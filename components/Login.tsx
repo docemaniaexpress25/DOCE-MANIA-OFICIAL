@@ -28,6 +28,12 @@ const Login: React.FC<LoginProps> = ({ users, onLogin, logo }) => {
     e.preventDefault();
     if (!selectedUser) return;
 
+    // --- Debug logs START ---
+    console.log("PIN digitado:", pin, typeof pin);
+    console.log("PIN do usuário:", selectedUser.pin, typeof selectedUser.pin);
+    console.log("Usuário selecionado:", selectedUser);
+    // --- Debug logs END ---
+
     // Login agora utiliza APENAS o PIN dinâmico do objeto do usuário,
     // que deve vir do Supabase no campo 'pin'.
     const correctPin = selectedUser.pin;
@@ -104,7 +110,7 @@ const Login: React.FC<LoginProps> = ({ users, onLogin, logo }) => {
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-blue-600 p-6">
-      <div className="bg-white p-8 pt-12 rounded-3xl shadow-2xl w-full max-w-md text-center relative z-10">
+      <div className="bg-white p-8 pt-12 rounded-3xl shadow-2xl w-full max-w-md text-center">
         <div className="mb-12 flex justify-center">
           {logo ? (
             <img src={logo} alt="Empresa" className="max-h-48 max-w-full object-contain" />
@@ -120,7 +126,7 @@ const Login: React.FC<LoginProps> = ({ users, onLogin, logo }) => {
             <button
               key={user.id}
               onClick={() => handleSelectUser(user)}
-              className="w-full bg-gray-50 hover:bg-blue-50 text-gray-800 font-bold py-4 px-6 rounded-2xl border border-gray-100 flex items-center justify-between transition-all active:scale-95 group cursor-pointer"
+              className="w-full bg-gray-50 hover:bg-blue-50 text-gray-800 font-bold py-4 px-6 rounded-2xl border border-gray-100 flex items-center justify-between transition-all active:scale-95 group"
             >
               <div className="flex flex-col items-start">
                 <span className="text-sm">{user.nome}</span>

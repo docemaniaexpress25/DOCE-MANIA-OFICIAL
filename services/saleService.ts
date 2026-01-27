@@ -1,6 +1,9 @@
 import { supabase } from '../supabaseClient';
 import { Sale } from '../types';
 
+// Helper function to safely convert database numeric values (which might be null or string) to number
+const safeNumber = (value: any): number => Number(value || 0);
+
 export const saleService = {
   async getAllSales(): Promise<Sale[]> {
     const { data, error } = await supabase.from('sales').select('*, sale_items(*)');
@@ -12,8 +15,8 @@ export const saleService = {
       id: s.id,
       vendedorId: s.vendedor_id,
       clientId: s.client_id,
-      valorTotal: Number(s.valor_total),
-      valorPago: Number(s.valor_pago),
+      valorTotal: safeNumber(s.valor_total), // Usando safeNumber
+      valorPago: safeNumber(s.valor_pago),   // Usando safeNumber
       metodoPagamento: s.metodo_pagamento,
       detalhePagamento: s.detalhe_pagamento,
       statusPagamento: s.status_pagamento,
@@ -21,8 +24,8 @@ export const saleService = {
       data: new Date(s.data_venda),
       itens: (s.sale_items || []).map((i: any) => ({
         produtoId: i.produto_id,
-        quantidade: Number(i.quantidade),
-        precoVenda: Number(i.preco_venda)
+        quantidade: safeNumber(i.quantidade), // Usando safeNumber
+        precoVenda: safeNumber(i.preco_venda) // Usando safeNumber
       }))
     })) as Sale[];
   },

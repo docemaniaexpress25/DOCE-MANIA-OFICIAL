@@ -324,16 +324,27 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
       {activeTab === 'ROTEIRO' && (
         <div className="space-y-4">
-          <header className="flex justify-between items-center px-1"><h2 className="text-xs font-black uppercase">Hoje: {DIAS_SEMANA[diaAtual] ?? 'N/D'}</h2><span className="bg-blue-100 text-blue-600 text-[10px] px-2 py-1 rounded-lg font-black">{rotaDeHoje.length} VISITAS</span></header>
+          <header className="flex justify-between items-center px-1">
+            <h2 className="text-xs font-black uppercase">
+              Hoje: {DIAS_SEMANA[diaAtual] ?? 'N/D'}
+            </h2>
+            <span className="text-[10px] font-black uppercase text-gray-400">
+              {new Date().toLocaleDateString()} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </span>
+            <span className="bg-blue-100 text-blue-600 text-[10px] px-2 py-1 rounded-lg font-black">{rotaDeHoje.length} VISITAS</span>
+          </header>
           {rotaDeHoje.map(c => {
-            const isVisited = (skippedClientIds.includes(c.id) || sales.some(s => s.clientId === c.id && isSameDay(s.data))) && !reopenedClientIds.includes(c.id);
+            // Um cliente é considerado 'visited' se foi vendido OU pulado, e não foi reaberto.
+            const isSold = sales.some(s => s.clientId === c.id && isSameDay(s.data));
+            const isSkipped = skippedClientIds.includes(c.id);
+            const isVisited = (isSold || isSkipped) && !reopenedClientIds.includes(c.id);
+            
             return (
               <div key={c.id} className={`p-4 rounded-3xl border flex flex-col transition-all ${isVisited ? 'bg-gray-100 border-gray-200 grayscale opacity-60' : 'bg-white border-gray-100 shadow-sm'}`}>
                 <div className="flex justify-between items-center">
                   <div className="flex-1"><p className="font-bold text-gray-800 leading-tight">{c.nomeFantasia ?? 'Cliente Desconhecido'}</p><p className="text-[10px] text-gray-400 mt-1 uppercase font-semibold"><i className="fa-solid fa-location-dot mr-1"></i> {(c.bairro || 'S/B')}</p></div>
                   {!isVisited ? (
                     <div className="flex gap-2">
-                      {/* Fixed: Use 'c.id' instead of undefined 'clientId' */}
                       <button onClick={() => handleSkipClient(c.id)} className="w-10 h-10 bg-gray-50 text-gray-400 rounded-2xl flex items-center justify-center"><i className="fa-solid fa-forward"></i></button>
                       <button onClick={() => setSelectedClient(c)} className="bg-blue-600 text-white px-4 py-2 rounded-2xl font-black text-xs uppercase shadow-lg">Atender</button>
                     </div>

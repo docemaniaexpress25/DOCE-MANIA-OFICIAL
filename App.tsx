@@ -15,7 +15,8 @@ import {
 } from './utils/persistence';
 
 const App: React.FC = () => {
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  // Carrega o usuário persistido na inicialização
+  const [currentUser, setCurrentUser] = useState<User | null>(() => loadLocalState('currentUser', null));
   
   // Configurações Globais (Supabase-backed)
   const [logo, setLogo] = useState<string | null>(null);
@@ -44,6 +45,7 @@ const App: React.FC = () => {
   const [messages, setMessages] = useState<SystemMessage[]>(loadLocalState('messages', DEFAULT_MESSAGES));
 
   // --- Efeitos de Persistência Local ---
+  useEffect(() => { saveLocalState('currentUser', currentUser); }, [currentUser]);
   useEffect(() => { saveLocalState('cargas', cargas); }, [cargas]);
   useEffect(() => { saveLocalState('cargasPendentes', cargasPendentes); }, [cargasPendentes]);
   useEffect(() => { saveLocalState('sales', sales); }, [sales]);
@@ -56,8 +58,6 @@ const App: React.FC = () => {
   const fetchProducts = useCallback(async () => { setProducts(await productService.getAllProducts()); }, []);
   const fetchClients = useCallback(async () => { setClients(await clientService.getAllClients()); }, []);
   
-  // Funções de fetch para dados locais foram removidas, pois agora são carregadas via loadLocalState
-
   const fetchCoreData = useCallback(async () => {
     try {
       const settings = await appSettingsService.getSettings();
@@ -74,7 +74,6 @@ const App: React.FC = () => {
       console.error("Erro ao carregar configurações iniciais do Supabase:", e);
     }
 
-
     await Promise.all([
       fetchUsers(),
       fetchProducts(),
@@ -82,7 +81,6 @@ const App: React.FC = () => {
     ]);
   }, [fetchUsers, fetchProducts, fetchClients]);
 
-  // Carga inicial de dados globais e configurações
   useEffect(() => {
     fetchCoreData();
   }, [fetchCoreData]);
@@ -97,12 +95,9 @@ const App: React.FC = () => {
     }
   }, [margemGlobalAtiva, margemGlobalValor]);
 
-  // Função para atualizar configurações globais e persistir no Supabase
   const updateSetting = useCallback(async (key: keyof AppSettings, value: any) => {
     const success = await appSettingsService.updateSettings({ [key]: value });
-
     if (success) {
-        // Atualiza o estado local APENAS se a persistência no Supabase for bem-sucedida
         switch (key) {
             case 'logo': setLogo(value); break;
             case 'margemGlobalAtiva': setMargemGlobalAtiva(value); break;
@@ -114,25 +109,11 @@ const App: React.FC = () => {
             case 'pix2Name': setPix2Name(value); break;
             case 'pix2Code': setPix2Code(value); break;
         }
-    } else {
-        console.error(`Falha ao persistir a configuração: ${key}`);
-        // Opcional: Recarregar configurações do DB para reverter o estado local em caso de falha
-        // fetchCoreData(); 
     }
   }, []);
 
-  // --- Funções CRUD Supabase (Users, Products, Clients) ---
-  
   const addUser = async (nome: string, foto?: string, telefone?: string) => {
-    const newUser: Omit<User, 'id'> = {
-      nome,
-      email: `${nome.toLowerCase().replace(/\s/g, '')}@sistema.com`,
-      role: 'VENDEDOR',
-      ativo: true,
-      foto,
-      telefone,
-      pin: '123456' 
-    };
+    const newUser: Omit<User, 'id'> = { nome, email: `${nome.toLowerCase().replace(/\s/g, '')}@sistema.com`, role: 'VENDEDOR', ativo: true, foto, telefone, pin: '123456' };
     const res = await userService.insertUser(newUser);
     if (res) await fetchUsers();
   };
@@ -143,14 +124,7 @@ const App: React.FC = () => {
   };
 
   const addProduct = async (nome: string, custo: number, venda: number, comissao: number) => {
-    const newProduct: Omit<Product, 'id'> = { 
-      nome, 
-      precoCusto: Number(custo.toFixed(2)), 
-      precoVenda: Number(venda.toFixed(2)), 
-      comissaoPercentual: Number(comissao.toFixed(2)), 
-      estoquePrincipal: 0, 
-      ativo: true 
-    };
+    const newProduct: Omit<Product, 'id'> = { nome, precoCusto: Number(custo.toFixed(2)), precoVenda: Number(venda.toFixed(2)), comissaoPercentual: Number(comissao.toFixed(2)), estoquePrincipal: 0, ativo: true };
     const res = await productService.insertProduct(newProduct);
     if (res) await fetchProducts();
   };
@@ -185,16 +159,7 @@ const App: React.FC = () => {
   };
 
   const addClient = async (data: Omit<Client, 'id'>) => {
-    const clientPayload: Omit<Client, 'id'> = {
-      ...data,
-      bairro: data.bairro || 'N/D',
-      endereco: data.endereco || 'N/D',
-      telefone: data.telefone || 'N/D',
-      diaRoteiro: data.diaRoteiro || 1,
-      ativo: data.ativo ?? true,
-      ativarCnpj: data.ativarCnpj ?? false,
-    };
-
+    const clientPayload: Omit<Client, 'id'> = { ...data, bairro: data.bairro || 'N/D', endereco: data.endereco || 'N/D', telefone: data.telefone || 'N/D', diaRoteiro: data.diaRoteiro || 1, ativo: data.ativo ?? true, ativarCnpj: data.ativarCnpj ?? false };
     const res = await clientService.insertClient(clientPayload);
     if (res) await fetchClients();
   };
@@ -209,74 +174,40 @@ const App: React.FC = () => {
     if (res) await fetchClients();
   };
 
-  // --- Funções CRUD Locais (Cargas, Vendas, Comissões, Mensagens) ---
-
-  // Função para criar uma Carga Pendente (Local)
   const syncVendedorCarga = (vendedorId: string, novosItens: { produtoId: string, quantidade: number }[]) => {
     const cp: CargaPendente = { id: generateId(), vendedorId, itens: novosItens, data: new Date() };
     setCargasPendentes(prev => [...prev, cp]);
     setAdminNotification("Carga enviada para aceite do vendedor.");
   };
 
-  // Função para aplicar a carga diretamente (Local)
   const applyCargaDirectly = (vendedorId: string, novosItens: { produtoId: string, quantidade: number }[]) => {
-    // Remove a carga antiga e insere a nova situação
     const otherCargas = cargas.filter(c => c.vendedorId !== vendedorId);
-    const newCargas = novosItens.filter(i => i.quantidade > 0).map(i => ({
-      vendedorId: vendedorId,
-      produtoId: i.produtoId,
-      quantidade: i.quantidade
-    }));
+    const newCargas = novosItens.filter(i => i.quantidade > 0).map(i => ({ vendedorId: vendedorId, produtoId: i.produtoId, quantidade: i.quantidade }));
     setCargas([...otherCargas, ...newCargas]);
     setAdminNotification("Carga aplicada diretamente com sucesso.");
   };
 
-  // Função para aceitar carga pendente (Local + Supabase para estoque central)
   const aceitarCarga = async (pendenciaId: string) => {
     const pendencia = cargasPendentes.find(p => p.id === pendenciaId);
     if (!pendencia) return;
-
-    // 1. Atualizar estoque principal dos produtos no Supabase
     for (const item of pendencia.itens) {
       const p = products.find(prod => prod.id === item.produtoId);
       if (p) {
         await productService.updateProduct(p.id, { estoquePrincipal: p.estoquePrincipal - item.quantidade });
       }
     }
-
-    // 2. Atualizar carga ativa do vendedor (Local)
     const otherCargas = cargas.filter(c => c.vendedorId !== pendencia.vendedorId);
-    const newCargas = pendencia.itens.filter(i => i.quantidade > 0).map(i => ({
-      vendedorId: pendencia.vendedorId,
-      produtoId: i.produtoId,
-      quantidade: i.quantidade
-    }));
+    const newCargas = pendencia.itens.filter(i => i.quantidade > 0).map(i => ({ vendedorId: pendencia.vendedorId, produtoId: i.produtoId, quantidade: i.quantidade }));
     setCargas([...otherCargas, ...newCargas]);
-
-    // 3. Deletar pendência (Local)
     setCargasPendentes(prev => prev.filter(cp => cp.id !== pendenciaId));
-
-    // 4. Refresh Supabase Products
     await fetchProducts();
     setAdminNotification("Carga aceita pelo vendedor com sucesso.");
   };
 
-  // Processar Venda (Local)
   const processSale = async (saleData: any) => {
     const valorTotalFixed = Number(saleData.valorTotal.toFixed(2));
-    
-    const newSale: Sale = { 
-      ...saleData, 
-      id: generateId(), // ID Local
-      data: new Date(), 
-      valorTotal: valorTotalFixed,
-      valorPago: saleData.statusPagamento === 'PAGO' ? valorTotalFixed : 0,
-    };
-
-    // 1. Atualizar Sales (Local)
+    const newSale: Sale = { ...saleData, id: generateId(), data: new Date(), valorTotal: valorTotalFixed, valorPago: saleData.statusPagamento === 'PAGO' ? valorTotalFixed : 0 };
     setSales(prev => [...prev, newSale]);
-
-    // 2. Atualizar Carga (Local)
     setCargas(prevCargas => {
       const updatedCargas = [...prevCargas];
       saleData.itens.forEach((item: any) => {
@@ -287,36 +218,19 @@ const App: React.FC = () => {
       });
       return updatedCargas.filter(c => c.quantidade > 0);
     });
-
-    // 3. Criar Comissão (Local)
     const totalComissao = saleData.itens.reduce((acc: number, item: any) => {
       const p = products.find(prod => prod.id === item.produtoId);
       return acc + (item.precoVenda * item.quantidade * ((p?.comissaoPercentual || 0) / 100));
     }, 0);
-    
     const effectivePercentual = valorTotalFixed > 0 ? (totalComissao / valorTotalFixed) * 100 : 0;
-
-    const newCommission: Commission = {
-      id: generateId(), // ID Local
-      saleId: newSale.id,
-      vendedorId: saleData.vendedorId,
-      valor: Number(totalComissao.toFixed(2)),
-      valorBase: valorTotalFixed,
-      percentual: Number(effectivePercentual.toFixed(2)),
-      status: saleData.statusPagamento === 'PAGO' ? 'DISPONIVEL' : 'A_RECEBER',
-      dataGeracao: new Date()
-    };
+    const newCommission: Commission = { id: generateId(), saleId: newSale.id, vendedorId: saleData.vendedorId, valor: Number(totalComissao.toFixed(2)), valorBase: valorTotalFixed, percentual: Number(effectivePercentual.toFixed(2)), status: saleData.statusPagamento === 'PAGO' ? 'DISPONIVEL' : 'A_RECEBER', dataGeracao: new Date() };
     setCommissions(prev => [...prev, newCommission]);
-
     return newSale;
   };
 
-  // Excluir Venda (Local)
   const deleteSaleInternal = (saleId: string, isAdmin: boolean) => {
     const saleToDelete = sales.find(s => s.id === saleId);
     if (!saleToDelete) return;
-
-    // 1. Estornar Carga (Local)
     setCargas(prevCargas => {
       const updatedCargas = [...prevCargas];
       saleToDelete.itens.forEach(item => {
@@ -326,98 +240,43 @@ const App: React.FC = () => {
       });
       return updatedCargas;
     });
-
-    // 2. Remover Comissões (Local)
     setCommissions(prev => prev.filter(c => c.saleId !== saleId));
-
-    // 3. Remover Venda (Local)
     setSales(prev => prev.filter(s => s.id !== saleId));
   };
 
-  // Receber Conta (Local)
   const receiveAccount = (saleId: string, method: PaymentMethod, amount?: number) => {
     let saleUpdated: Sale | undefined;
-
-    // 1. Atualiza a venda
     setSales(prevSales => prevSales.map(s => {
       if (s.id !== saleId) return s;
-      
       const novoValorPago = Number(((s.valorPago ?? 0) + (amount || s.valorTotal)).toFixed(2));
       const totalQuitado = novoValorPago >= s.valorTotal;
-
-      saleUpdated = {
-        ...s,
-        valorPago: novoValorPago,
-        statusPagamento: totalQuitado ? 'PAGO' : 'PENDENTE',
-        metodoPagamento: method
-      };
+      saleUpdated = { ...s, valorPago: novoValorPago, statusPagamento: totalQuitado ? 'PAGO' : 'PENDENTE', metodoPagamento: method };
       return saleUpdated;
     }));
-
-    // 2. Se a venda foi quitada, libera a comissão
     if (saleUpdated && saleUpdated.statusPagamento === 'PAGO') {
-      setCommissions(prevComms => prevComms.map(c => 
-        c.saleId === saleId && c.status === 'A_RECEBER' 
-          ? { ...c, status: 'DISPONIVEL' } 
-          : c
-      ));
+      setCommissions(prevComms => prevComms.map(c => c.saleId === saleId && c.status === 'A_RECEBER' ? { ...c, status: 'DISPONIVEL' } : c));
     }
   };
 
-  // Pagar Comissão (Local)
   const handlePayCommission = (vendedorId: string, amount: number, type: 'TOTAL' | 'PARCIAL', adminId: string) => {
     const v = users.find(u => u.id === vendedorId);
     if (!v) return;
-
     const jaPagoNoPassado = payoutLogs.filter(l => l.vendedorId === vendedorId).reduce((acc, curr) => acc + curr.valorPago, 0);
-    const totalCommsEligible = commissions
-      .filter(c => c.vendedorId === vendedorId && c.status !== 'A_RECEBER')
-      .reduce((acc, curr) => acc + curr.valor, 0);
+    const totalCommsEligible = commissions.filter(c => c.vendedorId === vendedorId && c.status !== 'A_RECEBER').reduce((acc, curr) => acc + curr.valor, 0);
     const saldoReal = totalCommsEligible - jaPagoNoPassado;
-
-    // 1. Inserir Log de Pagamento (Local)
-    const newLog: CommissionPaymentLog = {
-      id: generateId(), // ID Local
-      vendedorId, vendedorNome: v.nome, valorPago: amount, valorRestante: saldoReal - amount, tipo: type, dataPagamento: new Date(), adminId
-    };
+    const newLog: CommissionPaymentLog = { id: generateId(), vendedorId, vendedorNome: v.nome, valorPago: amount, valorRestante: saldoReal - amount, tipo: type, dataPagamento: new Date(), adminId };
     setPayoutLogs(prev => [...prev, newLog]);
-
-    // 2. Marcar comissões DISPONIVEIS como PENDENTE_CONFIRMACAO (Local)
-    setCommissions(prev => prev.map(c => 
-      c.vendedorId === vendedorId && c.status === 'DISPONIVEL' 
-        ? { ...c, status: 'PENDENTE_CONFIRMACAO' } 
-        : c
-    ));
-
-    // 3. Inserir Mensagem do Sistema (Local)
-    const newMessage: SystemMessage = {
-      id: generateId(), // ID Local
-      vendedorId,
-      titulo: "💰 Comissão Disponível para Confirmação",
-      mensagem: `O administrador registrou o pagamento de R$ ${amount.toFixed(2)}. Aceite para confirmar.`,
-      data: new Date(),
-      lida: false,
-      type: 'COMMISSION_CONFIRMATION'
-    };
+    setCommissions(prev => prev.map(c => c.vendedorId === vendedorId && c.status === 'DISPONIVEL' ? { ...c, status: 'PENDENTE_CONFIRMACAO' } : c));
+    const newMessage: SystemMessage = { id: generateId(), vendedorId, titulo: "💰 Comissão Disponível para Confirmação", mensagem: `O administrador registrou o pagamento de R$ ${amount.toFixed(2)}. Aceite para confirmar.`, data: new Date(), lida: false, type: 'COMMISSION_CONFIRMATION' };
     setMessages(prev => [...prev, newMessage]);
   };
 
-  // Marcar Mensagem como Lida (Local)
   const markMessageAsRead = (msgId: string) => {
     const m = messages.find(msg => msg.id === msgId);
     if (m && m.type === 'COMMISSION_CONFIRMATION') {
-      // Se for confirmação de comissão, marca as comissões PENDENTE_CONFIRMACAO como PAGO
-      setCommissions(prev => prev.map(c => 
-        c.vendedorId === m.vendedorId && c.status === 'PENDENTE_CONFIRMACAO' 
-          ? { ...c, status: 'PAGO' } 
-          : c
-      ));
+      setCommissions(prev => prev.map(c => c.vendedorId === m.vendedorId && c.status === 'PENDENTE_CONFIRMACAO' ? { ...c, status: 'PAGO' } : c));
     }
-    
-    // Marca a mensagem como lida
-    setMessages(prev => prev.map(msg => 
-      msg.id === msgId ? { ...msg, lida: true } : msg
-    ));
+    setMessages(prev => prev.map(msg => msg.id === msgId ? { ...msg, lida: true } : msg));
   };
 
   if (!currentUser) return <Login users={users} onLogin={setCurrentUser} logo={logo} />;
@@ -461,7 +320,7 @@ const App: React.FC = () => {
         ) : (
           <VendedorDashboard 
             products={products} users={users} cargas={cargas} clients={clients} sales={sales} commissions={commissions}
-            addClient={addClient} updateClient={updateClient} deleteClient={deleteClient} // Passando addClient e deleteClient
+            addClient={addClient} updateClient={updateClient} deleteClient={deleteClient}
             user={currentUser} 
             payoutLogs={payoutLogs.filter(l => l.vendedorId === currentUser.id)}
             cargasPendentes={cargasPendentes.filter(cp => cp.vendedorId === currentUser.id)}

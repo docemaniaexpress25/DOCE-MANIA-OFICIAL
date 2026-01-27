@@ -172,7 +172,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {products
-          .filter(p => productIdsInCarga.has(p.id) && (p.ativo ?? false)) // Filtra apenas produtos na carga E ativos
+          .filter(p => productIdsInCarga.has(p.id)) // Filtra apenas produtos na carga (removido o filtro 'ativo')
           .map(p => { 
           const itemNoCart = cart[p.id];
           const cargaOriginal = minhaCarga.find(c => c.produtoId === p.id)?.quantidade || 0;
@@ -180,8 +180,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           
           // Se o produto está na carga, mas a quantidade é 0 (após vendas), ele ainda deve aparecer se estiver no carrinho,
           // mas se não estiver no carrinho e a carga for 0, ele não deve aparecer.
-          // Como já filtramos por productIdsInCarga, se a cargaOriginal for 0, ele não deveria estar aqui,
-          // mas vamos manter a verificação de cargaOriginal > 0 para garantir que apenas itens carregados sejam processados.
+          // Mantemos esta verificação para garantir que itens com estoque zero e fora do carrinho não sejam exibidos.
           if (cargaOriginal <= 0 && (itemNoCart?.quantidade ?? 0) === 0) return null;
 
           const currentPrice = parseFloat(itemNoCart?.precoVenda || (p.precoVenda ?? 0).toString()) || 0; 

@@ -48,7 +48,6 @@ export const saleService = {
     const itemsRows = sale.itens.map(i => ({
       sale_id: data.id,
       produto_id: i.produtoId,
-      product_id: i.produtoId, // Adicionado para satisfazer a restrição NOT NULL
       quantidade: i.quantidade,
       preco_venda: i.precoVenda
     }));

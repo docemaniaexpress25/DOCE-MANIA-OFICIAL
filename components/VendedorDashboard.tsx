@@ -330,7 +330,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 {DIAS_SEMANA[diaAtual] ?? 'N/D'}
               </h2>
               <span className="text-[10px] font-black uppercase text-gray-400 mt-1">
-                {new Date().toLocaleDateString('pt-BR')} {new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                {new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })} {new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
               </span>
             </div>
             <span className="bg-blue-100 text-blue-600 text-[10px] px-2 py-1 rounded-lg font-black">{rotaDeHoje.length} VISITAS</span>
@@ -366,7 +366,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
           <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-md flex flex-col gap-4">
              <div className="flex justify-between items-center border-b border-gray-100 pb-3">
                 <span className="text-xs font-black text-gray-400 uppercase">Total Geral ({historyFilter})</span>
-                <span className="text-3xl font-black text-gray-900">R$ {historySummary.total.toFixed(2)}</span>
+                <span className="text-2xl font-black text-gray-900">R$ {historySummary.total.toFixed(2)}</span>
              </div>
              <div className="grid grid-cols-3 gap-3">
                 <div className="text-center bg-emerald-50 p-3 rounded-xl">

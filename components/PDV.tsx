@@ -24,6 +24,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const [detalheMetodo, setDetalheMetodo] = useState<string>('Dinheiro');
   const [showPrazoOverlay, setShowPrazoOverlay] = useState(false);
   const [showFinalizeOverlay, setShowFinalizeOverlay] = useState(false);
+  const [showPixOverlay, setShowPixOverlay] = useState<1 | 2 | null>(null); // Novo estado para o modal Pix
   const [prazoData, setPrazoData] = useState<string>('');
   
   const [valorRecebido, setValorRecebido] = useState<string>('');
@@ -248,23 +249,23 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                     <button onClick={() => setSelectedPixSlot(1)} className={`flex flex-col items-center gap-2 p-4 rounded-2xl border-2 transition-all ${selectedPixSlot === 1 ? 'border-blue-600 bg-blue-50' : 'border-gray-100 bg-gray-50'}`}>
                        <span className="text-[9px] font-black uppercase text-gray-600">{pix1Name ?? 'Pix 1'}</span> 
                        <div className="w-full aspect-square bg-white rounded-lg flex items-center justify-center overflow-hidden">
-                          {pix1Code ? <img src={pix1Code} className="w-full h-full object-cover" /> : <i className="fa-solid fa-qrcode text-gray-200"></i>}
+                          {pix1Code ? <i className="fa-solid fa-qrcode text-blue-600 text-3xl"></i> : <i className="fa-solid fa-qrcode text-gray-200"></i>}
                        </div>
                     </button>
                     <button onClick={() => setSelectedPixSlot(2)} className={`flex flex-col items-center gap-2 p-4 rounded-2xl border-2 transition-all ${selectedPixSlot === 2 ? 'border-blue-600 bg-blue-50' : 'border-gray-100 bg-gray-50'}`}>
                        <span className="text-[9px] font-black uppercase text-gray-600">{pix2Name ?? 'Pix 2'}</span> 
                        <div className="w-full aspect-square bg-white rounded-lg flex items-center justify-center overflow-hidden">
-                          {pix2Code ? <img src={pix2Code} className="w-full h-full object-cover" /> : <i className="fa-solid fa-qrcode text-gray-200"></i>}
+                          {pix2Code ? <i className="fa-solid fa-qrcode text-blue-600 text-3xl"></i> : <i className="fa-solid fa-qrcode text-gray-200"></i>}
                        </div>
                     </button>
                   </div>
                   {selectedPixSlot && (
-                    <div className="bg-gray-50 p-4 rounded-2xl animate-in zoom-in-95">
-                       <p className="text-[10px] font-black text-gray-400 uppercase mb-4">Escaneie agora:</p>
-                       <div className="w-48 h-48 mx-auto bg-white p-2 rounded-xl shadow-inner mb-2 border">
-                          <img src={selectedPixSlot === 1 ? (pix1Code ?? '') : (pix2Code ?? '')} className="w-full h-full object-contain" /> 
-                       </div>
-                    </div>
+                    <button 
+                      onClick={() => setShowPixOverlay(selectedPixSlot)} 
+                      className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 transition-all text-xs uppercase tracking-widest mt-4"
+                    >
+                      Visualizar QR Code
+                    </button>
                   )}
                 </div>
               )}
@@ -299,6 +300,35 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               <div className="space-y-2 mb-8"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Data Personalizada</label><input type="date" min={todayStr} value={prazoData} onChange={e => setPrazoData(e.target.value)} className="w-full p-4 bg-blue-50 text-blue-600 font-black border-none rounded-2xl outline-none" /></div>
               <button onClick={() => { if(!prazoData) return alert("Selecione uma data."); setShowPrazoOverlay(false); }} className="w-full bg-blue-600 text-white font-black py-5 rounded-3xl shadow-xl uppercase text-xs">Salvar Condição</button>
            </div>
+        </div>
+      )}
+
+      {showPixOverlay && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[120] flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-sm rounded-[2.5rem] p-8 text-center shadow-2xl animate-in zoom-in-95 duration-300">
+            <h3 className="font-black text-gray-800 text-lg mb-4 uppercase tracking-tight">
+              PIX - {showPixOverlay === 1 ? pix1Name : pix2Name}
+            </h3>
+            <div className="bg-gray-50 p-4 rounded-2xl mb-6">
+              <p className="text-[10px] font-black text-gray-400 uppercase mb-2">Valor a Pagar</p>
+              <p className="text-2xl font-black text-gray-800">R$ {total.toFixed(2)}</p>
+            </div>
+            
+            <div className="w-48 h-48 mx-auto bg-white p-2 rounded-xl shadow-inner mb-6 border">
+              <img 
+                src={showPixOverlay === 1 ? (pix1Code ?? '') : (pix2Code ?? '')} 
+                alt="QR Code Pix"
+                className="w-full h-full object-contain" 
+              /> 
+            </div>
+
+            <button 
+              onClick={() => setShowPixOverlay(null)} 
+              className="w-full bg-blue-600 text-white font-black py-5 rounded-3xl shadow-xl uppercase text-xs active:scale-95"
+            >
+              FECHAR QR CODE
+            </button>
+          </div>
         </div>
       )}
     </div>

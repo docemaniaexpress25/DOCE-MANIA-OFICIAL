@@ -348,12 +348,29 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       {activeTab === 'HISTORY' && (
         <div className="space-y-4">
           <div className="flex bg-gray-100 p-1 rounded-2xl shadow-inner mb-2">{(['DIA', 'SEMANA', 'MES', 'GERAL'] as const).map(f => (<button key={f} onClick={() => setHistoryFilter(f)} className={`flex-1 py-2 rounded-xl text-[9px] font-black uppercase ${historyFilter === f ? 'bg-white text-[#1E3A5F] shadow-sm' : 'text-gray-400'}`}>{f}</button>))}</div>
-          <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-md grid grid-cols-2 gap-y-6 gap-x-4">
-             <div className="text-center border-r border-gray-100"><p className="text-[10px] font-black text-gray-400 uppercase mb-1">Dinheiro</p><p className="text-lg font-black text-emerald-600">R$ {historySummary.dinheiro.toFixed(2)}</p></div>
-             <div className="text-center"><p className="text-[10px] font-black text-gray-400 uppercase mb-1">Pix</p><p className="text-lg font-black text-blue-600">R$ {historySummary.pix.toFixed(2)}</p></div>
-             <div className="text-center border-r border-gray-100"><p className="text-[10px] font-black text-gray-400 uppercase mb-1">A Prazo</p><p className="text-lg font-black text-orange-500">R$ {historySummary.prazo.toFixed(2)}</p></div>
-             <div className="text-center"><p className="text-[10px] font-black text-gray-400 uppercase mb-1">Total Geral</p><p className="text-xl font-black text-gray-900">R$ {historySummary.total.toFixed(2)}</p></div>
+          
+          {/* Card de Resumo de Histórico de Vendas (Melhorado) */}
+          <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-md flex flex-col gap-4">
+             <div className="flex justify-between items-center border-b border-gray-100 pb-3">
+                <span className="text-xs font-black text-gray-400 uppercase">Total Geral ({historyFilter})</span>
+                <span className="text-3xl font-black text-gray-900">R$ {historySummary.total.toFixed(2)}</span>
+             </div>
+             <div className="grid grid-cols-3 gap-3">
+                <div className="text-center bg-emerald-50 p-3 rounded-xl">
+                   <p className="text-[9px] font-black text-emerald-600 uppercase mb-1">Dinheiro</p>
+                   <p className="text-sm font-black text-emerald-700">R$ {historySummary.dinheiro.toFixed(2)}</p>
+                </div>
+                <div className="text-center bg-blue-50 p-3 rounded-xl">
+                   <p className="text-[9px] font-black text-blue-600 uppercase mb-1">Pix</p>
+                   <p className="text-sm font-black text-blue-700">R$ {historySummary.pix.toFixed(2)}</p>
+                </div>
+                <div className="text-center bg-orange-50 p-3 rounded-xl">
+                   <p className="text-[9px] font-black text-orange-600 uppercase mb-1">A Prazo</p>
+                   <p className="text-sm font-black text-orange-700">R$ {historySummary.prazo.toFixed(2)}</p>
+                </div>
+             </div>
           </div>
+          
           {filteredHistory.map(s => (<div key={s.id} className="bg-white p-4 rounded-3xl border border-gray-100 flex flex-col shadow-sm"><div className="flex justify-between items-center mb-2"><p className="font-bold text-gray-800 text-sm">{clients.find(c => c.id === s.clientId)?.nomeFantasia ?? 'Cliente Desconhecido'}</p><p className="text-sm font-semibold text-emerald-600">R$ {(s.valorTotal ?? 0).toFixed(2)}</p></div><div className="flex justify-between items-end"><p className="text-[10px] text-gray-400 font-semibold">{(s.metodoPagamento ?? 'N/D')} • {(s.data ?? new Date()).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</p><div className="flex gap-3"><button onClick={() => setViewingSale(s)} className="text-[#1E3A5F] text-lg"><i className="fa-solid fa-file-invoice"></i></button></div></div></div>))} 
         </div>
       )}

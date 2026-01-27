@@ -465,6 +465,29 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                  <p className="text-xl font-black text-orange-700">R$ {financeStats.pendente.toFixed(2)}</p>
               </div>
            </div>
+
+           {/* Histórico de Pagamentos de Comissão */}
+           <div className="space-y-4 pt-4">
+              <h3 className="text-xs font-black text-gray-400 uppercase tracking-wider px-1">Histórico de Pagamentos</h3>
+              <div className="grid gap-3">
+                {payoutLogs.sort((a, b) => b.dataPagamento.getTime() - a.dataPagamento.getTime()).map(log => (
+                  <div key={log.id} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex justify-between items-center">
+                    <div>
+                      <p className="font-bold text-gray-800 text-sm leading-tight">Pagamento de Comissão</p>
+                      <p className="text-[10px] text-gray-400 font-semibold uppercase mt-1">
+                        {log.dataPagamento.toLocaleDateString()} • {log.tipo}
+                      </p>
+                    </div>
+                    <p className="text-sm font-black text-emerald-600">R$ {log.valorPago.toFixed(2)}</p>
+                  </div>
+                ))}
+                {payoutLogs.length === 0 && (
+                  <div className="text-center py-10 opacity-30 italic text-[10px] uppercase font-bold">
+                    Nenhum pagamento registrado.
+                  </div>
+                )}
+              </div>
+           </div>
         </div>
       )}
 
@@ -509,7 +532,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                   <p className="text-[10px] text-gray-400 font-semibold uppercase mt-1">{(c.telefone ?? 'Sem Telefone')} • {(DIAS_SEMANA[c.diaRoteiro ?? 0] ?? 'N/D')}</p> 
                 </div>
                 <button onClick={() => handleOpenEditClient(c)} className="w-10 h-10 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center active:scale-95">
-                  <i className="fa-solid fa-pencil text-xs"></i>
+                  <i className="fa-solid fa-pencil-alt text-xs"></i>
                 </button>
               </div>
             ))}

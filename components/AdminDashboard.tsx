@@ -88,7 +88,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [pwUser, setPwUser] = useState<string>('');
   const [pwNew, setPwNew] = useState<string>('');
 
-  const [pForm, setPForm] = useState({ nome: '', custo: '', venda: '', comissao: '', margem: '', ativo: true });
+  const [pForm, setPForm] = useState({ nome: '', custo: '', venda: '', comissao: '', margem: '', ativo: true, estoquePrincipal: '' });
   const [entryForm, setEntryForm] = useState({ qtd: '', custo: '' });
   const [clientForm, setClientForm] = useState<Partial<Client>>({ ativarCnpj: false, cnpj: '', pinLocalizacao: '' });
   const [userForm, setUserForm] = useState<Partial<User>>({ nome: '', foto: '', telefone: '', pin: '' });
@@ -200,7 +200,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
   const handleOpenProduct = (p: Product | 'NEW') => {
     if (p === 'NEW') {
-      setPForm({ nome: '', custo: '', venda: '', comissao: '', margem: props.margemGlobalAtiva ? props.margemGlobalValor.toString() : '35', ativo: true });
+      setPForm({ nome: '', custo: '', venda: '', comissao: '', margem: props.margemGlobalAtiva ? props.margemGlobalValor.toString() : '35', ativo: true, estoquePrincipal: '0' });
     } else {
       const precoVenda = Number(p.precoVenda) || 0;
       const precoCusto = Number(p.precoCusto) || 0;
@@ -211,7 +211,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         venda: precoVenda.toString(), 
         comissao: (p.comissaoPercentual ?? 0).toString(), 
         margem: margemCalculada.toFixed(2), 
-        ativo: p.ativo ?? true 
+        ativo: p.ativo ?? true,
+        estoquePrincipal: (p.estoquePrincipal ?? 0).toString()
       });
     }
     setShowProductModal(p);
@@ -230,14 +231,15 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
   const handleSaveProduct = () => {
     if (!pForm.nome || !pForm.custo || !pForm.venda || !pForm.comissao) return alert("Preencha todos os campos.");
-    const data = { 
+    const data: Partial<Product> = { 
       nome: pForm.nome, 
       precoCusto: parseFloat(pForm.custo), 
       precoVenda: parseFloat(pForm.venda), 
       comissaoPercentual: parseFloat(pForm.comissao), 
-      ativo: pForm.ativo ?? true 
+      ativo: pForm.ativo ?? true,
+      estoquePrincipal: parseInt(pForm.estoquePrincipal)
     };
-    if (showProductModal === 'NEW') props.addProduct(data.nome, data.precoCusto, data.precoVenda, data.comissaoPercentual);
+    if (showProductModal === 'NEW') props.addProduct(data.nome!, data.precoCusto!, data.precoVenda!, data.comissaoPercentual!);
     else if (typeof showProductModal === 'object') props.updateProduct(showProductModal.id, data);
     showToast("Produto salvo com sucesso");
     setShowProductModal(null);
@@ -972,6 +974,19 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             <h3 className="font-black text-gray-800 uppercase text-sm mb-6">{showProductModal === 'NEW' ? 'Novo Produto' : 'Editar Produto'}</h3>
             <div className="space-y-4">
               <input value={pForm.nome ?? ''} onChange={e => setPForm({...pForm, nome: e.target.value})} placeholder="Nome Comercial" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" />
+              
+              {/* Novo campo de Estoque Principal */}
+              <div className="space-y-1">
+                <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Estoque Principal (UN)</label>
+                <input 
+                  type="number" 
+                  value={pForm.estoquePrincipal ?? ''} 
+                  onChange={e => setPForm({...pForm, estoquePrincipal: e.target.value})} 
+                  placeholder="0" 
+                  className="w-full p-4 bg-gray-50 border rounded-2xl font-black text-lg" 
+                />
+              </div>
+
               <div className="grid grid-cols-2 gap-4">
                 <input type="number" value={pForm.custo ?? ''} onChange={e => { const c = e.target.value; const nv = updatePriceFromMargin(parseFloat(c)||0, parseFloat(pForm.margem)||0).toFixed(2); setPForm({...pForm, custo: c, venda: nv}); }} placeholder="Custo R$" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" />
                 <input type="number" value={pForm.margem ?? ''} disabled={props.margemGlobalAtiva} onChange={e => { const m = e.target.value; const nv = updatePriceFromMargin(parseFloat(pForm.custo)||0, parseFloat(m)||0).toFixed(2); setPForm({...pForm, margem: m, venda: nv}); }} placeholder="Margem %" className={`w-full p-4 border rounded-2xl font-bold ${props.margemGlobalAtiva ? 'bg-gray-100 opacity-50' : 'bg-gray-50'}`} />

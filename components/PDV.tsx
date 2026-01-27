@@ -237,10 +237,10 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           <div className="bg-rose-100 p-3 rounded-xl flex flex-col gap-1 text-rose-700 animate-pulse">
             <div className="flex items-center gap-2">
               <i className="fa-solid fa-circle-exclamation"></i>
-              <span className="text-[10px] font-black uppercase">Venda Bloqueada: Margem Mínima ({margemMinima}%)</span>
+              <span className="text-[10px] font-black uppercase">Venda Bloqueada: Preço Mínimo R$ {marginViolationInfo.minPrice}</span>
             </div>
             <p className="text-[10px] font-bold text-rose-800">
-              {marginViolationInfo.productName}: Preço Mínimo R$ {marginViolationInfo.minPrice} (Atual: R$ {marginViolationInfo.currentPrice})
+              {marginViolationInfo.productName} (Atual: R$ {marginViolationInfo.currentPrice})
             </p>
           </div>
         )}

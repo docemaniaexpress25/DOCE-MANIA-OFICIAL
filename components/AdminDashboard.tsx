@@ -788,7 +788,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-gray-100 flex flex-col items-center">
             <h3 className="font-black text-gray-800 uppercase text-xs mb-6 text-center">Logotipo da Empresa</h3>
             <div onClick={() => logoInputRef.current?.click()} className="w-48 h-24 bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200 flex items-center justify-center cursor-pointer relative group overflow-hidden">
-               {props.logo ? <img src={props.logo} className="w-full h-full object-contain" /> : <div className="text-gray-300 flex flex-col items-center gap-1"><i className="fa-solid fa-cloud-arrow-up text-2xl"></i><span className="text-[9px] font-black">Upload</span></div>}
+               {props.logo ? <img src={props.logo} alt="Logo" className="w-full h-full object-contain" /> : <div className="text-gray-300 flex flex-col items-center gap-1"><i className="fa-solid fa-cloud-arrow-up text-2xl"></i><span className="text-[9px] font-black">Upload</span></div>}
             </div>
             <input type="file" ref={logoInputRef} onChange={handleLogoUpload} accept="image/*" className="hidden" />
           </div>
@@ -803,7 +803,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                          <input value={props.pix1Name ?? ''} onChange={e => props.setPix1Name(e.target.value)} className="w-full p-4 bg-gray-50 rounded-xl border-none outline-none font-bold text-xs" />
                       </div>
                       <div onClick={() => pix1InputRef.current?.click()} className="w-20 h-20 bg-gray-50 border-2 border-dashed border-gray-200 rounded-xl flex items-center justify-center cursor-pointer overflow-hidden">
-                         {props.pix1Code ? <img src={props.pix1Code} className="w-full h-full object-cover" /> : <i className="fa-solid fa-qrcode text-gray-300"></i>}
+                         {props.pix1Code ? <img src={props.pix1Code} alt="QR Code Pix 1" className="w-full h-full object-cover" /> : <i className="fa-solid fa-qrcode text-gray-300"></i>}
                       </div>
                       <input type="file" ref={pix1InputRef} onChange={e => handlePixUpload(e, 1)} className="hidden" accept="image/*" />
                    </div>
@@ -815,7 +815,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                          <input value={props.pix2Name ?? ''} onChange={e => props.setPix2Name(e.target.value)} className="w-full p-4 bg-gray-50 rounded-xl border-none outline-none font-bold text-xs" />
                       </div>
                       <div onClick={() => pix2InputRef.current?.click()} className="w-20 h-20 bg-gray-50 border-2 border-dashed border-gray-200 rounded-xl flex items-center justify-center cursor-pointer overflow-hidden">
-                         {props.pix2Code ? <img src={props.pix2Code} className="w-full h-full object-cover" /> : <i className="fa-solid fa-qrcode text-gray-300"></i>}
+                         {props.pix2Code ? <img src={props.pix2Code} alt="QR Code Pix 2" className="w-full h-full object-cover" /> : <i className="fa-solid fa-qrcode text-gray-300"></i>}
                       </div>
                       <input type="file" ref={pix2InputRef} onChange={e => handlePixUpload(e, 2)} className="hidden" accept="image/*" />
                    </div>
@@ -914,7 +914,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
               
               <div className="flex flex-col items-center mb-6">
                 <div onClick={() => userPhotoInputRef.current?.click()} className="w-24 h-24 bg-purple-100 text-purple-600 rounded-[2rem] flex items-center justify-center font-black overflow-hidden border-4 border-white shadow-xl cursor-pointer relative group transition-all hover:scale-105">
-                  {userForm.foto ? <img src={userForm.foto} className="w-full h-full object-cover" /> : <i className="fa-solid fa-camera text-2xl"></i>}
+                  {userForm.foto ? <img src={userForm.foto} alt="Foto do Vendedor" className="w-full h-full object-cover" /> : <i className="fa-solid fa-camera text-2xl"></i>}
                   <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-[10px] font-black uppercase">Alterar</div>
                 </div>
                 <input type="file" ref={userPhotoInputRef} onChange={handleUserPhotoUpload} className="hidden" accept="image/*" />

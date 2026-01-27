@@ -10,15 +10,17 @@ import { saleService } from './services/saleService';
 import { commissionService } from './services/commissionService';
 import { cargaService } from './services/cargaService';
 import { messageService } from './services/messageService';
+import { appSettingsService, AppSettings } from './services/appSettingsService';
 
 const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  
+  // Configurações Globais (agora persistidas)
   const [logo, setLogo] = useState<string | null>(null);
   const [margemGlobalAtiva, setMargemGlobalAtiva] = useState(true);
   const [margemGlobalValor, setMargemGlobalValor] = useState(35);
   const [margemMinima, setMargemMinima] = useState(20); 
   const [margemMinimaAtiva, setMargemMinimaAtiva] = useState(true); 
-  
   const [pix1Name, setPix1Name] = useState("Pix Banco A");
   const [pix1Code, setPix1Code] = useState<string | null>(null);
   const [pix2Name, setPix2Name] = useState("Pix Banco B");
@@ -56,9 +58,37 @@ const App: React.FC = () => {
 
   const fetchMessages = async () => { setMessages(await messageService.getAllMessages()); };
 
-  // Carga inicial de dados globais
+  // Funções de persistência para configurações
+  const updateSetting = async (key: keyof AppSettings, value: any) => {
+    const success = await appSettingsService.updateSettings({ [key]: value });
+    if (success) {
+      // Atualiza o estado local após a persistência
+      if (key === 'logo') setLogo(value);
+      if (key === 'margemGlobalAtiva') setMargemGlobalAtiva(value);
+      if (key === 'margemGlobalValor') setMargemGlobalValor(value);
+      if (key === 'margemMinimaAtiva') setMargemMinimaAtiva(value);
+      if (key === 'margemMinima') setMargemMinima(value);
+      if (key === 'pix1Name') setPix1Name(value);
+      if (key === 'pix1Code') setPix1Code(value);
+      if (key === 'pix2Name') setPix2Name(value);
+      if (key === 'pix2Code') setPix2Code(value);
+    }
+  };
+
+  // Carga inicial de dados globais e configurações
   useEffect(() => {
     const loadGlobals = async () => {
+      const settings = await appSettingsService.getSettings();
+      setLogo(settings.logo);
+      setMargemGlobalAtiva(settings.margemGlobalAtiva);
+      setMargemGlobalValor(settings.margemGlobalValor);
+      setMargemMinimaAtiva(settings.margemMinimaAtiva);
+      setMargemMinima(settings.margemMinima);
+      setPix1Name(settings.pix1Name ?? "Pix Banco A");
+      setPix1Code(settings.pix1Code);
+      setPix2Name(settings.pix2Name ?? "Pix Banco B");
+      setPix2Code(settings.pix2Code);
+
       await Promise.all([
         fetchUsers(),
         fetchProducts(),
@@ -340,11 +370,11 @@ const App: React.FC = () => {
             adjustStockManual={adjustStockManual} syncVendedorCarga={syncVendedorCarga} addClient={addClient} updateClient={updateClient}
             deleteClient={deleteClient} addUser={addUser} updateUser={updateUser} payCommission={handlePayCommission}
             setCommissions={()=>{}} updateEstoqueCentral={()=>{}} reinforceCarga={()=>{}} deleteSale={(id) => deleteSaleInternal(id, true)}
-            receiveAccount={receiveAccount} logo={logo} setLogo={setLogo} adminUser={currentUser} margemGlobalAtiva={margemGlobalAtiva}
-            setMargemGlobalAtiva={setMargemGlobalAtiva} margemGlobalValor={margemGlobalValor} setMargemGlobalValor={setMargemGlobalValor}
-            margemMinima={margemMinima} setMargemMinima={setMargemMinima} margemMinimaAtiva={margemMinimaAtiva}
-            setMargemMinimaAtiva={setMargemMinimaAtiva} pix1Name={pix1Name} setPix1Name={setPix1Name} pix1Code={pix1Code} setPix1Code={setPix1Code}
-            pix2Name={pix2Name} setPix2Name={setPix2Name} pix2Code={pix2Code} setPix2Code={pix2Code}
+            receiveAccount={receiveAccount} logo={logo} setLogo={(val) => updateSetting('logo', val)} adminUser={currentUser} margemGlobalAtiva={margemGlobalAtiva}
+            setMargemGlobalAtiva={(val) => updateSetting('margemGlobalAtiva', val)} margemGlobalValor={margemGlobalValor} setMargemGlobalValor={(val) => updateSetting('margemGlobalValor', val)}
+            margemMinima={margemMinima} setMargemMinima={(val) => updateSetting('margemMinima', val)} margemMinimaAtiva={margemMinimaAtiva}
+            setMargemMinimaAtiva={(val) => updateSetting('margemMinimaAtiva', val)} pix1Name={pix1Name} setPix1Name={(val) => updateSetting('pix1Name', val)} pix1Code={pix1Code} setPix1Code={(val) => updateSetting('pix1Code', val)}
+            pix2Name={pix2Name} setPix2Name={(val) => updateSetting('pix2Name', val)} pix2Code={pix2Code} setPix2Code={(val) => updateSetting('pix2Code', val)}
             adminNotification={adminNotification} clearAdminNotification={() => setAdminNotification(null)}
           />
         ) : (

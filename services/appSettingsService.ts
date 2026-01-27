@@ -45,16 +45,17 @@ export const appSettingsService = {
       return DEFAULT_SETTINGS;
     }
 
+    // Mapeamento robusto, usando valores do DB se existirem, ou valores padrão se forem null
     return {
-      logo: data.logo,
+      logo: data.logo ?? DEFAULT_SETTINGS.logo,
       margemGlobalAtiva: !!data.margem_global_ativa,
       margemGlobalValor: safeNumber(data.margem_global_valor),
       margemMinimaAtiva: !!data.margem_minima_ativa,
       margemMinima: safeNumber(data.margem_minima),
-      pix1Name: data.pix1_name,
-      pix1Code: data.pix1_code,
-      pix2Name: data.pix2_name,
-      pix2Code: data.pix2_code,
+      pix1Name: data.pix1_name ?? DEFAULT_SETTINGS.pix1Name,
+      pix1Code: data.pix1_code ?? DEFAULT_SETTINGS.pix1Code,
+      pix2Name: data.pix2_name ?? DEFAULT_SETTINGS.pix2Name,
+      pix2Code: data.pix2_code ?? DEFAULT_SETTINGS.pix2Code,
     };
   },
 

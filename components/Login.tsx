@@ -28,12 +28,6 @@ const Login: React.FC<LoginProps> = ({ users, onLogin, logo }) => {
     e.preventDefault();
     if (!selectedUser) return;
 
-    // --- Debug logs START ---
-    console.log("PIN digitado:", pin, typeof pin);
-    console.log("PIN do usuário:", selectedUser.pin, typeof selectedUser.pin);
-    console.log("Usuário selecionado:", selectedUser);
-    // --- Debug logs END ---
-
     // Login agora utiliza APENAS o PIN dinâmico do objeto do usuário,
     // que deve vir do Supabase no campo 'pin'.
     const correctPin = selectedUser.pin;

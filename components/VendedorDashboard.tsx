@@ -17,7 +17,9 @@ interface VendedorDashboardProps {
   markMessageAsRead: (id: string) => void;
   // Fix: processSale should return Promise<Sale | null> as it's an async operation in App.tsx
   processSale: (data: any) => Promise<Sale | null>;
+  addClient: (data: Omit<Client, 'id'>) => Promise<void>; // Nova prop
   updateClient: (id: string, data: Partial<Client>) => void;
+  deleteClient: (id: string) => void; // Mantendo para consistência, embora o vendedor não deva deletar
   receivePayment: (id: string, method: PaymentMethod, amount?: number) => void;
   deleteSale: (id: string) => void;
   aceitarCarga: (id: string) => void;
@@ -30,7 +32,7 @@ interface VendedorDashboardProps {
 }
 
 const VendedorDashboard: React.FC<VendedorDashboardProps> = ({ 
-  user, products, clients, cargas, cargasPendentes, sales, commissions, payoutLogs, messages, markMessageAsRead, processSale, updateClient, receivePayment, deleteSale, aceitarCarga, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code
+  user, products, clients, cargas, cargasPendentes, sales, commissions, payoutLogs, messages, markMessageAsRead, processSale, addClient, updateClient, deleteClient, receivePayment, deleteSale, aceitarCarga, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code
 }) => {
   const [activeTab, setActiveTab] = useState<'HOME' | 'ROTEIRO' | 'CARGA' | 'HISTORY' | 'FINANCE' | 'CREDIT' | 'CLIENTS' | 'WEEKLY' | 'STOCK_VIEW'>('HOME');
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
@@ -40,7 +42,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const [extraRouteClientIds, setExtraRouteClientIds] = useState<string[]>([]);
   const [showReceiveModal, setShowReceiveModal] = useState<Sale | null>(null);
   const [valorRecebidoParcial, setValorRecebidoParcial] = useState<string>('');
-  const [editingClient, setEditingClient] = useState<Client | null>(null);
+  const [editingClient, setEditingClient] = useState<Client | 'NEW' | null>(null); // Suporta 'NEW'
   const [expandedDay, setExpandedDay] = useState<number | null>(null);
   const [historyFilter, setHistoryFilter] = useState<'DIA' | 'SEMANA' | 'MES' | 'GERAL'>('DIA');
   const [financeFilter, setFinanceFilter] = useState<'DIA' | 'SEMANA' | 'MES' | 'GERAL'>('DIA');
@@ -113,9 +115,24 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   };
   const isSameDay = (date: Date | undefined) => new Date().toDateString() === (new Date(date ?? new Date())).toDateString(); 
 
-  const handleOpenEditClient = (c: Client) => {
+  const handleOpenEditClient = (c: Client | 'NEW') => {
+    if (c === 'NEW') {
+      // Inicializa com valores padrão para novos clientes
+      setCForm({ 
+        nomeFantasia: '', 
+        telefone: '', 
+        endereco: '', 
+        bairro: '', 
+        diaRoteiro: diaAtual, // Sugere o dia atual como dia de roteiro
+        ativo: true,
+        ativarCnpj: false,
+        cnpj: '',
+        pinLocalizacao: ''
+      });
+    } else {
+      setCForm({ ...c });
+    }
     setEditingClient(c);
-    setCForm({ ...c });
   };
 
   const handlePinLocation = () => {
@@ -133,17 +150,33 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   };
 
   const handleSaveClientBasic = () => {
-    if (editingClient) {
-      updateClient(editingClient.id, { 
-        nomeFantasia: cForm.nomeFantasia ?? '', 
-        diaRoteiro: cForm.diaRoteiro ?? 0, 
-        telefone: cForm.telefone ?? '', 
-        endereco: cForm.endereco ?? '',
-        pinLocalizacao: cForm.pinLocalizacao ?? '' // Salvando o PIN de localização
-      }); 
-      setEditingClient(null);
+    if (!cForm.nomeFantasia || !cForm.telefone || !cForm.endereco || !cForm.bairro) {
+      showToast("Preencha Nome Fantasia, Telefone, Endereço e Bairro.", 'error');
+      return;
+    }
+
+    const clientData: Omit<Client, 'id'> = {
+      nomeFantasia: cForm.nomeFantasia,
+      telefone: cForm.telefone,
+      endereco: cForm.endereco,
+      bairro: cForm.bairro,
+      diaRoteiro: cForm.diaRoteiro ?? diaAtual,
+      ativo: cForm.ativo ?? true,
+      ativarCnpj: cForm.ativarCnpj ?? false,
+      cnpj: cForm.cnpj,
+      pinLocalizacao: cForm.pinLocalizacao,
+      nome: cForm.nome,
+      observacoes: cForm.observacoes,
+    };
+
+    if (editingClient === 'NEW') {
+      addClient(clientData);
+      showToast("Novo cliente cadastrado com sucesso!");
+    } else if (typeof editingClient === 'object') {
+      updateClient(editingClient.id, clientData); 
       showToast("Cliente atualizado");
     }
+    setEditingClient(null);
   };
 
   const handleAceitarCarga = (pendenciaId: string) => {
@@ -452,7 +485,12 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
       {activeTab === 'CLIENTS' && (
         <div className="space-y-4">
-          <header className="px-1"><h2 className="text-xs font-black text-gray-400 uppercase tracking-wider">Meus Clientes</h2></header>
+          <header className="px-1 flex justify-between items-center">
+            <h2 className="text-xs font-black text-gray-400 uppercase tracking-wider">Meus Clientes</h2>
+            <button onClick={() => handleOpenEditClient('NEW')} className="bg-green-600 text-white px-4 py-2 rounded-xl font-black text-xs uppercase shadow-md active:scale-95">
+              <i className="fa-solid fa-user-plus mr-2"></i>Novo
+            </button>
+          </header>
           <div className="grid gap-3">
             {clients.map(c => (
               <div key={c.id} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex justify-between items-center transition-all">
@@ -496,7 +534,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                         return (
                           <div key={c.id} className="p-3 bg-gray-50 rounded-2xl flex justify-between items-center">
                             <div><p className="font-bold text-gray-800 text-xs">{c.nomeFantasia ?? 'Cliente Desconhecido'}</p><p className="text-[9px] text-gray-400 font-semibold mt-0.5">{(c.bairro || 'Sem Bairro')}</p></div>
-                            {/* Botão para puxar para a rota do dia, visível se não estiver já na rota */}
                             {!isInCurrentRoute && (
                               <button 
                                 onClick={() => handleAddToTodayRoute(c.id)} 
@@ -617,12 +654,13 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       {editingClient && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[310] flex items-end sm:items-center justify-center p-4">
           <div className="bg-white w-full max-w-md rounded-t-[2rem] sm:rounded-[2rem] shadow-2xl p-8 animate-in slide-in-from-bottom duration-300 max-h-[90vh] overflow-y-auto">
-             <div className="flex justify-between items-center mb-6"><h3 className="font-black text-gray-800 uppercase text-sm tracking-tight">Editar Cliente</h3></div>
+             <div className="flex justify-between items-center mb-6"><h3 className="font-black text-gray-800 uppercase text-sm tracking-tight">{editingClient === 'NEW' ? 'Novo Cliente' : 'Editar Cliente'}</h3></div>
              <div className="space-y-4 pb-6">
-                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Nome Fantasia</label><input value={cForm.nomeFantasia || ''} onChange={e => setCForm({...cForm, nomeFantasia: e.target.value})} className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100" /></div>
-                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Telefone / WhatsApp</label><input value={cForm.telefone || ''} onChange={e => setCForm({...cForm, telefone: e.target.value})} className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100" /></div>
+                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Nome Fantasia</label><input value={cForm.nomeFantasia || ''} onChange={e => setCForm({...cForm, nomeFantasia: e.target.value})} placeholder="Nome Fantasia" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100" /></div>
+                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Telefone / WhatsApp</label><input value={cForm.telefone || ''} onChange={e => setCForm({...cForm, telefone: e.target.value})} placeholder="Telefone" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100" /></div>
+                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Endereço</label><input value={cForm.endereco || ''} onChange={e => setCForm({...cForm, endereco: e.target.value})} placeholder="Endereço" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100" /></div>
+                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Bairro</label><input value={cForm.bairro || ''} onChange={e => setCForm({...cForm, bairro: e.target.value})} placeholder="Bairro" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100" /></div>
                 <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Dia de Atendimento</label><select value={cForm.diaRoteiro ?? 1} onChange={e => setCForm({...cForm, diaRoteiro: parseInt(e.target.value)})} className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100">{[1, 2, 3, 4, 5, 6].map(d => (<option key={d} value={d}>{DIAS_SEMANA[d] ?? 'N/D'}</option>))}</select></div> 
-                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Endereço</label><input value={cForm.endereco || ''} onChange={e => setCForm({...cForm, endereco: e.target.value})} className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100" /></div>
                 
                 {/* Campo de PIN de Localização com botão de captura */}
                 <div className="space-y-1">

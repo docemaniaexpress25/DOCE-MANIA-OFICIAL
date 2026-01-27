@@ -220,7 +220,18 @@ const App: React.FC = () => {
   };
 
   const addClient = async (data: Omit<Client, 'id'>) => {
-    const res = await clientService.insertClient(data);
+    // Garantir que campos obrigatórios para o DB sejam preenchidos, mesmo que o vendedor não os forneça
+    const clientPayload: Omit<Client, 'id'> = {
+      ...data,
+      bairro: data.bairro || 'N/D',
+      endereco: data.endereco || 'N/D',
+      telefone: data.telefone || 'N/D',
+      diaRoteiro: data.diaRoteiro || 1,
+      ativo: data.ativo ?? true,
+      ativarCnpj: data.ativarCnpj ?? false,
+    };
+
+    const res = await clientService.insertClient(clientPayload);
     if (res) await fetchClients();
   };
 
@@ -389,11 +400,13 @@ const App: React.FC = () => {
           />
         ) : (
           <VendedorDashboard 
-            user={currentUser} products={products} clients={clients} cargas={cargas} sales={sales} commissions={commissions}
+            products={products} users={users} cargas={cargas} clients={clients} sales={sales} commissions={commissions}
+            addClient={addClient} updateClient={updateClient} deleteClient={deleteClient} // Passando addClient e deleteClient
+            user={currentUser} 
             payoutLogs={payoutLogs.filter(l => l.vendedorId === currentUser.id)}
             cargasPendentes={cargasPendentes}
             messages={messages.filter(m => m.vendedorId === currentUser.id)}
-            markMessageAsRead={markMessageAsRead} processSale={processSale} updateClient={updateClient}
+            markMessageAsRead={markMessageAsRead} processSale={processSale} 
             receivePayment={receiveAccount} deleteSale={(id) => deleteSaleInternal(id, false)} aceitarCarga={aceitarCarga}
             margemMinima={margemMinima} margemMinimaAtiva={margemMinimaAtiva} pix1Name={pix1Name} pix1Code={pix1Code}
             pix2Name={pix2Name} pix2Code={pix2Code}

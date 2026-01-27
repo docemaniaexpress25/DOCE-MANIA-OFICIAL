@@ -14,10 +14,10 @@ export const commissionService = {
     return data.map(c => ({
       id: c.id,
       saleId: c.sale_id,
-      vendedorId: c.seller_id, // FIX: Mapped from seller_id
-      valor: safeNumber(c.valor_comissao), // FIX: Mapped from valor_comissao
-      valorBase: safeNumber(c.valor_base), // NEW: Mapped from valor_base
-      percentual: safeNumber(c.percentual), // NEW: Mapped from percentual
+      vendedorId: c.seller_id, // Mapped from seller_id
+      valor: safeNumber(c.valor_comissao), // Mapped from valor_comissao
+      valorBase: safeNumber(c.valor_base), // Mapped from valor_base
+      percentual: safeNumber(c.percentual), // Mapped from percentual
       status: c.status,
       dataGeracao: new Date(c.created_at)
     })) as Commission[];
@@ -32,10 +32,10 @@ export const commissionService = {
     
     const { error } = await supabase.from('commissions').insert({
       sale_id: comm.saleId,
-      seller_id: comm.vendedorId, // FIX: Using seller_id
-      valor_comissao: comm.valor, // FIX: Using valor_comissao
-      valor_base: comm.valorBase, // NEW: Using valor_base
-      percentual: comm.percentual, // NEW: Using percentual
+      seller_id: comm.vendedorId, // Using seller_id
+      valor_comissao: comm.valor, // Using valor_comissao
+      valor_base: comm.valorBase, // Using valor_base
+      percentual: comm.percentual, // Using percentual
       status: comm.status,
       created_at: comm.dataGeracao.toISOString()
     });
@@ -43,15 +43,19 @@ export const commissionService = {
   },
 
   async updateCommissionStatus(id: string, status: string): Promise<boolean> {
+    // Persiste a atualização de status no Supabase
     const { error } = await supabase.from('commissions').update({ status: status }).eq('id', id);
+    if (error) console.error('Erro ao atualizar status da comissão:', error);
     return !error;
   },
 
   async bulkUpdateStatusByVendedor(vId: string, oldStatus: string, newStatus: string): Promise<boolean> {
+    // Persiste a atualização em massa no Supabase
     const { error } = await supabase.from('commissions')
       .update({ status: newStatus })
-      .eq('seller_id', vId) // FIX: Using seller_id
+      .eq('seller_id', vId) // Using seller_id
       .eq('status', oldStatus);
+    if (error) console.error('Erro ao atualizar status em massa das comissões:', error);
     return !error;
   },
 
@@ -71,15 +75,20 @@ export const commissionService = {
   },
 
   async insertPayout(log: Omit<CommissionPaymentLog, 'id'>): Promise<boolean> {
-    const { error } = await supabase.from('commission_payment_logs').insert({
-      vendedor_id: log.vendedorId,
-      vendedor_nome: log.vendedorNome,
+    // Construindo o payload de forma limpa, mapeando os campos da interface para o DB
+    const payload = {
+      seller_id: log.vendedorId, // Mapeando vendedorId para seller_id (assumindo que são o mesmo)
       valor_pago: log.valorPago,
+      vendedor_nome: log.vendedorNome,
       valor_restante: log.valorRestante,
       tipo: log.tipo,
-      created_at: log.dataPagamento.toISOString(),
-      admin_id: log.adminId
-    });
+      admin_id: log.adminId,
+      created_at: log.dataPagamento.toISOString(), // Usando created_at para data_pagamento
+    };
+    
+    const { error } = await supabase.from('commission_payment_logs').insert(payload);
+    
+    if (error) console.error('Erro ao inserir log de pagamento de comissão:', error);
     return !error;
   },
 

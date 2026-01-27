@@ -102,5 +102,5 @@ export interface SystemMessage {
   mensagem: string;
   data: Date;
   lida: boolean;
-  type?: 'INFO' | 'COMMISSION_CONFIRMATION';
+  type?: 'INFO' | 'COMMISSION_CONFIRMATION'; // Adicionado 'type'
 }

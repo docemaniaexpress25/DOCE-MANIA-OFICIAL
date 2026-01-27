@@ -325,12 +325,14 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       {activeTab === 'ROTEIRO' && (
         <div className="space-y-4">
           <header className="flex justify-between items-center px-1">
-            <h2 className="text-xs font-black uppercase">
-              Hoje: {DIAS_SEMANA[diaAtual] ?? 'N/D'}
-            </h2>
-            <span className="text-[10px] font-black uppercase text-gray-400">
-              {new Date().toLocaleDateString()} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-            </span>
+            <div className="flex flex-col items-start">
+              <h2 className="text-xl font-black text-gray-800 tracking-tight leading-none">
+                {DIAS_SEMANA[diaAtual] ?? 'N/D'}
+              </h2>
+              <span className="text-[10px] font-black uppercase text-gray-400 mt-1">
+                {new Date().toLocaleDateString('pt-BR')} {new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+              </span>
+            </div>
             <span className="bg-blue-100 text-blue-600 text-[10px] px-2 py-1 rounded-lg font-black">{rotaDeHoje.length} VISITAS</span>
           </header>
           {rotaDeHoje.map(c => {

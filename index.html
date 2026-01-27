@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Pronta Entrega Pro</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <style>
+      body {
+        -webkit-tap-highlight-color: transparent;
+        background-color: #f3f4f6;
+        font-family: 'Inter', sans-serif;
+      }
+      .safe-bottom {
+        padding-bottom: env(safe-area-inset-bottom);
+      }
+      .font-semibold { font-weight: 600; }
+      .font-medium { font-weight: 500; }
+      .font-regular { font-weight: 400; }
+    </style>
+<script type="importmap">
+{
+  "imports": {
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "react": "https://esm.sh/react@^19.2.3",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@^2.91.1"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+<body>
+    <div id="root"></div>
+<script type="module" src="/index.tsx"></script>
+</body>
+<script>
+  // Garante que process.env exista em um contexto de navegador para variáveis de ambiente
+  window.process = window.process || {};
+  window.process.env = window.process.env || {};
+
+  // Configura as variáveis de ambiente do Supabase
+  // Substitua 'YOUR_SUPABASE_URL_HERE' e 'YOUR_SUPABASE_ANON_KEY_HERE' com seus valores reais
+  window.process.env.SUPABASE_URL = 'https://eyjhqjrczzpfthsddlpg.supabase.co';
+  window.process.env.SUPABASE_ANON_KEY = 'sb_publishable_zZvpUsuxPRjT28OFxkHtag_hvRCu7vW';
+</script>
+</html>

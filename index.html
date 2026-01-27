@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Pronta Entrega Pro</title>
+    <link rel="manifest" href="/manifest.json">
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -37,7 +38,6 @@
 <body>
     <div id="root"></div>
 <script type="module" src="/index.tsx"></script>
-</body>
 <script>
   // Garante que process.env exista em um contexto de navegador para variáveis de ambiente
   window.process = window.process || {};
@@ -47,5 +47,18 @@
   // Substitua 'YOUR_SUPABASE_URL_HERE' e 'YOUR_SUPABASE_ANON_KEY_HERE' com seus valores reais
   window.process.env.SUPABASE_URL = 'https://eyjhqjrczzpfthsddlpg.supabase.co';
   window.process.env.SUPABASE_ANON_KEY = 'sb_publishable_zZvpUsuxPRjT28OFxkHtag_hvRCu7vW';
+
+  // PWA: Register Service Worker
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js')
+        .then(registration => {
+          console.log('Service Worker registered: ', registration);
+        })
+        .catch(registrationError => {
+          console.log('Service Worker registration failed: ', registrationError);
+        });
+    });
+  }
 </script>
 </html>

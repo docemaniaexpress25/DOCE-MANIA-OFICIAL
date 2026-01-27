@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { User, Product, Carga, Sale, Commission, Client, PaymentMethod, CargaPendente, CommissionPaymentLog, SystemMessage } from './types';
 import AdminDashboard from './components/AdminDashboard';
 import VendedorDashboard from './components/VendedorDashboard';
@@ -6,16 +6,18 @@ import Login from './components/Login';
 import { userService } from './services/userService';
 import { productService } from './services/productService';
 import { clientService } from './services/clientService';
-import { saleService } from './services/saleService';
-import { commissionService } from './services/commissionService';
-import { cargaService } from './services/cargaService';
-import { messageService } from './services/messageService';
 import { appSettingsService, AppSettings } from './services/appSettingsService';
+import { generateId } from './utils/uuid';
+import { 
+  loadLocalState, saveLocalState, 
+  DEFAULT_CARGAS, DEFAULT_CARGAS_PENDENTES, DEFAULT_SALES, 
+  DEFAULT_COMMISSIONS, DEFAULT_PAYOUT_LOGS, DEFAULT_MESSAGES 
+} from './utils/persistence';
 
 const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   
-  // Configurações Globais (agora persistidas)
+  // Configurações Globais (Supabase-backed)
   const [logo, setLogo] = useState<string | null>(null);
   const [margemGlobalAtiva, setMargemGlobalAtiva] = useState(true);
   const [margemGlobalValor, setMargemGlobalValor] = useState(35);
@@ -28,86 +30,59 @@ const App: React.FC = () => {
 
   const [adminNotification, setAdminNotification] = useState<string | null>(null);
   
+  // Dados Supabase (Carregados na inicialização)
   const [users, setUsers] = useState<User[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
-  const [cargas, setCargas] = useState<Carga[]>([]);
-  const [cargasPendentes, setCargasPendentes] = useState<CargaPendente[]>([]);
-  const [sales, setSales] = useState<Sale[]>([]);
-  const [commissions, setCommissions] = useState<Commission[]>([]);
-  const [payoutLogs, setPayoutLogs] = useState<CommissionPaymentLog[]>([]);
-  const [messages, setMessages] = useState<SystemMessage[]>([]);
 
-  const fetchUsers = async () => { setUsers(await userService.getAllUsers()); };
-  const fetchProducts = async () => { setProducts(await productService.getAllProducts()); };
-  const fetchClients = async () => { setClients(await clientService.getAllClients()); };
-  const fetchSales = async () => { setSales(await saleService.getAllSales()); };
-  const fetchCommissions = async () => { 
-    setCommissions(await commissionService.getAllCommissions());
-    setPayoutLogs(await commissionService.getAllPayouts());
-  };
+  // Dados Locais (Persistidos via localStorage)
+  const [cargas, setCargas] = useState<Carga[]>(loadLocalState('cargas', DEFAULT_CARGAS));
+  const [cargasPendentes, setCargasPendentes] = useState<CargaPendente[]>(loadLocalState('cargasPendentes', DEFAULT_CARGAS_PENDENTES));
+  const [sales, setSales] = useState<Sale[]>(loadLocalState('sales', DEFAULT_SALES));
+  const [commissions, setCommissions] = useState<Commission[]>(loadLocalState('commissions', DEFAULT_COMMISSIONS));
+  const [payoutLogs, setPayoutLogs] = useState<CommissionPaymentLog[]>(loadLocalState('payoutLogs', DEFAULT_PAYOUT_LOGS));
+  const [messages, setMessages] = useState<SystemMessage[]>(loadLocalState('messages', DEFAULT_MESSAGES));
+
+  // --- Efeitos de Persistência Local ---
+  useEffect(() => { saveLocalState('cargas', cargas); }, [cargas]);
+  useEffect(() => { saveLocalState('cargasPendentes', cargasPendentes); }, [cargasPendentes]);
+  useEffect(() => { saveLocalState('sales', sales); }, [sales]);
+  useEffect(() => { saveLocalState('commissions', commissions); }, [commissions]);
+  useEffect(() => { saveLocalState('payoutLogs', payoutLogs); }, [payoutLogs]);
+  useEffect(() => { saveLocalState('messages', messages); }, [messages]);
+  // -------------------------------------
+
+  const fetchUsers = useCallback(async () => { setUsers(await userService.getAllUsers()); }, []);
+  const fetchProducts = useCallback(async () => { setProducts(await productService.getAllProducts()); }, []);
+  const fetchClients = useCallback(async () => { setClients(await clientService.getAllClients()); }, []);
   
-  const fetchCargas = async () => {
-    const active = await cargaService.getAllCargas();
-    const pending = await cargaService.getAllCargasPendentes(
-      currentUser?.role === 'VENDEDOR' ? currentUser.id : undefined
-    );
-    setCargas(active);
-    setCargasPendentes(pending);
-  };
+  // Funções de fetch para dados locais foram removidas, pois agora são carregadas via loadLocalState
 
-  const fetchMessages = async () => { setMessages(await messageService.getAllMessages()); };
+  const fetchCoreData = useCallback(async () => {
+    const settings = await appSettingsService.getSettings();
+    setLogo(settings.logo);
+    setMargemGlobalAtiva(settings.margemGlobalAtiva);
+    setMargemGlobalValor(settings.margemGlobalValor);
+    setMargemMinimaAtiva(settings.margemMinimaAtiva);
+    setMargemMinima(settings.margemMinima);
+    setPix1Name(settings.pix1Name ?? "Pix Banco A");
+    setPix1Code(settings.pix1Code);
+    setPix2Name(settings.pix2Name ?? "Pix Banco B");
+    setPix2Code(settings.pix2Code);
 
-  // Funções de persistência para configurações
-  const updateSetting = async (key: keyof AppSettings, value: any) => {
-    const success = await appSettingsService.updateSettings({ [key]: value });
-    if (success) {
-      // Atualiza o estado local após a persistência
-      if (key === 'logo') setLogo(value);
-      if (key === 'margemGlobalAtiva') setMargemGlobalAtiva(value);
-      if (key === 'margemGlobalValor') setMargemGlobalValor(value);
-      if (key === 'margemMinimaAtiva') setMargemMinimaAtiva(value);
-      if (key === 'margemMinima') setMargemMinima(value);
-      if (key === 'pix1Name') setPix1Name(value);
-      if (key === 'pix1Code') setPix1Code(value);
-      if (key === 'pix2Name') setPix2Name(value);
-      if (key === 'pix2Code') setPix2Code(value);
-    }
-  };
+    await Promise.all([
+      fetchUsers(),
+      fetchProducts(),
+      fetchClients()
+    ]);
+  }, [fetchUsers, fetchProducts, fetchClients]);
 
   // Carga inicial de dados globais e configurações
   useEffect(() => {
-    const loadGlobals = async () => {
-      const settings = await appSettingsService.getSettings();
-      setLogo(settings.logo);
-      setMargemGlobalAtiva(settings.margemGlobalAtiva);
-      setMargemGlobalValor(settings.margemGlobalValor);
-      setMargemMinimaAtiva(settings.margemMinimaAtiva);
-      setMargemMinima(settings.margemMinima);
-      setPix1Name(settings.pix1Name ?? "Pix Banco A");
-      setPix1Code(settings.pix1Code);
-      setPix2Name(settings.pix2Name ?? "Pix Banco B");
-      setPix2Code(settings.pix2Code);
+    fetchCoreData();
+  }, [fetchCoreData]);
 
-      await Promise.all([
-        fetchUsers(),
-        fetchProducts(),
-        fetchClients()
-      ]);
-    };
-    loadGlobals();
-  }, []);
-
-  // Recarrega dados específicos sempre que o usuário logar ou mudar
-  useEffect(() => {
-    if (currentUser) {
-      fetchCargas();
-      fetchSales();
-      fetchCommissions();
-      fetchMessages();
-    }
-  }, [currentUser]);
-
+  // Recalcula preço de venda se margem global mudar
   useEffect(() => {
     if (margemGlobalAtiva) {
       setProducts(prev => prev.map(p => ({
@@ -117,6 +92,28 @@ const App: React.FC = () => {
     }
   }, [margemGlobalAtiva, margemGlobalValor]);
 
+  // Função para atualizar configurações globais e persistir no Supabase
+  const updateSetting = useCallback(async (key: keyof AppSettings, value: any) => {
+    const success = await appSettingsService.updateSettings({ [key]: value });
+
+    if (success) {
+        // Atualiza o estado local
+        switch (key) {
+            case 'logo': setLogo(value); break;
+            case 'margemGlobalAtiva': setMargemGlobalAtiva(value); break;
+            case 'margemGlobalValor': setMargemGlobalValor(value); break;
+            case 'margemMinimaAtiva': setMargemMinimaAtiva(value); break;
+            case 'margemMinima': setMargemMinima(value); break;
+            case 'pix1Name': setPix1Name(value); break;
+            case 'pix1Code': setPix1Code(value); break;
+            case 'pix2Name': setPix2Name(value); break;
+            case 'pix2Code': setPix2Code(value); break;
+        }
+    }
+  }, []);
+
+  // --- Funções CRUD Supabase (Users, Products, Clients) ---
+  
   const addUser = async (nome: string, foto?: string, telefone?: string) => {
     const newUser: Omit<User, 'id'> = {
       nome,
@@ -178,49 +175,7 @@ const App: React.FC = () => {
     if (res) await fetchProducts();
   };
 
-  // Função para criar uma Carga Pendente (requer aceite do vendedor)
-  const syncVendedorCarga = async (vendedorId: string, novosItens: { produtoId: string, quantidade: number }[]) => {
-    const cp: Omit<CargaPendente, 'id'> = { vendedorId, itens: novosItens, data: new Date() };
-    const res = await cargaService.insertCargaPendente(cp);
-    if (res) {
-      await fetchCargas(); // Re-sincroniza estado imediatamente após insert bem sucedido
-    }
-  };
-
-  // NOVA FUNÇÃO: Aplica a carga diretamente (sem aceite do vendedor)
-  const applyCargaDirectly = async (vendedorId: string, novosItens: { produtoId: string, quantidade: number }[]) => {
-    const res = await cargaService.updateActiveCarga(vendedorId, novosItens);
-    if (res) {
-      await fetchCargas();
-      setAdminNotification("Carga aplicada diretamente com sucesso.");
-    }
-  };
-
-  const aceitarCarga = async (pendenciaId: string) => {
-    const pendencia = cargasPendentes.find(p => p.id === pendenciaId);
-    if (!pendencia) return;
-
-    // 1. Atualizar estoque principal dos produtos no Supabase
-    for (const item of pendencia.itens) {
-      const p = products.find(prod => prod.id === item.produtoId);
-      if (p) {
-        await productService.updateProduct(p.id, { estoquePrincipal: p.estoquePrincipal - item.quantidade });
-      }
-    }
-
-    // 2. Atualizar carga ativa do vendedor no Supabase
-    await cargaService.updateActiveCarga(pendencia.vendedorId, pendencia.itens);
-
-    // 3. Deletar pendência no Supabase
-    await cargaService.deleteCargaPendente(pendenciaId);
-
-    // 4. Refresh Total para garantir integridade
-    await Promise.all([fetchProducts(), fetchCargas()]);
-    setAdminNotification("Carga aceita pelo vendedor com sucesso.");
-  };
-
   const addClient = async (data: Omit<Client, 'id'>) => {
-    // Garantir que campos obrigatórios para o DB sejam preenchidos, mesmo que o vendedor não os forneça
     const clientPayload: Omit<Client, 'id'> = {
       ...data,
       bairro: data.bairro || 'N/D',
@@ -245,134 +200,215 @@ const App: React.FC = () => {
     if (res) await fetchClients();
   };
 
+  // --- Funções CRUD Locais (Cargas, Vendas, Comissões, Mensagens) ---
+
+  // Função para criar uma Carga Pendente (Local)
+  const syncVendedorCarga = (vendedorId: string, novosItens: { produtoId: string, quantidade: number }[]) => {
+    const cp: CargaPendente = { id: generateId(), vendedorId, itens: novosItens, data: new Date() };
+    setCargasPendentes(prev => [...prev, cp]);
+    setAdminNotification("Carga enviada para aceite do vendedor.");
+  };
+
+  // Função para aplicar a carga diretamente (Local)
+  const applyCargaDirectly = (vendedorId: string, novosItens: { produtoId: string, quantidade: number }[]) => {
+    // Remove a carga antiga e insere a nova situação
+    const otherCargas = cargas.filter(c => c.vendedorId !== vendedorId);
+    const newCargas = novosItens.filter(i => i.quantidade > 0).map(i => ({
+      vendedorId: vendedorId,
+      produtoId: i.produtoId,
+      quantidade: i.quantidade
+    }));
+    setCargas([...otherCargas, ...newCargas]);
+    setAdminNotification("Carga aplicada diretamente com sucesso.");
+  };
+
+  // Função para aceitar carga pendente (Local + Supabase para estoque central)
+  const aceitarCarga = async (pendenciaId: string) => {
+    const pendencia = cargasPendentes.find(p => p.id === pendenciaId);
+    if (!pendencia) return;
+
+    // 1. Atualizar estoque principal dos produtos no Supabase
+    for (const item of pendencia.itens) {
+      const p = products.find(prod => prod.id === item.produtoId);
+      if (p) {
+        await productService.updateProduct(p.id, { estoquePrincipal: p.estoquePrincipal - item.quantidade });
+      }
+    }
+
+    // 2. Atualizar carga ativa do vendedor (Local)
+    const otherCargas = cargas.filter(c => c.vendedorId !== pendencia.vendedorId);
+    const newCargas = pendencia.itens.filter(i => i.quantidade > 0).map(i => ({
+      vendedorId: pendencia.vendedorId,
+      produtoId: i.produtoId,
+      quantidade: i.quantidade
+    }));
+    setCargas([...otherCargas, ...newCargas]);
+
+    // 3. Deletar pendência (Local)
+    setCargasPendentes(prev => prev.filter(cp => cp.id !== pendenciaId));
+
+    // 4. Refresh Supabase Products
+    await fetchProducts();
+    setAdminNotification("Carga aceita pelo vendedor com sucesso.");
+  };
+
+  // Processar Venda (Local)
   const processSale = async (saleData: any) => {
     const valorTotalFixed = Number(saleData.valorTotal.toFixed(2));
-    const salePayload: Omit<Sale, 'id'> = { 
+    
+    const newSale: Sale = { 
       ...saleData, 
+      id: generateId(), // ID Local
       data: new Date(), 
       valorTotal: valorTotalFixed,
       valorPago: saleData.statusPagamento === 'PAGO' ? valorTotalFixed : 0,
     };
 
-    const newSale = await saleService.insertSale(salePayload);
-    if (!newSale) return null;
+    // 1. Atualizar Sales (Local)
+    setSales(prev => [...prev, newSale]);
 
-    const minhaCarga = cargas.filter(c => c.vendedorId === saleData.vendedorId);
-    const novosItensCarga = minhaCarga.map(c => {
-      const itemVendido = saleData.itens.find((i: any) => i.produtoId === c.produtoId);
-      return { produtoId: c.produtoId, quantidade: Math.max(0, c.quantidade - (itemVendido?.quantidade || 0)) };
+    // 2. Atualizar Carga (Local)
+    setCargas(prevCargas => {
+      const updatedCargas = [...prevCargas];
+      saleData.itens.forEach((item: any) => {
+        const idx = updatedCargas.findIndex(c => c.vendedorId === saleData.vendedorId && c.produtoId === item.produtoId);
+        if (idx !== -1) {
+          updatedCargas[idx].quantidade = Math.max(0, updatedCargas[idx].quantidade - item.quantidade);
+        }
+      });
+      return updatedCargas.filter(c => c.quantidade > 0);
     });
-    await cargaService.updateActiveCarga(saleData.vendedorId, novosItensCarga);
 
+    // 3. Criar Comissão (Local)
     const totalComissao = saleData.itens.reduce((acc: number, item: any) => {
       const p = products.find(prod => prod.id === item.produtoId);
       return acc + (item.precoVenda * item.quantidade * ((p?.comissaoPercentual || 0) / 100));
     }, 0);
     
-    // Calculate effective percentage for the whole commission record
     const effectivePercentual = valorTotalFixed > 0 ? (totalComissao / valorTotalFixed) * 100 : 0;
 
-    await commissionService.insertCommission({
+    const newCommission: Commission = {
+      id: generateId(), // ID Local
       saleId: newSale.id,
       vendedorId: saleData.vendedorId,
       valor: Number(totalComissao.toFixed(2)),
-      valorBase: valorTotalFixed, // Pass total sale value as base
-      percentual: Number(effectivePercentual.toFixed(2)), // Pass calculated effective percentage
+      valorBase: valorTotalFixed,
+      percentual: Number(effectivePercentual.toFixed(2)),
       status: saleData.statusPagamento === 'PAGO' ? 'DISPONIVEL' : 'A_RECEBER',
       dataGeracao: new Date()
-    });
+    };
+    setCommissions(prev => [...prev, newCommission]);
 
-    await Promise.all([fetchSales(), fetchCargas(), fetchCommissions()]);
     return newSale;
   };
 
-  const deleteSaleInternal = async (saleId: string, isAdmin: boolean) => {
+  // Excluir Venda (Local)
+  const deleteSaleInternal = (saleId: string, isAdmin: boolean) => {
     const saleToDelete = sales.find(s => s.id === saleId);
     if (!saleToDelete) return;
 
-    const minhaCarga = cargas.filter(c => c.vendedorId === saleToDelete.vendedorId);
-    const cargaAtualizada = [...minhaCarga];
-    saleToDelete.itens.forEach(item => {
-      const idx = cargaAtualizada.findIndex(c => c.produtoId === item.produtoId);
-      if (idx !== -1) cargaAtualizada[idx].quantidade += item.quantidade;
-      else cargaAtualizada.push({ vendedorId: saleToDelete.vendedorId, produtoId: item.produtoId, quantidade: item.quantidade });
-    });
-    await cargaService.updateActiveCarga(saleToDelete.vendedorId, cargaAtualizada);
-
-    await commissionService.deleteCommissionBySale(saleId);
-    await saleService.deleteSale(saleId);
-
-    await Promise.all([fetchSales(), fetchCargas(), fetchCommissions()]);
-  };
-
-  const receiveAccount = async (saleId: string, method: PaymentMethod, amount?: number) => {
-    const s = sales.find(sale => sale.id === saleId);
-    if (!s) return;
-
-    const novoValorPago = Number(((s.valorPago ?? 0) + (amount || s.valorTotal)).toFixed(2));
-    const totalQuitado = novoValorPago >= s.valorTotal;
-
-    await saleService.updateSale(saleId, { 
-      valorPago: novoValorPago, 
-      statusPagamento: totalQuitado ? 'PAGO' : 'PENDENTE',
-      metodoPagamento: method
+    // 1. Estornar Carga (Local)
+    setCargas(prevCargas => {
+      const updatedCargas = [...prevCargas];
+      saleToDelete.itens.forEach(item => {
+        const idx = updatedCargas.findIndex(c => c.vendedorId === saleToDelete.vendedorId && c.produtoId === item.produtoId);
+        if (idx !== -1) updatedCargas[idx].quantidade += item.quantidade;
+        else updatedCargas.push({ vendedorId: saleToDelete.vendedorId, produtoId: item.produtoId, quantidade: item.quantidade });
+      });
+      return updatedCargas;
     });
 
-    if (totalQuitado) {
-      const comm = commissions.find(c => c.saleId === saleId);
-      if (comm) await commissionService.updateCommissionStatus(comm.id, 'DISPONIVEL');
-    }
+    // 2. Remover Comissões (Local)
+    setCommissions(prev => prev.filter(c => c.saleId !== saleId));
 
-    await Promise.all([fetchSales(), fetchCommissions()]);
+    // 3. Remover Venda (Local)
+    setSales(prev => prev.filter(s => s.id !== saleId));
   };
 
-  const handlePayCommission = async (vendedorId: string, amount: number, type: 'TOTAL' | 'PARCIAL', adminId: string) => {
+  // Receber Conta (Local)
+  const receiveAccount = (saleId: string, method: PaymentMethod, amount?: number) => {
+    setSales(prevSales => prevSales.map(s => {
+      if (s.id !== saleId) return s;
+      
+      const novoValorPago = Number(((s.valorPago ?? 0) + (amount || s.valorTotal)).toFixed(2));
+      const totalQuitado = novoValorPago >= s.valorTotal;
+
+      if (totalQuitado) {
+        // Atualiza status da comissão para DISPONIVEL
+        setCommissions(prevComms => prevComms.map(c => 
+          c.saleId === saleId ? { ...c, status: 'DISPONIVEL' } : c
+        ));
+      }
+
+      return {
+        ...s,
+        valorPago: novoValorPago,
+        statusPagamento: totalQuitado ? 'PAGO' : 'PENDENTE',
+        metodoPagamento: method
+      };
+    }));
+  };
+
+  // Pagar Comissão (Local)
+  const handlePayCommission = (vendedorId: string, amount: number, type: 'TOTAL' | 'PARCIAL', adminId: string) => {
     const v = users.find(u => u.id === vendedorId);
     if (!v) return;
 
     const jaPagoNoPassado = payoutLogs.filter(l => l.vendedorId === vendedorId).reduce((acc, curr) => acc + curr.valorPago, 0);
-    
-    // Calcula o valor total de comissões que são elegíveis para pagamento (DISPONIVEL, PENDENTE_CONFIRMACAO, PAGO)
     const totalCommsEligible = commissions
       .filter(c => c.vendedorId === vendedorId && c.status !== 'A_RECEBER')
       .reduce((acc, curr) => acc + curr.valor, 0);
-      
-    const saldoReal = totalCommsEligible - jaPagoNoPassado; // Saldo real disponível
+    const saldoReal = totalCommsEligible - jaPagoNoPassado;
 
-    // A validação de valor é feita no componente, mas garantimos que o log seja consistente
-    
-    await commissionService.insertPayout({
+    // 1. Inserir Log de Pagamento (Local)
+    const newLog: CommissionPaymentLog = {
+      id: generateId(), // ID Local
       vendedorId, vendedorNome: v.nome, valorPago: amount, valorRestante: saldoReal - amount, tipo: type, dataPagamento: new Date(), adminId
-    });
+    };
+    setPayoutLogs(prev => [...prev, newLog]);
 
-    // Marca as comissões DISPONIVEIS como PENDENTE_CONFIRMACAO para removê-las do pool disponível
-    await commissionService.bulkUpdateStatusByVendedor(vendedorId, 'DISPONIVEL', 'PENDENTE_CONFIRMACAO');
+    // 2. Marcar comissões DISPONIVEIS como PENDENTE_CONFIRMACAO (Local)
+    setCommissions(prev => prev.map(c => 
+      c.vendedorId === vendedorId && c.status === 'DISPONIVEL' 
+        ? { ...c, status: 'PENDENTE_CONFIRMACAO' } 
+        : c
+    ));
 
-    await messageService.insertMessage({
+    // 3. Inserir Mensagem do Sistema (Local)
+    const newMessage: SystemMessage = {
+      id: generateId(), // ID Local
       vendedorId,
       titulo: "💰 Comissão Disponível para Confirmação",
       mensagem: `O administrador registrou o pagamento de R$ ${amount.toFixed(2)}. Aceite para confirmar.`,
       data: new Date(),
       lida: false,
       type: 'COMMISSION_CONFIRMATION'
-    });
-
-    await Promise.all([fetchCommissions(), fetchMessages()]);
+    };
+    setMessages(prev => [...prev, newMessage]);
   };
 
-  const markMessageAsRead = async (msgId: string) => {
+  // Marcar Mensagem como Lida (Local)
+  const markMessageAsRead = (msgId: string) => {
     const m = messages.find(msg => msg.id === msgId);
     if (m && m.type === 'COMMISSION_CONFIRMATION') {
-      await commissionService.bulkUpdateStatusByVendedor(m.vendedorId, 'PENDENTE_CONFIRMACAO', 'PAGO');
+      // Se for confirmação de comissão, marca as comissões PENDENTE_CONFIRMACAO como PAGO
+      setCommissions(prev => prev.map(c => 
+        c.vendedorId === m.vendedorId && c.status === 'PENDENTE_CONFIRMACAO' 
+          ? { ...c, status: 'PAGO' } 
+          : c
+      ));
     }
-    await messageService.updateMessage(msgId, { lida: true });
-    await Promise.all([fetchMessages(), fetchCommissions()]);
+    
+    // Marca a mensagem como lida
+    setMessages(prev => prev.map(msg => 
+      msg.id === msgId ? { ...msg, lida: true } : msg
+    ));
   };
 
   if (!currentUser) return <Login users={users} onLogin={setCurrentUser} logo={logo} />;
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-20 md:pb-0">
+    <div className="min-h-screen bg-gray-50 pb-20 md:pb-0 flex flex-col">
       <header className="bg-white text-gray-800 h-20 px-6 shadow-sm flex justify-between items-center sticky top-0 z-50 border-b border-gray-100">
         <div className="flex items-center h-full">
           {logo ? ( <img src={logo} alt="Logo" className="h-16 w-auto object-contain" /> ) : (
@@ -391,6 +427,7 @@ const App: React.FC = () => {
           </button>
         </div>
       </header>
+      
       <main className="container mx-auto p-4 max-w-lg">
         {currentUser.role === 'ADMIN' ? (
           <AdminDashboard 
@@ -412,7 +449,7 @@ const App: React.FC = () => {
             addClient={addClient} updateClient={updateClient} deleteClient={deleteClient} // Passando addClient e deleteClient
             user={currentUser} 
             payoutLogs={payoutLogs.filter(l => l.vendedorId === currentUser.id)}
-            cargasPendentes={cargasPendentes}
+            cargasPendentes={cargasPendentes.filter(cp => cp.vendedorId === currentUser.id)}
             messages={messages.filter(m => m.vendedorId === currentUser.id)}
             markMessageAsRead={markMessageAsRead} processSale={processSale} 
             receivePayment={receiveAccount} deleteSale={(id) => deleteSaleInternal(id, false)} aceitarCarga={aceitarCarga}

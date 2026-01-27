@@ -71,23 +71,22 @@ export const appSettingsService = {
     if (settings.pix2Name !== undefined) payload.pix2_name = settings.pix2Name;
     if (settings.pix2Code !== undefined) payload.pix2_code = settings.pix2Code;
 
+    // Adiciona o ID da linha única e mescla com os valores padrão para garantir que todos os campos NOT NULL sejam preenchidos na inserção (upsert)
+    const upsertPayload = {
+        id: 'global_settings',
+        margem_global_ativa: DEFAULT_SETTINGS.margemGlobalAtiva,
+        margem_global_valor: DEFAULT_SETTINGS.margemGlobalValor,
+        margem_minima_ativa: DEFAULT_SETTINGS.margemMinimaAtiva,
+        margem_minima: DEFAULT_SETTINGS.margemMinima,
+        ...payload
+    };
+
     const { error } = await supabase
       .from('app_settings')
-      .update(payload)
-      .eq('id', 'global_settings');
+      .upsert(upsertPayload, { onConflict: 'id' });
 
     if (error) {
-      // Se a linha não existir, tenta inserir
-      if (error.code === 'PGRST116') {
-        const insertPayload = { id: 'global_settings', ...payload };
-        const { error: insertError } = await supabase.from('app_settings').insert(insertPayload);
-        if (insertError) {
-          console.error('Erro ao inserir configurações:', insertError);
-          return false;
-        }
-        return true;
-      }
-      console.error('Erro ao atualizar configurações:', error);
+      console.error('Erro ao persistir configurações globais (upsert):', error);
       return false;
     }
     return true;

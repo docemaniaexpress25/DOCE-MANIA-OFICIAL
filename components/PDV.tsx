@@ -127,7 +127,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
 
   const handleOpenFinalize = () => {
     if (total === 0) return alert("Carrinho vazio!");
-    if (hasMarginViolation) return alert("Erro: Preço abaixo da margem mínima permitida.");
+    if (hasMarginViolation) return alert(`Erro: Preço abaixo da margem mínima permitida (${margemMinima}%).`);
     setShowFinalizeOverlay(true);
   };
 
@@ -218,7 +218,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
             <span className="text-xs font-black text-gray-400 uppercase">Total da Venda</span>
             <span className="text-2xl font-black text-gray-800">R$ {total.toFixed(2)}</span>
         </div>
-        {hasMarginViolation && <div className="bg-rose-100 p-3 rounded-xl flex items-center gap-2 text-rose-700 animate-pulse"><i className="fa-solid fa-circle-exclamation"></i><span className="text-[10px] font-black uppercase">Venda Bloqueada: Margem Mínima</span></div>}
+        {hasMarginViolation && <div className="bg-rose-100 p-3 rounded-xl flex items-center gap-2 text-rose-700 animate-pulse"><i className="fa-solid fa-circle-exclamation"></i><span className="text-[10px] font-black uppercase">Venda Bloqueada: Margem Mínima ({margemMinima}%)</span></div>}
         <div className="flex gap-2">{(['DINHEIRO', 'PIX', 'A_PRAZO'] as PaymentMethod[]).map(m => (<button key={m} onClick={() => handleSelectMetodo(m)} className={`flex-1 py-4 rounded-2xl text-[10px] font-black uppercase transition-all border-2 ${metodo === m ? 'bg-blue-600 text-white border-blue-600' : 'bg-gray-50 text-gray-400 border-gray-100'}`}>{m.replace('_', ' ')}</button>))}</div>
         <button onClick={handleOpenFinalize} disabled={total === 0 || hasMarginViolation} className={`w-full py-5 rounded-3xl font-black shadow-xl uppercase tracking-widest text-sm transition-all active:scale-95 ${total > 0 && !hasMarginViolation ? 'bg-green-600 text-white' : 'bg-gray-100 text-gray-300'}`}>Confirmar Venda</button>
       </footer>

@@ -222,19 +222,20 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     const isNarrow = fiscalizationSize === 56;
     const width = isNarrow ? 32 : 48;
     const sep = "-".repeat(width);
-    const titleSep = "═".repeat(width);
+    const titleSep = "════════════════════════════════".repeat(isNarrow ? 1 : 1.5).substring(0, width);
 
     const center = (str: string) => {
       const space = Math.max(0, Math.floor((width - str.length) / 2));
       return " ".repeat(space) + str;
     };
 
-    let t = titleSep + "\n";
+    let t = "";
+    t += titleSep + "\n";
     t += center("RELATÓRIO DE CARGA PARA CONTROLE") + "\n";
     t += center("DE ESTOQUE E FISCALIZAÇÃO") + "\n";
     t += titleSep + "\n\n";
 
-    t += `EMPRESA: DOCE SABOR DISTRIBUIDORA\n`;
+    t += `EMPRESA: DOCE MANIA DISTRIBUIDORA\n`;
     t += `CNPJ: 00.000.000/0001-00\n`;
     t += `VENDEDOR: ${(user.nome ?? 'Desconhecido').toUpperCase()}\n`; 
     t += `PLACA: ABC-1234\n\n`;
@@ -251,18 +252,35 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       const qty = (c.quantidade ?? 0).toString(); 
       
       if (isNarrow) {
-        t += `${name.substring(0, 22).padEnd(22)} ${qty.padStart(9)}\n`;
+        // Para 56mm, se o nome for muito grande, quebra em duas linhas
+        if (name.length > 22) {
+            t += `${name.substring(0, 22)}\n`;
+            t += `${name.substring(22, 44).padEnd(22)} ${qty.padStart(9)}\n`;
+        } else {
+            t += `${name.padEnd(22)} ${qty.padStart(9)}\n`;
+        }
       } else {
-        t += `${name.substring(0, 35).padEnd(35)} ${qty.padStart(12)}\n`;
+        // Para 80mm
+        if (name.length > 35) {
+            t += `${name.substring(0, 35)}\n`;
+            t += `${name.substring(35, 70).padEnd(35)} ${qty.padStart(12)}\n`;
+        } else {
+            t += `${name.padEnd(35)} ${qty.padStart(12)}\n`;
+        }
       }
     });
 
     t += sep + "\n\n";
-    t += `TOTAL DE ITENS: ${totalItensCarga.toString().padStart(isNarrow ? 16 : 32)}\n`;
-    t += `QUANTIDADE TOTAL DE UNIDADES: ${unidadesTotaisCarga.toString().padStart(isNarrow ? 2 : 18)}\n\n`;
+    t += isNarrow
+      ? `TOTAL DE ITENS: ${totalItensCarga.toString().padStart(16)}\n`
+      : `TOTAL DE ITENS: ${totalItensCarga.toString().padStart(32)}\n`;
+      
+    t += isNarrow
+      ? `QUANTIDADE TOTAL: ${unidadesTotaisCarga.toString().padStart(14)}\n\n`
+      : `QUANTIDADE TOTAL DE UNIDADES: ${unidadesTotaisCarga.toString().padStart(18)}\n\n`;
 
     t += center(`GERADO EM ${new Date().toLocaleDateString()} AS ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`) + "\n";
-    t += center(`CÓDIGO DE AUTENTICAÇÃO: ${Math.random().toString(36).substring(2, 10).toUpperCase()}`) + "\n";
+    t += center(`CÓDIGO DE AUTENTICAÇÃO: 8F2A-99B1-C4D3`) + "\n";
     t += center(`--- FIM DO RELATÓRIO ---`) + "\n";
 
     return t;
@@ -609,60 +627,68 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       )}
 
       {showFiscalization && (
-        <div className="fixed inset-0 bg-slate-100 z-[500] flex flex-col items-center p-4 sm:p-6 overflow-y-auto">
-          <div className="w-full max-w-[450px] mb-6 flex items-center">
-            <button onClick={() => setShowFiscalization(false)} className="p-3 text-slate-800 text-xl"><i className="fa-solid fa-chevron-left"></i></button>
-            <h1 className="flex-1 text-center font-black text-[13px] uppercase tracking-[0.1em] text-slate-800">
+        <div className="fixed inset-0 bg-[#f4f5f9] z-[500] flex flex-col items-center overflow-y-auto">
+          {/* Header do Modal */}
+          <div className="w-full bg-white p-4 flex items-center justify-between shadow-sm sticky top-0 z-10">
+            <button onClick={() => setShowFiscalization(false)} className="w-10 h-10 flex items-center justify-center text-slate-800 text-xl active:scale-90"><i className="fa-solid fa-chevron-left"></i></button>
+            <h1 className="flex-1 text-center font-black text-[11px] uppercase tracking-widest text-slate-800">
               Relatório de Carga Oficial Atualizado
             </h1>
-            <button className="p-3 text-slate-400 text-xl"><i className="fa-solid fa-print"></i></button>
+            <button className="w-10 h-10 flex items-center justify-center text-slate-400 text-xl"><i className="fa-solid fa-print"></i></button>
           </div>
 
-          <div className="w-full max-w-[400px] bg-gray-200 p-1 rounded-xl flex mb-8">
-            <button 
-              onClick={() => setFiscalizationSize(80)}
-              className={`flex-1 py-3 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${fiscalizationSize === 80 ? 'bg-white text-slate-900 shadow-md' : 'text-slate-400'}`}
-            >
-              80mm (Padrão)
-            </button>
-            <button 
-              onClick={() => setFiscalizationSize(56)}
-              className={`flex-1 py-3 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${fiscalizationSize === 56 ? 'bg-white text-slate-900 shadow-md' : 'text-slate-400'}`}
-            >
-              56mm (Móvel)
-            </button>
-          </div>
-
-          <div className={`bg-white shadow-2xl overflow-hidden mb-8 transform transition-all w-full max-w-[400px]`}>
-            <div className="p-4 sm:p-8 font-mono text-black uppercase leading-tight bg-white overflow-x-auto">
-              <pre className="whitespace-pre-wrap text-[11px] sm:text-[12px] select-none text-center sm:text-left min-w-[320px]">
-                {getFiscalizationText()}
-              </pre>
+          <div className="w-full max-w-[450px] p-6 flex flex-col items-center">
+            {/* Segmented Control */}
+            <div className="w-full bg-gray-200/50 p-1 rounded-2xl flex mb-10 shadow-inner">
+              <button 
+                onClick={() => setFiscalizationSize(80)}
+                className={`flex-1 py-3.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${fiscalizationSize === 80 ? 'bg-white text-slate-900 shadow-md' : 'text-slate-400'}`}
+              >
+                80mm (Padrão)
+              </button>
+              <button 
+                onClick={() => setFiscalizationSize(56)}
+                className={`flex-1 py-3.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${fiscalizationSize === 56 ? 'bg-white text-slate-900 shadow-md' : 'text-slate-400'}`}
+              >
+                56mm (Móvel)
+              </button>
             </div>
-            <div className="flex justify-between text-gray-100 overflow-hidden h-3 select-none">
-              {Array.from({ length: 60 }).map((_, i) => (
-                <span key={i} className="text-[25px] leading-none transform rotate-45">▲</span>
-              ))}
+
+            {/* Relatório Visual Estilo Papel */}
+            <div className="w-full bg-white shadow-2xl relative animate-in zoom-in-95 duration-300">
+              <div className="p-8 sm:p-12 font-mono text-black uppercase leading-tight bg-white overflow-x-auto">
+                <pre className="whitespace-pre-wrap text-[11px] sm:text-[12px] select-none text-left min-w-[300px]">
+                  {getFiscalizationText()}
+                </pre>
+              </div>
+              
+              {/* Efeito Serrado no Fundo */}
+              <div className="absolute -bottom-3 left-0 right-0 h-3 flex justify-between overflow-hidden opacity-100 select-none pointer-events-none">
+                {Array.from({ length: 40 }).map((_, i) => (
+                  <div key={i} className="w-0 h-0 border-l-[8px] border-l-transparent border-r-[8px] border-r-transparent border-t-[8px] border-t-white"></div>
+                ))}
+              </div>
             </div>
-          </div>
 
-          <div className="w-full max-w-[400px] grid grid-cols-2 gap-3 mb-6">
-            <button 
-              onClick={() => { navigator.clipboard.writeText(getFiscalizationText()); showToast("Relatório copiado!"); }}
-              className="bg-white border-2 border-slate-200 text-slate-800 font-black py-4 rounded-xl flex items-center justify-center gap-2 active:scale-95 transition-all text-[11px] uppercase"
-            >
-              <i className="fa-solid fa-copy"></i>
-              Copiar Texto
-            </button>
-            <button className="bg-[#0f172a] text-white font-black py-4 rounded-xl flex items-center justify-center gap-2 active:scale-95 transition-all text-[11px] uppercase">
-              <i className="fa-solid fa-share-nodes"></i>
-              Compartilhar PDF
+            {/* Botões de Ação */}
+            <div className="w-full grid grid-cols-2 gap-4 mt-16 mb-8">
+              <button 
+                onClick={() => { navigator.clipboard.writeText(getFiscalizationText()); showToast("Relatório copiado!"); }}
+                className="bg-white border-2 border-slate-100 text-slate-800 font-black py-5 rounded-[1.25rem] flex items-center justify-center gap-3 active:scale-95 transition-all text-[11px] uppercase shadow-sm"
+              >
+                <i className="fa-solid fa-copy text-sm"></i>
+                COPIAR TEXTO
+              </button>
+              <button className="bg-[#111827] text-white font-black py-5 rounded-[1.25rem] flex items-center justify-center gap-3 active:scale-95 transition-all text-[11px] uppercase shadow-xl">
+                <i className="fa-solid fa-share-nodes text-sm"></i>
+                COMPARTILHAR PDF
+              </button>
+            </div>
+
+            <button onClick={() => setShowFiscalization(false)} className="text-slate-400 font-black text-[10px] uppercase tracking-[0.3em] py-4 mb-10">
+              VOLTAR
             </button>
           </div>
-
-          <button onClick={() => setShowFiscalization(false)} className="text-slate-400 font-black text-[11px] uppercase tracking-[0.2em] py-4">
-            Voltar
-          </button>
         </div>
       )}
 

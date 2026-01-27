@@ -535,9 +535,9 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
             </button>
           </div>
 
-          <div className={`bg-white shadow-2xl overflow-hidden mb-8 transform transition-all ${fiscalizationSize === 56 ? 'w-full max-w-[320px]' : 'w-full max-w-[400px]'}`}>
-            <div className="p-8 font-mono text-black uppercase leading-tight bg-white">
-              <pre className="whitespace-pre-wrap text-[11px] sm:text-[12px] select-none text-center sm:text-left">
+          <div className={`bg-white shadow-2xl overflow-hidden mb-8 transform transition-all w-full max-w-[400px]`}>
+            <div className="p-4 sm:p-8 font-mono text-black uppercase leading-tight bg-white overflow-x-auto">
+              <pre className="whitespace-pre-wrap text-[11px] sm:text-[12px] select-none text-center sm:text-left min-w-[320px]">
                 {getFiscalizationText()}
               </pre>
             </div>

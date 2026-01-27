@@ -1,5 +1,5 @@
 {
-  "name": "DOCE MANIA",
+  "name": "Doce Mania",
   "description": "Sistema de gestão de vendas externas e pronta-entrega para distribuidoras com controle de carga individual e comissões automáticas.",
   "requestFramePermissions": [
     "geolocation",

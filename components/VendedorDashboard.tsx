@@ -96,12 +96,22 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     const vCommsAll = commissions.filter(c => c.vendedorId === user.id);
     const jaPago = payoutLogs.reduce((acc, curr) => acc + (curr.valorPago ?? 0), 0); 
     const vSalesFiltered = sales.filter(s => s.vendedorId === user.id && filterByPeriod((s.data ?? new Date()), financeFilter)); 
-    const totalCommsPeriodo = commissions.filter(c => c.vendedorId === user.id && filterByPeriod((c.dataGeracao ?? new Date()), financeFilter)).reduce((acc, curr) => acc + (curr.valor ?? 0), 0); 
+    
+    // Calcula o valor total de comissões que são elegíveis para pagamento (DISPONIVEL, PENDENTE_CONFIRMACAO, PAGO)
+    const totalCommsEligible = vCommsAll
+      .filter(c => c.status !== 'A_RECEBER')
+      .reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
+      
+    // A comissão disponível é o total elegível menos o que já foi pago
+    const disponivel = Math.max(0, totalCommsEligible - jaPago);
+    
+    const pendente = vCommsAll.filter(c => c.status === 'A_RECEBER').reduce((acc, curr) => acc + (curr.valor ?? 0), 0); 
+    
     return {
       totalVendido: Number(vSalesFiltered.reduce((acc, curr) => acc + (curr.valorTotal ?? 0), 0).toFixed(2)), 
-      totalComissao: Number(totalCommsPeriodo.toFixed(2)),
-      disponivel: Number(Math.max(0, vCommsAll.filter(c => c.status === 'DISPONIVEL').reduce((acc, curr) => acc + (curr.valor ?? 0), 0) - jaPago).toFixed(2)), 
-      pendente: Number(vCommsAll.filter(c => c.status === 'A_RECEBER').reduce((acc, curr) => acc + (curr.valor ?? 0), 0).toFixed(2)) 
+      totalComissao: Number(vCommsAll.reduce((acc, curr) => acc + (curr.valor ?? 0), 0).toFixed(2)),
+      disponivel: Number(disponivel.toFixed(2)), 
+      pendente: Number(pendente.toFixed(2)) 
     };
   }, [commissions, user.id, sales, financeFilter, payoutLogs]);
 

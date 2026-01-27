@@ -331,13 +331,21 @@ const App: React.FC = () => {
     if (!v) return;
 
     const jaPagoNoPassado = payoutLogs.filter(l => l.vendedorId === vendedorId).reduce((acc, curr) => acc + curr.valorPago, 0);
-    const totalDisp = commissions.filter(c => c.vendedorId === vendedorId && c.status === 'DISPONIVEL').reduce((acc, curr) => acc + curr.valor, 0);
-    const saldoReal = totalDisp - jaPagoNoPassado;
+    
+    // Calcula o valor total de comissões que são elegíveis para pagamento (DISPONIVEL, PENDENTE_CONFIRMACAO, PAGO)
+    const totalCommsEligible = commissions
+      .filter(c => c.vendedorId === vendedorId && c.status !== 'A_RECEBER')
+      .reduce((acc, curr) => acc + curr.valor, 0);
+      
+    const saldoReal = totalCommsEligible - jaPagoNoPassado; // Saldo real disponível
 
+    // A validação de valor é feita no componente, mas garantimos que o log seja consistente
+    
     await commissionService.insertPayout({
       vendedorId, vendedorNome: v.nome, valorPago: amount, valorRestante: saldoReal - amount, tipo: type, dataPagamento: new Date(), adminId
     });
 
+    // Marca as comissões DISPONIVEIS como PENDENTE_CONFIRMACAO para removê-las do pool disponível
     await commissionService.bulkUpdateStatusByVendedor(vendedorId, 'DISPONIVEL', 'PENDENTE_CONFIRMACAO');
 
     await messageService.insertMessage({

@@ -105,8 +105,11 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     // A comissão disponível é o total elegível menos o que já foi pago
     const disponivel = Math.max(0, totalCommsEligible - jaPago);
     
+    // Comissão a receber (vendas a prazo não quitadas)
     const pendente = vCommsAll.filter(c => c.status === 'A_RECEBER').reduce((acc, curr) => acc + (curr.valor ?? 0), 0); 
     
+    console.log(`[FinanceStats] Comissão Disponível: ${disponivel.toFixed(2)}, Comissão Pendente (A_RECEBER): ${pendente.toFixed(2)}`);
+
     return {
       totalVendido: Number(vSalesFiltered.reduce((acc, curr) => acc + (curr.valorTotal ?? 0), 0).toFixed(2)), 
       totalComissao: Number(vCommsAll.reduce((acc, curr) => acc + (curr.valor ?? 0), 0).toFixed(2)),

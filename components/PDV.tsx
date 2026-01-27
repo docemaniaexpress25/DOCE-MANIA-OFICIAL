@@ -89,17 +89,32 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const valorRecebidoNum = parseFloat(valorRecebido) || 0;
   const troco = Math.max(0, valorRecebidoNum - total);
 
-  const hasMarginViolation = useMemo(() => {
-    if (!margemMinimaAtiva) return false;
-    return Object.entries(cart).some(([pId, item]) => {
+  // Calcula a violação de margem e retorna o primeiro produto infrator (ou null)
+  const marginViolationInfo = useMemo(() => {
+    if (!margemMinimaAtiva) return null;
+    
+    for (const [pId, item] of Object.entries(cart)) {
         const product = products.find(p => p.id === pId);
-        if (!product) return false;
-        const currentPrice = parseFloat((item as any).precoVenda) || 0;
+        if (!product) continue;
         
-        const minPriceAllowed = Number(((product.precoCusto ?? 0) / (1 - margemMinima / 100)).toFixed(2));
-        return currentPrice < minPriceAllowed;
-    });
+        const currentPrice = parseFloat((item as any).precoVenda) || 0;
+        const precoCusto = product.precoCusto ?? 0;
+        
+        // Calcula o preço mínimo permitido
+        const minPriceAllowed = Number((precoCusto / (1 - margemMinima / 100)).toFixed(2));
+        
+        if (currentPrice < minPriceAllowed) {
+            return {
+                productName: product.nome,
+                minPrice: minPriceAllowed.toFixed(2),
+                currentPrice: currentPrice.toFixed(2)
+            };
+        }
+    }
+    return null;
   }, [cart, products, margemMinima, margemMinimaAtiva]);
+
+  const hasMarginViolation = !!marginViolationInfo;
 
   const canFinalize = useMemo(() => {
     if (total <= 0 || hasMarginViolation) return false;
@@ -218,7 +233,17 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
             <span className="text-xs font-black text-gray-400 uppercase">Total da Venda</span>
             <span className="text-2xl font-black text-gray-800">R$ {total.toFixed(2)}</span>
         </div>
-        {hasMarginViolation && <div className="bg-rose-100 p-3 rounded-xl flex items-center gap-2 text-rose-700 animate-pulse"><i className="fa-solid fa-circle-exclamation"></i><span className="text-[10px] font-black uppercase">Venda Bloqueada: Margem Mínima ({margemMinima}%)</span></div>}
+        {hasMarginViolation && marginViolationInfo && (
+          <div className="bg-rose-100 p-3 rounded-xl flex flex-col gap-1 text-rose-700 animate-pulse">
+            <div className="flex items-center gap-2">
+              <i className="fa-solid fa-circle-exclamation"></i>
+              <span className="text-[10px] font-black uppercase">Venda Bloqueada: Margem Mínima ({margemMinima}%)</span>
+            </div>
+            <p className="text-[10px] font-bold text-rose-800">
+              {marginViolationInfo.productName}: Preço Mínimo R$ {marginViolationInfo.minPrice} (Atual: R$ {marginViolationInfo.currentPrice})
+            </p>
+          </div>
+        )}
         <div className="flex gap-2">{(['DINHEIRO', 'PIX', 'A_PRAZO'] as PaymentMethod[]).map(m => (<button key={m} onClick={() => handleSelectMetodo(m)} className={`flex-1 py-4 rounded-2xl text-[10px] font-black uppercase transition-all border-2 ${metodo === m ? 'bg-blue-600 text-white border-blue-600' : 'bg-gray-50 text-gray-400 border-gray-100'}`}>{m.replace('_', ' ')}</button>))}</div>
         <button onClick={handleOpenFinalize} disabled={total === 0 || hasMarginViolation} className={`w-full py-5 rounded-3xl font-black shadow-xl uppercase tracking-widest text-sm transition-all active:scale-95 ${total > 0 && !hasMarginViolation ? 'bg-green-600 text-white' : 'bg-gray-100 text-gray-300'}`}>Confirmar Venda</button>
       </footer>

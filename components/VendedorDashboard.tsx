@@ -1,4 +1,3 @@
-
 import React, { useState, useMemo, useEffect } from 'react';
 import { User, Product, Client, Carga, Sale, Commission, PaymentMethod, CargaPendente, CommissionPaymentLog, SystemMessage } from '../types';
 import { DIAS_SEMANA } from '../constants';
@@ -468,7 +467,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         <div className="space-y-4">
           <header className="px-1"><h2 className="text-xs font-black text-gray-400 uppercase tracking-wider">Estoque Central (Apenas Leitura)</h2></header>
           <div className="grid gap-3">
-            {products.filter(p => (p.ativo ?? false)).map(p => ( 
+            {products.map(p => ( 
               <div key={p.id} className="bg-white px-4 py-3 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between">
                 <div className="flex-1">
                   <h3 className="font-bold text-gray-800 text-sm leading-tight">{p.nome ?? 'Produto Desconhecido'}</h3> 

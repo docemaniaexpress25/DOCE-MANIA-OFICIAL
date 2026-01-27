@@ -29,10 +29,13 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
     
     sale.itens.forEach(i => {
       const p = products.find(prod => prod.id === i.produtoId);
-      const name = padRight((p?.nome ?? 'PRODUTO').toUpperCase(), 18);
-      const qty = padLeft(`${(i.quantidade ?? 0)}x`, 7);
+      // Coluna Nome: 19 caracteres
+      const name = padRight((p?.nome ?? 'PRODUTO').toUpperCase(), 19);
+      // Coluna Qtd: 4 caracteres (Garante dois espaços à esquerda se a qtd for 1x, ex: "  1x")
+      const qty = padLeft(`${(i.quantidade ?? 0)}x`, 4);
+      // Coluna Valor: 9 caracteres
       const subtotal = ((i.quantidade ?? 0) * (i.precoVenda ?? 0)).toFixed(2);
-      const val = padLeft(subtotal, 7);
+      const val = padLeft(subtotal, 9);
       
       t += `${name}${qty}${val}\n`;
     });

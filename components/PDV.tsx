@@ -35,6 +35,14 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   // 1. Mapeia os IDs dos produtos que o vendedor tem na carga
   const productIdsInCarga = useMemo(() => new Set(minhaCarga.map(c => c.produtoId)), [minhaCarga]);
 
+  // --- DEBUG LOGS PDV ---
+  useEffect(() => {
+    console.log("PDV: Produtos recebidos:", products.length);
+    console.log("PDV: Carga recebida (minhaCarga):", minhaCarga);
+    console.log("PDV: IDs de produtos na carga:", Array.from(productIdsInCarga));
+  }, [products, minhaCarga, productIdsInCarga]);
+  // -----------------------
+
   useEffect(() => {
     const savedCart = localStorage.getItem(`pdv_cart_${vendedorId}_${client.id}`);
     if (savedCart) {
@@ -193,8 +201,6 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           const itemNoCart = cart[p.id];
           const cargaOriginal = minhaCarga.find(c => c.produtoId === p.id)?.quantidade || 0;
           const cargaDisponivel = cargaOriginal - (itemNoCart?.quantidade ?? 0); 
-          
-          // Removido o filtro condicional que retornava null, garantindo que todos os produtos na carga sejam exibidos.
           
           const currentPrice = parseFloat(itemNoCart?.precoVenda || (p.precoVenda ?? 0).toString()) || 0; 
           

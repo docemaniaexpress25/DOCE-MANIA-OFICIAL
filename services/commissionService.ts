@@ -75,20 +75,24 @@ export const commissionService = {
   },
 
   async insertPayout(log: Omit<CommissionPaymentLog, 'id'>): Promise<boolean> {
-    // Mapeando apenas os campos que existem na tabela 'commission_payment_logs' do Supabase
-    // (seller_id, valor_pago, metodo_pagamento, observacao, created_at)
+    // UUID de placeholder para satisfazer a restrição NOT NULL de commission_id no DB
+    const PLACEHOLDER_COMMISSION_ID = '00000000-0000-0000-0000-000000000000'; 
+    
     const payload = {
+      commission_id: PLACEHOLDER_COMMISSION_ID,
       seller_id: log.vendedorId,
       valor_pago: log.valorPago,
-      // Adicionando valores padrão para campos obrigatórios/existentes no DB, mas ausentes na interface local
-      metodo_pagamento: 'DINHEIRO', // Assumindo pagamento em dinheiro como padrão
-      observacao: `Pagamento ${log.tipo} por Admin ${log.adminId}`,
+      metodo_pagamento: 'DINHEIRO', // Valor padrão para campo obrigatório/existente
+      observacao: `Pagamento ${log.tipo} por Admin ${log.adminId}. Saldo restante: ${log.valorRestante.toFixed(2)}`,
       created_at: log.dataPagamento.toISOString(),
     };
     
     const { error } = await supabase.from('commission_payment_logs').insert(payload);
     
-    if (error) console.error('Erro ao inserir log de pagamento de comissão:', error);
+    if (error) {
+        console.error('Erro CRÍTICO ao inserir log de pagamento de comissão:', error);
+        console.error('Payload enviado:', payload); 
+    }
     return !error;
   },
 

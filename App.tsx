@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { User, Product, Carga, Sale, Commission, Client, PaymentMethod, CargaPendente, CommissionPaymentLog, SystemMessage } from './types';
 import AdminDashboard from './components/AdminDashboard';
@@ -218,11 +217,16 @@ const App: React.FC = () => {
       const p = products.find(prod => prod.id === item.produtoId);
       return acc + (item.precoVenda * item.quantidade * ((p?.comissaoPercentual || 0) / 100));
     }, 0);
+    
+    // Calculate effective percentage for the whole commission record
+    const effectivePercentual = valorTotalFixed > 0 ? (totalComissao / valorTotalFixed) * 100 : 0;
 
     await commissionService.insertCommission({
       saleId: newSale.id,
       vendedorId: saleData.vendedorId,
       valor: Number(totalComissao.toFixed(2)),
+      valorBase: valorTotalFixed, // Pass total sale value as base
+      percentual: Number(effectivePercentual.toFixed(2)), // Pass calculated effective percentage
       status: saleData.statusPagamento === 'PAGO' ? 'DISPONIVEL' : 'A_RECEBER',
       dataGeracao: new Date()
     });
@@ -340,7 +344,7 @@ const App: React.FC = () => {
             setMargemGlobalAtiva={setMargemGlobalAtiva} margemGlobalValor={margemGlobalValor} setMargemGlobalValor={setMargemGlobalValor}
             margemMinima={margemMinima} setMargemMinima={setMargemMinima} margemMinimaAtiva={margemMinimaAtiva}
             setMargemMinimaAtiva={setMargemMinimaAtiva} pix1Name={pix1Name} setPix1Name={setPix1Name} pix1Code={pix1Code} setPix1Code={setPix1Code}
-            pix2Name={pix2Name} setPix2Name={setPix2Name} pix2Code={pix2Code} setPix2Code={setPix2Code}
+            pix2Name={pix2Name} setPix2Name={setPix2Name} pix2Code={pix2Code} setPix2Code={pix2Code}
             adminNotification={adminNotification} clearAdminNotification={() => setAdminNotification(null)}
           />
         ) : (

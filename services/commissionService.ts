@@ -14,18 +14,28 @@ export const commissionService = {
     return data.map(c => ({
       id: c.id,
       saleId: c.sale_id,
-      vendedorId: c.vendedor_id,
-      valor: safeNumber(c.valor), // Usando safeNumber
+      vendedorId: c.seller_id, // FIX: Mapped from seller_id
+      valor: safeNumber(c.valor_comissao), // FIX: Mapped from valor_comissao
+      valorBase: safeNumber(c.valor_base), // NEW: Mapped from valor_base
+      percentual: safeNumber(c.percentual), // NEW: Mapped from percentual
       status: c.status,
       dataGeracao: new Date(c.created_at)
     })) as Commission[];
   },
 
   async insertCommission(comm: Omit<Commission, 'id'>): Promise<boolean> {
+    // Ensure required fields are present, even if optional in TS interface
+    if (comm.valorBase === undefined || comm.percentual === undefined) {
+        console.error('Erro: valorBase e percentual são obrigatórios para inserir comissão.');
+        return false;
+    }
+    
     const { error } = await supabase.from('commissions').insert({
       sale_id: comm.saleId,
-      vendedor_id: comm.vendedorId,
-      valor: comm.valor,
+      seller_id: comm.vendedorId, // FIX: Using seller_id
+      valor_comissao: comm.valor, // FIX: Using valor_comissao
+      valor_base: comm.valorBase, // NEW: Using valor_base
+      percentual: comm.percentual, // NEW: Using percentual
       status: comm.status,
       created_at: comm.dataGeracao.toISOString()
     });
@@ -40,7 +50,7 @@ export const commissionService = {
   async bulkUpdateStatusByVendedor(vId: string, oldStatus: string, newStatus: string): Promise<boolean> {
     const { error } = await supabase.from('commissions')
       .update({ status: newStatus })
-      .eq('vendedor_id', vId)
+      .eq('seller_id', vId) // FIX: Using seller_id
       .eq('status', oldStatus);
     return !error;
   },

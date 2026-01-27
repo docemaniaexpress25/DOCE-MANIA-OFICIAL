@@ -1,4 +1,3 @@
-
 export type UserRole = 'ADMIN' | 'VENDEDOR';
 
 export interface User {
@@ -79,6 +78,8 @@ export interface Commission {
   saleId: string;
   vendedorId: string;
   valor: number;
+  valorBase?: number;
+  percentual?: number;
   status: 'DISPONIVEL' | 'A_RECEBER' | 'PAGO' | 'PENDENTE_CONFIRMACAO';
   dataGeracao: Date;
 }

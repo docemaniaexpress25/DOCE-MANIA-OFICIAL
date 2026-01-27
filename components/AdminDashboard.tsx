@@ -602,8 +602,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             </select>
           </div>
           {selectedVendedorId && (
-            <>
-              <div className="grid gap-2 mb-24 px-1">
+            <div className="pb-40"> {/* Adiciona padding inferior para evitar que os botões fixos cubram o conteúdo */}
+              <div className="grid gap-2 mb-2 px-1">
                 {props.products.map((p: Product) => { 
                   const noV = props.cargas.find(c => c.vendedorId === selectedVendedorId && c.produtoId === p.id)?.quantidade ?? 0; 
                   const meta = stagingCarga[p.id] ?? 0;
@@ -623,24 +623,30 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                   );
                 })}
               </div>
-              <div className="fixed bottom-4 left-4 right-4 max-w-lg mx-auto z-50 flex flex-col gap-2">
-                <button 
-                  onClick={() => setShowConfirmApply(true)} 
-                  disabled={!hasCargaChanges}
-                  className={`w-full font-black py-5 rounded-3xl shadow-xl flex items-center justify-center gap-3 transition-all ${hasCargaChanges ? 'bg-emerald-600 text-white active:scale-95' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}
-                >
-                  <i className="fa-solid fa-check-circle"></i> APLICAR CARGA IMEDIATAMENTE
-                </button>
-                <button 
-                  onClick={() => setShowConfirmSync(true)} 
-                  disabled={!hasCargaChanges}
-                  className={`w-full font-black py-5 rounded-3xl shadow-xl flex items-center justify-center gap-3 transition-all ${hasCargaChanges ? 'bg-gray-900 text-white active:scale-95' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}
-                >
-                  <i className="fa-solid fa-truck-loading"></i> ENVIAR CARGA PENDENTE
-                </button>
-              </div>
-            </>
+            </div>
           )}
+        </div>
+      )}
+
+      {/* Botões de Sincronização Fixos (Apenas na aba CARGAS e com vendedor selecionado) */}
+      {activeTab === 'CARGAS' && selectedVendedorId && (
+        <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t border-gray-100 shadow-2xl z-50 max-w-lg mx-auto safe-bottom">
+          <div className="flex flex-col gap-2">
+            <button 
+              onClick={() => setShowConfirmApply(true)} 
+              disabled={!hasCargaChanges}
+              className={`w-full font-black py-5 rounded-3xl shadow-xl flex items-center justify-center gap-3 transition-all ${hasCargaChanges ? 'bg-emerald-600 text-white active:scale-95' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}
+            >
+              <i className="fa-solid fa-check-circle"></i> APLICAR CARGA IMEDIATAMENTE
+            </button>
+            <button 
+              onClick={() => setShowConfirmSync(true)} 
+              disabled={!hasCargaChanges}
+              className={`w-full font-black py-5 rounded-3xl shadow-xl flex items-center justify-center gap-3 transition-all ${hasCargaChanges ? 'bg-gray-900 text-white active:scale-95' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}
+            >
+              <i className="fa-solid fa-truck-loading"></i> ENVIAR CARGA PENDENTE
+            </button>
+          </div>
         </div>
       )}
 
@@ -729,7 +735,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             {props.users.filter(u => u.role === 'VENDEDOR').map((u: User) => (
               <div key={u.id} className={`bg-white p-4 rounded-3xl border transition-all shadow-sm flex items-center justify-between ${!(u.ativo ?? false) ? 'opacity-60 grayscale' : 'border-gray-100'}`}> 
                 <div onClick={() => handleOpenUserModal(u)} className="flex items-center gap-4 flex-1 cursor-pointer">
-                  <div className="w-14 h-14 bg-purple-100 text-purple-600 rounded-2xl flex items-center justify-center font-black overflow-hidden border-2 border-white shadow-md">
+                  <div className="w-14 h-14 bg-purple-100 text-purple-600 rounded-2xl flex items-center justify-center font-black overflow-hidden border-4 border-white shadow-md">
                     {(u.foto) ? <img src={u.foto} className="w-full h-full object-cover" /> : <i className="fa-solid fa-user-tie text-xl"></i>} 
                   </div>
                   <div>

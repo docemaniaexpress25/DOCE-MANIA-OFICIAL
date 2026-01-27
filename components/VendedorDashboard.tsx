@@ -105,7 +105,12 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
   const handleSkipClient = (clientId: string) => { if (confirm("Pular atendimento?")) setSkippedClientIds(prev => [...prev, clientId]); };
   const handleReopenClient = (clientId: string) => setReopenedClientIds(prev => [...prev, clientId]);
-  const handleAddToTodayRoute = (clientId: string) => { if (!extraRouteClientIds.includes(clientId)) { setExtraRouteClientIds(prev => [...prev, clientId]); showToast("Cliente adicionado"); } };
+  const handleAddToTodayRoute = (clientId: string) => { 
+    if (!extraRouteClientIds.includes(clientId)) { 
+      setExtraRouteClientIds(prev => [...prev, clientId]); 
+      showToast("Cliente adicionado à rota do dia!"); 
+    } 
+  };
   const isSameDay = (date: Date | undefined) => new Date().toDateString() === (new Date(date ?? new Date())).toDateString(); 
 
   const handleOpenEditClient = (c: Client) => {
@@ -491,8 +496,13 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                         return (
                           <div key={c.id} className="p-3 bg-gray-50 rounded-2xl flex justify-between items-center">
                             <div><p className="font-bold text-gray-800 text-xs">{c.nomeFantasia ?? 'Cliente Desconhecido'}</p><p className="text-[9px] text-gray-400 font-semibold mt-0.5">{(c.bairro || 'Sem Bairro')}</p></div>
+                            {/* Botão para puxar para a rota do dia, visível se não estiver já na rota */}
                             {!isInCurrentRoute && (
-                              <button onClick={() => handleAddToTodayRoute(c.id)} className="w-8 h-8 bg-white border border-indigo-200 text-indigo-600 rounded-xl flex items-center justify-center shadow-sm active:scale-90" title="Puxar para hoje">
+                              <button 
+                                onClick={() => handleAddToTodayRoute(c.id)} 
+                                className="w-8 h-8 bg-white border border-indigo-200 text-indigo-600 rounded-xl flex items-center justify-center shadow-sm active:scale-90" 
+                                title="Puxar para hoje"
+                              >
                                 <i className="fa-solid fa-plus text-[10px]"></i>
                               </button>
                             )}

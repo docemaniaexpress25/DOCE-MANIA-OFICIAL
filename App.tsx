@@ -336,26 +336,32 @@ const App: React.FC = () => {
 
   // Receber Conta (Local)
   const receiveAccount = (saleId: string, method: PaymentMethod, amount?: number) => {
+    let saleUpdated: Sale | undefined;
+
+    // 1. Atualiza a venda
     setSales(prevSales => prevSales.map(s => {
       if (s.id !== saleId) return s;
       
       const novoValorPago = Number(((s.valorPago ?? 0) + (amount || s.valorTotal)).toFixed(2));
       const totalQuitado = novoValorPago >= s.valorTotal;
 
-      if (totalQuitado) {
-        // Atualiza status da comissão para DISPONIVEL
-        setCommissions(prevComms => prevComms.map(c => 
-          c.saleId === saleId ? { ...c, status: 'DISPONIVEL' } : c
-        ));
-      }
-
-      return {
+      saleUpdated = {
         ...s,
         valorPago: novoValorPago,
         statusPagamento: totalQuitado ? 'PAGO' : 'PENDENTE',
         metodoPagamento: method
       };
+      return saleUpdated;
     }));
+
+    // 2. Se a venda foi quitada, libera a comissão
+    if (saleUpdated && saleUpdated.statusPagamento === 'PAGO') {
+      setCommissions(prevComms => prevComms.map(c => 
+        c.saleId === saleId && c.status === 'A_RECEBER' 
+          ? { ...c, status: 'DISPONIVEL' } 
+          : c
+      ));
+    }
   };
 
   // Pagar Comissão (Local)

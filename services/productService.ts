@@ -57,15 +57,25 @@ export const productService = {
     
     if (updates.estoquePrincipal !== undefined) {
       payload.estoque_principal = updates.estoquePrincipal;
-      // Regra: se estoque atualizado para <= 0, forçar inativo
+      
+      // Se o estoque for <= 0, forçar inativo.
       if (updates.estoquePrincipal <= 0) {
         payload.ativo = false;
-      } else if (updates.ativo !== undefined) {
-        payload.ativo = updates.ativo;
+      } 
+      // Se o estoque for > 0, e o update não está explicitamente desativando, garantir que esteja ativo.
+      else if (updates.estoquePrincipal > 0 && updates.ativo !== false) {
+        payload.ativo = true;
       }
-    } else if (updates.ativo !== undefined) {
-      payload.ativo = updates.ativo;
+    } 
+    
+    // Se a flag 'ativo' foi passada explicitamente, usá-la (exceto se o estoque for 0, que tem prioridade)
+    if (updates.ativo !== undefined && payload.estoque_principal === undefined) {
+        payload.ativo = updates.ativo;
+    } else if (updates.ativo !== undefined && payload.estoque_principal !== undefined && payload.estoque_principal > 0) {
+        // Se o estoque é positivo, respeitar a ativação/desativação manual, mas se for 0, a regra acima prevalece.
+        payload.ativo = updates.ativo;
     }
+
 
     const { data, error } = await supabase.from('products').update(payload).eq('id', id).select().single();
     if (error) {

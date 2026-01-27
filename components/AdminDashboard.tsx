@@ -584,9 +584,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           {selectedVendedorId && (
             <>
               <div className="grid gap-2 mb-24 px-1">
-                {props.products.filter(p => (p.ativo ?? false)).map((p: Product) => { 
+                {props.products.map((p: Product) => { 
                   const noV = props.cargas.find(c => c.vendedorId === selectedVendedorId && c.produtoId === p.id)?.quantidade ?? 0; 
                   const meta = stagingCarga[p.id] ?? 0;
+                  const totalDisp = (p.estoquePrincipal ?? 0) + noV; 
                   return (
                     <div key={p.id} className="bg-white px-4 py-3 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between">
                       <div className="flex-1 min-w-0 pr-3">

@@ -1,7 +1,7 @@
-import type { CommissionPaymentLog } from '../types';
 import { supabase } from '../supabaseClient';
-import { Commission } from '../types';
+import { Commission, CommissionPaymentLog } from '../types';
 
+// Helper function to safely convert database numeric values (which might be null or string) to number
 const safeNumber = (value: any): number => Number(value || 0);
 
 export const commissionService = {
@@ -15,9 +15,9 @@ export const commissionService = {
       id: c.id,
       saleId: c.sale_id,
       vendedorId: c.vendedor_id,
-      valor: safeNumber(c.valor),
+      valor: safeNumber(c.valor), // Usando safeNumber
       status: c.status,
-      dataGeracao: c.data_criacao ? new Date(c.data_criacao) : new Date()
+      dataGeracao: new Date(c.created_at)
     })) as Commission[];
   },
 
@@ -27,16 +27,9 @@ export const commissionService = {
       vendedor_id: comm.vendedorId,
       valor: comm.valor,
       status: comm.status,
-      data_criacao: comm.dataGeracao.toISOString(),
-      percentual: null,
-      valor_comissao: null,
-      paid_at: null
+      created_at: comm.dataGeracao.toISOString()
     });
-    if (error) {
-      console.error('Erro ao inserir comissão:', error);
-      return false;
-    }
-    return true;
+    return !error;
   },
 
   async updateCommissionStatus(id: string, status: string): Promise<boolean> {
@@ -59,10 +52,10 @@ export const commissionService = {
       id: l.id,
       vendedorId: l.vendedor_id,
       vendedorNome: l.vendedor_nome,
-      valorPago: safeNumber(l.valor_pago),
-      valorRestante: safeNumber(l.valor_restante),
+      valorPago: safeNumber(l.valor_pago), // Usando safeNumber
+      valorRestante: safeNumber(l.valor_restante), // Usando safeNumber
       tipo: l.tipo,
-      dataPagamento: l.created_at ? new Date(l.created_at) : new Date(),
+      dataPagamento: new Date(l.created_at),
       adminId: l.admin_id
     })) as CommissionPaymentLog[];
   },

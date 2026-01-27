@@ -49,13 +49,21 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const [weeklySearch, setWeeklySearch] = useState('');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [showFiscalization, setShowFiscalization] = useState(false);
-  const [fiscalizationSize, setFiscalizationSize] = useState<56 | 80>(80);
+  const [fiscalizationSize, setFiscalizationSize] = useState<56 | 80>(56); // Default para 56mm agora
   
   const [cForm, setCForm] = useState<Partial<Client>>({});
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
+  };
+
+  const removeAccents = (str: string) => {
+    return str.normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/ç/g, "c")
+      .replace(/Ç/g, "C")
+      .toUpperCase();
   };
 
   const unreadMessage = useMemo(() => messages.find(m => !(m.lida ?? false)), [messages]); 
@@ -222,7 +230,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     const isNarrow = fiscalizationSize === 56;
     const width = isNarrow ? 32 : 48;
     const sep = "-".repeat(width);
-    const titleSep = "════════════════════════════════".repeat(isNarrow ? 1 : 1.5).substring(0, width);
+    const titleSep = "=".repeat(width);
 
     const center = (str: string) => {
       const space = Math.max(0, Math.floor((width - str.length) / 2));
@@ -231,57 +239,52 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
     let t = "";
     t += titleSep + "\n";
-    t += center("RELATÓRIO DE CARGA PARA CONTROLE") + "\n";
-    t += center("DE ESTOQUE E FISCALIZAÇÃO") + "\n";
+    t += center(removeAccents("RELATORIO DE CARGA PARA CONTROLE")) + "\n";
+    t += center(removeAccents("DE ESTOQUE E FISCALIZACAO")) + "\n";
     t += titleSep + "\n\n";
 
-    t += `EMPRESA: DOCE MANIA DISTRIBUIDORA\n`;
-    t += `CNPJ: 00.000.000/0001-00\n`;
-    t += `VENDEDOR: ${(user.nome ?? 'Desconhecido').toUpperCase()}\n`; 
-    t += `PLACA: ABC-1234\n\n`;
+    t += removeAccents(`EMPRESA: DOCE MANIA DISTRIBUIDORA`) + "\n";
+    t += removeAccents(`CNPJ: 00.000.000/0001-00`) + "\n";
+    t += removeAccents(`VENDEDOR: ${user.nome ?? 'DESCONHECIDO'}`) + "\n"; 
+    t += removeAccents(`PLACA: ABC-1234`) + "\n\n";
 
     t += sep + "\n";
     t += isNarrow 
-      ? `PRODUTO             QTD NO VEÍCULO\n`
-      : `PRODUTO                         QTD NO VEÍCULO\n`;
+      ? `PRODUTO             QTD VEICULO\n`
+      : `PRODUTO                         QTD NO VEICULO\n`;
     t += sep + "\n";
 
     minhaCarga.forEach(c => {
       const p = products.find(prod => prod.id === c.produtoId);
-      const name = (p?.nome ?? '').toUpperCase(); 
+      const name = removeAccents(p?.nome ?? ''); 
       const qty = (c.quantidade ?? 0).toString(); 
       
       if (isNarrow) {
-        // Para 56mm, se o nome for muito grande, quebra em duas linhas
-        if (name.length > 22) {
-            t += `${name.substring(0, 22)}\n`;
-            t += `${name.substring(22, 44).padEnd(22)} ${qty.padStart(9)}\n`;
-        } else {
-            t += `${name.padEnd(22)} ${qty.padStart(9)}\n`;
-        }
+        // Para 56mm (32 chars): Nome (22) + Espaço (1) + Qtd (9) = 32
+        const shortName = name.substring(0, 22).padEnd(22);
+        const paddedQty = qty.padStart(9);
+        t += `${shortName} ${paddedQty}\n`;
       } else {
         // Para 80mm
-        if (name.length > 35) {
-            t += `${name.substring(0, 35)}\n`;
-            t += `${name.substring(35, 70).padEnd(35)} ${qty.padStart(12)}\n`;
-        } else {
-            t += `${name.padEnd(35)} ${qty.padStart(12)}\n`;
-        }
+        const longName = name.substring(0, 35).padEnd(35);
+        const paddedQty = qty.padStart(12);
+        t += `${longName} ${paddedQty}\n`;
       }
     });
 
     t += sep + "\n\n";
     t += isNarrow
-      ? `TOTAL DE ITENS: ${totalItensCarga.toString().padStart(16)}\n`
-      : `TOTAL DE ITENS: ${totalItensCarga.toString().padStart(32)}\n`;
+      ? removeAccents(`TOTAL DE ITENS:`) + totalItensCarga.toString().padStart(17) + "\n"
+      : removeAccents(`TOTAL DE ITENS:`) + totalItensCarga.toString().padStart(33) + "\n";
       
     t += isNarrow
-      ? `QUANTIDADE TOTAL: ${unidadesTotaisCarga.toString().padStart(14)}\n\n`
-      : `QUANTIDADE TOTAL DE UNIDADES: ${unidadesTotaisCarga.toString().padStart(18)}\n\n`;
+      ? removeAccents(`QUANTIDADE TOTAL:`) + unidadesTotaisCarga.toString().padStart(15) + "\n\n"
+      : removeAccents(`QUANTIDADE TOTAL DE UNIDADES:`) + unidadesTotaisCarga.toString().padStart(19) + "\n\n";
 
-    t += center(`GERADO EM ${new Date().toLocaleDateString()} AS ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`) + "\n";
-    t += center(`CÓDIGO DE AUTENTICAÇÃO: 8F2A-99B1-C4D3`) + "\n";
-    t += center(`--- FIM DO RELATÓRIO ---`) + "\n";
+    const dateStr = removeAccents(`GERADO EM ${new Date().toLocaleDateString()} AS ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`);
+    t += center(dateStr) + "\n";
+    t += center(removeAccents(`CODIGO DE AUTENTICACAO: 8F2A-99B1-C4D3`)) + "\n";
+    t += center(removeAccents(`--- FIM DO RELATORIO ---`)) + "\n";
 
     return t;
   };
@@ -632,7 +635,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
           <div className="w-full bg-white p-4 flex items-center justify-between shadow-sm sticky top-0 z-10">
             <button onClick={() => setShowFiscalization(false)} className="w-10 h-10 flex items-center justify-center text-slate-800 text-xl active:scale-90"><i className="fa-solid fa-chevron-left"></i></button>
             <h1 className="flex-1 text-center font-black text-[11px] uppercase tracking-widest text-slate-800">
-              Relatório de Carga Oficial Atualizado
+              Relatorio de Carga Oficial
             </h1>
             <button className="w-10 h-10 flex items-center justify-center text-slate-400 text-xl"><i className="fa-solid fa-print"></i></button>
           </div>
@@ -644,13 +647,13 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 onClick={() => setFiscalizationSize(80)}
                 className={`flex-1 py-3.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${fiscalizationSize === 80 ? 'bg-white text-slate-900 shadow-md' : 'text-slate-400'}`}
               >
-                80mm (Padrão)
+                80mm (Padrao)
               </button>
               <button 
                 onClick={() => setFiscalizationSize(56)}
                 className={`flex-1 py-3.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${fiscalizationSize === 56 ? 'bg-white text-slate-900 shadow-md' : 'text-slate-400'}`}
               >
-                56mm (Móvel)
+                56mm (Movel)
               </button>
             </div>
 
@@ -673,7 +676,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
             {/* Botões de Ação */}
             <div className="w-full grid grid-cols-2 gap-4 mt-16 mb-8">
               <button 
-                onClick={() => { navigator.clipboard.writeText(getFiscalizationText()); showToast("Relatório copiado!"); }}
+                onClick={() => { navigator.clipboard.writeText(getFiscalizationText()); showToast("Relatorio copiado!"); }}
                 className="bg-white border-2 border-slate-100 text-slate-800 font-black py-5 rounded-[1.25rem] flex items-center justify-center gap-3 active:scale-95 transition-all text-[11px] uppercase shadow-sm"
               >
                 <i className="fa-solid fa-copy text-sm"></i>

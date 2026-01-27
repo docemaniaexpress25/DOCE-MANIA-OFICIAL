@@ -1,6 +1,9 @@
 import { supabase } from '../supabaseClient';
 import { Commission, CommissionPaymentLog } from '../types';
 
+// Helper function to safely convert database numeric values (which might be null or string) to number
+const safeNumber = (value: any): number => Number(value || 0);
+
 export const commissionService = {
   async getAllCommissions(): Promise<Commission[]> {
     const { data, error } = await supabase.from('commissions').select('*');
@@ -12,9 +15,9 @@ export const commissionService = {
       id: c.id,
       saleId: c.sale_id,
       vendedorId: c.vendedor_id,
-      valor: Number(c.valor),
-      status: c.status, // CORRIGIDO: Usando 'status'
-      dataGeracao: new Date(c.created_at) // Assumindo que data de criação é 'created_at'
+      valor: safeNumber(c.valor), // Usando safeNumber
+      status: c.status,
+      dataGeracao: new Date(c.created_at)
     })) as Commission[];
   },
 
@@ -23,22 +26,22 @@ export const commissionService = {
       sale_id: comm.saleId,
       vendedor_id: comm.vendedorId,
       valor: comm.valor,
-      status: comm.status, // CORRIGIDO: Usando 'status'
-      created_at: comm.dataGeracao.toISOString() // Assumindo que data de geração é 'created_at'
+      status: comm.status,
+      created_at: comm.dataGeracao.toISOString()
     });
     return !error;
   },
 
   async updateCommissionStatus(id: string, status: string): Promise<boolean> {
-    const { error } = await supabase.from('commissions').update({ status: status }).eq('id', id); // CORRIGIDO: Usando 'status'
+    const { error } = await supabase.from('commissions').update({ status: status }).eq('id', id);
     return !error;
   },
 
   async bulkUpdateStatusByVendedor(vId: string, oldStatus: string, newStatus: string): Promise<boolean> {
     const { error } = await supabase.from('commissions')
-      .update({ status: newStatus }) // CORRIGIDO: Usando 'status'
+      .update({ status: newStatus })
       .eq('vendedor_id', vId)
-      .eq('status', oldStatus); // CORRIGIDO: Usando 'status'
+      .eq('status', oldStatus);
     return !error;
   },
 
@@ -49,10 +52,10 @@ export const commissionService = {
       id: l.id,
       vendedorId: l.vendedor_id,
       vendedorNome: l.vendedor_nome,
-      valorPago: Number(l.valor_pago),
-      valorRestante: Number(l.valor_restante),
+      valorPago: safeNumber(l.valor_pago), // Usando safeNumber
+      valorRestante: safeNumber(l.valor_restante), // Usando safeNumber
       tipo: l.tipo,
-      dataPagamento: new Date(l.created_at), // Assumindo que data de pagamento é 'created_at'
+      dataPagamento: new Date(l.created_at),
       adminId: l.admin_id
     })) as CommissionPaymentLog[];
   },
@@ -64,13 +67,12 @@ export const commissionService = {
       valor_pago: log.valorPago,
       valor_restante: log.valorRestante,
       tipo: log.tipo,
-      created_at: log.dataPagamento.toISOString(), // Assumindo que data de pagamento é 'created_at'
+      created_at: log.dataPagamento.toISOString(),
       admin_id: log.adminId
     });
     return !error;
   },
 
-  // Fix: Adding missing method deleteCommissionBySale
   async deleteCommissionBySale(saleId: string): Promise<boolean> {
     const { error } = await supabase.from('commissions').delete().eq('sale_id', saleId);
     return !error;

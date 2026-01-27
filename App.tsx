@@ -59,16 +59,21 @@ const App: React.FC = () => {
   // Funções de fetch para dados locais foram removidas, pois agora são carregadas via loadLocalState
 
   const fetchCoreData = useCallback(async () => {
-    const settings = await appSettingsService.getSettings();
-    setLogo(settings.logo);
-    setMargemGlobalAtiva(settings.margemGlobalAtiva);
-    setMargemGlobalValor(settings.margemGlobalValor);
-    setMargemMinimaAtiva(settings.margemMinimaAtiva);
-    setMargemMinima(settings.margemMinima);
-    setPix1Name(settings.pix1Name ?? "Pix Banco A");
-    setPix1Code(settings.pix1Code);
-    setPix2Name(settings.pix2Name ?? "Pix Banco B");
-    setPix2Code(settings.pix2Code);
+    try {
+      const settings = await appSettingsService.getSettings();
+      setLogo(settings.logo);
+      setMargemGlobalAtiva(settings.margemGlobalAtiva);
+      setMargemGlobalValor(settings.margemGlobalValor);
+      setMargemMinimaAtiva(settings.margemMinimaAtiva);
+      setMargemMinima(settings.margemMinima);
+      setPix1Name(settings.pix1Name ?? "Pix Banco A");
+      setPix1Code(settings.pix1Code);
+      setPix2Name(settings.pix2Name ?? "Pix Banco B");
+      setPix2Code(settings.pix2Code);
+    } catch (e) {
+      console.error("Erro ao carregar configurações iniciais do Supabase:", e);
+    }
+
 
     await Promise.all([
       fetchUsers(),
@@ -97,7 +102,7 @@ const App: React.FC = () => {
     const success = await appSettingsService.updateSettings({ [key]: value });
 
     if (success) {
-        // Atualiza o estado local
+        // Atualiza o estado local APENAS se a persistência no Supabase for bem-sucedida
         switch (key) {
             case 'logo': setLogo(value); break;
             case 'margemGlobalAtiva': setMargemGlobalAtiva(value); break;
@@ -109,6 +114,10 @@ const App: React.FC = () => {
             case 'pix2Name': setPix2Name(value); break;
             case 'pix2Code': setPix2Code(value); break;
         }
+    } else {
+        console.error(`Falha ao persistir a configuração: ${key}`);
+        // Opcional: Recarregar configurações do DB para reverter o estado local em caso de falha
+        // fetchCoreData(); 
     }
   }, []);
 

@@ -188,17 +188,14 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {products
-          .filter(p => productIdsInCarga.has(p.id)) // Filtra apenas produtos na carga (removido o filtro 'ativo')
+          .filter(p => productIdsInCarga.has(p.id)) // Filtra apenas produtos na carga
           .map(p => { 
           const itemNoCart = cart[p.id];
           const cargaOriginal = minhaCarga.find(c => c.produtoId === p.id)?.quantidade || 0;
           const cargaDisponivel = cargaOriginal - (itemNoCart?.quantidade ?? 0); 
           
-          // Se o produto está na carga, mas a quantidade é 0 (após vendas), ele ainda deve aparecer se estiver no carrinho,
-          // mas se não estiver no carrinho e a carga for 0, ele não deve aparecer.
-          // Mantemos esta verificação para garantir que itens com estoque zero e fora do carrinho não sejam exibidos.
-          if (cargaOriginal <= 0 && (itemNoCart?.quantidade ?? 0) === 0) return null;
-
+          // Removido o filtro condicional que retornava null, garantindo que todos os produtos na carga sejam exibidos.
+          
           const currentPrice = parseFloat(itemNoCart?.precoVenda || (p.precoVenda ?? 0).toString()) || 0; 
           
           const minPriceAllowed = Number(((p.precoCusto ?? 0) / (1 - margemMinima / 100)).toFixed(2));
@@ -261,7 +258,14 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                   </div>
                   <div className="space-y-1">
                     <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Valor Recebido</label>
-                    <input type="number" min="0" value={valorRecebido} onChange={e => { const val = e.target.value; if (val === '' || parseFloat(val) >= 0) setValorRecebido(val); }} placeholder="0,00" className={`w-full p-4 font-black border-none rounded-2xl outline-none text-xl ${valorRecebidoNum < total ? 'bg-rose-50 text-rose-600' : 'bg-blue-50 text-blue-600'}`} />
+                    <input
+                      type="number"
+                      min="0"
+                      value={valorRecebido}
+                      onChange={e => { const val = e.target.value; if (val === '' || parseFloat(val) >= 0) setValorRecebido(val); }}
+                      placeholder="0,00"
+                      className={`w-full p-4 font-black border-none rounded-2xl outline-none text-xl ${valorRecebidoNum < total ? 'bg-rose-50 text-rose-600' : 'bg-blue-50 text-blue-600'}`}
+                    />
                   </div>
                   {troco > 0 && <div className="bg-green-50 p-4 rounded-2xl flex justify-between items-center"><p className="text-[10px] font-black text-green-600 uppercase">Troco</p><p className="text-xl font-black text-green-700">R$ {troco.toFixed(2)}</p></div>}
                 </div>

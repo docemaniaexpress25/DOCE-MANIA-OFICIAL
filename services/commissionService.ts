@@ -64,26 +64,26 @@ export const commissionService = {
     if (error) return [];
     return data.map(l => ({
       id: l.id,
-      vendedorId: l.vendedor_id,
-      vendedorNome: l.vendedor_nome,
+      vendedorId: l.seller_id, // Mapeando de seller_id
+      vendedorNome: 'N/D', // Não existe no DB, usando N/D
       valorPago: safeNumber(l.valor_pago), // Usando safeNumber
-      valorRestante: safeNumber(l.valor_restante), // Usando safeNumber
-      tipo: l.tipo,
+      valorRestante: 0, // Não existe no DB, usando 0
+      tipo: 'TOTAL', // Não existe no DB, usando default
       dataPagamento: new Date(l.created_at),
-      adminId: l.admin_id
+      adminId: 'N/D' // Não existe no DB, usando N/D
     })) as CommissionPaymentLog[];
   },
 
   async insertPayout(log: Omit<CommissionPaymentLog, 'id'>): Promise<boolean> {
-    // Construindo o payload de forma limpa, mapeando os campos da interface para o DB
+    // Mapeando apenas os campos que existem na tabela 'commission_payment_logs' do Supabase
+    // (seller_id, valor_pago, metodo_pagamento, observacao, created_at)
     const payload = {
-      seller_id: log.vendedorId, // Mapeando vendedorId para seller_id (assumindo que são o mesmo)
+      seller_id: log.vendedorId,
       valor_pago: log.valorPago,
-      vendedor_nome: log.vendedorNome,
-      valor_restante: log.valorRestante,
-      tipo: log.tipo,
-      admin_id: log.adminId,
-      created_at: log.dataPagamento.toISOString(), // Usando created_at para data_pagamento
+      // Adicionando valores padrão para campos obrigatórios/existentes no DB, mas ausentes na interface local
+      metodo_pagamento: 'DINHEIRO', // Assumindo pagamento em dinheiro como padrão
+      observacao: `Pagamento ${log.tipo} por Admin ${log.adminId}`,
+      created_at: log.dataPagamento.toISOString(),
     };
     
     const { error } = await supabase.from('commission_payment_logs').insert(payload);

@@ -1,9 +1,8 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { User, Product, Carga, Sale, Commission, Client, PaymentMethod, CargaPendente, CommissionPaymentLog, SystemMessage } from './types';
 import AdminDashboard from './components/AdminDashboard';
 import VendedorDashboard from './components/VendedorDashboard';
 import Login from './components/Login';
-import PullToRefresh from './components/PullToRefresh'; // Importando PullToRefresh
 import { userService } from './services/userService';
 import { productService } from './services/productService';
 import { clientService } from './services/clientService';
@@ -39,111 +38,75 @@ const App: React.FC = () => {
   const [payoutLogs, setPayoutLogs] = useState<CommissionPaymentLog[]>([]);
   const [messages, setMessages] = useState<SystemMessage[]>([]);
 
-  const fetchUsers = useCallback(async () => { setUsers(await userService.getAllUsers()); }, []);
-  const fetchProducts = useCallback(async () => { setProducts(await productService.getAllProducts()); }, []);
-  const fetchClients = useCallback(async () => { setClients(await clientService.getAllClients()); }, []);
-  const fetchSales = useCallback(async () => { setSales(await saleService.getAllSales()); }, []);
-  const fetchCommissions = useCallback(async () => { 
+  const fetchUsers = async () => { setUsers(await userService.getAllUsers()); };
+  const fetchProducts = async () => { setProducts(await productService.getAllProducts()); };
+  const fetchClients = async () => { setClients(await clientService.getAllClients()); };
+  const fetchSales = async () => { setSales(await saleService.getAllSales()); };
+  const fetchCommissions = async () => { 
     setCommissions(await commissionService.getAllCommissions());
     setPayoutLogs(await commissionService.getAllPayouts());
-  }, []);
+  };
   
-  const fetchCargas = useCallback(async (vId?: string) => {
+  const fetchCargas = async () => {
     const active = await cargaService.getAllCargas();
-    const pending = await cargaService.getAllCargasPendentes(vId);
+    const pending = await cargaService.getAllCargasPendentes(
+      currentUser?.role === 'VENDEDOR' ? currentUser.id : undefined
+    );
     setCargas(active);
     setCargasPendentes(pending);
-  }, []);
+  };
 
-  const fetchMessages = useCallback(async () => { setMessages(await messageService.getAllMessages()); }, []);
+  const fetchMessages = async () => { setMessages(await messageService.getAllMessages()); };
 
-  const fetchCoreData = useCallback(async () => {
-    const settings = await appSettingsService.getSettings();
-    setLogo(settings.logo);
-    setMargemGlobalAtiva(settings.margemGlobalAtiva);
-    setMargemGlobalValor(settings.margemGlobalValor);
-    setMargemMinimaAtiva(settings.margemMinimaAtiva);
-    setMargemMinima(settings.margemMinima);
-    setPix1Name(settings.pix1Name ?? "Pix Banco A");
-    setPix1Code(settings.pix1Code);
-    setPix2Name(settings.pix2Name ?? "Pix Banco B");
-    setPix2Code(settings.pix2Code);
-
-    await Promise.all([
-      fetchUsers(),
-      fetchProducts(),
-      fetchClients()
-    ]);
-  }, [fetchUsers, fetchProducts, fetchClients]);
-
-  const fetchUserData = useCallback(async (user: User) => {
-    await Promise.all([
-      fetchCargas(user.role === 'VENDEDOR' ? user.id : undefined),
-      fetchSales(),
-      fetchCommissions(),
-      fetchMessages(),
-    ]);
-  }, [fetchCargas, fetchSales, fetchCommissions, fetchMessages]);
-
-  // Função de Refresh para Pull-to-Refresh
-  const handleRefresh = useCallback(async () => {
-    await fetchCoreData();
-    if (currentUser) {
-      await fetchUserData(currentUser);
-    }
-  }, [fetchCoreData, currentUser, fetchUserData]);
-
-  // Função para atualizar configurações globais e persistir no Supabase
-  const updateSetting = useCallback(async (key: keyof AppSettings, value: any) => {
+  // Funções de persistência para configurações
+  const updateSetting = async (key: keyof AppSettings, value: any) => {
     const success = await appSettingsService.updateSettings({ [key]: value });
-
     if (success) {
-        // Atualiza o estado local
-        switch (key) {
-            case 'logo':
-                setLogo(value);
-                break;
-            case 'margemGlobalAtiva':
-                setMargemGlobalAtiva(value);
-                break;
-            case 'margemGlobalValor':
-                setMargemGlobalValor(value);
-                break;
-            case 'margemMinimaAtiva':
-                setMargemMinimaAtiva(value);
-                break;
-            case 'margemMinima':
-                setMargemMinima(value);
-                break;
-            case 'pix1Name':
-                setPix1Name(value);
-                break;
-            case 'pix1Code':
-                setPix1Code(value);
-                break;
-            case 'pix2Name':
-                setPix2Name(value);
-                break;
-            case 'pix2Code':
-                setPix2Code(value);
-                break;
-        }
+      // Atualiza o estado local após a persistência
+      if (key === 'logo') setLogo(value);
+      if (key === 'margemGlobalAtiva') setMargemGlobalAtiva(value);
+      if (key === 'margemGlobalValor') setMargemGlobalValor(value);
+      if (key === 'margemMinimaAtiva') setMargemMinimaAtiva(value);
+      if (key === 'margemMinima') setMargemMinima(value);
+      if (key === 'pix1Name') setPix1Name(value);
+      if (key === 'pix1Code') setPix1Code(value);
+      if (key === 'pix2Name') setPix2Name(value);
+      if (key === 'pix2Code') setPix2Code(value);
     }
-  }, []);
-
+  };
 
   // Carga inicial de dados globais e configurações
   useEffect(() => {
-    fetchCoreData();
-  }, [fetchCoreData]);
+    const loadGlobals = async () => {
+      const settings = await appSettingsService.getSettings();
+      setLogo(settings.logo);
+      setMargemGlobalAtiva(settings.margemGlobalAtiva);
+      setMargemGlobalValor(settings.margemGlobalValor);
+      setMargemMinimaAtiva(settings.margemMinimaAtiva);
+      setMargemMinima(settings.margemMinima);
+      setPix1Name(settings.pix1Name ?? "Pix Banco A");
+      setPix1Code(settings.pix1Code);
+      setPix2Name(settings.pix2Name ?? "Pix Banco B");
+      setPix2Code(settings.pix2Code);
+
+      await Promise.all([
+        fetchUsers(),
+        fetchProducts(),
+        fetchClients()
+      ]);
+    };
+    loadGlobals();
+  }, []);
 
   // Recarrega dados específicos sempre que o usuário logar ou mudar
   useEffect(() => {
     if (currentUser) {
-      fetchUserData(currentUser);
+      fetchCargas();
+      fetchSales();
+      fetchCommissions();
+      fetchMessages();
     }
-  }, [currentUser, fetchUserData]);
-
+  }, [currentUser]);
 
   useEffect(() => {
     if (margemGlobalAtiva) {
@@ -220,7 +183,7 @@ const App: React.FC = () => {
     const cp: Omit<CargaPendente, 'id'> = { vendedorId, itens: novosItens, data: new Date() };
     const res = await cargaService.insertCargaPendente(cp);
     if (res) {
-      await fetchCargas(currentUser?.role === 'VENDEDOR' ? currentUser.id : undefined); // Re-sincroniza estado imediatamente após insert bem sucedido
+      await fetchCargas(); // Re-sincroniza estado imediatamente após insert bem sucedido
     }
   };
 
@@ -228,7 +191,7 @@ const App: React.FC = () => {
   const applyCargaDirectly = async (vendedorId: string, novosItens: { produtoId: string, quantidade: number }[]) => {
     const res = await cargaService.updateActiveCarga(vendedorId, novosItens);
     if (res) {
-      await fetchCargas(currentUser?.role === 'VENDEDOR' ? currentUser.id : undefined);
+      await fetchCargas();
       setAdminNotification("Carga aplicada diretamente com sucesso.");
     }
   };
@@ -252,7 +215,7 @@ const App: React.FC = () => {
     await cargaService.deleteCargaPendente(pendenciaId);
 
     // 4. Refresh Total para garantir integridade
-    await Promise.all([fetchProducts(), fetchCargas(currentUser?.role === 'VENDEDOR' ? currentUser.id : undefined)]);
+    await Promise.all([fetchProducts(), fetchCargas()]);
     setAdminNotification("Carga aceita pelo vendedor com sucesso.");
   };
 
@@ -319,7 +282,7 @@ const App: React.FC = () => {
       dataGeracao: new Date()
     });
 
-    await Promise.all([fetchSales(), fetchCargas(currentUser?.role === 'VENDEDOR' ? currentUser.id : undefined), fetchCommissions()]);
+    await Promise.all([fetchSales(), fetchCargas(), fetchCommissions()]);
     return newSale;
   };
 
@@ -339,7 +302,7 @@ const App: React.FC = () => {
     await commissionService.deleteCommissionBySale(saleId);
     await saleService.deleteSale(saleId);
 
-    await Promise.all([fetchSales(), fetchCargas(currentUser?.role === 'VENDEDOR' ? currentUser.id : undefined), fetchCommissions()]);
+    await Promise.all([fetchSales(), fetchCargas(), fetchCommissions()]);
   };
 
   const receiveAccount = async (saleId: string, method: PaymentMethod, amount?: number) => {
@@ -409,7 +372,7 @@ const App: React.FC = () => {
   if (!currentUser) return <Login users={users} onLogin={setCurrentUser} logo={logo} />;
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-20 md:pb-0 flex flex-col">
+    <div className="min-h-screen bg-gray-50 pb-20 md:pb-0">
       <header className="bg-white text-gray-800 h-20 px-6 shadow-sm flex justify-between items-center sticky top-0 z-50 border-b border-gray-100">
         <div className="flex items-center h-full">
           {logo ? ( <img src={logo} alt="Logo" className="h-16 w-auto object-contain" /> ) : (
@@ -428,39 +391,36 @@ const App: React.FC = () => {
           </button>
         </div>
       </header>
-      
-      <PullToRefresh onRefresh={handleRefresh}>
-        <main className="container mx-auto p-4 max-w-lg">
-          {currentUser.role === 'ADMIN' ? (
-            <AdminDashboard 
-              products={products} users={users} cargas={cargas} clients={clients} sales={sales} commissions={commissions} payoutLogs={payoutLogs}
-              addProduct={addProduct} updateProduct={updateProduct} deleteProduct={deleteProduct} registerStockEntry={registerStockEntry}
-              adjustStockManual={adjustStockManual} syncVendedorCarga={syncVendedorCarga} applyCargaDirectly={applyCargaDirectly} addClient={addClient} updateClient={updateClient}
-              deleteClient={deleteClient} addUser={addUser} updateUser={updateUser} payCommission={handlePayCommission}
-              setCommissions={()=>{}} updateEstoqueCentral={()=>{}} reinforceCarga={()=>{}} deleteSale={(id) => deleteSaleInternal(id, true)}
-              receiveAccount={receiveAccount} logo={logo} setLogo={(val) => updateSetting('logo', val)} adminUser={currentUser} margemGlobalAtiva={margemGlobalAtiva}
-              setMargemGlobalAtiva={(val) => updateSetting('margemGlobalAtiva', val)} margemGlobalValor={margemGlobalValor} setMargemGlobalValor={(val) => updateSetting('margemGlobalValor', val)}
-              margemMinima={margemMinima} setMargemMinima={(val) => updateSetting('margemMinima', val)} margemMinimaAtiva={margemMinimaAtiva}
-              setMargemMinimaAtiva={(val) => updateSetting('margemMinimaAtiva', val)} pix1Name={pix1Name} setPix1Name={(val) => updateSetting('pix1Name', val)} pix1Code={pix1Code} setPix1Code={(val) => updateSetting('pix1Code', val)}
-              pix2Name={pix2Name} setPix2Name={(val) => updateSetting('pix2Name', val)} pix2Code={pix2Code} setPix2Code={(val) => updateSetting('pix2Code', val)}
-              adminNotification={adminNotification} clearAdminNotification={() => setAdminNotification(null)}
-            />
-          ) : (
-            <VendedorDashboard 
-              products={products} users={users} cargas={cargas} clients={clients} sales={sales} commissions={commissions}
-              addClient={addClient} updateClient={updateClient} deleteClient={deleteClient} // Passando addClient e deleteClient
-              user={currentUser} 
-              payoutLogs={payoutLogs.filter(l => l.vendedorId === currentUser.id)}
-              cargasPendentes={cargasPendentes}
-              messages={messages.filter(m => m.vendedorId === currentUser.id)}
-              markMessageAsRead={markMessageAsRead} processSale={processSale} 
-              receivePayment={receiveAccount} deleteSale={(id) => deleteSaleInternal(id, false)} aceitarCarga={aceitarCarga}
-              margemMinima={margemMinima} margemMinimaAtiva={margemMinimaAtiva} pix1Name={pix1Name} pix1Code={pix1Code}
-              pix2Name={pix2Name} pix2Code={pix2Code}
-            />
-          )}
-        </main>
-      </PullToRefresh>
+      <main className="container mx-auto p-4 max-w-lg">
+        {currentUser.role === 'ADMIN' ? (
+          <AdminDashboard 
+            products={products} users={users} cargas={cargas} clients={clients} sales={sales} commissions={commissions} payoutLogs={payoutLogs}
+            addProduct={addProduct} updateProduct={updateProduct} deleteProduct={deleteProduct} registerStockEntry={registerStockEntry}
+            adjustStockManual={adjustStockManual} syncVendedorCarga={syncVendedorCarga} applyCargaDirectly={applyCargaDirectly} addClient={addClient} updateClient={updateClient}
+            deleteClient={deleteClient} addUser={addUser} updateUser={updateUser} payCommission={handlePayCommission}
+            setCommissions={()=>{}} updateEstoqueCentral={()=>{}} reinforceCarga={()=>{}} deleteSale={(id) => deleteSaleInternal(id, true)}
+            receiveAccount={receiveAccount} logo={logo} setLogo={(val) => updateSetting('logo', val)} adminUser={currentUser} margemGlobalAtiva={margemGlobalAtiva}
+            setMargemGlobalAtiva={(val) => updateSetting('margemGlobalAtiva', val)} margemGlobalValor={margemGlobalValor} setMargemGlobalValor={(val) => updateSetting('margemGlobalValor', val)}
+            margemMinima={margemMinima} setMargemMinima={(val) => updateSetting('margemMinima', val)} margemMinimaAtiva={margemMinimaAtiva}
+            setMargemMinimaAtiva={(val) => updateSetting('margemMinimaAtiva', val)} pix1Name={pix1Name} setPix1Name={(val) => updateSetting('pix1Name', val)} pix1Code={pix1Code} setPix1Code={(val) => updateSetting('pix1Code', val)}
+            pix2Name={pix2Name} setPix2Name={(val) => updateSetting('pix2Name', val)} pix2Code={pix2Code} setPix2Code={(val) => updateSetting('pix2Code', val)}
+            adminNotification={adminNotification} clearAdminNotification={() => setAdminNotification(null)}
+          />
+        ) : (
+          <VendedorDashboard 
+            products={products} users={users} cargas={cargas} clients={clients} sales={sales} commissions={commissions}
+            addClient={addClient} updateClient={updateClient} deleteClient={deleteClient} // Passando addClient e deleteClient
+            user={currentUser} 
+            payoutLogs={payoutLogs.filter(l => l.vendedorId === currentUser.id)}
+            cargasPendentes={cargasPendentes}
+            messages={messages.filter(m => m.vendedorId === currentUser.id)}
+            markMessageAsRead={markMessageAsRead} processSale={processSale} 
+            receivePayment={receiveAccount} deleteSale={(id) => deleteSaleInternal(id, false)} aceitarCarga={aceitarCarga}
+            margemMinima={margemMinima} margemMinimaAtiva={margemMinimaAtiva} pix1Name={pix1Name} pix1Code={pix1Code}
+            pix2Name={pix2Name} pix2Code={pix2Code}
+          />
+        )}
+      </main>
     </div>
   );
 };

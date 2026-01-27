@@ -70,13 +70,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
   const rotaDeHoje = useMemo(() => clients.filter(c => (c.ativo ?? false) && ((c.diaRoteiro ?? 0) === diaAtual || extraRouteClientIds.includes(c.id))), [clients, diaAtual, extraRouteClientIds]); 
 
-  // --- DEBUG LOGS ---
-  useEffect(() => {
-    console.log("VendedorDashboard: Carga Ativa (minhaCarga):", minhaCarga);
-    console.log("VendedorDashboard: Produtos Carregados:", products.length);
-  }, [minhaCarga, products]);
-  // ------------------
-
   const filterByPeriod = (date: Date, period: string) => {
     const d = new Date(date);
     const today = new Date();

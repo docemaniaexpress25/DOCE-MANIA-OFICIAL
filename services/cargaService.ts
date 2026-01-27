@@ -1,4 +1,3 @@
-
 import { supabase } from '../supabaseClient';
 import { Carga, CargaPendente } from '../types';
 

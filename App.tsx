@@ -85,6 +85,53 @@ const App: React.FC = () => {
     ]);
   }, [fetchCargas, fetchSales, fetchCommissions, fetchMessages]);
 
+  // Função de Refresh para Pull-to-Refresh
+  const handleRefresh = useCallback(async () => {
+    await fetchCoreData();
+    if (currentUser) {
+      await fetchUserData(currentUser);
+    }
+  }, [fetchCoreData, currentUser, fetchUserData]);
+
+  // Função para atualizar configurações globais e persistir no Supabase
+  const updateSetting = useCallback(async (key: keyof AppSettings, value: any) => {
+    const success = await appSettingsService.updateSettings({ [key]: value });
+
+    if (success) {
+        // Atualiza o estado local
+        switch (key) {
+            case 'logo':
+                setLogo(value);
+                break;
+            case 'margemGlobalAtiva':
+                setMargemGlobalAtiva(value);
+                break;
+            case 'margemGlobalValor':
+                setMargemGlobalValor(value);
+                break;
+            case 'margemMinimaAtiva':
+                setMargemMinimaAtiva(value);
+                break;
+            case 'margemMinima':
+                setMargemMinima(value);
+                break;
+            case 'pix1Name':
+                setPix1Name(value);
+                break;
+            case 'pix1Code':
+                setPix1Code(value);
+                break;
+            case 'pix2Name':
+                setPix2Name(value);
+                break;
+            case 'pix2Code':
+                setPix2Code(value);
+                break;
+        }
+    }
+  }, []);
+
+
   // Carga inicial de dados globais e configurações
   useEffect(() => {
     fetchCoreData();
@@ -96,14 +143,6 @@ const App: React.FC = () => {
       fetchUserData(currentUser);
     }
   }, [currentUser, fetchUserData]);
-
-  // Função de Refresh para Pull-to-Refresh
-  const handleRefresh = useCallback(async () => {
-    await fetchCoreData();
-    if (currentUser) {
-      await fetchUserData(currentUser);
-    }
-  }, [fetchCoreData, currentUser, fetchUserData]);
 
 
   useEffect(() => {
@@ -335,7 +374,7 @@ const App: React.FC = () => {
       .filter(c => c.vendedorId === vendedorId && c.status !== 'A_RECEBER')
       .reduce((acc, curr) => acc + curr.valor, 0);
       
-    const saldoReal = totalCommsEligible - jaPago; // Saldo real disponível
+    const saldoReal = totalCommsEligible - jaPagoNoPassado; // Saldo real disponível
 
     // A validação de valor é feita no componente, mas garantimos que o log seja consistente
     

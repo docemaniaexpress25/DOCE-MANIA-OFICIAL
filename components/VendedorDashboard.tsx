@@ -113,13 +113,28 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     setCForm({ ...c });
   };
 
+  const handlePinLocation = () => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition((position) => {
+        const pin = `${position.coords.latitude.toFixed(6)}, ${position.coords.longitude.toFixed(6)}`;
+        setCForm(prev => ({ ...prev, pinLocalizacao: pin }));
+        showToast("Localização capturada!");
+      }, () => {
+        showToast("Erro ao capturar localização. Verifique as permissões do GPS.", 'error');
+      });
+    } else {
+      showToast("Geolocalização não suportada pelo seu dispositivo.", 'error');
+    }
+  };
+
   const handleSaveClientBasic = () => {
     if (editingClient) {
       updateClient(editingClient.id, { 
         nomeFantasia: cForm.nomeFantasia ?? '', 
         diaRoteiro: cForm.diaRoteiro ?? 0, 
         telefone: cForm.telefone ?? '', 
-        endereco: cForm.endereco ?? '' 
+        endereco: cForm.endereco ?? '',
+        pinLocalizacao: cForm.pinLocalizacao ?? '' // Salvando o PIN de localização
       }); 
       setEditingClient(null);
       showToast("Cliente atualizado");
@@ -598,6 +613,28 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Telefone / WhatsApp</label><input value={cForm.telefone || ''} onChange={e => setCForm({...cForm, telefone: e.target.value})} className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100" /></div>
                 <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Dia de Atendimento</label><select value={cForm.diaRoteiro ?? 1} onChange={e => setCForm({...cForm, diaRoteiro: parseInt(e.target.value)})} className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100">{[1, 2, 3, 4, 5, 6].map(d => (<option key={d} value={d}>{DIAS_SEMANA[d] ?? 'N/D'}</option>))}</select></div> 
                 <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Endereço</label><input value={cForm.endereco || ''} onChange={e => setCForm({...cForm, endereco: e.target.value})} className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100" /></div>
+                
+                {/* Campo de PIN de Localização com botão de captura */}
+                <div className="space-y-1">
+                   <label className="text-[10px] font-black text-gray-400 uppercase ml-1">PIN de Localização (Lat, Lng)</label>
+                   <div className="relative">
+                      <input 
+                         value={cForm.pinLocalizacao ?? ''} 
+                         onChange={e => setCForm({...cForm, pinLocalizacao: e.target.value})} 
+                         placeholder="Ex: -23.5505, -46.6333" 
+                         className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100 pr-12" 
+                      />
+                      <button 
+                         type="button"
+                         onClick={handlePinLocation} 
+                         className="absolute right-3 top-1/2 -translate-y-1/2 text-blue-600 p-2 w-8 h-8 rounded-full bg-white shadow-md flex items-center justify-center active:scale-95"
+                         title="Capturar Localização Atual"
+                      >
+                         <i className="fa-solid fa-location-crosshairs text-xs"></i>
+                      </button>
+                   </div>
+                </div>
+
                 <div className="flex flex-col gap-2 mt-4"><button onClick={handleSaveClientBasic} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-lg uppercase text-xs">Salvar Alterações</button><button onClick={() => setEditingClient(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px]">Cancelar</button></div>
              </div>
           </div>

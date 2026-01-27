@@ -603,7 +603,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           </div>
           {selectedVendedorId && (
             <>
-              <div className="grid gap-2 px-1 pb-60">
+              <div className="grid gap-2 mb-24 px-1">
                 {props.products.map((p: Product) => { 
                   const noV = props.cargas.find(c => c.vendedorId === selectedVendedorId && c.produtoId === p.id)?.quantidade ?? 0; 
                   const meta = stagingCarga[p.id] ?? 0;

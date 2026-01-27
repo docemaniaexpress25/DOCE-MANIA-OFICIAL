@@ -14,6 +14,7 @@ interface AdminDashboardProps {
   registerStockEntry: (id: string, q: number, c: number) => void;
   adjustStockManual: (id: string, q: number, t: 'ADICAO' | 'SUBTRACAO') => void;
   syncVendedorCarga: (vId: string, itens: { produtoId: string, quantidade: number }[]) => void;
+  applyCargaDirectly: (vId: string, itens: { produtoId: string, quantidade: number }[]) => void; // Nova prop
   addClient: (data: Omit<Client, 'id'>) => void;
   updateClient: (id: string, data: Partial<Client>) => void;
   deleteClient: (id: string) => void;
@@ -72,6 +73,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [showEntryModal, setShowEntryModal] = useState<Product | null>(null);
   const [showClientModal, setShowClientModal] = useState<Client | 'NEW' | null>(null);
   const [showConfirmSync, setShowConfirmSync] = useState(false);
+  const [showConfirmApply, setShowConfirmApply] = useState(false); // Novo estado para aplicação direta
   const [filtroPeriodo, setFiltroPeriodo] = useState<'HOJE' | 'SEMANA' | 'MES' | 'GERAL'>('HOJE');
   const [selectedSale, setSelectedSale] = useState<Sale | null>(null);
   const [showUserModal, setShowUserModal] = useState<User | 'NEW' | null>(null);
@@ -245,7 +247,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     const itens = Object.entries(stagingCarga).map(([produtoId, quantidade]) => ({ produtoId, quantidade: quantidade ?? 0 })); 
     props.syncVendedorCarga(selectedVendedorId, itens);
     setShowConfirmSync(false);
-    showToast("Carga sincronizada com sucesso");
+    showToast("Carga enviada para aceite do vendedor.");
+  };
+
+  const handleApply = () => {
+    const itens = Object.entries(stagingCarga).map(([produtoId, quantidade]) => ({ produtoId, quantidade: quantidade ?? 0 })); 
+    props.applyCargaDirectly(selectedVendedorId, itens);
+    setShowConfirmApply(false);
+    showToast("Carga aplicada imediatamente.");
   };
 
   const handleOpenClient = (c: Client | 'NEW') => {
@@ -603,13 +612,20 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                   );
                 })}
               </div>
-              <div className="fixed bottom-4 left-4 right-4 max-w-lg mx-auto z-50">
+              <div className="fixed bottom-4 left-4 right-4 max-w-lg mx-auto z-50 flex flex-col gap-2">
+                <button 
+                  onClick={() => setShowConfirmApply(true)} 
+                  disabled={!hasCargaChanges}
+                  className={`w-full font-black py-5 rounded-3xl shadow-xl flex items-center justify-center gap-3 transition-all ${hasCargaChanges ? 'bg-emerald-600 text-white active:scale-95' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}
+                >
+                  <i className="fa-solid fa-check-circle"></i> APLICAR CARGA IMEDIATAMENTE
+                </button>
                 <button 
                   onClick={() => setShowConfirmSync(true)} 
                   disabled={!hasCargaChanges}
-                  className={`w-full font-black py-5 rounded-3xl shadow-2xl flex items-center justify-center gap-3 transition-all ${hasCargaChanges ? 'bg-gray-900 text-white active:scale-95' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}
+                  className={`w-full font-black py-5 rounded-3xl shadow-xl flex items-center justify-center gap-3 transition-all ${hasCargaChanges ? 'bg-gray-900 text-white active:scale-95' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}
                 >
-                  <i className="fa-solid fa-rotate"></i> SINCRONIZAR CARGA
+                  <i className="fa-solid fa-truck-loading"></i> ENVIAR CARGA PENDENTE
                 </button>
               </div>
             </>
@@ -991,13 +1007,26 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         </div>
       )}
 
-      {/* MODAL SINCRONIZAÇÃO */}
+      {/* MODAL SINCRONIZAÇÃO PENDENTE */}
       {showConfirmSync && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[250] flex items-center justify-center p-6">
           <div className="bg-white w-full max-w-xs rounded-3xl p-8 text-center shadow-2xl">
-            <h3 className="font-black text-gray-800 text-lg mb-6">Deseja sincronizar a carga?</h3>
-            <button onClick={handleSync} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 mb-2 uppercase text-xs">Sim, Confirmar</button>
+            <h3 className="font-black text-gray-800 text-lg mb-6">Enviar Carga Pendente?</h3>
+            <p className="text-sm text-gray-500 mb-6">O vendedor precisará aceitar esta carga para que ela seja aplicada ao estoque dele.</p>
+            <button onClick={handleSync} className="w-full bg-gray-900 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 mb-2 uppercase text-xs">Sim, Enviar Pendente</button>
             <button onClick={() => setShowConfirmSync(false)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px]">Cancelar</button>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL APLICAR IMEDIATAMENTE */}
+      {showConfirmApply && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[250] flex items-center justify-center p-6">
+          <div className="bg-white w-full max-w-xs rounded-3xl p-8 text-center shadow-2xl">
+            <h3 className="font-black text-gray-800 text-lg mb-6">Aplicar Carga Imediatamente?</h3>
+            <p className="text-sm text-gray-500 mb-6">Esta ação sobrescreverá o estoque atual do vendedor sem a necessidade de aceite.</p>
+            <button onClick={handleApply} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 mb-2 uppercase text-xs">Sim, Aplicar Agora</button>
+            <button onClick={() => setShowConfirmApply(false)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px]">Cancelar</button>
           </div>
         </div>
       )}

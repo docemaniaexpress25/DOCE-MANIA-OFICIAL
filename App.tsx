@@ -178,11 +178,21 @@ const App: React.FC = () => {
     if (res) await fetchProducts();
   };
 
+  // Função para criar uma Carga Pendente (requer aceite do vendedor)
   const syncVendedorCarga = async (vendedorId: string, novosItens: { produtoId: string, quantidade: number }[]) => {
     const cp: Omit<CargaPendente, 'id'> = { vendedorId, itens: novosItens, data: new Date() };
     const res = await cargaService.insertCargaPendente(cp);
     if (res) {
       await fetchCargas(); // Re-sincroniza estado imediatamente após insert bem sucedido
+    }
+  };
+
+  // NOVA FUNÇÃO: Aplica a carga diretamente (sem aceite do vendedor)
+  const applyCargaDirectly = async (vendedorId: string, novosItens: { produtoId: string, quantidade: number }[]) => {
+    const res = await cargaService.updateActiveCarga(vendedorId, novosItens);
+    if (res) {
+      await fetchCargas();
+      setAdminNotification("Carga aplicada diretamente com sucesso.");
     }
   };
 
@@ -367,7 +377,7 @@ const App: React.FC = () => {
           <AdminDashboard 
             products={products} users={users} cargas={cargas} clients={clients} sales={sales} commissions={commissions} payoutLogs={payoutLogs}
             addProduct={addProduct} updateProduct={updateProduct} deleteProduct={deleteProduct} registerStockEntry={registerStockEntry}
-            adjustStockManual={adjustStockManual} syncVendedorCarga={syncVendedorCarga} addClient={addClient} updateClient={updateClient}
+            adjustStockManual={adjustStockManual} syncVendedorCarga={syncVendedorCarga} applyCargaDirectly={applyCargaDirectly} addClient={addClient} updateClient={updateClient}
             deleteClient={deleteClient} addUser={addUser} updateUser={updateUser} payCommission={handlePayCommission}
             setCommissions={()=>{}} updateEstoqueCentral={()=>{}} reinforceCarga={()=>{}} deleteSale={(id) => deleteSaleInternal(id, true)}
             receiveAccount={receiveAccount} logo={logo} setLogo={(val) => updateSetting('logo', val)} adminUser={currentUser} margemGlobalAtiva={margemGlobalAtiva}

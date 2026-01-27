@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useMemo } from 'react';
 import { Product, Client, Carga, Sale, SaleItem, PaymentMethod } from '../types';
 
@@ -31,6 +30,9 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const [selectedPixSlot, setSelectedPixSlot] = useState<1 | 2 | null>(null);
 
   const todayStr = new Date().toISOString().split('T')[0];
+
+  // 1. Mapeia os IDs dos produtos que o vendedor tem na carga
+  const productIdsInCarga = useMemo(() => new Set(minhaCarga.map(c => c.produtoId)), [minhaCarga]);
 
   useEffect(() => {
     const savedCart = localStorage.getItem(`pdv_cart_${vendedorId}_${client.id}`);
@@ -169,11 +171,18 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       </header>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {products.filter(p => (p.ativo ?? false)).map(p => { 
+        {products
+          .filter(p => productIdsInCarga.has(p.id) && (p.ativo ?? false)) // Filtra apenas produtos na carga E ativos
+          .map(p => { 
           const itemNoCart = cart[p.id];
           const cargaOriginal = minhaCarga.find(c => c.produtoId === p.id)?.quantidade || 0;
           const cargaDisponivel = cargaOriginal - (itemNoCart?.quantidade ?? 0); 
-          if (cargaOriginal <= 0) return null;
+          
+          // Se o produto está na carga, mas a quantidade é 0 (após vendas), ele ainda deve aparecer se estiver no carrinho,
+          // mas se não estiver no carrinho e a carga for 0, ele não deve aparecer.
+          // Como já filtramos por productIdsInCarga, se a cargaOriginal for 0, ele não deveria estar aqui,
+          // mas vamos manter a verificação de cargaOriginal > 0 para garantir que apenas itens carregados sejam processados.
+          if (cargaOriginal <= 0 && (itemNoCart?.quantidade ?? 0) === 0) return null;
 
           const currentPrice = parseFloat(itemNoCart?.precoVenda || (p.precoVenda ?? 0).toString()) || 0; 
           

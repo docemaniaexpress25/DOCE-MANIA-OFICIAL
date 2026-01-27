@@ -75,11 +75,10 @@ export const commissionService = {
   },
 
   async insertPayout(log: Omit<CommissionPaymentLog, 'id'>): Promise<boolean> {
-    // UUID de placeholder para satisfazer a restrição NOT NULL de commission_id no DB
-    const PLACEHOLDER_COMMISSION_ID = '00000000-0000-0000-0000-000000000000'; 
+    // Removido o PLACEHOLDER_COMMISSION_ID e a coluna commission_id do payload,
+    // pois a coluna agora permite NULL no banco de dados.
     
     const payload = {
-      commission_id: PLACEHOLDER_COMMISSION_ID,
       seller_id: log.vendedorId,
       valor_pago: log.valorPago,
       metodo_pagamento: 'DINHEIRO', // Valor padrão para campo obrigatório/existente

@@ -1,4 +1,3 @@
-
 import { supabase } from '../supabaseClient';
 import { Commission, CommissionPaymentLog } from '../types';
 
@@ -14,8 +13,8 @@ export const commissionService = {
       saleId: c.sale_id,
       vendedorId: c.vendedor_id,
       valor: Number(c.valor),
-      status: c.status_comissao,
-      dataGeracao: new Date(c.data_geracao)
+      status: c.status, // CORRIGIDO: Usando 'status'
+      dataGeracao: new Date(c.created_at) // Assumindo que data de criação é 'created_at'
     })) as Commission[];
   },
 
@@ -24,27 +23,27 @@ export const commissionService = {
       sale_id: comm.saleId,
       vendedor_id: comm.vendedorId,
       valor: comm.valor,
-      status_comissao: comm.status,
-      data_geracao: comm.dataGeracao.toISOString()
+      status: comm.status, // CORRIGIDO: Usando 'status'
+      created_at: comm.dataGeracao.toISOString() // Assumindo que data de geração é 'created_at'
     });
     return !error;
   },
 
   async updateCommissionStatus(id: string, status: string): Promise<boolean> {
-    const { error } = await supabase.from('commissions').update({ status_comissao: status }).eq('id', id);
+    const { error } = await supabase.from('commissions').update({ status: status }).eq('id', id); // CORRIGIDO: Usando 'status'
     return !error;
   },
 
   async bulkUpdateStatusByVendedor(vId: string, oldStatus: string, newStatus: string): Promise<boolean> {
     const { error } = await supabase.from('commissions')
-      .update({ status_comissao: newStatus })
+      .update({ status: newStatus }) // CORRIGIDO: Usando 'status'
       .eq('vendedor_id', vId)
-      .eq('status_comissao', oldStatus);
+      .eq('status', oldStatus); // CORRIGIDO: Usando 'status'
     return !error;
   },
 
   async getAllPayouts(): Promise<CommissionPaymentLog[]> {
-    const { data, error } = await supabase.from('commission_payout_logs').select('*');
+    const { data, error } = await supabase.from('commission_payment_logs').select('*');
     if (error) return [];
     return data.map(l => ({
       id: l.id,
@@ -53,19 +52,19 @@ export const commissionService = {
       valorPago: Number(l.valor_pago),
       valorRestante: Number(l.valor_restante),
       tipo: l.tipo,
-      dataPagamento: new Date(l.data_pagamento),
+      dataPagamento: new Date(l.created_at), // Assumindo que data de pagamento é 'created_at'
       adminId: l.admin_id
     })) as CommissionPaymentLog[];
   },
 
   async insertPayout(log: Omit<CommissionPaymentLog, 'id'>): Promise<boolean> {
-    const { error } = await supabase.from('commission_payout_logs').insert({
+    const { error } = await supabase.from('commission_payment_logs').insert({
       vendedor_id: log.vendedorId,
       vendedor_nome: log.vendedorNome,
       valor_pago: log.valorPago,
       valor_restante: log.valorRestante,
       tipo: log.tipo,
-      data_pagamento: log.dataPagamento.toISOString(),
+      created_at: log.dataPagamento.toISOString(), // Assumindo que data de pagamento é 'created_at'
       admin_id: log.adminId
     });
     return !error;

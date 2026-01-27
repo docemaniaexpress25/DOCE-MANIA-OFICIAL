@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { User, Product, Carga, Sale, Commission, Client, PaymentMethod, CargaPendente, CommissionPaymentLog, SystemMessage } from './types';
 import AdminDashboard from './components/AdminDashboard';
@@ -149,7 +150,6 @@ const App: React.FC = () => {
   };
 
   const syncVendedorCarga = async (vendedorId: string, novosItens: { produtoId: string, quantidade: number }[]) => {
-    // A carga pendente agora é persistida no Supabase
     const cp: Omit<CargaPendente, 'id'> = { vendedorId, itens: novosItens, data: new Date() };
     const res = await cargaService.insertCargaPendente(cp);
     if (res) {
@@ -161,7 +161,7 @@ const App: React.FC = () => {
     const pendencia = cargasPendentes.find(p => p.id === pendenciaId);
     if (!pendencia) return;
 
-    // 1. Atualizar estoque principal dos produtos no Supabase (redução)
+    // 1. Atualizar estoque principal dos produtos no Supabase
     for (const item of pendencia.itens) {
       const p = products.find(prod => prod.id === item.produtoId);
       if (p) {
@@ -169,7 +169,7 @@ const App: React.FC = () => {
       }
     }
 
-    // 2. Atualizar carga ativa do vendedor no Supabase (Substitui a carga antiga pela nova)
+    // 2. Atualizar carga ativa do vendedor no Supabase
     await cargaService.updateActiveCarga(pendencia.vendedorId, pendencia.itens);
 
     // 3. Deletar pendência no Supabase
@@ -207,7 +207,6 @@ const App: React.FC = () => {
     const newSale = await saleService.insertSale(salePayload);
     if (!newSale) return null;
 
-    // Atualiza a carga ativa do vendedor no Supabase (redução de estoque)
     const minhaCarga = cargas.filter(c => c.vendedorId === saleData.vendedorId);
     const novosItensCarga = minhaCarga.map(c => {
       const itemVendido = saleData.itens.find((i: any) => i.produtoId === c.produtoId);
@@ -236,7 +235,6 @@ const App: React.FC = () => {
     const saleToDelete = sales.find(s => s.id === saleId);
     if (!saleToDelete) return;
 
-    // Estorno da carga ativa do vendedor no Supabase
     const minhaCarga = cargas.filter(c => c.vendedorId === saleToDelete.vendedorId);
     const cargaAtualizada = [...minhaCarga];
     saleToDelete.itens.forEach(item => {

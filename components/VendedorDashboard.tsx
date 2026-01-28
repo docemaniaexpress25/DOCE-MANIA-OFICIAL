@@ -29,17 +29,18 @@ interface VendedorDashboardProps {
   pix1Code: string | null;
   pix2Name: string;
   pix2Code: string | null;
+  // Novas props para a Rota do Dia
   dailyRouteState: DailyRouteState;
   updateDailyRoute: (clientIds: string[], skippedClientIds: string[]) => void;
-  productOrder: string[]; 
 }
 
 const VendedorDashboard: React.FC<VendedorDashboardProps> = ({ 
-  user, products, clients, cargas, cargasPendentes, sales, commissions, payoutLogs, messages, markMessageAsRead, processSale, addClient, updateClient, deleteClient, receivePayment, deleteSale, aceitarCarga, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, updateDailyRoute, productOrder
+  user, products, clients, cargas, cargasPendentes, sales, commissions, payoutLogs, messages, markMessageAsRead, processSale, addClient, updateClient, deleteClient, receivePayment, deleteSale, aceitarCarga, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, updateDailyRoute
 }) => {
   const [activeTab, setActiveTab] = useState<'HOME' | 'ROTEIRO' | 'CARGA' | 'HISTORY' | 'FINANCE' | 'CREDIT' | 'CLIENTS' | 'WEEKLY' | 'STOCK_VIEW'>('HOME');
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [viewingSale, setViewingSale] = useState<Sale | null>(null);
+  // O estado de skippedClientIds e extraRouteClientIds agora é gerenciado via dailyRouteState
   const [reopenedClientIds, setReopenedClientIds] = useState<string[]>([]);
   const [showReceiveModal, setShowReceiveModal] = useState<Sale | null>(null);
   const [valorRecebidoParcial, setValorRecebidoParcial] = useState<string>('');
@@ -58,43 +59,20 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   };
 
   const diaAtual = new Date().getDay();
+  const minhaCarga = useMemo(() => cargas.filter(c => c.vendedorId === user.id), [cargas, user.id]);
   
-  // Filtra as cargas ativas e pendentes do vendedor logado
-  const minhaCargaAtiva = useMemo(() => cargas.filter(c => c.vendedorId === user.id), [cargas, user.id]);
-  const minhasPendencias = useMemo(() => cargasPendentes.filter(cp => cp.vendedorId === user.id), [cargasPendentes, user.id]);
-  
+  // Rota do Dia agora é baseada no dailyRouteState
   const rotaDeHoje = useMemo(() => {
     const clientMap = new Map(clients.map(c => [c.id, c]));
+    
+    // Filtra e mapeia os IDs salvos para objetos Client
     const clientsInRoute = dailyRouteState.clientIds
       .map(id => clientMap.get(id))
       .filter((c): c is Client => !!c && (c.ativo ?? false));
+
+    // Garante a ordenação
     return clientsInRoute.sort((a, b) => (a.ordem || 0) - (b.ordem || 0)); 
   }, [clients, dailyRouteState.clientIds]); 
-
-  const getProductById = (id: string) => products.find(p => p.id === id);
-
-  const orderedCargaProducts = useMemo(() => {
-    // Explicitamente tipando o Map para evitar erros de comparação com 'unknown'
-    const cargaMap = new Map<string, number>(minhaCargaAtiva.map(c => [c.produtoId, c.quantidade]));
-    return productOrder
-      .map(pId => {
-        const product = getProductById(pId);
-        const qtd = cargaMap.get(pId);
-        if (product && qtd && qtd > 0) {
-          return { ...product, quantidadeCarga: qtd };
-        }
-        return null;
-      })
-      .filter((p): p is (Product & { quantidadeCarga: number }) => !!p);
-  }, [minhaCargaAtiva, products, productOrder]);
-
-  const orderedStockProducts = useMemo(() => {
-    return productOrder
-      .map(id => getProductById(id))
-      .filter((p): p is Product => !!p);
-  }, [products, productOrder]);
-
-  const isSameDay = (date: Date | undefined) => new Date().toDateString() === (new Date(date ?? new Date())).toDateString(); 
 
   const handleSkipClient = (clientId: string) => { 
     if (confirm("Pular atendimento?")) {
@@ -104,8 +82,10 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   };
 
   const handleReopenClient = (clientId: string) => {
+    // Remove o cliente da lista de pulados
     const newSkipped = dailyRouteState.skippedClientIds.filter(id => id !== clientId);
     updateDailyRoute(dailyRouteState.clientIds, newSkipped);
+    // Adiciona à lista de reabertos (para ignorar o status 'isSold' temporariamente)
     setReopenedClientIds(prev => [...prev, clientId]);
   };
 
@@ -117,15 +97,36 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     } 
   };
 
+  const isSameDay = (date: Date | undefined) => new Date().toDateString() === (new Date(date ?? new Date())).toDateString(); 
+
   const handleOpenEditClient = (c: Client | 'NEW') => {
-    if (c === 'NEW') setCForm({ nomeFantasia: '', telefone: '', endereco: '', bairro: '', diaRoteiro: diaAtual, ativo: true, ordem: 0 });
-    else setCForm({ ...c });
+    if (c === 'NEW') {
+      setCForm({ nomeFantasia: '', telefone: '', endereco: '', bairro: '', diaRoteiro: diaAtual, ativo: true, ativarCnpj: false, cnpj: '', pinLocalizacao: '', ordem: 0 });
+    } else {
+      setCForm({ ...c });
+    }
     setEditingClient(c);
   };
 
+  const handlePinLocation = () => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition((position) => {
+        const pin = `${position.coords.latitude.toFixed(6)}, ${position.coords.longitude.toFixed(6)}`;
+        setCForm(prev => ({ ...prev, pinLocalizacao: pin }));
+        showToast("Localização capturada!");
+      }, () => {
+        showToast("Erro ao capturar localização.", 'error');
+      });
+    }
+  };
+
   const handleSaveClientBasic = () => {
-    if (!cForm.nomeFantasia || !cForm.telefone) return showToast("Preencha Nome e Telefone.", 'error');
-    const data: Omit<Client, 'id'> = {
+    if (!cForm.nomeFantasia || !cForm.telefone) {
+      showToast("Preencha ao menos Nome e Telefone.", 'error');
+      return;
+    }
+
+    const clientData: Omit<Client, 'id'> = {
       nomeFantasia: cForm.nomeFantasia!,
       telefone: cForm.telefone!,
       endereco: cForm.endereco || '',
@@ -139,9 +140,12 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       nome: cForm.nome,
       observacoes: cForm.observacoes,
     };
-    if (editingClient === 'NEW') addClient(data).then(() => showToast("Novo cliente cadastrado!"));
-    else if (typeof editingClient === 'object') {
-      updateClient(editingClient.id, data);
+
+    if (editingClient === 'NEW') {
+      addClient(clientData);
+      showToast("Novo cliente cadastrado!");
+    } else if (typeof editingClient === 'object') {
+      updateClient(editingClient.id, clientData); 
       showToast("Cliente atualizado");
     }
     setEditingClient(null);
@@ -150,11 +154,12 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const handleConfirmReceive = (method: PaymentMethod) => {
     if (!showReceiveModal) return;
     const valor = parseFloat(valorRecebidoParcial);
-    const saldo = Number(((showReceiveModal.valorTotal ?? 0) - (showReceiveModal.valorPago ?? 0)).toFixed(2)); 
-    if (isNaN(valor) || valor <= 0 || valor > saldo) return alert("Valor inválido.");
+    const saldoEmAberto = Number(((showReceiveModal.valorTotal ?? 0) - (showReceiveModal.valorPago ?? 0)).toFixed(2)); 
+    if (isNaN(valor) || valor <= 0 || valor > saldoEmAberto) return alert("Valor inválido.");
     receivePayment(showReceiveModal.id, method, valor);
-    showToast(valor === saldo ? "Conta quitada!" : "Pagamento parcial registrado!");
+    showToast(valor === saldoEmAberto ? "Conta quitada!" : "Pagamento parcial registrado!");
     setShowReceiveModal(null);
+    setValorRecebidoParcial('');
   };
 
   const MenuCard = ({ icon, title, tab, color, badge }: any) => (
@@ -178,12 +183,12 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     return true;
   };
 
-  const filteredHistory = useMemo(() => sales.filter(s => s.vendedorId === user.id && filterByPeriod(s.data, historyFilter)).sort((a, b) => b.data.getTime() - a.data.getTime()), [sales, user.id, historyFilter]); 
+  const filteredHistory = useMemo(() => sales.filter(s => s.vendedorId === user.id && filterByPeriod((s.data ?? new Date()), historyFilter)).sort((a, b) => (b.data?.getTime() ?? 0) - (a.data?.getTime() ?? 0)), [sales, user.id, historyFilter]); 
   
   const financeStats = useMemo(() => {
     const vCommsAll = commissions.filter(c => c.vendedorId === user.id);
     const jaPago = payoutLogs.reduce((acc, curr) => acc + (curr.valorPago ?? 0), 0); 
-    const vSalesFiltered = sales.filter(s => s.vendedorId === user.id && filterByPeriod(s.data, financeFilter)); 
+    const vSalesFiltered = sales.filter(s => s.vendedorId === user.id && filterByPeriod((s.data ?? new Date()), financeFilter)); 
     const totalCommsEligible = vCommsAll.filter(c => c.status !== 'A_RECEBER').reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
     const disponivel = Math.max(0, totalCommsEligible - jaPago);
     const pendente = vCommsAll.filter(c => c.status === 'A_RECEBER').reduce((acc, curr) => acc + (curr.valor ?? 0), 0); 
@@ -196,36 +201,36 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   }, [commissions, user.id, sales, financeFilter, payoutLogs]);
 
   const historySummary = useMemo(() => filteredHistory.reduce((acc, sale) => {
-    acc.total += sale.valorTotal; 
-    if (sale.metodoPagamento === 'DINHEIRO') acc.dinheiro += sale.valorTotal;
-    if (sale.metodoPagamento === 'PIX') acc.pix += sale.valorTotal;
-    if (sale.metodoPagamento === 'A_PRAZO') acc.prazo += sale.valorTotal;
+    acc.total += (sale.valorTotal ?? 0); 
+    if (sale.metodoPagamento === 'DINHEIRO') acc.dinheiro += (sale.valorTotal ?? 0);
+    if (sale.metodoPagamento === 'PIX') acc.pix += (sale.valorTotal ?? 0);
+    if (sale.metodoPagamento === 'A_PRAZO') acc.prazo += (sale.valorTotal ?? 0);
     return acc;
   }, { total: 0, dinheiro: 0, pix: 0, prazo: 0 }), [filteredHistory]);
 
   const contasAReceber = useMemo(() => sales.filter(s => s.vendedorId === user.id && s.metodoPagamento === 'A_PRAZO' && s.statusPagamento === 'PENDENTE'), [sales, user.id]);
 
-  const valorTotalCarga = useMemo(() => minhaCargaAtiva.reduce((acc, curr) => {
+  const valorTotalCarga = useMemo(() => minhaCarga.reduce((acc, curr) => {
     const p = products.find(prod => prod.id === curr.produtoId);
-    return acc + (curr.quantidade * (p?.precoVenda ?? 0)); 
-  }, 0), [minhaCargaAtiva, products]);
+    return acc + ((curr.quantidade ?? 0) * (p?.precoVenda ?? 0)); 
+  }, 0), [minhaCarga, products]);
 
   if (selectedClient) {
+    const pdvClient = clients.find(c => c.id === selectedClient.id);
+    if (!pdvClient) { setSelectedClient(null); return null; }
     return (
       <PDV
-        client={selectedClient} products={products} minhaCarga={minhaCargaAtiva} vendedorId={user.id} 
-        onCancel={() => setSelectedClient(null)}
+        client={pdvClient} products={products} minhaCarga={minhaCarga} vendedorId={user.id} onCancel={() => setSelectedClient(null)}
         onFinish={(s) => { setViewingSale(s); setSelectedClient(null); showToast("Venda realizada"); }}
-        processSale={processSale} margemMinima={margemMinima} margemMinimaAtiva={margemMinimaAtiva} 
-        pix1Name={pix1Name} pix1Code={pix1Code} pix2Name={pix2Name} pix2Code={pix2Code}
-        productOrder={productOrder}
+        processSale={processSale} margemMinima={margemMinima} margemMinimaAtiva={margemMinimaAtiva} pix1Name={pix1Name} pix1Code={pix1Code} pix2Name={pix2Name} pix2Code={pix2Code}
       />
     );
   }
 
   if (viewingSale) {
     const cupomClient = clients.find(c => c.id === viewingSale.clientId);
-    return ( <Cupom sale={viewingSale} client={cupomClient!} products={products} onClose={() => setViewingSale(null)} onDeleteSale={deleteSale} allowDelete={true} /> );
+    if (!cupomClient) { setViewingSale(null); return null; }
+    return ( <Cupom sale={viewingSale} client={cupomClient} products={products} onClose={() => setViewingSale(null)} onDeleteSale={deleteSale} allowDelete={true} /> );
   }
 
   return (
@@ -243,7 +248,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       {activeTab === 'HOME' && (
         <div className="py-4 grid grid-cols-2 gap-4">
           <MenuCard icon="fa-route" title="Rota do Dia" tab="ROTEIRO" color="bg-blue-50 text-blue-600" />
-          <MenuCard icon="fa-truck-fast" title="Minha Carga" tab="CARGA" color="bg-purple-50 text-purple-600" badge={minhasPendencias.length > 0} />
+          <MenuCard icon="fa-truck-fast" title="Minha Carga" tab="CARGA" color="bg-purple-50 text-purple-600" badge={cargasPendentes.length > 0} />
           <MenuCard icon="fa-receipt" title="Vendas" tab="HISTORY" color="bg-blue-50 text-[#1E3A5F]" />
           <MenuCard icon="fa-wallet" title="Financeiro" tab="FINANCE" color="bg-emerald-50 text-[#1F7A4D]" />
           <MenuCard icon="fa-file-invoice-dollar" title="Contas a Receber" tab="CREDIT" color="bg-rose-50 text-rose-600" />
@@ -256,7 +261,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       {activeTab === 'ROTEIRO' && (
         <div className="space-y-4">
           <header className="flex justify-between items-center px-1">
-            <div className="flex flex-col items-start"><h2 className="text-xl font-black text-gray-800 tracking-tight leading-none">{DIAS_SEMANA[diaAtual]}</h2><span className="text-[10px] font-black uppercase text-gray-400 mt-1">{new Date().toLocaleDateString()}</span></div>
+            <div className="flex flex-col items-start"><h2 className="text-xl font-black text-gray-800 tracking-tight leading-none">{DIAS_SEMANA[diaAtual] ?? 'N/D'}</h2><span className="text-[10px] font-black uppercase text-gray-400 mt-1">{new Date().toLocaleDateString()}</span></div>
             <span className="bg-blue-100 text-blue-600 text-[10px] px-2 py-1 rounded-lg font-black uppercase">{rotaDeHoje.length} VISITAS</span>
           </header>
           {rotaDeHoje.map(c => {
@@ -266,7 +271,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
             return (
               <div key={c.id} className={`p-4 rounded-3xl border flex flex-col transition-all ${isVisited ? 'bg-gray-100 border-gray-200 grayscale opacity-60' : 'bg-white border-gray-100 shadow-sm'}`}>
                 <div className="flex justify-between items-center">
-                  <div className="flex-1"><p className="font-bold text-gray-800 leading-tight uppercase">{c.nomeFantasia}</p><p className="text-[10px] text-gray-400 mt-1 uppercase font-semibold"><i className="fa-solid fa-location-dot mr-1"></i> {c.bairro}</p></div>
+                  <div className="flex-1"><p className="font-bold text-gray-800 leading-tight uppercase">{c.nomeFantasia ?? 'Cliente'}</p><p className="text-[10px] text-gray-400 mt-1 uppercase font-semibold"><i className="fa-solid fa-location-dot mr-1"></i> {(c.bairro || 'S/B')}</p></div>
                   {!isVisited ? (
                     <div className="flex gap-2">
                       <button onClick={() => handleSkipClient(c.id)} className="w-10 h-10 bg-gray-50 text-gray-400 rounded-2xl flex items-center justify-center"><i className="fa-solid fa-forward"></i></button>
@@ -280,34 +285,78 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         </div>
       )}
 
+      {activeTab === 'CLIENTES' && (
+        <div className="space-y-4">
+          <header className="px-1 flex justify-between items-center"><h2 className="text-xs font-black text-gray-400 uppercase tracking-wider">Meus Clientes</h2><button onClick={() => handleOpenEditClient('NEW')} className="bg-green-600 text-white px-4 py-2 rounded-xl font-black text-xs uppercase shadow-md active:scale-95"><i className="fa-solid fa-user-plus mr-2"></i>Novo</button></header>
+          <div className="grid gap-3">
+            {clients.sort((a,b) => a.nomeFantasia.localeCompare(b.nomeFantasia)).map(c => (
+              <div key={c.id} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex justify-between items-center transition-all">
+                <div><h4 className="font-bold text-gray-800 text-sm leading-tight uppercase">{c.nomeFantasia ?? 'Cliente'}</h4><p className="text-[10px] text-gray-400 font-semibold uppercase mt-1">{c.telefone} • {DIAS_SEMANA[c.diaRoteiro]}</p></div>
+                <button onClick={() => handleOpenEditClient(c)} className="w-10 h-10 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center active:scale-95"><i className="fa-solid fa-pencil-alt text-xs"></i></button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'WEEKLY' && (
+        <div className="space-y-6 py-4">
+          <div className="px-1 flex justify-between items-center"><h2 className="text-xl font-black text-gray-800 tracking-tight">Roteiro Semanal</h2></div>
+          <div className="px-1"><input value={weeklySearch} onChange={e => setWeeklySearch(e.target.value)} placeholder="Filtrar por nome..." className="w-full p-4 bg-white border border-gray-100 rounded-2xl shadow-sm text-sm outline-none focus:ring-2 focus:ring-indigo-100" /></div>
+          <div className="space-y-3 px-1">
+            {[1, 2, 3, 4, 5, 6].map(dia => {
+              const isOpen = expandedDay === dia;
+              const clientsInDay = clients
+                .filter(c => c.diaRoteiro === dia && c.ativo && (weeklySearch === '' || c.nomeFantasia.toLowerCase().includes(weeklySearch.toLowerCase())))
+                .sort((a, b) => (a.ordem || 0) - (b.ordem || 0)); 
+              return (
+                <div key={dia} className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
+                  <button onClick={() => setExpandedDay(isOpen ? null : dia)} className={`w-full flex items-center justify-between p-5 text-left ${isOpen ? 'bg-indigo-50 text-indigo-700' : 'bg-white text-gray-700'}`}>
+                    <div className="flex items-center gap-3"><div className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-[10px] ${isOpen ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-400'}`}>{dia}</div><span className="font-black uppercase text-xs tracking-tight">{DIAS_SEMANA[dia]}</span></div>
+                    <div className="flex items-center gap-2"><span className="text-[9px] font-black uppercase opacity-40">{clientsInDay.length} clientes</span><i className={`fa-solid ${isOpen ? 'fa-chevron-up' : 'fa-chevron-down'} text-[10px]`}></i></div>
+                  </button>
+                  {isOpen && (
+                    <div className="p-4 bg-white space-y-2 border-t border-indigo-50">
+                      {clientsInDay.map(c => (
+                        <div key={c.id} className="p-3 bg-gray-50 rounded-2xl flex justify-between items-center">
+                          <div><p className="font-bold text-gray-800 text-xs uppercase">{c.nomeFantasia}</p><p className="text-[9px] text-gray-400 font-bold mt-0.5">{c.bairro || 'Sem Bairro'}</p></div>
+                          <button onClick={() => handleAddToTodayRoute(c.id)} className="w-8 h-8 bg-indigo-100 text-indigo-600 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-plus text-xs"></i></button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {activeTab === 'CARGA' && (
         <div className="space-y-4">
-          {minhasPendencias.length > 0 ? (
+          {cargasPendentes.length > 0 ? (
             <div className="bg-orange-50 p-6 rounded-3xl shadow-xl flex flex-col gap-4 items-center text-center">
               <i className="fa-solid fa-truck-loading text-orange-600 text-4xl mb-2"></i>
               <h3 className="text-xl font-black text-orange-800 uppercase">Nova Carga Disponível!</h3>
-              <p className="text-xs text-orange-600 font-bold uppercase">Você tem {minhasPendencias.length} carga(s) aguardando aceite.</p>
-              <button onClick={() => aceitarCarga(minhasPendencias[0].id)} className="w-full bg-orange-600 text-white font-black py-5 rounded-2xl shadow-lg active:scale-95 text-sm uppercase">ACEITAR CARGA</button>
+              <button onClick={() => aceitarCarga(cargasPendentes[0].id)} className="w-full bg-orange-600 text-white font-black py-5 rounded-2xl shadow-lg active:scale-95 text-sm uppercase">ACEITAR CARGA</button>
             </div>
           ) : (
             <>
               <div className="bg-purple-600 text-white p-6 rounded-3xl shadow-xl flex justify-between items-center">
                  <div><p className="text-[10px] font-black uppercase opacity-60">Valor Total Carga</p><h3 className="text-2xl font-black">R$ {valorTotalCarga.toFixed(2)}</h3></div>
-                 <div className="text-right"><p className="text-[10px] font-black uppercase opacity-60">Itens Ativos</p><h3 className="text-2xl font-black">{orderedCargaProducts.length}</h3></div>
+                 <div className="text-right"><p className="text-[10px] font-black uppercase opacity-60">Itens Ativos</p><h3 className="text-2xl font-black">{minhaCarga.length}</h3></div>
               </div>
               <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
                 <table className="w-full text-left">
                   <thead className="bg-gray-50"><tr><th className="p-4 text-[10px] font-black text-gray-400 uppercase">Item</th><th className="p-4 text-center text-[10px] font-black text-gray-400 uppercase">Preço</th><th className="p-4 text-right text-[10px] font-black text-gray-400 uppercase">Qtd</th></tr></thead>
-                  <tbody className="divide-y divide-gray-50">{orderedCargaProducts.map(p => (<tr key={p.id}><td className="p-4 text-xs font-semibold uppercase">{p.nome}</td><td className="p-4 text-center text-xs text-gray-400">R$ {p.precoVenda.toFixed(2)}</td><td className="p-4 text-right font-black text-lg text-blue-600">{p.quantidadeCarga}</td></tr>))}</tbody> 
+                  <tbody className="divide-y divide-gray-50">{minhaCarga.map(c => { const p = products.find(prod => prod.id === c.produtoId); return (<tr key={c.produtoId}><td className="p-4 text-xs font-semibold uppercase">{p?.nome ?? 'Desc.'}</td><td className="p-4 text-center text-xs text-gray-400">R$ {(p?.precoVenda ?? 0).toFixed(2)}</td><td className="p-4 text-right font-black text-lg text-blue-600">{c.quantidade}</td></tr>); })}</tbody> 
                 </table>
               </div>
-              {orderedCargaProducts.length === 0 && <p className="text-center py-10 opacity-30 italic font-black uppercase text-[10px]">Carga vazia</p>}
             </>
           )}
         </div>
       )}
 
-      {/* Outras abas permanecem inalteradas... */}
       {activeTab === 'HISTORY' && (
         <div className="space-y-4">
           <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner">{(['DIA', 'SEMANA', 'MES', 'GERAL'] as const).map(f => (<button key={f} onClick={() => setHistoryFilter(f)} className={`flex-1 py-2 rounded-xl text-[9px] font-black uppercase ${historyFilter === f ? 'bg-white text-[#1E3A5F] shadow-sm' : 'text-gray-400'}`}>{f}</button>))}</div>
@@ -319,7 +368,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 <div className="text-center bg-orange-50 p-3 rounded-xl"><p className="text-[9px] font-black text-orange-600 uppercase mb-1">A Prazo</p><p className="text-sm font-black text-orange-700">R$ {historySummary.prazo.toFixed(2)}</p></div>
              </div>
           </div>
-          {filteredHistory.map(s => (<div key={s.id} onClick={() => setViewingSale(s)} className="bg-white p-4 rounded-3xl border border-gray-100 flex flex-col shadow-sm active:scale-95 transition-all"><div className="flex justify-between items-center mb-2"><p className="font-bold text-gray-800 text-sm uppercase truncate pr-2">{clients.find(c => c.id === s.clientId)?.nomeFantasia}</p><p className="text-sm font-semibold text-emerald-600 whitespace-nowrap">R$ {s.valorTotal.toFixed(2)}</p></div><div className="flex justify-between items-end"><p className="text-[10px] text-gray-400 font-semibold">{s.metodoPagamento} • {s.data.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</p><i className="fa-solid fa-file-invoice text-[#1E3A5F]"></i></div></div>))} 
+          {filteredHistory.map(s => (<div key={s.id} className="bg-white p-4 rounded-3xl border border-gray-100 flex flex-col shadow-sm"><div className="flex justify-between items-center mb-2"><p className="font-bold text-gray-800 text-sm uppercase">{clients.find(c => c.id === s.clientId)?.nomeFantasia ?? 'Cliente'}</p><p className="text-sm font-semibold text-emerald-600">R$ {s.valorTotal.toFixed(2)}</p></div><div className="flex justify-between items-end"><p className="text-[10px] text-gray-400 font-semibold">{s.metodoPagamento} • {s.data.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</p><div className="flex gap-3"><button onClick={() => setViewingSale(s)} className="text-[#1E3A5F] text-lg"><i className="fa-solid fa-file-invoice"></i></button></div></div></div>))} 
         </div>
       )}
 
@@ -334,16 +383,70 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         </div>
       )}
 
+      {activeTab === 'CREDIT' && (
+        <div className="space-y-4">
+          <header className="px-1"><h2 className="text-xs font-black text-gray-400 uppercase tracking-wider">Contas a Receber</h2></header>
+          <div className="grid gap-3">
+            {contasAReceber.map(s => {
+              const saldo = Number(((s.valorTotal ?? 0) - (s.valorPago ?? 0)).toFixed(2)); 
+              const today = new Date();
+              today.setHours(0,0,0,0);
+              const dueDate = s.dataVencimento ? new Date(s.dataVencimento) : null;
+              if (dueDate) dueDate.setHours(0,0,0,0);
+              const isOverdue = dueDate ? dueDate <= today : false;
+
+              return (
+              <div key={s.id} className={`p-5 rounded-3xl border shadow-sm flex flex-col transition-all ${isOverdue ? 'bg-rose-50 border-rose-200' : 'bg-white border-gray-100'}`}>
+                <div className="flex justify-between items-start mb-2">
+                   <div>
+                      <h4 className={`font-bold text-sm leading-tight uppercase ${isOverdue ? 'text-rose-900' : 'text-gray-800'}`}>{clients.find(c => c.id === s.clientId)?.nomeFantasia || 'Cliente'}</h4>
+                      <div className="flex flex-col mt-2">
+                        <span className={`text-[9px] font-black uppercase ${isOverdue ? 'text-rose-600' : 'text-gray-400'}`}>Vencimento</span>
+                        <span className={`text-xs font-black ${isOverdue ? 'text-rose-700' : 'text-gray-800'}`}>{s.dataVencimento ? new Date(s.dataVencimento).toLocaleDateString() : 'N/D'}</span>
+                      </div>
+                   </div>
+                   <div className="text-right">
+                      <span className={`text-[8px] font-black px-2 py-0.5 rounded uppercase ${isOverdue ? 'bg-rose-600 text-white animate-pulse' : 'bg-orange-100 text-orange-600'}`}>
+                        {isOverdue ? 'VENCIDO / HOJE' : 'PENDENTE'}
+                      </span>
+                      <p className="text-lg font-black mt-2 text-rose-600">Saldo: R$ {saldo.toFixed(2)}</p>
+                   </div>
+                </div>
+                <button onClick={() => { setShowReceiveModal(s); setValorRecebidoParcial(saldo.toString()); }} className={`w-full py-3 rounded-2xl text-[10px] font-black uppercase mt-3 shadow-lg active:scale-95 ${isOverdue ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white'}`}>Receber Agora</button>
+              </div>
+            )})}
+            {contasAReceber.length === 0 && (
+               <div className="text-center py-20 opacity-20 italic font-black uppercase tracking-widest text-[10px]">Nenhuma conta pendente</div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'STOCK_VIEW' && (
+        <div className="space-y-4">
+          <header className="px-1"><h2 className="text-xs font-black text-gray-400 uppercase tracking-wider">Estoque Central</h2></header>
+          <div className="grid gap-3">
+            {products.map(p => ( 
+              <div key={p.id} className="bg-white px-4 py-3 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between">
+                <div className="flex-1"><h3 className="font-bold text-gray-800 text-sm leading-tight uppercase">{p.nome}</h3><div className="flex items-center gap-2 mt-1"><span className="text-[10px] font-black bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded tracking-tighter">Central: {p.estoquePrincipal} un</span></div></div>
+                <div className="text-right"><p className="text-sm font-black text-emerald-600">R$ {p.precoVenda.toFixed(2)}</p></div> 
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* MODAIS */}
       {showReceiveModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[250] flex items-center justify-center p-6">
            <div className="bg-white w-full max-w-xs rounded-3xl p-8 shadow-2xl animate-in zoom-in-95 duration-200">
-              <h3 className="font-black text-gray-800 text-sm uppercase mb-4 text-center tracking-tight">Recebimento</h3>
+              <h3 className="font-black text-gray-800 text-sm uppercase mb-4 text-center tracking-tight">Confirmar Recebimento</h3>
               <div className="bg-gray-50 p-4 rounded-2xl mb-6"><p className="text-[10px] font-black text-gray-400 uppercase mb-1">Saldo em Aberto</p><p className="text-xl font-black text-rose-600">R$ {((showReceiveModal.valorTotal ?? 0) - (showReceiveModal.valorPago ?? 0)).toFixed(2)}</p></div>
               <div className="space-y-4 mb-6"><p className="text-[10px] font-black text-gray-400 uppercase text-left ml-1">Valor a Receber</p><input type="number" value={valorRecebidoParcial} onChange={e => setValorRecebidoParcial(e.target.value)} className="w-full p-4 bg-white border border-gray-200 rounded-2xl font-black text-xl text-center outline-none" /></div>
               <div className="space-y-3">
-                 <button onClick={() => handleConfirmReceive('DINHEIRO')} className="w-full bg-gray-900 text-white py-4 rounded-2xl shadow-lg font-black uppercase text-xs tracking-widest">DINHEIRO</button>
-                 <button onClick={() => handleConfirmReceive('PIX')} className="w-full bg-blue-600 text-white py-4 rounded-2xl shadow-lg font-black uppercase text-xs tracking-widest">PIX</button>
-                 <button onClick={() => setShowReceiveModal(null)} className="w-full py-3 text-gray-400 font-semibold uppercase text-[9px] text-center">Cancelar</button>
+                 <button onClick={() => handleConfirmReceive('DINHEIRO')} className="w-full bg-gray-900 text-white py-4 rounded-2xl shadow-lg active:scale-95 font-black uppercase text-xs tracking-widest">DINHEIRO</button>
+                 <button onClick={() => handleConfirmReceive('PIX')} className="w-full bg-blue-600 text-white py-4 rounded-2xl shadow-lg active:scale-95 font-black uppercase text-xs tracking-widest">PIX</button>
+                 <button onClick={() => setShowReceiveModal(null)} className="w-full py-3 text-gray-400 font-semibold uppercase text-[9px] tracking-widest text-center">Cancelar</button>
               </div>
            </div>
         </div>
@@ -358,8 +461,8 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Telefone / WhatsApp</label><input value={cForm.telefone || ''} onChange={e => setCForm({...cForm, telefone: e.target.value})} placeholder="Telefone" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100" /></div>
                 <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Endereço</label><input value={cForm.endereco || ''} onChange={e => setCForm({...cForm, endereco: e.target.value})} placeholder="Endereço" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100 uppercase" /></div>
                 <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Bairro</label><input value={cForm.bairro || ''} onChange={e => setCForm({...cForm, bairro: e.target.value})} placeholder="Bairro" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100 uppercase" /></div>
-                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Dia de Atendimento</label><select value={cForm.diaRoteiro ?? 1} onChange={e => setCForm({...cForm, diaRoteiro: parseInt(e.target.value)})} className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100">{[1, 2, 3, 4, 5, 6].map(d => (<option key={d} value={d}>{DIAS_SEMANA[d]}</option>))}</select></div> 
-                <div className="flex flex-col gap-2 mt-4"><button onClick={handleSaveClientBasic} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-lg uppercase text-xs">Salvar</button><button onClick={() => setEditingClient(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px]">Cancelar</button></div>
+                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Dia de Atendimento</label><select value={cForm.diaRoteiro ?? 1} onChange={e => setCForm({...cForm, diaRoteiro: parseInt(e.target.value)})} className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100">{[1, 2, 3, 4, 5, 6].map(d => (<option key={d} value={d}>{DIAS_SEMANA[d] ?? 'N/D'}</option>))}</select></div> 
+                <div className="flex flex-col gap-2 mt-4"><button onClick={handleSaveClientBasic} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-lg uppercase text-xs">Salvar Alterações</button><button onClick={() => setEditingClient(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px]">Cancelar</button></div>
              </div>
           </div>
         </div>

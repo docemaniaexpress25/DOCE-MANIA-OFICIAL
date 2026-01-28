@@ -4,33 +4,38 @@ import { Sale } from '../types';
 // Helper function to safely convert database numeric values (which might be null or string) to number
 const safeNumber = (value: any): number => Number(value || 0);
 
+// Mapeamento de DB para TS
+const mapSaleFromDB = (s: any): Sale => ({
+  id: s.id,
+  vendedorId: s.vendedor_id,
+  clientId: s.client_id,
+  valorTotal: safeNumber(s.valor_total),
+  valorPago: safeNumber(s.valor_pago),
+  metodoPagamento: s.metodo_pagamento,
+  detalhePagamento: s.detalhe_pagamento,
+  statusPagamento: s.status_pagamento,
+  dataVencimento: s.data_vencimento ? new Date(s.data_vencimento) : undefined,
+  data: new Date(s.data_venda),
+  itens: (s.sale_items || []).map((i: any) => ({
+    produtoId: i.produto_id || i.product_id, // Suporte a ambas as colunas
+    quantidade: safeNumber(i.quantidade),
+    precoVenda: safeNumber(i.preco_venda)
+  }))
+});
+
 export const saleService = {
   async getAllSales(): Promise<Sale[]> {
-    const { data, error } = await supabase.from('sales').select('*, sale_items(*)');
+    // Busca vendas e itens relacionados
+    const { data, error } = await supabase.from('sales').select('*, sale_items(*)').order('data_venda', { ascending: false });
     if (error) {
       console.error('Erro ao buscar vendas:', error);
       return [];
     }
-    return data.map(s => ({
-      id: s.id,
-      vendedorId: s.vendedor_id,
-      clientId: s.client_id,
-      valorTotal: safeNumber(s.valor_total), // Usando safeNumber
-      valorPago: safeNumber(s.valor_pago),   // Usando safeNumber
-      metodoPagamento: s.metodo_pagamento,
-      detalhePagamento: s.detalhe_pagamento,
-      statusPagamento: s.status_pagamento,
-      dataVencimento: s.data_vencimento ? new Date(s.data_vencimento) : undefined,
-      data: new Date(s.data_venda),
-      itens: (s.sale_items || []).map((i: any) => ({
-        produtoId: i.produto_id,
-        quantidade: safeNumber(i.quantidade), // Usando safeNumber
-        precoVenda: safeNumber(i.preco_venda) // Usando safeNumber
-      }))
-    })) as Sale[];
+    return data.map(mapSaleFromDB) as Sale[];
   },
 
   async insertSale(sale: Omit<Sale, 'id'>): Promise<Sale | null> {
+    // 1. Insere a venda principal
     const { data, error } = await supabase.from('sales').insert({
       vendedor_id: sale.vendedorId,
       client_id: sale.clientId,
@@ -48,8 +53,11 @@ export const saleService = {
       return null;
     }
 
+    const saleId = data.id;
+
+    // 2. Insere os itens da venda
     const itemsRows = sale.itens.map(i => ({
-      sale_id: data.id,
+      sale_id: saleId,
       produto_id: i.produtoId,
       product_id: i.produtoId, // Garantindo que product_id também seja preenchido
       quantidade: i.quantidade,
@@ -59,10 +67,12 @@ export const saleService = {
     const { error: itemsError } = await supabase.from('sale_items').insert(itemsRows);
     if (itemsError) {
       console.error('Erro ao inserir itens da venda:', itemsError);
+      // Nota: Em um ambiente de produção, isso exigiria uma transação para reverter a inserção da venda.
       return null;
     }
 
-    return { ...sale, id: data.id };
+    // Retorna a venda completa (sem os itens, pois a busca completa é feita no getAllSales)
+    return { ...sale, id: saleId };
   },
 
   async updateSale(id: string, updates: Partial<Sale>): Promise<boolean> {
@@ -72,11 +82,15 @@ export const saleService = {
     if (updates.metodoPagamento !== undefined) payload.metodo_pagamento = updates.metodoPagamento;
 
     const { error } = await supabase.from('sales').update(payload).eq('id', id);
+    if (error) console.error('Erro ao atualizar venda:', error);
     return !error;
   },
 
   async deleteSale(id: string): Promise<boolean> {
+    // A exclusão em cascata deve ser configurada no banco para sale_items,
+    // mas para garantir, vamos excluir a venda principal.
     const { error } = await supabase.from('sales').delete().eq('id', id);
+    if (error) console.error('Erro ao excluir venda:', error);
     return !error;
   }
 };

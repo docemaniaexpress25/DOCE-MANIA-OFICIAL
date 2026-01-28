@@ -54,7 +54,6 @@ export const saveLocalState = <T>(key: string, state: T): void => {
 // Define default values for local state arrays
 export const DEFAULT_CARGAS: Carga[] = [];
 export const DEFAULT_CARGAS_PENDENTES: CargaPendente[] = [];
-export const DEFAULT_SALES: Sale[] = [];
 export const DEFAULT_COMMISSIONS: Commission[] = [];
 export const DEFAULT_PAYOUT_LOGS: CommissionPaymentLog[] = [];
 export const DEFAULT_MESSAGES: SystemMessage[] = [];

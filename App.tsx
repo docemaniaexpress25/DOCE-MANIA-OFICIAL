@@ -6,11 +6,12 @@ import Login from './components/Login';
 import { userService } from './services/userService';
 import { productService } from './services/productService';
 import { clientService } from './services/clientService';
+import { saleService } from './services/saleService'; // Importando saleService
 import { appSettingsService, AppSettings } from './services/appSettingsService';
 import { generateId } from './utils/uuid';
 import { 
   loadLocalState, saveLocalState, 
-  DEFAULT_CARGAS, DEFAULT_CARGAS_PENDENTES, DEFAULT_SALES, 
+  DEFAULT_CARGAS, DEFAULT_CARGAS_PENDENTES, 
   DEFAULT_COMMISSIONS, DEFAULT_PAYOUT_LOGS, DEFAULT_MESSAGES,
   DailyRouteState
 } from './utils/persistence';
@@ -39,11 +40,11 @@ const App: React.FC = () => {
   const [users, setUsers] = useState<User[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
+  const [sales, setSales] = useState<Sale[]>([]); // Agora carregado via fetch
 
   // Dados Locais (Persistidos via localStorage)
   const [cargas, setCargas] = useState<Carga[]>(loadLocalState('cargas', DEFAULT_CARGAS));
   const [cargasPendentes, setCargasPendentes] = useState<CargaPendente[]>(loadLocalState('cargasPendentes', DEFAULT_CARGAS_PENDENTES));
-  const [sales, setSales] = useState<Sale[]>(loadLocalState('sales', DEFAULT_SALES));
   const [commissions, setCommissions] = useState<Commission[]>(loadLocalState('commissions', DEFAULT_COMMISSIONS));
   const [payoutLogs, setPayoutLogs] = useState<CommissionPaymentLog[]>(loadLocalState('payoutLogs', DEFAULT_PAYOUT_LOGS));
   const [messages, setMessages] = useState<SystemMessage[]>(loadLocalState('messages', DEFAULT_MESSAGES));
@@ -67,7 +68,7 @@ const App: React.FC = () => {
   useEffect(() => { saveLocalState('currentUser', currentUser); }, [currentUser]);
   useEffect(() => { saveLocalState('cargas', cargas); }, [cargas]);
   useEffect(() => { saveLocalState('cargasPendentes', cargasPendentes); }, [cargasPendentes]);
-  useEffect(() => { saveLocalState('sales', sales); }, [sales]);
+  // REMOVIDO: useEffect(() => { saveLocalState('sales', sales); }, [sales]);
   useEffect(() => { saveLocalState('commissions', commissions); }, [commissions]);
   useEffect(() => { saveLocalState('payoutLogs', payoutLogs); }, [payoutLogs]);
   useEffect(() => { saveLocalState('messages', messages); }, [messages]);
@@ -78,6 +79,7 @@ const App: React.FC = () => {
   const fetchUsers = useCallback(async () => { setUsers(await userService.getAllUsers()); }, []);
   const fetchProducts = useCallback(async () => { setProducts(await productService.getAllProducts()); }, []);
   const fetchClients = useCallback(async () => { setClients(await clientService.getAllClients()); }, []);
+  const fetchSales = useCallback(async () => { setSales(await saleService.getAllSales()); }, []);
   
   const fetchCoreData = useCallback(async () => {
     try {
@@ -98,9 +100,10 @@ const App: React.FC = () => {
     await Promise.all([
       fetchUsers(),
       fetchProducts(),
-      fetchClients()
+      fetchClients(),
+      fetchSales() // Carrega vendas do Supabase
     ]);
-  }, [fetchUsers, fetchProducts, fetchClients]);
+  }, [fetchUsers, fetchProducts, fetchClients, fetchSales]);
 
   useEffect(() => {
     fetchCoreData();
@@ -285,10 +288,22 @@ const App: React.FC = () => {
 
   const processSale = async (saleData: any) => {
     const valorTotalFixed = Number(saleData.valorTotal.toFixed(2));
-    const newSale: Sale = { ...saleData, id: generateId(), data: new Date(), valorTotal: valorTotalFixed, valorPago: saleData.statusPagamento === 'PAGO' ? valorTotalFixed : 0 };
-    setSales(prev => [...prev, newSale]);
     
-    // Atualiza Cargas (Imutável)
+    const newSalePayload: Omit<Sale, 'id'> = { 
+      ...saleData, 
+      data: new Date(), 
+      valorTotal: valorTotalFixed, 
+      valorPago: saleData.statusPagamento === 'PAGO' ? valorTotalFixed : 0 
+    };
+
+    // 1. Insere a venda no Supabase
+    const newSale = await saleService.insertSale(newSalePayload);
+    if (!newSale) return null;
+
+    // 2. Atualiza estado local de vendas
+    await fetchSales();
+    
+    // 3. Atualiza Cargas (Imutável, Local)
     setCargas(prevCargas => {
       const updatedCargas = [...prevCargas];
       saleData.itens.forEach((item: any) => {
@@ -300,6 +315,7 @@ const App: React.FC = () => {
       return updatedCargas.filter(c => c.quantidade > 0);
     });
     
+    // 4. Cria Comissão (Local)
     const totalComissao = saleData.itens.reduce((acc: number, item: any) => {
       const p = products.find(prod => prod.id === item.produtoId);
       return acc + (item.precoVenda * item.quantidade * ((p?.comissaoPercentual || 0) / 100));
@@ -307,14 +323,22 @@ const App: React.FC = () => {
     const effectivePercentual = valorTotalFixed > 0 ? (totalComissao / valorTotalFixed) * 100 : 0;
     const newCommission: Commission = { id: generateId(), saleId: newSale.id, vendedorId: saleData.vendedorId, valor: Number(totalComissao.toFixed(2)), valorBase: valorTotalFixed, percentual: Number(effectivePercentual.toFixed(2)), status: saleData.statusPagamento === 'PAGO' ? 'DISPONIVEL' : 'A_RECEBER', dataGeracao: new Date() };
     setCommissions(prev => [...prev, newCommission]);
+    
     return newSale;
   };
 
-  const deleteSaleInternal = (saleId: string, isAdmin: boolean) => {
+  const deleteSaleInternal = async (saleId: string, isAdmin: boolean) => {
     const saleToDelete = sales.find(s => s.id === saleId);
     if (!saleToDelete) return;
     
-    // Estorno de Cargas (Imutável)
+    // 1. Exclui a venda do Supabase
+    const success = await saleService.deleteSale(saleId);
+    if (!success) return;
+
+    // 2. Atualiza estado local de vendas
+    await fetchSales();
+    
+    // 3. Estorno de Cargas (Imutável, Local)
     setCargas(prevCargas => {
       const updatedCargas = [...prevCargas];
       saleToDelete.itens.forEach(item => {
@@ -328,25 +352,32 @@ const App: React.FC = () => {
       return updatedCargas.filter(c => c.quantidade > 0);
     });
     
-    // Remove Comissões (Imutável)
+    // 4. Remove Comissões (Imutável, Local)
     setCommissions(prev => prev.filter(c => c.saleId !== saleId));
-    
-    // Remove Venda (Imutável)
-    setSales(prev => prev.filter(s => s.id !== saleId));
   };
 
-  const receiveAccount = (saleId: string, method: PaymentMethod, amount?: number) => {
-    let saleUpdated: Sale | undefined;
-    setSales(prevSales => prevSales.map(s => {
-      if (s.id !== saleId) return s;
-      const novoValorPago = Number(((s.valorPago ?? 0) + (amount || s.valorTotal)).toFixed(2));
-      const totalQuitado = novoValorPago >= s.valorTotal;
-      saleUpdated = { ...s, valorPago: novoValorPago, statusPagamento: totalQuitado ? 'PAGO' : 'PENDENTE', metodoPagamento: method };
-      return saleUpdated;
-    }));
+  const receiveAccount = async (saleId: string, method: PaymentMethod, amount?: number) => {
+    const saleToUpdate = sales.find(s => s.id === saleId);
+    if (!saleToUpdate) return;
+
+    const novoValorPago = Number(((saleToUpdate.valorPago ?? 0) + (amount || saleToUpdate.valorTotal)).toFixed(2));
+    const totalQuitado = novoValorPago >= saleToUpdate.valorTotal;
     
-    // Atualiza Comissões se a venda foi quitada (Imutável)
-    if (saleUpdated && saleUpdated.statusPagamento === 'PAGO') {
+    const updates: Partial<Sale> = { 
+      valorPago: novoValorPago, 
+      statusPagamento: totalQuitado ? 'PAGO' : 'PENDENTE', 
+      metodoPagamento: method 
+    };
+
+    // 1. Atualiza a venda no Supabase
+    const success = await saleService.updateSale(saleId, updates);
+    if (!success) return;
+
+    // 2. Atualiza estado local de vendas
+    await fetchSales();
+    
+    // 3. Atualiza Comissões se a venda foi quitada (Imutável, Local)
+    if (totalQuitado) {
       setCommissions(prevComms => prevComms.map(c => c.saleId === saleId && c.status === 'A_RECEBER' ? { ...c, status: 'DISPONIVEL' } : c));
     }
   };

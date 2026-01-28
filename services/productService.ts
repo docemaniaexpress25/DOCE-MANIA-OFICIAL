@@ -21,8 +21,6 @@ export const productService = {
 
   async insertProduct(product: Omit<Product, 'id'>): Promise<Product | null> {
     const { nome, precoCusto, precoVenda, comissaoPercentual, estoquePrincipal, ativo } = product;
-    
-    // Regra: se estoque <= 0, forçar inativo
     const finalAtivo = estoquePrincipal <= 0 ? false : ativo;
 
     const payload = {
@@ -57,7 +55,6 @@ export const productService = {
     
     if (updates.estoquePrincipal !== undefined) {
       payload.estoque_principal = updates.estoquePrincipal;
-      // Regra: se estoque atualizado para <= 0, forçar inativo
       if (updates.estoquePrincipal <= 0) {
         payload.ativo = false;
       } else if (updates.ativo !== undefined) {
@@ -82,13 +79,13 @@ export const productService = {
   },
 
   async deleteProduct(id: string): Promise<boolean> {
+    // Primeiro tenta excluir
     const { error } = await supabase.from('products').delete().eq('id', id);
     if (error) {
       // Código 23503: Violação de chave estrangeira (produto vinculado a vendas/cargas)
       if (error.code === '23503') {
-        console.warn('Produto vinculado a outros registros. Desativando em vez de excluir.');
-        await supabase.from('products').update({ ativo: false }).eq('id', id);
-        return true;
+        const { error: updateError } = await supabase.from('products').update({ ativo: false }).eq('id', id);
+        return !updateError;
       }
       console.error('Erro ao excluir produto:', error);
       return false;

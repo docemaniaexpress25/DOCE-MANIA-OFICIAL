@@ -595,7 +595,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                 <div className="flex justify-between items-end">
                    <div>
                      <h4 className="font-bold text-gray-800 text-sm leading-tight">{props.clients.find(c => c.id === s.clientId)?.nomeFantasia || 'Cliente'}</h4>
-                     <p className="text-[10px] text-gray-400 font-bold uppercase mt-1">Vend: {props.users.find(u => u.id === s.vendedorId)?.nome ?? 'Desconhecido'}</p> 
+                     <p className="text-[10px] text-gray-400 font-bold uppercase mt-1">Vend: {props.users.find(u => u.id === s.vendedorId)?.nome ?? 'Desconhecido'} export default AdminDashboard;</p> 
                      {(s.valorPago ?? 0) > 0 && <p className="text-[9px] text-emerald-600 font-bold uppercase mt-1">Já pago: R$ {(s.valorPago ?? 0).toFixed(2)}</p>} 
                    </div>
                    <div className="text-right">
@@ -733,25 +733,47 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar cliente..." className="flex-1 px-4 py-3 bg-white border border-gray-200 rounded-xl text-sm" />
             <button onClick={() => handleOpenClient('NEW')} className="bg-blue-600 text-white w-12 h-12 rounded-xl flex items-center justify-center shadow-lg active:scale-90 transition-transform"><i className="fa-solid fa-user-plus"></i></button>
           </div>
-          <div className="grid gap-3 px-1">
+          <div className="grid gap-2 px-1">
             {props.clients.filter(c => (c.nomeFantasia ?? '').toLowerCase().includes(search.toLowerCase())).map((c: Client) => ( 
-              <div key={c.id} className="bg-white p-5 rounded-[2rem] border border-gray-100 shadow-sm flex flex-col gap-4">
-                <div className="flex justify-between items-center">
-                  <div className="flex-1 min-w-0 pr-2">
-                    <h3 className="font-bold text-gray-800 text-sm leading-tight uppercase truncate">{c.nomeFantasia ?? 'Cliente sem nome'}</h3> 
-                    <p className="text-[10px] text-gray-400 font-semibold uppercase mt-1 truncate">{DIAS_SEMANA[c.diaRoteiro ?? 0] ?? 'N/D'} {c.cnpj ? `• CNPJ: ${c.cnpj}` : ''}</p> 
+              <div key={c.id} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex items-center justify-between transition-all hover:border-blue-200">
+                <div className="flex-1 min-w-0 pr-2">
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-bold text-gray-800 text-[13px] leading-tight uppercase truncate">{c.nomeFantasia ?? 'Cliente sem nome'}</h3> 
+                    {c.telefone && (
+                      <a 
+                        href={`https://wa.me/55${c.telefone.replace(/\D/g, '')}`} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="text-emerald-500 hover:text-emerald-600 transition-colors"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <i className="fa-brands fa-whatsapp text-lg"></i>
+                      </a>
+                    )}
                   </div>
-                  <div className="flex gap-1 flex-shrink-0">
-                    <button onClick={() => handleOpenClient(c)} className="text-gray-300 hover:text-blue-600 w-10 h-10 rounded-xl flex items-center justify-center active:scale-90"><i className="fa-solid fa-pencil-alt text-base"></i></button>
-                    <button onClick={() => { if(confirm("Excluir cliente?")) { props.deleteClient(c.id); showToast("Cliente removido"); } }} className="text-gray-300 hover:text-red-500 w-10 h-10 rounded-xl flex items-center justify-center active:scale-90"><i className="fa-solid fa-trash-can text-base"></i></button>
+                  <div className="flex items-center gap-3 mt-1.5">
+                    <p className="text-[10px] text-gray-400 font-black uppercase truncate">{DIAS_SEMANA[c.diaRoteiro ?? 0] ?? 'N/D'}</p> 
+                    <div className="flex items-center gap-1.5 bg-blue-50 px-2 py-0.5 rounded border border-blue-100">
+                      <i className="fa-solid fa-chart-line text-blue-400 text-[10px]"></i>
+                      <span className="text-[11px] font-black text-blue-600">R$ {getClientAvgRevenue(c.id)}</span>
+                    </div>
                   </div>
                 </div>
-                <div className="bg-gray-50 p-4 rounded-2xl flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <i className="fa-solid fa-chart-line text-blue-400 text-xs"></i>
-                    <span className="text-[10px] font-black text-gray-400 uppercase">Média de Faturamento</span>
-                  </div>
-                  <span className="text-xs font-black text-gray-800">R$ {getClientAvgRevenue(c.id)}</span>
+                <div className="flex gap-2 flex-shrink-0">
+                  <button 
+                    onClick={() => handleOpenClient(c)} 
+                    className="bg-blue-50 text-blue-600 w-9 h-9 rounded-lg border border-blue-100 flex items-center justify-center active:scale-90 transition-all shadow-sm" 
+                    title="Editar"
+                  >
+                    <i className="fa-solid fa-pencil-alt text-sm"></i>
+                  </button>
+                  <button 
+                    onClick={() => { if(confirm("Excluir cliente?")) { props.deleteClient(c.id); showToast("Cliente removido"); } }} 
+                    className="bg-rose-50 text-rose-600 w-9 h-9 rounded-lg border border-rose-100 flex items-center justify-center active:scale-90 transition-all shadow-sm" 
+                    title="Excluir"
+                  >
+                    <i className="fa-solid fa-trash-can text-sm"></i>
+                  </button>
                 </div>
               </div>
             ))}

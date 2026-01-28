@@ -595,7 +595,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                 <div className="flex justify-between items-end">
                    <div>
                      <h4 className="font-bold text-gray-800 text-sm leading-tight">{props.clients.find(c => c.id === s.clientId)?.nomeFantasia || 'Cliente'}</h4>
-                     <p className="text-[10px] text-gray-400 font-bold uppercase mt-1">Vend: {props.users.find(u => u.id === s.vendedorId)?.nome ?? 'Desconhecido'} • {s.metodoPagamento?.replace('_', ' ') ?? 'N/D'}</p> 
+                     <p className="text-[10px] text-gray-400 font-bold uppercase mt-1">Vend: {props.users.find(u => u.id === s.vendedorId)?.nome ?? 'Desconhecido'}</p> 
                      {(s.valorPago ?? 0) > 0 && <p className="text-[9px] text-emerald-600 font-bold uppercase mt-1">Já pago: R$ {(s.valorPago ?? 0).toFixed(2)}</p>} 
                    </div>
                    <div className="text-right">
@@ -677,20 +677,20 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           </div>
           {selectedVendedorId && (
             <div className="pb-40"> {/* Adiciona padding inferior para evitar que os botões fixos cubram o conteúdo */}
-              <div className="grid gap-2 mb-2 px-1">
+              <div className="grid gap-1.5 px-1">
                 {props.products.map((p: Product) => { 
                   const noV = props.cargas.find(c => c.vendedorId === selectedVendedorId && c.produtoId === p.id)?.quantidade ?? 0; 
                   const meta = stagingCarga[p.id] ?? 0;
                   return (
-                    <div key={p.id} className="bg-white px-4 py-3 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between">
+                    <div key={p.id} className="bg-white px-3 py-2 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between">
                       <div className="flex-1 min-w-0 pr-3">
-                        <h4 className="font-bold text-gray-800 text-sm leading-tight uppercase">{p.nome ?? 'Produto sem nome'}</h4> 
-                        <p className="text-[10px] text-gray-400 font-semibold mt-1">Central: {(p.estoquePrincipal ?? 0)} | Veículo: {noV}</p> 
+                        <h4 className="font-bold text-gray-800 text-[11px] leading-tight uppercase truncate">{p.nome ?? 'Produto sem nome'}</h4> 
+                        <p className="text-[9px] text-gray-400 font-semibold mt-0.5">C: {(p.estoquePrincipal ?? 0)} | V: {noV}</p> 
                       </div>
                       <div className="flex items-center bg-gray-50 rounded-xl p-1 gap-1 flex-shrink-0">
-                        <button onClick={() => updateStaging(p.id, -1)} className="w-9 h-9 bg-white border border-gray-200 text-gray-400 rounded-lg active:scale-90 flex items-center justify-center"><i className="fa-solid fa-minus text-xs"></i></button>
-                        <span className="font-black text-sm min-w-[28px] text-center">{meta}</span>
-                        <button onClick={() => updateStaging(p.id, 1)} className="w-9 h-9 bg-blue-600 text-white rounded-lg active:scale-90 shadow-sm flex items-center justify-center"><i className="fa-solid fa-plus text-xs"></i></button>
+                        <button onClick={() => updateStaging(p.id, -1)} className="w-8 h-8 bg-white border border-gray-200 text-gray-400 rounded-lg active:scale-90 flex items-center justify-center"><i className="fa-solid fa-minus text-[10px]"></i></button>
+                        <span className="font-black text-xs min-w-[24px] text-center">{meta}</span>
+                        <button onClick={() => updateStaging(p.id, 1)} className="w-8 h-8 bg-blue-600 text-white rounded-lg active:scale-90 shadow-sm flex items-center justify-center"><i className="fa-solid fa-plus text-[10px]"></i></button>
                       </div>
                     </div>
                   );
@@ -704,20 +704,20 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       {/* Botões de Sincronização Fixos (Apenas na aba CARGAS e com vendedor selecionado) */}
       {activeTab === 'CARGAS' && selectedVendedorId && (
         <div className="fixed bottom-0 left-0 right-0 p-4 bg-white/95 backdrop-blur-md border-t border-gray-100 shadow-[0_-10px_30px_rgba(0,0,0,0.1)] z-50 max-w-lg mx-auto safe-bottom animate-in slide-in-from-bottom duration-300">
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-row gap-2">
             <button 
               onClick={() => setShowConfirmApply(true)} 
               disabled={!hasCargaChanges}
-              className={`w-full font-black py-4 rounded-2xl shadow-xl flex items-center justify-center gap-3 transition-all text-xs uppercase tracking-widest ${hasCargaChanges ? 'bg-emerald-600 text-white active:scale-95' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}
+              className={`flex-1 font-black py-4 rounded-2xl shadow-xl flex flex-col items-center justify-center gap-1 transition-all text-[9px] uppercase tracking-tighter ${hasCargaChanges ? 'bg-emerald-600 text-white active:scale-95' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}
             >
-              <i className="fa-solid fa-check-circle"></i> Aplicar Agora
+              <i className="fa-solid fa-check-circle text-sm"></i> Aplicar Agora
             </button>
             <button 
               onClick={() => setShowConfirmSync(true)} 
               disabled={!hasCargaChanges}
-              className={`w-full font-black py-4 rounded-2xl shadow-xl flex items-center justify-center gap-3 transition-all text-xs uppercase tracking-widest ${hasCargaChanges ? 'bg-gray-900 text-white active:scale-95' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}
+              className={`flex-1 font-black py-4 rounded-2xl shadow-xl flex flex-col items-center justify-center gap-1 transition-all text-[9px] uppercase tracking-tighter ${hasCargaChanges ? 'bg-gray-900 text-white active:scale-95' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}
             >
-              <i className="fa-solid fa-truck-loading"></i> Enviar Pendente
+              <i className="fa-solid fa-truck-loading text-sm"></i> Enviar Pendente
             </button>
           </div>
         </div>

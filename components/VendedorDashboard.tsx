@@ -58,7 +58,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const diaAtual = new Date().getDay();
   const minhaCarga = useMemo(() => cargas.filter(c => c.vendedorId === user.id), [cargas, user.id]);
   
-  // Rota de Hoje ordenada rigorosamente pelo campo 'ordem'
   const rotaDeHoje = useMemo(() => {
     return clients
       .filter(c => (c.ativo ?? false) && ((c.diaRoteiro ?? 0) === diaAtual || extraRouteClientIds.includes(c.id)))
@@ -365,18 +364,35 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
           <div className="grid gap-3">
             {contasAReceber.map(s => {
               const saldo = Number(((s.valorTotal ?? 0) - (s.valorPago ?? 0)).toFixed(2)); 
+              const today = new Date();
+              today.setHours(0,0,0,0);
+              const dueDate = s.dataVencimento ? new Date(s.dataVencimento) : null;
+              if (dueDate) dueDate.setHours(0,0,0,0);
+              const isOverdue = dueDate ? dueDate <= today : false;
+
               return (
-              <div key={s.id} className="bg-white p-5 rounded-3xl border border-gray-100 shadow-sm flex flex-col">
+              <div key={s.id} className={`p-5 rounded-3xl border shadow-sm flex flex-col transition-all ${isOverdue ? 'bg-rose-50 border-rose-200' : 'bg-white border-gray-100'}`}>
                 <div className="flex justify-between items-start mb-2">
                    <div>
-                      <h4 className="font-bold text-gray-800 text-sm leading-tight uppercase">{clients.find(c => c.id === s.clientId)?.nomeFantasia || 'Cliente'}</h4>
-                      <p className="text-[10px] text-gray-400 font-semibold uppercase mt-2">Vencimento: {s.dataVencimento?.toLocaleDateString()}</p> 
+                      <h4 className={`font-bold text-sm leading-tight uppercase ${isOverdue ? 'text-rose-900' : 'text-gray-800'}`}>{clients.find(c => c.id === s.clientId)?.nomeFantasia || 'Cliente'}</h4>
+                      <div className="flex flex-col mt-2">
+                        <span className={`text-[9px] font-black uppercase ${isOverdue ? 'text-rose-600' : 'text-gray-400'}`}>Vencimento</span>
+                        <span className={`text-xs font-black ${isOverdue ? 'text-rose-700' : 'text-gray-800'}`}>{s.dataVencimento ? new Date(s.dataVencimento).toLocaleDateString() : 'N/D'}</span>
+                      </div>
                    </div>
-                   <p className="text-lg font-black text-rose-600">Saldo: R$ {saldo.toFixed(2)}</p>
+                   <div className="text-right">
+                      <span className={`text-[8px] font-black px-2 py-0.5 rounded uppercase ${isOverdue ? 'bg-rose-600 text-white animate-pulse' : 'bg-orange-100 text-orange-600'}`}>
+                        {isOverdue ? 'VENCIDO / HOJE' : 'PENDENTE'}
+                      </span>
+                      <p className={`text-lg font-black mt-2 ${isOverdue ? 'text-rose-700' : 'text-rose-600'}`}>Saldo: R$ {saldo.toFixed(2)}</p>
+                   </div>
                 </div>
-                <button onClick={() => { setShowReceiveModal(s); setValorRecebidoParcial(saldo.toString()); }} className="w-full bg-emerald-600 text-white py-3 rounded-2xl text-[10px] font-black uppercase mt-3 shadow-lg active:scale-95">Receber Agora</button>
+                <button onClick={() => { setShowReceiveModal(s); setValorRecebidoParcial(saldo.toString()); }} className={`w-full py-3 rounded-2xl text-[10px] font-black uppercase mt-3 shadow-lg active:scale-95 ${isOverdue ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white'}`}>Receber Agora</button>
               </div>
             )})}
+            {contasAReceber.length === 0 && (
+               <div className="text-center py-20 opacity-20 italic font-black uppercase tracking-widest text-[10px]">Nenhuma conta pendente</div>
+            )}
           </div>
         </div>
       )}

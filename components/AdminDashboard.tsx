@@ -576,21 +576,33 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar produto..." className="flex-1 px-4 py-3 bg-white border border-gray-200 rounded-xl text-sm font-medium" />
             <button onClick={() => handleOpenProduct('NEW')} className="bg-blue-600 text-white w-12 h-12 rounded-xl flex items-center justify-center shadow-lg active:scale-90 transition-transform"><i className="fa-solid fa-plus"></i></button>
           </div>
-          <div className="grid gap-3">
+          <div className="grid gap-3 px-1">
             {props.products.filter(p => (p.nome ?? '').toLowerCase().includes(search.toLowerCase())).map((p: Product) => ( 
-              <div key={p.id} className="bg-white px-4 py-3 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between transition-all hover:border-blue-200">
+              <div key={p.id} className="bg-white px-4 py-4 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between transition-all hover:border-blue-200 group">
                 <div className="flex-1 min-w-0 pr-3" onClick={() => handleOpenProduct(p)}>
-                  <h3 className="font-bold text-gray-800 text-sm leading-tight line-clamp-2">{p.nome ?? 'Produto sem nome'}</h3> 
-                  <div className="flex items-center gap-2 mt-1">
-                    <span className="text-[11px] font-black bg-blue-50 text-blue-600 px-2 py-0.5 rounded border border-blue-100 shadow-inner">
-                      Estoque: {(p.estoquePrincipal ?? 0)} un 
+                  <h3 className="font-bold text-gray-800 text-[13px] leading-tight line-clamp-2 uppercase">{p.nome ?? 'Sem nome'}</h3> 
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5">
+                    <span className="text-[10px] font-black bg-blue-50 text-blue-600 px-2 py-0.5 rounded border border-blue-100 shadow-inner whitespace-nowrap">
+                      {(p.estoquePrincipal ?? 0)} UN 
                     </span>
-                    <span className="text-sm font-black text-emerald-600">R$ {(p.precoVenda ?? 0).toFixed(2)}</span> 
+                    <span className="text-[13px] font-black text-emerald-600">R$ {(p.precoVenda ?? 0).toFixed(2)}</span> 
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <button onClick={() => { setShowEntryModal(p); setEntryForm({ qtd: '', custo: (p.precoCusto ?? 0).toString() }); }} className="bg-emerald-600 text-white w-10 h-10 rounded-xl flex items-center justify-center shadow-md active:scale-90 transition-all" title="Entrada"><i className="fa-solid fa-plus-circle text-base"></i></button>
-                  <button onClick={() => handleOpenProduct(p)} className="bg-blue-50 text-blue-600 w-10 h-10 rounded-xl border border-blue-100 flex items-center justify-center active:scale-90 transition-all shadow-sm" title="Editar"><i className="fa-solid fa-pencil-alt text-base"></i></button>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <button 
+                    onClick={() => { setShowEntryModal(p); setEntryForm({ qtd: '', custo: (p.precoCusto ?? 0).toString() }); }} 
+                    className="bg-emerald-600 text-white w-9 h-9 rounded-lg flex items-center justify-center shadow-md active:scale-90 transition-all" 
+                    title="Entrada"
+                  >
+                    <i className="fa-solid fa-plus-circle text-base"></i>
+                  </button>
+                  <button 
+                    onClick={() => handleOpenProduct(p)} 
+                    className="bg-blue-50 text-blue-600 w-9 h-9 rounded-lg border border-blue-100 flex items-center justify-center active:scale-90 transition-all shadow-sm" 
+                    title="Editar"
+                  >
+                    <i className="fa-solid fa-pencil-alt text-base"></i>
+                  </button>
                 </div>
               </div>
             ))}
@@ -618,10 +630,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                   return (
                     <div key={p.id} className="bg-white px-4 py-3 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between">
                       <div className="flex-1 min-w-0 pr-3">
-                        <h4 className="font-bold text-gray-800 text-sm leading-tight">{p.nome ?? 'Produto sem nome'}</h4> 
+                        <h4 className="font-bold text-gray-800 text-sm leading-tight uppercase">{p.nome ?? 'Produto sem nome'}</h4> 
                         <p className="text-[10px] text-gray-400 font-semibold mt-1">Central: {(p.estoquePrincipal ?? 0)} | Veículo: {noV}</p> 
                       </div>
-                      <div className="flex items-center bg-gray-50 rounded-xl p-1 gap-1">
+                      <div className="flex items-center bg-gray-50 rounded-xl p-1 gap-1 flex-shrink-0">
                         <button onClick={() => updateStaging(p.id, -1)} className="w-9 h-9 bg-white border border-gray-200 text-gray-400 rounded-lg active:scale-90 flex items-center justify-center"><i className="fa-solid fa-minus text-xs"></i></button>
                         <span className="font-black text-sm min-w-[28px] text-center">{meta}</span>
                         <button onClick={() => updateStaging(p.id, 1)} className="w-9 h-9 bg-blue-600 text-white rounded-lg active:scale-90 shadow-sm flex items-center justify-center"><i className="fa-solid fa-plus text-xs"></i></button>
@@ -637,21 +649,21 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
       {/* Botões de Sincronização Fixos (Apenas na aba CARGAS e com vendedor selecionado) */}
       {activeTab === 'CARGAS' && selectedVendedorId && (
-        <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t border-gray-100 shadow-2xl z-50 max-w-lg mx-auto safe-bottom">
+        <div className="fixed bottom-0 left-0 right-0 p-4 bg-white/95 backdrop-blur-md border-t border-gray-100 shadow-[0_-10px_30px_rgba(0,0,0,0.1)] z-50 max-w-lg mx-auto safe-bottom animate-in slide-in-from-bottom duration-300">
           <div className="flex flex-col gap-2">
             <button 
               onClick={() => setShowConfirmApply(true)} 
               disabled={!hasCargaChanges}
-              className={`w-full font-black py-5 rounded-3xl shadow-xl flex items-center justify-center gap-3 transition-all ${hasCargaChanges ? 'bg-emerald-600 text-white active:scale-95' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}
+              className={`w-full font-black py-4 rounded-2xl shadow-xl flex items-center justify-center gap-3 transition-all text-xs uppercase tracking-widest ${hasCargaChanges ? 'bg-emerald-600 text-white active:scale-95' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}
             >
-              <i className="fa-solid fa-check-circle"></i> APLICAR CARGA IMEDIATAMENTE
+              <i className="fa-solid fa-check-circle"></i> Aplicar Agora
             </button>
             <button 
               onClick={() => setShowConfirmSync(true)} 
               disabled={!hasCargaChanges}
-              className={`w-full font-black py-5 rounded-3xl shadow-xl flex items-center justify-center gap-3 transition-all ${hasCargaChanges ? 'bg-gray-900 text-white active:scale-95' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}
+              className={`w-full font-black py-4 rounded-2xl shadow-xl flex items-center justify-center gap-3 transition-all text-xs uppercase tracking-widest ${hasCargaChanges ? 'bg-gray-900 text-white active:scale-95' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}
             >
-              <i className="fa-solid fa-truck-loading"></i> ENVIAR CARGA PENDENTE
+              <i className="fa-solid fa-truck-loading"></i> Enviar Pendente
             </button>
           </div>
         </div>
@@ -667,17 +679,17 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar cliente..." className="flex-1 px-4 py-3 bg-white border border-gray-200 rounded-xl text-sm" />
             <button onClick={() => handleOpenClient('NEW')} className="bg-blue-600 text-white w-12 h-12 rounded-xl flex items-center justify-center shadow-lg active:scale-90 transition-transform"><i className="fa-solid fa-user-plus"></i></button>
           </div>
-          <div className="grid gap-3">
+          <div className="grid gap-3 px-1">
             {props.clients.filter(c => (c.nomeFantasia ?? '').toLowerCase().includes(search.toLowerCase())).map((c: Client) => ( 
               <div key={c.id} className="bg-white p-5 rounded-[2rem] border border-gray-100 shadow-sm flex flex-col gap-4">
                 <div className="flex justify-between items-center">
-                  <div className="flex-1">
-                    <h3 className="font-bold text-gray-800 text-sm leading-tight">{c.nomeFantasia ?? 'Cliente sem nome'}</h3> 
-                    <p className="text-[10px] text-gray-400 font-semibold uppercase mt-1">{DIAS_SEMANA[c.diaRoteiro ?? 0] ?? 'N/D'} {c.cnpj ? `• CNPJ: ${c.cnpj}` : ''}</p> 
+                  <div className="flex-1 min-w-0 pr-2">
+                    <h3 className="font-bold text-gray-800 text-sm leading-tight uppercase truncate">{c.nomeFantasia ?? 'Cliente sem nome'}</h3> 
+                    <p className="text-[10px] text-gray-400 font-semibold uppercase mt-1 truncate">{DIAS_SEMANA[c.diaRoteiro ?? 0] ?? 'N/D'} {c.cnpj ? `• CNPJ: ${c.cnpj}` : ''}</p> 
                   </div>
-                  <div className="flex gap-1">
-                    <button onClick={() => handleOpenClient(c)} className="text-gray-300 hover:text-blue-600 w-10 h-10 rounded-xl flex items-center justify-center active:scale-90"><i className="fa-solid fa-pencil-alt"></i></button>
-                    <button onClick={() => { if(confirm("Excluir cliente?")) { props.deleteClient(c.id); showToast("Cliente removido"); } }} className="text-gray-300 hover:text-red-500 w-10 h-10 rounded-xl flex items-center justify-center active:scale-90"><i className="fa-solid fa-trash-can"></i></button>
+                  <div className="flex gap-1 flex-shrink-0">
+                    <button onClick={() => handleOpenClient(c)} className="text-gray-300 hover:text-blue-600 w-10 h-10 rounded-xl flex items-center justify-center active:scale-90"><i className="fa-solid fa-pencil-alt text-base"></i></button>
+                    <button onClick={() => { if(confirm("Excluir cliente?")) { props.deleteClient(c.id); showToast("Cliente removido"); } }} className="text-gray-300 hover:text-red-500 w-10 h-10 rounded-xl flex items-center justify-center active:scale-90"><i className="fa-solid fa-trash-can text-base"></i></button>
                   </div>
                 </div>
                 <div className="bg-gray-50 p-4 rounded-2xl flex items-center justify-between">
@@ -709,7 +721,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                       {v.foto ? <img src={v.foto} className="w-full h-full object-cover" /> : <i className="fa-solid fa-user text-2xl"></i>}
                     </div>
                     <div>
-                      <h3 className="font-black text-gray-800 text-lg leading-none mb-1">{v.nome ?? 'Vendedor Desconhecido'}</h3> 
+                      <h3 className="font-black text-gray-800 text-lg leading-none mb-1 uppercase truncate max-w-[150px]">{v.nome ?? 'Vendedor Desconhecido'}</h3> 
                       <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">Performance Hoje</p>
                     </div>
                   </div>
@@ -723,7 +735,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                       <p className="text-lg font-black text-emerald-700">R$ {stats.comissaoDisponivel.toFixed(2)}</p>
                     </div>
                   </div>
-                  <button onClick={() => handleOpenPayout(v)} className="w-full bg-emerald-600 text-white py-5 rounded-3xl font-black text-xs uppercase shadow-xl active:scale-95 transition-all">Pagar Comissão</button>
+                  <button onClick={() => handleOpenPayout(v)} className="w-full bg-emerald-600 text-white py-5 rounded-3xl font-black text-xs uppercase shadow-xl active:scale-95 transition-all tracking-widest">Pagar Comissão</button>
                 </div>
               );
             })}
@@ -738,19 +750,19 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             <h2 className="text-2xl font-black text-gray-800 tracking-tight">Vendedores</h2>
             <button onClick={() => handleOpenUserModal('NEW')} className="bg-purple-600 text-white px-4 py-2 rounded-xl font-black text-xs uppercase shadow-md active:scale-95"><i className="fa-solid fa-plus mr-2"></i>Novo</button>
           </div>
-          <div className="grid gap-3">
+          <div className="grid gap-3 px-1">
             {props.users.filter(u => u.role === 'VENDEDOR').map((u: User) => (
               <div key={u.id} className={`bg-white p-4 rounded-3xl border transition-all shadow-sm flex items-center justify-between ${!(u.ativo ?? false) ? 'opacity-60 grayscale' : 'border-gray-100'}`}> 
-                <div onClick={() => handleOpenUserModal(u)} className="flex items-center gap-4 flex-1 cursor-pointer">
-                  <div className="w-14 h-14 bg-purple-100 text-purple-600 rounded-2xl flex items-center justify-center font-black overflow-hidden border-4 border-white shadow-md">
+                <div onClick={() => handleOpenUserModal(u)} className="flex items-center gap-4 flex-1 cursor-pointer min-w-0 pr-2">
+                  <div className="w-14 h-14 bg-purple-100 text-purple-600 rounded-2xl flex items-center justify-center font-black overflow-hidden border-4 border-white shadow-md flex-shrink-0">
                     {(u.foto) ? <img src={u.foto} className="w-full h-full object-cover" /> : <i className="fa-solid fa-user-tie text-xl"></i>} 
                   </div>
-                  <div>
-                    <p className="font-bold text-gray-800 text-sm leading-tight">{u.nome ?? 'Vendedor Desconhecido'}</p> 
-                    <p className="text-[10px] text-gray-400 font-bold mt-1 uppercase">{(u.telefone || 'Sem telefone')}</p> 
+                  <div className="min-w-0">
+                    <p className="font-bold text-gray-800 text-sm leading-tight uppercase truncate">{u.nome ?? 'Vendedor Desconhecido'}</p> 
+                    <p className="text-[10px] text-gray-400 font-bold mt-1 uppercase truncate">{(u.telefone || 'Sem telefone')}</p> 
                   </div>
                 </div>
-                <button onClick={(e) => { e.stopPropagation(); props.updateUser(u.id, { ativo: !(u.ativo ?? false) }); }} className={`w-12 h-6 rounded-full relative transition-colors ${(u.ativo ?? false) ? 'bg-green-500' : 'bg-gray-300'}`}> 
+                <button onClick={(e) => { e.stopPropagation(); props.updateUser(u.id, { ativo: !(u.ativo ?? false) }); }} className={`w-12 h-6 rounded-full flex-shrink-0 relative transition-colors ${(u.ativo ?? false) ? 'bg-green-500' : 'bg-gray-300'}`}> 
                    <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${(u.ativo ?? false) ? 'left-7' : 'left-1'}`}></div>
                 </button>
               </div>
@@ -790,11 +802,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
              <div className="divide-y divide-gray-50">
                 {reportStats.topClients.map((c, idx) => (
                   <div key={idx} className="flex items-center justify-between p-4 px-6">
-                    <div className="flex items-center gap-3">
-                      <span className="text-[10px] font-black text-gray-300 w-4">{idx + 1}º</span>
-                      <span className="text-xs font-bold text-gray-700">{c.nome ?? 'Cliente Desconhecido'}</span> 
+                    <div className="flex items-center gap-3 min-w-0">
+                      <span className="text-[10px] font-black text-gray-300 w-4 flex-shrink-0">{idx + 1}º</span>
+                      <span className="text-xs font-bold text-gray-700 truncate uppercase">{c.nome ?? 'Cliente Desconhecido'}</span> 
                     </div>
-                    <p className="text-xs font-black text-emerald-600">R$ {c.total.toFixed(2)}</p>
+                    <p className="text-xs font-black text-emerald-600 flex-shrink-0 ml-2">R$ {c.total.toFixed(2)}</p>
                   </div>
                 ))}
              </div>
@@ -808,11 +820,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
              <div className="divide-y divide-gray-50">
                 {reportStats.rankingProdutos.map((p, idx) => (
                   <div key={idx} className="flex items-center justify-between p-4 px-6">
-                    <div className="flex items-center gap-3">
-                      <span className="text-[10px] font-black text-gray-300 w-4">{idx + 1}º</span>
-                      <span className="text-xs font-bold text-gray-700">{p.nome ?? 'Produto Desconhecido'}</span> 
+                    <div className="flex items-center gap-3 min-w-0">
+                      <span className="text-[10px] font-black text-gray-300 w-4 flex-shrink-0">{idx + 1}º</span>
+                      <span className="text-xs font-bold text-gray-700 truncate uppercase">{p.nome ?? 'Produto Desconhecido'}</span> 
                     </div>
-                    <p className="text-xs font-black text-gray-800">{p.qtd} un</p>
+                    <p className="text-xs font-black text-gray-800 flex-shrink-0 ml-2">{p.qtd} un</p>
                   </div>
                 ))}
              </div>
@@ -842,7 +854,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                          <label className="text-[10px] font-black text-gray-400 uppercase">Nome Pix 1</label>
                          <input value={props.pix1Name ?? ''} onChange={e => props.setPix1Name(e.target.value)} className="w-full p-4 bg-gray-50 rounded-xl border-none outline-none font-bold text-xs" />
                       </div>
-                      <div onClick={() => pix1InputRef.current?.click()} className="w-20 h-20 bg-gray-50 border-2 border-dashed border-gray-200 rounded-xl flex items-center justify-center cursor-pointer overflow-hidden">
+                      <div onClick={() => pix1InputRef.current?.click()} className="w-20 h-20 bg-gray-50 border-2 border-dashed border-gray-200 rounded-xl flex items-center justify-center cursor-pointer overflow-hidden flex-shrink-0">
                          {props.pix1Code ? <img src={props.pix1Code} alt="QR Code Pix 1" className="w-full h-full object-cover" /> : <i className="fa-solid fa-qrcode text-gray-300"></i>}
                       </div>
                       <input type="file" ref={pix1InputRef} onChange={e => handlePixUpload(e, 1)} className="hidden" accept="image/*" />
@@ -854,7 +866,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                          <label className="text-[10px] font-black text-gray-400 uppercase">Nome Pix 2</label>
                          <input value={props.pix2Name ?? ''} onChange={e => props.setPix2Name(e.target.value)} className="w-full p-4 bg-gray-50 rounded-xl border-none outline-none font-bold text-xs" />
                       </div>
-                      <div onClick={() => pix2InputRef.current?.click()} className="w-20 h-20 bg-gray-50 border-2 border-dashed border-gray-200 rounded-xl flex items-center justify-center cursor-pointer overflow-hidden">
+                      <div onClick={() => pix2InputRef.current?.click()} className="w-20 h-20 bg-gray-50 border-2 border-dashed border-gray-200 rounded-xl flex items-center justify-center cursor-pointer overflow-hidden flex-shrink-0">
                          {props.pix2Code ? <img src={props.pix2Code} alt="QR Code Pix 2" className="w-full h-full object-cover" /> : <i className="fa-solid fa-qrcode text-gray-300"></i>}
                       </div>
                       <input type="file" ref={pix2InputRef} onChange={e => handlePixUpload(e, 2)} className="hidden" accept="image/*" />
@@ -868,7 +880,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
              <div className="space-y-4">
                 <div className="space-y-1">
                    <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Usuário</label>
-                   <select value={pwUser} onChange={e => setPwUser(e.target.value)} className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none">
+                   <select value={pwUser} onChange={e => setPwUser(e.target.value)} className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none text-xs">
                       <option value="">Selecione...</option>
                       {props.users.map((u: User) => <option key={u.id} value={u.id}>{u.nome ?? 'Usuário Desconhecido'} ({u.role ?? 'N/D'})</option>)} 
                    </select>
@@ -883,7 +895,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                     className="w-full p-4 bg-gray-50 rounded-2xl font-black text-xl tracking-widest border-none outline-none" 
                    />
                 </div>
-                <button onClick={handleUpdatePassword} className="w-full bg-gray-900 text-white py-4 rounded-2xl font-black text-xs uppercase shadow-lg active:scale-95 transition-all">Atualizar Senha</button>
+                <button onClick={handleUpdatePassword} className="w-full bg-gray-900 text-white py-4 rounded-2xl font-black text-xs uppercase shadow-lg active:scale-95 transition-all tracking-widest">Atualizar Senha</button>
              </div>
           </div>
 
@@ -907,8 +919,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
                 <div className="pt-4 border-t border-gray-50">
                     <div className="flex justify-between items-center mb-4">
-                        <span className="text-xs font-bold text-gray-600">Ativar trava de margem mínima?</span>
-                        <button onClick={() => props.setMargemMinimaAtiva(!props.margemMinimaAtiva)} className={`w-12 h-6 rounded-full relative transition-colors ${props.margemMinimaAtiva ? 'bg-rose-600' : 'bg-gray-300'}`}>
+                        <span className="text-xs font-bold text-gray-600 text-left mr-2">Ativar trava de margem mínima?</span>
+                        <button onClick={() => props.setMargemMinimaAtiva(!props.margemMinimaAtiva)} className={`w-12 h-6 rounded-full flex-shrink-0 relative transition-colors ${props.margemMinimaAtiva ? 'bg-rose-600' : 'bg-gray-300'}`}>
                            <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${props.margemMinimaAtiva ? 'left-7' : 'left-1'}`}></div>
                         </button>
                     </div>
@@ -949,7 +961,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       {/* MODAL VENDEDOR */}
       {showUserModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6">
-           <div className="bg-white w-full max-w-sm rounded-[2rem] p-8 shadow-2xl">
+           <div className="bg-white w-full max-w-sm rounded-[2rem] p-8 shadow-2xl overflow-y-auto max-h-[90vh]">
               <h3 className="font-black text-gray-800 uppercase text-sm mb-6 text-center">{showUserModal === 'NEW' ? 'Novo Vendedor' : 'Editar Vendedor'}</h3>
               
               <div className="flex flex-col items-center mb-6">
@@ -973,7 +985,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                    <label className="text-[9px] font-black text-gray-400 uppercase ml-1">PIN de Acesso (6 dígitos)</label>
                    <input value={userForm.pin ?? ''} onChange={e => setUserForm({...userForm, pin: e.target.value})} placeholder="123456" maxLength={6} className="w-full p-4 bg-gray-50 border rounded-2xl font-black text-center text-xl tracking-[0.5em]" />
                  </div>
-                 <button onClick={handleSaveUser} className="w-full bg-purple-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 uppercase text-xs mt-4">Salvar Vendedor</button>
+                 <button onClick={handleSaveUser} className="w-full bg-purple-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 uppercase text-xs mt-4 tracking-widest">Salvar Vendedor</button>
                  <button onClick={() => setShowUserModal(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button>
               </div>
            </div>
@@ -983,12 +995,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       {/* MODAL PRODUTO */}
       {showProductModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-end sm:items-center justify-center p-4">
-          <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6 animate-in slide-in-from-bottom duration-300 shadow-2xl">
+          <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6 animate-in slide-in-from-bottom duration-300 shadow-2xl overflow-y-auto max-h-[95vh]">
             <h3 className="font-black text-gray-800 uppercase text-sm mb-6">{showProductModal === 'NEW' ? 'Novo Produto' : 'Editar Produto'}</h3>
             <div className="space-y-4">
-              <input value={pForm.nome ?? ''} onChange={e => setPForm({...pForm, nome: e.target.value})} placeholder="Nome Comercial" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" />
+              <div className="space-y-1">
+                <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome Comercial</label>
+                <input value={pForm.nome ?? ''} onChange={e => setPForm({...pForm, nome: e.target.value})} placeholder="Nome do Produto" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" />
+              </div>
               
-              {/* Campo de Estoque Principal */}
               <div className="space-y-1">
                 <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Estoque Principal (UN)</label>
                 <input 
@@ -1022,7 +1036,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
               </div>
 
               <div className="flex flex-col gap-2 pt-2">
-                <button onClick={handleSaveProduct} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 transition-all uppercase text-xs">SALVAR PRODUTO</button>
+                <button onClick={handleSaveProduct} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 transition-all uppercase text-xs tracking-widest">SALVAR PRODUTO</button>
                 
                 {showProductModal !== 'NEW' && (
                   <button onClick={handleDeleteProductInModal} className="w-full bg-rose-50 text-rose-600 font-black py-4 rounded-2xl active:scale-95 transition-all uppercase text-[10px] tracking-widest border border-rose-100 flex items-center justify-center gap-2">
@@ -1030,7 +1044,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                   </button>
                 )}
                 
-                <button onClick={() => setShowProductModal(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px]">Cancelar</button>
+                <button onClick={() => setShowProductModal(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button>
               </div>
             </div>
           </div>
@@ -1043,7 +1057,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl shadow-2xl p-6 animate-in slide-in-from-bottom duration-300 max-h-[90vh] overflow-y-auto">
             <h3 className="font-black text-gray-800 uppercase text-sm mb-6">{showClientModal === 'NEW' ? 'Novo Cliente' : 'Editar Cliente'}</h3>
             <div className="space-y-4">
-              <input value={clientForm.nomeFantasia ?? ''} onChange={e => setClientForm({...clientForm, nomeFantasia: e.target.value})} placeholder="Nome Fantasia" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" />
+              <input value={clientForm.nomeFantasia ?? ''} onChange={e => setClientForm({...clientForm, nomeFantasia: e.target.value})} placeholder="Nome Fantasia" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" />
               <div className="flex items-center justify-between p-2">
                 <span className="text-xs font-bold text-gray-600 uppercase">Ativar CNPJ?</span>
                 <button onClick={() => setClientForm({...clientForm, ativarCnpj: !(clientForm.ativarCnpj ?? false)})} className={`w-10 h-5 rounded-full relative transition-colors ${(clientForm.ativarCnpj ?? false) ? 'bg-blue-600' : 'bg-gray-300'}`}> 
@@ -1061,8 +1075,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                 <input value={clientForm.telefone ?? ''} onChange={e => setClientForm({...clientForm, telefone: e.target.value})} placeholder="Telefone" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" />
                 <select value={clientForm.diaRoteiro ?? 1} onChange={e => setClientForm({...clientForm, diaRoteiro: parseInt(e.target.value)})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-sm">{[1, 2, 3, 4, 5, 6].map(dia => (<option key={dia} value={dia}>{DIAS_SEMANA[dia] ?? 'N/D'}</option>))}</select> 
               </div>
-              <button onClick={handleSaveClient} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl active:scale-95 transition-all uppercase text-xs">Salvar Cliente</button>
-              <button onClick={() => setShowClientModal(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px]">Cancelar</button>
+              <button onClick={handleSaveClient} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl active:scale-95 transition-all uppercase text-xs tracking-widest">Salvar Cliente</button>
+              <button onClick={() => setShowClientModal(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button>
             </div>
           </div>
         </div>
@@ -1074,8 +1088,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           <div className="bg-white w-full max-w-xs rounded-3xl p-8 text-center shadow-2xl">
             <h3 className="font-black text-gray-800 text-lg mb-6">Enviar Carga Pendente?</h3>
             <p className="text-sm text-gray-500 mb-6">O vendedor precisará aceitar esta carga para que ela seja aplicada ao estoque dele.</p>
-            <button onClick={handleSync} className="w-full bg-gray-900 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 mb-2 uppercase text-xs">Sim, Enviar Pendente</button>
-            <button onClick={() => setShowConfirmSync(false)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px]">Cancelar</button>
+            <button onClick={handleSync} className="w-full bg-gray-900 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 mb-2 uppercase text-xs tracking-widest">Sim, Enviar Pendente</button>
+            <button onClick={() => setShowConfirmSync(false)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button>
           </div>
         </div>
       )}
@@ -1086,8 +1100,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           <div className="bg-white w-full max-w-xs rounded-3xl p-8 text-center shadow-2xl">
             <h3 className="font-black text-gray-800 text-lg mb-6">Aplicar Carga Imediatamente?</h3>
             <p className="text-sm text-gray-500 mb-6">Esta ação sobrescreverá o estoque atual do vendedor sem a necessidade de aceite.</p>
-            <button onClick={handleApply} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 mb-2 uppercase text-xs">Sim, Aplicar Agora</button>
-            <button onClick={() => setShowConfirmApply(false)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px]">Cancelar</button>
+            <button onClick={handleApply} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 mb-2 uppercase text-xs tracking-widest">Sim, Aplicar Agora</button>
+            <button onClick={() => setShowConfirmApply(false)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button>
           </div>
         </div>
       )}
@@ -1102,10 +1116,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                 <span className="text-[10px] font-black text-blue-400 uppercase mb-1">📦 Estoque Atual</span>
                 <span className="text-lg font-black text-blue-700">{(showEntryModal.estoquePrincipal ?? 0)} UN</span> 
               </div>
-              <input type="number" placeholder="Quantidade Entrada" className="w-full p-4 bg-gray-50 rounded-2xl border font-black text-center text-lg" value={entryForm.qtd} onChange={e => setEntryForm({...entryForm, qtd: e.target.value})} />
-              <input type="number" placeholder="Custo Unit." className="w-full p-4 bg-gray-50 rounded-2xl border font-black text-center text-lg" value={entryForm.custo} onChange={e => setEntryForm({...entryForm, custo: e.target.value})} />
-              <button onClick={() => { if(!entryForm.qtd || !entryForm.custo) return; props.registerStockEntry(showEntryModal.id, parseInt(entryForm.qtd), parseFloat(entryForm.custo)); showToast("Entrada registrada"); setShowEntryModal(null); }} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl active:scale-95 shadow-xl uppercase text-xs">Confirmar Entrada</button>
-              <button onClick={() => setShowEntryModal(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px]">Cancelar</button>
+              <input type="number" placeholder="Quantidade Entrada" className="w-full p-4 bg-gray-50 rounded-2xl border font-black text-center text-lg outline-none" value={entryForm.qtd} onChange={e => setEntryForm({...entryForm, qtd: e.target.value})} />
+              <input type="number" placeholder="Custo Unit." className="w-full p-4 bg-gray-50 rounded-2xl border font-black text-center text-lg outline-none" value={entryForm.custo} onChange={e => setEntryForm({...entryForm, custo: e.target.value})} />
+              <button onClick={() => { if(!entryForm.qtd || !entryForm.custo) return; props.registerStockEntry(showEntryModal.id, parseInt(entryForm.qtd), parseFloat(entryForm.custo)); showToast("Entrada registrada"); setShowEntryModal(null); }} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl active:scale-95 shadow-xl uppercase text-xs tracking-widest">Confirmar Entrada</button>
+              <button onClick={() => setShowEntryModal(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button>
             </div>
           </div>
         </div>
@@ -1124,9 +1138,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                 <input type="number" value={valorRecebidoParcial} onChange={e => setValorRecebidoParcial(e.target.value)} className="w-full p-4 bg-white border border-gray-200 rounded-2xl font-black text-xl text-center outline-none" />
               </div>
               <div className="space-y-3">
-                 <button onClick={() => handleConfirmReceive('DINHEIRO')} className="w-full bg-gray-900 text-white py-4 rounded-2xl shadow-lg font-black uppercase text-xs tracking-widest">Confirmar Dinheiro</button>
-                 <button onClick={() => handleConfirmReceive('PIX')} className="w-full bg-blue-600 text-white py-4 rounded-2xl shadow-lg font-black uppercase text-xs tracking-widest">Confirmar PIX</button>
-                 <button onClick={() => setShowReceiveModal(null)} className="w-full py-3 text-gray-400 font-bold text-[9px] uppercase">Cancelar</button>
+                 <button onClick={() => handleConfirmReceive('DINHEIRO')} className="w-full bg-gray-900 text-white py-4 rounded-2xl shadow-lg font-black uppercase text-xs tracking-widest tracking-widest">Dinheiro</button>
+                 <button onClick={() => handleConfirmReceive('PIX')} className="w-full bg-blue-600 text-white py-4 rounded-2xl shadow-lg font-black uppercase text-xs tracking-widest tracking-widest">PIX</button>
+                 <button onClick={() => setShowReceiveModal(null)} className="w-full py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Cancelar</button>
               </div>
            </div>
         </div>

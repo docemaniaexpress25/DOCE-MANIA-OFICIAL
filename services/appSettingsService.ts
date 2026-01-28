@@ -10,6 +10,7 @@ export interface AppSettings {
   pix1Code: string | null;
   pix2Name: string | null;
   pix2Code: string | null;
+  productOrder: string[]; // Novo campo para ordem dos produtos
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -22,6 +23,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   pix1Code: null,
   pix2Name: "Pix Banco B",
   pix2Code: null,
+  productOrder: [], // Padrão: array vazio
 };
 
 // Helper function to safely convert database numeric values (which might be null or string) to number
@@ -56,6 +58,7 @@ export const appSettingsService = {
       pix1Code: data.pix1_code ?? DEFAULT_SETTINGS.pix1Code,
       pix2Name: data.pix2_name ?? DEFAULT_SETTINGS.pix2Name,
       pix2Code: data.pix2_code ?? DEFAULT_SETTINGS.pix2Code,
+      productOrder: data.product_order || DEFAULT_SETTINGS.productOrder, // Lendo o JSONB
     };
   },
 
@@ -71,6 +74,7 @@ export const appSettingsService = {
     if (settings.pix1Code !== undefined) payload.pix1_code = settings.pix1Code;
     if (settings.pix2Name !== undefined) payload.pix2_name = settings.pix2Name;
     if (settings.pix2Code !== undefined) payload.pix2_code = settings.pix2Code;
+    if (settings.productOrder !== undefined) payload.product_order = settings.productOrder; // Escrevendo o JSONB
 
     // Adiciona o ID da linha única e mescla com os valores padrão para garantir que todos os campos NOT NULL sejam preenchidos na inserção (upsert)
     const upsertPayload = {
@@ -79,6 +83,7 @@ export const appSettingsService = {
         margem_global_valor: DEFAULT_SETTINGS.margemGlobalValor,
         margem_minima_ativa: DEFAULT_SETTINGS.margemMinimaAtiva,
         margem_minima: DEFAULT_SETTINGS.margemMinima,
+        product_order: DEFAULT_SETTINGS.productOrder,
         ...payload
     };
 

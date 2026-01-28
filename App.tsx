@@ -33,6 +33,7 @@ const App: React.FC = () => {
   const [pix1Code, setPix1Code] = useState<string | null>(null);
   const [pix2Name, setPix2Name] = useState("Pix Banco B");
   const [pix2Code, setPix2Code] = useState<string | null>(null);
+  const [productOrder, setProductOrder] = useState<string[]>([]); // Novo estado para ordem dos produtos
 
   const [adminNotification, setAdminNotification] = useState<string | null>(null);
   
@@ -76,21 +77,38 @@ const App: React.FC = () => {
     setCargasPendentes(cgp);
   }, []);
 
-  const fetchDailyRoute = useCallback(async () => {
+  const fetchDailyRoute = useCallback(async (currentClients: Client[]) => {
     if (currentUser && currentUser.role === 'VENDEDOR') {
       const today = getTodayDateString();
       const route = await dailyRouteService.getRoute(currentUser.id, today);
+      
       if (route) {
         setDailyRouteState(route);
       } else {
-        setDailyRouteState({ date: today, clientIds: [], skippedClientIds: [] });
+        // Lógica de Geração Automática da Rota (Solução 1)
+        const todayDay = new Date().getDay(); // 0=Domingo, 1=Segunda...
+        const initialClientIds = currentClients
+          .filter(c => c.diaRoteiro === todayDay && c.ativo)
+          .sort((a, b) => (a.ordem || 0) - (b.ordem || 0))
+          .map(c => c.id);
+
+        const newRoute: DailyRouteState = { 
+          date: today, 
+          clientIds: initialClientIds, 
+          skippedClientIds: [] 
+        };
+        
+        // Persiste a rota recém-gerada
+        await dailyRouteService.updateRoute(currentUser.id, newRoute);
+        setDailyRouteState(newRoute);
       }
     }
   }, [currentUser]);
 
   const fetchCoreData = useCallback(async () => {
+    let settings: AppSettings;
     try {
-      const settings = await appSettingsService.getSettings();
+      settings = await appSettingsService.getSettings();
       setLogo(settings.logo);
       setMargemGlobalAtiva(settings.margemGlobalAtiva);
       setMargemGlobalValor(settings.margemGlobalValor);
@@ -100,20 +118,27 @@ const App: React.FC = () => {
       setPix1Code(settings.pix1Code);
       setPix2Name(settings.pix2Name ?? "Pix Banco B");
       setPix2Code(settings.pix2Code);
+      setProductOrder(settings.productOrder); // Carregando ordem dos produtos
     } catch (e) {
       console.error("Erro ao carregar configurações:", e);
+      return;
     }
 
-    await Promise.all([
+    const [fetchedUsers, fetchedProducts, fetchedClients] = await Promise.all([
       fetchUsers(),
       fetchProducts(),
       fetchClients(),
       fetchTransactionalData()
     ]);
-  }, [fetchUsers, fetchProducts, fetchClients, fetchTransactionalData]);
+    
+    // Chama a busca da rota após carregar os clientes
+    if (fetchedClients) {
+      await fetchDailyRoute(fetchedClients);
+    }
+    
+  }, [fetchUsers, fetchProducts, fetchClients, fetchTransactionalData, fetchDailyRoute]);
 
   useEffect(() => { fetchCoreData(); }, [fetchCoreData]);
-  useEffect(() => { fetchDailyRoute(); }, [fetchDailyRoute]);
 
   const updateSetting = useCallback(async (key: keyof AppSettings, value: any) => {
     const success = await appSettingsService.updateSettings({ [key]: value });
@@ -128,6 +153,7 @@ const App: React.FC = () => {
             case 'pix1Code': setPix1Code(value); break;
             case 'pix2Name': setPix2Name(value); break;
             case 'pix2Code': setPix2Code(value); break;
+            case 'productOrder': setProductOrder(value); break; // Atualizando estado da ordem
         }
     }
   }, []);
@@ -146,7 +172,11 @@ const App: React.FC = () => {
   const addProduct = async (nome: string, custo: number, venda: number, comissao: number, estoque: number = 0) => {
     const newProduct: Omit<Product, 'id'> = { nome, precoCusto: Number(custo.toFixed(2)), precoVenda: Number(venda.toFixed(2)), comissaoPercentual: Number(comissao.toFixed(2)), estoquePrincipal: estoque, ativo: true };
     const res = await productService.insertProduct(newProduct);
-    if (res) await fetchProducts();
+    if (res) {
+      // Adiciona o novo produto ao final da ordem persistida
+      await updateSetting('productOrder', [...productOrder, res.id]);
+      await fetchProducts();
+    }
   };
 
   const updateProduct = async (id: string, data: Partial<Product>) => {
@@ -156,7 +186,11 @@ const App: React.FC = () => {
 
   const deleteProduct = async (id: string) => {
     const res = await productService.deleteProduct(id);
-    if (res) await fetchProducts();
+    if (res) {
+      // Remove o produto da ordem persistida
+      await updateSetting('productOrder', productOrder.filter(pId => pId !== id));
+      await fetchProducts();
+    }
   };
 
   const registerStockEntry = async (id: string, qtd: number, custo: number) => {
@@ -172,7 +206,14 @@ const App: React.FC = () => {
 
   const addClient = async (data: Omit<Client, 'id'>) => {
     const res = await clientService.insertClient(data);
-    if (res) await fetchClients();
+    if (res) {
+      await fetchClients();
+      // Se o cliente for adicionado para o dia de hoje, atualiza a rota
+      const todayDay = new Date().getDay();
+      if (res.diaRoteiro === todayDay && currentUser?.role === 'VENDEDOR') {
+        await handleUpdateDailyRoute([...dailyRouteState.clientIds, res.id], dailyRouteState.skippedClientIds);
+      }
+    }
   };
 
   const updateClient = async (id: string, data: Partial<Client>) => {
@@ -413,6 +454,7 @@ const App: React.FC = () => {
             setMargemMinimaAtiva={(val) => updateSetting('margemMinimaAtiva', val)} pix1Name={pix1Name} setPix1Name={(val) => updateSetting('pix1Name', val)} pix1Code={pix1Code} setPix1Code={(val) => updateSetting('pix1Code', val)}
             pix2Name={pix2Name} setPix2Name={(val) => updateSetting('pix2Name', val)} pix2Code={pix2Code} setPix2Code={(val) => updateSetting('pix2Code', val)}
             adminNotification={adminNotification} clearAdminNotification={() => setAdminNotification(null)}
+            orderedProductIds={productOrder} setOrderedProductIds={(ids) => updateSetting('productOrder', ids)} // Passando e salvando a ordem
           />
         ) : (
           <VendedorDashboard 

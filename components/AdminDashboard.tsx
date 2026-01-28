@@ -50,13 +50,17 @@ interface AdminDashboardProps {
   setPix2Code: (val: string | null) => void;
   adminNotification?: string | null;
   clearAdminNotification?: () => void;
+  orderedProductIds: string[]; // Recebe a ordem persistida do App.tsx
+  setOrderedProductIds: (ids: string[]) => void; // Função para salvar a nova ordem
 }
 
 const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [activeTab, setActiveTab] = useState<'HOME' | 'CATALOGO' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'SETTINGS'>('HOME');
   const [search, setSearch] = useState('');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
-  const [orderedProductIds, setOrderedProductIds] = useState<string[]>([]);
+  
+  // Usamos o estado local apenas para manipulação temporária, mas inicializamos com a prop
+  const [localOrderedProductIds, setLocalOrderedProductIds] = useState<string[]>(props.orderedProductIds);
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
@@ -70,17 +74,25 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     }
   }, [props.adminNotification]);
 
+  // Sincroniza a ordem persistida (prop) com o estado local na montagem/atualização da prop
   useEffect(() => {
-    if (props.products.length > 0 && orderedProductIds.length === 0) {
-      setOrderedProductIds(props.products.map(p => p.id));
-    } else if (props.products.length !== orderedProductIds.length) {
-      const currentIds = props.products.map(p => p.id);
-      const newIds = currentIds.filter(id => !orderedProductIds.includes(id));
-      if (newIds.length > 0) {
-        setOrderedProductIds([...orderedProductIds, ...newIds]);
-      }
+    const currentIds = props.products.map(p => p.id);
+    
+    // 1. Filtra IDs inválidos ou excluídos da ordem persistida
+    const validOrder = props.orderedProductIds.filter(id => currentIds.includes(id));
+    
+    // 2. Adiciona novos produtos que não estão na ordem (ao final)
+    const newIds = currentIds.filter(id => !validOrder.includes(id));
+    const finalOrder = [...validOrder, ...newIds];
+
+    setLocalOrderedProductIds(finalOrder);
+    
+    // Se a ordem final for diferente da ordem persistida, salva a nova ordem (incluindo novos produtos)
+    if (finalOrder.length !== props.orderedProductIds.length || finalOrder.some((id, index) => id !== props.orderedProductIds[index])) {
+        props.setOrderedProductIds(finalOrder);
     }
-  }, [props.products]);
+  }, [props.products, props.orderedProductIds]);
+
 
   const [showProductModal, setShowProductModal] = useState<Product | 'NEW' | null>(null);
   const [showEntryModal, setShowEntryModal] = useState<Product | null>(null);
@@ -278,11 +290,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   };
 
   const moveProduct = (id: string, dir: 'UP' | 'DOWN') => {
-    const idx = orderedProductIds.indexOf(id);
-    const newOrder = [...orderedProductIds];
+    const idx = localOrderedProductIds.indexOf(id);
+    const newOrder = [...localOrderedProductIds];
     if (dir === 'UP' && idx > 0) [newOrder[idx], newOrder[idx-1]] = [newOrder[idx-1], newOrder[idx]];
     else if (dir === 'DOWN' && idx < newOrder.length - 1) [newOrder[idx], newOrder[idx+1]] = [newOrder[idx+1], newOrder[idx]];
-    setOrderedProductIds(newOrder);
+    
+    setLocalOrderedProductIds(newOrder);
+    props.setOrderedProductIds(newOrder); // Salva a nova ordem via prop
   };
 
   const moveClient = async (id: string, direction: 'UP' | 'DOWN', day: number) => {
@@ -492,13 +506,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const filteredProducts = useMemo(() => {
     const filtered = props.products.filter(p => (p.nome ?? '').toLowerCase().includes(search.toLowerCase()));
     if (search) return filtered;
-    return [...filtered].sort((a, b) => {
-      const idxA = orderedProductIds.indexOf(a.id);
-      const idxB = orderedProductIds.indexOf(b.id);
-      if (idxA === -1 || idxB === -1) return 0;
-      return idxA - idxB;
-    });
-  }, [props.products, orderedProductIds, search]);
+    
+    // Ordena usando a ordem persistida (localOrderedProductIds)
+    const productMap = new Map(filtered.map(p => [p.id, p]));
+    return localOrderedProductIds
+      .map(id => productMap.get(id))
+      .filter((p): p is Product => !!p);
+      
+  }, [props.products, localOrderedProductIds, search]);
 
   const filteredHistory = useMemo(() => {
     return props.sales.filter(s => filterByPeriod(s.data, filtroPeriodo))

@@ -11,8 +11,12 @@ import { generateId } from './utils/uuid';
 import { 
   loadLocalState, saveLocalState, 
   DEFAULT_CARGAS, DEFAULT_CARGAS_PENDENTES, DEFAULT_SALES, 
-  DEFAULT_COMMISSIONS, DEFAULT_PAYOUT_LOGS, DEFAULT_MESSAGES 
+  DEFAULT_COMMISSIONS, DEFAULT_PAYOUT_LOGS, DEFAULT_MESSAGES,
+  DailyRouteState
 } from './utils/persistence';
+
+// Função auxiliar para obter a data de hoje no formato YYYY-MM-DD
+const getTodayDateString = () => new Date().toISOString().split('T')[0];
 
 const App: React.FC = () => {
   // Carrega o usuário persistido na inicialização
@@ -44,6 +48,18 @@ const App: React.FC = () => {
   const [payoutLogs, setPayoutLogs] = useState<CommissionPaymentLog[]>(loadLocalState('payoutLogs', DEFAULT_PAYOUT_LOGS));
   const [messages, setMessages] = useState<SystemMessage[]>(loadLocalState('messages', DEFAULT_MESSAGES));
 
+  // Novo estado para a Rota do Dia Persistida
+  const [dailyRouteState, setDailyRouteState] = useState<DailyRouteState>(() => {
+    const today = getTodayDateString();
+    const savedState = loadLocalState<DailyRouteState | null>('dailyRouteState', null);
+    
+    if (savedState && savedState.date === today) {
+      return savedState;
+    }
+    // Se a data for diferente, ou não houver estado salvo, inicializa com o dia atual
+    return { date: today, clientIds: [], skippedClientIds: [] };
+  });
+
   // --- Efeitos de Persistência Local ---
   useEffect(() => { saveLocalState('currentUser', currentUser); }, [currentUser]);
   useEffect(() => { saveLocalState('cargas', cargas); }, [cargas]);
@@ -52,6 +68,7 @@ const App: React.FC = () => {
   useEffect(() => { saveLocalState('commissions', commissions); }, [commissions]);
   useEffect(() => { saveLocalState('payoutLogs', payoutLogs); }, [payoutLogs]);
   useEffect(() => { saveLocalState('messages', messages); }, [messages]);
+  useEffect(() => { saveLocalState('dailyRouteState', dailyRouteState); }, [dailyRouteState]);
   // -------------------------------------
 
   const fetchUsers = useCallback(async () => { setUsers(await userService.getAllUsers()); }, []);
@@ -94,6 +111,33 @@ const App: React.FC = () => {
       })));
     }
   }, [margemGlobalAtiva, margemGlobalValor]);
+
+  // Lógica para inicializar/resetar a rota do dia
+  useEffect(() => {
+    if (clients.length === 0) return;
+
+    const today = getTodayDateString();
+    const currentDayOfWeek = new Date().getDay(); // 0 (Domingo) a 6 (Sábado)
+
+    // 1. Clientes do roteiro semanal para hoje
+    const clientsFromRoute = clients
+      .filter(c => (c.ativo ?? false) && (c.diaRoteiro ?? 0) === currentDayOfWeek)
+      .map(c => c.id);
+
+    setDailyRouteState(prev => {
+      if (prev.date === today) {
+        // Se ainda é o mesmo dia, mantemos o estado atual (incluindo skipped e extras)
+        return prev;
+      } else {
+        // Se o dia mudou, resetamos a rota para os clientes do roteiro de hoje
+        return {
+          date: today,
+          clientIds: clientsFromRoute, // Inicializa com os clientes do roteiro
+          skippedClientIds: []
+        };
+      }
+    });
+  }, [clients]); // Depende apenas de clients para inicializar/resetar
 
   const updateSetting = useCallback(async (key: keyof AppSettings, value: any) => {
     const success = await appSettingsService.updateSettings({ [key]: value });
@@ -279,6 +323,15 @@ const App: React.FC = () => {
     setMessages(prev => prev.map(msg => msg.id === msgId ? { ...msg, lida: true } : msg));
   };
 
+  // Funções de manipulação da Rota do Dia
+  const updateDailyRoute = (clientIds: string[], skippedClientIds: string[]) => {
+    setDailyRouteState(prev => ({
+      ...prev,
+      clientIds: clientIds,
+      skippedClientIds: skippedClientIds
+    }));
+  };
+
   if (!currentUser) return <Login users={users} onLogin={setCurrentUser} logo={logo} />;
 
   return (
@@ -329,6 +382,8 @@ const App: React.FC = () => {
             receivePayment={receiveAccount} deleteSale={(id) => deleteSaleInternal(id, false)} aceitarCarga={aceitarCarga}
             margemMinima={margemMinima} margemMinimaAtiva={margemMinimaAtiva} pix1Name={pix1Name} pix1Code={pix1Code}
             pix2Name={pix2Name} pix2Code={pix2Code}
+            dailyRouteState={dailyRouteState}
+            updateDailyRoute={updateDailyRoute}
           />
         )}
       </main>

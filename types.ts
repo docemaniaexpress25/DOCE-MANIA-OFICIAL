@@ -105,3 +105,9 @@ export interface SystemMessage {
   lida: boolean;
   type?: 'INFO' | 'COMMISSION_CONFIRMATION'; 
 }
+
+export interface DailyRouteState {
+  date: string; // Data no formato YYYY-MM-DD
+  clientIds: string[]; // IDs dos clientes na rota
+  skippedClientIds: string[]; // IDs dos clientes pulados
+}

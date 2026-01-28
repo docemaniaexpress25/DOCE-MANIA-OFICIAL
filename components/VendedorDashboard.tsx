@@ -3,6 +3,7 @@ import { User, Product, Client, Carga, Sale, Commission, PaymentMethod, CargaPen
 import { DIAS_SEMANA } from '../constants';
 import PDV from './PDV';
 import Cupom from './Cupom';
+import { DailyRouteState } from '../utils/persistence';
 
 interface VendedorDashboardProps {
   user: User;
@@ -28,17 +29,19 @@ interface VendedorDashboardProps {
   pix1Code: string | null;
   pix2Name: string;
   pix2Code: string | null;
+  // Novas props para a Rota do Dia
+  dailyRouteState: DailyRouteState;
+  updateDailyRoute: (clientIds: string[], skippedClientIds: string[]) => void;
 }
 
 const VendedorDashboard: React.FC<VendedorDashboardProps> = ({ 
-  user, products, clients, cargas, cargasPendentes, sales, commissions, payoutLogs, messages, markMessageAsRead, processSale, addClient, updateClient, deleteClient, receivePayment, deleteSale, aceitarCarga, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code
+  user, products, clients, cargas, cargasPendentes, sales, commissions, payoutLogs, messages, markMessageAsRead, processSale, addClient, updateClient, deleteClient, receivePayment, deleteSale, aceitarCarga, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, updateDailyRoute
 }) => {
   const [activeTab, setActiveTab] = useState<'HOME' | 'ROTEIRO' | 'CARGA' | 'HISTORY' | 'FINANCE' | 'CREDIT' | 'CLIENTS' | 'WEEKLY' | 'STOCK_VIEW'>('HOME');
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [viewingSale, setViewingSale] = useState<Sale | null>(null);
-  const [skippedClientIds, setSkippedClientIds] = useState<string[]>([]);
+  // O estado de skippedClientIds e extraRouteClientIds agora é gerenciado via dailyRouteState
   const [reopenedClientIds, setReopenedClientIds] = useState<string[]>([]);
-  const [extraRouteClientIds, setExtraRouteClientIds] = useState<string[]>([]);
   const [showReceiveModal, setShowReceiveModal] = useState<Sale | null>(null);
   const [valorRecebidoParcial, setValorRecebidoParcial] = useState<string>('');
   const [editingClient, setEditingClient] = useState<Client | 'NEW' | null>(null); 
@@ -58,20 +61,42 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const diaAtual = new Date().getDay();
   const minhaCarga = useMemo(() => cargas.filter(c => c.vendedorId === user.id), [cargas, user.id]);
   
+  // Rota do Dia agora é baseada no dailyRouteState
   const rotaDeHoje = useMemo(() => {
-    return clients
-      .filter(c => (c.ativo ?? false) && ((c.diaRoteiro ?? 0) === diaAtual || extraRouteClientIds.includes(c.id)))
-      .sort((a, b) => (a.ordem || 0) - (b.ordem || 0)); 
-  }, [clients, diaAtual, extraRouteClientIds]); 
+    const clientMap = new Map(clients.map(c => [c.id, c]));
+    
+    // Filtra e mapeia os IDs salvos para objetos Client
+    const clientsInRoute = dailyRouteState.clientIds
+      .map(id => clientMap.get(id))
+      .filter((c): c is Client => !!c && (c.ativo ?? false));
 
-  const handleSkipClient = (clientId: string) => { if (confirm("Pular atendimento?")) setSkippedClientIds(prev => [...prev, clientId]); };
-  const handleReopenClient = (clientId: string) => setReopenedClientIds(prev => [...prev, clientId]);
+    // Garante a ordenação
+    return clientsInRoute.sort((a, b) => (a.ordem || 0) - (b.ordem || 0)); 
+  }, [clients, dailyRouteState.clientIds]); 
+
+  const handleSkipClient = (clientId: string) => { 
+    if (confirm("Pular atendimento?")) {
+      const newSkipped = [...dailyRouteState.skippedClientIds, clientId];
+      updateDailyRoute(dailyRouteState.clientIds, newSkipped);
+    }
+  };
+
+  const handleReopenClient = (clientId: string) => {
+    // Remove o cliente da lista de pulados
+    const newSkipped = dailyRouteState.skippedClientIds.filter(id => id !== clientId);
+    updateDailyRoute(dailyRouteState.clientIds, newSkipped);
+    // Adiciona à lista de reabertos (para ignorar o status 'isSold' temporariamente)
+    setReopenedClientIds(prev => [...prev, clientId]);
+  };
+
   const handleAddToTodayRoute = (clientId: string) => { 
-    if (!extraRouteClientIds.includes(clientId)) { 
-      setExtraRouteClientIds(prev => [...prev, clientId]); 
+    if (!dailyRouteState.clientIds.includes(clientId)) { 
+      const newRoute = [...dailyRouteState.clientIds, clientId];
+      updateDailyRoute(newRoute, dailyRouteState.skippedClientIds);
       showToast("Cliente adicionado à rota do dia!"); 
     } 
   };
+
   const isSameDay = (date: Date | undefined) => new Date().toDateString() === (new Date(date ?? new Date())).toDateString(); 
 
   const handleOpenEditClient = (c: Client | 'NEW') => {
@@ -241,7 +266,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
           </header>
           {rotaDeHoje.map(c => {
             const isSold = sales.some(s => s.clientId === c.id && isSameDay(s.data));
-            const isSkipped = skippedClientIds.includes(c.id);
+            const isSkipped = dailyRouteState.skippedClientIds.includes(c.id);
             const isVisited = (isSold || isSkipped) && !reopenedClientIds.includes(c.id);
             return (
               <div key={c.id} className={`p-4 rounded-3xl border flex flex-col transition-all ${isVisited ? 'bg-gray-100 border-gray-200 grayscale opacity-60' : 'bg-white border-gray-100 shadow-sm'}`}>
@@ -384,7 +409,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                       <span className={`text-[8px] font-black px-2 py-0.5 rounded uppercase ${isOverdue ? 'bg-rose-600 text-white animate-pulse' : 'bg-orange-100 text-orange-600'}`}>
                         {isOverdue ? 'VENCIDO / HOJE' : 'PENDENTE'}
                       </span>
-                      <p className={`text-lg font-black mt-2 ${isOverdue ? 'text-rose-700' : 'text-rose-600'}`}>Saldo: R$ {saldo.toFixed(2)}</p>
+                      <p className="text-lg font-black mt-2 text-rose-600">Saldo: R$ {saldo.toFixed(2)}</p>
                    </div>
                 </div>
                 <button onClick={() => { setShowReceiveModal(s); setValorRecebidoParcial(saldo.toString()); }} className={`w-full py-3 rounded-2xl text-[10px] font-black uppercase mt-3 shadow-lg active:scale-95 ${isOverdue ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white'}`}>Receber Agora</button>

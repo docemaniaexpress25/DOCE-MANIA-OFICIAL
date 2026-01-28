@@ -1,5 +1,12 @@
 import { Sale, Carga, CargaPendente, Commission, CommissionPaymentLog, SystemMessage } from '../types';
 
+// Define a estrutura para persistir a Rota do Dia
+export interface DailyRouteState {
+  date: string; // Data no formato YYYY-MM-DD
+  clientIds: string[]; // IDs dos clientes na rota
+  skippedClientIds: string[]; // IDs dos clientes pulados
+}
+
 // Helper function to check if a string is a valid ISO date string
 const isIsoDateString = (value: any): boolean => {
   if (typeof value !== 'string') return false;

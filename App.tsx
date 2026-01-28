@@ -10,6 +10,8 @@ import { appSettingsService, AppSettings } from './services/appSettingsService';
 import { saleService } from './services/saleService';
 import { commissionService } from './services/commissionService';
 import { messageService } from './services/messageService';
+import { cargaService } from './services/cargaService';
+import { dailyRouteService } from './services/dailyRouteService';
 import { generateId } from './utils/uuid';
 import { 
   loadLocalState, saveLocalState, 
@@ -38,42 +40,53 @@ const App: React.FC = () => {
   const [products, setProducts] = useState<Product[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
 
-  // Estados agora inicializados vazios e preenchidos via Supabase
-  const [cargas, setCargas] = useState<Carga[]>(loadLocalState('cargas', DEFAULT_CARGAS));
-  const [cargasPendentes, setCargasPendentes] = useState<CargaPendente[]>(loadLocalState('cargasPendentes', DEFAULT_CARGAS_PENDENTES));
+  const [cargas, setCargas] = useState<Carga[]>([]);
+  const [cargasPendentes, setCargasPendentes] = useState<CargaPendente[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
   const [commissions, setCommissions] = useState<Commission[]>([]);
   const [payoutLogs, setPayoutLogs] = useState<CommissionPaymentLog[]>([]);
   const [messages, setMessages] = useState<SystemMessage[]>([]);
 
-  const [dailyRouteState, setDailyRouteState] = useState<DailyRouteState>(() => {
-    const today = getTodayDateString();
-    const savedState = loadLocalState<DailyRouteState | null>('dailyRouteState', null);
-    if (savedState && savedState.date === today) return savedState;
-    return { date: today, clientIds: [], skippedClientIds: [] };
+  const [dailyRouteState, setDailyRouteState] = useState<DailyRouteState>({ 
+    date: getTodayDateString(), 
+    clientIds: [], 
+    skippedClientIds: [] 
   });
 
   useEffect(() => { saveLocalState('currentUser', currentUser); }, [currentUser]);
-  useEffect(() => { saveLocalState('cargas', cargas); }, [cargas]);
-  useEffect(() => { saveLocalState('cargasPendentes', cargasPendentes); }, [cargasPendentes]);
-  useEffect(() => { saveLocalState('dailyRouteState', dailyRouteState); }, [dailyRouteState]);
 
   const fetchUsers = useCallback(async () => { setUsers(await userService.getAllUsers()); }, []);
   const fetchProducts = useCallback(async () => { setProducts(await productService.getAllProducts()); }, []);
   const fetchClients = useCallback(async () => { setClients(await clientService.getAllClients()); }, []);
   
   const fetchTransactionalData = useCallback(async () => {
-    const [s, c, p, m] = await Promise.all([
+    const [s, c, p, m, cg, cgp] = await Promise.all([
       saleService.getAllSales(),
       commissionService.getAllCommissions(),
       commissionService.getAllPayouts(),
-      messageService.getAllMessages()
+      messageService.getAllMessages(),
+      cargaService.getAllCargas(),
+      cargaService.getAllCargasPendentes()
     ]);
     setSales(s);
     setCommissions(c);
     setPayoutLogs(p);
     setMessages(m);
+    setCargas(cg);
+    setCargasPendentes(cgp);
   }, []);
+
+  const fetchDailyRoute = useCallback(async () => {
+    if (currentUser && currentUser.role === 'VENDEDOR') {
+      const today = getTodayDateString();
+      const route = await dailyRouteService.getRoute(currentUser.id, today);
+      if (route) {
+        setDailyRouteState(route);
+      } else {
+        setDailyRouteState({ date: today, clientIds: [], skippedClientIds: [] });
+      }
+    }
+  }, [currentUser]);
 
   const fetchCoreData = useCallback(async () => {
     try {
@@ -100,6 +113,7 @@ const App: React.FC = () => {
   }, [fetchUsers, fetchProducts, fetchClients, fetchTransactionalData]);
 
   useEffect(() => { fetchCoreData(); }, [fetchCoreData]);
+  useEffect(() => { fetchDailyRoute(); }, [fetchDailyRoute]);
 
   const updateSetting = useCallback(async (key: keyof AppSettings, value: any) => {
     const success = await appSettingsService.updateSettings({ [key]: value });
@@ -171,6 +185,29 @@ const App: React.FC = () => {
     if (res) await fetchClients();
   };
 
+  const syncVendedorCarga = async (vId: string, itens: { produtoId: string, quantidade: number }[]) => {
+    const res = await cargaService.insertCargaPendente({ vendedorId: vId, itens, data: new Date() });
+    if (res) {
+      await fetchTransactionalData();
+    }
+  };
+
+  const applyCargaDirectly = async (vId: string, itens: { produtoId: string, quantidade: number }[]) => {
+    // Atualiza o estoque principal dos produtos primeiro
+    for (const item of itens) {
+      const p = products.find(prod => prod.id === item.produtoId);
+      const noVAnterior = cargas.find(c => c.vendedorId === vId && c.produtoId === item.produtoId)?.quantidade || 0;
+      const delta = item.quantidade - noVAnterior;
+      if (p) {
+        await productService.updateProduct(p.id, { estoquePrincipal: p.estoquePrincipal - delta });
+      }
+    }
+    const res = await cargaService.updateActiveCarga(vId, itens);
+    if (res) {
+      await fetchCoreData();
+    }
+  };
+
   const aceitarCarga = async (pendenciaId: string) => {
     const pendencia = cargasPendentes.find(p => p.id === pendenciaId);
     if (!pendencia) return;
@@ -178,11 +215,13 @@ const App: React.FC = () => {
       const p = products.find(prod => prod.id === item.produtoId);
       if (p) await productService.updateProduct(p.id, { estoquePrincipal: p.estoquePrincipal - item.quantidade });
     }
-    const otherCargas = cargas.filter(c => c.vendedorId !== pendencia.vendedorId);
-    const newCargas = pendencia.itens.filter(i => i.quantidade > 0).map(i => ({ vendedorId: pendencia.vendedorId, produtoId: i.produtoId, quantidade: i.quantidade }));
-    setCargas([...otherCargas, ...newCargas]);
-    setCargasPendentes(prev => prev.filter(cp => cp.id !== pendenciaId));
-    await fetchProducts();
+    
+    // Atualiza a carga ativa no banco
+    await cargaService.updateActiveCarga(pendencia.vendedorId, pendencia.itens);
+    // Remove a pendência do banco
+    await cargaService.deleteCargaPendente(pendenciaId);
+    
+    await fetchCoreData();
     setAdminNotification("Carga aceita com sucesso.");
   };
 
@@ -217,17 +256,18 @@ const App: React.FC = () => {
     };
     await commissionService.insertCommission(commissionPayload);
 
-    // 3. Atualizar Carga Localmente
-    setCargas(prevCargas => {
-      const updatedCargas = [...prevCargas];
-      saleData.itens.forEach((item: any) => {
-        const idx = updatedCargas.findIndex(c => c.vendedorId === saleData.vendedorId && c.produtoId === item.produtoId);
-        if (idx !== -1) updatedCargas[idx].quantidade = Math.max(0, updatedCargas[idx].quantidade - item.quantidade);
-      });
-      return updatedCargas.filter(c => c.quantidade > 0);
+    // 3. Atualizar Carga no Supabase
+    const minhaCargaAtual = cargas.filter(c => c.vendedorId === saleData.vendedorId);
+    const novaCargaItems = minhaCargaAtual.map(c => {
+      const itemVendido = saleData.itens.find((i: any) => i.produtoId === c.produtoId);
+      return {
+        produtoId: c.produtoId,
+        quantidade: Math.max(0, c.quantidade - (itemVendido?.quantidade || 0))
+      };
     });
+    await cargaService.updateActiveCarga(saleData.vendedorId, novaCargaItems);
 
-    // 4. Sincronizar estados com o banco
+    // 4. Sincronizar estados
     await fetchTransactionalData();
     return savedSale;
   };
@@ -240,16 +280,15 @@ const App: React.FC = () => {
     const success = await saleService.deleteSale(saleId);
     if (!success) return;
 
-    // 2. Estornar Carga Localmente
-    setCargas(prevCargas => {
-      const updatedCargas = [...prevCargas];
-      saleToDelete.itens.forEach(item => {
-        const idx = updatedCargas.findIndex(c => c.vendedorId === saleToDelete.vendedorId && c.produtoId === item.produtoId);
-        if (idx !== -1) updatedCargas[idx].quantidade += item.quantidade;
-        else updatedCargas.push({ vendedorId: saleToDelete.vendedorId, produtoId: item.produtoId, quantidade: item.quantidade });
-      });
-      return updatedCargas;
+    // 2. Estornar Carga no Supabase
+    const minhaCargaAtual = cargas.filter(c => c.vendedorId === saleToDelete.vendedorId);
+    const novaCargaItems = [...minhaCargaAtual];
+    saleToDelete.itens.forEach(item => {
+      const idx = novaCargaItems.findIndex(c => c.produtoId === item.produtoId);
+      if (idx !== -1) novaCargaItems[idx].quantidade += item.quantidade;
+      else novaCargaItems.push({ vendedorId: saleToDelete.vendedorId, produtoId: item.produtoId, quantidade: item.quantidade });
     });
+    await cargaService.updateActiveCarga(saleToDelete.vendedorId, novaCargaItems);
 
     // 3. Sincronizar estados
     await fetchTransactionalData();
@@ -288,7 +327,7 @@ const App: React.FC = () => {
       vendedorId,
       vendedorNome: v.nome,
       valorPago: amount,
-      valorRestante: 0, // O serviço calcula o restante ou deixamos para leitura
+      valorRestante: 0,
       tipo: type,
       dataPagamento: new Date(),
       adminId
@@ -329,8 +368,12 @@ const App: React.FC = () => {
     await fetchTransactionalData();
   };
 
-  const updateDailyRoute = (clientIds: string[], skippedClientIds: string[]) => {
-    setDailyRouteState(prev => ({ ...prev, clientIds, skippedClientIds }));
+  const handleUpdateDailyRoute = async (clientIds: string[], skippedClientIds: string[]) => {
+    if (currentUser && currentUser.role === 'VENDEDOR') {
+      const newState = { date: dailyRouteState.date, clientIds, skippedClientIds };
+      setDailyRouteState(newState);
+      await dailyRouteService.updateRoute(currentUser.id, newState);
+    }
   };
 
   if (!currentUser) return <Login users={users} onLogin={setCurrentUser} logo={logo} />;
@@ -361,7 +404,7 @@ const App: React.FC = () => {
           <AdminDashboard 
             products={products} users={users} cargas={cargas} clients={clients} sales={sales} commissions={commissions} payoutLogs={payoutLogs}
             addProduct={addProduct} updateProduct={updateProduct} deleteProduct={deleteProduct} registerStockEntry={registerStockEntry}
-            adjustStockManual={()=>{}} syncVendedorCarga={()=>{}} applyCargaDirectly={()=>{}} addClient={addClient} updateClient={updateClient}
+            adjustStockManual={()=>{}} syncVendedorCarga={syncVendedorCarga} applyCargaDirectly={applyCargaDirectly} addClient={addClient} updateClient={updateClient}
             deleteClient={deleteClient} addUser={addUser} updateUser={updateUser} payCommission={handlePayCommission}
             setCommissions={()=>{}} updateEstoqueCentral={()=>{}} reinforceCarga={()=>{}} deleteSale={(id) => deleteSaleInternal(id, true)}
             receiveAccount={receiveAccount} logo={logo} setLogo={(val) => updateSetting('logo', val)} adminUser={currentUser} margemGlobalAtiva={margemGlobalAtiva}
@@ -384,7 +427,7 @@ const App: React.FC = () => {
             margemMinima={margemMinima} margemMinimaAtiva={margemMinimaAtiva} pix1Name={pix1Name} pix1Code={pix1Code}
             pix2Name={pix2Name} pix2Code={pix2Code}
             dailyRouteState={dailyRouteState}
-            updateDailyRoute={updateDailyRoute}
+            updateDailyRoute={handleUpdateDailyRoute}
           />
         )}
       </main>

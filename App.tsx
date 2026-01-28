@@ -358,11 +358,16 @@ const App: React.FC = () => {
     const saleToDelete = sales.find(s => s.id === saleId);
     if (!saleToDelete) return;
 
-    // 1. Remover do Supabase (A regra Cascade tratará itens e comissões)
+    // 1. Remover Comissões associadas (Garantia de integridade, caso o CASCADE não esteja ativo)
+    // O saleService.deleteSale deve remover os sale_items via CASCADE.
+    // A comissão também deve ser removida.
+    await commissionService.deleteCommissionBySale(saleId);
+
+    // 2. Remover a Venda do Supabase (A regra Cascade deve tratar os sale_items)
     const success = await saleService.deleteSale(saleId);
     if (!success) return;
 
-    // 2. Estornar Carga no Supabase
+    // 3. Estornar Carga no Supabase
     const minhaCargaAtual = cargas.filter(c => c.vendedorId === saleToDelete.vendedorId);
     const novaCargaItems = [...minhaCargaAtual];
     saleToDelete.itens.forEach(item => {
@@ -372,7 +377,7 @@ const App: React.FC = () => {
     });
     await cargaService.updateActiveCarga(saleToDelete.vendedorId, novaCargaItems);
 
-    // 3. Sincronizar estados
+    // 4. Sincronizar estados
     await fetchTransactionalData();
   };
 

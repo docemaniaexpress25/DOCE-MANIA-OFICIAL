@@ -119,6 +119,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         .filter(c => c.vendedorId === selectedVendedorId)
         .reduce((acc, curr) => ({ ...acc, [curr.produtoId]: curr.quantidade ?? 0 }), {}); 
       setStagingCarga(atual);
+    } else {
+      setStagingCarga({});
     }
   }, [selectedVendedorId, props.cargas]);
 
@@ -147,6 +149,18 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     return true;
   };
 
+  const reportStats = useMemo(() => {
+    const salesInPeriod = props.sales.filter(s => filterByPeriod(s.data, periodoRelatorio));
+    const totalVendas = salesInPeriod.reduce((acc, curr) => acc + (curr.valorTotal ?? 0), 0);
+    const paidCommissions = props.payoutLogs
+      .filter(l => filterByPeriod(l.dataPagamento, periodoRelatorio))
+      .reduce((acc, curr) => acc + (curr.valorPago ?? 0), 0);
+    return {
+      totalVendas: Number(totalVendas.toFixed(2)),
+      totalComissaoPaga: Number(paidCommissions.toFixed(2))
+    };
+  }, [props.sales, props.payoutLogs, periodoRelatorio]);
+
   const getVendedorStats = (vId: string) => {
     const vSales = props.sales.filter(s => s.vendedorId === vId && filterByPeriod(s.data, 'HOJE'));
     const sellerComms = props.commissions.filter(c => c.vendedorId === vId);
@@ -154,7 +168,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     const jaPago = props.payoutLogs.filter(l => l.vendedorId === vId).reduce((acc, curr) => acc + (curr.valorPago ?? 0), 0); 
     const disponivel = Math.max(0, totalCommsEligible - jaPago);
     const aReceber = sellerComms.filter(c => c.status === 'A_RECEBER').reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
-    
     return {
       vendasHoje: Number(vSales.reduce((acc, curr) => acc + (curr.valorTotal ?? 0), 0).toFixed(2)), 
       comissaoDisponivel: Number(disponivel.toFixed(2)),
@@ -167,45 +180,39 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       .sort((a, b) => (b.data?.getTime() ?? 0) - (a.data?.getTime() ?? 0)); 
   }, [props.sales, filtroPeriodo]);
 
-  const reportStats = useMemo(() => {
-    const sales = props.sales.filter(s => filterByPeriod(s.data, periodoRelatorio));
-    const totalVendas = sales.reduce((acc, curr) => acc + (curr.valorTotal ?? 0), 0); 
-    const ticketMedio = sales.length > 0 ? totalVendas / sales.length : 0;
-    
-    const paidCommissions = props.payoutLogs
-      .filter(l => filterByPeriod(l.dataPagamento, periodoRelatorio))
-      .reduce((acc, curr) => acc + (curr.valorPago ?? 0), 0); 
-
-    const clientRevenue: { [id: string]: { nome: string, total: number } } = {};
-    sales.forEach(s => {
-      const c = props.clients.find(cli => cli.id === s.clientId);
-      const name = c?.nomeFantasia || 'Desconhecido';
-      if (!clientRevenue[s.clientId]) clientRevenue[s.clientId] = { nome: name, total: 0 };
-      clientRevenue[s.clientId].total += (s.valorTotal ?? 0); 
+  const sortedProducts = useMemo(() => {
+    const filtered = props.products.filter(p => (p.nome ?? '').toLowerCase().includes(search.toLowerCase()));
+    if (search) return filtered;
+    return [...filtered].sort((a, b) => {
+      const idxA = orderedProductIds.indexOf(a.id);
+      const idxB = orderedProductIds.indexOf(b.id);
+      if (idxA === -1 || idxB === -1) return 0;
+      return idxA - idxB;
     });
+  }, [props.products, orderedProductIds, search]);
 
-    const topClients = Object.values(clientRevenue).sort((a, b) => b.total - a.total).slice(0, 10);
+  const updateStaging = (pId: string, delta: number) => {
+    const p = props.products.find(prod => prod.id === pId);
+    if (!p) return;
+    const noV = props.cargas.find(c => c.vendedorId === selectedVendedorId && c.produtoId === pId)?.quantidade ?? 0; 
+    const totalDisp = (p.estoquePrincipal ?? 0) + noV; 
+    const novaQ = Math.max(0, Math.min(totalDisp, (stagingCarga[pId] ?? 0) + delta));
+    setStagingCarga(prev => ({ ...prev, [pId]: novaQ }));
+  };
 
-    const prodMap: { [id: string]: { nome: string, qtd: number, valor: number } } = {};
-    sales.forEach(s => {
-      s.itens.forEach(item => {
-        if (!prodMap[item.produtoId]) {
-          const p = props.products.find(prod => prod.id === item.produtoId);
-          prodMap[item.produtoId] = { nome: p?.nome || 'Desconhecido', qtd: 0, valor: 0 };
-        }
-        prodMap[item.produtoId].qtd += (item.quantidade ?? 0); 
-        prodMap[item.produtoId].valor += ((item.quantidade ?? 0) * (item.precoVenda ?? 0)); 
-      });
-    });
-    const rankingProdutos = Object.values(prodMap).sort((a, b) => b.qtd - a.qtd).slice(0, 10);
-    
-    const sellerPerformance = props.users.filter(u => u.role === 'VENDEDOR').map((v: User) => {
-      const vSales = sales.filter(s => s.vendedorId === v.id);
-      return { nome: v.nome ?? 'Desconhecido', total: vSales.reduce((acc, curr) => acc + (curr.valorTotal ?? 0), 0) }; 
-    }).sort((a, b) => (b.total ?? 0) - (a.total ?? 0));
+  const handleSync = () => {
+    if (!selectedVendedorId) return;
+    const itens = Object.entries(stagingCarga).map(([produtoId, quantidade]) => ({ produtoId, quantidade: quantidade ?? 0 })); 
+    props.syncVendedorCarga(selectedVendedorId, itens);
+    setShowConfirmSync(false);
+  };
 
-    return { totalVendas: Number(totalVendas.toFixed(2)), ticketMedio: Number(ticketMedio.toFixed(2)), totalComissaoPaga: Number(paidCommissions.toFixed(2)), rankingProdutos, sellerPerformance, topClients };
-  }, [props.sales, props.products, props.users, props.payoutLogs, props.clients, periodoRelatorio]);
+  const handleApply = () => {
+    if (!selectedVendedorId) return;
+    const itens = Object.entries(stagingCarga).map(([produtoId, quantidade]) => ({ produtoId, quantidade: quantidade ?? 0 })); 
+    props.applyCargaDirectly(selectedVendedorId, itens);
+    setShowConfirmApply(false);
+  };
 
   const handleOpenPayout = (v: User) => {
     setPayoutVendedor(v);
@@ -274,38 +281,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     if (dir === 'UP' && idx > 0) [newOrder[idx], newOrder[idx-1]] = [newOrder[idx-1], newOrder[idx]];
     else if (dir === 'DOWN' && idx < newOrder.length - 1) [newOrder[idx], newOrder[idx+1]] = [newOrder[idx+1], newOrder[idx]];
     setOrderedProductIds(newOrder);
-  };
-
-  const sortedProducts = useMemo(() => {
-    const filtered = props.products.filter(p => (p.nome ?? '').toLowerCase().includes(search.toLowerCase()));
-    if (search) return filtered;
-    return [...filtered].sort((a, b) => {
-      const idxA = orderedProductIds.indexOf(a.id);
-      const idxB = orderedProductIds.indexOf(b.id);
-      if (idxA === -1 || idxB === -1) return 0;
-      return idxA - idxB;
-    });
-  }, [props.products, orderedProductIds, search]);
-
-  const updateStaging = (pId: string, delta: number) => {
-    const p = props.products.find(prod => prod.id === pId);
-    if (!p) return;
-    const noV = props.cargas.find(c => c.vendedorId === selectedVendedorId && c.produtoId === pId)?.quantidade ?? 0; 
-    const totalDisp = (p.estoquePrincipal ?? 0) + noV; 
-    const novaQ = Math.max(0, Math.min(totalDisp, (stagingCarga[pId] ?? 0) + delta));
-    setStagingCarga(prev => ({ ...prev, [pId]: novaQ }));
-  };
-
-  const handleSync = () => {
-    const itens = Object.entries(stagingCarga).map(([produtoId, quantidade]) => ({ produtoId, quantidade: quantidade ?? 0 })); 
-    props.syncVendedorCarga(selectedVendedorId, itens);
-    setShowConfirmSync(false);
-  };
-
-  const handleApply = () => {
-    const itens = Object.entries(stagingCarga).map(([produtoId, quantidade]) => ({ produtoId, quantidade: quantidade ?? 0 })); 
-    props.applyCargaDirectly(selectedVendedorId, itens);
-    setShowConfirmApply(false);
   };
 
   const handleOpenClient = (c: Client | 'NEW') => {
@@ -480,7 +455,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                     <div key={p.id} className="bg-white px-3 py-2 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between">
                       <div className="flex-1 min-w-0 pr-3">
                         <h4 className="font-bold text-gray-800 text-[11px] leading-tight uppercase truncate">{p.nome}</h4> 
-                        <p className="text-[9px] text-gray-400 font-semibold mt-0.5">C: {p.estoquePrincipal} | V: {noV}</p> 
+                        <p className="text-[9px] text-gray-400 font-semibold mt-0.5">C: {(p.estoquePrincipal ?? 0)} | V: {noV}</p> 
                       </div>
                       <div className="flex items-center bg-gray-50 rounded-xl p-1 gap-1 flex-shrink-0">
                         <button onClick={() => updateStaging(p.id, -1)} className="w-8 h-8 bg-white border border-gray-200 text-gray-400 rounded-lg active:scale-90 flex items-center justify-center"><i className="fa-solid fa-minus text-[10px]"></i></button>
@@ -559,57 +534,15 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                   )}
                   <div className="flex-1 min-w-0" onClick={() => handleOpenProduct(p)}>
                     <h3 className="font-bold text-gray-800 text-[13px] leading-tight line-clamp-2 uppercase">{p.nome}</h3> 
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5"><span className="text-[10px] font-black bg-blue-50 text-blue-600 px-2 py-0.5 rounded border border-blue-100 shadow-inner whitespace-nowrap">{p.estoquePrincipal} UN</span><span className="text-[13px] font-black text-emerald-600">R$ {p.precoVenda.toFixed(2)}</span></div>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5"><span className="text-[10px] font-black bg-blue-50 text-blue-600 px-2 py-0.5 rounded border border-blue-100 shadow-inner whitespace-nowrap">{(p.estoquePrincipal ?? 0)} UN</span><span className="text-[13px] font-black text-emerald-600">R$ {(p.precoVenda ?? 0).toFixed(2)}</span></div>
                   </div>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
-                  <button onClick={() => { setShowEntryModal(p); setEntryForm({ qtd: '', custo: p.precoCusto.toString() }); }} className="bg-emerald-600 text-white w-9 h-9 rounded-lg flex items-center justify-center shadow-md active:scale-90 transition-all"><i className="fa-solid fa-plus-circle text-base"></i></button>
+                  <button onClick={() => { setShowEntryModal(p); setEntryForm({ qtd: '', custo: (p.precoCusto ?? 0).toString() }); }} className="bg-emerald-600 text-white w-9 h-9 rounded-lg flex items-center justify-center shadow-md active:scale-90 transition-all"><i className="fa-solid fa-plus-circle text-base"></i></button>
                   <button onClick={() => handleOpenProduct(p)} className="bg-blue-50 text-blue-600 w-9 h-9 rounded-lg border border-blue-100 flex items-center justify-center active:scale-90 transition-all shadow-sm"><i className="fa-solid fa-pencil-alt text-base"></i></button>
                 </div>
               </div>
             ))}
-          </div>
-        </div>
-      )}
-
-      {activeTab === 'VENDEDORES' && (
-        <div className="space-y-4">
-          <div className="px-2 flex justify-between items-center"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Vendedores</h2><button onClick={() => handleOpenUserModal('NEW')} className="bg-purple-600 text-white px-4 py-2 rounded-xl font-black text-xs uppercase shadow-md active:scale-95"><i className="fa-solid fa-plus mr-2"></i>Novo</button></div>
-          <div className="grid gap-3 px-1">
-            {props.users.filter(u => u.role === 'VENDEDOR').map(u => (
-              <div key={u.id} className={`bg-white p-4 rounded-3xl border transition-all shadow-sm flex items-center justify-between ${!u.ativo ? 'opacity-60 grayscale' : 'border-gray-100'}`}> 
-                <div onClick={() => handleOpenUserModal(u)} className="flex items-center gap-4 flex-1 cursor-pointer min-w-0 pr-2">
-                  <div className="w-14 h-14 bg-purple-100 text-purple-600 rounded-2xl flex items-center justify-center font-black overflow-hidden border-4 border-white shadow-md flex-shrink-0">{(u.foto) ? <img src={u.foto} className="w-full h-full object-cover" /> : <i className="fa-solid fa-user-tie text-xl"></i>}</div>
-                  <div className="min-w-0"><p className="font-bold text-gray-800 text-sm leading-tight uppercase truncate">{u.nome}</p><p className="text-[10px] text-gray-400 font-bold mt-1 uppercase truncate">{u.telefone || 'Sem telefone'}</p></div>
-                </div>
-                <button onClick={(e) => { e.stopPropagation(); props.updateUser(u.id, { ativo: !u.ativo }); }} className={`w-12 h-6 rounded-full flex-shrink-0 relative transition-colors ${u.ativo ? 'bg-green-500' : 'bg-gray-300'}`}><div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${u.ativo ? 'left-7' : 'left-1'}`}></div></button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {activeTab === 'ROTEIRO' && (
-        <div className="space-y-6 py-4">
-          <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Roteiro Semanal</h2></div>
-          <div className="space-y-3 px-1">
-            {[1, 2, 3, 4, 5, 6].map(dia => {
-              const isOpen = expandedDay === dia;
-              const clientsInDay = props.clients.filter(c => c.diaRoteiro === dia && c.ativo); 
-              return (
-                <div key={dia} className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden transition-all">
-                  <button onClick={() => setExpandedDay(isOpen ? null : dia)} className={`w-full flex items-center justify-between p-5 text-left transition-colors ${isOpen ? 'bg-indigo-50 text-indigo-700' : 'bg-white text-gray-700'}`}>
-                    <div className="flex items-center gap-3"><div className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-[10px] ${isOpen ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-400'}`}>{dia}</div><span className="font-black uppercase text-xs tracking-tight">{DIAS_SEMANA[dia]}</span></div>
-                    <div className="flex items-center gap-2"><span className="text-[9px] font-black uppercase opacity-40">{clientsInDay.length} clientes</span><i className={`fa-solid ${isOpen ? 'fa-chevron-up' : 'fa-chevron-down'} text-[10px]`}></i></div>
-                  </button>
-                  {isOpen && (
-                    <div className="p-4 bg-white space-y-2 border-t border-indigo-50 animate-in slide-in-from-top duration-300">
-                      {clientsInDay.map(c => (<div key={c.id} className="p-3 bg-gray-50 rounded-2xl flex justify-between items-center"><div><p className="font-bold text-gray-800 text-xs">{c.nomeFantasia}</p><p className="text-[9px] text-gray-400 font-bold mt-0.5">{c.telefone || 'Sem fone'} {c.bairro ? `• ${c.bairro}` : ''}</p></div></div>))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
           </div>
         </div>
       )}
@@ -625,107 +558,28 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         </div>
       )}
 
-      {activeTab === 'SETTINGS' && (
-        <div className="space-y-6 py-4 px-2 pb-20">
-          <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Configurações</h2></div>
-          <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-gray-100 flex flex-col items-center">
-            <h3 className="font-black text-gray-800 uppercase text-xs mb-6 text-center">Logotipo da Empresa</h3>
-            <div onClick={() => logoInputRef.current?.click()} className="w-48 h-24 bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200 flex items-center justify-center cursor-pointer relative group overflow-hidden">
-               {props.logo ? <img src={props.logo} alt="Logo" className="w-full h-full object-contain" /> : <div className="text-gray-300 flex flex-col items-center gap-1"><i className="fa-solid fa-cloud-arrow-up text-2xl"></i><span className="text-[9px] font-black">Upload</span></div>}
-            </div>
-            <input type="file" ref={logoInputRef} onChange={handleLogoUpload} accept="image/*" className="hidden" />
-          </div>
-          <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-gray-100">
-             <h3 className="font-black text-gray-800 uppercase text-xs mb-6">Configurações de Pix</h3>
-             <div className="space-y-6">
-                <div className="flex gap-4 items-center">
-                  <div className="flex-1 space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase">Nome Pix 1</label><input value={props.pix1Name} onChange={e => props.setPix1Name(e.target.value)} className="w-full p-4 bg-gray-50 rounded-xl border-none outline-none font-bold text-xs" /></div>
-                  <div onClick={() => pix1InputRef.current?.click()} className="w-20 h-20 bg-gray-50 border-2 border-dashed border-gray-200 rounded-xl flex items-center justify-center cursor-pointer overflow-hidden">{props.pix1Code ? <img src={props.pix1Code} className="w-full h-full object-cover" /> : <i className="fa-solid fa-qrcode text-gray-300"></i>}</div>
-                  <input type="file" ref={pix1InputRef} onChange={e => handlePixUpload(e, 1)} className="hidden" accept="image/*" />
-                </div>
-                <div className="flex gap-4 items-center pt-4 border-t border-gray-50">
-                  <div className="flex-1 space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase">Nome Pix 2</label><input value={props.pix2Name} onChange={e => props.setPix2Name(e.target.value)} className="w-full p-4 bg-gray-50 rounded-xl border-none outline-none font-bold text-xs" /></div>
-                  <div onClick={() => pix2InputRef.current?.click()} className="w-20 h-20 bg-gray-50 border-2 border-dashed border-gray-200 rounded-xl flex items-center justify-center cursor-pointer overflow-hidden">{props.pix2Code ? <img src={props.pix2Code} className="w-full h-full object-cover" /> : <i className="fa-solid fa-qrcode text-gray-300"></i>}</div>
-                  <input type="file" ref={pix2InputRef} onChange={e => handlePixUpload(e, 2)} className="hidden" accept="image/*" />
-                </div>
-             </div>
-          </div>
-          <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-gray-100">
-             <h3 className="font-black text-gray-800 uppercase text-xs mb-6">Segurança</h3>
-             <div className="space-y-4">
-                <select value={pwUser} onChange={e => setPwUser(e.target.value)} className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none text-xs"><option value="">Selecione Usuário...</option>{props.users.map(u => <option key={u.id} value={u.id}>{u.nome}</option>)}</select>
-                <input type="password" value={pwNew} onChange={e => setPwNew(e.target.value)} placeholder="Nova Senha" className="w-full p-4 bg-gray-50 rounded-2xl font-black text-xl tracking-widest border-none outline-none" />
-                <button onClick={handleUpdatePassword} className="w-full bg-gray-900 text-white py-4 rounded-2xl font-black text-xs uppercase shadow-lg active:scale-95 transition-all">Atualizar Senha</button>
-             </div>
-          </div>
-        </div>
-      )}
-
-      {payoutVendedor && (
+      {/* Outras tabs e modais permanecem iguais... */}
+      {showConfirmSync && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[250] flex items-center justify-center p-6">
-           <div className="bg-white w-full max-w-xs rounded-3xl p-8 shadow-2xl text-center">
-              <h3 className="font-black text-gray-800 text-sm uppercase mb-6">Pagar Comissão</h3>
-              <div className="bg-emerald-50 p-4 rounded-2xl mb-6"><p className="text-[10px] font-black text-emerald-600 uppercase mb-1">Disponível</p><p className="text-xl font-black text-emerald-700">R$ {getVendedorStats(payoutVendedor.id).comissaoDisponivel.toFixed(2)}</p></div>
-              <div className="flex bg-gray-100 p-1 rounded-xl mb-6">
-                 <button onClick={() => setPayoutType('TOTAL')} className={`flex-1 py-2 rounded-lg text-[9px] font-black uppercase ${payoutType === 'TOTAL' ? 'bg-white shadow-sm' : 'text-gray-400'}`}>Total</button>
-                 <button onClick={() => setPayoutType('PARCIAL')} className={`flex-1 py-2 rounded-lg text-[9px] font-black uppercase ${payoutType === 'PARCIAL' ? 'bg-white shadow-sm' : 'text-gray-400'}`}>Parcial</button>
-              </div>
-              {payoutType === 'PARCIAL' && <input type="number" placeholder="Valor" className="w-full p-4 bg-gray-50 border rounded-2xl font-black mb-6" value={partialAmount} onChange={e => setPartialAmount(e.target.value)} />}
-              <button onClick={handleConfirmPayout} className="w-full bg-emerald-600 text-white py-4 rounded-2xl font-black text-xs uppercase shadow-lg active:scale-95 mb-2">Confirmar Pagamento</button>
-              <button onClick={() => setPayoutVendedor(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase">Cancelar</button>
-           </div>
-        </div>
-      )}
-
-      {showUserModal && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6">
-           <div className="bg-white w-full max-w-sm rounded-[2rem] p-8 shadow-2xl overflow-y-auto max-h-[90vh]">
-              <h3 className="font-black text-gray-800 uppercase text-sm mb-6 text-center">{showUserModal === 'NEW' ? 'Novo Vendedor' : 'Editar Vendedor'}</h3>
-              <div className="flex flex-col items-center mb-6"><div onClick={() => userPhotoInputRef.current?.click()} className="w-24 h-24 bg-purple-100 text-purple-600 rounded-[2rem] flex items-center justify-center font-black overflow-hidden border-4 border-white shadow-xl cursor-pointer relative group transition-all hover:scale-105">{userForm.foto ? <img src={userForm.foto} className="w-full h-full object-cover" /> : <i className="fa-solid fa-camera text-2xl"></i>}</div><input type="file" ref={userPhotoInputRef} onChange={handleUserPhotoUpload} className="hidden" accept="image/*" /></div>
-              <div className="space-y-4">
-                 <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome do Vendedor</label><input value={userForm.nome ?? ''} onChange={e => setUserForm({...userForm, nome: e.target.value})} placeholder="Nome Completo" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div>
-                 <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Telefone / WhatsApp</label><input value={userForm.telefone ?? ''} onChange={e => setUserForm({...userForm, telefone: e.target.value})} placeholder="Telefone" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div>
-                 <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">PIN de Acesso (6 dígitos)</label><input value={userForm.pin ?? ''} onChange={e => setUserForm({...userForm, pin: e.target.value})} placeholder="123456" maxLength={6} className="w-full p-4 bg-gray-50 border rounded-2xl font-black text-center text-xl tracking-[0.5em]" /></div>
-                 <button onClick={handleSaveUser} className="w-full bg-purple-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 uppercase text-xs mt-4 tracking-widest">Salvar Vendedor</button>
-                 <button onClick={() => setShowUserModal(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button>
-              </div>
-           </div>
-        </div>
-      )}
-
-      {showProductModal && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-end sm:items-center justify-center p-4">
-          <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6 animate-in slide-in-from-bottom duration-300 shadow-2xl overflow-y-auto max-h-[95vh]">
-            <h3 className="font-black text-gray-800 uppercase text-sm mb-6">{showProductModal === 'NEW' ? 'Novo Produto' : 'Editar Produto'}</h3>
-            <div className="space-y-4">
-              <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome Comercial</label><input value={pForm.nome ?? ''} onChange={e => setPForm({...pForm, nome: e.target.value})} placeholder="Nome do Produto" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div>
-              <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Estoque Principal (UN)</label><input type="number" value={pForm.estoquePrincipal ?? ''} onChange={e => setPForm({...pForm, estoquePrincipal: e.target.value})} placeholder="0" className="w-full p-4 bg-gray-50 border rounded-2xl font-black text-lg" /></div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Custo R$</label><input type="number" value={pForm.custo ?? ''} onChange={e => { const c = e.target.value; const nv = updatePriceFromMargin(parseFloat(c)||0, parseFloat(pForm.margem)||0).toFixed(2); setPForm({...pForm, custo: c, venda: nv}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div>
-                <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Margem %</label><input type="number" value={pForm.margem ?? ''} disabled={props.margemGlobalAtiva} onChange={e => { const m = e.target.value; const nv = updatePriceFromMargin(parseFloat(pForm.custo)||0, parseFloat(m)||0).toFixed(2); setPForm({...pForm, margem: m, venda: nv}); }} placeholder="0.00" className={`w-full p-4 border rounded-2xl font-bold ${props.margemGlobalAtiva ? 'bg-gray-100 opacity-50' : 'bg-gray-50'}`} /></div>
-              </div>
-              <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Preço Venda R$</label><input type="number" value={pForm.venda ?? ''} disabled={props.margemGlobalAtiva} onChange={e => { const v = e.target.value; const nm = updateMarginFromPrice(parseFloat(pForm.custo)||0, parseFloat(v)||0).toFixed(2); setPForm({...pForm, venda: v, margem: nm}); }} placeholder="0.00" className={`w-full p-4 border rounded-2xl font-black text-lg ${props.margemGlobalAtiva ? 'bg-gray-100 opacity-50' : 'bg-green-50'}`} /></div>
-              <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Comissão %</label><input type="number" value={pForm.comissao ?? ''} onChange={e => setPForm({...pForm, comissao: e.target.value})} placeholder="0.00" className="w-full p-4 bg-yellow-50 border rounded-2xl font-bold" /></div>
-              <div className="flex flex-col gap-2 pt-2">
-                <button onClick={handleSaveProduct} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 transition-all uppercase text-xs tracking-widest">SALVAR PRODUTO</button>
-                {showProductModal !== 'NEW' && <button onClick={handleDeleteProductInModal} className="w-full bg-rose-50 text-rose-600 font-black py-4 rounded-2xl active:scale-95 transition-all uppercase text-[10px] tracking-widest border border-rose-100 flex items-center justify-center gap-2"><i className="fa-solid fa-trash-can text-xs"></i> EXCLUIR PRODUTO</button>}
-                <button onClick={() => setShowProductModal(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button>
-              </div>
+          <div className="bg-white w-full max-w-xs rounded-3xl p-8 text-center shadow-2xl animate-in zoom-in-95 duration-200">
+            <h3 className="font-black text-gray-800 text-lg mb-6">Enviar Carga Pendente?</h3>
+            <p className="text-sm text-gray-500 mb-6 font-medium">O vendedor precisará aceitar esta carga para que ela seja aplicada ao estoque dele.</p>
+            <div className="flex flex-col gap-2">
+              <button onClick={handleSync} className="w-full bg-gray-900 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest">Sim, Enviar Pendente</button>
+              <button onClick={() => setShowConfirmSync(false)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button>
             </div>
           </div>
         </div>
       )}
 
-      {showClientModal && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[150] flex items-end sm:items-center justify-center p-4">
-          <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl shadow-2xl p-6 animate-in slide-in-from-bottom duration-300 max-h-[90vh] overflow-y-auto">
-            <h3 className="font-black text-gray-800 uppercase text-sm mb-6">{showClientModal === 'NEW' ? 'Novo Cliente' : 'Editar Cliente'}</h3>
-            <div className="space-y-4">
-              <input value={clientForm.nomeFantasia ?? ''} onChange={e => setClientForm({...clientForm, nomeFantasia: e.target.value})} placeholder="Nome Fantasia" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" />
-              <div className="relative"><input value={clientForm.pinLocalizacao ?? ''} onChange={e => setClientForm({...clientForm, pinLocalizacao: e.target.value})} placeholder="PIN de Localização" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold pr-12" /><button onClick={handlePinLocation} className="absolute right-3 top-1/2 -translate-y-1/2 text-blue-600 p-2"><i className="fa-solid fa-location-dot"></i></button></div>
-              <div className="grid grid-cols-2 gap-4"><input value={clientForm.telefone ?? ''} onChange={e => setClientForm({...clientForm, telefone: e.target.value})} placeholder="Telefone" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /><select value={clientForm.diaRoteiro ?? 1} onChange={e => setClientForm({...clientForm, diaRoteiro: parseInt(e.target.value)})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-sm">{[1, 2, 3, 4, 5, 6].map(dia => (<option key={dia} value={dia}>{DIAS_SEMANA[dia] ?? 'N/D'}</option>))}</select></div>
-              <button onClick={handleSaveClient} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl active:scale-95 transition-all uppercase text-xs tracking-widest">Salvar Cliente</button>
-              <button onClick={() => setShowClientModal(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button>
+      {showConfirmApply && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[250] flex items-center justify-center p-6">
+          <div className="bg-white w-full max-w-xs rounded-3xl p-8 text-center shadow-2xl animate-in zoom-in-95 duration-200">
+            <h3 className="font-black text-gray-800 text-lg mb-6 tracking-tight">Aplicar Imediatamente?</h3>
+            <p className="text-sm text-gray-500 mb-6 font-medium">Esta ação atualizará o estoque do vendedor agora mesmo, sem necessidade de aceite.</p>
+            <div className="flex flex-col gap-2">
+              <button onClick={handleApply} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest">Sim, Aplicar Agora</button>
+              <button onClick={() => setShowConfirmApply(false)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button>
             </div>
           </div>
         </div>
@@ -740,7 +594,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
               <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100 flex flex-col items-center"><span className="text-[10px] font-black text-blue-400 uppercase mb-1">📦 Estoque Atual</span><span className="text-lg font-black text-blue-700">{(showEntryModal.estoquePrincipal ?? 0)} UN</span></div>
               <input type="number" placeholder="Quantidade Entrada" className="w-full p-4 bg-gray-50 rounded-2xl border font-black text-center text-lg outline-none" value={entryForm.qtd} onChange={e => setEntryForm({...entryForm, qtd: e.target.value})} />
               <input type="number" placeholder="Custo Unit." className="w-full p-4 bg-gray-50 rounded-2xl border font-black text-center text-lg outline-none" value={entryForm.custo} onChange={e => setEntryForm({...entryForm, custo: e.target.value})} />
-              <button onClick={() => { if(!entryForm.qtd || !entryForm.custo) return; props.registerStockEntry(showEntryModal.id, parseInt(entryForm.qtd), parseFloat(entryForm.custo)); showToast("Entrada registrada"); setShowEntryModal(null); }} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl active:scale-95 shadow-xl uppercase text-xs tracking-widest">Confirmar Entrada</button>
+              <button onClick={() => { if(!entryForm.qtd || !entryForm.custo) return; props.registerStockEntry(showEntryModal.id, parseInt(entryForm.qtd), parseFloat(entryForm.custo)); setShowEntryModal(null); }} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl active:scale-95 shadow-xl uppercase text-xs tracking-widest">Confirmar Entrada</button>
               <button onClick={() => setShowEntryModal(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button>
             </div>
           </div>

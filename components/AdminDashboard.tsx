@@ -130,6 +130,23 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     }
   };
 
+  // Função para upload de QR Code Pix (necessária para a aba SETTINGS)
+  const handlePixUpload = (e: React.ChangeEvent<HTMLInputElement>, slot: 1 | 2) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        if (slot === 1) {
+          props.setPix1Code(reader.result as string);
+        } else {
+          props.setPix2Code(reader.result as string);
+        }
+        showToast(`QR Code Pix ${slot} atualizado!`);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
   useEffect(() => {
     if (selectedVendedorId) {
       const atual = props.cargas
@@ -826,6 +843,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       {activeTab === 'SETTINGS' && (
         <div className="space-y-6 py-4 px-2 pb-20">
           <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Configurações</h2></div>
+          
+          {/* LOGOTIPO */}
           <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-gray-100 flex flex-col items-center">
             <h3 className="font-black text-gray-800 uppercase text-xs mb-6 text-center">Logotipo da Empresa</h3>
             <div onClick={() => logoInputRef.current?.click()} className="w-48 h-24 bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200 flex items-center justify-center cursor-pointer relative group overflow-hidden">
@@ -833,6 +852,69 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             </div>
             <input type="file" ref={logoInputRef} onChange={handleLogoUpload} accept="image/*" className="hidden" />
           </div>
+
+          {/* MARGENS */}
+          <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-gray-100">
+             <h3 className="font-black text-gray-800 uppercase text-xs mb-6">Regras de Margem</h3>
+             <div className="space-y-4">
+                <div className="flex items-center justify-between bg-gray-50 p-4 rounded-2xl border border-gray-100">
+                    <label className="text-sm font-bold text-gray-700 uppercase">Margem Global Ativa</label>
+                    <button onClick={() => props.setMargemGlobalAtiva(!props.margemGlobalAtiva)} className={`w-12 h-6 rounded-full relative transition-colors ${props.margemGlobalAtiva ? 'bg-green-500' : 'bg-gray-300'}`}><div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${props.margemGlobalAtiva ? 'left-7' : 'left-1'}`}></div></button>
+                </div>
+                <div className="space-y-1">
+                    <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Valor Margem Global (%)</label>
+                    <input type="number" value={props.margemGlobalValor} onChange={e => props.setMargemGlobalValor(parseFloat(e.target.value) || 0)} placeholder="35" className="w-full p-4 bg-gray-50 border rounded-2xl font-black text-lg" />
+                </div>
+                <div className="flex items-center justify-between bg-gray-50 p-4 rounded-2xl border border-gray-100">
+                    <label className="text-sm font-bold text-gray-700 uppercase">Margem Mínima Ativa</label>
+                    <button onClick={() => props.setMargemMinimaAtiva(!props.margemMinimaAtiva)} className={`w-12 h-6 rounded-full relative transition-colors ${props.margemMinimaAtiva ? 'bg-green-500' : 'bg-gray-300'}`}><div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${props.margemMinimaAtiva ? 'left-7' : 'left-1'}`}></div></button>
+                </div>
+                <div className="space-y-1">
+                    <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Valor Margem Mínima (%)</label>
+                    <input type="number" value={props.margemMinima} onChange={e => props.setMargemMinima(parseFloat(e.target.value) || 0)} placeholder="20" className="w-full p-4 bg-gray-50 border rounded-2xl font-black text-lg" />
+                </div>
+             </div>
+          </div>
+
+          {/* PIX */}
+          <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-gray-100">
+             <h3 className="font-black text-gray-800 uppercase text-xs mb-6">Configurações PIX</h3>
+             <div className="space-y-6">
+                {/* PIX 1 */}
+                <div className="space-y-3 p-4 bg-blue-50 rounded-2xl border border-blue-100">
+                    <div className="space-y-1">
+                        <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome PIX 1</label>
+                        <input value={props.pix1Name ?? ''} onChange={e => props.setPix1Name(e.target.value)} placeholder="Nome do Banco/Chave" className="w-full p-3 bg-white border rounded-xl font-bold text-sm" />
+                    </div>
+                    <div className="space-y-1">
+                        <label className="text-[9px] font-black text-gray-400 uppercase ml-1">QR Code PIX 1 (Base64 ou URL)</label>
+                        <input value={props.pix1Code ?? ''} onChange={e => props.setPix1Code(e.target.value)} placeholder="URL ou Base64 do QR Code" className="w-full p-3 bg-white border rounded-xl font-bold text-xs" />
+                    </div>
+                    <button onClick={() => pix1InputRef.current?.click()} className="w-full bg-blue-600 text-white font-black py-3 rounded-xl uppercase text-[10px] tracking-widest flex items-center justify-center gap-2">
+                        <i className="fa-solid fa-qrcode"></i> Upload QR Code 1
+                    </button>
+                    <input type="file" ref={pix1InputRef} onChange={(e) => handlePixUpload(e, 1)} accept="image/*" className="hidden" />
+                </div>
+
+                {/* PIX 2 */}
+                <div className="space-y-3 p-4 bg-blue-50 rounded-2xl border border-blue-100">
+                    <div className="space-y-1">
+                        <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome PIX 2</label>
+                        <input value={props.pix2Name ?? ''} onChange={e => props.setPix2Name(e.target.value)} placeholder="Nome do Banco/Chave" className="w-full p-3 bg-white border rounded-xl font-bold text-sm" />
+                    </div>
+                    <div className="space-y-1">
+                        <label className="text-[9px] font-black text-gray-400 uppercase ml-1">QR Code PIX 2 (Base64 ou URL)</label>
+                        <input value={props.pix2Code ?? ''} onChange={e => props.setPix2Code(e.target.value)} placeholder="URL ou Base64 do QR Code" className="w-full p-3 bg-white border rounded-xl font-bold text-xs" />
+                    </div>
+                    <button onClick={() => pix2InputRef.current?.click()} className="w-full bg-blue-600 text-white font-black py-3 rounded-xl uppercase text-[10px] tracking-widest flex items-center justify-center gap-2">
+                        <i className="fa-solid fa-qrcode"></i> Upload QR Code 2
+                    </button>
+                    <input type="file" ref={pix2InputRef} onChange={(e) => handlePixUpload(e, 2)} accept="image/*" className="hidden" />
+                </div>
+             </div>
+          </div>
+
+          {/* SEGURANÇA */}
           <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-gray-100">
              <h3 className="font-black text-gray-800 uppercase text-xs mb-6">Segurança</h3>
              <div className="space-y-4">

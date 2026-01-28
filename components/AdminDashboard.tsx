@@ -734,7 +734,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             <button onClick={() => handleOpenClient('NEW')} className="bg-blue-600 text-white w-12 h-12 rounded-xl flex items-center justify-center shadow-lg active:scale-90 transition-transform"><i className="fa-solid fa-user-plus"></i></button>
           </div>
           <div className="grid gap-2 px-1">
-            {props.clients.filter(c => (c.nomeFantasia ?? '').toLowerCase().includes(search.toLowerCase())).map((c: Client) => ( 
+            {props.clients
+              .filter(c => (c.nomeFantasia ?? '').toLowerCase().includes(search.toLowerCase()))
+              .sort((a, b) => (a.nomeFantasia || '').toLowerCase().localeCompare((b.nomeFantasia || '').toLowerCase()))
+              .map((c: Client) => ( 
               <div key={c.id} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex items-center justify-between transition-all hover:border-blue-200">
                 <div className="flex-1 min-w-0 pr-2">
                   <div className="flex items-center gap-2">

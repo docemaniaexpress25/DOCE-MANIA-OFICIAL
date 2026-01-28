@@ -60,6 +60,12 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     setTimeout(() => setToast(null), 3000);
   };
 
+  // Função para marcar a mensagem como lida e acionar a lógica de comissão
+  const handleMarkMessageAsRead = (msgId: string) => {
+    markMessageAsRead(msgId);
+    showToast("Mensagem marcada como lida.");
+  };
+
   // --- Notificação de Novo Pagamento ---
   useEffect(() => {
     const unreadPayments = messages.filter(m => !m.lida && m.type === 'COMMISSION_CONFIRMATION');
@@ -395,6 +401,35 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
               <div className="bg-orange-50 p-5 rounded-3xl shadow-sm border border-orange-100"><p className="text-[9px] font-black text-orange-600 uppercase mb-1">A receber</p><p className="text-xl font-black text-orange-700">R$ {financeStats.pendente.toFixed(2)}</p></div>
            </div>
 
+           {/* SEÇÃO DE NOTIFICAÇÕES DE COMISSÃO */}
+           <div className="space-y-2 pt-4">
+             <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">Notificações de Comissão</h3>
+             <div className="bg-white rounded-3xl border border-gray-100 shadow-sm divide-y divide-gray-50 overflow-hidden">
+                {messages.filter(m => m.vendedorId === user.id).sort((a, b) => b.data.getTime() - a.data.getTime()).map(m => (
+                    <div key={m.id} className={`p-4 flex justify-between items-center transition-colors ${!m.lida ? 'bg-blue-50/50' : 'bg-white'}`}>
+                        <div className="flex-1 pr-3">
+                            <p className={`text-[11px] font-black uppercase leading-none mb-1 ${!m.lida ? 'text-blue-700' : 'text-gray-700'}`}>{m.titulo}</p>
+                            <p className="text-[10px] font-semibold text-gray-500 mt-1">{m.mensagem}</p>
+                            <p className="text-[8px] text-gray-400 mt-1">{m.data.toLocaleDateString()} {m.data.toLocaleTimeString()}</p>
+                        </div>
+                        {!m.lida && m.type === 'COMMISSION_CONFIRMATION' && (
+                            <button 
+                                onClick={() => handleMarkMessageAsRead(m.id)} 
+                                className="bg-emerald-600 text-white px-3 py-2 rounded-xl text-[9px] font-black uppercase active:scale-95 shadow-md"
+                            >
+                                Confirmar
+                            </button>
+                        )}
+                        {m.lida && <i className="fa-solid fa-check-circle text-emerald-500 text-lg"></i>}
+                    </div>
+                ))}
+                {messages.filter(m => m.vendedorId === user.id).length === 0 && (
+                    <div className="text-center py-8 opacity-30 italic text-[9px] uppercase font-bold tracking-widest">Nenhuma notificação.</div>
+                )}
+             </div>
+           </div>
+           
+           {/* SEÇÃO DE RECEBIMENTOS (LOG) */}
            <div className="space-y-2 pt-2">
              <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">Recebimentos</h3>
              <div className="bg-white rounded-3xl border border-gray-100 shadow-sm divide-y divide-gray-50 overflow-hidden">

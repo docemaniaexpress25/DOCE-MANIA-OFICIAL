@@ -12,7 +12,6 @@ import { commissionService } from './services/commissionService';
 import { messageService } from './services/messageService';
 import { dailyRouteService } from './services/dailyRouteService';
 import { appSettingsService, AppSettings } from './services/appSettingsService';
-import { generateId } from './utils/uuid';
 import { loadLocalState, saveLocalState } from './utils/persistence';
 
 const getTodayDateString = () => new Date().toISOString().split('T')[0];
@@ -48,11 +47,11 @@ const App: React.FC = () => {
 
   const [adminNotification, setAdminNotification] = useState<string | null>(null);
 
-  // Efeito para persistir apenas o usuário atual localmente
+  // Efeito para persistir apenas o usuário atual localmente para manter a sessão
   useEffect(() => { saveLocalState('currentUser', currentUser); }, [currentUser]);
 
   const fetchData = useCallback(async () => {
-    // 1. Carregar Configurações Globais
+    // 1. Carregar Configurações Globais do Supabase
     const settings = await appSettingsService.getSettings();
     setLogo(settings.logo);
     setMargemGlobalAtiva(settings.margemGlobalAtiva);
@@ -65,7 +64,7 @@ const App: React.FC = () => {
     setPix2Code(settings.pix2Code);
     setProductOrder(settings.productOrder);
 
-    // 2. Carregar Dados das Tabelas
+    // 2. Carregar Dados das Tabelas do Supabase
     const [u, p, c, s, cg, cp, comm, logs, msg] = await Promise.all([
       userService.getAllUsers(),
       productService.getAllProducts(),
@@ -88,13 +87,12 @@ const App: React.FC = () => {
     setPayoutLogs(logs);
     setMessages(msg);
 
-    // 3. Carregar Rota se houver usuário vendedor
+    // 3. Carregar Rota se houver usuário vendedor logado
     if (currentUser && currentUser.role === 'VENDEDOR') {
       const route = await dailyRouteService.getRoute(currentUser.id);
       if (route) {
         setDailyRouteState(route);
       } else {
-        // Inicializar com roteiro padrão do dia
         const today = getTodayDateString();
         const currentDayOfWeek = new Date().getDay();
         const clientsFromRoute = c.filter(cl => cl.ativo && cl.diaRoteiro === currentDayOfWeek).map(cl => cl.id);
@@ -109,7 +107,7 @@ const App: React.FC = () => {
     fetchData();
   }, [fetchData]);
 
-  // Sincronizar ordem dos produtos quando alterada
+  // Sincronizar ordem dos produtos quando alterada pelo Admin
   const handleSetProductOrder = async (order: string[]) => {
     setProductOrder(order);
     await appSettingsService.updateSettings({ productOrder: order });
@@ -120,11 +118,86 @@ const App: React.FC = () => {
     if (success) await fetchData();
   }, [fetchData]);
 
-  // --- Funções de Venda ---
+  // --- Funções de Negócio ---
+
+  const addProduct = async (nome: string, custo: number, venda: number, comissao: number, estoque: number = 0) => {
+    const newProduct: Omit<Product, 'id'> = { 
+      nome: nome.toUpperCase(), 
+      precoCusto: Number(custo.toFixed(2)), 
+      precoVenda: Number(venda.toFixed(2)), 
+      comissaoPercentual: Number(comissao.toFixed(2)), 
+      estoquePrincipal: estoque, 
+      ativo: true 
+    };
+    const res = await productService.insertProduct(newProduct);
+    if (res) {
+      // Importante: Adiciona o ID do novo produto à ordem persistente para que ele apareça na lista
+      const newOrder = [...productOrder, res.id];
+      await handleSetProductOrder(newOrder);
+      await fetchData();
+    }
+  };
+
+  const updateProduct = async (id: string, data: Partial<Product>) => {
+    const res = await productService.updateProduct(id, data);
+    if (res) await fetchData();
+  };
+
+  const deleteProduct = async (id: string) => {
+    const res = await productService.deleteProduct(id);
+    if (res) {
+      const newOrder = productOrder.filter(pId => pId !== id);
+      await handleSetProductOrder(newOrder);
+      await fetchData();
+    }
+  };
+
+  const registerStockEntry = async (id: string, q: number, c: number) => {
+    const p = products.find(prod => prod.id === id);
+    if (!p) return;
+    const nTotal = p.estoquePrincipal + q;
+    const nCusto = Number((((p.estoquePrincipal * p.precoCusto) + (q * c)) / nTotal).toFixed(2));
+    const nVenda = margemGlobalAtiva ? Number((nCusto / (1 - margemGlobalValor / 100)).toFixed(2)) : p.precoVenda;
+    await productService.updateProduct(id, { estoquePrincipal: nTotal, precoCusto: nCusto, precoVenda: nVenda });
+    await fetchData();
+  };
+
+  const addClient = async (data: Omit<Client, 'id'>) => {
+    const res = await clientService.insertClient(data);
+    if (res) await fetchData();
+  };
+
+  const updateClient = async (id: string, data: Partial<Client>) => {
+    const res = await clientService.updateClient(id, data);
+    if (res) await fetchData();
+  };
+
+  const deleteClient = async (id: string) => {
+    const res = await clientService.deleteClient(id);
+    if (res) await fetchData();
+  };
+
+  const addUser = async (nome: string, foto?: string, telefone?: string) => {
+    const res = await userService.insertUser({ 
+      nome, 
+      email: '', 
+      role: 'VENDEDOR', 
+      ativo: true, 
+      foto, 
+      telefone, 
+      pin: '123456' 
+    });
+    if (res) await fetchData();
+  };
+
+  const updateUser = async (id: string, data: Partial<User>) => {
+    const res = await userService.updateUser(id, data);
+    if (res) await fetchData();
+  };
+
   const processSale = async (saleData: any) => {
     const newSale = await saleService.insertSale(saleData);
     if (newSale) {
-      // 1. Atualizar Carga no Supabase
       const vendedorCarga = cargas.filter(cg => cg.vendedorId === saleData.vendedorId);
       const novosItensCarga = vendedorCarga.map(cg => {
         const itemVendido = saleData.itens.find((i: any) => i.produtoId === cg.produtoId);
@@ -135,7 +208,6 @@ const App: React.FC = () => {
       });
       await cargaService.updateActiveCarga(saleData.vendedorId, novosItensCarga);
 
-      // 2. Criar Comissão no Supabase
       const totalComissao = saleData.itens.reduce((acc: number, item: any) => {
         const p = products.find(prod => prod.id === item.produtoId);
         return acc + (item.precoVenda * item.quantidade * ((p?.comissaoPercentual || 0) / 100));
@@ -161,7 +233,6 @@ const App: React.FC = () => {
     const saleToDelete = sales.find(s => s.id === saleId);
     if (!saleToDelete) return;
 
-    // 1. Estornar Carga
     const vendedorCarga = cargas.filter(cg => cg.vendedorId === saleToDelete.vendedorId);
     const novosItensCarga = [...vendedorCarga.map(cg => ({ produtoId: cg.produtoId, quantidade: cg.quantidade }))];
     
@@ -201,13 +272,8 @@ const App: React.FC = () => {
     await fetchData();
   };
 
-  // --- Funções de Carga ---
   const syncVendedorCarga = async (vendedorId: string, itens: { produtoId: string, quantidade: number }[]) => {
-    await cargaService.insertCargaPendente({
-      vendedorId,
-      itens,
-      data: new Date()
-    });
+    await cargaService.insertCargaPendente({ vendedorId, itens, data: new Date() });
     setAdminNotification("Carga enviada para aceite.");
     await fetchData();
   };
@@ -221,33 +287,27 @@ const App: React.FC = () => {
   const aceitarCarga = async (pendenciaId: string) => {
     const pendencia = cargasPendentes.find(p => p.id === pendenciaId);
     if (!pendencia) return;
-
-    // Reduzir estoque principal
     for (const item of pendencia.itens) {
       const p = products.find(prod => prod.id === item.produtoId);
       if (p) await productService.updateProduct(p.id, { estoquePrincipal: p.estoquePrincipal - item.quantidade });
     }
-
     await Promise.all([
       cargaService.updateActiveCarga(pendencia.vendedorId, pendencia.itens),
       cargaService.deleteCargaPendente(pendenciaId)
     ]);
-
     await fetchData();
     setAdminNotification("Carga aceita!");
   };
 
-  // --- Funções de Comissão ---
   const handlePayCommission = async (vendedorId: string, amount: number, type: 'TOTAL' | 'PARCIAL', adminId: string) => {
     const v = users.find(u => u.id === vendedorId);
     if (!v) return;
-
     await Promise.all([
       commissionService.insertPayout({
         vendedorId,
         vendedorNome: v.nome,
         valorPago: amount,
-        valorRestante: 0, // Calculado dinamicamente na UI
+        valorRestante: 0, 
         tipo: type,
         dataPagamento: new Date(),
         adminId
@@ -260,7 +320,6 @@ const App: React.FC = () => {
         lida: false
       })
     ]);
-
     await fetchData();
   };
 
@@ -294,31 +353,24 @@ const App: React.FC = () => {
         {currentUser.role === 'ADMIN' ? (
           <AdminDashboard 
             products={products} users={users} cargas={cargas} clients={clients} sales={sales} commissions={commissions} payoutLogs={payoutLogs}
-            addProduct={(n, c, v, com, e) => productService.insertProduct({ nome: n, precoCusto: c, precoVenda: v, comissaoPercentual: com, estoquePrincipal: e||0, ativo: true }).then(()=>fetchData())}
-            updateProduct={(id, data) => productService.updateProduct(id, data).then(()=>fetchData())}
-            deleteProduct={(id) => productService.deleteProduct(id).then(()=>fetchData())}
-            registerStockEntry={async (id, q, c) => {
-                const p = products.find(prod => prod.id === id);
-                if (p) {
-                    const nTotal = p.estoquePrincipal + q;
-                    const nCusto = Number((((p.estoquePrincipal * p.precoCusto) + (q * c)) / nTotal).toFixed(2));
-                    await productService.updateProduct(id, { estoquePrincipal: nTotal, precoCusto: nCusto });
-                    await fetchData();
-                }
-            }}
-            adjustStockManual={(id, q, t) => {
+            addProduct={addProduct}
+            updateProduct={updateProduct}
+            deleteProduct={deleteProduct}
+            registerStockEntry={registerStockEntry}
+            adjustStockManual={async (id, q, t) => {
                 const p = products.find(prod => prod.id === id);
                 if (p) {
                     const nStock = Math.max(0, p.estoquePrincipal + (t === 'ADICAO' ? q : -q));
-                    productService.updateProduct(id, { estoquePrincipal: nStock }).then(()=>fetchData());
+                    await productService.updateProduct(id, { estoquePrincipal: nStock });
+                    await fetchData();
                 }
             }}
             syncVendedorCarga={syncVendedorCarga} applyCargaDirectly={applyCargaDirectly}
-            addClient={(data) => clientService.insertClient(data).then(()=>fetchData())}
-            updateClient={(id, data) => clientService.updateClient(id, data).then(()=>fetchData())}
-            deleteClient={(id) => clientService.deleteClient(id).then(()=>fetchData())}
-            addUser={(n, f, t) => userService.insertUser({ nome: n, email: '', role: 'VENDEDOR', ativo: true, foto: f, telefone: t, pin: '123456' }).then(()=>fetchData())}
-            updateUser={(id, data) => userService.updateUser(id, data).then(()=>fetchData())}
+            addClient={addClient}
+            updateClient={updateClient}
+            deleteClient={deleteClient}
+            addUser={addUser}
+            updateUser={updateUser}
             payCommission={handlePayCommission} setCommissions={()=>{}} updateEstoqueCentral={()=>{}} reinforceCarga={()=>{}}
             deleteSale={deleteSaleInternal} receiveAccount={receiveAccount} logo={logo} setLogo={(val) => updateSetting('logo', val)} adminUser={currentUser}
             margemGlobalAtiva={margemGlobalAtiva} setMargemGlobalAtiva={(val) => updateSetting('margemGlobalAtiva', val)}
@@ -333,9 +385,7 @@ const App: React.FC = () => {
         ) : (
           <VendedorDashboard 
             products={products} users={users} cargas={cargas} clients={clients} sales={sales} commissions={commissions}
-            addClient={async (data) => { await clientService.insertClient(data); await fetchData(); }}
-            updateClient={async (id, data) => { await clientService.updateClient(id, data); await fetchData(); }}
-            deleteClient={async (id) => { await clientService.deleteClient(id); await fetchData(); }}
+            addClient={addClient} updateClient={updateClient} deleteClient={deleteClient}
             user={currentUser} payoutLogs={payoutLogs.filter(l => l.vendedorId === currentUser.id)}
             cargasPendentes={cargasPendentes.filter(cp => cp.vendedorId === currentUser.id)}
             messages={messages.filter(m => m.vendedorId === currentUser.id)}

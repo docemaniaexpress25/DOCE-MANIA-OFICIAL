@@ -381,28 +381,22 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
               <div className="bg-orange-50 p-5 rounded-3xl shadow-sm border border-orange-100"><p className="text-[9px] font-black text-orange-600 uppercase mb-1">A receber</p><p className="text-xl font-black text-orange-700">R$ {financeStats.pendente.toFixed(2)}</p></div>
            </div>
 
-           <div className="space-y-4 pt-4">
-             <h3 className="text-xs font-black text-gray-400 uppercase tracking-widest px-2">Histórico de Recebimentos</h3>
-             <div className="grid gap-3 px-1">
+           <div className="space-y-2 pt-2">
+             <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">Recebimentos</h3>
+             <div className="bg-white rounded-3xl border border-gray-100 shadow-sm divide-y divide-gray-50 overflow-hidden">
                 {payoutLogs.sort((a, b) => b.dataPagamento.getTime() - a.dataPagamento.getTime()).map(log => (
-                  <div key={log.id} className="bg-white p-5 rounded-[2rem] border border-gray-100 shadow-sm flex justify-between items-center group active:scale-95 transition-all">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 bg-emerald-50 text-emerald-600 rounded-xl flex items-center justify-center text-sm shadow-inner">
-                        <i className="fa-solid fa-arrow-down-long"></i>
-                      </div>
-                      <div className="flex flex-col">
-                        <p className="text-[10px] font-black text-gray-400 uppercase leading-none mb-1">{log.dataPagamento.toLocaleDateString()}</p>
-                        <p className="text-sm font-black text-gray-800 uppercase tracking-tight">{log.tipo === 'TOTAL' ? 'Pagamento Integral' : 'Repasse Parcial'}</p>
-                      </div>
+                  <div key={log.id} className="p-4 flex justify-between items-center active:bg-gray-50 transition-colors">
+                    <div>
+                      <p className="text-[10px] font-black text-gray-400 uppercase leading-none mb-1">{log.dataPagamento.toLocaleDateString()}</p>
+                      <p className="text-[11px] font-bold text-gray-700 uppercase tracking-tight">{log.tipo === 'TOTAL' ? 'Pagamento Integral' : 'Repasse Parcial'}</p>
                     </div>
                     <div className="text-right">
-                       <p className="text-sm font-black text-emerald-600">R$ {log.valorPago.toFixed(2)}</p>
-                       <p className="text-[9px] font-bold text-gray-300 uppercase">Recebido</p>
+                       <p className="text-xs font-black text-emerald-600">R$ {log.valorPago.toFixed(2)}</p>
                     </div>
                   </div>
                 ))}
                 {payoutLogs.length === 0 && (
-                  <div className="text-center py-10 opacity-30 italic text-[10px] uppercase font-black tracking-widest border-2 border-dashed border-gray-200 rounded-3xl">Nenhum repasse registrado.</div>
+                  <div className="text-center py-8 opacity-30 italic text-[9px] uppercase font-bold tracking-widest">Nenhum repasse registrado.</div>
                 )}
              </div>
            </div>

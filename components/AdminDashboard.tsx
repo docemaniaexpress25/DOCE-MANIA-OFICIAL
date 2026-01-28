@@ -229,6 +229,22 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     showToast("Pagamento registrado!");
   };
 
+  // RESTAURANDO FUNÇÕES DE CARGA
+  const handleSync = () => {
+    if (!selectedVendedorId) return;
+    const itens = Object.entries(stagingCarga).map(([produtoId, quantidade]) => ({ produtoId, quantidade: quantidade ?? 0 })); 
+    props.syncVendedorCarga(selectedVendedorId, itens);
+    setShowConfirmSync(false);
+  };
+
+  const handleApply = () => {
+    if (!selectedVendedorId) return;
+    const itens = Object.entries(stagingCarga).map(([produtoId, quantidade]) => ({ produtoId, quantidade: quantidade ?? 0 })); 
+    props.applyCargaDirectly(selectedVendedorId, itens);
+    setShowConfirmApply(false);
+  };
+  // FIM RESTAURAÇÃO FUNÇÕES DE CARGA
+
   const moveProduct = (id: string, dir: 'UP' | 'DOWN') => {
     const idx = orderedProductIds.indexOf(id);
     const newOrder = [...orderedProductIds];
@@ -291,7 +307,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       estoquePrincipal: parseInt(pForm.estoquePrincipal) || 0
     };
     if (showProductModal === 'NEW') props.addProduct(data.nome!, data.precoCusto!, data.precoVenda!, data.comissaoPercentual!, data.estoquePrincipal);
-    else if (typeof showProductModal === 'object') props.updateProduct(showProductIds.id, data); // Corrected to use object id
+    else if (typeof showProductModal === 'object') props.updateProduct(showProductModal.id, data);
     setShowProductModal(null);
     showToast("Produto salvo!");
   };

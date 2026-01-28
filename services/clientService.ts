@@ -3,23 +3,23 @@ import { Client } from '../types';
 
 export const clientService = {
   async getAllClients(): Promise<Client[]> {
-    const { data, error } = await supabase.from('clients').select('*');
+    const { data, error } = await supabase.from('clients').select('*').order('ordem', { ascending: true });
     if (error) {
       console.error('Erro ao buscar clientes:', error);
       return [];
     }
-    // Mapeia de 'snake_case' do DB para 'camelCase' do Type para consistência local
     return data.map(c => ({
       ...c,
       nomeFantasia: c.nome_fantasia,
       ativarCnpj: c.ativar_cnpj,
       diaRoteiro: c.dia_roteiro,
+      ordem: c.ordem || 0,
       pinLocalizacao: c.pin_localizacao,
     })) as Client[];
   },
 
   async insertClient(client: Omit<Client, 'id'>): Promise<Client | null> {
-    const { nomeFantasia, nome, ativarCnpj, cnpj, telefone, endereco, bairro, ativo, localizacao, diaRoteiro, observacoes, pinLocalizacao } = client;
+    const { nomeFantasia, nome, ativarCnpj, cnpj, telefone, endereco, bairro, ativo, localizacao, diaRoteiro, ordem, observacoes, pinLocalizacao } = client;
     const payload = {
       nome_fantasia: nomeFantasia,
       nome,
@@ -29,8 +29,9 @@ export const clientService = {
       endereco,
       bairro,
       ativo,
-      localizacao, // JSONB type, might be directly compatible
+      localizacao,
       dia_roteiro: diaRoteiro,
+      ordem: ordem || 0,
       observacoes,
       pin_localizacao: pinLocalizacao,
     };
@@ -40,18 +41,18 @@ export const clientService = {
       console.error('Erro ao inserir cliente:', error);
       return null;
     }
-    // Mapeia de volta para 'camelCase' para consistência com o tipo local
     return {
       ...data,
       nomeFantasia: data.nome_fantasia,
       ativarCnpj: data.ativar_cnpj,
       diaRoteiro: data.dia_roteiro,
+      ordem: data.ordem,
       pinLocalizacao: data.pin_localizacao,
     } as Client;
   },
 
   async updateClient(id: string, updates: Partial<Client>): Promise<Client | null> {
-    const payload: Partial<any> = {}; // Usar 'any' temporariamente para construir o payload dinamicamente
+    const payload: Partial<any> = {}; 
     if (updates.nomeFantasia !== undefined) payload.nome_fantasia = updates.nomeFantasia;
     if (updates.nome !== undefined) payload.nome = updates.nome;
     if (updates.ativarCnpj !== undefined) payload.ativar_cnpj = updates.ativarCnpj;
@@ -62,6 +63,7 @@ export const clientService = {
     if (updates.ativo !== undefined) payload.ativo = updates.ativo;
     if (updates.localizacao !== undefined) payload.localizacao = updates.localizacao;
     if (updates.diaRoteiro !== undefined) payload.dia_roteiro = updates.diaRoteiro;
+    if (updates.ordem !== undefined) payload.ordem = updates.ordem;
     if (updates.observacoes !== undefined) payload.observacoes = updates.observacoes;
     if (updates.pinLocalizacao !== undefined) payload.pin_localizacao = updates.pinLocalizacao;
 
@@ -70,12 +72,12 @@ export const clientService = {
       console.error('Erro ao atualizar cliente:', error);
       return null;
     }
-    // Mapeia de volta para 'camelCase' para consistência com o tipo local
     return {
       ...data,
       nomeFantasia: data.nome_fantasia,
       ativarCnpj: data.ativar_cnpj,
       diaRoteiro: data.dia_roteiro,
+      ordem: data.ordem,
       pinLocalizacao: data.pin_localizacao,
     } as Client;
   },

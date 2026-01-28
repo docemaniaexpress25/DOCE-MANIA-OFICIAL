@@ -49,6 +49,7 @@ export interface Client {
   ativo: boolean;
   localizacao?: { lat: number; lng: number };
   diaRoteiro: number;
+  ordem: number; // Campo adicionado para ordenação
   observacoes?: string;
   pinLocalizacao?: string;
 }
@@ -102,5 +103,5 @@ export interface SystemMessage {
   mensagem: string;
   data: Date;
   lida: boolean;
-  type?: 'INFO' | 'COMMISSION_CONFIRMATION'; // Adicionado 'type'
+  type?: 'INFO' | 'COMMISSION_CONFIRMATION'; 
 }

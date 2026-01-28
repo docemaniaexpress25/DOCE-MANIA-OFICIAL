@@ -3,7 +3,7 @@ import { User, Product, Client, Carga, Sale, Commission, PaymentMethod, CargaPen
 import { DIAS_SEMANA } from '../constants';
 import PDV from './PDV';
 import Cupom from './Cupom';
-import { DailyRouteState } from '../utils/persistence';
+import { DailyRouteState, loadLocalState, saveLocalState } from '../utils/persistence';
 
 interface VendedorDashboardProps {
   user: User;
@@ -29,18 +29,20 @@ interface VendedorDashboardProps {
   pix1Code: string | null;
   pix2Name: string;
   pix2Code: string | null;
-  // Novas props para a Rota do Dia
   dailyRouteState: DailyRouteState;
   updateDailyRoute: (clientIds: string[], skippedClientIds: string[]) => void;
 }
 
+type TabType = 'HOME' | 'ROTEIRO' | 'CARGA' | 'HISTORY' | 'FINANCE' | 'CREDIT' | 'CLIENTS' | 'WEEKLY' | 'STOCK_VIEW';
+
 const VendedorDashboard: React.FC<VendedorDashboardProps> = ({ 
   user, products, clients, cargas, cargasPendentes, sales, commissions, payoutLogs, messages, markMessageAsRead, processSale, addClient, updateClient, deleteClient, receivePayment, deleteSale, aceitarCarga, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, updateDailyRoute
 }) => {
-  const [activeTab, setActiveTab] = useState<'HOME' | 'ROTEIRO' | 'CARGA' | 'HISTORY' | 'FINANCE' | 'CREDIT' | 'CLIENTS' | 'WEEKLY' | 'STOCK_VIEW'>('HOME');
-  const [selectedClient, setSelectedClient] = useState<Client | null>(null);
-  const [viewingSale, setViewingSale] = useState<Sale | null>(null);
-  // O estado de skippedClientIds e extraRouteClientIds agora é gerenciado via dailyRouteState
+  // Estados de navegação com persistência
+  const [activeTab, setActiveTab] = useState<TabType>(() => loadLocalState('v_activeTab', 'HOME'));
+  const [selectedClient, setSelectedClient] = useState<Client | null>(() => loadLocalState('v_selectedClient', null));
+  const [viewingSale, setViewingSale] = useState<Sale | null>(() => loadLocalState('v_viewingSale', null));
+
   const [reopenedClientIds, setReopenedClientIds] = useState<string[]>([]);
   const [showReceiveModal, setShowReceiveModal] = useState<Sale | null>(null);
   const [valorRecebidoParcial, setValorRecebidoParcial] = useState<string>('');
@@ -50,125 +52,55 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const [financeFilter, setFinanceFilter] = useState<'DIA' | 'SEMANA' | 'MES' | 'GERAL'>('DIA');
   const [weeklySearch, setWeeklySearch] = useState('');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
-  
   const [cForm, setCForm] = useState<Partial<Client>>({});
+
+  // --- Efeitos de Persistência e Histórico ---
+  useEffect(() => {
+    saveLocalState('v_activeTab', activeTab);
+    if (activeTab !== 'HOME' && window.history.state?.tab !== activeTab) {
+      window.history.pushState({ tab: activeTab }, '');
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    saveLocalState('v_selectedClient', selectedClient);
+    if (selectedClient && window.history.state?.view !== 'PDV') {
+      window.history.pushState({ view: 'PDV' }, '');
+    }
+  }, [selectedClient]);
+
+  useEffect(() => {
+    saveLocalState('v_viewingSale', viewingSale);
+    if (viewingSale && window.history.state?.view !== 'CUPOM') {
+      window.history.pushState({ view: 'CUPOM' }, '');
+    }
+  }, [viewingSale]);
+
+  useEffect(() => {
+    const handlePopState = (event: PopStateEvent) => {
+      const state = event.state;
+      if (viewingSale) {
+        setViewingSale(null);
+      } else if (selectedClient) {
+        setSelectedClient(null);
+      } else if (activeTab !== 'HOME') {
+        if (state && state.tab) {
+          setActiveTab(state.tab);
+        } else {
+          setActiveTab('HOME');
+        }
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [activeTab, selectedClient, viewingSale]);
+  // -------------------------------------------
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
   };
-
-  const diaAtual = new Date().getDay();
-  const minhaCarga = useMemo(() => cargas.filter(c => c.vendedorId === user.id), [cargas, user.id]);
-  
-  // Rota do Dia agora é baseada no dailyRouteState
-  const rotaDeHoje = useMemo(() => {
-    const clientMap = new Map(clients.map(c => [c.id, c]));
-    
-    // Filtra e mapeia os IDs salvos para objetos Client
-    const clientsInRoute = dailyRouteState.clientIds
-      .map(id => clientMap.get(id))
-      .filter((c): c is Client => !!c && (c.ativo ?? false));
-
-    // Garante a ordenação
-    return clientsInRoute.sort((a, b) => (a.ordem || 0) - (b.ordem || 0)); 
-  }, [clients, dailyRouteState.clientIds]); 
-
-  const handleSkipClient = (clientId: string) => { 
-    if (confirm("Pular atendimento?")) {
-      const newSkipped = [...dailyRouteState.skippedClientIds, clientId];
-      updateDailyRoute(dailyRouteState.clientIds, newSkipped);
-    }
-  };
-
-  const handleReopenClient = (clientId: string) => {
-    // Remove o cliente da lista de pulados
-    const newSkipped = dailyRouteState.skippedClientIds.filter(id => id !== clientId);
-    updateDailyRoute(dailyRouteState.clientIds, newSkipped);
-    // Adiciona à lista de reabertos (para ignorar o status 'isSold' temporariamente)
-    setReopenedClientIds(prev => [...prev, clientId]);
-  };
-
-  const handleAddToTodayRoute = (clientId: string) => { 
-    if (!dailyRouteState.clientIds.includes(clientId)) { 
-      const newRoute = [...dailyRouteState.clientIds, clientId];
-      updateDailyRoute(newRoute, dailyRouteState.skippedClientIds);
-      showToast("Cliente adicionado à rota do dia!"); 
-    } 
-  };
-
-  const isSameDay = (date: Date | undefined) => new Date().toDateString() === (new Date(date ?? new Date())).toDateString(); 
-
-  const handleOpenEditClient = (c: Client | 'NEW') => {
-    if (c === 'NEW') {
-      setCForm({ nomeFantasia: '', telefone: '', endereco: '', bairro: '', diaRoteiro: diaAtual, ativo: true, ativarCnpj: false, cnpj: '', pinLocalizacao: '', ordem: 0 });
-    } else {
-      setCForm({ ...c });
-    }
-    setEditingClient(c);
-  };
-
-  const handlePinLocation = () => {
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition((position) => {
-        const pin = `${position.coords.latitude.toFixed(6)}, ${position.coords.longitude.toFixed(6)}`;
-        setCForm(prev => ({ ...prev, pinLocalizacao: pin }));
-        showToast("Localização capturada!");
-      }, () => {
-        showToast("Erro ao capturar localização.", 'error');
-      });
-    }
-  };
-
-  const handleSaveClientBasic = () => {
-    if (!cForm.nomeFantasia || !cForm.telefone) {
-      showToast("Preencha ao menos Nome e Telefone.", 'error');
-      return;
-    }
-
-    const clientData: Omit<Client, 'id'> = {
-      nomeFantasia: cForm.nomeFantasia!,
-      telefone: cForm.telefone!,
-      endereco: cForm.endereco || '',
-      bairro: cForm.bairro || '',
-      diaRoteiro: cForm.diaRoteiro ?? diaAtual,
-      ordem: cForm.ordem ?? 0,
-      ativo: cForm.ativo ?? true,
-      ativarCnpj: cForm.ativarCnpj ?? false,
-      cnpj: cForm.cnpj,
-      pinLocalizacao: cForm.pinLocalizacao,
-      nome: cForm.nome,
-      observacoes: cForm.observacoes,
-    };
-
-    if (editingClient === 'NEW') {
-      addClient(clientData);
-      showToast("Novo cliente cadastrado!");
-    } else if (typeof editingClient === 'object') {
-      updateClient(editingClient.id, clientData); 
-      showToast("Cliente atualizado");
-    }
-    setEditingClient(null);
-  };
-
-  const handleConfirmReceive = (method: PaymentMethod) => {
-    if (!showReceiveModal) return;
-    const valor = parseFloat(valorRecebidoParcial);
-    const saldoEmAberto = Number(((showReceiveModal.valorTotal ?? 0) - (showReceiveModal.valorPago ?? 0)).toFixed(2)); 
-    if (isNaN(valor) || valor <= 0 || valor > saldoEmAberto) return alert("Valor inválido.");
-    receivePayment(showReceiveModal.id, method, valor);
-    showToast(valor === saldoEmAberto ? "Conta quitada!" : "Pagamento parcial registrado!");
-    setShowReceiveModal(null);
-    setValorRecebidoParcial('');
-  };
-
-  const MenuCard = ({ icon, title, tab, color, badge }: any) => (
-    <button onClick={() => setActiveTab(tab)} className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col items-center gap-3 active:scale-95 transition-all text-center relative">
-      {badge && <div className="absolute top-4 right-4 w-3 h-3 bg-red-500 rounded-full border-2 border-white"></div>}
-      <div className={`w-14 h-14 ${color} rounded-2xl flex items-center justify-center text-xl shadow-inner`}><i className={`fa-solid ${icon}`}></i></div>
-      <span className="text-[11px] font-black uppercase text-gray-700">{title}</span>
-    </button>
-  );
 
   const filterByPeriod = (date: Date, period: string) => {
     const d = new Date(date);
@@ -183,6 +115,72 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     return true;
   };
 
+  const isSameDay = (date: Date | undefined) => new Date().toDateString() === (new Date(date ?? new Date())).toDateString(); 
+
+  const diaAtual = new Date().getDay();
+  const minhaCarga = useMemo(() => cargas.filter(c => c.vendedorId === user.id), [cargas, user.id]);
+  
+  const rotaDeHoje = useMemo(() => {
+    const clientMap = new Map(clients.map(c => [c.id, c]));
+    const clientsInRoute = dailyRouteState.clientIds
+      .map(id => clientMap.get(id))
+      .filter((c): c is Client => !!c && (c.ativo ?? false));
+    return clientsInRoute.sort((a, b) => (a.ordem || 0) - (b.ordem || 0)); 
+  }, [clients, dailyRouteState.clientIds]); 
+
+  const handleSkipClient = (clientId: string) => { 
+    if (confirm("Pular atendimento?")) {
+      const newSkipped = [...dailyRouteState.skippedClientIds, clientId];
+      updateDailyRoute(dailyRouteState.clientIds, newSkipped);
+    }
+  };
+
+  const handleReopenClient = (clientId: string) => {
+    const newSkipped = dailyRouteState.skippedClientIds.filter(id => id !== clientId);
+    updateDailyRoute(dailyRouteState.clientIds, newSkipped);
+    setReopenedClientIds(prev => [...prev, clientId]);
+  };
+
+  const handleAddToTodayRoute = (clientId: string) => { 
+    if (!dailyRouteState.clientIds.includes(clientId)) { 
+      const newRoute = [...dailyRouteState.clientIds, clientId];
+      updateDailyRoute(newRoute, dailyRouteState.skippedClientIds);
+      showToast("Cliente adicionado à rota do dia!"); 
+    } 
+  };
+
+  const handleOpenEditClient = (c: Client | 'NEW') => {
+    if (c === 'NEW') setCForm({ nomeFantasia: '', telefone: '', endereco: '', bairro: '', diaRoteiro: diaAtual, ativo: true, ativarCnpj: false, cnpj: '', pinLocalizacao: '', ordem: 0 });
+    else setCForm({ ...c });
+    setEditingClient(c);
+  };
+
+  const handleSaveClientBasic = () => {
+    if (!cForm.nomeFantasia || !cForm.telefone) { showToast("Preencha ao menos Nome e Telefone.", 'error'); return; }
+    const clientData: Omit<Client, 'id'> = { nomeFantasia: cForm.nomeFantasia!, telefone: cForm.telefone!, endereco: cForm.endereco || '', bairro: cForm.bairro || '', diaRoteiro: cForm.diaRoteiro ?? diaAtual, ordem: cForm.ordem ?? 0, ativo: cForm.ativo ?? true, ativarCnpj: cForm.ativarCnpj ?? false, cnpj: cForm.cnpj, pinLocalizacao: cForm.pinLocalizacao, nome: cForm.nome, observacoes: cForm.observacoes };
+    if (editingClient === 'NEW') addClient(clientData);
+    else if (typeof editingClient === 'object') updateClient(editingClient.id, clientData); 
+    setEditingClient(null);
+  };
+
+  const handleConfirmReceive = (method: PaymentMethod) => {
+    if (!showReceiveModal) return;
+    const valor = parseFloat(valorRecebidoParcial);
+    const saldoEmAberto = Number(((showReceiveModal.valorTotal ?? 0) - (showReceiveModal.valorPago ?? 0)).toFixed(2)); 
+    if (isNaN(valor) || valor <= 0 || valor > saldoEmAberto) return alert("Valor inválido.");
+    receivePayment(showReceiveModal.id, method, valor);
+    setShowReceiveModal(null);
+    setValorRecebidoParcial('');
+  };
+
+  const MenuCard = ({ icon, title, tab, color, badge }: any) => (
+    <button onClick={() => setActiveTab(tab)} className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col items-center gap-3 active:scale-95 transition-all text-center relative">
+      {badge && <div className="absolute top-4 right-4 w-3 h-3 bg-red-500 rounded-full border-2 border-white"></div>}
+      <div className={`w-14 h-14 ${color} rounded-2xl flex items-center justify-center text-xl shadow-inner`}><i className={`fa-solid ${icon}`}></i></div>
+      <span className="text-[11px] font-black uppercase text-gray-700">{title}</span>
+    </button>
+  );
+
   const filteredHistory = useMemo(() => sales.filter(s => s.vendedorId === user.id && filterByPeriod((s.data ?? new Date()), historyFilter)).sort((a, b) => (b.data?.getTime() ?? 0) - (a.data?.getTime() ?? 0)), [sales, user.id, historyFilter]); 
   
   const financeStats = useMemo(() => {
@@ -192,12 +190,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     const totalCommsEligible = vCommsAll.filter(c => c.status !== 'A_RECEBER').reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
     const disponivel = Math.max(0, totalCommsEligible - jaPago);
     const pendente = vCommsAll.filter(c => c.status === 'A_RECEBER').reduce((acc, curr) => acc + (curr.valor ?? 0), 0); 
-    return {
-      totalVendido: Number(vSalesFiltered.reduce((acc, curr) => acc + (curr.valorTotal ?? 0), 0).toFixed(2)), 
-      totalComissao: Number(vCommsAll.reduce((acc, curr) => acc + (curr.valor ?? 0), 0).toFixed(2)),
-      disponivel: Number(disponivel.toFixed(2)), 
-      pendente: Number(pendente.toFixed(2)) 
-    };
+    return { totalVendido: Number(vSalesFiltered.reduce((acc, curr) => acc + (curr.valorTotal ?? 0), 0).toFixed(2)), totalComissao: Number(vCommsAll.reduce((acc, curr) => acc + (curr.valor ?? 0), 0).toFixed(2)), disponivel: Number(disponivel.toFixed(2)), pendente: Number(pendente.toFixed(2)) };
   }, [commissions, user.id, sales, financeFilter, payoutLogs]);
 
   const historySummary = useMemo(() => filteredHistory.reduce((acc, sale) => {
@@ -209,7 +202,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   }, { total: 0, dinheiro: 0, pix: 0, prazo: 0 }), [filteredHistory]);
 
   const contasAReceber = useMemo(() => sales.filter(s => s.vendedorId === user.id && s.metodoPagamento === 'A_PRAZO' && s.statusPagamento === 'PENDENTE'), [sales, user.id]);
-
   const valorTotalCarga = useMemo(() => minhaCarga.reduce((acc, curr) => {
     const p = products.find(prod => prod.id === curr.produtoId);
     return acc + ((curr.quantidade ?? 0) * (p?.precoVenda ?? 0)); 

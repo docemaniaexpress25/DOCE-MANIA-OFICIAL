@@ -83,26 +83,27 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
           </div>
         </div>
 
-        <div className="bg-gray-100 p-4 grid grid-cols-1 gap-2 border-t border-gray-200">
-          <button 
-            onClick={handleCopyText}
-            className="w-full bg-blue-600 text-white font-black py-4 rounded-xl flex items-center justify-center gap-2 active:scale-95 transition-all text-xs tracking-widest uppercase"
-          >
-            <i className="fa-solid fa-copy"></i>
-            COPIAR TEXTO FORMATADO
-          </button>
-          {allowDelete && onDeleteSale && (
-            <button
-              onClick={handleDelete}
-              className="w-full bg-rose-600 text-white font-black py-4 rounded-xl flex items-center justify-center gap-2 active:scale-95 transition-all text-xs tracking-widest uppercase mt-2"
+        <div className="bg-gray-100 p-4 flex flex-col gap-2 border-t border-gray-200">
+          <div className="flex gap-2">
+            <button 
+              onClick={handleCopyText}
+              className="flex-1 bg-blue-600 text-white font-black py-4 rounded-xl flex items-center justify-center gap-2 active:scale-95 transition-all text-[10px] tracking-widest uppercase"
             >
-              <i className="fa-solid fa-trash-can"></i>
-              EXCLUIR VENDA
+              <i className="fa-solid fa-copy"></i>
+              COPIAR TEXTO
             </button>
-          )}
+            {allowDelete && onDeleteSale && (
+              <button
+                onClick={handleDelete}
+                className="w-14 bg-rose-600 text-white font-black py-4 rounded-xl flex items-center justify-center active:scale-95 transition-all text-lg"
+              >
+                <i className="fa-solid fa-trash-can"></i>
+              </button>
+            )}
+          </div>
           <button 
             onClick={onClose}
-            className="w-full bg-slate-800 text-white font-black py-3 rounded-xl active:scale-95 transition-all text-[10px] tracking-[0.2em] uppercase mt-2"
+            className="w-full bg-slate-800 text-white font-black py-3 rounded-xl active:scale-95 transition-all text-[10px] tracking-[0.2em] uppercase"
           >
             VOLTAR
           </button>

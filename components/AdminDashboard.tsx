@@ -8,7 +8,7 @@ interface AdminDashboardProps {
   users: User[];
   cargas: Carga[];
   clients: Client[];
-  addProduct: (n: string, c: number, v: number, com: number) => void;
+  addProduct: (n: string, c: number, v: number, com: number, estoque?: number) => void;
   updateProduct: (id: string, data: Partial<Product>) => void;
   deleteProduct: (id: string) => void;
   registerStockEntry: (id: string, q: number, c: number) => void;
@@ -237,9 +237,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       precoVenda: parseFloat(pForm.venda), 
       comissaoPercentual: parseFloat(pForm.comissao), 
       ativo: pForm.ativo ?? true,
-      estoquePrincipal: parseInt(pForm.estoquePrincipal)
+      estoquePrincipal: parseInt(pForm.estoquePrincipal) || 0
     };
-    if (showProductModal === 'NEW') props.addProduct(data.nome!, data.precoCusto!, data.precoVenda!, data.comissaoPercentual!);
+    if (showProductModal === 'NEW') props.addProduct(data.nome!, data.precoCusto!, data.precoVenda!, data.comissaoPercentual!, data.estoquePrincipal);
     else if (typeof showProductModal === 'object') props.updateProduct(showProductModal.id, data);
     showToast("Produto salvo com sucesso");
     setShowProductModal(null);

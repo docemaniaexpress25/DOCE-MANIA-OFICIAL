@@ -123,8 +123,8 @@ const App: React.FC = () => {
     if (res) await fetchUsers();
   };
 
-  const addProduct = async (nome: string, custo: number, venda: number, comissao: number) => {
-    const newProduct: Omit<Product, 'id'> = { nome, precoCusto: Number(custo.toFixed(2)), precoVenda: Number(venda.toFixed(2)), comissaoPercentual: Number(comissao.toFixed(2)), estoquePrincipal: 0, ativo: true };
+  const addProduct = async (nome: string, custo: number, venda: number, comissao: number, estoque: number = 0) => {
+    const newProduct: Omit<Product, 'id'> = { nome, precoCusto: Number(custo.toFixed(2)), precoVenda: Number(venda.toFixed(2)), comissaoPercentual: Number(comissao.toFixed(2)), estoquePrincipal: estoque, ativo: true };
     const res = await productService.insertProduct(newProduct);
     if (res) await fetchProducts();
   };

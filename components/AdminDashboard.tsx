@@ -292,17 +292,40 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     }
   };
 
+  const updatePriceFromMargin = (custo: number, margemPercent: number) => {
+    const c = Number(custo) || 0;
+    const m = Number(margemPercent) || 0;
+    return m >= 100 ? c : c / (1 - m / 100);
+  };
+  const updateMarginFromPrice = (custo: number, venda: number) => {
+    const c = Number(custo) || 0;
+    const v = Number(venda) || 0;
+    return v <= 0 ? 0 : ((v - c) / v) * 100;
+  };
+
   const handleOpenProduct = (p: Product | 'NEW') => {
-    if (p === 'NEW') setPForm({ nome: '', custo: '', venda: '', comissao: '', margem: '35', ativo: true, estoquePrincipal: '0' });
-    else {
+    if (p === 'NEW') {
+      // Novo produto: valores padrão
+      setPForm({ 
+        nome: '', 
+        custo: '0.00', 
+        venda: props.margemGlobalAtiva ? updatePriceFromMargin(0, props.margemGlobalValor).toFixed(2) : '0.00', 
+        comissao: '0.00', 
+        margem: props.margemGlobalAtiva ? props.margemGlobalValor.toFixed(2) : '0.00', 
+        ativo: true, 
+        estoquePrincipal: '0' 
+      });
+    } else {
+      // Editar produto: carrega dados existentes
       const precoVenda = Number(p.precoVenda) || 0;
       const precoCusto = Number(p.precoCusto) || 0;
-      const margemCalculada = precoVenda > 0 ? ((precoVenda - precoCusto) / precoVenda) * 100 : 0;
+      const margemCalculada = updateMarginFromPrice(precoCusto, precoVenda);
+      
       setPForm({ 
         nome: p.nome ?? '', 
-        custo: precoCusto.toString(), 
-        venda: precoVenda.toString(), 
-        comissao: (p.comissaoPercentual ?? 0).toString(), 
+        custo: precoCusto.toFixed(2), 
+        venda: precoVenda.toFixed(2), 
+        comissao: (p.comissaoPercentual ?? 0).toFixed(2), 
         margem: margemCalculada.toFixed(2), 
         ativo: p.ativo ?? true,
         estoquePrincipal: (p.estoquePrincipal ?? 0).toString()
@@ -312,7 +335,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   };
 
   const handleSaveProduct = () => {
-    if (!pForm.nome || !pForm.custo || !pForm.venda || !pForm.comissao) return;
+    if (!pForm.nome || !pForm.custo || !pForm.venda || !pForm.comissao) {
+      showToast("Preencha todos os campos obrigatórios.", 'error');
+      return;
+    }
+    
     const data: Partial<Product> = { 
       nome: pForm.nome, 
       precoCusto: parseFloat(pForm.custo), 
@@ -321,8 +348,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       ativo: pForm.ativo ?? true,
       estoquePrincipal: parseInt(pForm.estoquePrincipal) || 0
     };
-    if (showProductModal === 'NEW') props.addProduct(data.nome!, data.precoCusto!, data.precoVenda!, data.comissaoPercentual!, data.estoquePrincipal);
-    else if (typeof showProductModal === 'object') props.updateProduct(showProductModal.id, data);
+
+    if (showProductModal === 'NEW') {
+      props.addProduct(data.nome!, data.precoCusto!, data.precoVenda!, data.comissaoPercentual!, data.estoquePrincipal);
+    } else if (typeof showProductModal === 'object') {
+      props.updateProduct(showProductModal.id, data);
+    }
     setShowProductModal(null);
     showToast("Produto salvo!");
   };
@@ -332,6 +363,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       if (confirm(`Deseja realmente excluir o produto "${showProductModal.nome}"?`)) {
         props.deleteProduct(showProductModal.id);
         setShowProductModal(null);
+        showToast("Produto excluído (ou desativado).");
       }
     }
   };
@@ -386,17 +418,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     props.receiveAccount(showReceiveModal.id, method, valor);
     setShowReceiveModal(null);
     showToast("Recebimento registrado!");
-  };
-
-  const updatePriceFromMargin = (custo: number, margemPercent: number) => {
-    const c = Number(custo) || 0;
-    const m = Number(margemPercent) || 0;
-    return m >= 100 ? c : c / (1 - m / 100);
-  };
-  const updateMarginFromPrice = (custo: number, venda: number) => {
-    const c = Number(custo) || 0;
-    const v = Number(venda) || 0;
-    return v <= 0 ? 0 : ((v - c) / v) * 100;
   };
 
   const MenuCard = ({ icon, title, tab, color }: any) => (
@@ -835,6 +856,61 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                  <button onClick={() => setShowReceiveModal(null)} className="w-full py-3 text-gray-400 font-bold text-[9px] uppercase">Cancelar</button>
               </div>
            </div>
+        </div>
+      )}
+
+      {showUserModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6">
+           <div className="bg-white w-full max-w-sm rounded-[2rem] p-8 shadow-2xl overflow-y-auto max-h-[90vh]">
+              <h3 className="font-black text-gray-800 uppercase text-sm mb-6 text-center">{showUserModal === 'NEW' ? 'Novo Vendedor' : 'Editar Vendedor'}</h3>
+              <div className="flex flex-col items-center mb-6"><div onClick={() => userPhotoInputRef.current?.click()} className="w-24 h-24 bg-purple-100 text-purple-600 rounded-[2rem] flex items-center justify-center font-black overflow-hidden border-4 border-white shadow-xl cursor-pointer relative group transition-all hover:scale-105">{userForm.foto ? <img src={userForm.foto} className="w-full h-full object-cover" /> : <i className="fa-solid fa-camera text-2xl"></i>}</div><input type="file" ref={userPhotoInputRef} onChange={handleUserPhotoUpload} className="hidden" accept="image/*" /></div>
+              <div className="space-y-4">
+                 <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome do Vendedor</label><input value={userForm.nome ?? ''} onChange={e => setUserForm({...userForm, nome: e.target.value})} placeholder="Nome Completo" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div>
+                 <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Telefone / WhatsApp</label><input value={userForm.telefone ?? ''} onChange={e => setUserForm({...userForm, telefone: e.target.value})} placeholder="Telefone" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div>
+                 <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">PIN de Acesso (6 dígitos)</label><input type="password" value={userForm.pin ?? ''} onChange={e => setUserForm({...userForm, pin: e.target.value})} placeholder="123456" maxLength={6} className="w-full p-4 bg-gray-50 border rounded-2xl font-black text-center text-xl tracking-[0.5em]" /></div>
+                 <button onClick={handleSaveUser} className="w-full bg-purple-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 uppercase text-xs mt-4 tracking-widest">Salvar Vendedor</button>
+                 <button onClick={() => setShowUserModal(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button>
+              </div>
+           </div>
+        </div>
+      )}
+
+      {showProductModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-end sm:items-center justify-center p-4">
+          <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6 animate-in slide-in-from-bottom duration-300 shadow-2xl overflow-y-auto max-h-[95vh]">
+            <h3 className="font-black text-gray-800 uppercase text-sm mb-6">{showProductModal === 'NEW' ? 'Novo Produto' : 'Editar Produto'}</h3>
+            <div className="space-y-4">
+              <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome Comercial</label><input value={pForm.nome ?? ''} onChange={e => setPForm({...pForm, nome: e.target.value})} placeholder="Nome do Produto" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div>
+              <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Estoque Principal (UN)</label><input type="number" value={pForm.estoquePrincipal ?? ''} onChange={e => setPForm({...pForm, estoquePrincipal: e.target.value})} placeholder="0" className="w-full p-4 bg-gray-50 border rounded-2xl font-black text-lg" /></div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Custo R$</label><input type="number" value={pForm.custo ?? ''} onChange={e => { const c = e.target.value; const nv = updatePriceFromMargin(parseFloat(c)||0, parseFloat(pForm.margem)||0).toFixed(2); setPForm({...pForm, custo: c, venda: nv}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div>
+                <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Margem %</label><input type="number" value={pForm.margem ?? ''} disabled={props.margemGlobalAtiva} onChange={e => { const m = e.target.value; const nv = updatePriceFromMargin(parseFloat(pForm.custo)||0, parseFloat(m)||0).toFixed(2); setPForm({...pForm, margem: m, venda: nv}); }} placeholder="0.00" className={`w-full p-4 border rounded-2xl font-bold ${props.margemGlobalAtiva ? 'bg-gray-100 opacity-50' : 'bg-gray-50'}`} /></div>
+              </div>
+              <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Preço Venda R$</label><input type="number" value={pForm.venda ?? ''} disabled={props.margemGlobalAtiva} onChange={e => { const v = e.target.value; const nm = updateMarginFromPrice(parseFloat(pForm.custo)||0, parseFloat(v)||0).toFixed(2); setPForm({...pForm, venda: v, margem: nm}); }} placeholder="0.00" className={`w-full p-4 border rounded-2xl font-black text-lg ${props.margemGlobalAtiva ? 'bg-gray-100 opacity-50' : 'bg-green-50'}`} /></div>
+              <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Comissão %</label><input type="number" value={pForm.comissao ?? ''} onChange={e => setPForm({...pForm, comissao: e.target.value})} placeholder="0.00" className="w-full p-4 bg-yellow-50 border rounded-2xl font-bold" /></div>
+              <div className="flex flex-col gap-2 pt-2">
+                <button onClick={handleSaveProduct} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 transition-all uppercase text-xs tracking-widest">SALVAR PRODUTO</button>
+                {showProductModal !== 'NEW' && <button onClick={handleDeleteProductInModal} className="w-full bg-rose-50 text-rose-600 font-black py-4 rounded-2xl active:scale-95 transition-all uppercase text-[10px] tracking-widest border border-rose-100 flex items-center justify-center gap-2"><i className="fa-solid fa-trash-can text-xs"></i> EXCLUIR PRODUTO</button>}
+                <button onClick={() => setShowProductModal(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showEntryModal && (
+        <div className="fixed inset-0 bg-black/50 z-[200] flex items-center justify-center p-6">
+          <div className="bg-white p-8 rounded-[32px] w-full max-w-xs shadow-2xl text-center">
+            <h3 className="font-black text-gray-800 text-sm uppercase mb-4">Entrada de Mercadoria</h3>
+            <div className="mb-6"><p className="text-[10px] font-black text-gray-400 uppercase mb-1">Produto</p><h4 className="text-sm font-bold text-gray-800 uppercase leading-tight">{showEntryModal.nome}</h4></div>
+            <div className="space-y-4">
+              <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100 flex flex-col items-center"><span className="text-[10px] font-black text-blue-400 uppercase mb-1">📦 Estoque Atual</span><span className="text-lg font-black text-blue-700">{(showEntryModal.estoquePrincipal ?? 0)} UN</span></div>
+              <input type="number" placeholder="Quantidade Entrada" className="w-full p-4 bg-gray-50 rounded-2xl border font-black text-center text-lg outline-none" value={entryForm.qtd} onChange={e => setEntryForm({...entryForm, qtd: e.target.value})} />
+              <input type="number" placeholder="Custo Unit." className="w-full p-4 bg-gray-50 rounded-2xl border font-black text-center text-lg outline-none" value={entryForm.custo} onChange={e => setEntryForm({...entryForm, custo: e.target.value})} />
+              <button onClick={() => { if(!entryForm.qtd || !entryForm.custo) return; props.registerStockEntry(showEntryModal.id, parseInt(entryForm.qtd), parseFloat(entryForm.custo)); showToast("Entrada registrada"); setShowEntryModal(null); }} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl active:scale-95 shadow-xl uppercase text-xs tracking-widest">Confirmar Entrada</button>
+              <button onClick={() => setShowEntryModal(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button>
+            </div>
+          </div>
         </div>
       )}
 

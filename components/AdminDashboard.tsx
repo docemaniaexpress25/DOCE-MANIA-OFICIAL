@@ -103,7 +103,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
   const [pForm, setPForm] = useState({ nome: '', custo: '', venda: '', comissao: '', margem: '', ativo: true, estoquePrincipal: '' });
   const [entryForm, setEntryForm] = useState({ qtd: '', custo: '' });
-  const [clientForm, setClientForm] = useState<Partial<Client>>({ ativarCnpj: false, cnpj: '', pinLocalizacao: '' });
+  const [clientForm, setClientForm] = useState<Partial<Client>>({ nomeFantasia: '', telefone: '', endereco: '', bairro: '', diaRoteiro: 1, ativo: true, ativarCnpj: false, cnpj: '', pinLocalizacao: '', ordem: 0 });
   const [userForm, setUserForm] = useState<Partial<User>>({ nome: '', foto: '', telefone: '', pin: '' });
   const [selectedVendedorId, setSelectedVendedorId] = useState('');
   const [stagingCarga, setStagingCarga] = useState<{ [pId: string]: number }>({});
@@ -369,15 +369,60 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   };
 
   const handleOpenClient = (c: Client | 'NEW') => {
-    if (c === 'NEW') setClientForm({ nomeFantasia: '', telefone: '', diaRoteiro: 1, ativo: true, bairro: '', endereco: '', ordem: 0 });
-    else setClientForm({ ...c });
+    if (c === 'NEW') {
+      setClientForm({ 
+        nomeFantasia: '', 
+        telefone: '', 
+        endereco: '', 
+        bairro: '', 
+        diaRoteiro: 1, 
+        ativo: true, 
+        ativarCnpj: false, 
+        cnpj: '', 
+        pinLocalizacao: '', 
+        ordem: 0 
+      });
+    } else {
+      setClientForm({ ...c });
+    }
     setShowClientModal(c);
   };
 
+  const handlePinLocation = () => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(p => {
+        setClientForm(prev => ({ ...prev, pinLocalizacao: `${p.coords.latitude.toFixed(6)}, ${p.coords.longitude.toFixed(6)}` }));
+        showToast("Localização capturada!");
+      });
+    }
+  };
+
   const handleSaveClient = () => {
-    if (!clientForm.nomeFantasia) return;
-    if (showClientModal === 'NEW') props.addClient(clientForm as Omit<Client, 'id'>);
-    else if (typeof showClientModal === 'object') props.updateClient(showClientModal.id, clientForm);
+    if (!clientForm.nomeFantasia || !clientForm.telefone || !clientForm.endereco || !clientForm.bairro) {
+      showToast("Preencha Nome Fantasia, Telefone, Endereço e Bairro.", 'error');
+      return;
+    }
+    
+    const clientPayload: Omit<Client, 'id'> = {
+      nomeFantasia: clientForm.nomeFantasia,
+      telefone: clientForm.telefone,
+      endereco: clientForm.endereco,
+      bairro: clientForm.bairro,
+      diaRoteiro: clientForm.diaRoteiro ?? 1,
+      ativo: clientForm.ativo ?? true,
+      ativarCnpj: clientForm.ativarCnpj ?? false,
+      cnpj: clientForm.cnpj,
+      pinLocalizacao: clientForm.pinLocalizacao,
+      ordem: clientForm.ordem ?? 0,
+      nome: clientForm.nome,
+      observacoes: clientForm.observacoes,
+    };
+
+    if (showClientModal === 'NEW') {
+      props.addClient(clientPayload);
+    } else if (typeof showClientModal === 'object') {
+      props.updateClient(showClientModal.id, clientPayload);
+    }
     setShowClientModal(null);
     showToast("Cliente salvo!");
   };
@@ -892,6 +937,54 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                 <button onClick={handleSaveProduct} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 transition-all uppercase text-xs tracking-widest">SALVAR PRODUTO</button>
                 {showProductModal !== 'NEW' && <button onClick={handleDeleteProductInModal} className="w-full bg-rose-50 text-rose-600 font-black py-4 rounded-2xl active:scale-95 transition-all uppercase text-[10px] tracking-widest border border-rose-100 flex items-center justify-center gap-2"><i className="fa-solid fa-trash-can text-xs"></i> EXCLUIR PRODUTO</button>}
                 <button onClick={() => setShowProductModal(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showEntryModal && (
+        <div className="fixed inset-0 bg-black/50 z-[200] flex items-center justify-center p-6">
+          <div className="bg-white p-8 rounded-[32px] w-full max-w-xs shadow-2xl text-center">
+            <h3 className="font-black text-gray-800 text-sm uppercase mb-4">Entrada de Mercadoria</h3>
+            <div className="mb-6"><p className="text-[10px] font-black text-gray-400 uppercase mb-1">Produto</p><h4 className="text-sm font-bold text-gray-800 uppercase leading-tight">{showEntryModal.nome}</h4></div>
+            <div className="space-y-4">
+              <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100 flex flex-col items-center"><span className="text-[10px] font-black text-blue-400 uppercase mb-1">📦 Estoque Atual</span><span className="text-lg font-black text-blue-700">{(showEntryModal.estoquePrincipal ?? 0)} UN</span></div>
+              <input type="number" placeholder="Quantidade Entrada" className="w-full p-4 bg-gray-50 rounded-2xl border font-black text-center text-lg outline-none" value={entryForm.qtd} onChange={e => setEntryForm({...entryForm, qtd: e.target.value})} />
+              <input type="number" placeholder="Custo Unit." className="w-full p-4 bg-gray-50 rounded-2xl border font-black text-center text-lg outline-none" value={entryForm.custo} onChange={e => setEntryForm({...entryForm, custo: e.target.value})} />
+              <button onClick={() => { if(!entryForm.qtd || !entryForm.custo) return; props.registerStockEntry(showEntryModal.id, parseInt(entryForm.qtd), parseFloat(entryForm.custo)); showToast("Entrada registrada"); setShowEntryModal(null); }} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl active:scale-95 shadow-xl uppercase text-xs tracking-widest">Confirmar Entrada</button>
+              <button onClick={() => setShowEntryModal(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showClientModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-end sm:items-center justify-center p-4">
+          <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6 animate-in slide-in-from-bottom duration-300 shadow-2xl overflow-y-auto max-h-[95vh]">
+            <h3 className="font-black text-gray-800 uppercase text-sm mb-6">{showClientModal === 'NEW' ? 'Novo Cliente' : 'Editar Cliente'}</h3>
+            <div className="space-y-4">
+              <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome Fantasia</label><input value={clientForm.nomeFantasia ?? ''} onChange={e => setClientForm({...clientForm, nomeFantasia: e.target.value})} placeholder="Nome Fantasia" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div>
+              <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Telefone</label><input value={clientForm.telefone ?? ''} onChange={e => setClientForm({...clientForm, telefone: e.target.value})} placeholder="Telefone" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div>
+              <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Endereço</label><input value={clientForm.endereco ?? ''} onChange={e => setClientForm({...clientForm, endereco: e.target.value})} placeholder="Endereço" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div>
+              <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Bairro</label><input value={clientForm.bairro ?? ''} onChange={e => setClientForm({...clientForm, bairro: e.target.value})} placeholder="Bairro" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div>
+              
+              <div className="flex items-center gap-4 bg-gray-50 p-4 rounded-2xl border">
+                <input type="checkbox" checked={clientForm.ativarCnpj ?? false} onChange={e => setClientForm({...clientForm, ativarCnpj: e.target.checked})} className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500" />
+                <label className="text-xs font-bold text-gray-700 uppercase">Ativar CNPJ</label>
+              </div>
+              {clientForm.ativarCnpj && (
+                <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">CNPJ</label><input value={clientForm.cnpj ?? ''} onChange={e => setClientForm({...clientForm, cnpj: e.target.value})} placeholder="00.000.000/0000-00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div>
+              )}
+
+              <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Dia de Roteiro</label><select value={clientForm.diaRoteiro ?? 1} onChange={e => setClientForm({...clientForm, diaRoteiro: parseInt(e.target.value)})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold">{[1, 2, 3, 4, 5, 6].map(d => (<option key={d} value={d}>{DIAS_SEMANA[d] ?? 'N/D'}</option>))}</select></div>
+              
+              <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">PIN Localização</label><input value={clientForm.pinLocalizacao ?? ''} onChange={e => setClientForm({...clientForm, pinLocalizacao: e.target.value})} placeholder="Latitude, Longitude" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div>
+              <button onClick={handlePinLocation} className="w-full bg-indigo-50 text-indigo-600 font-black py-3 rounded-2xl uppercase text-[10px] tracking-widest flex items-center justify-center gap-2"><i className="fa-solid fa-location-dot"></i> Capturar Localização Atual</button>
+
+              <div className="flex flex-col gap-2 pt-2">
+                <button onClick={handleSaveClient} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 transition-all uppercase text-xs tracking-widest">SALVAR CLIENTE</button>
+                <button onClick={() => setShowClientModal(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button>
               </div>
             </div>
           </div>

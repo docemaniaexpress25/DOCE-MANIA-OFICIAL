@@ -57,6 +57,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [search, setSearch] = useState('');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
+  // Estado local para gerenciar a ordem dos produtos
+  const [orderedProductIds, setOrderedProductIds] = useState<string[]>([]);
+
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
@@ -68,6 +71,20 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       props.clearAdminNotification?.();
     }
   }, [props.adminNotification]);
+
+  // Inicializa a ordem dos produtos se ainda não estiver definida
+  useEffect(() => {
+    if (props.products.length > 0 && orderedProductIds.length === 0) {
+      setOrderedProductIds(props.products.map(p => p.id));
+    } else if (props.products.length !== orderedProductIds.length) {
+      // Sincroniza novos produtos que possam ter sido adicionados
+      const currentIds = props.products.map(p => p.id);
+      const newIds = currentIds.filter(id => !orderedProductIds.includes(id));
+      if (newIds.length > 0) {
+        setOrderedProductIds([...orderedProductIds, ...newIds]);
+      }
+    }
+  }, [props.products]);
 
   const [showProductModal, setShowProductModal] = useState<Product | 'NEW' | null>(null);
   const [showEntryModal, setShowEntryModal] = useState<Product | null>(null);
@@ -254,6 +271,34 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       }
     }
   };
+
+  const moveProduct = (id: string, direction: 'UP' | 'DOWN') => {
+    const index = orderedProductIds.indexOf(id);
+    if (index === -1) return;
+    
+    const newOrder = [...orderedProductIds];
+    if (direction === 'UP' && index > 0) {
+      [newOrder[index], newOrder[index - 1]] = [newOrder[index - 1], newOrder[index]];
+    } else if (direction === 'DOWN' && index < newOrder.length - 1) {
+      [newOrder[index], newOrder[index + 1]] = [newOrder[index + 1], newOrder[index]];
+    }
+    setOrderedProductIds(newOrder);
+  };
+
+  const sortedProducts = useMemo(() => {
+    const filtered = props.products.filter(p => (p.nome ?? '').toLowerCase().includes(search.toLowerCase()));
+    
+    // Se estiver pesquisando, retorna a lista filtrada normalmente
+    if (search) return filtered;
+    
+    // Se não estiver pesquisando, retorna na ordem definida pelas setas
+    return [...filtered].sort((a, b) => {
+      const idxA = orderedProductIds.indexOf(a.id);
+      const idxB = orderedProductIds.indexOf(b.id);
+      if (idxA === -1 || idxB === -1) return 0;
+      return idxA - idxB;
+    });
+  }, [props.products, orderedProductIds, search]);
 
   const updateStaging = (pId: string, delta: number) => {
     const p = props.products.find(prod => prod.id === pId);
@@ -550,7 +595,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                 <div className="flex justify-between items-end">
                    <div>
                      <h4 className="font-bold text-gray-800 text-sm leading-tight">{props.clients.find(c => c.id === s.clientId)?.nomeFantasia || 'Cliente'}</h4>
-                     <p className="text-[10px] text-gray-400 font-bold uppercase mt-1">Vend: {props.users.find(u => u.id === s.vendedorId)?.nome ?? 'Desconhecido'}</p> 
+                     <p className="text-[10px] text-gray-400 font-bold uppercase mt-1">Vend: {props.users.find(u => u.id === s.vendedorId)?.nome ?? 'Desconhecido'} • {s.metodoPagamento?.replace('_', ' ') ?? 'N/D'}</p> 
                      {(s.valorPago ?? 0) > 0 && <p className="text-[9px] text-emerald-600 font-bold uppercase mt-1">Já pago: R$ {(s.valorPago ?? 0).toFixed(2)}</p>} 
                    </div>
                    <div className="text-right">
@@ -577,15 +622,24 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             <button onClick={() => handleOpenProduct('NEW')} className="bg-blue-600 text-white w-12 h-12 rounded-xl flex items-center justify-center shadow-lg active:scale-90 transition-transform"><i className="fa-solid fa-plus"></i></button>
           </div>
           <div className="grid gap-3 px-1">
-            {props.products.filter(p => (p.nome ?? '').toLowerCase().includes(search.toLowerCase())).map((p: Product) => ( 
+            {sortedProducts.map((p: Product) => ( 
               <div key={p.id} className="bg-white px-4 py-4 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between transition-all hover:border-blue-200 group">
-                <div className="flex-1 min-w-0 pr-3" onClick={() => handleOpenProduct(p)}>
-                  <h3 className="font-bold text-gray-800 text-[13px] leading-tight line-clamp-2 uppercase">{p.nome ?? 'Sem nome'}</h3> 
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5">
-                    <span className="text-[10px] font-black bg-blue-50 text-blue-600 px-2 py-0.5 rounded border border-blue-100 shadow-inner whitespace-nowrap">
-                      {(p.estoquePrincipal ?? 0)} UN 
-                    </span>
-                    <span className="text-[13px] font-black text-emerald-600">R$ {(p.precoVenda ?? 0).toFixed(2)}</span> 
+                <div className="flex items-center gap-3 flex-1 min-w-0">
+                  {/* Setas de Ordenação */}
+                  {!search && (
+                    <div className="flex flex-col gap-1 pr-2 border-r border-gray-50">
+                      <button onClick={() => moveProduct(p.id, 'UP')} className="text-gray-300 hover:text-blue-500 active:scale-125 transition-all"><i className="fa-solid fa-chevron-up text-[10px]"></i></button>
+                      <button onClick={() => moveProduct(p.id, 'DOWN')} className="text-gray-300 hover:text-blue-500 active:scale-125 transition-all"><i className="fa-solid fa-chevron-down text-[10px]"></i></button>
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0" onClick={() => handleOpenProduct(p)}>
+                    <h3 className="font-bold text-gray-800 text-[13px] leading-tight line-clamp-2 uppercase">{p.nome ?? 'Sem nome'}</h3> 
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5">
+                      <span className="text-[10px] font-black bg-blue-50 text-blue-600 px-2 py-0.5 rounded border border-blue-100 shadow-inner whitespace-nowrap">
+                        {(p.estoquePrincipal ?? 0)} UN 
+                      </span>
+                      <span className="text-[13px] font-black text-emerald-600">R$ {(p.precoVenda ?? 0).toFixed(2)}</span> 
+                    </div>
                   </div>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
@@ -1110,7 +1164,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       {showEntryModal && (
         <div className="fixed inset-0 bg-black/50 z-[200] flex items-center justify-center p-6">
           <div className="bg-white p-8 rounded-[32px] w-full max-w-xs shadow-2xl text-center">
-            <h3 className="font-black text-gray-800 text-sm uppercase mb-6">Entrada de Mercadoria</h3>
+            <h3 className="font-black text-gray-800 text-sm uppercase mb-4">Entrada de Mercadoria</h3>
+            
+            {/* Nome do Produto em Destaque */}
+            <div className="mb-6">
+               <p className="text-[10px] font-black text-gray-400 uppercase mb-1">Produto</p>
+               <h4 className="text-sm font-bold text-gray-800 uppercase leading-tight">{showEntryModal.nome}</h4>
+            </div>
+
             <div className="space-y-4">
               <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100 flex flex-col items-center">
                 <span className="text-[10px] font-black text-blue-400 uppercase mb-1">📦 Estoque Atual</span>

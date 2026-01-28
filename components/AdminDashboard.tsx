@@ -50,13 +50,16 @@ interface AdminDashboardProps {
   setPix2Code: (val: string | null) => void;
   adminNotification?: string | null;
   clearAdminNotification?: () => void;
+  productOrder: string[];
+  setProductOrder: (order: string[]) => void;
 }
 
 const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [activeTab, setActiveTab] = useState<'HOME' | 'CATALOGO' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'SETTINGS'>('HOME');
   const [search, setSearch] = useState('');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
-  const [orderedProductIds, setOrderedProductIds] = useState<string[]>([]);
+  // Removido estado local orderedProductIds, usando props.productOrder
+  // const [orderedProductIds, setOrderedProductIds] = useState<string[]>([]);
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
@@ -70,17 +73,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     }
   }, [props.adminNotification]);
 
-  useEffect(() => {
-    if (props.products.length > 0 && orderedProductIds.length === 0) {
-      setOrderedProductIds(props.products.map(p => p.id));
-    } else if (props.products.length !== orderedProductIds.length) {
-      const currentIds = props.products.map(p => p.id);
-      const newIds = currentIds.filter(id => !orderedProductIds.includes(id));
-      if (newIds.length > 0) {
-        setOrderedProductIds([...orderedProductIds, ...newIds]);
-      }
-    }
-  }, [props.products]);
+  // Removido useEffect de inicialização de orderedProductIds
 
   const [showProductModal, setShowProductModal] = useState<Product | 'NEW' | null>(null);
   const [showEntryModal, setShowEntryModal] = useState<Product | null>(null);
@@ -278,11 +271,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   };
 
   const moveProduct = (id: string, dir: 'UP' | 'DOWN') => {
-    const idx = orderedProductIds.indexOf(id);
-    const newOrder = [...orderedProductIds];
+    const idx = props.productOrder.indexOf(id);
+    const newOrder = [...props.productOrder];
     if (dir === 'UP' && idx > 0) [newOrder[idx], newOrder[idx-1]] = [newOrder[idx-1], newOrder[idx]];
     else if (dir === 'DOWN' && idx < newOrder.length - 1) [newOrder[idx], newOrder[idx+1]] = [newOrder[idx+1], newOrder[idx]];
-    setOrderedProductIds(newOrder);
+    props.setProductOrder(newOrder);
   };
 
   const moveClient = async (id: string, direction: 'UP' | 'DOWN', day: number) => {
@@ -489,16 +482,17 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     </button>
   );
 
+  const getProductById = (id: string) => props.products.find(p => p.id === id);
+
   const filteredProducts = useMemo(() => {
     const filtered = props.products.filter(p => (p.nome ?? '').toLowerCase().includes(search.toLowerCase()));
     if (search) return filtered;
-    return [...filtered].sort((a, b) => {
-      const idxA = orderedProductIds.indexOf(a.id);
-      const idxB = orderedProductIds.indexOf(b.id);
-      if (idxA === -1 || idxB === -1) return 0;
-      return idxA - idxB;
-    });
-  }, [props.products, orderedProductIds, search]);
+    
+    // Ordena usando a ordem persistida
+    return props.productOrder
+      .map(id => getProductById(id))
+      .filter((p): p is Product => !!p);
+  }, [props.products, props.productOrder, search]);
 
   const filteredHistory = useMemo(() => {
     return props.sales.filter(s => filterByPeriod(s.data, filtroPeriodo))
@@ -515,6 +509,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   };
 
   const contasAReceber = useMemo(() => props.sales.filter(s => s.metodoPagamento === 'A_PRAZO' && s.statusPagamento === 'PENDENTE'), [props.sales]);
+
+  // Mapeia produtos para a Gestão de Cargas, usando a ordem persistente
+  const productsForCarga = useMemo(() => {
+    return props.productOrder
+      .map(id => getProductById(id))
+      .filter((p): p is Product => !!p);
+  }, [props.products, props.productOrder]);
 
   return (
     <div className="space-y-6 pb-10">
@@ -577,7 +578,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           {selectedVendedorId && (
             <div className="pb-40">
               <div className="grid gap-1.5 px-1">
-                {props.products.map(p => { 
+                {productsForCarga.map(p => { 
                   const noV = props.cargas.find(c => c.vendedorId === selectedVendedorId && c.produtoId === p.id)?.quantidade ?? 0; 
                   const meta = stagingCarga[p.id] ?? 0;
                   return (
@@ -1019,54 +1020,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                 <button onClick={handleSaveProduct} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 transition-all uppercase text-xs tracking-widest">SALVAR PRODUTO</button>
                 {showProductModal !== 'NEW' && <button onClick={handleDeleteProductInModal} className="w-full bg-rose-50 text-rose-600 font-black py-4 rounded-2xl active:scale-95 transition-all uppercase text-[10px] tracking-widest border border-rose-100 flex items-center justify-center gap-2"><i className="fa-solid fa-trash-can text-xs"></i> EXCLUIR PRODUTO</button>}
                 <button onClick={() => setShowProductModal(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showEntryModal && (
-        <div className="fixed inset-0 bg-black/50 z-[200] flex items-center justify-center p-6">
-          <div className="bg-white p-8 rounded-[32px] w-full max-w-xs shadow-2xl text-center">
-            <h3 className="font-black text-gray-800 text-sm uppercase mb-4">Entrada de Mercadoria</h3>
-            <div className="mb-6"><p className="text-[10px] font-black text-gray-400 uppercase mb-1">Produto</p><h4 className="text-sm font-bold text-gray-800 uppercase leading-tight">{showEntryModal.nome}</h4></div>
-            <div className="space-y-4">
-              <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100 flex flex-col items-center"><span className="text-[10px] font-black text-blue-400 uppercase mb-1">📦 Estoque Atual</span><span className="text-lg font-black text-blue-700">{(showEntryModal.estoquePrincipal ?? 0)} UN</span></div>
-              <input type="number" placeholder="Quantidade Entrada" className="w-full p-4 bg-gray-50 rounded-2xl border font-black text-center text-lg outline-none" value={entryForm.qtd} onChange={e => setEntryForm({...entryForm, qtd: e.target.value})} />
-              <input type="number" placeholder="Custo Unit." className="w-full p-4 bg-gray-50 rounded-2xl border font-black text-center text-lg outline-none" value={entryForm.custo} onChange={e => setEntryForm({...entryForm, custo: e.target.value})} />
-              <button onClick={() => { if(!entryForm.qtd || !entryForm.custo) return; props.registerStockEntry(showEntryModal.id, parseInt(entryForm.qtd), parseFloat(entryForm.custo)); showToast("Entrada registrada"); setShowEntryModal(null); }} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl active:scale-95 shadow-xl uppercase text-xs tracking-widest">Confirmar Entrada</button>
-              <button onClick={() => setShowEntryModal(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showClientModal && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-end sm:items-center justify-center p-4">
-          <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6 animate-in slide-in-from-bottom duration-300 shadow-2xl overflow-y-auto max-h-[95vh]">
-            <h3 className="font-black text-gray-800 uppercase text-sm mb-6">{showClientModal === 'NEW' ? 'Novo Cliente' : 'Editar Cliente'}</h3>
-            <div className="space-y-4">
-              <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome Fantasia</label><input value={clientForm.nomeFantasia ?? ''} onChange={e => setClientForm({...clientForm, nomeFantasia: e.target.value})} placeholder="Nome Fantasia" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div>
-              <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Telefone</label><input value={clientForm.telefone ?? ''} onChange={e => setClientForm({...clientForm, telefone: e.target.value})} placeholder="Telefone" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div>
-              <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Endereço</label><input value={clientForm.endereco ?? ''} onChange={e => setClientForm({...clientForm, endereco: e.target.value})} placeholder="Endereço" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div>
-              <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Bairro</label><input value={clientForm.bairro ?? ''} onChange={e => setClientForm({...clientForm, bairro: e.target.value})} placeholder="Bairro" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div>
-              
-              <div className="flex items-center gap-4 bg-gray-50 p-4 rounded-2xl border">
-                <input type="checkbox" checked={clientForm.ativarCnpj ?? false} onChange={e => setClientForm({...clientForm, ativarCnpj: e.target.checked})} className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500" />
-                <label className="text-xs font-bold text-gray-700 uppercase">Ativar CNPJ</label>
-              </div>
-              {clientForm.ativarCnpj && (
-                <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">CNPJ</label><input value={clientForm.cnpj ?? ''} onChange={e => setClientForm({...clientForm, cnpj: e.target.value})} placeholder="00.000.000/0000-00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div>
-              )}
-
-              <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Dia de Roteiro</label><select value={clientForm.diaRoteiro ?? 1} onChange={e => setClientForm({...clientForm, diaRoteiro: parseInt(e.target.value)})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold">{[1, 2, 3, 4, 5, 6].map(d => (<option key={d} value={d}>{DIAS_SEMANA[d] ?? 'N/D'}</option>))}</select></div>
-              
-              <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">PIN Localização</label><input value={clientForm.pinLocalizacao ?? ''} onChange={e => setClientForm({...clientForm, pinLocalizacao: e.target.value})} placeholder="Latitude, Longitude" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div>
-              <button onClick={handlePinLocation} className="w-full bg-indigo-50 text-indigo-600 font-black py-3 rounded-2xl uppercase text-[10px] tracking-widest flex items-center justify-center gap-2"><i className="fa-solid fa-location-dot"></i> Capturar Localização Atual</button>
-
-              <div className="flex flex-col gap-2 pt-2">
-                <button onClick={handleSaveClient} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 transition-all uppercase text-xs tracking-widest">SALVAR CLIENTE</button>
-                <button onClick={() => setShowClientModal(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button>
               </div>
             </div>
           </div>

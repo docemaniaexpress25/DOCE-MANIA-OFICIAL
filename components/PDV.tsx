@@ -16,9 +16,10 @@ interface PDVProps {
   pix1Code: string | null;
   pix2Name: string;
   pix2Code: string | null;
+  productOrder: string[]; // Adicionando a ordem persistente
 }
 
-const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onCancel, onFinish, processSale, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code }) => {
+const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onCancel, onFinish, processSale, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, productOrder }) => {
   const [cart, setCart] = useState<{ [key: string]: { quantidade: number, precoVenda: string } }>({});
   const [metodo, setMetodo] = useState<PaymentMethod>('DINHEIRO');
   const [detalheMetodo, setDetalheMetodo] = useState<string>('Dinheiro');
@@ -33,7 +34,16 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const todayStr = new Date().toISOString().split('T')[0];
 
   // 1. Mapeia os IDs dos produtos que o vendedor tem na carga
-  const productIdsInCarga = useMemo(() => new Set(minhaCarga.map(c => c.produtoId)), [minhaCarga]);
+  const cargaMap = useMemo(() => new Map(minhaCarga.map(c => [c.produtoId, c.quantidade])), [minhaCarga]);
+
+  // 2. Filtra e ordena os produtos com base na ordem persistente e na carga
+  const orderedProductsInCarga = useMemo(() => {
+    const productMap = new Map(products.map(p => [p.id, p]));
+    return productOrder
+      .map(pId => productMap.get(pId))
+      .filter((p): p is Product => !!p && cargaMap.has(p.id));
+  }, [products, productOrder, cargaMap]);
+
 
   useEffect(() => {
     const savedCart = localStorage.getItem(`pdv_cart_${vendedorId}_${client.id}`);
@@ -57,7 +67,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const updateCart = (pId: string, delta: number, basePrice: number) => {
     setCart(prev => {
       const current = prev[pId] || { quantidade: 0, precoVenda: basePrice.toString() };
-      const cargaOriginal = minhaCarga.find(c => c.produtoId === pId)?.quantidade || 0;
+      const cargaOriginal = cargaMap.get(pId) || 0;
       const novaQtd = Math.max(0, Math.min(cargaOriginal, (current.quantidade ?? 0) + delta)); 
       if (novaQtd === 0) {
         const { [pId]: _, ...rest } = prev;
@@ -89,7 +99,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const valorRecebidoNum = parseFloat(valorRecebido) || 0;
   const troco = Math.max(0, valorRecebidoNum - total);
 
-  // Calcula a violação de margem e retorna o primeiro produto infrator (ou null)
+  // Calcula a violação de margem e retorna o primeiro produto infrator (or null)
   const marginViolationInfo = useMemo(() => {
     if (!margemMinimaAtiva) return null;
     
@@ -187,18 +197,12 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       </header>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {products
-          .filter(p => productIdsInCarga.has(p.id)) // Filtra apenas produtos na carga (removido o filtro 'ativo')
+        {orderedProductsInCarga
           .map(p => { 
           const itemNoCart = cart[p.id];
-          const cargaOriginal = minhaCarga.find(c => c.produtoId === p.id)?.quantidade || 0;
+          const cargaOriginal = cargaMap.get(p.id) || 0;
           const cargaDisponivel = cargaOriginal - (itemNoCart?.quantidade ?? 0); 
           
-          // Se o produto está na carga, mas a quantidade é 0 (após vendas), ele ainda deve aparecer se estiver no carrinho,
-          // mas se não estiver no carrinho e a carga for 0, ele não deve aparecer.
-          // Mantemos esta verificação para garantir que itens com estoque zero e fora do carrinho não sejam exibidos.
-          if (cargaOriginal <= 0 && (itemNoCart?.quantidade ?? 0) === 0) return null;
-
           const currentPrice = parseFloat(itemNoCart?.precoVenda || (p.precoVenda ?? 0).toString()) || 0; 
           
           const minPriceAllowed = Number(((p.precoCusto ?? 0) / (1 - margemMinima / 100)).toFixed(2));

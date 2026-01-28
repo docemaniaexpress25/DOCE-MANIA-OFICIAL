@@ -32,10 +32,11 @@ interface VendedorDashboardProps {
   // Novas props para a Rota do Dia
   dailyRouteState: DailyRouteState;
   updateDailyRoute: (clientIds: string[], skippedClientIds: string[]) => void;
+  productOrder: string[]; // Adicionando a ordem persistente
 }
 
 const VendedorDashboard: React.FC<VendedorDashboardProps> = ({ 
-  user, products, clients, cargas, cargasPendentes, sales, commissions, payoutLogs, messages, markMessageAsRead, processSale, addClient, updateClient, deleteClient, receivePayment, deleteSale, aceitarCarga, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, updateDailyRoute
+  user, products, clients, cargas, cargasPendentes, sales, commissions, payoutLogs, messages, markMessageAsRead, processSale, addClient, updateClient, deleteClient, receivePayment, deleteSale, aceitarCarga, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, updateDailyRoute, productOrder
 }) => {
   const [activeTab, setActiveTab] = useState<'HOME' | 'ROTEIRO' | 'CARGA' | 'HISTORY' | 'FINANCE' | 'CREDIT' | 'CLIENTS' | 'WEEKLY' | 'STOCK_VIEW'>('HOME');
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
@@ -73,6 +74,34 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     // Garante a ordenação
     return clientsInRoute.sort((a, b) => (a.ordem || 0) - (b.ordem || 0)); 
   }, [clients, dailyRouteState.clientIds]); 
+
+  const getProductById = (id: string) => products.find(p => p.id === id);
+
+  // Produtos na carga, ordenados pela ordem persistente
+  const orderedCargaProducts = useMemo(() => {
+    // Tipagem explícita para Map<string, Carga>
+    const cargaMap: Map<string, Carga> = new Map(minhaCarga.map(c => [c.produtoId, c]));
+    return productOrder
+      .map(pId => {
+        const product = getProductById(pId);
+        const cargaItem = cargaMap.get(pId);
+        
+        // Agora cargaItem é do tipo Carga | undefined
+        if (product && cargaItem && cargaItem.quantidade > 0) {
+          return { ...product, quantidadeCarga: cargaItem.quantidade };
+        }
+        return null;
+      })
+      .filter((p): p is (Product & { quantidadeCarga: number }) => !!p);
+  }, [minhaCarga, products, productOrder]);
+
+  // Produtos no estoque central, ordenados pela ordem persistente
+  const orderedStockProducts = useMemo(() => {
+    return productOrder
+      .map(id => getProductById(id))
+      .filter((p): p is Product => !!p);
+  }, [products, productOrder]);
+
 
   const handleSkipClient = (clientId: string) => { 
     if (confirm("Pular atendimento?")) {
@@ -223,6 +252,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         client={pdvClient} products={products} minhaCarga={minhaCarga} vendedorId={user.id} onCancel={() => setSelectedClient(null)}
         onFinish={(s) => { setViewingSale(s); setSelectedClient(null); showToast("Venda realizada"); }}
         processSale={processSale} margemMinima={margemMinima} margemMinimaAtiva={margemMinimaAtiva} pix1Name={pix1Name} pix1Code={pix1Code} pix2Name={pix2Name} pix2Code={pix2Code}
+        productOrder={productOrder}
       />
     );
   }
@@ -344,12 +374,12 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
             <>
               <div className="bg-purple-600 text-white p-6 rounded-3xl shadow-xl flex justify-between items-center">
                  <div><p className="text-[10px] font-black uppercase opacity-60">Valor Total Carga</p><h3 className="text-2xl font-black">R$ {valorTotalCarga.toFixed(2)}</h3></div>
-                 <div className="text-right"><p className="text-[10px] font-black uppercase opacity-60">Itens Ativos</p><h3 className="text-2xl font-black">{minhaCarga.length}</h3></div>
+                 <div className="text-right"><p className="text-[10px] font-black uppercase opacity-60">Itens Ativos</p><h3 className="text-2xl font-black">{orderedCargaProducts.length}</h3></div>
               </div>
               <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
                 <table className="w-full text-left">
                   <thead className="bg-gray-50"><tr><th className="p-4 text-[10px] font-black text-gray-400 uppercase">Item</th><th className="p-4 text-center text-[10px] font-black text-gray-400 uppercase">Preço</th><th className="p-4 text-right text-[10px] font-black text-gray-400 uppercase">Qtd</th></tr></thead>
-                  <tbody className="divide-y divide-gray-50">{minhaCarga.map(c => { const p = products.find(prod => prod.id === c.produtoId); return (<tr key={c.produtoId}><td className="p-4 text-xs font-semibold uppercase">{p?.nome ?? 'Desc.'}</td><td className="p-4 text-center text-xs text-gray-400">R$ {(p?.precoVenda ?? 0).toFixed(2)}</td><td className="p-4 text-right font-black text-lg text-blue-600">{c.quantidade}</td></tr>); })}</tbody> 
+                  <tbody className="divide-y divide-gray-50">{orderedCargaProducts.map(p => (<tr key={p.id}><td className="p-4 text-xs font-semibold uppercase">{p.nome ?? 'Desc.'}</td><td className="p-4 text-center text-xs text-gray-400">R$ {(p.precoVenda ?? 0).toFixed(2)}</td><td className="p-4 text-right font-black text-lg text-blue-600">{p.quantidadeCarga}</td></tr>))}</tbody> 
                 </table>
               </div>
             </>
@@ -426,7 +456,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         <div className="space-y-4">
           <header className="px-1"><h2 className="text-xs font-black text-gray-400 uppercase tracking-wider">Estoque Central</h2></header>
           <div className="grid gap-3">
-            {products.map(p => ( 
+            {orderedStockProducts.map(p => ( 
               <div key={p.id} className="bg-white px-4 py-3 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between">
                 <div className="flex-1"><h3 className="font-bold text-gray-800 text-sm leading-tight uppercase">{p.nome}</h3><div className="flex items-center gap-2 mt-1"><span className="text-[10px] font-black bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded tracking-tighter">Central: {p.estoquePrincipal} un</span></div></div>
                 <div className="text-right"><p className="text-sm font-black text-emerald-600">R$ {p.precoVenda.toFixed(2)}</p></div> 

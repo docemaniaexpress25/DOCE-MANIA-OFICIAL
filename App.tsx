@@ -47,6 +47,9 @@ const App: React.FC = () => {
   const [commissions, setCommissions] = useState<Commission[]>(loadLocalState('commissions', DEFAULT_COMMISSIONS));
   const [payoutLogs, setPayoutLogs] = useState<CommissionPaymentLog[]>(loadLocalState('payoutLogs', DEFAULT_PAYOUT_LOGS));
   const [messages, setMessages] = useState<SystemMessage[]>(loadLocalState('messages', DEFAULT_MESSAGES));
+  
+  // Persistência da Ordem dos Produtos
+  const [productOrder, setProductOrder] = useState<string[]>(() => loadLocalState('productOrder', []));
 
   // Novo estado para a Rota do Dia Persistida
   const [dailyRouteState, setDailyRouteState] = useState<DailyRouteState>(() => {
@@ -69,6 +72,7 @@ const App: React.FC = () => {
   useEffect(() => { saveLocalState('payoutLogs', payoutLogs); }, [payoutLogs]);
   useEffect(() => { saveLocalState('messages', messages); }, [messages]);
   useEffect(() => { saveLocalState('dailyRouteState', dailyRouteState); }, [dailyRouteState]);
+  useEffect(() => { saveLocalState('productOrder', productOrder); }, [productOrder]);
   // -------------------------------------
 
   const fetchUsers = useCallback(async () => { setUsers(await userService.getAllUsers()); }, []);
@@ -101,6 +105,20 @@ const App: React.FC = () => {
   useEffect(() => {
     fetchCoreData();
   }, [fetchCoreData]);
+
+  // Inicializa a ordem dos produtos se estiver vazia
+  useEffect(() => {
+    if (products.length > 0 && productOrder.length === 0) {
+      setProductOrder(products.map(p => p.id));
+    } else if (products.length > 0) {
+      // Garante que novos produtos sejam adicionados ao final da ordem
+      const currentIds = products.map(p => p.id);
+      const newIds = currentIds.filter(id => !productOrder.includes(id));
+      if (newIds.length > 0) {
+        setProductOrder(prev => [...prev, ...newIds]);
+      }
+    }
+  }, [products]);
 
   // Recalcula preço de venda se margem global mudar
   useEffect(() => {
@@ -170,7 +188,11 @@ const App: React.FC = () => {
   const addProduct = async (nome: string, custo: number, venda: number, comissao: number, estoque: number = 0) => {
     const newProduct: Omit<Product, 'id'> = { nome, precoCusto: Number(custo.toFixed(2)), precoVenda: Number(venda.toFixed(2)), comissaoPercentual: Number(comissao.toFixed(2)), estoquePrincipal: estoque, ativo: true };
     const res = await productService.insertProduct(newProduct);
-    if (res) await fetchProducts();
+    if (res) {
+      await fetchProducts();
+      // Adiciona o novo produto ao final da ordem
+      setProductOrder(prev => [...prev, res.id]);
+    }
   };
 
   const updateProduct = async (id: string, data: Partial<Product>) => {
@@ -180,7 +202,11 @@ const App: React.FC = () => {
 
   const deleteProduct = async (id: string) => {
     const res = await productService.deleteProduct(id);
-    if (res) await fetchProducts();
+    if (res) {
+      await fetchProducts();
+      // Remove o produto da ordem
+      setProductOrder(prev => prev.filter(pId => pId !== id));
+    }
   };
 
   const registerStockEntry = async (id: string, qtd: number, custo: number) => {
@@ -392,6 +418,7 @@ const App: React.FC = () => {
             setMargemMinimaAtiva={(val) => updateSetting('margemMinimaAtiva', val)} pix1Name={pix1Name} setPix1Name={(val) => updateSetting('pix1Name', val)} pix1Code={pix1Code} setPix1Code={(val) => updateSetting('pix1Code', val)}
             pix2Name={pix2Name} setPix2Name={(val) => updateSetting('pix2Name', val)} pix2Code={pix2Code} setPix2Code={(val) => updateSetting('pix2Code', val)}
             adminNotification={adminNotification} clearAdminNotification={() => setAdminNotification(null)}
+            productOrder={productOrder} setProductOrder={setProductOrder}
           />
         ) : (
           <VendedorDashboard 
@@ -407,6 +434,7 @@ const App: React.FC = () => {
             pix2Name={pix2Name} pix2Code={pix2Code}
             dailyRouteState={dailyRouteState}
             updateDailyRoute={updateDailyRoute}
+            productOrder={productOrder}
           />
         )}
       </main>

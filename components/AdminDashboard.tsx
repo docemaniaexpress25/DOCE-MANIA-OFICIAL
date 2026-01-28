@@ -139,7 +139,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     
     // Calcula o valor total de comissões que são elegíveis para pagamento (DISPONIVEL, PENDENTE_CONFIRMACAO, PAGO)
     const totalCommsEligible = props.commissions
-      .filter(c => c.vendedorId === vId && c.status !== 'A_RECEBER')
+      .filter(c => c.status !== 'A_RECEBER')
       .reduce((acc, curr) => acc + (curr.valor ?? 0), 0); 
       
     const jaPago = props.payoutLogs.filter(l => l.vendedorId === vId).reduce((acc, curr) => acc + (curr.valorPago ?? 0), 0); 
@@ -193,7 +193,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     const sellerPerformance = props.users.filter(u => u.role === 'VENDEDOR').map((v: User) => {
       const vSales = sales.filter(s => s.vendedorId === v.id);
       return { nome: v.nome ?? 'Desconhecido', total: vSales.reduce((acc, curr) => acc + (curr.valorTotal ?? 0), 0) }; 
-    }).sort((a, b) => b.total - a.total);
+    }).sort((a, b) => (b.total ?? 0) - (a.total ?? 0));
 
     return { totalVendas: Number(totalVendas.toFixed(2)), ticketMedio: Number(ticketMedio.toFixed(2)), totalComissaoPaga: Number(paidCommissions.toFixed(2)), rankingProdutos, sellerPerformance, topClients };
   }, [props.sales, props.products, props.users, props.payoutLogs, props.clients, periodoRelatorio]);
@@ -243,6 +243,16 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     else if (typeof showProductModal === 'object') props.updateProduct(showProductModal.id, data);
     showToast("Produto salvo com sucesso");
     setShowProductModal(null);
+  };
+
+  const handleDeleteProductInModal = () => {
+    if (typeof showProductModal === 'object' && showProductModal !== null) {
+      if (confirm(`Deseja realmente excluir o produto "${showProductModal.nome}"?`)) {
+        props.deleteProduct(showProductModal.id);
+        showToast("Produto excluído ou desativado");
+        setShowProductModal(null);
+      }
+    }
   };
 
   const updateStaging = (pId: string, delta: number) => {
@@ -455,7 +465,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           <div className="grid gap-3 px-1">
             {filteredHistory.map((s: Sale) => {
               const today = new Date();
-              const saleDate = new Date(s.data ?? today); 
               return (
                 <button key={s.id} onClick={() => setSelectedSale(s)} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex flex-col transition-all hover:border-blue-200 text-left w-full">
                   <div className="flex justify-between items-start mb-2">
@@ -570,7 +579,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           <div className="grid gap-3">
             {props.products.filter(p => (p.nome ?? '').toLowerCase().includes(search.toLowerCase())).map((p: Product) => ( 
               <div key={p.id} className="bg-white px-4 py-3 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between transition-all hover:border-blue-200">
-                <div className="flex-1 min-w-0 pr-3">
+                <div className="flex-1 min-w-0 pr-3" onClick={() => handleOpenProduct(p)}>
                   <h3 className="font-bold text-gray-800 text-sm leading-tight line-clamp-2">{p.nome ?? 'Produto sem nome'}</h3> 
                   <div className="flex items-center gap-2 mt-1">
                     <span className="text-[11px] font-black bg-blue-50 text-blue-600 px-2 py-0.5 rounded border border-blue-100 shadow-inner">
@@ -580,9 +589,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button onClick={() => { setShowEntryModal(p); setEntryForm({ qtd: '', custo: (p.precoCusto ?? 0).toString() }); }} className="bg-emerald-600 text-white w-12 h-12 rounded-xl flex items-center justify-center shadow-md active:scale-90 transition-all border-2 border-emerald-700" title="Entrada"><i className="fa-solid fa-plus-circle text-lg"></i></button>
-                  <button onClick={() => handleOpenProduct(p)} className="bg-blue-50 text-blue-600 w-12 h-12 rounded-xl border-2 border-blue-100 flex items-center justify-center active:scale-90 transition-all shadow-sm" title="Editar"><i className="fa-solid fa-pencil-alt text-lg"></i></button>
-                  <button onClick={() => { if(confirm("Excluir produto?")) { props.deleteProduct(p.id); showToast("Produto excluído ou desativado"); } }} className="text-gray-300 hover:text-red-500 w-12 h-12 rounded-xl flex items-center justify-center active:scale-90 transition-colors" title="Excluir"><i className="fa-solid fa-trash-can text-lg"></i></button>
+                  <button onClick={() => { setShowEntryModal(p); setEntryForm({ qtd: '', custo: (p.precoCusto ?? 0).toString() }); }} className="bg-emerald-600 text-white w-10 h-10 rounded-xl flex items-center justify-center shadow-md active:scale-90 transition-all" title="Entrada"><i className="fa-solid fa-plus-circle text-base"></i></button>
+                  <button onClick={() => handleOpenProduct(p)} className="bg-blue-50 text-blue-600 w-10 h-10 rounded-xl border border-blue-100 flex items-center justify-center active:scale-90 transition-all shadow-sm" title="Editar"><i className="fa-solid fa-pencil-alt text-base"></i></button>
                 </div>
               </div>
             ))}
@@ -607,7 +615,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                 {props.products.map((p: Product) => { 
                   const noV = props.cargas.find(c => c.vendedorId === selectedVendedorId && c.produtoId === p.id)?.quantidade ?? 0; 
                   const meta = stagingCarga[p.id] ?? 0;
-                  const totalDisp = (p.estoquePrincipal ?? 0) + noV; 
                   return (
                     <div key={p.id} className="bg-white px-4 py-3 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between">
                       <div className="flex-1 min-w-0 pr-3">
@@ -981,7 +988,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             <div className="space-y-4">
               <input value={pForm.nome ?? ''} onChange={e => setPForm({...pForm, nome: e.target.value})} placeholder="Nome Comercial" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" />
               
-              {/* Novo campo de Estoque Principal */}
+              {/* Campo de Estoque Principal */}
               <div className="space-y-1">
                 <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Estoque Principal (UN)</label>
                 <input 
@@ -994,13 +1001,37 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
               </div>
 
               <div className="grid grid-cols-2 gap-4">
-                <input type="number" value={pForm.custo ?? ''} onChange={e => { const c = e.target.value; const nv = updatePriceFromMargin(parseFloat(c)||0, parseFloat(pForm.margem)||0).toFixed(2); setPForm({...pForm, custo: c, venda: nv}); }} placeholder="Custo R$" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" />
-                <input type="number" value={pForm.margem ?? ''} disabled={props.margemGlobalAtiva} onChange={e => { const m = e.target.value; const nv = updatePriceFromMargin(parseFloat(pForm.custo)||0, parseFloat(m)||0).toFixed(2); setPForm({...pForm, margem: m, venda: nv}); }} placeholder="Margem %" className={`w-full p-4 border rounded-2xl font-bold ${props.margemGlobalAtiva ? 'bg-gray-100 opacity-50' : 'bg-gray-50'}`} />
+                <div className="space-y-1">
+                   <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Custo R$</label>
+                   <input type="number" value={pForm.custo ?? ''} onChange={e => { const c = e.target.value; const nv = updatePriceFromMargin(parseFloat(c)||0, parseFloat(pForm.margem)||0).toFixed(2); setPForm({...pForm, custo: c, venda: nv}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" />
+                </div>
+                <div className="space-y-1">
+                   <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Margem %</label>
+                   <input type="number" value={pForm.margem ?? ''} disabled={props.margemGlobalAtiva} onChange={e => { const m = e.target.value; const nv = updatePriceFromMargin(parseFloat(pForm.custo)||0, parseFloat(m)||0).toFixed(2); setPForm({...pForm, margem: m, venda: nv}); }} placeholder="0.00" className={`w-full p-4 border rounded-2xl font-bold ${props.margemGlobalAtiva ? 'bg-gray-100 opacity-50' : 'bg-gray-50'}`} />
+                </div>
               </div>
-              <input type="number" value={pForm.venda ?? ''} disabled={props.margemGlobalAtiva} onChange={e => { const v = e.target.value; const nm = updateMarginFromPrice(parseFloat(pForm.custo)||0, parseFloat(v)||0).toFixed(2); setPForm({...pForm, venda: v, margem: nm}); }} placeholder="Venda R$" className={`w-full p-4 border rounded-2xl font-black text-lg ${props.margemGlobalAtiva ? 'bg-gray-100 opacity-50' : 'bg-green-50'}`} />
-              <input type="number" value={pForm.comissao ?? ''} onChange={e => setPForm({...pForm, comissao: e.target.value})} placeholder="Comissão %" className="w-full p-4 bg-yellow-50 border rounded-2xl font-bold" />
-              <button onClick={handleSaveProduct} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 transition-all">SALVAR PRODUTO</button>
-              <button onClick={() => setShowProductModal(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px]">Cancelar</button>
+              
+              <div className="space-y-1">
+                <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Preço Venda R$</label>
+                <input type="number" value={pForm.venda ?? ''} disabled={props.margemGlobalAtiva} onChange={e => { const v = e.target.value; const nm = updateMarginFromPrice(parseFloat(pForm.custo)||0, parseFloat(v)||0).toFixed(2); setPForm({...pForm, venda: v, margem: nm}); }} placeholder="0.00" className={`w-full p-4 border rounded-2xl font-black text-lg ${props.margemGlobalAtiva ? 'bg-gray-100 opacity-50' : 'bg-green-50'}`} />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Comissão %</label>
+                <input type="number" value={pForm.comissao ?? ''} onChange={e => setPForm({...pForm, comissao: e.target.value})} placeholder="0.00" className="w-full p-4 bg-yellow-50 border rounded-2xl font-bold" />
+              </div>
+
+              <div className="flex flex-col gap-2 pt-2">
+                <button onClick={handleSaveProduct} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 transition-all uppercase text-xs">SALVAR PRODUTO</button>
+                
+                {showProductModal !== 'NEW' && (
+                  <button onClick={handleDeleteProductInModal} className="w-full bg-rose-50 text-rose-600 font-black py-4 rounded-2xl active:scale-95 transition-all uppercase text-[10px] tracking-widest border border-rose-100 flex items-center justify-center gap-2">
+                    <i className="fa-solid fa-trash-can text-xs"></i> EXCLUIR PRODUTO
+                  </button>
+                )}
+                
+                <button onClick={() => setShowProductModal(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px]">Cancelar</button>
+              </div>
             </div>
           </div>
         </div>

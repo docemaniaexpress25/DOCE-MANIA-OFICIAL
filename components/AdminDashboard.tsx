@@ -14,7 +14,7 @@ interface AdminDashboardProps {
   registerStockEntry: (id: string, q: number, c: number) => void;
   adjustStockManual: (id: string, q: number, t: 'ADICAO' | 'SUBTRACAO') => void;
   syncVendedorCarga: (vId: string, itens: { produtoId: string, quantidade: number }[]) => void;
-  applyCargaDirectly: (vId: string, itens: { produtoId: string, quantidade: number }[]) => void; // Nova prop
+  applyCargaDirectly: (vId: string, itens: { produtoId: string, quantidade: number }[]) => void;
   addClient: (data: Omit<Client, 'id'>) => void;
   updateClient: (id: string, data: Partial<Client>) => void;
   deleteClient: (id: string) => void;
@@ -56,8 +56,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [activeTab, setActiveTab] = useState<'HOME' | 'CATALOGO' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'SETTINGS'>('HOME');
   const [search, setSearch] = useState('');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
-
-  // Estado local para gerenciar a ordem dos produtos
   const [orderedProductIds, setOrderedProductIds] = useState<string[]>([]);
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
@@ -72,7 +70,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     }
   }, [props.adminNotification]);
 
-  // Inicializa a ordem dos produtos se ainda não estiver definida
   useEffect(() => {
     if (props.products.length > 0 && orderedProductIds.length === 0) {
       setOrderedProductIds(props.products.map(p => p.id));
@@ -153,19 +150,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const getVendedorStats = (vId: string) => {
     const vSales = props.sales.filter(s => s.vendedorId === vId && filterByPeriod(s.data, 'HOJE'));
     const sellerComms = props.commissions.filter(c => c.vendedorId === vId);
-    
-    // Comissão disponível: Tudo que não é 'A_RECEBER' menos o que já foi pago
-    const totalCommsEligible = sellerComms
-      .filter(c => c.status !== 'A_RECEBER')
-      .reduce((acc, curr) => acc + (curr.valor ?? 0), 0); 
-      
+    const totalCommsEligible = sellerComms.filter(c => c.status !== 'A_RECEBER').reduce((acc, curr) => acc + (curr.valor ?? 0), 0); 
     const jaPago = props.payoutLogs.filter(l => l.vendedorId === vId).reduce((acc, curr) => acc + (curr.valorPago ?? 0), 0); 
     const disponivel = Math.max(0, totalCommsEligible - jaPago);
-
-    // Comissão a receber: Tudo que está com status 'A_RECEBER'
-    const aReceber = sellerComms
-      .filter(c => c.status === 'A_RECEBER')
-      .reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
+    const aReceber = sellerComms.filter(c => c.status === 'A_RECEBER').reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
     
     return {
       vendasHoje: Number(vSales.reduce((acc, curr) => acc + (curr.valorTotal ?? 0), 0).toFixed(2)), 
@@ -219,10 +207,15 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     return { totalVendas: Number(totalVendas.toFixed(2)), ticketMedio: Number(ticketMedio.toFixed(2)), totalComissaoPaga: Number(paidCommissions.toFixed(2)), rankingProdutos, sellerPerformance, topClients };
   }, [props.sales, props.products, props.users, props.payoutLogs, props.clients, periodoRelatorio]);
 
+  const handleOpenPayout = (v: User) => {
+    setPayoutVendedor(v);
+    setPayoutType('TOTAL');
+    setPartialAmount('');
+  };
+
   const handleOpenProduct = (p: Product | 'NEW') => {
-    if (p === 'NEW') {
-      setPForm({ nome: '', custo: '', venda: '', comissao: '', margem: props.margemGlobalAtiva ? props.margemGlobalValor.toString() : '35', ativo: true, estoquePrincipal: '0' });
-    } else {
+    if (p === 'NEW') setPForm({ nome: '', custo: '', venda: '', comissao: '', margem: '35', ativo: true, estoquePrincipal: '0' });
+    else {
       const precoVenda = Number(p.precoVenda) || 0;
       const precoCusto = Number(p.precoCusto) || 0;
       const margemCalculada = precoVenda > 0 ? ((precoVenda - precoCusto) / precoVenda) * 100 : 0;
@@ -251,7 +244,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   };
 
   const handleSaveProduct = () => {
-    if (!pForm.nome || !pForm.custo || !pForm.venda || !pForm.comissao) return alert("Preencha todos os campos.");
+    if (!pForm.nome || !pForm.custo || !pForm.venda || !pForm.comissao) return;
     const data: Partial<Product> = { 
       nome: pForm.nome, 
       precoCusto: parseFloat(pForm.custo), 
@@ -262,30 +255,24 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     };
     if (showProductModal === 'NEW') props.addProduct(data.nome!, data.precoCusto!, data.precoVenda!, data.comissaoPercentual!, data.estoquePrincipal);
     else if (typeof showProductModal === 'object') props.updateProduct(showProductModal.id, data);
-    showToast("Produto salvo com sucesso");
     setShowProductModal(null);
+    showToast("Produto salvo!");
   };
 
   const handleDeleteProductInModal = () => {
     if (typeof showProductModal === 'object' && showProductModal !== null) {
       if (confirm(`Deseja realmente excluir o produto "${showProductModal.nome}"?`)) {
         props.deleteProduct(showProductModal.id);
-        showToast("Produto excluído ou desativado");
         setShowProductModal(null);
       }
     }
   };
 
-  const moveProduct = (id: string, direction: 'UP' | 'DOWN') => {
-    const index = orderedProductIds.indexOf(id);
-    if (index === -1) return;
-    
+  const moveProduct = (id: string, dir: 'UP' | 'DOWN') => {
+    const idx = orderedProductIds.indexOf(id);
     const newOrder = [...orderedProductIds];
-    if (direction === 'UP' && index > 0) {
-      [newOrder[index], newOrder[index - 1]] = [newOrder[index - 1], newOrder[index]];
-    } else if (direction === 'DOWN' && index < newOrder.length - 1) {
-      [newOrder[index], newOrder[index + 1]] = [newOrder[index + 1], newOrder[index]];
-    }
+    if (dir === 'UP' && idx > 0) [newOrder[idx], newOrder[idx-1]] = [newOrder[idx-1], newOrder[idx]];
+    else if (dir === 'DOWN' && idx < newOrder.length - 1) [newOrder[idx], newOrder[idx+1]] = [newOrder[idx+1], newOrder[idx]];
     setOrderedProductIds(newOrder);
   };
 
@@ -313,45 +300,35 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     const itens = Object.entries(stagingCarga).map(([produtoId, quantidade]) => ({ produtoId, quantidade: quantidade ?? 0 })); 
     props.syncVendedorCarga(selectedVendedorId, itens);
     setShowConfirmSync(false);
-    showToast("Carga enviada para aceite do vendedor.");
   };
 
   const handleApply = () => {
     const itens = Object.entries(stagingCarga).map(([produtoId, quantidade]) => ({ produtoId, quantidade: quantidade ?? 0 })); 
     props.applyCargaDirectly(selectedVendedorId, itens);
     setShowConfirmApply(false);
-    showToast("Carga aplicada imediatamente.");
   };
 
   const handleOpenClient = (c: Client | 'NEW') => {
-    if (c === 'NEW') setClientForm({ nomeFantasia: '', telefone: '', diaRoteiro: 1, ativo: true, bairro: '', endereco: '', ativarCnpj: false, cnpj: '', pinLocalizacao: '' });
+    if (c === 'NEW') setClientForm({ nomeFantasia: '', telefone: '', diaRoteiro: 1, ativo: true, bairro: '', endereco: '' });
     else setClientForm({ ...c });
     setShowClientModal(c);
   };
 
   const handlePinLocation = () => {
     if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition((position) => {
-        const pin = `${position.coords.latitude.toFixed(6)}, ${position.coords.longitude.toFixed(6)}`;
-        setClientForm(prev => ({ ...prev, pinLocalizacao: pin }));
+      navigator.geolocation.getCurrentPosition(p => {
+        setClientForm(prev => ({ ...prev, pinLocalizacao: `${p.coords.latitude.toFixed(6)}, ${p.coords.longitude.toFixed(6)}` }));
         showToast("Localização capturada!");
-      }, () => {
-        alert("Erro ao capturar localização. Verifique as permissões do GPS.");
       });
     }
   };
 
   const handleSaveClient = () => {
-    if (!clientForm.nomeFantasia) return alert("Nome é obrigatório!");
-    if ((clientForm.ativarCnpj ?? false) && !(clientForm.cnpj)) return alert("CNPJ é obrigatório!"); 
-    const data: Omit<Client, 'id'> = { 
-        nomeFantasia: clientForm.nomeFantasia || '', telefone: clientForm.telefone || '', diaRoteiro: clientForm.diaRoteiro || 1, ativo: clientForm.ativo ?? true, bairro: clientForm.bairro || '', endereco: clientForm.endereco || '',
-        ativarCnpj: clientForm.ativarCnpj ?? false, cnpj: clientForm.cnpj || '', pinLocalizacao: clientForm.pinLocalizacao || ''
-    };
-    if (showClientModal === 'NEW') props.addClient(data);
-    else if (typeof showClientModal === 'object') props.updateClient(showClientModal.id, data);
-    showToast("Cliente salvo com sucesso");
+    if (!clientForm.nomeFantasia) return;
+    if (showClientModal === 'NEW') props.addClient(clientForm as Omit<Client, 'id'>);
+    else if (typeof showClientModal === 'object') props.updateClient(showClientModal.id, clientForm);
     setShowClientModal(null);
+    showToast("Cliente salvo!");
   };
 
   const handleOpenUserModal = (u: User | 'NEW') => {
@@ -370,28 +347,27 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   };
 
   const handleSaveUser = () => {
-    if (!userForm.nome) return alert("Nome é obrigatório");
-    if (showUserModal === 'NEW') props.addUser(userForm.nome, userForm.foto, userForm.telefone); 
+    if (!userForm.nome) return;
+    if (showUserModal === 'NEW') props.addUser(userForm.nome, userForm.foto, userForm.telefone);
     else if (typeof showUserModal === 'object') props.updateUser(showUserModal.id, userForm);
-    showToast("Vendedor salvo com sucesso");
     setShowUserModal(null);
+    showToast("Vendedor salvo!");
   };
 
   const handleUpdatePassword = () => {
-    if (!pwUser || !pwNew) return alert("Selecione um usuário e digite a nova senha.");
-    props.updateUser(pwUser, { pin: pwNew }); 
+    if (!pwUser || !pwNew) return;
+    props.updateUser(pwUser, { pin: pwNew });
     setPwNew('');
-    showToast("Senha atualizada com sucesso.");
+    showToast("Senha atualizada!");
   };
 
-  const getClientAvgRevenue = (clientId: string) => {
-    const cSales = props.sales.filter(s => s.clientId === clientId).slice(-3);
+  const getClientAvgRevenue = (id: string) => {
+    const cSales = props.sales.filter(s => s.clientId === id).slice(-3);
     if (cSales.length === 0) return "0.00";
-    const total = cSales.reduce((acc, curr) => acc + (curr.valorTotal ?? 0), 0); 
-    return (total / cSales.length).toFixed(2);
+    return (cSales.reduce((acc, curr) => acc + (curr.valorTotal ?? 0), 0) / cSales.length).toFixed(2);
   };
 
-  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleLogoUpload = (e: any) => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
@@ -400,57 +376,36 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     }
   };
 
-  const handlePixUpload = (e: React.ChangeEvent<HTMLInputElement>, slot: 1 | 2) => {
+  const handlePixUpload = (e: any, slot: 1 | 2) => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
-      reader.onloadend = () => {
-        if (slot === 1) props.setPix1Code(reader.result as string);
-        else props.setPix2Code(reader.result as string);
-        showToast("QR Code Pix atualizado.");
-      };
+      reader.onloadend = () => slot === 1 ? props.setPix1Code(reader.result as string) : props.setPix2Code(reader.result as string);
       reader.readAsDataURL(file);
     }
-  };
-
-  const handleOpenPayout = (u: User) => {
-    setPayoutVendedor(u);
-    setPayoutType('TOTAL');
-    setPartialAmount('');
   };
 
   const handleConfirmPayout = () => {
     if (!payoutVendedor) return;
     const stats = getVendedorStats(payoutVendedor.id);
-    const available = stats.comissaoDisponivel;
-    const amountToPay = payoutType === 'TOTAL' ? available : parseFloat(partialAmount);
-    if (isNaN(amountToPay) || amountToPay <= 0 || amountToPay > available) return alert("Valor inválido.");
-    props.payCommission(payoutVendedor.id, amountToPay, payoutType, props.adminUser.id);
+    const amount = payoutType === 'TOTAL' ? stats.comissaoDisponivel : parseFloat(partialAmount);
+    if (isNaN(amount) || amount <= 0 || amount > stats.comissaoDisponivel) return alert("Valor inválido");
+    props.payCommission(payoutVendedor.id, amount, payoutType, props.adminUser.id);
     setPayoutVendedor(null);
-    showToast("Comissão paga com sucesso");
+    showToast("Pagamento registrado!");
   };
 
   const handleConfirmReceive = (method: PaymentMethod) => {
     if (!showReceiveModal) return;
     const valor = parseFloat(valorRecebidoParcial);
-    const saldoEmAberto = Number(((showReceiveModal.valorTotal ?? 0) - (showReceiveModal.valorPago ?? 0)).toFixed(2)); 
-    
-    if (isNaN(valor) || valor <= 0 || valor > saldoEmAberto) {
-        alert("Valor inválido.");
-        return;
-    }
-
     props.receiveAccount(showReceiveModal.id, method, valor);
-    showToast(valor === saldoEmAberto ? "Conta quitada!" : "Pagamento parcial registrado!");
     setShowReceiveModal(null);
-    setValorRecebidoParcial('');
+    showToast("Recebimento registrado!");
   };
 
-  const MenuCard = ({ icon, title, tab, color }: { icon: string, title: string, tab: any, color: string }) => (
+  const MenuCard = ({ icon, title, tab, color }: any) => (
     <button onClick={() => setActiveTab(tab)} className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col items-center justify-center gap-3 active:scale-95 transition-all text-center group">
-      <div className={`w-14 h-14 ${color} rounded-2xl flex items-center justify-center text-xl shadow-inner group-hover:scale-110 transition-transform`}>
-        <i className={`fa-solid ${icon}`}></i>
-      </div>
+      <div className={`w-14 h-14 ${color} rounded-2xl flex items-center justify-center text-xl shadow-inner group-hover:scale-110 transition-transform`}><i className={`fa-solid ${icon}`}></i></div>
       <span className="text-[11px] font-black uppercase text-gray-700 tracking-tight">{title}</span>
     </button>
   );
@@ -458,21 +413,16 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const contasAReceber = useMemo(() => props.sales.filter(s => s.metodoPagamento === 'A_PRAZO' && s.statusPagamento === 'PENDENTE'), [props.sales]);
 
   return (
-    <div className="space-y-6 animate-in fade-in duration-500 pb-10">
+    <div className="space-y-6 pb-10">
       {toast && (
         <div className="fixed top-20 left-4 right-4 z-[300] flex justify-center animate-in slide-in-from-top duration-300 pointer-events-none">
           <div className={`${toast.type === 'success' ? 'bg-emerald-600' : 'bg-rose-600'} text-white px-6 py-3 rounded-2xl shadow-2xl font-black text-xs uppercase flex items-center gap-3`}>
-            <i className={`fa-solid ${toast.type === 'success' ? 'fa-circle-check' : 'fa-circle-exclamation'}`}></i>
-            {toast.message}
+            <i className={`fa-solid ${toast.type === 'success' ? 'fa-circle-check' : 'fa-circle-exclamation'}`}></i>{toast.message}
           </div>
         </div>
       )}
 
-      {activeTab !== 'HOME' && (
-        <button onClick={() => setActiveTab('HOME')} className="w-10 h-10 bg-white text-blue-600 rounded-xl flex items-center justify-center shadow-sm border border-gray-100 active:scale-90 transition-transform mb-2">
-          <i className="fa-solid fa-arrow-left"></i>
-        </button>
-      )}
+      {activeTab !== 'HOME' && <button onClick={() => setActiveTab('HOME')} className="w-10 h-10 bg-white text-blue-600 rounded-xl flex items-center justify-center shadow-sm border border-gray-100 mb-2 active:scale-90 transition-transform"><i className="fa-solid fa-arrow-left"></i></button>}
 
       {activeTab === 'HOME' && (
         <div className="space-y-6 py-4">
@@ -497,145 +447,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
       {activeTab === 'HISTORY' && (
         <div className="space-y-6 py-4">
-          <div className="px-2">
-            <h2 className="text-2xl font-black text-gray-800 tracking-tight">Vendas Realizadas</h2>
-            <p className="text-xs text-gray-400 font-semibold uppercase tracking-wider">Auditoria e Histórico</p>
-          </div>
-          <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner">
-            {(['HOJE', 'SEMANA', 'MES', 'GERAL'] as const).map(p => (
-              <button key={p} onClick={() => setFiltroPeriodo(p)} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${filtroPeriodo === p ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>{p}</button>
-            ))}
-          </div>
+          <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Vendas Realizadas</h2></div>
+          <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner">{(['HOJE', 'SEMANA', 'MES', 'GERAL'] as const).map(p => (<button key={p} onClick={() => setFiltroPeriodo(p)} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${filtroPeriodo === p ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>{p}</button>))}</div>
           <div className="grid gap-3 px-1">
-            {filteredHistory.map((s: Sale) => (
-              <button key={s.id} onClick={() => setSelectedSale(s)} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex flex-col transition-all hover:border-blue-200 text-left w-full">
-                <div className="flex justify-between items-start mb-2">
-                  <span className="text-[9px] font-black text-gray-400 uppercase">{(s.data ?? new Date()).toLocaleDateString()} {(s.data ?? new Date()).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span> 
-                  <span className={`text-[9px] font-black px-2 py-0.5 rounded uppercase ${s.statusPagamento === 'PAGO' ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>{s.statusPagamento === 'PAGO' ? 'RECEBIDA' : 'EM ABERTO'}</span>
-                </div>
-                <div className="flex justify-between items-end">
-                  <div>
-                    <h4 className="font-bold text-gray-800 text-sm leading-tight">{props.clients.find(c => c.id === s.clientId)?.nomeFantasia || 'Cliente'}</h4>
-                    <p className="text-[10px] text-gray-400 font-bold uppercase mt-1">Vend: {props.users.find(u => u.id === s.vendedorId)?.nome ?? 'Desconhecido'} • {s.metodoPagamento?.replace('_', ' ') ?? 'N/D'}</p> 
-                  </div>
-                  <div className="text-right">
-                    <p className="text-sm font-black text-gray-800">R$ {(s.valorTotal ?? 0).toFixed(2)}</p> 
-                  </div>
-                </div>
+            {filteredHistory.map(s => (
+              <button key={s.id} onClick={() => setSelectedSale(s)} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex flex-col text-left transition-all hover:border-blue-200">
+                <div className="flex justify-between items-start mb-2"><span className="text-[9px] font-black text-gray-400 uppercase">{s.data.toLocaleDateString()} {s.data.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span><span className={`text-[9px] font-black px-2 py-0.5 rounded uppercase ${s.statusPagamento === 'PAGO' ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>{s.statusPagamento === 'PAGO' ? 'RECEBIDA' : 'EM ABERTO'}</span></div>
+                <div className="flex justify-between items-end"><div><h4 className="font-bold text-gray-800 text-sm leading-tight">{props.clients.find(c => c.id === s.clientId)?.nomeFantasia || 'Cliente'}</h4><p className="text-[10px] text-gray-400 font-bold uppercase mt-1">Vend: {props.users.find(u => u.id === s.vendedorId)?.nome ?? 'Desc.'}</p></div><p className="text-sm font-black text-gray-800">R$ {s.valorTotal.toFixed(2)}</p></div>
               </button>
-            ))}
-            {filteredHistory.length === 0 && <div className="text-center py-20 opacity-30 italic text-xs font-bold uppercase">Nenhuma venda encontrada</div>}
-          </div>
-        </div>
-      )}
-
-      {activeTab === 'ROTEIRO' && (
-        <div className="space-y-6 py-4">
-          <div className="px-2">
-            <h2 className="text-2xl font-black text-gray-800 tracking-tight">Roteiro Semanal</h2>
-            <p className="text-xs text-gray-400 font-semibold uppercase tracking-wider">Visualização por Dia</p>
-          </div>
-          <div className="space-y-3 px-1">
-            {[1, 2, 3, 4, 5, 6].map(dia => {
-              const isOpen = expandedDay === dia;
-              const clientsInDay = props.clients.filter(c => (c.diaRoteiro ?? 0) === dia && (c.ativo ?? false)); 
-              return (
-                <div key={dia} className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden transition-all">
-                  <button onClick={() => setExpandedDay(isOpen ? null : dia)} className={`w-full flex items-center justify-between p-5 text-left transition-colors ${isOpen ? 'bg-indigo-50 text-indigo-700' : 'bg-white text-gray-700'}`}>
-                    <div className="flex items-center gap-3">
-                       <div className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-[10px] ${isOpen ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-400'}`}>{dia}</div>
-                       <span className="font-black uppercase text-xs tracking-tight">{DIAS_SEMANA[dia] ?? 'N/D'}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[9px] font-black uppercase opacity-40">{clientsInDay.length} clientes</span>
-                      <i className={`fa-solid ${isOpen ? 'fa-chevron-up' : 'fa-chevron-down'} text-[10px]`}></i>
-                    </div>
-                  </button>
-                  {isOpen && (
-                    <div className="p-4 bg-white space-y-2 border-t border-indigo-50 animate-in slide-in-from-top duration-300">
-                      {clientsInDay.map((c: Client) => (
-                        <div key={c.id} className="p-3 bg-gray-50 rounded-2xl flex justify-between items-center">
-                          <div>
-                            <p className="font-bold text-gray-800 text-xs">{c.nomeFantasia ?? 'Cliente Desconhecido'}</p> 
-                            <p className="text-[9px] text-gray-400 font-bold mt-0.5">{(c.telefone || 'Sem fone')} {c.bairro ? `• ${c.bairro}` : ''}</p> 
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {activeTab === 'CONTAS_RECEBER' && (
-        <div className="space-y-6 py-4">
-          <div className="px-2">
-            <h2 className="text-2xl font-black text-gray-800 tracking-tight">Contas a Receber</h2>
-            <p className="text-xs text-gray-400 font-semibold uppercase tracking-wider">Vendas em Aberto</p>
-          </div>
-          <div className="grid gap-3 px-1">
-            {contasAReceber.map((s: Sale) => {
-              const saldo = Number(((s.valorTotal ?? 0) - (s.valorPago ?? 0)).toFixed(2)); 
-              return (
-              <div key={s.id} className="bg-white p-5 rounded-3xl border border-gray-100 shadow-sm">
-                <div className="flex justify-between items-start mb-2">
-                  <span className="text-[9px] font-black text-gray-400 uppercase">{(s.data ?? new Date()).toLocaleDateString()}</span> 
-                  <span className="bg-rose-50 text-rose-600 text-[9px] font-black px-2 py-0.5 rounded uppercase">EM ABERTO</span>
-                </div>
-                <div className="flex justify-between items-end">
-                   <div>
-                     <h4 className="font-bold text-gray-800 text-sm leading-tight">{props.clients.find(c => c.id === s.clientId)?.nomeFantasia || 'Cliente'}</h4>
-                     <p className="text-[10px] text-gray-400 font-bold uppercase mt-1">Vend: {props.users.find(u => u.id === s.vendedorId)?.nome ?? 'Desconhecido'}</p> 
-                     {(s.valorPago ?? 0) > 0 && <p className="text-[9px] text-emerald-600 font-bold uppercase mt-1">Já pago: R$ {(s.valorPago ?? 0).toFixed(2)}</p>} 
-                   </div>
-                   <div className="text-right">
-                     <p className="text-sm font-black text-gray-800 mb-2">Saldo: R$ {saldo.toFixed(2)}</p>
-                     <button onClick={() => { setShowReceiveModal(s); setValorRecebidoParcial(saldo.toString()); }} className="bg-emerald-600 text-white px-4 py-2 rounded-xl text-[9px] font-black uppercase shadow-lg active:scale-95">RECEBER</button>
-                   </div>
-                </div>
-              </div>
-            )})}
-            {contasAReceber.length === 0 && <div className="text-center py-20 opacity-30 italic text-[10px] uppercase font-bold">Sem contas pendentes</div>}
-          </div>
-        </div>
-      )}
-
-      {activeTab === 'CATALOGO' && (
-        <div className="space-y-4">
-          <div className="px-2">
-            <h2 className="text-2xl font-black text-gray-800 tracking-tight">Estoque Central</h2>
-            <p className="text-xs text-gray-400 font-semibold uppercase tracking-wider">Produtos e Preços</p>
-          </div>
-          <div className="flex gap-2">
-            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar produto..." className="flex-1 px-4 py-3 bg-white border border-gray-200 rounded-xl text-sm font-medium" />
-            <button onClick={() => handleOpenProduct('NEW')} className="bg-blue-600 text-white w-12 h-12 rounded-xl flex items-center justify-center shadow-lg active:scale-90 transition-transform"><i className="fa-solid fa-plus"></i></button>
-          </div>
-          <div className="grid gap-3 px-1">
-            {sortedProducts.map((p: Product) => ( 
-              <div key={p.id} className="bg-white px-4 py-4 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between transition-all hover:border-blue-200 group">
-                <div className="flex items-center gap-3 flex-1 min-w-0">
-                  {!search && (
-                    <div className="flex flex-col gap-1 pr-2 border-r border-gray-50">
-                      <button onClick={() => moveProduct(p.id, 'UP')} className="text-gray-300 hover:text-blue-500 active:scale-125 transition-all"><i className="fa-solid fa-chevron-up text-[10px]"></i></button>
-                      <button onClick={() => moveProduct(p.id, 'DOWN')} className="text-gray-300 hover:text-blue-500 active:scale-125 transition-all"><i className="fa-solid fa-chevron-down text-[10px]"></i></button>
-                    </div>
-                  )}
-                  <div className="flex-1 min-w-0" onClick={() => handleOpenProduct(p)}>
-                    <h3 className="font-bold text-gray-800 text-[13px] leading-tight line-clamp-2 uppercase">{p.nome ?? 'Sem nome'}</h3> 
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5">
-                      <span className="text-[10px] font-black bg-blue-50 text-blue-600 px-2 py-0.5 rounded border border-blue-100 shadow-inner whitespace-nowrap">{(p.estoquePrincipal ?? 0)} UN</span>
-                      <span className="text-[13px] font-black text-emerald-600">R$ {(p.precoVenda ?? 0).toFixed(2)}</span> 
-                    </div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 flex-shrink-0">
-                  <button onClick={() => { setShowEntryModal(p); setEntryForm({ qtd: '', custo: (p.precoCusto ?? 0).toString() }); }} className="bg-emerald-600 text-white w-9 h-9 rounded-lg flex items-center justify-center shadow-md active:scale-90 transition-all"><i className="fa-solid fa-plus-circle text-base"></i></button>
-                  <button onClick={() => handleOpenProduct(p)} className="bg-blue-50 text-blue-600 w-9 h-9 rounded-lg border border-blue-100 flex items-center justify-center active:scale-90 transition-all shadow-sm"><i className="fa-solid fa-pencil-alt text-base"></i></button>
-                </div>
-              </div>
             ))}
           </div>
         </div>
@@ -648,20 +467,20 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             <h3 className="font-black text-gray-800 mb-4 uppercase text-[10px]">Vendedor Responsável</h3>
             <select value={selectedVendedorId} onChange={e => setSelectedVendedorId(e.target.value)} className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl outline-none font-semibold text-sm">
               <option value="">Selecione um vendedor...</option>
-              {props.users.filter((u: User) => (u.role === 'VENDEDOR') && (u.ativo ?? false)).map((u: User) => <option key={u.id} value={u.id}>{u.nome ?? 'Vendedor Desconhecido'}</option>)} 
+              {props.users.filter(u => u.role === 'VENDEDOR' && u.ativo).map(u => <option key={u.id} value={u.id}>{u.nome}</option>)} 
             </select>
           </div>
           {selectedVendedorId && (
             <div className="pb-40">
               <div className="grid gap-1.5 px-1">
-                {props.products.map((p: Product) => { 
+                {props.products.map(p => { 
                   const noV = props.cargas.find(c => c.vendedorId === selectedVendedorId && c.produtoId === p.id)?.quantidade ?? 0; 
                   const meta = stagingCarga[p.id] ?? 0;
                   return (
                     <div key={p.id} className="bg-white px-3 py-2 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between">
                       <div className="flex-1 min-w-0 pr-3">
-                        <h4 className="font-bold text-gray-800 text-[11px] leading-tight uppercase truncate">{p.nome ?? 'Produto sem nome'}</h4> 
-                        <p className="text-[9px] text-gray-400 font-semibold mt-0.5">C: {(p.estoquePrincipal ?? 0)} | V: {noV}</p> 
+                        <h4 className="font-bold text-gray-800 text-[11px] leading-tight uppercase truncate">{p.nome}</h4> 
+                        <p className="text-[9px] text-gray-400 font-semibold mt-0.5">C: {p.estoquePrincipal} | V: {noV}</p> 
                       </div>
                       <div className="flex items-center bg-gray-50 rounded-xl p-1 gap-1 flex-shrink-0">
                         <button onClick={() => updateStaging(p.id, -1)} className="w-8 h-8 bg-white border border-gray-200 text-gray-400 rounded-lg active:scale-90 flex items-center justify-center"><i className="fa-solid fa-minus text-[10px]"></i></button>
@@ -674,15 +493,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
               </div>
             </div>
           )}
-        </div>
-      )}
-
-      {activeTab === 'CARGAS' && selectedVendedorId && (
-        <div className="fixed bottom-0 left-0 right-0 p-4 bg-white/95 backdrop-blur-md border-t border-gray-100 shadow-[0_-10px_30px_rgba(0,0,0,0.1)] z-50 max-w-lg mx-auto safe-bottom animate-in slide-in-from-bottom duration-300">
-          <div className="flex flex-row gap-2">
-            <button onClick={() => setShowConfirmApply(true)} disabled={!hasCargaChanges} className={`flex-1 font-black py-4 rounded-2xl shadow-xl flex flex-col items-center justify-center gap-1 transition-all text-[9px] uppercase tracking-tighter ${hasCargaChanges ? 'bg-emerald-600 text-white active:scale-95' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}><i className="fa-solid fa-check-circle text-sm"></i> Aplicar Agora</button>
-            <button onClick={() => setShowConfirmSync(true)} disabled={!hasCargaChanges} className={`flex-1 font-black py-4 rounded-2xl shadow-xl flex flex-col items-center justify-center gap-1 transition-all text-[9px] uppercase tracking-tighter ${hasCargaChanges ? 'bg-gray-900 text-white active:scale-95' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}><i className="fa-solid fa-truck-loading text-sm"></i> Enviar Pendente</button>
-          </div>
+          {selectedVendedorId && (
+            <div className="fixed bottom-0 left-0 right-0 p-4 bg-white/95 backdrop-blur-md border-t border-gray-100 shadow-[0_-10px_30px_rgba(0,0,0,0.1)] z-50 max-w-lg mx-auto safe-bottom">
+              <div className="flex flex-row gap-2">
+                <button onClick={() => setShowConfirmApply(true)} disabled={!hasCargaChanges} className={`flex-1 font-black py-4 rounded-2xl shadow-xl flex flex-col items-center justify-center gap-1 transition-all text-[9px] uppercase tracking-tighter ${hasCargaChanges ? 'bg-emerald-600 text-white active:scale-95' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}><i className="fa-solid fa-check-circle text-sm"></i> Aplicar Agora</button>
+                <button onClick={() => setShowConfirmSync(true)} disabled={!hasCargaChanges} className={`flex-1 font-black py-4 rounded-2xl shadow-xl flex flex-col items-center justify-center gap-1 transition-all text-[9px] uppercase tracking-tighter ${hasCargaChanges ? 'bg-gray-900 text-white active:scale-95' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}><i className="fa-solid fa-truck-loading text-sm"></i> Enviar Pendente</button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -694,22 +512,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             <button onClick={() => handleOpenClient('NEW')} className="bg-blue-600 text-white w-12 h-12 rounded-xl flex items-center justify-center shadow-lg active:scale-90 transition-transform"><i className="fa-solid fa-user-plus"></i></button>
           </div>
           <div className="grid gap-2 px-1">
-            {props.clients.filter(c => (c.nomeFantasia ?? '').toLowerCase().includes(search.toLowerCase())).sort((a,b) => (a.nomeFantasia||'').toLowerCase().localeCompare((b.nomeFantasia||'').toLowerCase())).map((c: Client) => ( 
+            {props.clients.filter(c => c.nomeFantasia.toLowerCase().includes(search.toLowerCase())).sort((a,b) => (a.nomeFantasia||'').toLowerCase().localeCompare((b.nomeFantasia||'').toLowerCase())).map(c => ( 
               <div key={c.id} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex items-center justify-between transition-all hover:border-blue-200">
                 <div className="flex-1 min-w-0 pr-2">
-                  <div className="flex items-center gap-2">
-                    <h3 className="font-bold text-gray-800 text-[13px] leading-tight uppercase truncate">{c.nomeFantasia ?? 'Cliente sem nome'}</h3> 
-                    {c.telefone && <a href={`https://wa.me/55${c.telefone.replace(/\D/g, '')}`} target="_blank" rel="noopener noreferrer" className="text-emerald-500 hover:text-emerald-600 transition-colors" onClick={(e) => e.stopPropagation()}><i className="fa-brands fa-whatsapp text-lg"></i></a>}
-                  </div>
-                  <div className="flex items-center gap-3 mt-1.5">
-                    <p className="text-[10px] text-gray-400 font-black uppercase truncate">{DIAS_SEMANA[c.diaRoteiro ?? 0] ?? 'N/D'}</p> 
-                    <div className="flex items-center gap-1.5 bg-blue-50 px-2 py-0.5 rounded border border-blue-100"><i className="fa-solid fa-chart-line text-blue-400 text-[10px]"></i><span className="text-[11px] font-black text-blue-600">R$ {getClientAvgRevenue(c.id)}</span></div>
-                  </div>
+                  <div className="flex items-center gap-2"><h3 className="font-bold text-gray-800 text-[13px] leading-tight uppercase truncate">{c.nomeFantasia}</h3>{c.telefone && <a href={`https://wa.me/55${c.telefone.replace(/\D/g, '')}`} target="_blank" className="text-emerald-500" onClick={(e) => e.stopPropagation()}><i className="fa-brands fa-whatsapp text-lg"></i></a>}</div>
+                  <div className="flex items-center gap-3 mt-1.5"><p className="text-[10px] text-gray-400 font-black uppercase truncate">{DIAS_SEMANA[c.diaRoteiro]}</p><div className="flex items-center gap-1.5 bg-blue-50 px-2 py-0.5 rounded border border-blue-100"><i className="fa-solid fa-chart-line text-blue-400 text-[10px]"></i><span className="text-[11px] font-black text-blue-600">R$ {getClientAvgRevenue(c.id)}</span></div></div>
                 </div>
-                <div className="flex gap-2 flex-shrink-0">
-                  <button onClick={() => handleOpenClient(c)} className="bg-blue-50 text-blue-600 w-9 h-9 rounded-lg border border-blue-100 flex items-center justify-center active:scale-90 transition-all shadow-sm"><i className="fa-solid fa-pencil-alt text-sm"></i></button>
-                  <button onClick={() => { if(confirm("Excluir cliente?")) { props.deleteClient(c.id); showToast("Cliente removido"); } }} className="bg-rose-50 text-rose-600 w-9 h-9 rounded-lg border border-rose-100 flex items-center justify-center active:scale-90 transition-all shadow-sm"><i className="fa-solid fa-trash-can text-sm"></i></button>
-                </div>
+                <div className="flex gap-2"><button onClick={() => handleOpenClient(c)} className="bg-blue-50 text-blue-600 w-9 h-9 rounded-lg border border-blue-100 flex items-center justify-center active:scale-90 transition-all shadow-sm"><i className="fa-solid fa-pencil-alt text-sm"></i></button><button onClick={() => { if(confirm("Excluir cliente?")) props.deleteClient(c.id); }} className="bg-rose-50 text-rose-600 w-9 h-9 rounded-lg border border-rose-100 flex items-center justify-center active:scale-90 transition-all shadow-sm"><i className="fa-solid fa-trash-can text-sm"></i></button></div>
               </div>
             ))}
           </div>
@@ -720,35 +529,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         <div className="space-y-6 py-4">
           <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Caixa</h2></div>
           <div className="grid gap-4 px-1">
-            {props.users.filter((u: User) => (u.role === 'VENDEDOR') && (u.ativo ?? false)).map((v: User) => { 
+            {props.users.filter(u => u.role === 'VENDEDOR' && u.ativo).map(v => { 
               const stats = getVendedorStats(v.id);
               return (
                 <div key={v.id} className="bg-white rounded-[2.5rem] shadow-xl border-t-4 border-blue-500 p-8 flex flex-col gap-6">
-                  <div className="flex items-center gap-4">
-                    <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-3xl flex items-center justify-center font-black overflow-hidden border-4 border-white shadow-md">
-                      {v.foto ? <img src={v.foto} className="w-full h-full object-cover" /> : <i className="fa-solid fa-user text-2xl"></i>}
-                    </div>
-                    <div>
-                      <h3 className="font-black text-gray-800 text-lg leading-none mb-1 uppercase truncate max-w-[150px]">{v.nome ?? 'Vendedor Desconhecido'}</h3> 
-                      <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">Performance Hoje</p>
-                    </div>
-                  </div>
-                  <div className="space-y-4">
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="bg-gray-50 p-5 rounded-[2rem] border border-gray-100 flex flex-col items-center">
-                        <p className="text-[9px] text-gray-400 font-black uppercase mb-2 text-center leading-none">Vendas Hoje</p>
-                        <p className="text-lg font-black text-gray-800">R$ {stats.vendasHoje.toFixed(2)}</p>
-                      </div>
-                      <div className="bg-emerald-50 p-5 rounded-[2rem] border border-emerald-100 flex flex-col items-center">
-                        <p className="text-[9px] text-emerald-600 font-black uppercase mb-2 text-center leading-none">Disponível</p>
-                        <p className="text-lg font-black text-emerald-700">R$ {stats.comissaoDisponivel.toFixed(2)}</p>
-                      </div>
-                    </div>
-                    <div className="bg-orange-50 p-4 rounded-2xl border border-orange-100 flex justify-between items-center">
-                       <span className="text-[9px] font-black text-orange-600 uppercase">Comissão a Receber (Prazo)</span>
-                       <span className="text-sm font-black text-orange-700">R$ {stats.comissaoAReceber.toFixed(2)}</span>
-                    </div>
-                  </div>
+                  <div className="flex items-center gap-4"><div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-3xl flex items-center justify-center font-black overflow-hidden border-4 border-white shadow-md">{v.foto ? <img src={v.foto} className="w-full h-full object-cover" /> : <i className="fa-solid fa-user text-2xl"></i>}</div><div><h3 className="font-black text-gray-800 text-lg leading-none mb-1 uppercase truncate max-w-[150px]">{v.nome}</h3><p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">Performance Hoje</p></div></div>
+                  <div className="space-y-4"><div className="grid grid-cols-2 gap-4"><div className="bg-gray-50 p-5 rounded-[2rem] border border-gray-100 flex flex-col items-center"><p className="text-[9px] text-gray-400 font-black uppercase mb-2 text-center leading-none">Vendas Hoje</p><p className="text-lg font-black text-gray-800">R$ {stats.vendasHoje.toFixed(2)}</p></div><div className="bg-emerald-50 p-5 rounded-[2rem] border border-emerald-100 flex flex-col items-center"><p className="text-[9px] text-emerald-600 font-black uppercase mb-2 text-center leading-none">Disponível</p><p className="text-lg font-black text-emerald-700">R$ {stats.comissaoDisponivel.toFixed(2)}</p></div></div><div className="bg-orange-50 p-4 rounded-2xl border border-orange-100 flex justify-between items-center"><span className="text-[9px] font-black text-orange-600 uppercase">Comissão a Receber (Prazo)</span><span className="text-sm font-black text-orange-700">R$ {stats.comissaoAReceber.toFixed(2)}</span></div></div>
                   <button onClick={() => handleOpenPayout(v)} className="w-full bg-emerald-600 text-white py-5 rounded-3xl font-black text-xs uppercase shadow-xl active:scale-95 transition-all tracking-widest">Pagar Comissão</button>
                 </div>
               );
@@ -757,30 +543,73 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         </div>
       )}
 
-      {/* Outras tabs omitidas para manter o foco no Caixa */}
-      {activeTab === 'VENDEDORES' && (
+      {activeTab === 'CATALOGO' && (
         <div className="space-y-4">
-          <div className="px-2 flex justify-between items-center">
-            <h2 className="text-2xl font-black text-gray-800 tracking-tight">Vendedores</h2>
-            <button onClick={() => handleOpenUserModal('NEW')} className="bg-purple-600 text-white px-4 py-2 rounded-xl font-black text-xs uppercase shadow-md active:scale-95"><i className="fa-solid fa-plus mr-2"></i>Novo</button>
-          </div>
+          <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Estoque Central</h2></div>
+          <div className="flex gap-2"><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar produto..." className="flex-1 px-4 py-3 bg-white border border-gray-200 rounded-xl text-sm font-medium" /><button onClick={() => handleOpenProduct('NEW')} className="bg-blue-600 text-white w-12 h-12 rounded-xl flex items-center justify-center shadow-lg active:scale-90 transition-transform"><i className="fa-solid fa-plus"></i></button></div>
           <div className="grid gap-3 px-1">
-            {props.users.filter(u => u.role === 'VENDEDOR').map((u: User) => (
-              <div key={u.id} className={`bg-white p-4 rounded-3xl border transition-all shadow-sm flex items-center justify-between ${!(u.ativo ?? false) ? 'opacity-60 grayscale' : 'border-gray-100'}`}> 
-                <div onClick={() => handleOpenUserModal(u)} className="flex items-center gap-4 flex-1 cursor-pointer min-w-0 pr-2">
-                  <div className="w-14 h-14 bg-purple-100 text-purple-600 rounded-2xl flex items-center justify-center font-black overflow-hidden border-4 border-white shadow-md flex-shrink-0">
-                    {(u.foto) ? <img src={u.foto} className="w-full h-full object-cover" /> : <i className="fa-solid fa-user-tie text-xl"></i>} 
-                  </div>
-                  <div className="min-w-0">
-                    <p className="font-bold text-gray-800 text-sm leading-tight uppercase truncate">{u.nome ?? 'Vendedor Desconhecido'}</p> 
-                    <p className="text-[10px] text-gray-400 font-bold mt-1 uppercase truncate">{(u.telefone || 'Sem telefone')}</p> 
+            {sortedProducts.map(p => ( 
+              <div key={p.id} className="bg-white px-4 py-4 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between transition-all hover:border-blue-200 group">
+                <div className="flex items-center gap-3 flex-1 min-w-0">
+                  {!search && (
+                    <div className="flex flex-col gap-1 pr-2 border-r border-gray-50">
+                      <button onClick={() => moveProduct(p.id, 'UP')} className="text-gray-300 hover:text-blue-500 active:scale-125 transition-all"><i className="fa-solid fa-chevron-up text-[10px]"></i></button>
+                      <button onClick={() => moveProduct(p.id, 'DOWN')} className="text-gray-300 hover:text-blue-500 active:scale-125 transition-all"><i className="fa-solid fa-chevron-down text-[10px]"></i></button>
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0" onClick={() => handleOpenProduct(p)}>
+                    <h3 className="font-bold text-gray-800 text-[13px] leading-tight line-clamp-2 uppercase">{p.nome}</h3> 
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5"><span className="text-[10px] font-black bg-blue-50 text-blue-600 px-2 py-0.5 rounded border border-blue-100 shadow-inner whitespace-nowrap">{p.estoquePrincipal} UN</span><span className="text-[13px] font-black text-emerald-600">R$ {p.precoVenda.toFixed(2)}</span></div>
                   </div>
                 </div>
-                <button onClick={(e) => { e.stopPropagation(); props.updateUser(u.id, { ativo: !(u.ativo ?? false) }); }} className={`w-12 h-6 rounded-full flex-shrink-0 relative transition-colors ${(u.ativo ?? false) ? 'bg-green-500' : 'bg-gray-300'}`}> 
-                   <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${(u.ativo ?? false) ? 'left-7' : 'left-1'}`}></div>
-                </button>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <button onClick={() => { setShowEntryModal(p); setEntryForm({ qtd: '', custo: p.precoCusto.toString() }); }} className="bg-emerald-600 text-white w-9 h-9 rounded-lg flex items-center justify-center shadow-md active:scale-90 transition-all"><i className="fa-solid fa-plus-circle text-base"></i></button>
+                  <button onClick={() => handleOpenProduct(p)} className="bg-blue-50 text-blue-600 w-9 h-9 rounded-lg border border-blue-100 flex items-center justify-center active:scale-90 transition-all shadow-sm"><i className="fa-solid fa-pencil-alt text-base"></i></button>
+                </div>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'VENDEDORES' && (
+        <div className="space-y-4">
+          <div className="px-2 flex justify-between items-center"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Vendedores</h2><button onClick={() => handleOpenUserModal('NEW')} className="bg-purple-600 text-white px-4 py-2 rounded-xl font-black text-xs uppercase shadow-md active:scale-95"><i className="fa-solid fa-plus mr-2"></i>Novo</button></div>
+          <div className="grid gap-3 px-1">
+            {props.users.filter(u => u.role === 'VENDEDOR').map(u => (
+              <div key={u.id} className={`bg-white p-4 rounded-3xl border transition-all shadow-sm flex items-center justify-between ${!u.ativo ? 'opacity-60 grayscale' : 'border-gray-100'}`}> 
+                <div onClick={() => handleOpenUserModal(u)} className="flex items-center gap-4 flex-1 cursor-pointer min-w-0 pr-2">
+                  <div className="w-14 h-14 bg-purple-100 text-purple-600 rounded-2xl flex items-center justify-center font-black overflow-hidden border-4 border-white shadow-md flex-shrink-0">{(u.foto) ? <img src={u.foto} className="w-full h-full object-cover" /> : <i className="fa-solid fa-user-tie text-xl"></i>}</div>
+                  <div className="min-w-0"><p className="font-bold text-gray-800 text-sm leading-tight uppercase truncate">{u.nome}</p><p className="text-[10px] text-gray-400 font-bold mt-1 uppercase truncate">{u.telefone || 'Sem telefone'}</p></div>
+                </div>
+                <button onClick={(e) => { e.stopPropagation(); props.updateUser(u.id, { ativo: !u.ativo }); }} className={`w-12 h-6 rounded-full flex-shrink-0 relative transition-colors ${u.ativo ? 'bg-green-500' : 'bg-gray-300'}`}><div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${u.ativo ? 'left-7' : 'left-1'}`}></div></button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'ROTEIRO' && (
+        <div className="space-y-6 py-4">
+          <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Roteiro Semanal</h2></div>
+          <div className="space-y-3 px-1">
+            {[1, 2, 3, 4, 5, 6].map(dia => {
+              const isOpen = expandedDay === dia;
+              const clientsInDay = props.clients.filter(c => c.diaRoteiro === dia && c.ativo); 
+              return (
+                <div key={dia} className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden transition-all">
+                  <button onClick={() => setExpandedDay(isOpen ? null : dia)} className={`w-full flex items-center justify-between p-5 text-left transition-colors ${isOpen ? 'bg-indigo-50 text-indigo-700' : 'bg-white text-gray-700'}`}>
+                    <div className="flex items-center gap-3"><div className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-[10px] ${isOpen ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-400'}`}>{dia}</div><span className="font-black uppercase text-xs tracking-tight">{DIAS_SEMANA[dia]}</span></div>
+                    <div className="flex items-center gap-2"><span className="text-[9px] font-black uppercase opacity-40">{clientsInDay.length} clientes</span><i className={`fa-solid ${isOpen ? 'fa-chevron-up' : 'fa-chevron-down'} text-[10px]`}></i></div>
+                  </button>
+                  {isOpen && (
+                    <div className="p-4 bg-white space-y-2 border-t border-indigo-50 animate-in slide-in-from-top duration-300">
+                      {clientsInDay.map(c => (<div key={c.id} className="p-3 bg-gray-50 rounded-2xl flex justify-between items-center"><div><p className="font-bold text-gray-800 text-xs">{c.nomeFantasia}</p><p className="text-[9px] text-gray-400 font-bold mt-0.5">{c.telefone || 'Sem fone'} {c.bairro ? `• ${c.bairro}` : ''}</p></div></div>))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -788,9 +617,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       {activeTab === 'REPORTS' && (
         <div className="space-y-6 py-4">
           <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Relatórios</h2></div>
-          <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner">
-            {(['HOJE', 'SEMANA', 'MES', 'GERAL'] as const).map(p => (<button key={p} onClick={() => setPeriodoRelatorio(p)} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${periodoRelatorio === p ? 'bg-white text-emerald-600 shadow-sm' : 'text-gray-400'}`}>{p}</button>))}
-          </div>
+          <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner">{(['HOJE', 'SEMANA', 'MES', 'GERAL'] as const).map(p => (<button key={p} onClick={() => setPeriodoRelatorio(p)} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${periodoRelatorio === p ? 'bg-white text-emerald-600 shadow-sm' : 'text-gray-400'}`}>{p}</button>))}</div>
           <div className="grid grid-cols-2 gap-4 px-1">
              <div className="bg-white p-6 rounded-[2rem] shadow-sm border-b-4 border-emerald-500"><p className="text-[10px] font-black text-gray-400 uppercase mb-2">Vendas Totais</p><p className="text-xl font-black text-gray-800">R$ {reportStats.totalVendas.toFixed(2)}</p></div>
              <div className="bg-white p-6 rounded-[2rem] shadow-sm border-b-4 border-blue-500"><p className="text-[10px] font-black text-gray-400 uppercase mb-2">Comissão Paga</p><p className="text-xl font-black text-gray-800">R$ {reportStats.totalComissaoPaga.toFixed(2)}</p></div>
@@ -808,6 +635,29 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             </div>
             <input type="file" ref={logoInputRef} onChange={handleLogoUpload} accept="image/*" className="hidden" />
           </div>
+          <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-gray-100">
+             <h3 className="font-black text-gray-800 uppercase text-xs mb-6">Configurações de Pix</h3>
+             <div className="space-y-6">
+                <div className="flex gap-4 items-center">
+                  <div className="flex-1 space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase">Nome Pix 1</label><input value={props.pix1Name} onChange={e => props.setPix1Name(e.target.value)} className="w-full p-4 bg-gray-50 rounded-xl border-none outline-none font-bold text-xs" /></div>
+                  <div onClick={() => pix1InputRef.current?.click()} className="w-20 h-20 bg-gray-50 border-2 border-dashed border-gray-200 rounded-xl flex items-center justify-center cursor-pointer overflow-hidden">{props.pix1Code ? <img src={props.pix1Code} className="w-full h-full object-cover" /> : <i className="fa-solid fa-qrcode text-gray-300"></i>}</div>
+                  <input type="file" ref={pix1InputRef} onChange={e => handlePixUpload(e, 1)} className="hidden" accept="image/*" />
+                </div>
+                <div className="flex gap-4 items-center pt-4 border-t border-gray-50">
+                  <div className="flex-1 space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase">Nome Pix 2</label><input value={props.pix2Name} onChange={e => props.setPix2Name(e.target.value)} className="w-full p-4 bg-gray-50 rounded-xl border-none outline-none font-bold text-xs" /></div>
+                  <div onClick={() => pix2InputRef.current?.click()} className="w-20 h-20 bg-gray-50 border-2 border-dashed border-gray-200 rounded-xl flex items-center justify-center cursor-pointer overflow-hidden">{props.pix2Code ? <img src={props.pix2Code} className="w-full h-full object-cover" /> : <i className="fa-solid fa-qrcode text-gray-300"></i>}</div>
+                  <input type="file" ref={pix2InputRef} onChange={e => handlePixUpload(e, 2)} className="hidden" accept="image/*" />
+                </div>
+             </div>
+          </div>
+          <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-gray-100">
+             <h3 className="font-black text-gray-800 uppercase text-xs mb-6">Segurança</h3>
+             <div className="space-y-4">
+                <select value={pwUser} onChange={e => setPwUser(e.target.value)} className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none text-xs"><option value="">Selecione Usuário...</option>{props.users.map(u => <option key={u.id} value={u.id}>{u.nome}</option>)}</select>
+                <input type="password" value={pwNew} onChange={e => setPwNew(e.target.value)} placeholder="Nova Senha" className="w-full p-4 bg-gray-50 rounded-2xl font-black text-xl tracking-widest border-none outline-none" />
+                <button onClick={handleUpdatePassword} className="w-full bg-gray-900 text-white py-4 rounded-2xl font-black text-xs uppercase shadow-lg active:scale-95 transition-all">Atualizar Senha</button>
+             </div>
+          </div>
         </div>
       )}
 
@@ -815,17 +665,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[250] flex items-center justify-center p-6">
            <div className="bg-white w-full max-w-xs rounded-3xl p-8 shadow-2xl text-center">
               <h3 className="font-black text-gray-800 text-sm uppercase mb-6">Pagar Comissão</h3>
-              <div className="bg-emerald-50 p-4 rounded-2xl mb-6">
-                 <p className="text-[10px] font-black text-emerald-600 uppercase mb-1">Disponível</p>
-                 <p className="text-xl font-black text-emerald-700">R$ {getVendedorStats(payoutVendedor.id).comissaoDisponivel.toFixed(2)}</p>
-              </div>
+              <div className="bg-emerald-50 p-4 rounded-2xl mb-6"><p className="text-[10px] font-black text-emerald-600 uppercase mb-1">Disponível</p><p className="text-xl font-black text-emerald-700">R$ {getVendedorStats(payoutVendedor.id).comissaoDisponivel.toFixed(2)}</p></div>
               <div className="flex bg-gray-100 p-1 rounded-xl mb-6">
                  <button onClick={() => setPayoutType('TOTAL')} className={`flex-1 py-2 rounded-lg text-[9px] font-black uppercase ${payoutType === 'TOTAL' ? 'bg-white shadow-sm' : 'text-gray-400'}`}>Total</button>
                  <button onClick={() => setPayoutType('PARCIAL')} className={`flex-1 py-2 rounded-lg text-[9px] font-black uppercase ${payoutType === 'PARCIAL' ? 'bg-white shadow-sm' : 'text-gray-400'}`}>Parcial</button>
               </div>
-              {payoutType === 'PARCIAL' && (
-                 <input type="number" placeholder="Valor" className="w-full p-4 bg-gray-50 border rounded-2xl font-black mb-6" value={partialAmount} onChange={e => setPartialAmount(e.target.value)} />
-              )}
+              {payoutType === 'PARCIAL' && <input type="number" placeholder="Valor" className="w-full p-4 bg-gray-50 border rounded-2xl font-black mb-6" value={partialAmount} onChange={e => setPartialAmount(e.target.value)} />}
               <button onClick={handleConfirmPayout} className="w-full bg-emerald-600 text-white py-4 rounded-2xl font-black text-xs uppercase shadow-lg active:scale-95 mb-2">Confirmar Pagamento</button>
               <button onClick={() => setPayoutVendedor(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase">Cancelar</button>
            </div>
@@ -836,12 +681,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6">
            <div className="bg-white w-full max-w-sm rounded-[2rem] p-8 shadow-2xl overflow-y-auto max-h-[90vh]">
               <h3 className="font-black text-gray-800 uppercase text-sm mb-6 text-center">{showUserModal === 'NEW' ? 'Novo Vendedor' : 'Editar Vendedor'}</h3>
-              <div className="flex flex-col items-center mb-6">
-                <div onClick={() => userPhotoInputRef.current?.click()} className="w-24 h-24 bg-purple-100 text-purple-600 rounded-[2rem] flex items-center justify-center font-black overflow-hidden border-4 border-white shadow-xl cursor-pointer relative group transition-all hover:scale-105">
-                  {userForm.foto ? <img src={userForm.foto} alt="Foto do Vendedor" className="w-full h-full object-cover" /> : <i className="fa-solid fa-camera text-2xl"></i>}
-                </div>
-                <input type="file" ref={userPhotoInputRef} onChange={handleUserPhotoUpload} className="hidden" accept="image/*" />
-              </div>
+              <div className="flex flex-col items-center mb-6"><div onClick={() => userPhotoInputRef.current?.click()} className="w-24 h-24 bg-purple-100 text-purple-600 rounded-[2rem] flex items-center justify-center font-black overflow-hidden border-4 border-white shadow-xl cursor-pointer relative group transition-all hover:scale-105">{userForm.foto ? <img src={userForm.foto} className="w-full h-full object-cover" /> : <i className="fa-solid fa-camera text-2xl"></i>}</div><input type="file" ref={userPhotoInputRef} onChange={handleUserPhotoUpload} className="hidden" accept="image/*" /></div>
               <div className="space-y-4">
                  <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome do Vendedor</label><input value={userForm.nome ?? ''} onChange={e => setUserForm({...userForm, nome: e.target.value})} placeholder="Nome Completo" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div>
                  <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Telefone / WhatsApp</label><input value={userForm.telefone ?? ''} onChange={e => setUserForm({...userForm, telefone: e.target.value})} placeholder="Telefone" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div>
@@ -882,14 +722,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             <h3 className="font-black text-gray-800 uppercase text-sm mb-6">{showClientModal === 'NEW' ? 'Novo Cliente' : 'Editar Cliente'}</h3>
             <div className="space-y-4">
               <input value={clientForm.nomeFantasia ?? ''} onChange={e => setClientForm({...clientForm, nomeFantasia: e.target.value})} placeholder="Nome Fantasia" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" />
-              <div className="relative">
-                <input value={clientForm.pinLocalizacao ?? ''} onChange={e => setClientForm({...clientForm, pinLocalizacao: e.target.value})} placeholder="PIN de Localização" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold pr-12" />
-                <button onClick={handlePinLocation} className="absolute right-3 top-1/2 -translate-y-1/2 text-blue-600 p-2"><i className="fa-solid fa-location-dot"></i></button>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <input value={clientForm.telefone ?? ''} onChange={e => setClientForm({...clientForm, telefone: e.target.value})} placeholder="Telefone" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" />
-                <select value={clientForm.diaRoteiro ?? 1} onChange={e => setClientForm({...clientForm, diaRoteiro: parseInt(e.target.value)})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-sm">{[1, 2, 3, 4, 5, 6].map(dia => (<option key={dia} value={dia}>{DIAS_SEMANA[dia] ?? 'N/D'}</option>))}</select> 
-              </div>
+              <div className="relative"><input value={clientForm.pinLocalizacao ?? ''} onChange={e => setClientForm({...clientForm, pinLocalizacao: e.target.value})} placeholder="PIN de Localização" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold pr-12" /><button onClick={handlePinLocation} className="absolute right-3 top-1/2 -translate-y-1/2 text-blue-600 p-2"><i className="fa-solid fa-location-dot"></i></button></div>
+              <div className="grid grid-cols-2 gap-4"><input value={clientForm.telefone ?? ''} onChange={e => setClientForm({...clientForm, telefone: e.target.value})} placeholder="Telefone" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /><select value={clientForm.diaRoteiro ?? 1} onChange={e => setClientForm({...clientForm, diaRoteiro: parseInt(e.target.value)})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-sm">{[1, 2, 3, 4, 5, 6].map(dia => (<option key={dia} value={dia}>{DIAS_SEMANA[dia] ?? 'N/D'}</option>))}</select></div>
               <button onClick={handleSaveClient} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl active:scale-95 transition-all uppercase text-xs tracking-widest">Salvar Cliente</button>
               <button onClick={() => setShowClientModal(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button>
             </div>

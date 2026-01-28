@@ -149,6 +149,25 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     return true;
   };
 
+  const getVendedorStats = (vId: string) => {
+    const vSales = props.sales.filter(s => s.vendedorId === vId && filterByPeriod(s.data, 'HOJE'));
+    const sellerComms = props.commissions.filter(c => c.vendedorId === vId);
+    
+    const totalCommsEligible = sellerComms
+      .filter(c => c.status !== 'A_RECEBER')
+      .reduce((acc, curr) => acc + (curr.valor ?? 0), 0); 
+      
+    const jaPago = props.payoutLogs.filter(l => l.vendedorId === vId).reduce((acc, curr) => acc + (curr.valorPago ?? 0), 0); 
+    const disponivel = Math.max(0, totalCommsEligible - jaPago);
+    const aReceber = sellerComms.filter(c => c.status === 'A_RECEBER').reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
+    
+    return {
+      vendasHoje: Number(vSales.reduce((acc, curr) => acc + (curr.valorTotal ?? 0), 0).toFixed(2)), 
+      comissaoDisponivel: Number(disponivel.toFixed(2)),
+      comissaoAReceber: Number(aReceber.toFixed(2))
+    };
+  };
+
   const reportStats = useMemo(() => {
     const salesInPeriod = props.sales.filter(s => filterByPeriod(s.data, periodoRelatorio));
     const totalVendas = salesInPeriod.reduce((acc, curr) => acc + (curr.valorTotal ?? 0), 0);
@@ -161,43 +180,20 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     };
   }, [props.sales, props.payoutLogs, periodoRelatorio]);
 
-  const getVendedorStats = (vId: string) => {
-    const vSales = props.sales.filter(s => s.vendedorId === vId && filterByPeriod(s.data, 'HOJE'));
-    const sellerComms = props.commissions.filter(c => c.vendedorId === vId);
-    const totalCommsEligible = sellerComms.filter(c => c.status !== 'A_RECEBER').reduce((acc, curr) => acc + (curr.valor ?? 0), 0); 
-    const jaPago = props.payoutLogs.filter(l => l.vendedorId === vId).reduce((acc, curr) => acc + (curr.valorPago ?? 0), 0); 
-    const disponivel = Math.max(0, totalCommsEligible - jaPago);
-    const aReceber = sellerComms.filter(c => c.status === 'A_RECEBER').reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
-    return {
-      vendasHoje: Number(vSales.reduce((acc, curr) => acc + (curr.valorTotal ?? 0), 0).toFixed(2)), 
-      comissaoDisponivel: Number(disponivel.toFixed(2)),
-      comissaoAReceber: Number(aReceber.toFixed(2))
-    };
+  const handleOpenPayout = (v: User) => {
+    setPayoutVendedor(v);
+    setPayoutType('TOTAL');
+    setPartialAmount('');
   };
 
-  const filteredHistory = useMemo(() => {
-    return props.sales.filter(s => filterByPeriod(s.data, filtroPeriodo))
-      .sort((a, b) => (b.data?.getTime() ?? 0) - (a.data?.getTime() ?? 0)); 
-  }, [props.sales, filtroPeriodo]);
-
-  const sortedProducts = useMemo(() => {
-    const filtered = props.products.filter(p => (p.nome ?? '').toLowerCase().includes(search.toLowerCase()));
-    if (search) return filtered;
-    return [...filtered].sort((a, b) => {
-      const idxA = orderedProductIds.indexOf(a.id);
-      const idxB = orderedProductIds.indexOf(b.id);
-      if (idxA === -1 || idxB === -1) return 0;
-      return idxA - idxB;
-    });
-  }, [props.products, orderedProductIds, search]);
-
-  const updateStaging = (pId: string, delta: number) => {
-    const p = props.products.find(prod => prod.id === pId);
-    if (!p) return;
-    const noV = props.cargas.find(c => c.vendedorId === selectedVendedorId && c.produtoId === pId)?.quantidade ?? 0; 
-    const totalDisp = (p.estoquePrincipal ?? 0) + noV; 
-    const novaQ = Math.max(0, Math.min(totalDisp, (stagingCarga[pId] ?? 0) + delta));
-    setStagingCarga(prev => ({ ...prev, [pId]: novaQ }));
+  const handleConfirmPayout = () => {
+    if (!payoutVendedor) return;
+    const stats = getVendedorStats(payoutVendedor.id);
+    const amount = payoutType === 'TOTAL' ? stats.comissaoDisponivel : parseFloat(partialAmount);
+    if (isNaN(amount) || amount <= 0 || amount > stats.comissaoDisponivel) return alert("Valor inválido");
+    props.payCommission(payoutVendedor.id, amount, payoutType, props.adminUser.id);
+    setPayoutVendedor(null);
+    showToast("Pagamento registrado!");
   };
 
   const handleSync = () => {
@@ -212,12 +208,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     const itens = Object.entries(stagingCarga).map(([produtoId, quantidade]) => ({ produtoId, quantidade: quantidade ?? 0 })); 
     props.applyCargaDirectly(selectedVendedorId, itens);
     setShowConfirmApply(false);
-  };
-
-  const handleOpenPayout = (v: User) => {
-    setPayoutVendedor(v);
-    setPayoutType('TOTAL');
-    setPartialAmount('');
   };
 
   const handleOpenProduct = (p: Product | 'NEW') => {
@@ -239,17 +229,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     setShowProductModal(p);
   };
 
-  const updatePriceFromMargin = (custo: number, margemPercent: number) => {
-    const c = Number(custo) || 0;
-    const m = Number(margemPercent) || 0;
-    return m >= 100 ? c : c / (1 - m / 100);
-  };
-  const updateMarginFromPrice = (custo: number, venda: number) => {
-    const c = Number(custo) || 0;
-    const v = Number(venda) || 0;
-    return v <= 0 ? 0 : ((v - c) / v) * 100;
-  };
-
   const handleSaveProduct = () => {
     if (!pForm.nome || !pForm.custo || !pForm.venda || !pForm.comissao) return;
     const data: Partial<Product> = { 
@@ -266,21 +245,15 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     showToast("Produto salvo!");
   };
 
-  const handleDeleteProductInModal = () => {
-    if (typeof showProductModal === 'object' && showProductModal !== null) {
-      if (confirm(`Deseja realmente excluir o produto "${showProductModal.nome}"?`)) {
-        props.deleteProduct(showProductModal.id);
-        setShowProductModal(null);
-      }
-    }
+  const updatePriceFromMargin = (custo: number, margemPercent: number) => {
+    const c = Number(custo) || 0;
+    const m = Number(margemPercent) || 0;
+    return m >= 100 ? c : c / (1 - m / 100);
   };
-
-  const moveProduct = (id: string, dir: 'UP' | 'DOWN') => {
-    const idx = orderedProductIds.indexOf(id);
-    const newOrder = [...orderedProductIds];
-    if (dir === 'UP' && idx > 0) [newOrder[idx], newOrder[idx-1]] = [newOrder[idx-1], newOrder[idx]];
-    else if (dir === 'DOWN' && idx < newOrder.length - 1) [newOrder[idx], newOrder[idx+1]] = [newOrder[idx+1], newOrder[idx]];
-    setOrderedProductIds(newOrder);
+  const updateMarginFromPrice = (custo: number, venda: number) => {
+    const c = Number(custo) || 0;
+    const v = Number(venda) || 0;
+    return v <= 0 ? 0 : ((v - c) / v) * 100;
   };
 
   const handleOpenClient = (c: Client | 'NEW') => {
@@ -360,22 +333,45 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     }
   };
 
-  const handleConfirmPayout = () => {
-    if (!payoutVendedor) return;
-    const stats = getVendedorStats(payoutVendedor.id);
-    const amount = payoutType === 'TOTAL' ? stats.comissaoDisponivel : parseFloat(partialAmount);
-    if (isNaN(amount) || amount <= 0 || amount > stats.comissaoDisponivel) return alert("Valor inválido");
-    props.payCommission(payoutVendedor.id, amount, payoutType, props.adminUser.id);
-    setPayoutVendedor(null);
-    showToast("Pagamento registrado!");
-  };
-
   const handleConfirmReceive = (method: PaymentMethod) => {
     if (!showReceiveModal) return;
     const valor = parseFloat(valorRecebidoParcial);
     props.receiveAccount(showReceiveModal.id, method, valor);
     setShowReceiveModal(null);
     showToast("Recebimento registrado!");
+  };
+
+  const moveProduct = (id: string, dir: 'UP' | 'DOWN') => {
+    const idx = orderedProductIds.indexOf(id);
+    const newOrder = [...orderedProductIds];
+    if (dir === 'UP' && idx > 0) [newOrder[idx], newOrder[idx-1]] = [newOrder[idx-1], newOrder[idx]];
+    else if (dir === 'DOWN' && idx < newOrder.length - 1) [newOrder[idx], newOrder[idx+1]] = [newOrder[idx+1], newOrder[idx]];
+    setOrderedProductIds(newOrder);
+  };
+
+  const filteredHistory = useMemo(() => {
+    return props.sales.filter(s => filterByPeriod(s.data, filtroPeriodo))
+      .sort((a, b) => (b.data?.getTime() ?? 0) - (a.data?.getTime() ?? 0)); 
+  }, [props.sales, filtroPeriodo]);
+
+  const sortedProducts = useMemo(() => {
+    const filtered = props.products.filter(p => (p.nome ?? '').toLowerCase().includes(search.toLowerCase()));
+    if (search) return filtered;
+    return [...filtered].sort((a, b) => {
+      const idxA = orderedProductIds.indexOf(a.id);
+      const idxB = orderedProductIds.indexOf(b.id);
+      if (idxA === -1 || idxB === -1) return 0;
+      return idxA - idxB;
+    });
+  }, [props.products, orderedProductIds, search]);
+
+  const updateStaging = (pId: string, delta: number) => {
+    const p = props.products.find(prod => prod.id === pId);
+    if (!p) return;
+    const noV = props.cargas.find(c => c.vendedorId === selectedVendedorId && c.produtoId === pId)?.quantidade ?? 0; 
+    const totalDisp = (p.estoquePrincipal ?? 0) + noV; 
+    const novaQ = Math.max(0, Math.min(totalDisp, (stagingCarga[pId] ?? 0) + delta));
+    setStagingCarga(prev => ({ ...prev, [pId]: novaQ }));
   };
 
   const MenuCard = ({ icon, title, tab, color }: any) => (
@@ -547,18 +543,58 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         </div>
       )}
 
-      {activeTab === 'REPORTS' && (
+      {activeTab === 'ROTEIRO' && (
         <div className="space-y-6 py-4">
-          <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Relatórios</h2></div>
-          <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner">{(['HOJE', 'SEMANA', 'MES', 'GERAL'] as const).map(p => (<button key={p} onClick={() => setPeriodoRelatorio(p)} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${periodoRelatorio === p ? 'bg-white text-emerald-600 shadow-sm' : 'text-gray-400'}`}>{p}</button>))}</div>
-          <div className="grid grid-cols-2 gap-4 px-1">
-             <div className="bg-white p-6 rounded-[2rem] shadow-sm border-b-4 border-emerald-500"><p className="text-[10px] font-black text-gray-400 uppercase mb-2">Vendas Totais</p><p className="text-xl font-black text-gray-800">R$ {reportStats.totalVendas.toFixed(2)}</p></div>
-             <div className="bg-white p-6 rounded-[2rem] shadow-sm border-b-4 border-blue-500"><p className="text-[10px] font-black text-gray-400 uppercase mb-2">Comissão Paga</p><p className="text-xl font-black text-gray-800">R$ {reportStats.totalComissaoPaga.toFixed(2)}</p></div>
+          <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Roteiro Semanal</h2></div>
+          <div className="space-y-3 px-1">
+            {[1, 2, 3, 4, 5, 6].map(dia => {
+              const isOpen = expandedDay === dia;
+              const clientsInDay = props.clients.filter(c => (c.diaRoteiro ?? 0) === dia && (c.ativo ?? false)); 
+              return (
+                <div key={dia} className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden transition-all">
+                  <button onClick={() => setExpandedDay(isOpen ? null : dia)} className={`w-full flex items-center justify-between p-5 text-left transition-colors ${isOpen ? 'bg-indigo-50 text-indigo-700' : 'bg-white text-gray-700'}`}>
+                    <div className="flex items-center gap-3"><div className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-[10px] ${isOpen ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-400'}`}>{dia}</div><span className="font-black uppercase text-xs tracking-tight">{DIAS_SEMANA[dia] ?? 'N/D'}</span></div>
+                    <div className="flex items-center gap-2"><span className="text-[9px] font-black uppercase opacity-40">{clientsInDay.length} clientes</span><i className={`fa-solid ${isOpen ? 'fa-chevron-up' : 'fa-chevron-down'} text-[10px]`}></i></div>
+                  </button>
+                  {isOpen && (
+                    <div className="p-4 bg-white space-y-2 border-t border-indigo-50 animate-in slide-in-from-top duration-300">
+                      {clientsInDay.map(c => (<div key={c.id} className="p-3 bg-gray-50 rounded-2xl flex justify-between items-center"><div><p className="font-bold text-gray-800 text-xs">{c.nomeFantasia ?? 'Cliente'}</p><p className="text-[9px] text-gray-400 font-bold mt-0.5">{c.telefone || 'Sem fone'} {c.bairro ? `• ${c.bairro}` : ''}</p></div></div>))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
 
-      {/* Outras tabs e modais permanecem iguais... */}
+      {activeTab === 'CONTAS_RECEBER' && (
+        <div className="space-y-6 py-4">
+          <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Contas a Receber</h2></div>
+          <div className="grid gap-3 px-1">
+            {contasAReceber.map(s => {
+              const saldo = Number(((s.valorTotal ?? 0) - (s.valorPago ?? 0)).toFixed(2)); 
+              return (
+              <div key={s.id} className="bg-white p-5 rounded-3xl border border-gray-100 shadow-sm">
+                <div className="flex justify-between items-start mb-2"><span className="text-[9px] font-black text-gray-400 uppercase">{s.data.toLocaleDateString()}</span><span className="bg-rose-50 text-rose-600 text-[9px] font-black px-2 py-0.5 rounded uppercase">EM ABERTO</span></div>
+                <div className="flex justify-between items-end">
+                   <div>
+                     <h4 className="font-bold text-gray-800 text-sm leading-tight">{props.clients.find(c => c.id === s.clientId)?.nomeFantasia || 'Cliente'}</h4>
+                     <p className="text-[10px] text-gray-400 font-bold uppercase mt-1">Vend: {props.users.find(u => u.id === s.vendedorId)?.nome ?? 'Desc.'}</p> 
+                     {(s.valorPago ?? 0) > 0 && <p className="text-[9px] text-emerald-600 font-bold uppercase mt-1">Já pago: R$ {(s.valorPago ?? 0).toFixed(2)}</p>} 
+                   </div>
+                   <div className="text-right">
+                     <p className="text-sm font-black text-gray-800 mb-2">Saldo: R$ {saldo.toFixed(2)}</p>
+                     <button onClick={() => { setShowReceiveModal(s); setValorRecebidoParcial(saldo.toString()); }} className="bg-emerald-600 text-white px-4 py-2 rounded-xl text-[9px] font-black uppercase shadow-lg active:scale-95">RECEBER</button>
+                   </div>
+                </div>
+              </div>
+            )})}
+          </div>
+        </div>
+      )}
+
+      {/* MODAIS */}
       {showConfirmSync && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[250] flex items-center justify-center p-6">
           <div className="bg-white w-full max-w-xs rounded-3xl p-8 text-center shadow-2xl animate-in zoom-in-95 duration-200">
@@ -585,19 +621,22 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         </div>
       )}
 
-      {showEntryModal && (
-        <div className="fixed inset-0 bg-black/50 z-[200] flex items-center justify-center p-6">
-          <div className="bg-white p-8 rounded-[32px] w-full max-w-xs shadow-2xl text-center">
-            <h3 className="font-black text-gray-800 text-sm uppercase mb-4">Entrada de Mercadoria</h3>
-            <div className="mb-6"><p className="text-[10px] font-black text-gray-400 uppercase mb-1">Produto</p><h4 className="text-sm font-bold text-gray-800 uppercase leading-tight">{showEntryModal.nome}</h4></div>
-            <div className="space-y-4">
-              <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100 flex flex-col items-center"><span className="text-[10px] font-black text-blue-400 uppercase mb-1">📦 Estoque Atual</span><span className="text-lg font-black text-blue-700">{(showEntryModal.estoquePrincipal ?? 0)} UN</span></div>
-              <input type="number" placeholder="Quantidade Entrada" className="w-full p-4 bg-gray-50 rounded-2xl border font-black text-center text-lg outline-none" value={entryForm.qtd} onChange={e => setEntryForm({...entryForm, qtd: e.target.value})} />
-              <input type="number" placeholder="Custo Unit." className="w-full p-4 bg-gray-50 rounded-2xl border font-black text-center text-lg outline-none" value={entryForm.custo} onChange={e => setEntryForm({...entryForm, custo: e.target.value})} />
-              <button onClick={() => { if(!entryForm.qtd || !entryForm.custo) return; props.registerStockEntry(showEntryModal.id, parseInt(entryForm.qtd), parseFloat(entryForm.custo)); setShowEntryModal(null); }} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl active:scale-95 shadow-xl uppercase text-xs tracking-widest">Confirmar Entrada</button>
-              <button onClick={() => setShowEntryModal(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button>
-            </div>
-          </div>
+      {payoutVendedor && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[250] flex items-center justify-center p-6">
+           <div className="bg-white w-full max-w-xs rounded-3xl p-8 shadow-2xl text-center">
+              <h3 className="font-black text-gray-800 text-sm uppercase mb-6">Pagar Comissão</h3>
+              <div className="bg-emerald-50 p-4 rounded-2xl mb-6">
+                 <p className="text-[10px] font-black text-emerald-600 uppercase mb-1">Disponível</p>
+                 <p className="text-xl font-black text-emerald-700">R$ {getVendedorStats(payoutVendedor.id).comissaoDisponivel.toFixed(2)}</p>
+              </div>
+              <div className="flex bg-gray-100 p-1 rounded-xl mb-6">
+                 <button onClick={() => setPayoutType('TOTAL')} className={`flex-1 py-2 rounded-lg text-[9px] font-black uppercase ${payoutType === 'TOTAL' ? 'bg-white shadow-sm' : 'text-gray-400'}`}>Total</button>
+                 <button onClick={() => setPayoutType('PARCIAL')} className={`flex-1 py-2 rounded-lg text-[9px] font-black uppercase ${payoutType === 'PARCIAL' ? 'bg-white shadow-sm' : 'text-gray-400'}`}>Parcial</button>
+              </div>
+              {payoutType === 'PARCIAL' && <input type="number" placeholder="Valor" className="w-full p-4 bg-gray-50 border rounded-2xl font-black mb-6 text-center" value={partialAmount} onChange={e => setPartialAmount(e.target.value)} />}
+              <button onClick={handleConfirmPayout} className="w-full bg-emerald-600 text-white py-4 rounded-2xl font-black text-xs uppercase shadow-lg active:scale-95 mb-2">Confirmar Pagamento</button>
+              <button onClick={() => setPayoutVendedor(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase">Cancelar</button>
+           </div>
         </div>
       )}
 

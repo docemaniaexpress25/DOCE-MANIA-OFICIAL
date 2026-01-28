@@ -47,8 +47,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const [financeFilter, setFinanceFilter] = useState<'DIA' | 'SEMANA' | 'MES' | 'GERAL'>('DIA');
   const [weeklySearch, setWeeklySearch] = useState('');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
-  const [showFiscalization, setShowFiscalization] = useState(false);
-  const [fiscalizationSize, setFiscalizationSize] = useState<56 | 80>(56); 
   
   const [cForm, setCForm] = useState<Partial<Client>>({});
 
@@ -60,7 +58,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const diaAtual = new Date().getDay();
   const minhaCarga = useMemo(() => cargas.filter(c => c.vendedorId === user.id), [cargas, user.id]);
   
-  // Rota de Hoje ordenada pelo campo 'ordem'
+  // Rota de Hoje ordenada rigorosamente pelo campo 'ordem'
   const rotaDeHoje = useMemo(() => {
     return clients
       .filter(c => (c.ativo ?? false) && ((c.diaRoteiro ?? 0) === diaAtual || extraRouteClientIds.includes(c.id)))
@@ -93,22 +91,22 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         setCForm(prev => ({ ...prev, pinLocalizacao: pin }));
         showToast("Localização capturada!");
       }, () => {
-        showToast("Erro ao capturar localização. Verifique as permissões do GPS.", 'error');
+        showToast("Erro ao capturar localização.", 'error');
       });
     }
   };
 
   const handleSaveClientBasic = () => {
-    if (!cForm.nomeFantasia || !cForm.telefone || !cForm.endereco || !cForm.bairro) {
-      showToast("Preencha Nome Fantasia, Telefone, Endereço e Bairro.", 'error');
+    if (!cForm.nomeFantasia || !cForm.telefone) {
+      showToast("Preencha ao menos Nome e Telefone.", 'error');
       return;
     }
 
     const clientData: Omit<Client, 'id'> = {
-      nomeFantasia: cForm.nomeFantasia,
-      telefone: cForm.telefone,
-      endereco: cForm.endereco,
-      bairro: cForm.bairro,
+      nomeFantasia: cForm.nomeFantasia!,
+      telefone: cForm.telefone!,
+      endereco: cForm.endereco || '',
+      bairro: cForm.bairro || '',
       diaRoteiro: cForm.diaRoteiro ?? diaAtual,
       ordem: cForm.ordem ?? 0,
       ativo: cForm.ativo ?? true,
@@ -121,7 +119,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
     if (editingClient === 'NEW') {
       addClient(clientData);
-      showToast("Novo cliente cadastrado com sucesso!");
+      showToast("Novo cliente cadastrado!");
     } else if (typeof editingClient === 'object') {
       updateClient(editingClient.id, clientData); 
       showToast("Cliente atualizado");
@@ -129,26 +127,11 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     setEditingClient(null);
   };
 
-  const handleAceitarCarga = (pendenciaId: string) => {
-    aceitarCarga(pendenciaId);
-    showToast("Carga recebida com sucesso");
-  };
-
-  const handleReadPayoutMessage = (msgId: string) => {
-    markMessageAsRead(msgId);
-    showToast("Pagamento de comissão recebido");
-  };
-
   const handleConfirmReceive = (method: PaymentMethod) => {
     if (!showReceiveModal) return;
     const valor = parseFloat(valorRecebidoParcial);
     const saldoEmAberto = Number(((showReceiveModal.valorTotal ?? 0) - (showReceiveModal.valorPago ?? 0)).toFixed(2)); 
-    
-    if (isNaN(valor) || valor <= 0 || valor > saldoEmAberto) {
-        alert("Valor inválido.");
-        return;
-    }
-
+    if (isNaN(valor) || valor <= 0 || valor > saldoEmAberto) return alert("Valor inválido.");
     receivePayment(showReceiveModal.id, method, valor);
     showToast(valor === saldoEmAberto ? "Conta quitada!" : "Pagamento parcial registrado!");
     setShowReceiveModal(null);
@@ -203,8 +186,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
   const contasAReceber = useMemo(() => sales.filter(s => s.vendedorId === user.id && s.metodoPagamento === 'A_PRAZO' && s.statusPagamento === 'PENDENTE'), [sales, user.id]);
 
-  const totalItensCarga = useMemo(() => minhaCarga.length, [minhaCarga]);
-  const unidadesTotaisCarga = useMemo(() => minhaCarga.reduce((acc, curr) => acc + (curr.quantidade ?? 0), 0), [minhaCarga]); 
   const valorTotalCarga = useMemo(() => minhaCarga.reduce((acc, curr) => {
     const p = products.find(prod => prod.id === curr.produtoId);
     return acc + ((curr.quantidade ?? 0) * (p?.precoVenda ?? 0)); 
@@ -238,7 +219,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         </div>
       )}
 
-      {activeTab !== 'HOME' && <button onClick={() => setActiveTab('HOME')} className="w-10 h-10 bg-white text-blue-600 rounded-xl flex items-center justify-center shadow-sm border border-gray-100 mb-2"><i className="fa-solid fa-arrow-left"></i></button>}
+      {activeTab !== 'HOME' && <button onClick={() => setActiveTab('HOME')} className="w-10 h-10 bg-white text-blue-600 rounded-xl flex items-center justify-center shadow-sm border border-gray-100 mb-2 active:scale-90 transition-transform"><i className="fa-solid fa-arrow-left"></i></button>}
 
       {activeTab === 'HOME' && (
         <div className="py-4 grid grid-cols-2 gap-4">
@@ -257,7 +238,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         <div className="space-y-4">
           <header className="flex justify-between items-center px-1">
             <div className="flex flex-col items-start"><h2 className="text-xl font-black text-gray-800 tracking-tight leading-none">{DIAS_SEMANA[diaAtual] ?? 'N/D'}</h2><span className="text-[10px] font-black uppercase text-gray-400 mt-1">{new Date().toLocaleDateString()}</span></div>
-            <span className="bg-blue-100 text-blue-600 text-[10px] px-2 py-1 rounded-lg font-black">{rotaDeHoje.length} VISITAS</span>
+            <span className="bg-blue-100 text-blue-600 text-[10px] px-2 py-1 rounded-lg font-black uppercase">{rotaDeHoje.length} VISITAS</span>
           </header>
           {rotaDeHoje.map(c => {
             const isSold = sales.some(s => s.clientId === c.id && isSameDay(s.data));
@@ -266,7 +247,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
             return (
               <div key={c.id} className={`p-4 rounded-3xl border flex flex-col transition-all ${isVisited ? 'bg-gray-100 border-gray-200 grayscale opacity-60' : 'bg-white border-gray-100 shadow-sm'}`}>
                 <div className="flex justify-between items-center">
-                  <div className="flex-1"><p className="font-bold text-gray-800 leading-tight">{c.nomeFantasia ?? 'Cliente'}</p><p className="text-[10px] text-gray-400 mt-1 uppercase font-semibold"><i className="fa-solid fa-location-dot mr-1"></i> {(c.bairro || 'S/B')}</p></div>
+                  <div className="flex-1"><p className="font-bold text-gray-800 leading-tight uppercase">{c.nomeFantasia ?? 'Cliente'}</p><p className="text-[10px] text-gray-400 mt-1 uppercase font-semibold"><i className="fa-solid fa-location-dot mr-1"></i> {(c.bairro || 'S/B')}</p></div>
                   {!isVisited ? (
                     <div className="flex gap-2">
                       <button onClick={() => handleSkipClient(c.id)} className="w-10 h-10 bg-gray-50 text-gray-400 rounded-2xl flex items-center justify-center"><i className="fa-solid fa-forward"></i></button>
@@ -280,25 +261,71 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         </div>
       )}
 
-      {/* Outras tabs permanecem iguais... */}
+      {activeTab === 'CLIENTES' && (
+        <div className="space-y-4">
+          <header className="px-1 flex justify-between items-center"><h2 className="text-xs font-black text-gray-400 uppercase tracking-wider">Meus Clientes</h2><button onClick={() => handleOpenEditClient('NEW')} className="bg-green-600 text-white px-4 py-2 rounded-xl font-black text-xs uppercase shadow-md active:scale-95"><i className="fa-solid fa-user-plus mr-2"></i>Novo</button></header>
+          <div className="grid gap-3">
+            {clients.sort((a,b) => a.nomeFantasia.localeCompare(b.nomeFantasia)).map(c => (
+              <div key={c.id} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex justify-between items-center transition-all">
+                <div><h4 className="font-bold text-gray-800 text-sm leading-tight uppercase">{c.nomeFantasia ?? 'Cliente'}</h4><p className="text-[10px] text-gray-400 font-semibold uppercase mt-1">{c.telefone} • {DIAS_SEMANA[c.diaRoteiro]}</p></div>
+                <button onClick={() => handleOpenEditClient(c)} className="w-10 h-10 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center active:scale-95"><i className="fa-solid fa-pencil-alt text-xs"></i></button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'WEEKLY' && (
+        <div className="space-y-6 py-4">
+          <div className="px-1 flex justify-between items-center"><h2 className="text-xl font-black text-gray-800 tracking-tight">Roteiro Semanal</h2></div>
+          <div className="px-1"><input value={weeklySearch} onChange={e => setWeeklySearch(e.target.value)} placeholder="Filtrar por nome..." className="w-full p-4 bg-white border border-gray-100 rounded-2xl shadow-sm text-sm outline-none focus:ring-2 focus:ring-indigo-100" /></div>
+          <div className="space-y-3 px-1">
+            {[1, 2, 3, 4, 5, 6].map(dia => {
+              const isOpen = expandedDay === dia;
+              const clientsInDay = clients
+                .filter(c => c.diaRoteiro === dia && c.ativo && (weeklySearch === '' || c.nomeFantasia.toLowerCase().includes(weeklySearch.toLowerCase())))
+                .sort((a, b) => (a.ordem || 0) - (b.ordem || 0)); 
+              return (
+                <div key={dia} className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
+                  <button onClick={() => setExpandedDay(isOpen ? null : dia)} className={`w-full flex items-center justify-between p-5 text-left ${isOpen ? 'bg-indigo-50 text-indigo-700' : 'bg-white text-gray-700'}`}>
+                    <div className="flex items-center gap-3"><div className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-[10px] ${isOpen ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-400'}`}>{dia}</div><span className="font-black uppercase text-xs tracking-tight">{DIAS_SEMANA[dia]}</span></div>
+                    <div className="flex items-center gap-2"><span className="text-[9px] font-black uppercase opacity-40">{clientsInDay.length} clientes</span><i className={`fa-solid ${isOpen ? 'fa-chevron-up' : 'fa-chevron-down'} text-[10px]`}></i></div>
+                  </button>
+                  {isOpen && (
+                    <div className="p-4 bg-white space-y-2 border-t border-indigo-50">
+                      {clientsInDay.map(c => (
+                        <div key={c.id} className="p-3 bg-gray-50 rounded-2xl flex justify-between items-center">
+                          <div><p className="font-bold text-gray-800 text-xs uppercase">{c.nomeFantasia}</p><p className="text-[9px] text-gray-400 font-bold mt-0.5">{c.bairro || 'Sem Bairro'}</p></div>
+                          <button onClick={() => handleAddToTodayRoute(c.id)} className="w-8 h-8 bg-indigo-100 text-indigo-600 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-plus text-xs"></i></button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {activeTab === 'CARGA' && (
         <div className="space-y-4">
           {cargasPendentes.length > 0 ? (
             <div className="bg-orange-50 p-6 rounded-3xl shadow-xl flex flex-col gap-4 items-center text-center">
               <i className="fa-solid fa-truck-loading text-orange-600 text-4xl mb-2"></i>
-              <h3 className="text-xl font-black text-orange-800">Nova Carga Disponível!</h3>
-              <button onClick={() => handleAceitarCarga(cargasPendentes[0].id)} className="w-full bg-orange-600 text-white font-black py-5 rounded-2xl shadow-lg active:scale-95 transition-all text-sm uppercase">ACEITAR CARGA</button>
+              <h3 className="text-xl font-black text-orange-800 uppercase">Nova Carga Disponível!</h3>
+              <button onClick={() => aceitarCarga(cargasPendentes[0].id)} className="w-full bg-orange-600 text-white font-black py-5 rounded-2xl shadow-lg active:scale-95 text-sm uppercase">ACEITAR CARGA</button>
             </div>
           ) : (
             <>
               <div className="bg-purple-600 text-white p-6 rounded-3xl shadow-xl flex justify-between items-center">
-                 <div><p className="text-[10px] font-black uppercase opacity-60">Carga</p><h3 className="text-2xl font-black">R$ {valorTotalCarga.toFixed(2)}</h3></div>
-                 <div className="text-right"><p className="text-[10px] font-black uppercase opacity-60">Itens</p><h3 className="text-2xl font-black">{unidadesTotaisCarga}</h3></div>
+                 <div><p className="text-[10px] font-black uppercase opacity-60">Valor Total Carga</p><h3 className="text-2xl font-black">R$ {valorTotalCarga.toFixed(2)}</h3></div>
+                 <div className="text-right"><p className="text-[10px] font-black uppercase opacity-60">Itens Ativos</p><h3 className="text-2xl font-black">{minhaCarga.length}</h3></div>
               </div>
               <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
                 <table className="w-full text-left">
                   <thead className="bg-gray-50"><tr><th className="p-4 text-[10px] font-black text-gray-400 uppercase">Item</th><th className="p-4 text-center text-[10px] font-black text-gray-400 uppercase">Preço</th><th className="p-4 text-right text-[10px] font-black text-gray-400 uppercase">Qtd</th></tr></thead>
-                  <tbody className="divide-y divide-gray-50">{minhaCarga.map(c => { const p = products.find(prod => prod.id === c.produtoId); return (<tr key={c.produtoId}><td className="p-4 text-xs font-semibold">{p?.nome ?? 'Desc.'}</td><td className="p-4 text-center text-xs text-gray-400">R$ {(p?.precoVenda ?? 0).toFixed(2)}</td><td className="p-4 text-right font-black text-lg text-blue-600">{c.quantidade}</td></tr>); })}</tbody> 
+                  <tbody className="divide-y divide-gray-50">{minhaCarga.map(c => { const p = products.find(prod => prod.id === c.produtoId); return (<tr key={c.produtoId}><td className="p-4 text-xs font-semibold uppercase">{p?.nome ?? 'Desc.'}</td><td className="p-4 text-center text-xs text-gray-400">R$ {(p?.precoVenda ?? 0).toFixed(2)}</td><td className="p-4 text-right font-black text-lg text-blue-600">{c.quantidade}</td></tr>); })}</tbody> 
                 </table>
               </div>
             </>
@@ -317,7 +344,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 <div className="text-center bg-orange-50 p-3 rounded-xl"><p className="text-[9px] font-black text-orange-600 uppercase mb-1">A Prazo</p><p className="text-sm font-black text-orange-700">R$ {historySummary.prazo.toFixed(2)}</p></div>
              </div>
           </div>
-          {filteredHistory.map(s => (<div key={s.id} className="bg-white p-4 rounded-3xl border border-gray-100 flex flex-col shadow-sm"><div className="flex justify-between items-center mb-2"><p className="font-bold text-gray-800 text-sm">{clients.find(c => c.id === s.clientId)?.nomeFantasia ?? 'Cliente'}</p><p className="text-sm font-semibold text-emerald-600">R$ {s.valorTotal.toFixed(2)}</p></div><div className="flex justify-between items-end"><p className="text-[10px] text-gray-400 font-semibold">{s.metodoPagamento} • {s.data.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</p><div className="flex gap-3"><button onClick={() => setViewingSale(s)} className="text-[#1E3A5F] text-lg"><i className="fa-solid fa-file-invoice"></i></button></div></div></div>))} 
+          {filteredHistory.map(s => (<div key={s.id} className="bg-white p-4 rounded-3xl border border-gray-100 flex flex-col shadow-sm"><div className="flex justify-between items-center mb-2"><p className="font-bold text-gray-800 text-sm uppercase">{clients.find(c => c.id === s.clientId)?.nomeFantasia ?? 'Cliente'}</p><p className="text-sm font-semibold text-emerald-600">R$ {s.valorTotal.toFixed(2)}</p></div><div className="flex justify-between items-end"><p className="text-[10px] text-gray-400 font-semibold">{s.metodoPagamento} • {s.data.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</p><div className="flex gap-3"><button onClick={() => setViewingSale(s)} className="text-[#1E3A5F] text-lg"><i className="fa-solid fa-file-invoice"></i></button></div></div></div>))} 
         </div>
       )}
 
@@ -339,10 +366,10 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
             {contasAReceber.map(s => {
               const saldo = Number(((s.valorTotal ?? 0) - (s.valorPago ?? 0)).toFixed(2)); 
               return (
-              <div key={s.id} className="bg-white p-5 rounded-3xl border border-gray-100 shadow-sm flex flex-col transition-all">
+              <div key={s.id} className="bg-white p-5 rounded-3xl border border-gray-100 shadow-sm flex flex-col">
                 <div className="flex justify-between items-start mb-2">
                    <div>
-                      <h4 className="font-bold text-gray-800 text-sm leading-tight">{clients.find(c => c.id === s.clientId)?.nomeFantasia || 'Cliente'}</h4>
+                      <h4 className="font-bold text-gray-800 text-sm leading-tight uppercase">{clients.find(c => c.id === s.clientId)?.nomeFantasia || 'Cliente'}</h4>
                       <p className="text-[10px] text-gray-400 font-semibold uppercase mt-2">Vencimento: {s.dataVencimento?.toLocaleDateString()}</p> 
                    </div>
                    <p className="text-lg font-black text-rose-600">Saldo: R$ {saldo.toFixed(2)}</p>
@@ -354,27 +381,13 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         </div>
       )}
 
-      {activeTab === 'CLIENTS' && (
-        <div className="space-y-4">
-          <header className="px-1 flex justify-between items-center"><h2 className="text-xs font-black text-gray-400 uppercase tracking-wider">Meus Clientes</h2><button onClick={() => handleOpenEditClient('NEW')} className="bg-green-600 text-white px-4 py-2 rounded-xl font-black text-xs uppercase shadow-md active:scale-95"><i className="fa-solid fa-user-plus mr-2"></i>Novo</button></header>
-          <div className="grid gap-3">
-            {clients.map(c => (
-              <div key={c.id} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex justify-between items-center transition-all">
-                <div><h4 className="font-bold text-gray-800 text-sm leading-tight">{c.nomeFantasia ?? 'Cliente'}</h4><p className="text-[10px] text-gray-400 font-semibold uppercase mt-1">{c.telefone} • {DIAS_SEMANA[c.diaRoteiro]}</p></div>
-                <button onClick={() => handleOpenEditClient(c)} className="w-10 h-10 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center active:scale-95"><i className="fa-solid fa-pencil-alt text-xs"></i></button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       {activeTab === 'STOCK_VIEW' && (
         <div className="space-y-4">
           <header className="px-1"><h2 className="text-xs font-black text-gray-400 uppercase tracking-wider">Estoque Central</h2></header>
           <div className="grid gap-3">
             {products.map(p => ( 
               <div key={p.id} className="bg-white px-4 py-3 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between">
-                <div className="flex-1"><h3 className="font-bold text-gray-800 text-sm leading-tight">{p.nome}</h3><div className="flex items-center gap-2 mt-1"><span className="text-[10px] font-black bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded tracking-tighter">Central: {p.estoquePrincipal} un</span></div></div>
+                <div className="flex-1"><h3 className="font-bold text-gray-800 text-sm leading-tight uppercase">{p.nome}</h3><div className="flex items-center gap-2 mt-1"><span className="text-[10px] font-black bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded tracking-tighter">Central: {p.estoquePrincipal} un</span></div></div>
                 <div className="text-right"><p className="text-sm font-black text-emerald-600">R$ {p.precoVenda.toFixed(2)}</p></div> 
               </div>
             ))}
@@ -382,7 +395,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         </div>
       )}
 
-      {/* MODAIS (Receive, EditClient) */}
+      {/* MODAIS */}
       {showReceiveModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[250] flex items-center justify-center p-6">
            <div className="bg-white w-full max-w-xs rounded-3xl p-8 shadow-2xl animate-in zoom-in-95 duration-200">
@@ -403,10 +416,10 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
           <div className="bg-white w-full max-w-md rounded-t-[2rem] sm:rounded-[2rem] shadow-2xl p-8 animate-in slide-in-from-bottom duration-300 max-h-[90vh] overflow-y-auto">
              <div className="flex justify-between items-center mb-6"><h3 className="font-black text-gray-800 uppercase text-sm tracking-tight">{editingClient === 'NEW' ? 'Novo Cliente' : 'Editar Cliente'}</h3></div>
              <div className="space-y-4 pb-6">
-                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Nome Fantasia</label><input value={cForm.nomeFantasia || ''} onChange={e => setCForm({...cForm, nomeFantasia: e.target.value})} placeholder="Nome Fantasia" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100" /></div>
+                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Nome Fantasia</label><input value={cForm.nomeFantasia || ''} onChange={e => setCForm({...cForm, nomeFantasia: e.target.value})} placeholder="Nome Fantasia" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100 uppercase" /></div>
                 <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Telefone / WhatsApp</label><input value={cForm.telefone || ''} onChange={e => setCForm({...cForm, telefone: e.target.value})} placeholder="Telefone" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100" /></div>
-                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Endereço</label><input value={cForm.endereco || ''} onChange={e => setCForm({...cForm, endereco: e.target.value})} placeholder="Endereço" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100" /></div>
-                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Bairro</label><input value={cForm.bairro || ''} onChange={e => setCForm({...cForm, bairro: e.target.value})} placeholder="Bairro" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100" /></div>
+                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Endereço</label><input value={cForm.endereco || ''} onChange={e => setCForm({...cForm, endereco: e.target.value})} placeholder="Endereço" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100 uppercase" /></div>
+                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Bairro</label><input value={cForm.bairro || ''} onChange={e => setCForm({...cForm, bairro: e.target.value})} placeholder="Bairro" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100 uppercase" /></div>
                 <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Dia de Atendimento</label><select value={cForm.diaRoteiro ?? 1} onChange={e => setCForm({...cForm, diaRoteiro: parseInt(e.target.value)})} className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100">{[1, 2, 3, 4, 5, 6].map(d => (<option key={d} value={d}>{DIAS_SEMANA[d] ?? 'N/D'}</option>))}</select></div> 
                 <div className="flex flex-col gap-2 mt-4"><button onClick={handleSaveClientBasic} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-lg uppercase text-xs">Salvar Alterações</button><button onClick={() => setEditingClient(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px]">Cancelar</button></div>
              </div>

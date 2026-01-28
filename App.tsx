@@ -57,9 +57,35 @@ const App: React.FC = () => {
   useEffect(() => { saveLocalState('currentUser', currentUser); }, [currentUser]);
 
   const fetchUsers = useCallback(async () => { setUsers(await userService.getAllUsers()); }, []);
-  const fetchProducts = useCallback(async () => { setProducts(await productService.getAllProducts()); }, []);
   const fetchClients = useCallback(async () => { setClients(await clientService.getAllClients()); }, []);
   
+  const fetchProducts = useCallback(async (order: string[]) => { 
+    const fetchedProducts = await productService.getAllProducts();
+    
+    // 1. Cria um mapa para acesso rápido (Tipagem explícita adicionada)
+    const productMap: Map<string, Product> = new Map(fetchedProducts.map(p => [p.id, p]));
+    
+    // 2. Ordena usando a ordem persistida
+    const orderedProducts: Product[] = [];
+    const remainingProducts: Product[] = [];
+
+    // Adiciona produtos na ordem definida
+    order.forEach(id => {
+      const product = productMap.get(id);
+      if (product) {
+        orderedProducts.push(product);
+        productMap.delete(id); // Remove do mapa para não duplicar
+      }
+    });
+
+    // Adiciona produtos novos ou não ordenados ao final
+    productMap.forEach(product => {
+      remainingProducts.push(product);
+    });
+
+    setProducts([...orderedProducts, ...remainingProducts]);
+  }, []);
+
   const fetchTransactionalData = useCallback(async () => {
     const [s, c, p, m, cg, cgp] = await Promise.all([
       saleService.getAllSales(),
@@ -85,7 +111,7 @@ const App: React.FC = () => {
       if (route) {
         setDailyRouteState(route);
       } else {
-        // Lógica de Geração Automática da Rota (Solução 1)
+        // Lógica de Geração Automática da Rota
         const todayDay = new Date().getDay(); // 0=Domingo, 1=Segunda...
         const initialClientIds = currentClients
           .filter(c => c.diaRoteiro === todayDay && c.ativo)
@@ -124,19 +150,21 @@ const App: React.FC = () => {
       return;
     }
 
-    const [fetchedUsers, fetchedProducts, fetchedClients] = await Promise.all([
+    const [fetchedUsers, fetchedClients] = await Promise.all([
       fetchUsers(),
-      fetchProducts(),
       fetchClients(),
       fetchTransactionalData()
     ]);
     
-    // Chama a busca da rota após carregar os clientes
+    // 1. Carrega e ordena os produtos usando a ordem das configurações
+    await fetchProducts(settings.productOrder);
+    
+    // 2. Chama a busca da rota após carregar os clientes
     if (fetchedClients) {
       await fetchDailyRoute(fetchedClients);
     }
     
-  }, [fetchUsers, fetchProducts, fetchClients, fetchTransactionalData, fetchDailyRoute]);
+  }, [fetchUsers, fetchClients, fetchTransactionalData, fetchDailyRoute, fetchProducts]);
 
   useEffect(() => { fetchCoreData(); }, [fetchCoreData]);
 
@@ -153,10 +181,23 @@ const App: React.FC = () => {
             case 'pix1Code': setPix1Code(value); break;
             case 'pix2Name': setPix2Name(value); break;
             case 'pix2Code': setPix2Code(value); break;
-            case 'productOrder': setProductOrder(value); break; // Atualizando estado da ordem
+            case 'productOrder': setProductOrder(value); 
+              // Se a ordem do produto for atualizada, reordena a lista de produtos imediatamente
+              const productMap: Map<string, Product> = new Map(products.map(p => [p.id, p])); // Tipagem explícita adicionada
+              const orderedProducts: Product[] = [];
+              value.forEach((id: string) => {
+                const product = productMap.get(id);
+                if (product) {
+                  orderedProducts.push(product);
+                  productMap.delete(id);
+                }
+              });
+              productMap.forEach(product => orderedProducts.push(product));
+              setProducts(orderedProducts);
+              break;
         }
     }
-  }, []);
+  }, [products]);
 
   const addUser = async (nome: string, foto?: string, telefone?: string) => {
     const newUser: Omit<User, 'id'> = { nome, email: `${nome.toLowerCase().replace(/\s/g, '')}@sistema.com`, role: 'VENDEDOR', ativo: true, foto, telefone, pin: '123456' };
@@ -175,13 +216,13 @@ const App: React.FC = () => {
     if (res) {
       // Adiciona o novo produto ao final da ordem persistida
       await updateSetting('productOrder', [...productOrder, res.id]);
-      await fetchProducts();
+      // Não precisa chamar fetchProducts, pois updateSetting já reordena e atualiza o estado local
     }
   };
 
   const updateProduct = async (id: string, data: Partial<Product>) => {
     const res = await productService.updateProduct(id, data);
-    if (res) await fetchProducts();
+    if (res) await fetchProducts(productOrder); // Rebusca e reordena
   };
 
   const deleteProduct = async (id: string) => {
@@ -189,7 +230,7 @@ const App: React.FC = () => {
     if (res) {
       // Remove o produto da ordem persistida
       await updateSetting('productOrder', productOrder.filter(pId => pId !== id));
-      await fetchProducts();
+      // Não precisa chamar fetchProducts, pois updateSetting já reordena e atualiza o estado local
     }
   };
 
@@ -201,7 +242,7 @@ const App: React.FC = () => {
     const finalCusto = Number(novoCusto.toFixed(2));
     const finalVenda = margemGlobalAtiva ? Number((finalCusto / (1 - margemGlobalValor / 100)).toFixed(2)) : p.precoVenda;
     const res = await productService.updateProduct(id, { estoquePrincipal: novoTotal, precoCusto: finalCusto, precoVenda: finalVenda });
-    if (res) await fetchProducts();
+    if (res) await fetchProducts(productOrder); // Rebusca e reordena
   };
 
   const addClient = async (data: Omit<Client, 'id'>) => {

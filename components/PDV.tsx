@@ -29,7 +29,10 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const [selectedPixSlot, setSelectedPixSlot] = useState<1 | 2 | null>(null);
 
   const todayStr = new Date().toISOString().split('T')[0];
+  
+  // A lista 'products' já está ordenada pelo App.tsx.
   const productIdsInCarga = useMemo(() => new Set(minhaCarga.map(c => c.produtoId)), [minhaCarga]);
+  const orderedProductsInCarga = useMemo(() => products.filter(p => productIdsInCarga.has(p.id)), [products, productIdsInCarga]);
 
   useEffect(() => {
     const savedCart = localStorage.getItem(`pdv_cart_${vendedorId}_${client.id}`);
@@ -123,7 +126,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       </header>
 
       <div className="flex-1 overflow-y-auto p-2 space-y-1.5 pb-32">
-        {products.filter(p => productIdsInCarga.has(p.id)).map(p => { 
+        {orderedProductsInCarga.map(p => { 
           const itemNoCart = cart[p.id];
           const cargaOriginal = minhaCarga.find(c => c.produtoId === p.id)?.quantidade || 0;
           const cargaDisponivel = cargaOriginal - (itemNoCart?.quantidade ?? 0); 

@@ -123,6 +123,17 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const diaAtual = new Date().getDay();
   const minhaCarga = useMemo(() => cargas.filter(c => c.vendedorId === user.id), [cargas, user.id]);
   
+  // Lista de produtos na carga, ordenada pela ordem global
+  const orderedCargaProducts = useMemo(() => {
+    const cargaMap = new Map(minhaCarga.map(c => [c.produtoId, c]));
+    return products
+      .filter(p => cargaMap.has(p.id))
+      .map(p => ({
+        product: p,
+        carga: cargaMap.get(p.id)!
+      }));
+  }, [products, minhaCarga]);
+
   const rotaDeHoje = useMemo(() => {
     const clientMap = new Map(clients.map(c => [c.id, c]));
     const clientsInRoute = dailyRouteState.clientIds
@@ -285,7 +296,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
           <header className="px-1 flex justify-between items-center"><h2 className="text-xs font-black text-gray-400 uppercase tracking-wider">Meus Clientes</h2><button onClick={() => handleOpenEditClient('NEW')} className="bg-green-600 text-white px-4 py-2 rounded-xl font-black text-xs uppercase shadow-md active:scale-95"><i className="fa-solid fa-user-plus mr-2"></i>Novo</button></header>
           <div className="grid gap-3">
             {clients.sort((a,b) => a.nomeFantasia.localeCompare(b.nomeFantasia)).map(c => (
-              <div key={c.id} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex justify-between items-center transition-all">
+              <div key={c.id} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex justify-between items-center transition-all active:scale-95 group">
                 <div><h4 className="font-bold text-gray-800 text-sm leading-tight uppercase">{c.nomeFantasia ?? 'Cliente'}</h4><p className="text-[10px] text-gray-400 font-semibold uppercase mt-1">{c.telefone} • {DIAS_SEMANA[c.diaRoteiro]}</p></div>
                 <button onClick={() => handleOpenEditClient(c)} className="w-10 h-10 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center active:scale-95"><i className="fa-solid fa-pencil-alt text-xs"></i></button>
               </div>
@@ -344,7 +355,15 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
               <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
                 <table className="w-full text-left">
                   <thead className="bg-gray-50"><tr><th className="p-4 text-[10px] font-black text-gray-400 uppercase">Item</th><th className="p-4 text-center text-[10px] font-black text-gray-400 uppercase">Preço</th><th className="p-4 text-right text-[10px] font-black text-gray-400 uppercase">Qtd</th></tr></thead>
-                  <tbody className="divide-y divide-gray-50">{minhaCarga.map(c => { const p = products.find(prod => prod.id === c.produtoId); return (<tr key={c.produtoId}><td className="p-4 text-xs font-semibold uppercase">{p?.nome ?? 'Desc.'}</td><td className="p-4 text-center text-xs text-gray-400">R$ {(p?.precoVenda ?? 0).toFixed(2)}</td><td className="p-4 text-right font-black text-lg text-blue-600">{c.quantidade}</td></tr>); })}</tbody> 
+                  <tbody className="divide-y divide-gray-50">
+                    {orderedCargaProducts.map(({ product: p, carga: c }) => (
+                      <tr key={c.produtoId}>
+                        <td className="p-4 text-xs font-semibold uppercase">{p.nome ?? 'Desc.'}</td>
+                        <td className="p-4 text-center text-xs text-gray-400">R$ {(p.precoVenda ?? 0).toFixed(2)}</td>
+                        <td className="p-4 text-right font-black text-lg text-blue-600">{c.quantidade}</td>
+                      </tr>
+                    ))}
+                  </tbody> 
                 </table>
               </div>
             </>

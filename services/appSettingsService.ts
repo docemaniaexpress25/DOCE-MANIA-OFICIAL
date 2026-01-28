@@ -10,6 +10,7 @@ export interface AppSettings {
   pix1Code: string | null;
   pix2Name: string | null;
   pix2Code: string | null;
+  productOrder: string[];
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -22,9 +23,9 @@ const DEFAULT_SETTINGS: AppSettings = {
   pix1Code: null,
   pix2Name: "Pix Banco B",
   pix2Code: null,
+  productOrder: [],
 };
 
-// Helper function to safely convert database numeric values (which might be null or string) to number
 const safeNumber = (value: any): number => Number(value || 0);
 
 export const appSettingsService = {
@@ -35,17 +36,11 @@ export const appSettingsService = {
       .eq('id', 'global_settings')
       .single();
 
-    if (error && error.code !== 'PGRST116') { // PGRST116 = No rows found
-      console.error('Erro ao buscar configurações:', error);
-    }
-
     if (!data) {
-      // Se não houver configurações, insere as configurações padrão
       await this.updateSettings(DEFAULT_SETTINGS);
       return DEFAULT_SETTINGS;
     }
 
-    // Mapeamento robusto, usando valores do DB se existirem, ou valores padrão se forem null
     return {
       logo: data.logo ?? DEFAULT_SETTINGS.logo,
       margemGlobalAtiva: !!data.margem_global_ativa,
@@ -56,11 +51,12 @@ export const appSettingsService = {
       pix1Code: data.pix1_code ?? DEFAULT_SETTINGS.pix1Code,
       pix2Name: data.pix2_name ?? DEFAULT_SETTINGS.pix2Name,
       pix2Code: data.pix2_code ?? DEFAULT_SETTINGS.pix2Code,
+      productOrder: data.product_order ?? DEFAULT_SETTINGS.productOrder,
     };
   },
 
   async updateSettings(settings: Partial<AppSettings>): Promise<boolean> {
-    const payload: Partial<any> = {};
+    const payload: any = {};
     
     if (settings.logo !== undefined) payload.logo = settings.logo;
     if (settings.margemGlobalAtiva !== undefined) payload.margem_global_ativa = settings.margemGlobalAtiva;
@@ -71,25 +67,12 @@ export const appSettingsService = {
     if (settings.pix1Code !== undefined) payload.pix1_code = settings.pix1Code;
     if (settings.pix2Name !== undefined) payload.pix2_name = settings.pix2Name;
     if (settings.pix2Code !== undefined) payload.pix2_code = settings.pix2Code;
-
-    // Adiciona o ID da linha única e mescla com os valores padrão para garantir que todos os campos NOT NULL sejam preenchidos na inserção (upsert)
-    const upsertPayload = {
-        id: 'global_settings',
-        margem_global_ativa: DEFAULT_SETTINGS.margemGlobalAtiva,
-        margem_global_valor: DEFAULT_SETTINGS.margemGlobalValor,
-        margem_minima_ativa: DEFAULT_SETTINGS.margemMinimaAtiva,
-        margem_minima: DEFAULT_SETTINGS.margemMinima,
-        ...payload
-    };
+    if (settings.productOrder !== undefined) payload.product_order = settings.productOrder;
 
     const { error } = await supabase
       .from('app_settings')
-      .upsert(upsertPayload, { onConflict: 'id' });
+      .upsert({ id: 'global_settings', ...payload }, { onConflict: 'id' });
 
-    if (error) {
-      console.error('Erro ao persistir configurações globais (upsert):', error);
-      return false;
-    }
-    return true;
+    return !error;
   },
 };

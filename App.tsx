@@ -234,16 +234,25 @@ const App: React.FC = () => {
   const aceitarCarga = async (pendenciaId: string) => {
     const pendencia = cargasPendentes.find(p => p.id === pendenciaId);
     if (!pendencia) return;
+    
+    // 1. Atualiza estoque principal (Supabase)
     for (const item of pendencia.itens) {
       const p = products.find(prod => prod.id === item.produtoId);
       if (p) {
         await productService.updateProduct(p.id, { estoquePrincipal: p.estoquePrincipal - item.quantidade });
       }
     }
-    const otherCargas = cargas.filter(c => c.vendedorId !== pendencia.vendedorId);
-    const newCargas = pendencia.itens.filter(i => i.quantidade > 0).map(i => ({ vendedorId: pendencia.vendedorId, produtoId: i.produtoId, quantidade: i.quantidade }));
-    setCargas([...otherCargas, ...newCargas]);
+    
+    // 2. Atualiza carga ativa (Local)
+    setCargas(prevCargas => {
+      const otherCargas = prevCargas.filter(c => c.vendedorId !== pendencia.vendedorId);
+      const newCargas = pendencia.itens.filter(i => i.quantidade > 0).map(i => ({ vendedorId: pendencia.vendedorId, produtoId: i.produtoId, quantidade: i.quantidade }));
+      return [...otherCargas, ...newCargas];
+    });
+    
+    // 3. Remove pendência (Local)
     setCargasPendentes(prev => prev.filter(cp => cp.id !== pendenciaId));
+    
     await fetchProducts();
     setAdminNotification("Carga aceita pelo vendedor com sucesso.");
   };
@@ -252,16 +261,19 @@ const App: React.FC = () => {
     const valorTotalFixed = Number(saleData.valorTotal.toFixed(2));
     const newSale: Sale = { ...saleData, id: generateId(), data: new Date(), valorTotal: valorTotalFixed, valorPago: saleData.statusPagamento === 'PAGO' ? valorTotalFixed : 0 };
     setSales(prev => [...prev, newSale]);
+    
+    // Atualiza Cargas (Imutável)
     setCargas(prevCargas => {
       const updatedCargas = [...prevCargas];
       saleData.itens.forEach((item: any) => {
         const idx = updatedCargas.findIndex(c => c.vendedorId === saleData.vendedorId && c.produtoId === item.produtoId);
         if (idx !== -1) {
-          updatedCargas[idx].quantidade = Math.max(0, updatedCargas[idx].quantidade - item.quantidade);
+          updatedCargas[idx] = { ...updatedCargas[idx], quantidade: Math.max(0, updatedCargas[idx].quantidade - item.quantidade) };
         }
       });
       return updatedCargas.filter(c => c.quantidade > 0);
     });
+    
     const totalComissao = saleData.itens.reduce((acc: number, item: any) => {
       const p = products.find(prod => prod.id === item.produtoId);
       return acc + (item.precoVenda * item.quantidade * ((p?.comissaoPercentual || 0) / 100));
@@ -275,16 +287,25 @@ const App: React.FC = () => {
   const deleteSaleInternal = (saleId: string, isAdmin: boolean) => {
     const saleToDelete = sales.find(s => s.id === saleId);
     if (!saleToDelete) return;
+    
+    // Estorno de Cargas (Imutável)
     setCargas(prevCargas => {
       const updatedCargas = [...prevCargas];
       saleToDelete.itens.forEach(item => {
-        const idx = updatedCargas.findIndex(c => c.vendedorId === saleToDelete.vendedorId && c.produtoId === item.produtoId);
-        if (idx !== -1) updatedCargas[idx].quantidade += item.quantidade;
-        else updatedCargas.push({ vendedorId: saleToDelete.vendedorId, produtoId: item.produtoId, quantidade: item.quantidade });
+        const existingCargaIndex = updatedCargas.findIndex(c => c.vendedorId === saleToDelete.vendedorId && c.produtoId === item.produtoId);
+        if (existingCargaIndex !== -1) {
+          updatedCargas[existingCargaIndex] = { ...updatedCargas[existingCargaIndex], quantidade: updatedCargas[existingCargaIndex].quantidade + item.quantidade };
+        } else {
+          updatedCargas.push({ vendedorId: saleToDelete.vendedorId, produtoId: item.produtoId, quantidade: item.quantidade });
+        }
       });
-      return updatedCargas;
+      return updatedCargas.filter(c => c.quantidade > 0);
     });
+    
+    // Remove Comissões (Imutável)
     setCommissions(prev => prev.filter(c => c.saleId !== saleId));
+    
+    // Remove Venda (Imutável)
     setSales(prev => prev.filter(s => s.id !== saleId));
   };
 
@@ -297,6 +318,8 @@ const App: React.FC = () => {
       saleUpdated = { ...s, valorPago: novoValorPago, statusPagamento: totalQuitado ? 'PAGO' : 'PENDENTE', metodoPagamento: method };
       return saleUpdated;
     }));
+    
+    // Atualiza Comissões se a venda foi quitada (Imutável)
     if (saleUpdated && saleUpdated.statusPagamento === 'PAGO') {
       setCommissions(prevComms => prevComms.map(c => c.saleId === saleId && c.status === 'A_RECEBER' ? { ...c, status: 'DISPONIVEL' } : c));
     }

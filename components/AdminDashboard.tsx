@@ -113,6 +113,23 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const pix2InputRef = useRef<HTMLInputElement>(null);
   const userPhotoInputRef = useRef<HTMLInputElement>(null);
 
+  // Função para calcular a receita média do cliente (necessária para a aba CLIENTES)
+  const getClientAvgRevenue = (id: string) => {
+    const cSales = props.sales.filter(s => s.clientId === id).slice(-3);
+    if (cSales.length === 0) return "0.00";
+    return (cSales.reduce((acc, curr) => acc + (curr.valorTotal ?? 0), 0) / cSales.length).toFixed(2);
+  };
+
+  // Função para upload de logo (necessária para a aba SETTINGS)
+  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => props.setLogo(reader.result as string);
+      reader.readAsDataURL(file);
+    }
+  };
+
   useEffect(() => {
     if (selectedVendedorId) {
       const atual = props.cargas
@@ -229,7 +246,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     showToast("Pagamento registrado!");
   };
 
-  // RESTAURANDO FUNÇÕES DE CARGA
   const handleSync = () => {
     if (!selectedVendedorId) return;
     const itens = Object.entries(stagingCarga).map(([produtoId, quantidade]) => ({ produtoId, quantidade: quantidade ?? 0 })); 
@@ -243,7 +259,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     props.applyCargaDirectly(selectedVendedorId, itens);
     setShowConfirmApply(false);
   };
-  // FIM RESTAURAÇÃO FUNÇÕES DE CARGA
 
   const moveProduct = (id: string, dir: 'UP' | 'DOWN') => {
     const idx = orderedProductIds.indexOf(id);
@@ -312,6 +327,15 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     showToast("Produto salvo!");
   };
 
+  const handleDeleteProductInModal = () => {
+    if (typeof showProductModal === 'object' && showProductModal !== null) {
+      if (confirm(`Deseja realmente excluir o produto "${showProductModal.nome}"?`)) {
+        props.deleteProduct(showProductModal.id);
+        setShowProductModal(null);
+      }
+    }
+  };
+
   const handleOpenClient = (c: Client | 'NEW') => {
     if (c === 'NEW') setClientForm({ nomeFantasia: '', telefone: '', diaRoteiro: 1, ativo: true, bairro: '', endereco: '', ordem: 0 });
     else setClientForm({ ...c });
@@ -330,6 +354,15 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     if (u === 'NEW') setUserForm({ nome: '', telefone: '', foto: '', pin: '123456' });
     else setUserForm({ nome: u.nome ?? '', telefone: u.telefone ?? '', foto: u.foto ?? '', pin: u.pin ?? '' }); 
     setShowUserModal(u);
+  };
+
+  const handleUserPhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => setUserForm(prev => ({ ...prev, foto: reader.result as string }));
+      reader.readAsDataURL(file);
+    }
   };
 
   const handleSaveUser = () => {

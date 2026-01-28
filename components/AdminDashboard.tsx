@@ -152,15 +152,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const getVendedorStats = (vId: string) => {
     const vSales = props.sales.filter(s => s.vendedorId === vId && filterByPeriod(s.data, 'HOJE'));
     const sellerComms = props.commissions.filter(c => c.vendedorId === vId);
-    
-    const totalCommsEligible = sellerComms
-      .filter(c => c.status !== 'A_RECEBER')
-      .reduce((acc, curr) => acc + (curr.valor ?? 0), 0); 
-      
+    const totalCommsEligible = sellerComms.filter(c => c.status !== 'A_RECEBER').reduce((acc, curr) => acc + (curr.valor ?? 0), 0); 
     const jaPago = props.payoutLogs.filter(l => l.vendedorId === vId).reduce((acc, curr) => acc + (curr.valorPago ?? 0), 0); 
     const disponivel = Math.max(0, totalCommsEligible - jaPago);
     const aReceber = sellerComms.filter(c => c.status === 'A_RECEBER').reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
-    
     return {
       vendasHoje: Number(vSales.reduce((acc, curr) => acc + (curr.valorTotal ?? 0), 0).toFixed(2)), 
       comissaoDisponivel: Number(disponivel.toFixed(2)),
@@ -194,6 +189,15 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     props.payCommission(payoutVendedor.id, amount, payoutType, props.adminUser.id);
     setPayoutVendedor(null);
     showToast("Pagamento registrado!");
+  };
+
+  const updateStaging = (pId: string, delta: number) => {
+    const p = props.products.find(prod => prod.id === pId);
+    if (!p) return;
+    const noV = props.cargas.find(c => c.vendedorId === selectedVendedorId && c.produtoId === pId)?.quantidade ?? 0; 
+    const totalDisp = (p.estoquePrincipal ?? 0) + noV; 
+    const novaQ = Math.max(0, Math.min(totalDisp, (stagingCarga[pId] ?? 0) + delta));
+    setStagingCarga(prev => ({ ...prev, [pId]: novaQ }));
   };
 
   const handleSync = () => {
@@ -245,15 +249,21 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     showToast("Produto salvo!");
   };
 
-  const updatePriceFromMargin = (custo: number, margemPercent: number) => {
-    const c = Number(custo) || 0;
-    const m = Number(margemPercent) || 0;
-    return m >= 100 ? c : c / (1 - m / 100);
+  const handleDeleteProductInModal = () => {
+    if (typeof showProductModal === 'object' && showProductModal !== null) {
+      if (confirm(`Deseja realmente excluir o produto "${showProductModal.nome}"?`)) {
+        props.deleteProduct(showProductModal.id);
+        setShowProductModal(null);
+      }
+    }
   };
-  const updateMarginFromPrice = (custo: number, venda: number) => {
-    const c = Number(custo) || 0;
-    const v = Number(venda) || 0;
-    return v <= 0 ? 0 : ((v - c) / v) * 100;
+
+  const moveProduct = (id: string, dir: 'UP' | 'DOWN') => {
+    const idx = orderedProductIds.indexOf(id);
+    const newOrder = [...orderedProductIds];
+    if (dir === 'UP' && idx > 0) [newOrder[idx], newOrder[idx-1]] = [newOrder[idx-1], newOrder[idx]];
+    else if (dir === 'DOWN' && idx < newOrder.length - 1) [newOrder[idx], newOrder[idx+1]] = [newOrder[idx+1], newOrder[idx]];
+    setOrderedProductIds(newOrder);
   };
 
   const handleOpenClient = (c: Client | 'NEW') => {
@@ -341,20 +351,25 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     showToast("Recebimento registrado!");
   };
 
-  const moveProduct = (id: string, dir: 'UP' | 'DOWN') => {
-    const idx = orderedProductIds.indexOf(id);
-    const newOrder = [...orderedProductIds];
-    if (dir === 'UP' && idx > 0) [newOrder[idx], newOrder[idx-1]] = [newOrder[idx-1], newOrder[idx]];
-    else if (dir === 'DOWN' && idx < newOrder.length - 1) [newOrder[idx], newOrder[idx+1]] = [newOrder[idx+1], newOrder[idx]];
-    setOrderedProductIds(newOrder);
+  const updatePriceFromMargin = (custo: number, margemPercent: number) => {
+    const c = Number(custo) || 0;
+    const m = Number(margemPercent) || 0;
+    return m >= 100 ? c : c / (1 - m / 100);
+  };
+  const updateMarginFromPrice = (custo: number, venda: number) => {
+    const c = Number(custo) || 0;
+    const v = Number(venda) || 0;
+    return v <= 0 ? 0 : ((v - c) / v) * 100;
   };
 
-  const filteredHistory = useMemo(() => {
-    return props.sales.filter(s => filterByPeriod(s.data, filtroPeriodo))
-      .sort((a, b) => (b.data?.getTime() ?? 0) - (a.data?.getTime() ?? 0)); 
-  }, [props.sales, filtroPeriodo]);
+  const MenuCard = ({ icon, title, tab, color }: any) => (
+    <button onClick={() => setActiveTab(tab)} className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col items-center justify-center gap-3 active:scale-95 transition-all text-center group">
+      <div className={`w-14 h-14 ${color} rounded-2xl flex items-center justify-center text-xl shadow-inner group-hover:scale-110 transition-transform`}><i className={`fa-solid ${icon}`}></i></div>
+      <span className="text-[11px] font-black uppercase text-gray-700 tracking-tight">{title}</span>
+    </button>
+  );
 
-  const sortedProducts = useMemo(() => {
+  const filteredProducts = useMemo(() => {
     const filtered = props.products.filter(p => (p.nome ?? '').toLowerCase().includes(search.toLowerCase()));
     if (search) return filtered;
     return [...filtered].sort((a, b) => {
@@ -365,21 +380,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     });
   }, [props.products, orderedProductIds, search]);
 
-  const updateStaging = (pId: string, delta: number) => {
-    const p = props.products.find(prod => prod.id === pId);
-    if (!p) return;
-    const noV = props.cargas.find(c => c.vendedorId === selectedVendedorId && c.produtoId === pId)?.quantidade ?? 0; 
-    const totalDisp = (p.estoquePrincipal ?? 0) + noV; 
-    const novaQ = Math.max(0, Math.min(totalDisp, (stagingCarga[pId] ?? 0) + delta));
-    setStagingCarga(prev => ({ ...prev, [pId]: novaQ }));
-  };
-
-  const MenuCard = ({ icon, title, tab, color }: any) => (
-    <button onClick={() => setActiveTab(tab)} className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col items-center justify-center gap-3 active:scale-95 transition-all text-center group">
-      <div className={`w-14 h-14 ${color} rounded-2xl flex items-center justify-center text-xl shadow-inner group-hover:scale-110 transition-transform`}><i className={`fa-solid ${icon}`}></i></div>
-      <span className="text-[11px] font-black uppercase text-gray-700 tracking-tight">{title}</span>
-    </button>
-  );
+  const sortedHistory = useMemo(() => {
+    return props.sales.filter(s => filterByPeriod(s.data, filtroPeriodo))
+      .sort((a, b) => (b.data?.getTime() ?? 0) - (a.data?.getTime() ?? 0)); 
+  }, [props.sales, filtroPeriodo]);
 
   const contasAReceber = useMemo(() => props.sales.filter(s => s.metodoPagamento === 'A_PRAZO' && s.statusPagamento === 'PENDENTE'), [props.sales]);
 
@@ -421,7 +425,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Vendas Realizadas</h2></div>
           <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner">{(['HOJE', 'SEMANA', 'MES', 'GERAL'] as const).map(p => (<button key={p} onClick={() => setFiltroPeriodo(p)} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${filtroPeriodo === p ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>{p}</button>))}</div>
           <div className="grid gap-3 px-1">
-            {filteredHistory.map(s => (
+            {sortedHistory.map(s => (
               <button key={s.id} onClick={() => setSelectedSale(s)} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex flex-col text-left transition-all hover:border-blue-200">
                 <div className="flex justify-between items-start mb-2"><span className="text-[9px] font-black text-gray-400 uppercase">{s.data.toLocaleDateString()} {s.data.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span><span className={`text-[9px] font-black px-2 py-0.5 rounded uppercase ${s.statusPagamento === 'PAGO' ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>{s.statusPagamento === 'PAGO' ? 'RECEBIDA' : 'EM ABERTO'}</span></div>
                 <div className="flex justify-between items-end"><div><h4 className="font-bold text-gray-800 text-sm leading-tight">{props.clients.find(c => c.id === s.clientId)?.nomeFantasia || 'Cliente'}</h4><p className="text-[10px] text-gray-400 font-bold uppercase mt-1">Vend: {props.users.find(u => u.id === s.vendedorId)?.nome ?? 'Desc.'}</p></div><p className="text-sm font-black text-gray-800">R$ {s.valorTotal.toFixed(2)}</p></div>
@@ -499,6 +503,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       {activeTab === 'CAIXA' && (
         <div className="space-y-6 py-4">
           <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Caixa</h2></div>
+          
           <div className="grid gap-4 px-1">
             {props.users.filter(u => u.role === 'VENDEDOR' && u.ativo).map(v => { 
               const stats = getVendedorStats(v.id);
@@ -511,6 +516,27 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
               );
             })}
           </div>
+
+          {/* NOVO: Log de Pagamentos de Comissão */}
+          <div className="space-y-4 pt-6">
+             <h3 className="text-xs font-black text-gray-400 uppercase tracking-wider px-2">Histórico de Repasses (Log)</h3>
+             <div className="grid gap-3 px-1">
+                {props.payoutLogs.sort((a, b) => b.dataPagamento.getTime() - a.dataPagamento.getTime()).map(log => (
+                  <div key={log.id} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex justify-between items-center">
+                    <div className="flex-1 min-w-0 pr-3">
+                      <p className="font-bold text-gray-800 text-[11px] leading-tight uppercase truncate">{log.vendedorNome}</p>
+                      <p className="text-[9px] text-gray-400 font-semibold uppercase mt-0.5">
+                        {log.dataPagamento.toLocaleDateString()} {log.dataPagamento.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})} • {log.tipo}
+                      </p>
+                    </div>
+                    <p className="text-xs font-black text-emerald-600 whitespace-nowrap">R$ {log.valorPago.toFixed(2)}</p>
+                  </div>
+                ))}
+                {props.payoutLogs.length === 0 && (
+                  <div className="text-center py-10 opacity-30 italic text-[10px] uppercase font-bold">Nenhum pagamento registrado.</div>
+                )}
+             </div>
+          </div>
         </div>
       )}
 
@@ -519,7 +545,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Estoque Central</h2></div>
           <div className="flex gap-2"><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar produto..." className="flex-1 px-4 py-3 bg-white border border-gray-200 rounded-xl text-sm font-medium" /><button onClick={() => handleOpenProduct('NEW')} className="bg-blue-600 text-white w-12 h-12 rounded-xl flex items-center justify-center shadow-lg active:scale-90 transition-transform"><i className="fa-solid fa-plus"></i></button></div>
           <div className="grid gap-3 px-1">
-            {sortedProducts.map(p => ( 
+            {filteredProducts.map(p => ( 
               <div key={p.id} className="bg-white px-4 py-4 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between transition-all hover:border-blue-200 group">
                 <div className="flex items-center gap-3 flex-1 min-w-0">
                   {!search && (

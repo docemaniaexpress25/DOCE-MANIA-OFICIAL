@@ -202,11 +202,20 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const financeStats = useMemo(() => {
     const vCommsAll = commissions.filter(c => c.vendedorId === user.id);
     const jaPago = payoutLogs.reduce((acc, curr) => acc + (curr.valorPago ?? 0), 0); 
+    
     const vSalesFiltered = sales.filter(s => s.vendedorId === user.id && filterByPeriod((s.data ?? new Date()), financeFilter)); 
+    const vCommsFiltered = vCommsAll.filter(c => filterByPeriod(c.dataGeracao, financeFilter));
+
     const totalCommsEligible = vCommsAll.filter(c => c.status !== 'A_RECEBER').reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
     const disponivel = Math.max(0, totalCommsEligible - jaPago);
     const pendente = vCommsAll.filter(c => c.status === 'A_RECEBER').reduce((acc, curr) => acc + (curr.valor ?? 0), 0); 
-    return { totalVendido: Number(vSalesFiltered.reduce((acc, curr) => acc + (curr.valorTotal ?? 0), 0).toFixed(2)), totalComissao: Number(vCommsAll.reduce((acc, curr) => acc + (curr.valor ?? 0), 0).toFixed(2)), disponivel: Number(disponivel.toFixed(2)), pendente: Number(pendente.toFixed(2)) };
+    
+    return { 
+      totalVendido: Number(vSalesFiltered.reduce((acc, curr) => acc + (curr.valorTotal ?? 0), 0).toFixed(2)), 
+      comissaoGerada: Number(vCommsFiltered.reduce((acc, curr) => acc + (curr.valor ?? 0), 0).toFixed(2)),
+      disponivel: Number(disponivel.toFixed(2)), 
+      pendente: Number(pendente.toFixed(2)) 
+    };
   }, [commissions, user.id, sales, financeFilter, payoutLogs]);
 
   const historySummary = useMemo(() => filteredHistory.reduce((acc, sale) => {
@@ -394,10 +403,29 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       {activeTab === 'FINANCE' && (
         <div className="space-y-6">
            <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner">{(['DIA', 'SEMANA', 'MES', 'GERAL'] as const).map(f => (<button key={f} onClick={() => setFinanceFilter(f)} className={`flex-1 py-2 rounded-xl text-[9px] font-black uppercase ${financeFilter === f ? 'bg-white text-emerald-600 shadow-sm' : 'text-gray-400'}`}>{f}</button>))}</div>
-           <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex justify-between items-center"><div><p className="text-[10px] font-black uppercase text-gray-400 mb-1">Total Vendido</p><h2 className="text-2xl font-black text-gray-800">R$ {financeStats.totalVendido.toFixed(2)}</h2></div></div>
+           
            <div className="grid grid-cols-2 gap-4">
-              <div className="bg-emerald-50 p-5 rounded-3xl shadow-md border border-emerald-100"><p className="text-[9px] font-black text-emerald-600 uppercase mb-1">Disponível</p><p className="text-xl font-black text-emerald-700">R$ {financeStats.disponivel.toFixed(2)}</p></div>
-              <div className="bg-orange-50 p-5 rounded-3xl shadow-sm border border-orange-100"><p className="text-[9px] font-black text-orange-600 uppercase mb-1">A receber</p><p className="text-xl font-black text-orange-700">R$ {financeStats.pendente.toFixed(2)}</p></div>
+              <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col">
+                <p className="text-[9px] font-black uppercase text-gray-400 mb-1">Vendido no Período</p>
+                <h2 className="text-xl font-black text-gray-800">R$ {financeStats.totalVendido.toFixed(2)}</h2>
+              </div>
+              <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col">
+                <p className="text-[9px] font-black uppercase text-gray-400 mb-1">Comissão no Período</p>
+                <h2 className="text-xl font-black text-blue-600">R$ {financeStats.comissaoGerada.toFixed(2)}</h2>
+              </div>
+           </div>
+
+           <div className="grid grid-cols-2 gap-4">
+              <div className="bg-emerald-50 p-5 rounded-3xl shadow-md border border-emerald-100">
+                <p className="text-[9px] font-black text-emerald-600 uppercase mb-1">Carteira Disponível</p>
+                <p className="text-xl font-black text-emerald-700">R$ {financeStats.disponivel.toFixed(2)}</p>
+                <p className="text-[8px] font-bold text-emerald-400 uppercase mt-1">Saldo acumulado</p>
+              </div>
+              <div className="bg-orange-50 p-5 rounded-3xl shadow-sm border border-orange-100">
+                <p className="text-[9px] font-black text-orange-600 uppercase mb-1">A receber</p>
+                <p className="text-xl font-black text-orange-700">R$ {financeStats.pendente.toFixed(2)}</p>
+                <p className="text-[8px] font-bold text-orange-400 uppercase mt-1">Vendas a prazo</p>
+              </div>
            </div>
 
            <div className="space-y-2 pt-4">

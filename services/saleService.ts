@@ -27,7 +27,14 @@ export const saleService = {
   },
 
   async insertSale(sale: Omit<Sale, 'id'>): Promise<Sale | null> {
-    // Garante que todos os campos obrigatórios pelo RPC sejam enviados, mesmo como null
+    // Mapeia os itens para chaves minúsculas (ex: produtoid) para que o Postgres 
+    // consiga ler corretamente via jsonb_to_recordset sem problemas de case sensitivity
+    const rpcItems = sale.itens.map(item => ({
+      produtoid: item.produtoId,
+      quantidade: item.quantidade,
+      precovenda: item.precoVenda
+    }));
+
     const { data: saleId, error } = await supabase.rpc('processar_venda_v2', {
       p_vendedor_id: sale.vendedorId,
       p_client_id: sale.clientId,
@@ -38,7 +45,7 @@ export const saleService = {
       p_status_pagamento: sale.statusPagamento,
       p_data_venda: sale.data.toISOString(),
       p_data_vencimento: sale.dataVencimento ? sale.dataVencimento.toISOString() : null,
-      p_itens: sale.itens
+      p_itens: rpcItems
     });
 
     if (error) {

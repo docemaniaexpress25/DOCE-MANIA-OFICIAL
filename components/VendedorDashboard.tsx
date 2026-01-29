@@ -90,7 +90,9 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
   const isSameDay = (date: Date | undefined) => {
     if (!date) return false;
-    return new Date().toDateString() === new Date(date).toDateString();
+    const d = new Date(date);
+    const today = new Date();
+    return d.toDateString() === today.toDateString();
   };
 
   const diaAtual = new Date().getDay();
@@ -223,6 +225,27 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   }, 0), [minhaCarga, products]);
 
   const totalUnidadesCarga = useMemo(() => minhaCarga.reduce((acc, curr) => acc + (curr.quantidade ?? 0), 0), [minhaCarga]);
+
+  // Unificando Histórico Financeiro (Repasses e Despesas)
+  const unifiedHistory = useMemo(() => {
+    const combined = [
+      ...payoutLogs.map(p => ({ 
+        id: p.id, 
+        data: new Date(p.dataPagamento), 
+        desc: p.tipo === 'TOTAL' ? 'Pagamento Integral' : 'Repasse Parcial', 
+        valor: p.valorPago, 
+        tipo: 'REPASSE' as const 
+      })),
+      ...expenses.map(e => ({ 
+        id: e.id, 
+        data: new Date(e.createdAt), 
+        desc: e.descricao, 
+        valor: e.valor, 
+        tipo: 'DESPESA' as const 
+      }))
+    ];
+    return combined.sort((a, b) => b.data.getTime() - a.data.getTime());
+  }, [payoutLogs, expenses]);
 
   if (selectedClient) {
     const pdvClient = clients.find(c => c.id === selectedClient.id);
@@ -437,7 +460,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                       value={expenseDesc} 
                       onChange={e => setExpenseDesc(e.target.value)} 
                       placeholder="Ex: Combustível, Almoço..." 
-                      className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-semibold"
+                      className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-semibold outline-none"
                     />
                   </div>
                   <div className="space-y-1">
@@ -447,7 +470,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                       value={expenseVal} 
                       onChange={e => setExpenseVal(e.target.value)} 
                       placeholder="0.00" 
-                      className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-lg font-black"
+                      className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-lg font-black outline-none"
                     />
                   </div>
                   <button 
@@ -458,33 +481,18 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                   </button>
                 </div>
               )}
-
-              <div className="mt-6 space-y-2">
-                 <h4 className="text-[9px] font-black text-gray-400 uppercase tracking-widest px-1">Últimos Gastos</h4>
-                 <div className="divide-y divide-gray-50">
-                    {expenses.sort((a,b) => b.createdAt.getTime() - a.createdAt.getTime()).slice(0, 5).map(ex => (
-                      <div key={ex.id} className="py-3 flex justify-between items-center">
-                        <div>
-                          <p className="text-[10px] font-bold text-gray-700 uppercase">{ex.descricao}</p>
-                          <p className="text-[8px] text-gray-400 uppercase">{ex.createdAt.toLocaleDateString()}</p>
-                        </div>
-                        <span className="text-xs font-black text-rose-600">- R$ {ex.valor.toFixed(2)}</span>
-                      </div>
-                    ))}
-                    {expenses.length === 0 && <p className="text-center py-4 text-[9px] text-gray-300 font-bold uppercase italic tracking-widest">Nenhuma despesa</p>}
-                 </div>
-              </div>
            </div>
 
+           {/* Notificações permanecem separadas por ser comunicação Admin-Vendedor */}
            <div className="space-y-2 pt-4">
              <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">Notificações</h3>
              <div className="bg-white rounded-3xl border border-gray-100 shadow-sm divide-y divide-gray-50 overflow-hidden">
-                {messages.filter(m => m.vendedorId === user.id).sort((a, b) => b.data.getTime() - a.data.getTime()).map(m => (
+                {messages.filter(m => m.vendedorId === user.id).sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime()).map(m => (
                     <div key={m.id} className={`p-4 flex justify-between items-center transition-colors ${!m.lida ? 'bg-blue-50/50' : 'bg-white'}`}>
                         <div className="flex-1 pr-3">
                             <p className={`text-[11px] font-black uppercase leading-none mb-1 ${!m.lida ? 'text-blue-700' : 'text-gray-700'}`}>{m.titulo}</p>
                             <p className="text-[10px] font-semibold text-gray-500 mt-1">{m.mensagem}</p>
-                            <p className="text-[8px] text-gray-400 mt-1">{m.data.toLocaleDateString()} {m.data.toLocaleTimeString()}</p>
+                            <p className="text-[8px] text-gray-400 mt-1">{new Date(m.data).toLocaleDateString()} {new Date(m.data).toLocaleTimeString()}</p>
                         </div>
                         {!m.lida && m.type === 'COMMISSION_CONFIRMATION' && (
                             <button 
@@ -503,22 +511,28 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
              </div>
            </div>
            
+           {/* LOG UNIFICADO: RECEBIMENTOS E DESPESAS */}
            <div className="space-y-2 pt-2">
-             <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">Recebimentos</h3>
+             <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">Histórico Financeiro</h3>
              <div className="bg-white rounded-3xl border border-gray-100 shadow-sm divide-y divide-gray-50 overflow-hidden">
-                {payoutLogs.sort((a, b) => b.dataPagamento.getTime() - a.dataPagamento.getTime()).map(log => (
-                  <div key={log.id} className="p-4 flex justify-between items-center active:bg-gray-50 transition-colors">
-                    <div>
-                      <p className="text-[10px] font-black text-gray-400 uppercase leading-none mb-1">{log.dataPagamento.toLocaleDateString()}</p>
-                      <p className="text-[11px] font-bold text-gray-700 uppercase tracking-tight">{log.tipo === 'TOTAL' ? 'Pagamento Integral' : 'Repasse Parcial'}</p>
+                {unifiedHistory.map(item => (
+                  <div key={item.id} className="p-4 flex justify-between items-center active:bg-gray-50 transition-colors">
+                    <div className="flex-1 pr-3">
+                      <p className="text-[9px] font-black text-gray-400 uppercase leading-none mb-1">{item.data.toLocaleDateString()} {item.data.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</p>
+                      <p className={`text-[11px] font-bold uppercase tracking-tight ${item.tipo === 'REPASSE' ? 'text-emerald-700' : 'text-rose-700'}`}>{item.desc}</p>
+                      <span className={`text-[8px] font-black px-1.5 py-0.5 rounded uppercase ${item.tipo === 'REPASSE' ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
+                        {item.tipo}
+                      </span>
                     </div>
                     <div className="text-right">
-                       <p className="text-xs font-black text-emerald-600">R$ {log.valorPago.toFixed(2)}</p>
+                       <p className={`text-xs font-black ${item.tipo === 'REPASSE' ? 'text-emerald-600' : 'text-rose-600'}`}>
+                         {item.tipo === 'REPASSE' ? '+' : '-'} R$ {item.valor.toFixed(2)}
+                       </p>
                     </div>
                   </div>
                 ))}
-                {payoutLogs.length === 0 && (
-                  <div className="text-center py-8 opacity-30 italic text-[9px] uppercase font-bold tracking-widest">Nenhum repasse registrado.</div>
+                {unifiedHistory.length === 0 && (
+                  <div className="text-center py-8 opacity-30 italic text-[9px] uppercase font-bold tracking-widest">Nenhuma movimentação registrada.</div>
                 )}
              </div>
            </div>

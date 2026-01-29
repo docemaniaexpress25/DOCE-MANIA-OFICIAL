@@ -26,7 +26,7 @@ const App: React.FC = () => {
   
   const [logo, setLogo] = useState<string | null>(null);
   const [margemGlobalAtiva, setMargemGlobalAtiva] = useState(true);
-  const [margemGlobalValor, setMargemGlobalValor] = useState(35);
+  const [margemGlobalValor, setMargemGlobalValor] = useState(30); // Atualizado para 30
   const [margemMinima, setMargemMinima] = useState(20); 
   const [margemMinimaAtiva, setMargemMinimaAtiva] = useState(true); 
   const [pix1Name, setPix1Name] = useState("Pix Banco A");
@@ -457,7 +457,7 @@ const App: React.FC = () => {
             markMessageAsRead={markMessageAsRead} processSale={processSale} 
             receivePayment={receiveAccount} deleteSale={(id) => deleteSaleInternal(id, false)} aceitarCarga={aceitarCarga}
             margemMinima={margemMinima} margemMinimaAtiva={margemMinimaAtiva} pix1Name={pix1Name} pix1Code={pix1Code}
-            pix2Name={pix2Name} pix2Code={pix2Code}
+            pix2Name={pix2Name} setPix2Name={(val) => updateSetting('pix2Name', val)} pix2Code={pix2Code} setPix2Code={(val) => updateSetting('pix2Code', val)}
             dailyRouteState={dailyRouteState}
             updateDailyRoute={handleUpdateDailyRoute}
           />

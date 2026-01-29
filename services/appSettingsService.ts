@@ -16,7 +16,7 @@ export interface AppSettings {
 const DEFAULT_SETTINGS: AppSettings = {
   logo: null,
   margemGlobalAtiva: true,
-  margemGlobalValor: 35,
+  margemGlobalValor: 30, // Alterado de 35 para 30
   margemMinimaAtiva: true,
   margemMinima: 20,
   pix1Name: "Pix Banco A",

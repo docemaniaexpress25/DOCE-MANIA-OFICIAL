@@ -359,7 +359,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 <div key={dia} className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
                   <button onClick={() => setExpandedDay(isOpen ? null : dia)} className={`w-full flex items-center justify-between p-5 text-left ${isOpen ? 'bg-indigo-50 text-indigo-700' : 'bg-white text-gray-700'}`}>
                     <div className="flex items-center gap-3"><div className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-[10px] ${isOpen ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-400'}`}>{dia}</div><span className="font-black uppercase text-xs tracking-tight">{DIAS_SEMANA[dia]}</span></div>
-                    <div className="flex items-center gap-2"><span className="text-[9px] font-black uppercase opacity-40">{clientsInDay.length} clients</span><i className={`fa-solid ${isOpen ? 'fa-chevron-up' : 'fa-chevron-down'} text-[10px]`}></i></div>
+                    <div className="flex items-center gap-2"><span className="text-[9px] font-black uppercase opacity-40">{clientsInDay.length} clientes</span><i className={`fa-solid ${isOpen ? 'fa-chevron-up' : 'fa-chevron-down'} text-[10px]`}></i></div>
                   </button>
                   {isOpen && (
                     <div className="p-4 bg-white space-y-2 border-t border-indigo-50">
@@ -393,13 +393,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                  <div className="text-right"><p className="text-[10px] font-black uppercase opacity-60">Volume Total</p><h3 className="text-2xl font-black">{totalUnidadesCarga}</h3></div>
               </div>
 
-              <button 
-                onClick={() => setShowFiscalization(true)}
-                className="w-full bg-slate-800 text-white font-black py-5 rounded-[2rem] shadow-xl active:scale-95 transition-all uppercase text-[11px] tracking-[0.2em] flex items-center justify-center gap-3"
-              >
-                <i className="fa-solid fa-shield-halved text-lg"></i> Modo Fiscalização
-              </button>
-
               <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
                 <table className="w-full text-left">
                   <thead className="bg-gray-50"><tr><th className="p-4 text-[10px] font-black text-gray-400 uppercase">Item</th><th className="p-4 text-center text-[10px] font-black text-gray-400 uppercase">Preço</th><th className="p-4 text-right text-[10px] font-black text-gray-400 uppercase">Qtd</th></tr></thead>
@@ -414,6 +407,13 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                   </tbody> 
                 </table>
               </div>
+
+              <button 
+                onClick={() => setShowFiscalization(true)}
+                className="w-full bg-slate-800 text-white font-black py-5 rounded-[2rem] shadow-xl active:scale-95 transition-all uppercase text-[11px] tracking-[0.2em] flex items-center justify-center gap-3"
+              >
+                <i className="fa-solid fa-shield-halved text-lg"></i> Modo Fiscalização
+              </button>
             </>
           )}
         </div>
@@ -458,7 +458,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
               <div className="bg-orange-50 p-5 rounded-3xl shadow-sm border border-orange-100">
                 <p className="text-[9px] font-black text-orange-600 uppercase mb-1">A receber</p>
                 <p className="text-xl font-black text-orange-700">R$ {financeStats.pendente.toFixed(2)}</p>
-                <p className="text-[8px] font-bold text-orange-400 uppercase mt-1">Vendas a prazo</p>
+                <p className={`text-[8px] font-bold text-orange-400 uppercase mt-1`}>Vendas a prazo</p>
               </div>
            </div>
 

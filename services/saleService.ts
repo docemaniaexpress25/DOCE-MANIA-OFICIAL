@@ -26,23 +26,23 @@ export const saleService = {
     })) as Sale[];
   },
 
-  // Substituído por RPC atômico para garantir consistência
   async insertSale(sale: Omit<Sale, 'id'>): Promise<Sale | null> {
+    // Garante que todos os campos obrigatórios pelo RPC sejam enviados, mesmo como null
     const { data: saleId, error } = await supabase.rpc('processar_venda_v2', {
       p_vendedor_id: sale.vendedorId,
       p_client_id: sale.clientId,
       p_valor_total: sale.valorTotal,
       p_valor_pago: sale.valorPago,
       p_metodo_pagamento: sale.metodoPagamento,
-      p_detalhe_pagamento: sale.detalhePagamento,
+      p_detalhe_pagamento: sale.detalhePagamento || '',
       p_status_pagamento: sale.statusPagamento,
       p_data_venda: sale.data.toISOString(),
-      p_data_vencimento: sale.dataVencimento?.toISOString(),
+      p_data_vencimento: sale.dataVencimento ? sale.dataVencimento.toISOString() : null,
       p_itens: sale.itens
     });
 
     if (error) {
-      console.error('Erro RPC processar_venda_v2:', error);
+      console.error('Erro CRÍTICO no RPC processar_venda_v2:', error);
       return null;
     }
 
@@ -58,7 +58,6 @@ export const saleService = {
     return !error;
   },
 
-  // Substituído por RPC atômico para garantir estorno de estoque
   async deleteSale(id: string): Promise<boolean> {
     const { error } = await supabase.rpc('excluir_venda_estornar_estoque', {
       p_sale_id: id

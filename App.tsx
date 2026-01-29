@@ -26,14 +26,14 @@ const App: React.FC = () => {
   
   const [logo, setLogo] = useState<string | null>(null);
   const [margemGlobalAtiva, setMargemGlobalAtiva] = useState(true);
-  const [margemGlobalValor, setMargemGlobalValor] = useState(30); // Atualizado para 30
+  const [margemGlobalValor, setMargemGlobalValor] = useState(30); 
   const [margemMinima, setMargemMinima] = useState(20); 
   const [margemMinimaAtiva, setMargemMinimaAtiva] = useState(true); 
   const [pix1Name, setPix1Name] = useState("Pix Banco A");
   const [pix1Code, setPix1Code] = useState<string | null>(null);
   const [pix2Name, setPix2Name] = useState("Pix Banco B");
   const [pix2Code, setPix2Code] = useState<string | null>(null);
-  const [productOrder, setProductOrder] = useState<string[]>([]); // Novo estado para ordem dos produtos
+  const [productOrder, setProductOrder] = useState<string[]>([]);
 
   const [adminNotification, setAdminNotification] = useState<string | null>(null);
   
@@ -282,14 +282,13 @@ const App: React.FC = () => {
   const aceitarCarga = async (pendenciaId: string) => {
     const pendencia = cargasPendentes.find(p => p.id === pendenciaId);
     if (!pendencia) return;
-    for (const item of pendencia.itens) {
-      const p = products.find(prod => prod.id === item.produtoId);
-      if (p) await productService.updateProduct(p.id, { estoquePrincipal: p.estoquePrincipal - item.quantidade });
+    
+    // O aceite agora é feito via RPC para garantir atomicidade (estoque central + carga vendedor)
+    const success = await cargaService.aceitarCargaRPC(pendenciaId);
+    if (success) {
+      await fetchCoreData();
+      setAdminNotification("Carga aceita com sucesso.");
     }
-    await cargaService.updateActiveCarga(pendencia.vendedorId, pendencia.itens);
-    await cargaService.deleteCargaPendente(pendenciaId);
-    await fetchCoreData();
-    setAdminNotification("Carga aceita com sucesso.");
   };
 
   const processSale = async (saleData: any) => {
@@ -300,51 +299,27 @@ const App: React.FC = () => {
       valorTotal: valorTotalFixed, 
       valorPago: saleData.statusPagamento === 'PAGO' ? valorTotalFixed : 0 
     };
+    
+    // A função insertSale agora chama um RPC que já faz TUDO: 
+    // Insere venda, itens, reduz estoque da carga e cria a comissão.
     const savedSale = await saleService.insertSale(salePayload);
-    if (!savedSale) return null;
-    const totalComissao = saleData.itens.reduce((acc: number, item: any) => {
-      const p = products.find(prod => prod.id === item.produtoId);
-      return acc + (item.precoVenda * item.quantidade * ((p?.comissaoPercentual || 0) / 100));
-    }, 0);
-    const effectivePercentual = valorTotalFixed > 0 ? (totalComissao / valorTotalFixed) * 100 : 0;
-    const commissionPayload: Omit<Commission, 'id'> = { 
-      saleId: savedSale.id, 
-      vendedorId: saleData.vendedorId, 
-      valor: Number(totalComissao.toFixed(2)), 
-      valorBase: valorTotalFixed, 
-      percentual: Number(effectivePercentual.toFixed(2)), 
-      status: saleData.statusPagamento === 'PAGO' ? 'DISPONIVEL' : 'A_RECEBER', 
-      dataGeracao: new Date() 
-    };
-    await commissionService.insertCommission(commissionPayload);
-    const minhaCargaAtual = cargas.filter(c => c.vendedorId === saleData.vendedorId);
-    const novaCargaItems = minhaCargaAtual.map(c => {
-      const itemVendido = saleData.itens.find((i: any) => i.produtoId === c.produtoId);
-      return {
-        produtoId: c.produtoId,
-        quantidade: Math.max(0, c.quantidade - (itemVendido?.quantidade || 0))
-      };
-    });
-    await cargaService.updateActiveCarga(saleData.vendedorId, novaCargaItems);
-    await fetchTransactionalData();
+    
+    if (savedSale) {
+      await fetchTransactionalData();
+    }
+    
     return savedSale;
   };
 
   const deleteSaleInternal = async (saleId: string, isAdmin: boolean) => {
     const saleToDelete = sales.find(s => s.id === saleId);
     if (!saleToDelete) return;
-    await commissionService.deleteCommissionBySale(saleId);
+    
+    // O deleteSale agora chama um RPC que remove a venda e estorna o estoque automaticamente
     const success = await saleService.deleteSale(saleId);
-    if (!success) return;
-    const minhaCargaAtual = cargas.filter(c => c.vendedorId === saleToDelete.vendedorId);
-    const novaCargaItems = [...minhaCargaAtual];
-    saleToDelete.itens.forEach(item => {
-      const idx = novaCargaItems.findIndex(c => c.produtoId === item.produtoId);
-      if (idx !== -1) novaCargaItems[idx].quantidade += item.quantidade;
-      else novaCargaItems.push({ vendedorId: saleToDelete.vendedorId, produtoId: item.produtoId, quantidade: item.quantidade });
-    });
-    await cargaService.updateActiveCarga(saleToDelete.vendedorId, novaCargaItems);
-    await fetchTransactionalData();
+    if (success) {
+      await fetchTransactionalData();
+    }
   };
 
   const receiveAccount = async (saleId: string, method: PaymentMethod, amount?: number) => {

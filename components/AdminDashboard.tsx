@@ -635,7 +635,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
               <div key={c.id} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex items-center justify-between transition-all hover:border-blue-200">
                 <div className="flex-1 min-w-0 pr-2">
                   <div className="flex items-center gap-2"><h3 className="font-bold text-gray-800 text-[13px] leading-tight uppercase truncate">{c.nomeFantasia}</h3>{c.telefone && <a href={`https://wa.me/55${c.telefone.replace(/\D/g, '')}`} target="_blank" className="text-emerald-500" onClick={(e) => e.stopPropagation()}><i className="fa-brands fa-whatsapp text-lg"></i></a>}</div>
-                  <div className="flex items-center gap-3 mt-1.5"><p className="text-[10px] text-gray-400 font-black uppercase truncate">{DIAS_SEMANA[c.diaRoteiro]}</p><div className="flex items-center gap-1.5 bg-blue-50 px-2 py-0.5 rounded border border-blue-100"><i className="fa-solid fa-chart-line text-blue-400 text-[10px]"></i><span className="text-[11px] font-black text-blue-600">R$ {getClientAvgRevenue(c.id)}</span></div></div>
+                  <div className="flex items-center gap-3 mt-1.5"><p className="text-[10px] text-gray-400 font-black uppercase truncate">{DIAS_SEMANA[c.diaRoteiro]}</p><div className="flex items-center gap-1.5 bg-blue-50 px-2 py-0.5 rounded border border-blue-100 shadow-inner whitespace-nowrap"><i className="fa-solid fa-chart-line text-blue-400 text-[10px]"></i><span className="text-[11px] font-black text-blue-600">R$ {getClientAvgRevenue(c.id)}</span></div></div>
                 </div>
                 <div className="flex gap-2"><button onClick={() => handleOpenClient(c)} className="bg-blue-50 text-blue-600 w-9 h-9 rounded-lg border border-blue-100 flex items-center justify-center active:scale-90 transition-all shadow-sm"><i className="fa-solid fa-pencil-alt text-sm"></i></button><button onClick={() => { if(confirm("Excluir cliente?")) props.deleteClient(c.id); }} className="bg-rose-50 text-rose-600 w-9 h-9 rounded-lg border border-rose-100 flex items-center justify-center active:scale-90 transition-all shadow-sm"><i className="fa-solid fa-trash-can text-sm"></i></button></div>
               </div>
@@ -1018,22 +1018,142 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       )}
 
       {showProductModal && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-end sm:items-center justify-center p-4">
-          <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6 animate-in slide-in-from-bottom duration-300 shadow-2xl overflow-y-auto max-h-[95vh]">
-            <h3 className="font-black text-gray-800 uppercase text-sm mb-6">{showProductModal === 'NEW' ? 'Novo Produto' : 'Editar Produto'}</h3>
-            <div className="space-y-4">
-              <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome Comercial</label><input value={pForm.nome ?? ''} onChange={e => setPForm({...pForm, nome: e.target.value})} placeholder="Nome do Produto" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div>
-              <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Estoque Principal (UN)</label><input type="number" value={pForm.estoquePrincipal ?? ''} onChange={e => setPForm({...pForm, estoquePrincipal: e.target.value})} placeholder="0" className="w-full p-4 bg-gray-50 border rounded-2xl font-black text-lg" /></div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Custo R$</label><input type="number" value={pForm.custo ?? ''} onChange={e => { const c = e.target.value; const nv = updatePriceFromMargin(parseFloat(c)||0, parseFloat(pForm.margem)||0).toFixed(2); setPForm({...pForm, custo: c, venda: nv}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div>
-                <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Margem %</label><input type="number" value={pForm.margem ?? ''} disabled={props.margemGlobalAtiva} onChange={e => { const m = e.target.value; const nv = updatePriceFromMargin(parseFloat(pForm.custo)||0, parseFloat(m)||0).toFixed(2); setPForm({...pForm, margem: m, venda: nv}); }} placeholder="0.00" className={`w-full p-4 border rounded-2xl font-bold ${props.margemGlobalAtiva ? 'bg-gray-100 opacity-50' : 'bg-gray-50'}`} /></div>
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[200] flex items-end sm:items-center justify-center">
+          <div className="bg-white w-full max-w-md rounded-t-[2.5rem] sm:rounded-[2.5rem] shadow-2xl animate-in slide-in-from-bottom duration-300 max-h-[92vh] flex flex-col">
+            {/* Header */}
+            <div className="p-6 pb-2 flex justify-between items-center border-b border-gray-50">
+              <h3 className="font-black text-gray-800 uppercase text-sm tracking-tight">
+                {showProductModal === 'NEW' ? 'Cadastrar Novo Produto' : 'Editar Informações'}
+              </h3>
+              <button onClick={() => setShowProductModal(null)} className="w-8 h-8 bg-gray-50 text-gray-400 rounded-full flex items-center justify-center">
+                <i className="fa-solid fa-xmark"></i>
+              </button>
+            </div>
+
+            {/* Scrollable Body */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-4">
+              <div className="space-y-1">
+                <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Nome Comercial do Produto</label>
+                <input 
+                  value={pForm.nome ?? ''} 
+                  onChange={e => setPForm({...pForm, nome: e.target.value})} 
+                  placeholder="Ex: Doce de Leite 500g" 
+                  className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl font-bold uppercase focus:ring-2 focus:ring-blue-100 outline-none" 
+                />
               </div>
-              <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Preço Venda R$</label><input type="number" value={pForm.venda ?? ''} disabled={props.margemGlobalAtiva} onChange={e => { const v = e.target.value; const nm = updateMarginFromPrice(parseFloat(pForm.custo)||0, parseFloat(v)||0).toFixed(2); setPForm({...pForm, venda: v, margem: nm}); }} placeholder="0.00" className={`w-full p-4 border rounded-2xl font-black text-lg ${props.margemGlobalAtiva ? 'bg-gray-100 opacity-50' : 'bg-green-50'}`} /></div>
-              <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Comissão %</label><input type="number" value={pForm.comissao ?? ''} onChange={e => setPForm({...pForm, comissao: e.target.value})} placeholder="0.00" className="w-full p-4 bg-yellow-50 border rounded-2xl font-bold" /></div>
-              <div className="flex flex-col gap-2 pt-2">
-                <button onClick={handleSaveProduct} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 transition-all uppercase text-xs tracking-widest">SALVAR PRODUTO</button>
-                {showProductModal !== 'NEW' && <button onClick={handleDeleteProductInModal} className="w-full bg-rose-50 text-rose-600 font-black py-4 rounded-2xl active:scale-95 transition-all uppercase text-[10px] tracking-widest border border-rose-100 flex items-center justify-center gap-2"><i className="fa-solid fa-trash-can text-xs"></i> EXCLUIR PRODUTO</button>}
-                <button onClick={() => setShowProductModal(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Preço de Custo R$</label>
+                  <input 
+                    type="number" 
+                    value={pForm.custo ?? ''} 
+                    onChange={e => { 
+                      const c = e.target.value; 
+                      const nv = updatePriceFromMargin(parseFloat(c)||0, parseFloat(pForm.margem)||0).toFixed(2); 
+                      setPForm({...pForm, custo: c, venda: nv}); 
+                    }} 
+                    placeholder="0.00" 
+                    className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl font-bold outline-none" 
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Margem %</label>
+                  <div className="relative">
+                    <input 
+                      type="number" 
+                      value={pForm.margem ?? ''} 
+                      disabled={props.margemGlobalAtiva} 
+                      onChange={e => { 
+                        const m = e.target.value; 
+                        const nv = updatePriceFromMargin(parseFloat(pForm.custo)||0, parseFloat(m)||0).toFixed(2); 
+                        setPForm({...pForm, margem: m, venda: nv}); 
+                      }} 
+                      placeholder="0" 
+                      className={`w-full p-4 border rounded-2xl font-bold outline-none ${props.margemGlobalAtiva ? 'bg-gray-100 text-gray-400' : 'bg-gray-50'}`} 
+                    />
+                    {props.margemGlobalAtiva && <i className="fa-solid fa-lock absolute right-4 top-1/2 -translate-y-1/2 text-gray-300 text-[10px]"></i>}
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Preço de Venda Final</label>
+                <div className="relative">
+                  <input 
+                    type="number" 
+                    value={pForm.venda ?? ''} 
+                    disabled={props.margemGlobalAtiva} 
+                    onChange={e => { 
+                      const v = e.target.value; 
+                      const nm = updateMarginFromPrice(parseFloat(pForm.custo)||0, parseFloat(v)||0).toFixed(2); 
+                      setPForm({...pForm, venda: v, margem: nm}); 
+                    }} 
+                    placeholder="0.00" 
+                    className={`w-full p-5 border-2 rounded-2xl font-black text-2xl outline-none transition-colors ${props.margemGlobalAtiva ? 'bg-blue-50 border-blue-100 text-blue-600' : 'bg-emerald-50 border-emerald-100 text-emerald-600'}`} 
+                  />
+                  {props.margemGlobalAtiva && <span className="absolute right-4 top-1/2 -translate-y-1/2 text-[9px] font-black text-blue-400 uppercase tracking-tighter bg-white px-2 py-1 rounded-lg shadow-sm">Automático</span>}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Comissão %</label>
+                  <input 
+                    type="number" 
+                    value={pForm.comissao ?? ''} 
+                    onChange={e => setPForm({...pForm, comissao: e.target.value})} 
+                    placeholder="0" 
+                    className="w-full p-4 bg-yellow-50 border border-yellow-100 text-yellow-700 rounded-2xl font-bold outline-none" 
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Estoque Inicial</label>
+                  <input 
+                    type="number" 
+                    value={pForm.estoquePrincipal ?? ''} 
+                    onChange={e => setPForm({...pForm, estoquePrincipal: e.target.value})} 
+                    placeholder="0" 
+                    className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl font-bold outline-none" 
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between p-4 bg-gray-50 rounded-2xl border border-gray-100">
+                <span className="text-xs font-bold text-gray-700 uppercase">Produto Ativo</span>
+                <button 
+                  onClick={() => setPForm({...pForm, ativo: !pForm.ativo})}
+                  className={`w-12 h-6 rounded-full relative transition-colors ${pForm.ativo ? 'bg-green-500' : 'bg-gray-300'}`}
+                >
+                  <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${pForm.ativo ? 'left-7' : 'left-1'}`}></div>
+                </button>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="p-6 bg-gray-50 border-t border-gray-100 flex flex-col gap-3">
+              <button 
+                onClick={handleSaveProduct} 
+                className="w-full bg-blue-600 text-white font-black py-5 rounded-2xl shadow-xl active:scale-95 transition-all uppercase text-xs tracking-[0.2em]"
+              >
+                Salvar Produto
+              </button>
+              
+              <div className="flex gap-3">
+                {showProductModal !== 'NEW' && (
+                  <button 
+                    onClick={handleDeleteProductInModal} 
+                    className="flex-1 bg-rose-50 text-rose-600 font-black py-4 rounded-2xl active:scale-95 transition-all uppercase text-[9px] tracking-widest border border-rose-100"
+                  >
+                    Excluir
+                  </button>
+                )}
+                <button 
+                  onClick={() => setShowProductModal(null)} 
+                  className="flex-1 bg-white text-gray-400 font-bold py-4 rounded-2xl border border-gray-200 uppercase text-[9px] tracking-widest"
+                >
+                  Cancelar
+                </button>
               </div>
             </div>
           </div>
@@ -1083,22 +1203,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                 <button onClick={handleSaveClient} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 transition-all uppercase text-xs tracking-widest">SALVAR CLIENTE</button>
                 <button onClick={() => setShowClientModal(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button>
               </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showEntryModal && (
-        <div className="fixed inset-0 bg-black/50 z-[200] flex items-center justify-center p-6">
-          <div className="bg-white p-8 rounded-[32px] w-full max-w-xs shadow-2xl text-center">
-            <h3 className="font-black text-gray-800 text-sm uppercase mb-4">Entrada de Mercadoria</h3>
-            <div className="mb-6"><p className="text-[10px] font-black text-gray-400 uppercase mb-1">Produto</p><h4 className="text-sm font-bold text-gray-800 uppercase leading-tight">{showEntryModal.nome}</h4></div>
-            <div className="space-y-4">
-              <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100 flex flex-col items-center"><span className="text-[10px] font-black text-blue-400 uppercase mb-1">📦 Estoque Atual</span><span className="text-lg font-black text-blue-700">{(showEntryModal.estoquePrincipal ?? 0)} UN</span></div>
-              <input type="number" placeholder="Quantidade Entrada" className="w-full p-4 bg-gray-50 rounded-2xl border font-black text-center text-lg outline-none" value={entryForm.qtd} onChange={e => setEntryForm({...entryForm, qtd: e.target.value})} />
-              <input type="number" placeholder="Custo Unit." className="w-full p-4 bg-gray-50 rounded-2xl border font-black text-center text-lg outline-none" value={entryForm.custo} onChange={e => setEntryForm({...entryForm, custo: e.target.value})} />
-              <button onClick={() => { if(!entryForm.qtd || !entryForm.custo) return; props.registerStockEntry(showEntryModal.id, parseInt(entryForm.qtd), parseFloat(entryForm.custo)); showToast("Entrada registrada"); setShowEntryModal(null); }} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl active:scale-95 shadow-xl uppercase text-xs tracking-widest">Confirmar Entrada</button>
-              <button onClick={() => setShowEntryModal(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button>
             </div>
           </div>
         </div>

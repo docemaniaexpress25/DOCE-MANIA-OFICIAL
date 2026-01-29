@@ -75,53 +75,49 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
   useEffect(() => {
     saveLocalState('v_activeTab', activeTab);
-    if (activeTab !== 'HOME' && window.history.state?.tab !== activeTab) {
-      window.history.pushState({ tab: activeTab }, '');
-    }
   }, [activeTab]);
 
   useEffect(() => {
     saveLocalState('v_selectedClient', selectedClient);
-    if (selectedClient && window.history.state?.view !== 'PDV') {
-      window.history.pushState({ view: 'PDV' }, '');
-    }
   }, [selectedClient]);
 
   useEffect(() => {
     saveLocalState('v_viewingSale', viewingSale);
-    if (viewingSale && window.history.state?.view !== 'CUPOM') {
-      window.history.pushState({ view: 'CUPOM' }, '');
-    }
   }, [viewingSale]);
 
-  useEffect(() => {
-    const handlePopState = (event: PopStateEvent) => {
-      const state = event.state;
-      if (viewingSale) setViewingSale(null);
-      else if (selectedClient) setSelectedClient(null);
-      else if (activeTab !== 'HOME') {
-        if (state && state.tab) setActiveTab(state.tab);
-        else setActiveTab('HOME');
-      }
-    };
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, [activeTab, selectedClient, viewingSale]);
-
-  const filterByPeriod = (date: Date, period: string) => {
+  const filterByPeriod = (date: any, period: string) => {
+    if (!date) return false;
     const d = new Date(date);
     const today = new Date();
-    if (period === 'DIA') return d.toDateString() === today.toDateString();
+    
+    // Compara apenas a data (ignora hora) para evitar problemas de fuso horário
+    if (period === 'DIA') {
+      return d.getFullYear() === today.getFullYear() && 
+             d.getMonth() === today.getMonth() && 
+             d.getDate() === today.getDate();
+    }
+    
     if (period === 'SEMANA') {
       const weekAgo = new Date();
       weekAgo.setDate(today.getDate() - 7);
       return d >= weekAgo;
     }
-    if (period === 'MES') return d.getMonth() === today.getMonth() && d.getFullYear() === today.getFullYear();
+    
+    if (period === 'MES') {
+      return d.getMonth() === today.getMonth() && d.getFullYear() === today.getFullYear();
+    }
+    
     return true;
   };
 
-  const isSameDay = (date: Date | undefined) => new Date().toDateString() === (new Date(date ?? new Date())).toDateString(); 
+  const isSameDay = (date: Date | undefined) => {
+    if (!date) return false;
+    const d = new Date(date);
+    const today = new Date();
+    return d.getFullYear() === today.getFullYear() && 
+           d.getMonth() === today.getMonth() && 
+           d.getDate() === today.getDate();
+  };
 
   const diaAtual = new Date().getDay();
   const minhaCarga = useMemo(() => cargas.filter(c => c.vendedorId === user.id), [cargas, user.id]);
@@ -197,18 +193,24 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     </button>
   );
 
-  const filteredHistory = useMemo(() => sales.filter(s => s.vendedorId === user.id && filterByPeriod((s.data ?? new Date()), historyFilter)).sort((a, b) => (b.data?.getTime() ?? 0) - (a.data?.getTime() ?? 0)), [sales, user.id, historyFilter]); 
+  const filteredHistory = useMemo(() => sales.filter(s => s.vendedorId === user.id && filterByPeriod(s.data, historyFilter)).sort((a, b) => (new Date(b.data).getTime() ?? 0) - (new Date(a.data).getTime() ?? 0)), [sales, user.id, historyFilter]); 
   
   const financeStats = useMemo(() => {
     const vCommsAll = commissions.filter(c => c.vendedorId === user.id);
     const jaPago = payoutLogs.reduce((acc, curr) => acc + (curr.valorPago ?? 0), 0); 
     
-    const vSalesFiltered = sales.filter(s => s.vendedorId === user.id && filterByPeriod((s.data ?? new Date()), financeFilter)); 
+    const vSalesFiltered = sales.filter(s => s.vendedorId === user.id && filterByPeriod(s.data, financeFilter)); 
     const vCommsFiltered = vCommsAll.filter(c => filterByPeriod(c.dataGeracao, financeFilter));
 
-    const totalCommsEligible = vCommsAll.filter(c => c.status !== 'A_RECEBER').reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
+    // Saldo disponível considera tudo que não está 'A_RECEBER'
+    const totalCommsEligible = vCommsAll
+      .filter(c => c.status !== 'A_RECEBER')
+      .reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
+    
     const disponivel = Math.max(0, totalCommsEligible - jaPago);
-    const pendente = vCommsAll.filter(c => c.status === 'A_RECEBER').reduce((acc, curr) => acc + (curr.valor ?? 0), 0); 
+    const pendente = vCommsAll
+      .filter(c => c.status === 'A_RECEBER')
+      .reduce((acc, curr) => acc + (curr.valor ?? 0), 0); 
     
     return { 
       totalVendido: Number(vSalesFiltered.reduce((acc, curr) => acc + (curr.valorTotal ?? 0), 0).toFixed(2)), 
@@ -232,7 +234,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     return acc + ((curr.quantidade ?? 0) * (p?.precoVenda ?? 0)); 
   }, 0), [minhaCarga, products]);
 
-  // Nova soma total de quantidades na carga
   const totalUnidadesCarga = useMemo(() => minhaCarga.reduce((acc, curr) => acc + (curr.quantidade ?? 0), 0), [minhaCarga]);
 
   if (selectedClient) {
@@ -396,7 +397,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 <div className="text-center bg-orange-50 p-3 rounded-xl"><p className="text-[9px] font-black text-orange-600 uppercase mb-1">A Prazo</p><p className="text-sm font-black text-orange-700">R$ {historySummary.prazo.toFixed(2)}</p></div>
              </div>
           </div>
-          {filteredHistory.map(s => (<div key={s.id} className="bg-white p-4 rounded-3xl border border-gray-100 flex flex-col shadow-sm"><div className="flex justify-between items-center mb-2"><p className="font-bold text-gray-800 text-sm uppercase">{clients.find(c => c.id === s.clientId)?.nomeFantasia ?? 'Cliente'}</p><p className="text-sm font-semibold text-emerald-600">R$ {s.valorTotal.toFixed(2)}</p></div><div className="flex justify-between items-end"><p className="text-[10px] text-gray-400 font-semibold">{s.metodoPagamento} • {s.data.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</p><div className="flex gap-3"><button onClick={() => setViewingSale(s)} className="text-[#1E3A5F] text-lg"><i className="fa-solid fa-file-invoice"></i></button></div></div></div>))} 
+          {filteredHistory.map(s => (<div key={s.id} className="bg-white p-4 rounded-3xl border border-gray-100 flex flex-col shadow-sm"><div className="flex justify-between items-center mb-2"><p className="font-bold text-gray-800 text-sm uppercase">{clients.find(c => c.id === s.clientId)?.nomeFantasia ?? 'Cliente'}</p><p className="text-sm font-semibold text-emerald-600">R$ {s.valorTotal.toFixed(2)}</p></div><div className="flex justify-between items-end"><p className="text-[10px] text-gray-400 font-semibold">{s.metodoPagamento} • {new Date(s.data).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</p><div className="flex gap-3"><button onClick={() => setViewingSale(s)} className="text-[#1E3A5F] text-lg"><i className="fa-solid fa-file-invoice"></i></button></div></div></div>))} 
         </div>
       )}
 
@@ -431,12 +432,12 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
            <div className="space-y-2 pt-4">
              <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">Notificações de Comissão</h3>
              <div className="bg-white rounded-3xl border border-gray-100 shadow-sm divide-y divide-gray-50 overflow-hidden">
-                {messages.filter(m => m.vendedorId === user.id).sort((a, b) => b.data.getTime() - a.data.getTime()).map(m => (
+                {messages.filter(m => m.vendedorId === user.id).sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime()).map(m => (
                     <div key={m.id} className={`p-4 flex justify-between items-center transition-colors ${!m.lida ? 'bg-blue-50/50' : 'bg-white'}`}>
                         <div className="flex-1 pr-3">
                             <p className={`text-[11px] font-black uppercase leading-none mb-1 ${!m.lida ? 'text-blue-700' : 'text-gray-700'}`}>{m.titulo}</p>
                             <p className="text-[10px] font-semibold text-gray-500 mt-1">{m.mensagem}</p>
-                            <p className="text-[8px] text-gray-400 mt-1">{m.data.toLocaleDateString()} {m.data.toLocaleTimeString()}</p>
+                            <p className="text-[8px] text-gray-400 mt-1">{new Date(m.data).toLocaleDateString()} {new Date(m.data).toLocaleTimeString()}</p>
                         </div>
                         {!m.lida && m.type === 'COMMISSION_CONFIRMATION' && (
                             <button 
@@ -458,10 +459,10 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
            <div className="space-y-2 pt-2">
              <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">Recebimentos</h3>
              <div className="bg-white rounded-3xl border border-gray-100 shadow-sm divide-y divide-gray-50 overflow-hidden">
-                {payoutLogs.sort((a, b) => b.dataPagamento.getTime() - a.dataPagamento.getTime()).map(log => (
+                {payoutLogs.sort((a, b) => new Date(b.dataPagamento).getTime() - new Date(a.dataPagamento).getTime()).map(log => (
                   <div key={log.id} className="p-4 flex justify-between items-center active:bg-gray-50 transition-colors">
                     <div>
-                      <p className="text-[10px] font-black text-gray-400 uppercase leading-none mb-1">{log.dataPagamento.toLocaleDateString()}</p>
+                      <p className="text-[10px] font-black text-gray-400 uppercase leading-none mb-1">{new Date(log.dataPagamento).toLocaleDateString()}</p>
                       <p className="text-[11px] font-bold text-gray-700 uppercase tracking-tight">{log.tipo === 'TOTAL' ? 'Pagamento Integral' : 'Repasse Parcial'}</p>
                     </div>
                     <div className="text-right">

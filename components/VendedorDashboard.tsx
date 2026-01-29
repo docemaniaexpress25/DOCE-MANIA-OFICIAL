@@ -89,24 +89,13 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     if (!date) return false;
     const d = new Date(date);
     const today = new Date();
-    
-    // Compara apenas a data (ignora hora) para evitar problemas de fuso horário
-    if (period === 'DIA') {
-      return d.getFullYear() === today.getFullYear() && 
-             d.getMonth() === today.getMonth() && 
-             d.getDate() === today.getDate();
-    }
-    
+    if (period === 'DIA') return d.toDateString() === today.toDateString();
     if (period === 'SEMANA') {
       const weekAgo = new Date();
       weekAgo.setDate(today.getDate() - 7);
       return d >= weekAgo;
     }
-    
-    if (period === 'MES') {
-      return d.getMonth() === today.getMonth() && d.getFullYear() === today.getFullYear();
-    }
-    
+    if (period === 'MES') return d.getMonth() === today.getMonth() && d.getFullYear() === today.getFullYear();
     return true;
   };
 
@@ -114,9 +103,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     if (!date) return false;
     const d = new Date(date);
     const today = new Date();
-    return d.getFullYear() === today.getFullYear() && 
-           d.getMonth() === today.getMonth() && 
-           d.getDate() === today.getDate();
+    return d.toDateString() === today.toDateString();
   };
 
   const diaAtual = new Date().getDay();
@@ -197,17 +184,14 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   
   const financeStats = useMemo(() => {
     const vCommsAll = commissions.filter(c => c.vendedorId === user.id);
-    const jaPago = payoutLogs.reduce((acc, curr) => acc + (curr.valorPago ?? 0), 0); 
-    
     const vSalesFiltered = sales.filter(s => s.vendedorId === user.id && filterByPeriod(s.data, financeFilter)); 
     const vCommsFiltered = vCommsAll.filter(c => filterByPeriod(c.dataGeracao, financeFilter));
 
-    // Saldo disponível considera tudo que não está 'A_RECEBER'
-    const totalCommsEligible = vCommsAll
-      .filter(c => c.status !== 'A_RECEBER')
+    // Saldo agora é baseado estritamente no STATUS da comissão no banco de dados
+    const disponivel = vCommsAll
+      .filter(c => c.status === 'DISPONIVEL')
       .reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
     
-    const disponivel = Math.max(0, totalCommsEligible - jaPago);
     const pendente = vCommsAll
       .filter(c => c.status === 'A_RECEBER')
       .reduce((acc, curr) => acc + (curr.valor ?? 0), 0); 
@@ -218,7 +202,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       disponivel: Number(disponivel.toFixed(2)), 
       pendente: Number(pendente.toFixed(2)) 
     };
-  }, [commissions, user.id, sales, financeFilter, payoutLogs]);
+  }, [commissions, user.id, sales, financeFilter]);
 
   const historySummary = useMemo(() => filteredHistory.reduce((acc, sale) => {
     acc.total += (sale.valorTotal ?? 0); 
@@ -432,12 +416,12 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
            <div className="space-y-2 pt-4">
              <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">Notificações de Comissão</h3>
              <div className="bg-white rounded-3xl border border-gray-100 shadow-sm divide-y divide-gray-50 overflow-hidden">
-                {messages.filter(m => m.vendedorId === user.id).sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime()).map(m => (
+                {messages.filter(m => m.vendedorId === user.id).sort((a, b) => b.data.getTime() - a.data.getTime()).map(m => (
                     <div key={m.id} className={`p-4 flex justify-between items-center transition-colors ${!m.lida ? 'bg-blue-50/50' : 'bg-white'}`}>
                         <div className="flex-1 pr-3">
                             <p className={`text-[11px] font-black uppercase leading-none mb-1 ${!m.lida ? 'text-blue-700' : 'text-gray-700'}`}>{m.titulo}</p>
                             <p className="text-[10px] font-semibold text-gray-500 mt-1">{m.mensagem}</p>
-                            <p className="text-[8px] text-gray-400 mt-1">{new Date(m.data).toLocaleDateString()} {new Date(m.data).toLocaleTimeString()}</p>
+                            <p className="text-[8px] text-gray-400 mt-1">{m.data.toLocaleDateString()} {m.data.toLocaleTimeString()}</p>
                         </div>
                         {!m.lida && m.type === 'COMMISSION_CONFIRMATION' && (
                             <button 
@@ -459,10 +443,10 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
            <div className="space-y-2 pt-2">
              <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">Recebimentos</h3>
              <div className="bg-white rounded-3xl border border-gray-100 shadow-sm divide-y divide-gray-50 overflow-hidden">
-                {payoutLogs.sort((a, b) => new Date(b.dataPagamento).getTime() - new Date(a.dataPagamento).getTime()).map(log => (
+                {payoutLogs.sort((a, b) => b.dataPagamento.getTime() - a.dataPagamento.getTime()).map(log => (
                   <div key={log.id} className="p-4 flex justify-between items-center active:bg-gray-50 transition-colors">
                     <div>
-                      <p className="text-[10px] font-black text-gray-400 uppercase leading-none mb-1">{new Date(log.dataPagamento).toLocaleDateString()}</p>
+                      <p className="text-[10px] font-black text-gray-400 uppercase leading-none mb-1">{log.dataPagamento.toLocaleDateString()}</p>
                       <p className="text-[11px] font-bold text-gray-700 uppercase tracking-tight">{log.tipo === 'TOTAL' ? 'Pagamento Integral' : 'Repasse Parcial'}</p>
                     </div>
                     <div className="text-right">

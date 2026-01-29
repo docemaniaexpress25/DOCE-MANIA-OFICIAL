@@ -183,10 +183,16 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const getVendedorStats = (vId: string) => {
     const vSales = props.sales.filter(s => s.vendedorId === vId && filterByPeriod(s.data, 'HOJE'));
     const sellerComms = props.commissions.filter(c => c.vendedorId === vId);
-    const totalCommsEligible = sellerComms.filter(c => c.status !== 'A_RECEBER').reduce((acc, curr) => acc + (curr.valor ?? 0), 0); 
-    const jaPago = props.payoutLogs.filter(l => l.vendedorId === vId).reduce((acc, curr) => acc + (curr.valorPago ?? 0), 0); 
-    const disponivel = Math.max(0, totalCommsEligible - jaPago);
-    const aReceber = sellerComms.filter(c => c.status === 'A_RECEBER').reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
+    
+    // O Administrador agora vê como DISPONÍVEL apenas o que está com status 'DISPONIVEL' no banco
+    const disponivel = sellerComms
+      .filter(c => c.status === 'DISPONIVEL')
+      .reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
+    
+    const aReceber = sellerComms
+      .filter(c => c.status === 'A_RECEBER')
+      .reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
+
     return {
       vendasHoje: Number(vSales.reduce((acc, curr) => acc + (curr.valorTotal ?? 0), 0).toFixed(2)), 
       comissaoDisponivel: Number(disponivel.toFixed(2)),
@@ -389,7 +395,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     setStagingCarga(prev => ({ ...prev, [pId]: novaQ }));
   };
 
-  // Novo handler para digitação direta da quantidade da carga
   const handleStagingInputChange = (pId: string, value: string) => {
     const p = props.products.find(prod => prod.id === pId);
     if (!p) return;
@@ -692,7 +697,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
               if (dueDate) dueDate.setHours(0,0,0,0);
               const isOverdue = dueDate ? dueDate <= today : false;
               return (
-              <div key={s.id} className={`p-5 rounded-3xl border shadow-sm transition-all ${isOverdue ? 'bg-rose-50 border-rose-200 shadow-rose-100/50' : 'bg-white border-gray-100'}`}>
+              <div key={s.id} className={`p-5 rounded-3xl border shadow-sm transition-all ${isOverdue ? 'bg-rose-50 border-rose-200' : 'bg-white border-gray-100'}`}>
                 <div className="flex justify-between items-start mb-2">
                    <div className="flex flex-col">
                       <span className={`text-[10px] font-black uppercase ${isOverdue ? 'text-rose-600' : 'text-gray-400'}`}>Vencimento</span>

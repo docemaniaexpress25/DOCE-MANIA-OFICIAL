@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Product, User, Carga, Sale, Commission, Client, PaymentMethod, CommissionPaymentLog } from '../types';
+import { Product, User, Carga, Sale, Commission, Client, PaymentMethod, CommissionPaymentLog, Expense } from '../types';
 import { DIAS_SEMANA } from '../constants';
 import Cupom from './Cupom';
 
@@ -8,6 +8,10 @@ interface AdminDashboardProps {
   users: User[];
   cargas: Carga[];
   clients: Client[];
+  sales: Sale[];
+  commissions: Commission[];
+  payoutLogs: CommissionPaymentLog[];
+  expenses: Expense[];
   addProduct: (n: string, c: number, v: number, com: number, estoque?: number) => void;
   updateProduct: (id: string, data: Partial<Product>) => void;
   deleteProduct: (id: string) => void;
@@ -20,9 +24,6 @@ interface AdminDashboardProps {
   deleteClient: (id: string) => void;
   addUser: (nome: string, foto?: string, telefone?: string) => void;
   updateUser: (id: string, data: Partial<User>) => void;
-  sales: Sale[];
-  commissions: Commission[];
-  payoutLogs: CommissionPaymentLog[];
   payCommission: (vId: string, amount: number, type: 'TOTAL' | 'PARCIAL', adminId: string) => void;
   setCommissions: any;
   updateEstoqueCentral: any;
@@ -181,13 +182,17 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     const vSales = props.sales.filter(s => s.vendedorId === vId && filterByPeriod(s.data, 'HOJE'));
     const sellerComms = props.commissions.filter(c => c.vendedorId === vId);
     const sellerLogs = props.payoutLogs.filter(l => l.vendedorId === vId);
+    const sellerExps = props.expenses.filter(e => e.sellerId === vId);
 
     const totalCommsEligible = sellerComms
       .filter(c => c.status !== 'A_RECEBER')
       .reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
     
     const jaPago = sellerLogs.reduce((acc, curr) => acc + (curr.valorPago ?? 0), 0);
-    const disponivel = Math.max(0, totalCommsEligible - jaPago);
+    const totalDespesas = sellerExps.reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
+
+    // Saldo = Liberado - Pagos - Despesas
+    const disponivel = totalCommsEligible - jaPago - totalDespesas;
     
     const aReceber = sellerComms
       .filter(c => c.status === 'A_RECEBER')
@@ -223,7 +228,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     if (!payoutVendedor) return;
     const stats = getVendedorStats(payoutVendedor.id);
     const amount = payoutType === 'TOTAL' ? stats.comissaoDisponivel : parseFloat(partialAmount);
-    if (isNaN(amount) || amount <= 0 || amount > stats.comissaoDisponivel) return alert("Valor inválido");
+    if (isNaN(amount) || amount <= 0) return alert("Valor inválido");
     props.payCommission(payoutVendedor.id, amount, payoutType, props.adminUser.id);
     setPayoutVendedor(null);
     showToast("Pagamento registrado!");
@@ -536,7 +541,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
               return (
                 <div key={v.id} className="bg-white rounded-[2.5rem] shadow-xl border-t-4 border-blue-500 p-8 flex flex-col gap-6">
                   <div className="flex items-center gap-4"><div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-3xl flex items-center justify-center font-black overflow-hidden border-4 border-white shadow-md">{v.foto ? <img src={v.foto} className="w-full h-full object-cover" /> : <i className="fa-solid fa-user text-2xl"></i>}</div><div><h3 className="font-black text-gray-800 text-lg leading-none mb-1 uppercase truncate max-w-[150px]">{v.nome}</h3><p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">Performance Hoje</p></div></div>
-                  <div className="space-y-4"><div className="grid grid-cols-2 gap-4"><div className="bg-gray-50 p-5 rounded-[2rem] border border-gray-100 flex flex-col items-center"><p className="text-[9px] text-gray-400 font-black uppercase mb-2 text-center leading-none">Vendas Hoje</p><p className="text-lg font-black text-gray-800">R$ {stats.vendasHoje.toFixed(2)}</p></div><div className="bg-emerald-50 p-5 rounded-[2rem] border border-emerald-100 flex flex-col items-center"><p className="text-[9px] text-emerald-600 font-black uppercase mb-2 text-center leading-none">Disponível</p><p className="text-lg font-black text-emerald-700">R$ {stats.comissaoDisponivel.toFixed(2)}</p></div></div><div className="bg-orange-50 p-4 rounded-2xl border border-orange-100 flex justify-between items-center"><span className="text-[9px] font-black text-orange-600 uppercase">Comissão a Receber (Prazo)</span><span className="text-sm font-black text-orange-700">R$ {stats.comissaoAReceber.toFixed(2)}</span></div></div>
+                  <div className="space-y-4"><div className="grid grid-cols-2 gap-4"><div className="bg-gray-50 p-5 rounded-[2rem] border border-gray-100 flex flex-col items-center"><p className="text-[9px] text-gray-400 font-black uppercase mb-2 text-center leading-none">Vendas Hoje</p><p className="text-lg font-black text-gray-800">R$ {stats.vendasHoje.toFixed(2)}</p></div><div className={`${stats.comissaoDisponivel < 0 ? 'bg-rose-50 border-rose-100' : 'bg-emerald-50 border-emerald-100'} p-5 rounded-[2rem] border flex flex-col items-center`}><p className={`text-[9px] ${stats.comissaoDisponivel < 0 ? 'text-rose-600' : 'text-emerald-600'} font-black uppercase mb-2 text-center leading-none`}>Disponível</p><p className={`text-lg font-black ${stats.comissaoDisponivel < 0 ? 'text-rose-700' : 'text-gray-800'}`}>R$ {stats.comissaoDisponivel.toFixed(2)}</p></div></div><div className="bg-orange-50 p-4 rounded-2xl border border-orange-100 flex justify-between items-center"><span className="text-[9px] font-black text-orange-600 uppercase">Comissão a Receber (Prazo)</span><span className="text-sm font-black text-orange-700">R$ {stats.comissaoAReceber.toFixed(2)}</span></div></div>
                   <button onClick={() => handleOpenPayout(v)} className="w-full bg-emerald-600 text-white py-5 rounded-3xl font-black text-xs uppercase shadow-xl active:scale-95 transition-all tracking-widest">Pagar Comissão</button>
                 </div>
               );

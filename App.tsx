@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { User, Product, Carga, Sale, Commission, Client, PaymentMethod, CargaPendente, CommissionPaymentLog, SystemMessage } from './types';
+import { User, Product, Carga, Sale, Commission, Client, PaymentMethod, CargaPendente, CommissionPaymentLog, SystemMessage, Expense } from './types';
 import AdminDashboard from './components/AdminDashboard';
 import VendedorDashboard from './components/VendedorDashboard';
 import Login from './components/Login';
@@ -12,10 +12,9 @@ import { commissionService } from './services/commissionService';
 import { messageService } from './services/messageService';
 import { cargaService } from './services/cargaService';
 import { dailyRouteService } from './services/dailyRouteService';
-import { generateId } from './utils/uuid';
+import { expenseService } from './services/expenseService';
 import { 
   loadLocalState, saveLocalState, 
-  DEFAULT_CARGAS, DEFAULT_CARGAS_PENDENTES,
   DailyRouteState
 } from './utils/persistence';
 
@@ -46,6 +45,7 @@ const App: React.FC = () => {
   const [sales, setSales] = useState<Sale[]>([]);
   const [commissions, setCommissions] = useState<Commission[]>([]);
   const [payoutLogs, setPayoutLogs] = useState<CommissionPaymentLog[]>([]);
+  const [expenses, setExpenses] = useState<Expense[]>([]);
   const [messages, setMessages] = useState<SystemMessage[]>([]);
 
   const [dailyRouteState, setDailyRouteState] = useState<DailyRouteState>({ 
@@ -87,13 +87,14 @@ const App: React.FC = () => {
   }, []);
 
   const fetchTransactionalData = useCallback(async () => {
-    const [s, c, p, m, cg, cgp] = await Promise.all([
+    const [s, c, p, m, cg, cgp, ex] = await Promise.all([
       saleService.getAllSales(),
       commissionService.getAllCommissions(),
       commissionService.getAllPayouts(),
       messageService.getAllMessages(),
       cargaService.getAllCargas(),
-      cargaService.getAllCargasPendentes()
+      cargaService.getAllCargasPendentes(),
+      expenseService.getAllExpenses()
     ]);
     setSales(s);
     setCommissions(c);
@@ -101,6 +102,7 @@ const App: React.FC = () => {
     setMessages(m);
     setCargas(cg);
     setCargasPendentes(cgp);
+    setExpenses(ex);
   }, []);
 
   const fetchDailyRoute = useCallback(async (currentClients: Client[]) => {
@@ -260,6 +262,15 @@ const App: React.FC = () => {
   const syncVendedorCarga = async (vId: string, itens: { produtoId: string, quantidade: number }[]) => {
     const res = await cargaService.insertCargaPendente({ vendedorId: vId, itens, data: new Date() });
     if (res) {
+      // Restaurando a mensagem para o vendedor
+      await messageService.insertMessage({
+        vendedorId: vId,
+        titulo: "🚚 Nova Carga Sincronizada",
+        mensagem: "Uma nova carga foi preparada pelo administrador. Verifique na aba 'Minha Carga' para aceitar.",
+        data: new Date(),
+        lida: false,
+        type: 'INFO'
+      });
       await fetchTransactionalData();
     }
   };
@@ -334,7 +345,6 @@ const App: React.FC = () => {
     const v = users.find(u => u.id === vendedorId);
     if (!v) return;
     
-    // Insere o log de pagamento. O saldo é calculado subtraindo esses logs do total DISPONIVEL.
     const logSuccess = await commissionService.insertPayout({
       vendedorId,
       vendedorNome: v.nome,
@@ -356,6 +366,12 @@ const App: React.FC = () => {
       });
       await fetchTransactionalData();
     }
+  };
+
+  const addExpense = async (sellerId: string, descricao: string, valor: number) => {
+    const success = await expenseService.insertExpense({ sellerId, descricao, valor });
+    if (success) await fetchTransactionalData();
+    return success;
   };
 
   const markMessageAsRead = async (msgId: string) => {
@@ -398,6 +414,7 @@ const App: React.FC = () => {
         {currentUser.role === 'ADMIN' ? (
           <AdminDashboard 
             products={products} users={users} cargas={cargas} clients={clients} sales={sales} commissions={commissions} payoutLogs={payoutLogs}
+            expenses={expenses}
             addProduct={addProduct} updateProduct={updateProduct} deleteProduct={deleteProduct} registerStockEntry={registerStockEntry}
             adjustStockManual={()=>{}} syncVendedorCarga={syncVendedorCarga} applyCargaDirectly={applyCargaDirectly} addClient={addClient} updateClient={updateClient}
             deleteClient={deleteClient} addUser={addUser} updateUser={updateUser} payCommission={handlePayCommission}
@@ -413,6 +430,7 @@ const App: React.FC = () => {
         ) : (
           <VendedorDashboard 
             products={products} users={users} cargas={cargas} clients={clients} sales={sales} commissions={commissions}
+            expenses={expenses.filter(e => e.sellerId === currentUser.id)}
             addClient={addClient} updateClient={updateClient} deleteClient={deleteClient}
             user={currentUser} 
             payoutLogs={payoutLogs.filter(l => l.vendedorId === currentUser.id)}
@@ -420,6 +438,7 @@ const App: React.FC = () => {
             messages={messages.filter(m => m.vendedorId === currentUser.id)}
             markMessageAsRead={markMessageAsRead} processSale={processSale} 
             receivePayment={receiveAccount} deleteSale={(id) => deleteSaleInternal(id, false)} aceitarCarga={aceitarCarga}
+            addExpense={addExpense}
             margemMinima={margemMinima} margemMinimaAtiva={margemMinimaAtiva} pix1Name={pix1Name} pix1Code={pix1Code}
             pix2Name={pix2Name} setPix2Name={(val) => updateSetting('pix2Name', val)} pix2Code={pix2Code} setPix2Code={(val) => updateSetting('pix2Code', val)}
             dailyRouteState={dailyRouteState}

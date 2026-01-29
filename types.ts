@@ -49,7 +49,7 @@ export interface Client {
   ativo: boolean;
   localizacao?: { lat: number; lng: number };
   diaRoteiro: number;
-  ordem: number; // Campo adicionado para ordenação
+  ordem: number; 
   observacoes?: string;
   pinLocalizacao?: string;
 }
@@ -96,6 +96,14 @@ export interface CommissionPaymentLog {
   adminId: string;
 }
 
+export interface Expense {
+  id: string;
+  sellerId: string;
+  descricao: string;
+  valor: number;
+  createdAt: Date;
+}
+
 export interface SystemMessage {
   id: string;
   vendedorId: string;
@@ -103,11 +111,11 @@ export interface SystemMessage {
   mensagem: string;
   data: Date;
   lida: boolean;
-  type?: 'INFO' | 'COMMISSION_CONFIRMATION'; 
+  type?: 'INFO' | 'COMMISSION_CONFIRMATION' | 'CARGA_PENDENTE'; 
 }
 
 export interface DailyRouteState {
-  date: string; // Data no formato YYYY-MM-DD
-  clientIds: string[]; // IDs dos clientes na rota
-  skippedClientIds: string[]; // IDs dos clientes pulados
+  date: string; 
+  clientIds: string[]; 
+  skippedClientIds: string[]; 
 }

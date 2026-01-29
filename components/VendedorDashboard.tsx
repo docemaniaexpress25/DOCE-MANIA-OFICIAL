@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { User, Product, Client, Carga, Sale, Commission, PaymentMethod, CargaPendente, CommissionPaymentLog, SystemMessage } from '../types';
+import { User, Product, Client, Carga, Sale, Commission, PaymentMethod, CargaPendente, CommissionPaymentLog, SystemMessage, Expense } from '../types';
 import { DIAS_SEMANA } from '../constants';
 import PDV from './PDV';
 import Cupom from './Cupom';
@@ -14,6 +14,7 @@ interface VendedorDashboardProps {
   sales: Sale[];
   commissions: Commission[];
   payoutLogs: CommissionPaymentLog[];
+  expenses: Expense[];
   messages: SystemMessage[];
   markMessageAsRead: (id: string) => void;
   processSale: (data: any) => Promise<Sale | null>;
@@ -23,6 +24,7 @@ interface VendedorDashboardProps {
   receivePayment: (id: string, method: PaymentMethod, amount?: number) => void;
   deleteSale: (id: string) => void;
   aceitarCarga: (id: string) => void;
+  addExpense: (sellerId: string, descricao: string, valor: number) => Promise<boolean>;
   margemMinima: number;
   margemMinimaAtiva: boolean;
   pix1Name: string;
@@ -36,7 +38,7 @@ interface VendedorDashboardProps {
 type TabType = 'HOME' | 'ROTEIRO' | 'CARGA' | 'HISTORY' | 'FINANCE' | 'CREDIT' | 'CLIENTS' | 'WEEKLY' | 'STOCK_VIEW';
 
 const VendedorDashboard: React.FC<VendedorDashboardProps> = ({ 
-  user, products, clients, cargas, cargasPendentes, sales, commissions, payoutLogs, messages, markMessageAsRead, processSale, addClient, updateClient, deleteClient, receivePayment, deleteSale, aceitarCarga, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, updateDailyRoute
+  user, products, clients, cargas, cargasPendentes, sales, commissions, payoutLogs, expenses, messages, markMessageAsRead, processSale, addClient, updateClient, deleteClient, receivePayment, deleteSale, aceitarCarga, addExpense, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, updateDailyRoute
 }) => {
   const [activeTab, setActiveTab] = useState<TabType>(() => loadLocalState('v_activeTab', 'HOME'));
   const [selectedClient, setSelectedClient] = useState<Client | null>(() => loadLocalState('v_selectedClient', null));
@@ -52,6 +54,11 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const [weeklySearch, setWeeklySearch] = useState('');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [cForm, setCForm] = useState<Partial<Client>>({});
+
+  // Estados para Despesa
+  const [showExpenseForm, setShowExpenseForm] = useState(false);
+  const [expenseDesc, setExpenseDesc] = useState('');
+  const [expenseVal, setExpenseVal] = useState('');
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
@@ -83,9 +90,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
   const isSameDay = (date: Date | undefined) => {
     if (!date) return false;
-    const d = new Date(date);
-    const today = new Date();
-    return d.toDateString() === today.toDateString();
+    return new Date().toDateString() === new Date(date).toDateString();
   };
 
   const diaAtual = new Date().getDay();
@@ -154,6 +159,18 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     setValorRecebidoParcial('');
   };
 
+  const handleLaunchExpense = async () => {
+    const val = parseFloat(expenseVal);
+    if (!expenseDesc || isNaN(val) || val <= 0) return alert("Preencha descrição e valor.");
+    const success = await addExpense(user.id, expenseDesc, val);
+    if (success) {
+      showToast("Despesa lançada!");
+      setExpenseDesc('');
+      setExpenseVal('');
+      setShowExpenseForm(false);
+    }
+  };
+
   const MenuCard = ({ icon, title, tab, color, badge }: any) => (
     <button onClick={() => setActiveTab(tab)} className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col items-center gap-3 active:scale-95 transition-all text-center relative">
       {badge && <div className="absolute top-4 right-4 w-3 h-3 bg-red-500 rounded-full border-2 border-white"></div>}
@@ -174,7 +191,10 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       .reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
     
     const jaPago = payoutLogs.reduce((acc, curr) => acc + (curr.valorPago ?? 0), 0);
-    const disponivel = Math.max(0, totalCommsEligible - jaPago);
+    const totalDespesas = expenses.reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
+
+    // Saldo = Liberado - Pagos - Despesas
+    const disponivel = totalCommsEligible - jaPago - totalDespesas;
     
     const pendente = vCommsAll
       .filter(c => c.status === 'A_RECEBER')
@@ -186,7 +206,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       disponivel: Number(disponivel.toFixed(2)), 
       pendente: Number(pendente.toFixed(2)) 
     };
-  }, [commissions, user.id, sales, financeFilter, payoutLogs]);
+  }, [commissions, user.id, sales, financeFilter, payoutLogs, expenses]);
 
   const historySummary = useMemo(() => filteredHistory.reduce((acc, sale) => {
     acc.total += (sale.valorTotal ?? 0); 
@@ -385,10 +405,10 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
            </div>
 
            <div className="grid grid-cols-2 gap-4">
-              <div className="bg-emerald-50 p-5 rounded-3xl shadow-md border border-emerald-100">
-                <p className="text-[9px] font-black text-emerald-600 uppercase mb-1">Carteira Disponível</p>
-                <p className="text-xl font-black text-emerald-700">R$ {financeStats.disponivel.toFixed(2)}</p>
-                <p className="text-[8px] font-bold text-emerald-400 uppercase mt-1">Saldo acumulado</p>
+              <div className={`${financeStats.disponivel < 0 ? 'bg-rose-50 border-rose-100' : 'bg-emerald-50 border-emerald-100'} p-5 rounded-3xl shadow-md border`}>
+                <p className={`text-[9px] font-black ${financeStats.disponivel < 0 ? 'text-rose-600' : 'text-emerald-600'} uppercase mb-1`}>Carteira Disponível</p>
+                <p className={`text-xl font-black ${financeStats.disponivel < 0 ? 'text-rose-700' : 'text-emerald-700'}`}>R$ {financeStats.disponivel.toFixed(2)}</p>
+                <p className={`text-[8px] font-bold ${financeStats.disponivel < 0 ? 'text-rose-400' : 'text-emerald-400'} uppercase mt-1`}>Saldo acumulado</p>
               </div>
               <div className="bg-orange-50 p-5 rounded-3xl shadow-sm border border-orange-100">
                 <p className="text-[9px] font-black text-orange-600 uppercase mb-1">A receber</p>
@@ -397,15 +417,74 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
               </div>
            </div>
 
+           {/* Sistema de Despesas */}
+           <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-xs font-black text-gray-800 uppercase tracking-widest">Lançar Despesa</h3>
+                <button 
+                  onClick={() => setShowExpenseForm(!showExpenseForm)} 
+                  className={`w-10 h-10 rounded-2xl flex items-center justify-center transition-all ${showExpenseForm ? 'bg-rose-100 text-rose-600' : 'bg-blue-100 text-blue-600'}`}
+                >
+                  <i className={`fa-solid ${showExpenseForm ? 'fa-xmark' : 'fa-plus'}`}></i>
+                </button>
+              </div>
+              
+              {showExpenseForm && (
+                <div className="space-y-4 animate-in fade-in slide-in-from-top-2 duration-300">
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Descrição do Gasto</label>
+                    <input 
+                      value={expenseDesc} 
+                      onChange={e => setExpenseDesc(e.target.value)} 
+                      placeholder="Ex: Combustível, Almoço..." 
+                      className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-semibold"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Valor R$</label>
+                    <input 
+                      type="number" 
+                      value={expenseVal} 
+                      onChange={e => setExpenseVal(e.target.value)} 
+                      placeholder="0.00" 
+                      className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-lg font-black"
+                    />
+                  </div>
+                  <button 
+                    onClick={handleLaunchExpense}
+                    className="w-full bg-rose-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 transition-all uppercase text-xs tracking-widest"
+                  >
+                    Confirmar Despesa
+                  </button>
+                </div>
+              )}
+
+              <div className="mt-6 space-y-2">
+                 <h4 className="text-[9px] font-black text-gray-400 uppercase tracking-widest px-1">Últimos Gastos</h4>
+                 <div className="divide-y divide-gray-50">
+                    {expenses.sort((a,b) => b.createdAt.getTime() - a.createdAt.getTime()).slice(0, 5).map(ex => (
+                      <div key={ex.id} className="py-3 flex justify-between items-center">
+                        <div>
+                          <p className="text-[10px] font-bold text-gray-700 uppercase">{ex.descricao}</p>
+                          <p className="text-[8px] text-gray-400 uppercase">{ex.createdAt.toLocaleDateString()}</p>
+                        </div>
+                        <span className="text-xs font-black text-rose-600">- R$ {ex.valor.toFixed(2)}</span>
+                      </div>
+                    ))}
+                    {expenses.length === 0 && <p className="text-center py-4 text-[9px] text-gray-300 font-bold uppercase italic tracking-widest">Nenhuma despesa</p>}
+                 </div>
+              </div>
+           </div>
+
            <div className="space-y-2 pt-4">
-             <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">Notificações de Comissão</h3>
+             <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">Notificações</h3>
              <div className="bg-white rounded-3xl border border-gray-100 shadow-sm divide-y divide-gray-50 overflow-hidden">
-                {messages.filter(m => m.vendedorId === user.id).sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime()).map(m => (
+                {messages.filter(m => m.vendedorId === user.id).sort((a, b) => b.data.getTime() - a.data.getTime()).map(m => (
                     <div key={m.id} className={`p-4 flex justify-between items-center transition-colors ${!m.lida ? 'bg-blue-50/50' : 'bg-white'}`}>
                         <div className="flex-1 pr-3">
                             <p className={`text-[11px] font-black uppercase leading-none mb-1 ${!m.lida ? 'text-blue-700' : 'text-gray-700'}`}>{m.titulo}</p>
                             <p className="text-[10px] font-semibold text-gray-500 mt-1">{m.mensagem}</p>
-                            <p className="text-[8px] text-gray-400 mt-1">{new Date(m.data).toLocaleDateString()} {new Date(m.data).toLocaleTimeString()}</p>
+                            <p className="text-[8px] text-gray-400 mt-1">{m.data.toLocaleDateString()} {m.data.toLocaleTimeString()}</p>
                         </div>
                         {!m.lida && m.type === 'COMMISSION_CONFIRMATION' && (
                             <button 
@@ -427,10 +506,10 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
            <div className="space-y-2 pt-2">
              <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">Recebimentos</h3>
              <div className="bg-white rounded-3xl border border-gray-100 shadow-sm divide-y divide-gray-50 overflow-hidden">
-                {payoutLogs.sort((a, b) => new Date(b.dataPagamento).getTime() - new Date(a.dataPagamento).getTime()).map(log => (
+                {payoutLogs.sort((a, b) => b.dataPagamento.getTime() - a.dataPagamento.getTime()).map(log => (
                   <div key={log.id} className="p-4 flex justify-between items-center active:bg-gray-50 transition-colors">
                     <div>
-                      <p className="text-[10px] font-black text-gray-400 uppercase leading-none mb-1">{new Date(log.dataPagamento).toLocaleDateString()}</p>
+                      <p className="text-[10px] font-black text-gray-400 uppercase leading-none mb-1">{log.dataPagamento.toLocaleDateString()}</p>
                       <p className="text-[11px] font-bold text-gray-700 uppercase tracking-tight">{log.tipo === 'TOTAL' ? 'Pagamento Integral' : 'Repasse Parcial'}</p>
                     </div>
                     <div className="text-right">

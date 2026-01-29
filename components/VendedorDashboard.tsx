@@ -60,13 +60,11 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     setTimeout(() => setToast(null), 3000);
   };
 
-  // Função para marcar a mensagem como lida e acionar a lógica de comissão
   const handleMarkMessageAsRead = (msgId: string) => {
     markMessageAsRead(msgId);
     showToast("Mensagem marcada como lida.");
   };
 
-  // --- Notificação de Novo Pagamento ---
   useEffect(() => {
     const unreadPayments = messages.filter(m => !m.lida && m.type === 'COMMISSION_CONFIRMATION');
     if (unreadPayments.length > lastUnreadCount.current) {
@@ -75,7 +73,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     lastUnreadCount.current = unreadPayments.length;
   }, [messages]);
 
-  // --- Efeitos de Persistência e Histórico ---
   useEffect(() => {
     saveLocalState('v_activeTab', activeTab);
     if (activeTab !== 'HOME' && window.history.state?.tab !== activeTab) {
@@ -129,7 +126,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const diaAtual = new Date().getDay();
   const minhaCarga = useMemo(() => cargas.filter(c => c.vendedorId === user.id), [cargas, user.id]);
   
-  // Lista de produtos na carga, ordenada pela ordem global
   const orderedCargaProducts = useMemo(() => {
     const cargaMap = new Map(minhaCarga.map(c => [c.produtoId, c]));
     return products
@@ -226,6 +222,9 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     const p = products.find(prod => prod.id === curr.produtoId);
     return acc + ((curr.quantidade ?? 0) * (p?.precoVenda ?? 0)); 
   }, 0), [minhaCarga, products]);
+
+  // Nova soma total de quantidades na carga
+  const totalUnidadesCarga = useMemo(() => minhaCarga.reduce((acc, curr) => acc + (curr.quantidade ?? 0), 0), [minhaCarga]);
 
   if (selectedClient) {
     const pdvClient = clients.find(c => c.id === selectedClient.id);
@@ -356,7 +355,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
             <>
               <div className="bg-purple-600 text-white p-6 rounded-3xl shadow-xl flex justify-between items-center">
                  <div><p className="text-[10px] font-black uppercase opacity-60">Valor Total Carga</p><h3 className="text-2xl font-black">R$ {valorTotalCarga.toFixed(2)}</h3></div>
-                 <div className="text-right"><p className="text-[10px] font-black uppercase opacity-60">Itens Ativos</p><h3 className="text-2xl font-black">{minhaCarga.length}</h3></div>
+                 <div className="text-right"><p className="text-[10px] font-black uppercase opacity-60">Volume Total</p><h3 className="text-2xl font-black">{totalUnidadesCarga}</h3></div>
               </div>
               <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
                 <table className="w-full text-left">
@@ -401,7 +400,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
               <div className="bg-orange-50 p-5 rounded-3xl shadow-sm border border-orange-100"><p className="text-[9px] font-black text-orange-600 uppercase mb-1">A receber</p><p className="text-xl font-black text-orange-700">R$ {financeStats.pendente.toFixed(2)}</p></div>
            </div>
 
-           {/* SEÇÃO DE NOTIFICAÇÕES DE COMISSÃO */}
            <div className="space-y-2 pt-4">
              <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">Notificações de Comissão</h3>
              <div className="bg-white rounded-3xl border border-gray-100 shadow-sm divide-y divide-gray-50 overflow-hidden">
@@ -429,7 +427,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
              </div>
            </div>
            
-           {/* SEÇÃO DE RECEBIMENTOS (LOG) */}
            <div className="space-y-2 pt-2">
              <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">Recebimentos</h3>
              <div className="bg-white rounded-3xl border border-gray-100 shadow-sm divide-y divide-gray-50 overflow-hidden">
@@ -505,7 +502,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         </div>
       )}
 
-      {/* MODAIS */}
       {showReceiveModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[250] flex items-center justify-center p-6">
            <div className="bg-white w-full max-w-xs rounded-3xl p-8 shadow-2xl animate-in zoom-in-95 duration-200">

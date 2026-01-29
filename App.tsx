@@ -283,7 +283,6 @@ const App: React.FC = () => {
     const pendencia = cargasPendentes.find(p => p.id === pendenciaId);
     if (!pendencia) return;
     
-    // O aceite agora é feito via RPC para garantir atomicidade (estoque central + carga vendedor)
     const success = await cargaService.aceitarCargaRPC(pendenciaId);
     if (success) {
       await fetchCoreData();
@@ -300,22 +299,14 @@ const App: React.FC = () => {
       valorPago: saleData.statusPagamento === 'PAGO' ? valorTotalFixed : 0 
     };
     
-    // A função insertSale agora chama um RPC que já faz TUDO: 
-    // Insere venda, itens, reduz estoque da carga e cria a comissão.
     const savedSale = await saleService.insertSale(salePayload);
-    
     if (savedSale) {
       await fetchTransactionalData();
     }
-    
     return savedSale;
   };
 
   const deleteSaleInternal = async (saleId: string, isAdmin: boolean) => {
-    const saleToDelete = sales.find(s => s.id === saleId);
-    if (!saleToDelete) return;
-    
-    // O deleteSale agora chama um RPC que remove a venda e estorna o estoque automaticamente
     const success = await saleService.deleteSale(saleId);
     if (success) {
       await fetchTransactionalData();
@@ -342,6 +333,8 @@ const App: React.FC = () => {
   const handlePayCommission = async (vendedorId: string, amount: number, type: 'TOTAL' | 'PARCIAL', adminId: string) => {
     const v = users.find(u => u.id === vendedorId);
     if (!v) return;
+    
+    // Insere o log de pagamento. O saldo é calculado subtraindo esses logs do total DISPONIVEL.
     const logSuccess = await commissionService.insertPayout({
       vendedorId,
       vendedorNome: v.nome,
@@ -351,26 +344,22 @@ const App: React.FC = () => {
       dataPagamento: new Date(),
       adminId
     });
-    if (!logSuccess) return;
-    await commissionService.bulkUpdateStatusByVendedor(vendedorId, 'DISPONIVEL', 'PENDENTE_CONFIRMACAO');
-    await messageService.insertMessage({
-      vendedorId,
-      titulo: "💰 Comissão Disponível",
-      mensagem: `O administrador registrou o pagamento de R$ ${amount.toFixed(2)}. Aceite para confirmar.`,
-      data: new Date(),
-      lida: false,
-      type: 'COMMISSION_CONFIRMATION'
-    });
-    await fetchTransactionalData();
+    
+    if (logSuccess) {
+      await messageService.insertMessage({
+        vendedorId,
+        titulo: "💰 Pagamento de Comissão",
+        mensagem: `O administrador registrou um pagamento de R$ ${amount.toFixed(2)}.`,
+        data: new Date(),
+        lida: false,
+        type: 'INFO'
+      });
+      await fetchTransactionalData();
+    }
   };
 
   const markMessageAsRead = async (msgId: string) => {
-    const m = messages.find(msg => msg.id === msgId);
-    if (!m) return;
     await messageService.updateMessage(msgId, { lida: true });
-    if (m.type === 'COMMISSION_CONFIRMATION') {
-      await commissionService.bulkUpdateStatusByVendedor(m.vendedorId, 'PENDENTE_CONFIRMACAO', 'PAGO');
-    }
     await fetchTransactionalData();
   };
 

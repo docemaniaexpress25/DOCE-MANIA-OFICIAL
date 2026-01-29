@@ -83,7 +83,9 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
   const isSameDay = (date: Date | undefined) => {
     if (!date) return false;
-    return new Date().toDateString() === new Date(date).toDateString();
+    const d = new Date(date);
+    const today = new Date();
+    return d.toDateString() === today.toDateString();
   };
 
   const diaAtual = new Date().getDay();
@@ -398,12 +400,12 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
            <div className="space-y-2 pt-4">
              <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">Notificações de Comissão</h3>
              <div className="bg-white rounded-3xl border border-gray-100 shadow-sm divide-y divide-gray-50 overflow-hidden">
-                {messages.filter(m => m.vendedorId === user.id).sort((a, b) => b.data.getTime() - a.data.getTime()).map(m => (
+                {messages.filter(m => m.vendedorId === user.id).sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime()).map(m => (
                     <div key={m.id} className={`p-4 flex justify-between items-center transition-colors ${!m.lida ? 'bg-blue-50/50' : 'bg-white'}`}>
                         <div className="flex-1 pr-3">
                             <p className={`text-[11px] font-black uppercase leading-none mb-1 ${!m.lida ? 'text-blue-700' : 'text-gray-700'}`}>{m.titulo}</p>
                             <p className="text-[10px] font-semibold text-gray-500 mt-1">{m.mensagem}</p>
-                            <p className="text-[8px] text-gray-400 mt-1">{m.data.toLocaleDateString()} {m.data.toLocaleTimeString()}</p>
+                            <p className="text-[8px] text-gray-400 mt-1">{new Date(m.data).toLocaleDateString()} {new Date(m.data).toLocaleTimeString()}</p>
                         </div>
                         {!m.lida && m.type === 'COMMISSION_CONFIRMATION' && (
                             <button 
@@ -425,10 +427,10 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
            <div className="space-y-2 pt-2">
              <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">Recebimentos</h3>
              <div className="bg-white rounded-3xl border border-gray-100 shadow-sm divide-y divide-gray-50 overflow-hidden">
-                {payoutLogs.sort((a, b) => b.dataPagamento.getTime() - a.dataPagamento.getTime()).map(log => (
+                {payoutLogs.sort((a, b) => new Date(b.dataPagamento).getTime() - new Date(a.dataPagamento).getTime()).map(log => (
                   <div key={log.id} className="p-4 flex justify-between items-center active:bg-gray-50 transition-colors">
                     <div>
-                      <p className="text-[10px] font-black text-gray-400 uppercase leading-none mb-1">{log.dataPagamento.toLocaleDateString()}</p>
+                      <p className="text-[10px] font-black text-gray-400 uppercase leading-none mb-1">{new Date(log.dataPagamento).toLocaleDateString()}</p>
                       <p className="text-[11px] font-bold text-gray-700 uppercase tracking-tight">{log.tipo === 'TOTAL' ? 'Pagamento Integral' : 'Repasse Parcial'}</p>
                     </div>
                     <div className="text-right">
@@ -473,7 +475,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                       <p className="text-lg font-black mt-2 text-rose-600">Saldo: R$ {saldo.toFixed(2)}</p>
                    </div>
                 </div>
-                <button onClick={() => { setShowReceiveModal(s); setValorRecebidoParcial(saldo.toString()); }} className={`w-full py-3 rounded-2xl text-[10px] font-black uppercase mt-3 shadow-lg active:scale-95 ${isOverdue ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white'}`}>Receber Agora</button>
+                <button onClick={(e) => { e.stopPropagation(); setShowReceiveModal(s); setValorRecebidoParcial(saldo.toString()); }} className={`w-full py-3 rounded-2xl text-[10px] font-black uppercase mt-3 shadow-lg active:scale-95 ${isOverdue ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white'}`}>Receber Agora</button>
               </div>
             )})}
             {contasAReceber.length === 0 && (

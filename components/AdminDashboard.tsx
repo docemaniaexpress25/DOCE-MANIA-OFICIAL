@@ -752,28 +752,26 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-gray-100">
              <h3 className="font-black text-gray-800 uppercase text-xs mb-6">Configurações PIX</h3>
              <div className="space-y-6">
-                <div className="space-y-3 p-4 bg-blue-50 rounded-2xl border border-blue-100">
-                    <div className="space-y-1">
+                <div className="space-y-3 p-4 bg-blue-50 rounded-2xl border border-blue-100 text-center">
+                    <div className="space-y-1 mb-4 text-left">
                         <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome PIX 1</label>
                         <input value={props.pix1Name ?? ''} onChange={e => props.setPix1Name(e.target.value)} placeholder="Nome do Banco/Chave" className="w-full p-3 bg-white border rounded-xl font-bold text-sm" />
                     </div>
-                    <div className="space-y-1">
-                        <label className="text-[9px] font-black text-gray-400 uppercase ml-1">QR Code PIX 1 (Base64 ou URL)</label>
-                        <input value={props.pix1Code ?? ''} onChange={e => props.setPix1Code(e.target.value)} placeholder="URL ou Base64 do QR Code" className="w-full p-3 bg-white border rounded-xl font-bold text-xs" />
+                    <div className="w-32 h-32 mx-auto bg-white rounded-xl border border-blue-100 mb-3 flex items-center justify-center overflow-hidden">
+                      {props.pix1Code ? <img src={props.pix1Code} alt="Pix 1" className="w-full h-full object-contain" /> : <i className="fa-solid fa-qrcode text-blue-100 text-3xl"></i>}
                     </div>
-                    <button onClick={() => pix1InputRef.current?.click()} className="w-full bg-blue-600 text-white font-black py-3 rounded-xl uppercase text-[10px] tracking-widest flex items-center justify-center gap-2"><i className="fa-solid fa-qrcode"></i> Upload QR Code 1</button>
+                    <button onClick={() => pix1InputRef.current?.click()} className="w-full bg-blue-600 text-white font-black py-3 rounded-xl uppercase text-[10px] tracking-widest flex items-center justify-center gap-2 shadow-md active:scale-95"><i className="fa-solid fa-camera"></i> Subir QR Code 1</button>
                     <input type="file" ref={pix1InputRef} onChange={(e) => handlePixUpload(e, 1)} accept="image/*" className="hidden" />
                 </div>
-                <div className="space-y-3 p-4 bg-blue-50 rounded-2xl border border-blue-100">
-                    <div className="space-y-1">
+                <div className="space-y-3 p-4 bg-blue-50 rounded-2xl border border-blue-100 text-center">
+                    <div className="space-y-1 mb-4 text-left">
                         <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome PIX 2</label>
                         <input value={props.pix2Name ?? ''} onChange={e => props.setPix2Name(e.target.value)} placeholder="Nome do Banco/Chave" className="w-full p-3 bg-white border rounded-xl font-bold text-sm" />
                     </div>
-                    <div className="space-y-1">
-                        <label className="text-[9px] font-black text-gray-400 uppercase ml-1">QR Code PIX 2 (Base64 ou URL)</label>
-                        <input value={props.pix2Code ?? ''} onChange={e => props.setPix2Code(e.target.value)} placeholder="URL ou Base64 do QR Code" className="w-full p-3 bg-white border rounded-xl font-bold text-xs" />
+                    <div className="w-32 h-32 mx-auto bg-white rounded-xl border border-blue-100 mb-3 flex items-center justify-center overflow-hidden">
+                      {props.pix2Code ? <img src={props.pix2Code} alt="Pix 2" className="w-full h-full object-contain" /> : <i className="fa-solid fa-qrcode text-blue-100 text-3xl"></i>}
                     </div>
-                    <button onClick={() => pix2InputRef.current?.click()} className="w-full bg-blue-600 text-white font-black py-3 rounded-xl uppercase text-[10px] tracking-widest flex items-center justify-center gap-2"><i className="fa-solid fa-qrcode"></i> Upload QR Code 2</button>
+                    <button onClick={() => pix2InputRef.current?.click()} className="w-full bg-blue-600 text-white font-black py-3 rounded-xl uppercase text-[10px] tracking-widest flex items-center justify-center gap-2 shadow-md active:scale-95"><i className="fa-solid fa-camera"></i> Subir QR Code 2</button>
                     <input type="file" ref={pix2InputRef} onChange={(e) => handlePixUpload(e, 2)} accept="image/*" className="hidden" />
                 </div>
              </div>

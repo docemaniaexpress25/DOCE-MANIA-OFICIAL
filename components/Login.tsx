@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { User } from '../types';
 
 interface LoginProps {
@@ -12,34 +12,39 @@ const Login: React.FC<LoginProps> = ({ users, onLogin, logo }) => {
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
 
+  // Gerencia o botão voltar do celular para a tela de PIN
+  useEffect(() => {
+    const handlePopState = () => {
+      if (selectedUser) {
+        setSelectedUser(null);
+        setPin("");
+        setError("");
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [selectedUser]);
+
   const handleSelectUser = (user: User) => {
+    window.history.pushState({ screen: 'pin' }, '');
     setSelectedUser(user);
     setPin("");
     setError("");
   };
 
   const handleBack = () => {
-    setSelectedUser(null);
-    setPin("");
-    setError("");
+    window.history.back(); // Isso disparará o popstate e resetará o estado
   };
 
   const handleConfirm = (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedUser) return;
 
-    // --- Debug logs START ---
-    console.log("PIN digitado:", pin, typeof pin);
-    console.log("PIN do usuário:", selectedUser.pin, typeof selectedUser.pin);
-    console.log("Usuário selecionado:", selectedUser);
-    // --- Debug logs END ---
-
-    // Login agora utiliza APENAS o PIN dinâmico do objeto do usuário,
-    // que deve vir do Supabase no campo 'pin'.
     const correctPin = selectedUser.pin;
 
     if (!correctPin) {
-      setError("Erro: PIN de login não configurado para este usuário. Por favor, contate o administrador.");
+      setError("Erro: PIN não configurado.");
       setPin("");
       return;
     }
@@ -47,7 +52,7 @@ const Login: React.FC<LoginProps> = ({ users, onLogin, logo }) => {
     if (pin === correctPin) {
       onLogin(selectedUser);
     } else {
-      setError("PIN incorreto. Tente novamente.");
+      setError("PIN incorreto.");
       setPin("");
     }
   };
@@ -61,8 +66,8 @@ const Login: React.FC<LoginProps> = ({ users, onLogin, logo }) => {
           </div>
           
           <h1 className="text-xl font-black text-gray-800 mb-1">Acesso Restrito</h1>
-          <p className="text-gray-400 text-sm mb-8 font-medium">
-            Digite o PIN do {selectedUser.role === 'ADMIN' ? 'Administrador' : 'Vendedor'}
+          <p className="text-gray-400 text-sm mb-8 font-medium uppercase tracking-widest">
+            {selectedUser.nome}
           </p>
 
           <form onSubmit={handleConfirm} className="space-y-6">

@@ -584,7 +584,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
           <div className="grid gap-3">
             {products.map(p => ( 
               <div key={p.id} className="bg-white px-4 py-3 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between">
-                <div className="flex-1"><h3 className="font-bold text-gray-800 text-sm leading-tight uppercase">{p.nome}</h3><div className="flex items-center gap-2 mt-1"><span className="text-[10px] font-black bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded tracking-tighter">Central: {p.estoquePrincipal} un</span></div></div>
+                <div className="flex-1"><h3 className="font-bold text-gray-800 text-sm leading-tight uppercase">{p.nome}</h3><div className="flex items-center gap-2 mt-1"><span className="text-[10px] font-black bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded tracking-tighter"><i className="fa-solid fa-house mr-1 text-[8px]"></i>{p.estoquePrincipal} un</span></div></div>
                 <div className="text-right"><p className="text-sm font-black text-emerald-600">R$ {p.precoVenda.toFixed(2)}</p></div> 
               </div>
             ))}

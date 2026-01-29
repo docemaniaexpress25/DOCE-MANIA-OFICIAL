@@ -3,6 +3,7 @@ import { User, Product, Client, Carga, Sale, Commission, PaymentMethod, CargaPen
 import { DIAS_SEMANA } from '../constants';
 import PDV from './PDV';
 import Cupom from './Cupom';
+import RelatorioFiscal from './RelatorioFiscal';
 import { DailyRouteState, loadLocalState, saveLocalState } from '../utils/persistence';
 
 interface VendedorDashboardProps {
@@ -33,12 +34,14 @@ interface VendedorDashboardProps {
   pix2Code: string | null;
   dailyRouteState: DailyRouteState;
   updateDailyRoute: (clientIds: string[], skippedClientIds: string[]) => void;
+  companyName: string;
+  companyCnpj: string;
 }
 
 type TabType = 'HOME' | 'ROTEIRO' | 'CARGA' | 'HISTORY' | 'FINANCE' | 'CREDIT' | 'CLIENTS' | 'WEEKLY' | 'STOCK_VIEW';
 
 const VendedorDashboard: React.FC<VendedorDashboardProps> = ({ 
-  user, products, clients, cargas, cargasPendentes, sales, commissions, payoutLogs, expenses, messages, markMessageAsRead, processSale, addClient, updateClient, deleteClient, receivePayment, deleteSale, aceitarCarga, addExpense, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, updateDailyRoute
+  user, products, clients, cargas, cargasPendentes, sales, commissions, payoutLogs, expenses, messages, markMessageAsRead, processSale, addClient, updateClient, deleteClient, receivePayment, deleteSale, aceitarCarga, addExpense, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, updateDailyRoute, companyName, companyCnpj
 }) => {
   const [activeTab, setActiveTab] = useState<TabType>(() => loadLocalState('v_activeTab', 'HOME'));
   const [selectedClient, setSelectedClient] = useState<Client | null>(() => loadLocalState('v_selectedClient', null));
@@ -54,6 +57,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const [weeklySearch, setWeeklySearch] = useState('');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [cForm, setCForm] = useState<Partial<Client>>({});
+  const [showFiscalization, setShowFiscalization] = useState(false);
 
   // Estados para Despesa
   const [showExpenseForm, setShowExpenseForm] = useState(false);
@@ -265,6 +269,16 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     return ( <Cupom sale={viewingSale} client={cupomClient} products={products} onClose={() => setViewingSale(null)} onDeleteSale={deleteSale} allowDelete={true} /> );
   }
 
+  if (showFiscalization) {
+    return (
+      <RelatorioFiscal 
+        user={user} carga={minhaCarga} products={products} 
+        companyName={companyName} companyCnpj={companyCnpj} 
+        onClose={() => setShowFiscalization(false)} 
+      />
+    );
+  }
+
   return (
     <div className="space-y-4 pb-20">
       {toast && (
@@ -345,7 +359,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 <div key={dia} className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
                   <button onClick={() => setExpandedDay(isOpen ? null : dia)} className={`w-full flex items-center justify-between p-5 text-left ${isOpen ? 'bg-indigo-50 text-indigo-700' : 'bg-white text-gray-700'}`}>
                     <div className="flex items-center gap-3"><div className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-[10px] ${isOpen ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-400'}`}>{dia}</div><span className="font-black uppercase text-xs tracking-tight">{DIAS_SEMANA[dia]}</span></div>
-                    <div className="flex items-center gap-2"><span className="text-[9px] font-black uppercase opacity-40">{clientsInDay.length} clientes</span><i className={`fa-solid ${isOpen ? 'fa-chevron-up' : 'fa-chevron-down'} text-[10px]`}></i></div>
+                    <div className="flex items-center gap-2"><span className="text-[9px] font-black uppercase opacity-40">{clientsInDay.length} clients</span><i className={`fa-solid ${isOpen ? 'fa-chevron-up' : 'fa-chevron-down'} text-[10px]`}></i></div>
                   </button>
                   {isOpen && (
                     <div className="p-4 bg-white space-y-2 border-t border-indigo-50">
@@ -378,6 +392,14 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                  <div><p className="text-[10px] font-black uppercase opacity-60">Valor Total Carga</p><h3 className="text-2xl font-black">R$ {valorTotalCarga.toFixed(2)}</h3></div>
                  <div className="text-right"><p className="text-[10px] font-black uppercase opacity-60">Volume Total</p><h3 className="text-2xl font-black">{totalUnidadesCarga}</h3></div>
               </div>
+
+              <button 
+                onClick={() => setShowFiscalization(true)}
+                className="w-full bg-slate-800 text-white font-black py-5 rounded-[2rem] shadow-xl active:scale-95 transition-all uppercase text-[11px] tracking-[0.2em] flex items-center justify-center gap-3"
+              >
+                <i className="fa-solid fa-shield-halved text-lg"></i> Modo Fiscalização
+              </button>
+
               <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
                 <table className="w-full text-left">
                   <thead className="bg-gray-50"><tr><th className="p-4 text-[10px] font-black text-gray-400 uppercase">Item</th><th className="p-4 text-center text-[10px] font-black text-gray-400 uppercase">Preço</th><th className="p-4 text-right text-[10px] font-black text-gray-400 uppercase">Qtd</th></tr></thead>
@@ -483,7 +505,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
               )}
            </div>
 
-           {/* Notificações permanecem separadas por ser comunicação Admin-Vendedor */}
            <div className="space-y-2 pt-4">
              <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">Notificações</h3>
              <div className="bg-white rounded-3xl border border-gray-100 shadow-sm divide-y divide-gray-50 overflow-hidden">

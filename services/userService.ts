@@ -3,33 +3,32 @@ import { User, UserRole } from '../types';
 
 export const userService = {
   async getAllUsers(): Promise<User[]> {
-    // Busca exclusivamente da tabela 'app_users' para evitar conflito com a tabela interna do Supabase Auth
     const { data, error } = await supabase.from('app_users').select('*');
     if (error) {
       console.error('Erro ao buscar usuários na tabela app_users:', error);
       return [];
     }
     
-    // Mapeia os campos do banco para a interface User do TypeScript
     return data.map(u => ({
       id: u.id,
       nome: u.nome,
       email: u.email,
-      role: u.perfil as UserRole, // Mapeia 'perfil' (ADMIN/VENDEDOR) para 'role'
+      role: u.perfil as UserRole,
       ativo: !!u.ativo,
       telefone: u.telefone,
       whatsapp: u.whatsapp,
       foto: u.foto,
-      pin: u.pin, // Campo PIN para autenticação manual
+      pin: u.pin,
+      placaVeiculo: u.placa_veiculo,
     })) as User[];
   },
 
   async insertUser(user: Omit<User, 'id'>): Promise<User | null> {
-    // Mapeia 'role' para 'perfil' no payload de inserção
-    const { role, ...rest } = user;
+    const { role, placaVeiculo, ...rest } = user;
     const payload = { 
       ...rest, 
-      perfil: role 
+      perfil: role,
+      placa_veiculo: placaVeiculo
     };
 
     const { data, error } = await supabase.from('app_users').insert(payload).select().single();
@@ -38,7 +37,6 @@ export const userService = {
       return null;
     }
     
-    // Retorna o objeto mapeado de volta para o formato da interface User
     return {
       id: data.id,
       nome: data.nome,
@@ -48,17 +46,16 @@ export const userService = {
       telefone: data.telefone,
       whatsapp: data.whatsapp,
       foto: data.foto,
-      pin: data.pin
+      pin: data.pin,
+      placaVeiculo: data.placa_veiculo
     } as User;
   },
 
   async updateUser(id: string, updates: Partial<User>): Promise<User | null> {
-    // Mapeia 'role' para 'perfil' se estiver presente nas atualizações
-    const { role, ...rest } = updates;
+    const { role, placaVeiculo, ...rest } = updates;
     const payload: any = { ...rest };
-    if (role !== undefined) {
-      payload.perfil = role;
-    }
+    if (role !== undefined) payload.perfil = role;
+    if (placaVeiculo !== undefined) payload.placa_veiculo = placaVeiculo;
 
     const { data, error } = await supabase.from('app_users').update(payload).eq('id', id).select().single();
     if (error) {
@@ -66,7 +63,6 @@ export const userService = {
       return null;
     }
 
-    // Retorna o objeto mapeado para consistência
     return {
       id: data.id,
       nome: data.nome,
@@ -76,7 +72,8 @@ export const userService = {
       telefone: data.telefone,
       whatsapp: data.whatsapp,
       foto: data.foto,
-      pin: data.pin
+      pin: data.pin,
+      placaVeiculo: data.placa_veiculo
     } as User;
   },
 };

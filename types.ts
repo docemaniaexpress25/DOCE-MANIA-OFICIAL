@@ -10,6 +10,7 @@ export interface User {
   whatsapp?: string;
   foto?: string;
   pin?: string;
+  placaVeiculo?: string;
 }
 
 export interface Product {

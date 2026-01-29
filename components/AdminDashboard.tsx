@@ -53,6 +53,10 @@ interface AdminDashboardProps {
   clearAdminNotification?: () => void;
   orderedProductIds: string[]; 
   setOrderedProductIds: (ids: string[]) => void; 
+  companyName: string;
+  setCompanyName: (val: string) => void;
+  companyCnpj: string;
+  setCompanyCnpj: (val: string) => void;
 }
 
 const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
@@ -105,7 +109,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [pForm, setPForm] = useState({ nome: '', custo: '', venda: '', comissao: '', margem: '', ativo: true, estoquePrincipal: '' });
   const [entryForm, setEntryForm] = useState({ qtd: '', custo: '' });
   const [clientForm, setClientForm] = useState<Partial<Client>>({ nomeFantasia: '', telefone: '', endereco: '', bairro: '', diaRoteiro: 1, ativo: true, ativarCnpj: false, cnpj: '', pinLocalizacao: '', ordem: 0 });
-  const [userForm, setUserForm] = useState<Partial<User>>({ nome: '', foto: '', telefone: '', pin: '' });
+  const [userForm, setUserForm] = useState<Partial<User>>({ nome: '', foto: '', telefone: '', pin: '', placaVeiculo: '' });
   const [selectedVendedorId, setSelectedVendedorId] = useState('');
   const [stagingCarga, setStagingCarga] = useState<{ [pId: string]: number }>({});
 
@@ -191,7 +195,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     const jaPago = sellerLogs.reduce((acc, curr) => acc + (curr.valorPago ?? 0), 0);
     const totalDespesas = sellerExps.reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
 
-    // Saldo = Liberado - Pagos - Despesas
     const disponivel = totalCommsEligible - jaPago - totalDespesas;
     
     const aReceber = sellerComms
@@ -336,8 +339,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   };
 
   const handleOpenUserModal = (u: User | 'NEW') => {
-    if (u === 'NEW') setUserForm({ nome: '', telefone: '', foto: '', pin: '123456' });
-    else setUserForm({ nome: u.nome ?? '', telefone: u.telefone ?? '', foto: u.foto ?? '', pin: u.pin ?? '' }); 
+    if (u === 'NEW') setUserForm({ nome: '', telefone: '', foto: '', pin: '123456', placaVeiculo: '' });
+    else setUserForm({ nome: u.nome ?? '', telefone: u.telefone ?? '', foto: u.foto ?? '', pin: u.pin ?? '', placaVeiculo: u.placaVeiculo ?? '' }); 
     setShowUserModal(u);
   };
 
@@ -652,7 +655,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner">{(['HOJE', 'SEMANA', 'MES', 'GERAL'] as const).map(p => (<button key={p} onClick={() => setPeriodoRelatorio(p)} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${periodoRelatorio === p ? 'bg-white text-emerald-600 shadow-sm' : 'text-gray-400'}`}>{p}</button>))}</div>
           <div className="grid grid-cols-2 gap-4">
              <div className="bg-white p-6 rounded-[2rem] shadow-sm border-b-4 border-emerald-500"><p className="text-[10px] font-black text-gray-400 uppercase mb-2">Vendas Totais</p><p className="text-xl font-black text-gray-800">R$ {reportStats.totalVendas.toFixed(2)}</p></div>
-             <div className="bg-white p-6 rounded-[2rem] shadow-sm border-b-4 border-blue-500"><p className="text-[10px] font-black text-gray-400 uppercase mb-2">Comissão Paga</p><p className="text-xl font-black text-gray-800">R$ {reportStats.totalComissaoPaga.toFixed(2)}</p></div>
+             <div className="bg-white p-6 rounded-[2rem] shadow-sm border-b-4 border-blue-500"><p className="text-[10px] font-black text-gray-400 uppercase mb-2">Comissão Paga</p><p className="text-xl font-black text-xl font-black text-gray-800">R$ {reportStats.totalComissaoPaga.toFixed(2)}</p></div>
           </div>
           <div className="space-y-6 pt-4">
             <div className="bg-white rounded-[2.5rem] p-8 shadow-sm border border-gray-100">
@@ -730,6 +733,21 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       {activeTab === 'SETTINGS' && (
         <div className="space-y-6 py-4 px-2 pb-20">
           <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Configurações</h2></div>
+          
+          <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-gray-100">
+             <h3 className="font-black text-gray-800 uppercase text-xs mb-6">Dados da Empresa</h3>
+             <div className="space-y-4">
+                <div className="space-y-1">
+                    <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome Fantasia / Razão Social</label>
+                    <input value={props.companyName} onChange={e => props.setCompanyName(e.target.value)} placeholder="Ex: Doce Mania Ltda" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-sm uppercase" />
+                </div>
+                <div className="space-y-1">
+                    <label className="text-[9px] font-black text-gray-400 uppercase ml-1">CNPJ</label>
+                    <input value={props.companyCnpj} onChange={e => props.setCompanyCnpj(e.target.value)} placeholder="00.000.000/0001-00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-sm" />
+                </div>
+             </div>
+          </div>
+
           <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-gray-100 flex flex-col items-center">
             <h3 className="font-black text-gray-800 uppercase text-xs mb-6 text-center">Logotipo da Empresa</h3>
             <div onClick={() => logoInputRef.current?.click()} className="w-48 h-24 bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200 flex items-center justify-center cursor-pointer relative group overflow-hidden">
@@ -852,8 +870,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
               <h3 className="font-black text-gray-800 uppercase text-sm mb-6 text-center">{showUserModal === 'NEW' ? 'Novo Vendedor' : 'Editar Vendedor'}</h3>
               <div className="flex flex-col items-center mb-6"><div onClick={() => userPhotoInputRef.current?.click()} className="w-24 h-24 bg-purple-100 text-purple-600 rounded-[2rem] flex items-center justify-center font-black overflow-hidden border-4 border-white shadow-xl cursor-pointer relative group transition-all hover:scale-105">{userForm.foto ? <img src={userForm.foto} className="w-full h-full object-cover" /> : <i className="fa-solid fa-camera text-2xl"></i>}</div><input type="file" ref={userPhotoInputRef} onChange={handleUserPhotoUpload} className="hidden" accept="image/*" /></div>
               <div className="space-y-4">
-                 <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome do Vendedor</label><input value={userForm.nome ?? ''} onChange={e => setUserForm({...userForm, nome: e.target.value})} placeholder="Nome Completo" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div>
+                 <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome do Vendedor</label><input value={userForm.nome ?? ''} onChange={e => setUserForm({...userForm, nome: e.target.value})} placeholder="Nome Completo" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div>
                  <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Telefone / WhatsApp</label><input value={userForm.telefone ?? ''} onChange={e => setUserForm({...userForm, telefone: e.target.value})} placeholder="Telefone" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div>
+                 <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Placa do Veículo</label><input value={userForm.placaVeiculo ?? ''} onChange={e => setUserForm({...userForm, placaVeiculo: e.target.value})} placeholder="Ex: ABC-1234" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div>
                  <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">PIN de Acesso (6 dígitos)</label><input type="password" value={userForm.pin ?? ''} onChange={e => setUserForm({...userForm, pin: e.target.value})} placeholder="123456" maxLength={6} className="w-full p-4 bg-gray-50 border rounded-2xl font-black text-center text-xl tracking-[0.5em]" /></div>
                  <button onClick={handleSaveUser} className="w-full bg-purple-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 uppercase text-xs mt-4 tracking-widest">Salvar Vendedor</button>
                  <button onClick={() => setShowUserModal(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button>

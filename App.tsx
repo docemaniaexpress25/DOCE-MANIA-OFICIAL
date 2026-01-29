@@ -33,6 +33,8 @@ const App: React.FC = () => {
   const [pix2Name, setPix2Name] = useState("Pix Banco B");
   const [pix2Code, setPix2Code] = useState<string | null>(null);
   const [productOrder, setProductOrder] = useState<string[]>([]);
+  const [companyName, setCompanyName] = useState("DOCE MANIA DISTRIBUIDORA");
+  const [companyCnpj, setCompanyCnpj] = useState("00.000.000/0001-00");
 
   const [adminNotification, setAdminNotification] = useState<string | null>(null);
   
@@ -145,6 +147,8 @@ const App: React.FC = () => {
       setPix2Name(settings.pix2Name ?? "Pix Banco B");
       setPix2Code(settings.pix2Code);
       setProductOrder(settings.productOrder);
+      setCompanyName(settings.companyName ?? "DOCE MANIA DISTRIBUIDORA");
+      setCompanyCnpj(settings.companyCnpj ?? "00.000.000/0001-00");
     } catch (e) {
       console.error("Erro ao carregar configurações:", e);
       return;
@@ -179,6 +183,8 @@ const App: React.FC = () => {
             case 'pix1Code': setPix1Code(value); break;
             case 'pix2Name': setPix2Name(value); break;
             case 'pix2Code': setPix2Code(value); break;
+            case 'companyName': setCompanyName(value); break;
+            case 'companyCnpj': setCompanyCnpj(value); break;
             case 'productOrder': setProductOrder(value); 
               const productMap: Map<string, Product> = new Map(products.map(p => [p.id, p]));
               const orderedProducts: Product[] = [];
@@ -426,6 +432,8 @@ const App: React.FC = () => {
             pix2Name={pix2Name} setPix2Name={(val) => updateSetting('pix2Name', val)} pix2Code={pix2Code} setPix2Code={(val) => updateSetting('pix2Code', val)}
             adminNotification={adminNotification} clearAdminNotification={() => setAdminNotification(null)}
             orderedProductIds={productOrder} setOrderedProductIds={(ids) => updateSetting('productOrder', ids)}
+            companyName={companyName} setCompanyName={(val) => updateSetting('companyName', val)}
+            companyCnpj={companyCnpj} setCompanyCnpj={(val) => updateSetting('companyCnpj', val)}
           />
         ) : (
           <VendedorDashboard 
@@ -443,6 +451,8 @@ const App: React.FC = () => {
             pix2Name={pix2Name} setPix2Name={(val) => updateSetting('pix2Name', val)} pix2Code={pix2Code} setPix2Code={(val) => updateSetting('pix2Code', val)}
             dailyRouteState={dailyRouteState}
             updateDailyRoute={handleUpdateDailyRoute}
+            companyName={companyName}
+            companyCnpj={companyCnpj}
           />
         )}
       </main>

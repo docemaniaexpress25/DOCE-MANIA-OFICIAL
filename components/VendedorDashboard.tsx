@@ -188,6 +188,41 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     setEditingClient(c);
   };
 
+  const handlePinLocation = async () => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(async (p) => {
+        const lat = p.coords.latitude;
+        const lng = p.coords.longitude;
+        setCForm(prev => ({ ...prev, pinLocalizacao: `${lat.toFixed(6)}, ${lng.toFixed(6)}` }));
+        
+        try {
+          const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}`);
+          const data = await response.json();
+          if (data && data.address) {
+            const addr = data.address;
+            const rua = addr.road || addr.pedestrian || addr.street || '';
+            const numero = addr.house_number || '';
+            const bairro = addr.suburb || addr.neighbourhood || addr.city_district || addr.village || '';
+            const fullAddr = `${rua}${numero ? ', ' + numero : ''}`;
+            
+            setCForm(prev => ({ 
+              ...prev, 
+              endereco: fullAddr || prev.endereco,
+              bairro: bairro || prev.bairro
+            }));
+            showToast("Endereço capturado!");
+          } else {
+            showToast("Coordenadas capturadas!");
+          }
+        } catch (error) {
+          showToast("Erro ao obter endereço.", "error");
+        }
+      }, () => {
+        showToast("Erro ao acessar GPS.", "error");
+      });
+    }
+  };
+
   const handleSaveClientBasic = () => {
     if (!cForm.nomeFantasia || !cForm.telefone) { showToast("Preencha ao menos Nome e Telefone.", 'error'); return; }
     const clientData: Omit<Client, 'id'> = { nomeFantasia: cForm.nomeFantasia!, telefone: cForm.telefone!, endereco: cForm.endereco || '', bairro: cForm.bairro || '', diaRoteiro: cForm.diaRoteiro ?? diaAtual, ordem: cForm.ordem ?? 0, ativo: cForm.ativo ?? true, ativarCnpj: cForm.ativarCnpj ?? false, cnpj: cForm.cnpj, pinLocalizacao: cForm.pinLocalizacao, nome: cForm.nome, observacoes: cForm.observacoes };
@@ -400,7 +435,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 <div key={dia} className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
                   <button onClick={() => setExpandedDay(isOpen ? null : dia)} className={`w-full flex items-center justify-between p-5 text-left ${isOpen ? 'bg-indigo-50 text-indigo-700' : 'bg-white text-gray-700'}`}>
                     <div className="flex items-center gap-3"><div className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-[10px] ${isOpen ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-400'}`}>{dia}</div><span className="font-black uppercase text-xs tracking-tight">{DIAS_SEMANA[dia]}</span></div>
-                    <div className="flex items-center gap-2"><span className="text-[9px] font-black uppercase opacity-40">{clientsInDay.length} clientes</span><i className={`fa-solid ${isOpen ? 'fa-chevron-up' : 'fa-chevron-down'} text-[10px]`}></i></div>
+                    <div className="flex items-center gap-2"><span className="text-[9px] font-black uppercase opacity-40">{clientsInDay.length} clients</span><i className={`fa-solid ${isOpen ? 'fa-chevron-up' : 'fa-chevron-down'} text-[10px]`}></i></div>
                   </button>
                   {isOpen && (
                     <div className="p-4 bg-white space-y-2 border-t border-indigo-50">
@@ -679,6 +714,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Endereço</label><input value={cForm.endereco || ''} onChange={e => setCForm({...cForm, endereco: e.target.value})} placeholder="Endereço" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100 uppercase" /></div>
                 <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Bairro</label><input value={cForm.bairro || ''} onChange={e => setCForm({...cForm, bairro: e.target.value})} placeholder="Bairro" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100 uppercase" /></div>
                 <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Dia de Atendimento</label><select value={cForm.diaRoteiro ?? 1} onChange={e => setCForm({...cForm, diaRoteiro: parseInt(e.target.value)})} className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100">{[1, 2, 3, 4, 5, 6].map(d => (<option key={d} value={d}>{DIAS_SEMANA[d] ?? 'N/D'}</option>))}</select></div> 
+                <button onClick={handlePinLocation} className="w-full bg-indigo-50 text-indigo-600 font-black py-3 rounded-2xl uppercase text-[10px] tracking-widest flex items-center justify-center gap-2 mb-2"><i className="fa-solid fa-location-dot"></i> Capturar Localização Atual</button>
                 <div className="flex flex-col gap-2 mt-4"><button onClick={handleSaveClientBasic} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-lg uppercase text-xs">Salvar Alterações</button><button onClick={() => setEditingClient(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px]">Cancelar</button></div>
              </div>
           </div>

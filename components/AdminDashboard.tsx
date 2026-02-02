@@ -370,9 +370,38 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     setShowClientModal(c);
   };
 
-  const handlePinLocation = () => {
+  const handlePinLocation = async () => {
     if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(p => { setClientForm(prev => ({ ...prev, pinLocalizacao: `${p.coords.latitude.toFixed(6)}, ${p.coords.longitude.toFixed(6)}` })); showToast("Localização capturada!"); });
+      navigator.geolocation.getCurrentPosition(async (p) => {
+        const lat = p.coords.latitude;
+        const lng = p.coords.longitude;
+        setClientForm(prev => ({ ...prev, pinLocalizacao: `${lat.toFixed(6)}, ${lng.toFixed(6)}` }));
+        
+        try {
+          const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}`);
+          const data = await response.json();
+          if (data && data.address) {
+            const addr = data.address;
+            const rua = addr.road || addr.pedestrian || addr.street || '';
+            const numero = addr.house_number || '';
+            const bairro = addr.suburb || addr.neighbourhood || addr.city_district || addr.village || '';
+            const fullAddr = `${rua}${numero ? ', ' + numero : ''}`;
+            
+            setClientForm(prev => ({ 
+              ...prev, 
+              endereco: fullAddr || prev.endereco,
+              bairro: bairro || prev.bairro
+            }));
+            showToast("Localização e endereço capturados!");
+          } else {
+            showToast("Coordenadas capturadas!");
+          }
+        } catch (error) {
+          showToast("Coordenadas capturadas, erro ao obter endereço.", "error");
+        }
+      }, () => {
+        showToast("Erro ao acessar GPS.", "error");
+      });
     }
   };
 
@@ -903,7 +932,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       {showReceiveModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[250] flex items-center justify-center p-6">
            <div className="bg-white w-full max-w-xs rounded-3xl p-8 shadow-2xl text-center">
-              <h3 className="font-black text-gray-800 text-sm uppercase mb-4">Confirmar Recebimento</h3>
+              <h3 className="font-black text-gray-800 text-sm uppercase mb-6">Confirmar Recebimento</h3>
               <div className="bg-gray-50 p-4 rounded-2xl mb-6"><p className="text-[10px] font-black text-gray-400 uppercase mb-1">Saldo em Aberto</p><p className="text-xl font-black text-rose-600">R$ {((showReceiveModal.valorTotal ?? 0) - (showReceiveModal.valorPago ?? 0)).toFixed(2)}</p></div>
               <div className="space-y-4 mb-6"><p className="text-[10px] font-black text-gray-400 uppercase text-left ml-1">Valor a Receber</p><input type="number" value={valorRecebidoParcial} onChange={e => setValorRecebidoParcial(e.target.value)} className="w-full p-4 bg-white border border-gray-200 rounded-2xl font-black text-xl text-center outline-none" /></div>
               <div className="space-y-3"><button onClick={() => handleConfirmReceive('DINHEIRO')} className="w-full bg-gray-900 text-white py-4 rounded-2xl shadow-lg font-black uppercase text-xs tracking-widest">Dinheiro</button><button onClick={() => handleConfirmReceive('PIX')} className="w-full bg-blue-600 text-white py-4 rounded-2xl shadow-lg font-black uppercase text-xs tracking-widest">PIX</button><button onClick={() => setShowReceiveModal(null)} className="w-full py-3 text-gray-400 font-bold text-[9px] uppercase">Cancelar</button></div>

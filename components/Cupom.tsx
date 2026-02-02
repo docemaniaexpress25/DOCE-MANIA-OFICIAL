@@ -14,6 +14,9 @@ interface CupomProps {
 const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDeleteSale, allowDelete, showToast }) => {
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   
+  // Verifica se a venda é do dia atual (até meia-noite)
+  const isSaleToday = new Date(sale.data).toDateString() === new Date().toDateString();
+
   const padRight = (str: string, length: number) => str.substring(0, length).padEnd(length);
   const padLeft = (str: string, length: number) => str.substring(0, length).padStart(length);
 
@@ -22,7 +25,6 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
     t += `        CUPOM NAO FISCAL        \n`;
     t += `********************************\n\n`;
     
-    // Nome do cliente limitado para não quebrar a linha
     const clientName = (client.nomeFantasia || 'Nao identificado').substring(0, 24);
     t += `Cliente: ${padRight(clientName, 24)}\n\n`;
     
@@ -32,11 +34,8 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
     
     sale.itens.forEach(i => {
       const p = products.find(prod => prod.id === i.produtoId);
-      // Coluna Nome: 19 caracteres
       const name = padRight((p?.nome ?? 'PRODUTO').toUpperCase(), 19);
-      // Coluna Qtd: 4 caracteres (Garante dois espaços à esquerda se a qtd for 1x, ex: "  1x")
       const qty = padLeft(`${(i.quantidade ?? 0)}x`, 4);
-      // Coluna Valor: 9 caracteres
       const subtotal = ((i.quantidade ?? 0) * (i.precoVenda ?? 0)).toFixed(2);
       const val = padLeft(subtotal, 9);
       
@@ -46,7 +45,6 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
     t += `--------------------------------\n`;
     const totalLabel = "TOTAL:";
     const totalVal = `R$ ${(sale.valorTotal ?? 0).toFixed(2)}`;
-    // TOTAL: (6) + 17 espaços + VALOR (9) = 32
     t += `${padRight(totalLabel, 15)}${padLeft(totalVal, 17)}\n\n`;
     
     const paymentMethod = (sale.metodoPagamento ?? 'N/D').replace('_', '/');
@@ -66,6 +64,7 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
   };
 
   const handleDelete = () => {
+    if (!isSaleToday) return;
     onDeleteSale?.(sale.id);
     onClose();
   };
@@ -95,8 +94,13 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
             </button>
             {allowDelete && onDeleteSale && (
               <button
-                onClick={() => setShowConfirmDelete(true)}
-                className="w-14 bg-rose-600 text-white font-black py-4 rounded-xl flex items-center justify-center active:scale-95 transition-all text-lg"
+                onClick={() => isSaleToday && setShowConfirmDelete(true)}
+                disabled={!isSaleToday}
+                className={`w-14 font-black py-4 rounded-xl flex items-center justify-center transition-all text-lg ${
+                  isSaleToday 
+                    ? 'bg-rose-600 text-white active:scale-95 shadow-md' 
+                    : 'bg-gray-200 text-gray-400 cursor-not-allowed shadow-none'
+                }`}
               >
                 <i className="fa-solid fa-trash-can"></i>
               </button>

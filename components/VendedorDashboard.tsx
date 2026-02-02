@@ -581,7 +581,33 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
               )}
            </div>
 
+           {/* LOG UNIFICADO: RECEBIMENTOS E DESPESAS */}
            <div className="space-y-2 pt-4">
+             <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">Histórico Financeiro</h3>
+             <div className="bg-white rounded-3xl border border-gray-100 shadow-sm divide-y divide-gray-50 overflow-hidden">
+                {unifiedHistory.map(item => (
+                  <div key={item.id} className="p-4 flex justify-between items-center active:bg-gray-50 transition-colors">
+                    <div className="flex-1 pr-3">
+                      <p className="text-[9px] font-black text-gray-400 uppercase leading-none mb-1">{item.data.toLocaleDateString()} {item.data.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</p>
+                      <p className={`text-[11px] font-bold uppercase tracking-tight ${item.tipo === 'REPASSE' ? 'text-emerald-700' : 'text-rose-700'}`}>{item.desc}</p>
+                      <span className={`text-[8px] font-black px-1.5 py-0.5 rounded uppercase ${item.tipo === 'REPASSE' ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
+                        {item.tipo}
+                      </span>
+                    </div>
+                    <div className="text-right">
+                       <p className={`text-xs font-black ${item.tipo === 'REPASSE' ? 'text-emerald-600' : 'text-rose-600'}`}>
+                         {item.tipo === 'REPASSE' ? '+' : '-'} R$ {item.valor.toFixed(2)}
+                       </p>
+                    </div>
+                  </div>
+                ))}
+                {unifiedHistory.length === 0 && (
+                  <div className="text-center py-8 opacity-30 italic text-[9px] uppercase font-bold tracking-widest">Nenhuma movimentação registrada.</div>
+                )}
+             </div>
+           </div>
+
+           <div className="space-y-2 pt-2">
              <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">Notificações</h3>
              <div className="bg-white rounded-3xl border border-gray-100 shadow-sm divide-y divide-gray-50 overflow-hidden">
                 {messages.filter(m => m.vendedorId === user.id).sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime()).map(m => (
@@ -604,32 +630,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 ))}
                 {messages.filter(m => m.vendedorId === user.id).length === 0 && (
                     <div className="text-center py-8 opacity-30 italic text-[9px] uppercase font-bold tracking-widest">Nenhuma notificação.</div>
-                )}
-             </div>
-           </div>
-           
-           {/* LOG UNIFICADO: RECEBIMENTOS E DESPESAS */}
-           <div className="space-y-2 pt-2">
-             <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">Histórico Financeiro</h3>
-             <div className="bg-white rounded-3xl border border-gray-100 shadow-sm divide-y divide-gray-50 overflow-hidden">
-                {unifiedHistory.map(item => (
-                  <div key={item.id} className="p-4 flex justify-between items-center active:bg-gray-50 transition-colors">
-                    <div className="flex-1 pr-3">
-                      <p className="text-[9px] font-black text-gray-400 uppercase leading-none mb-1">{item.data.toLocaleDateString()} {item.data.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</p>
-                      <p className={`text-[11px] font-bold uppercase tracking-tight ${item.tipo === 'REPASSE' ? 'text-emerald-700' : 'text-rose-700'}`}>{item.desc}</p>
-                      <span className={`text-[8px] font-black px-1.5 py-0.5 rounded uppercase ${item.tipo === 'REPASSE' ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
-                        {item.tipo}
-                      </span>
-                    </div>
-                    <div className="text-right">
-                       <p className={`text-xs font-black ${item.tipo === 'REPASSE' ? 'text-emerald-600' : 'text-rose-600'}`}>
-                         {item.tipo === 'REPASSE' ? '+' : '-'} R$ {item.valor.toFixed(2)}
-                       </p>
-                    </div>
-                  </div>
-                ))}
-                {unifiedHistory.length === 0 && (
-                  <div className="text-center py-8 opacity-30 italic text-[9px] uppercase font-bold tracking-widest">Nenhuma movimentação registrada.</div>
                 )}
              </div>
            </div>

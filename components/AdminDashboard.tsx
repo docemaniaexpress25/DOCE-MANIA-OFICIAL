@@ -150,6 +150,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [partialAmount, setPartialAmount] = useState<string>('');
   const [periodoRelatorio, setPeriodoRelatorio] = useState<'HOJE' | 'SEMANA' | 'MES' | 'GERAL'>('MES');
 
+  // Estado para Confirmação de Exclusão
+  const [confirmDelete, setConfirmDelete] = useState<{ id: string, type: 'PRODUCT' | 'CLIENT', name: string } | null>(null);
+
   const [pwUser, setPwUser] = useState<string>('');
   const [pwNew, setPwNew] = useState<string>('');
 
@@ -278,7 +281,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     if (!payoutVendedor) return;
     const stats = getVendedorStats(payoutVendedor.id);
     const amount = payoutType === 'TOTAL' ? stats.comissaoDisponivel : parseFloat(partialAmount);
-    if (isNaN(amount) || amount <= 0) return alert("Valor inválido");
+    if (isNaN(amount) || amount <= 0) {
+      showToast("Valor inválido", "error");
+      return;
+    }
     props.payCommission(payoutVendedor.id, amount, payoutType, props.adminUser.id);
     setPayoutVendedor(null);
     showToast("Pagamento registrado!");
@@ -358,10 +364,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     showToast("Produto salvo!");
   };
 
-  const handleDeleteProductInModal = () => {
-    if (typeof showProductModal === 'object' && showProductModal !== null) {
-      if (confirm(`Deseja realmente excluir o produto "${showProductModal.nome}"?`)) { props.deleteProduct(showProductModal.id); setShowProductModal(null); showToast("Produto excluído (ou desativado)."); }
-    }
+  const handleConfirmDelete = () => {
+    if (!confirmDelete) return;
+    if (confirmDelete.type === 'PRODUCT') props.deleteProduct(confirmDelete.id);
+    else if (confirmDelete.type === 'CLIENT') props.deleteClient(confirmDelete.id);
+    setConfirmDelete(null);
+    showToast(confirmDelete.type === 'PRODUCT' ? "Produto removido" : "Cliente removido");
   };
 
   const handleOpenClient = (c: Client | 'NEW') => {
@@ -604,7 +612,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                   <div className="flex items-center gap-2"><h3 className="font-bold text-gray-800 text-[13px] leading-tight uppercase truncate">{c.nomeFantasia}</h3>{c.telefone && <a href={`https://wa.me/55${c.telefone.replace(/\D/g, '')}`} target="_blank" className="text-emerald-500" onClick={(e) => e.stopPropagation()}><i className="fa-brands fa-whatsapp text-lg"></i></a>}</div>
                   <div className="flex items-center gap-3 mt-1.5"><p className="text-[10px] text-gray-400 font-black uppercase truncate">{DIAS_SEMANA[c.diaRoteiro]}</p><div className="flex items-center gap-1.5 bg-blue-50 px-2 py-0.5 rounded border border-blue-100 shadow-inner whitespace-nowrap"><i className="fa-solid fa-chart-line text-blue-400 text-[10px]"></i><span className="text-[11px] font-black text-blue-600">R$ {getClientAvgRevenue(c.id)}</span></div></div>
                 </div>
-                <div className="flex gap-2"><button onClick={(e) => { e.stopPropagation(); handleOpenClient(c); }} className="bg-blue-50 text-blue-600 w-9 h-9 rounded-lg border border-blue-100 flex items-center justify-center active:scale-90 transition-all shadow-sm"><i className="fa-solid fa-pencil-alt text-sm"></i></button><button onClick={(e) => { e.stopPropagation(); if(confirm("Excluir cliente?")) props.deleteClient(c.id); }} className="bg-rose-50 text-rose-600 w-9 h-9 rounded-lg border border-rose-100 flex items-center justify-center active:scale-90 transition-all shadow-sm"><i className="fa-solid fa-trash-can text-sm"></i></button></div>
+                <div className="flex gap-2"><button onClick={(e) => { e.stopPropagation(); handleOpenClient(c); }} className="bg-blue-50 text-blue-600 w-9 h-9 rounded-lg border border-blue-100 flex items-center justify-center active:scale-90 transition-all shadow-sm"><i className="fa-solid fa-pencil-alt text-sm"></i></button><button onClick={(e) => { e.stopPropagation(); setConfirmDelete({ id: c.id, type: 'CLIENT', name: c.nomeFantasia }); }} className="bg-rose-50 text-rose-600 w-9 h-9 rounded-lg border border-rose-100 flex items-center justify-center active:scale-90 transition-all shadow-sm"><i className="fa-solid fa-trash-can text-sm"></i></button></div>
               </div>
             ))}
           </div>
@@ -890,6 +898,19 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         </div>
       )}
 
+      {confirmDelete && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[300] flex items-center justify-center p-6">
+          <div className="bg-white w-full max-w-xs rounded-3xl p-8 text-center shadow-2xl animate-in zoom-in-95 duration-200">
+            <h3 className="font-black text-gray-800 text-lg mb-4">Confirmar Exclusão</h3>
+            <p className="text-sm text-gray-500 mb-6 font-medium uppercase">Excluir {confirmDelete.type === 'PRODUCT' ? 'Produto' : 'Cliente'}: <br/><span className="text-gray-800 font-black">{confirmDelete.name}</span>?</p>
+            <div className="flex flex-col gap-2">
+              <button onClick={handleConfirmDelete} className="w-full bg-rose-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest">Sim, Excluir</button>
+              <button onClick={() => setConfirmDelete(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showConfirmSync && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[250] flex items-center justify-center p-6">
           <div className="bg-white w-full max-w-xs rounded-3xl p-8 text-center shadow-2xl animate-in zoom-in-95 duration-200">
@@ -980,7 +1001,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
               </div>
               <div className="flex items-center justify-between p-4 bg-gray-50 rounded-2xl border border-gray-100"><span className="text-xs font-bold text-gray-700 uppercase">Produto Ativo</span><button onClick={() => setPForm({...pForm, ativo: !pForm.ativo})} className={`w-12 h-6 rounded-full relative transition-colors ${pForm.ativo ? 'bg-green-500' : 'bg-gray-300'}`}><div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${pForm.ativo ? 'left-7' : 'left-1'}`}></div></button></div>
             </div>
-            <div className="p-6 bg-gray-50 border-t border-gray-100 flex flex-col gap-3"><button onClick={handleSaveProduct} className="w-full bg-blue-600 text-white font-black py-5 rounded-2xl shadow-xl active:scale-95 transition-all uppercase text-xs tracking-[0.2em]">Salvar Produto</button><div className="flex gap-3">{showProductModal !== 'NEW' && <button onClick={handleDeleteProductInModal} className="flex-1 bg-rose-50 text-rose-600 font-black py-4 rounded-2xl active:scale-95 transition-all uppercase text-[9px] tracking-widest border border-rose-100">Excluir</button>}<button onClick={() => setShowProductModal(null)} className="flex-1 bg-white text-gray-400 font-bold py-4 rounded-2xl border border-gray-200 uppercase text-[9px] tracking-widest">Cancelar</button></div></div>
+            <div className="p-6 bg-gray-50 border-t border-gray-100 flex flex-col gap-3"><button onClick={handleSaveProduct} className="w-full bg-blue-600 text-white font-black py-5 rounded-2xl shadow-xl active:scale-95 transition-all uppercase text-xs tracking-[0.2em]">Salvar Produto</button><div className="flex gap-3">{showProductModal !== 'NEW' && <button onClick={() => setConfirmDelete({ id: (showProductModal as Product).id, type: 'PRODUCT', name: (showProductModal as Product).nome })} className="flex-1 bg-rose-50 text-rose-600 font-black py-4 rounded-2xl active:scale-95 transition-all uppercase text-[9px] tracking-widest border border-rose-100">Excluir</button>}<button onClick={() => setShowProductModal(null)} className="flex-1 bg-white text-gray-400 font-bold py-4 rounded-2xl border border-gray-200 uppercase text-[9px] tracking-widest">Cancelar</button></div></div>
           </div>
         </div>
       )}

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Sale, Client, Product } from '../types';
 
 interface CupomProps {
@@ -8,9 +8,12 @@ interface CupomProps {
   onClose: () => void;
   onDeleteSale?: (saleId: string) => void;
   allowDelete?: boolean;
+  showToast?: (msg: string, type?: 'success' | 'error') => void;
 }
 
-const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDeleteSale, allowDelete }) => {
+const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDeleteSale, allowDelete, showToast }) => {
+  const [showConfirmDelete, setShowConfirmDelete] = useState(false);
+  
   const padRight = (str: string, length: number) => str.substring(0, length).padEnd(length);
   const padLeft = (str: string, length: number) => str.substring(0, length).padStart(length);
 
@@ -59,14 +62,12 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
 
   const handleCopyText = () => {
     navigator.clipboard.writeText(generateText());
-    alert("Texto formatado para 56mm copiado!");
+    if (showToast) showToast("Texto para 56mm copiado!");
   };
 
   const handleDelete = () => {
-    if (confirm("Tem certeza que deseja excluir esta venda? Esta ação é irreversível e estornará o estoque do vendedor.")) {
-      onDeleteSale?.(sale.id);
-      onClose();
-    }
+    onDeleteSale?.(sale.id);
+    onClose();
   };
 
   return (
@@ -94,7 +95,7 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
             </button>
             {allowDelete && onDeleteSale && (
               <button
-                onClick={handleDelete}
+                onClick={() => setShowConfirmDelete(true)}
                 className="w-14 bg-rose-600 text-white font-black py-4 rounded-xl flex items-center justify-center active:scale-95 transition-all text-lg"
               >
                 <i className="fa-solid fa-trash-can"></i>
@@ -109,6 +110,19 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
           </button>
         </div>
       </div>
+
+      {showConfirmDelete && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[200] flex items-center justify-center p-6">
+          <div className="bg-white w-full max-w-xs rounded-3xl p-8 text-center shadow-2xl animate-in zoom-in-95 duration-200">
+            <h3 className="font-black text-gray-800 text-lg mb-4">Excluir Venda?</h3>
+            <p className="text-sm text-gray-500 mb-6 font-medium uppercase leading-relaxed">Esta ação é irreversível e estornará o estoque do vendedor.</p>
+            <div className="flex flex-col gap-2">
+              <button onClick={handleDelete} className="w-full bg-rose-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest">Sim, Excluir</button>
+              <button onClick={() => setShowConfirmDelete(false)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

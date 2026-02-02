@@ -104,6 +104,9 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [cForm, setCForm] = useState<Partial<Client>>({});
 
+  // Estado para Confirmação de Pular Cliente
+  const [confirmSkipId, setConfirmSkipId] = useState<string | null>(null);
+
   // Estados para Despesa
   const [showExpenseForm, setShowExpenseForm] = useState(false);
   const [expenseDesc, setExpenseDesc] = useState('');
@@ -161,11 +164,12 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     return clientsInRoute.sort((a, b) => (a.ordem || 0) - (b.ordem || 0)); 
   }, [clients, dailyRouteState.clientIds]); 
 
-  const handleSkipClient = (clientId: string) => { 
-    if (confirm("Pular atendimento?")) {
-      const newSkipped = [...dailyRouteState.skippedClientIds, clientId];
-      updateDailyRoute(dailyRouteState.clientIds, newSkipped);
-    }
+  const handleSkipClient = () => { 
+    if (!confirmSkipId) return;
+    const newSkipped = [...dailyRouteState.skippedClientIds, confirmSkipId];
+    updateDailyRoute(dailyRouteState.clientIds, newSkipped);
+    setConfirmSkipId(null);
+    showToast("Visita pulada.");
   };
 
   const handleReopenClient = (clientId: string) => {
@@ -235,7 +239,10 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     if (!showReceiveModal) return;
     const valor = parseFloat(valorRecebidoParcial);
     const saldoEmAberto = Number(((showReceiveModal.valorTotal ?? 0) - (showReceiveModal.valorPago ?? 0)).toFixed(2)); 
-    if (isNaN(valor) || valor <= 0 || valor > saldoEmAberto) return alert("Valor inválido.");
+    if (isNaN(valor) || valor <= 0 || valor > saldoEmAberto) {
+      showToast("Valor inválido.", "error");
+      return;
+    }
     receivePayment(showReceiveModal.id, method, valor);
     setShowReceiveModal(null);
     setValorRecebidoParcial('');
@@ -243,7 +250,10 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
   const handleLaunchExpense = async () => {
     const val = parseFloat(expenseVal);
-    if (!expenseDesc || isNaN(val) || val <= 0) return alert("Preencha descrição e valor.");
+    if (!expenseDesc || isNaN(val) || val <= 0) {
+      showToast("Preencha descrição e valor.", "error");
+      return;
+    }
     const success = await addExpense(user.id, expenseDesc, val);
     if (success) {
       showToast("Despesa lançada!");
@@ -342,7 +352,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   if (viewingSale) {
     const cupomClient = clients.find(c => c.id === viewingSale.clientId);
     if (!cupomClient) { setViewingSale(null); return null; }
-    return ( <Cupom sale={viewingSale} client={cupomClient} products={products} onClose={() => setViewingSale(null)} onDeleteSale={deleteSale} allowDelete={true} /> );
+    return ( <Cupom sale={viewingSale} client={cupomClient} products={products} onClose={() => setViewingSale(null)} onDeleteSale={deleteSale} allowDelete={true} showToast={showToast} /> );
   }
 
   if (showFiscalization) {
@@ -360,7 +370,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       {toast && (
         <div className="fixed top-20 left-4 right-4 z-[300] flex justify-center pointer-events-none">
           <div className={`${toast.type === 'success' ? 'bg-emerald-600' : 'bg-rose-600'} text-white px-6 py-3 rounded-2xl shadow-2xl font-black text-xs uppercase flex items-center gap-3 animate-in slide-in-from-top`}>
-            <i className="fa-solid fa-circle-check"></i>{toast.message}
+            <i className={`fa-solid ${toast.type === 'success' ? 'fa-circle-check' : 'fa-circle-exclamation'}`}></i>{toast.message}
           </div>
         </div>
       )}
@@ -396,7 +406,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                   <div className="flex-1"><p className="font-bold text-gray-800 leading-tight uppercase">{c.nomeFantasia ?? 'Cliente'}</p><p className="text-[10px] text-gray-400 mt-1 uppercase font-semibold"><i className="fa-solid fa-location-dot mr-1"></i> {(c.bairro || 'S/B')}</p></div>
                   {!isVisited ? (
                     <div className="flex gap-2">
-                      <button onClick={() => handleSkipClient(c.id)} className="w-10 h-10 bg-gray-50 text-gray-400 rounded-2xl flex items-center justify-center"><i className="fa-solid fa-forward"></i></button>
+                      <button onClick={() => setConfirmSkipId(c.id)} className="w-10 h-10 bg-gray-50 text-gray-400 rounded-2xl flex items-center justify-center"><i className="fa-solid fa-forward"></i></button>
                       <button onClick={() => setSelectedClient(c)} className="bg-blue-600 text-white px-4 py-2 rounded-2xl font-black text-xs uppercase shadow-lg">Atender</button>
                     </div>
                   ) : <button onClick={() => handleReopenClient(c.id)} className="bg-white text-blue-600 border border-blue-200 px-3 py-1.5 rounded-xl text-[9px] font-black uppercase">Reabrir</button>}
@@ -685,6 +695,19 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 <div className="text-right"><p className="text-sm font-black text-emerald-600">R$ {p.precoVenda.toFixed(2)}</p></div> 
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {confirmSkipId && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[300] flex items-center justify-center p-6">
+          <div className="bg-white w-full max-w-xs rounded-3xl p-8 text-center shadow-2xl animate-in zoom-in-95 duration-200">
+            <h3 className="font-black text-gray-800 text-lg mb-4">Pular Cliente?</h3>
+            <p className="text-sm text-gray-500 mb-6 font-medium uppercase">Deseja realmente pular o atendimento deste cliente hoje?</p>
+            <div className="flex flex-col gap-2">
+              <button onClick={handleSkipClient} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest">Sim, Pular</button>
+              <button onClick={() => setConfirmSkipId(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Voltar</button>
+            </div>
           </div>
         </div>
       )}

@@ -43,9 +43,55 @@ type TabType = 'HOME' | 'ROTEIRO' | 'CARGA' | 'HISTORY' | 'FINANCE' | 'CREDIT' |
 const VendedorDashboard: React.FC<VendedorDashboardProps> = ({ 
   user, products, clients, cargas, cargasPendentes, sales, commissions, payoutLogs, expenses, messages, markMessageAsRead, processSale, addClient, updateClient, deleteClient, receivePayment, deleteSale, aceitarCarga, addExpense, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, updateDailyRoute, companyName, companyCnpj
 }) => {
+  // Persistência Completa para Sobreviver ao Refresh
   const [activeTab, setActiveTab] = useState<TabType>(() => loadLocalState('v_activeTab', 'HOME'));
   const [selectedClient, setSelectedClient] = useState<Client | null>(() => loadLocalState('v_selectedClient', null));
   const [viewingSale, setViewingSale] = useState<Sale | null>(() => loadLocalState('v_viewingSale', null));
+  const [showFiscalization, setShowFiscalization] = useState(() => loadLocalState('v_showFiscalization', false));
+
+  useEffect(() => { saveLocalState('v_activeTab', activeTab); }, [activeTab]);
+  useEffect(() => { saveLocalState('v_selectedClient', selectedClient); }, [selectedClient]);
+  useEffect(() => { saveLocalState('v_viewingSale', viewingSale); }, [viewingSale]);
+  useEffect(() => { saveLocalState('v_showFiscalization', showFiscalization); }, [showFiscalization]);
+
+  // Integração com o Botão Voltar Nativo
+  useEffect(() => {
+    const handlePopState = (event: PopStateEvent) => {
+      const state = event.state;
+      if (state) {
+        if (state.tab) setActiveTab(state.tab);
+        setSelectedClient(state.client || null);
+        setViewingSale(state.sale || null);
+        setShowFiscalization(!!state.fiscal);
+      } else {
+        setActiveTab('HOME');
+        setSelectedClient(null);
+        setViewingSale(null);
+        setShowFiscalization(false);
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    
+    if (!window.history.state) {
+      window.history.replaceState({ tab: activeTab, client: selectedClient, sale: viewingSale, fiscal: showFiscalization }, '');
+    }
+
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  useEffect(() => {
+    const currentState = window.history.state;
+    const isDifferent = !currentState || 
+                        currentState.tab !== activeTab || 
+                        currentState.client?.id !== selectedClient?.id || 
+                        currentState.sale?.id !== viewingSale?.id ||
+                        !!currentState.fiscal !== showFiscalization;
+    
+    if (isDifferent) {
+      window.history.pushState({ tab: activeTab, client: selectedClient, sale: viewingSale, fiscal: showFiscalization }, '');
+    }
+  }, [activeTab, selectedClient, viewingSale, showFiscalization]);
 
   const [reopenedClientIds, setReopenedClientIds] = useState<string[]>([]);
   const [showReceiveModal, setShowReceiveModal] = useState<Sale | null>(null);
@@ -57,7 +103,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const [weeklySearch, setWeeklySearch] = useState('');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [cForm, setCForm] = useState<Partial<Client>>({});
-  const [showFiscalization, setShowFiscalization] = useState(false);
 
   // Estados para Despesa
   const [showExpenseForm, setShowExpenseForm] = useState(false);
@@ -73,10 +118,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     markMessageAsRead(msgId);
     showToast("Mensagem marcada como lida.");
   };
-
-  useEffect(() => {
-    saveLocalState('v_activeTab', activeTab);
-  }, [activeTab]);
 
   const filterByPeriod = (date: any, period: string) => {
     if (!date) return false;

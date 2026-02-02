@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Product, User, Carga, Sale, Commission, Client, PaymentMethod, CommissionPaymentLog, Expense } from '../types';
 import { DIAS_SEMANA } from '../constants';
 import Cupom from './Cupom';
+import { loadLocalState, saveLocalState } from '../utils/persistence';
 
 interface AdminDashboardProps {
   products: Product[];
@@ -59,8 +60,55 @@ interface AdminDashboardProps {
   setCompanyCnpj: (val: string) => void;
 }
 
+type TabType = 'HOME' | 'CATALOGO' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'SETTINGS';
+
 const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
-  const [activeTab, setActiveTab] = useState<'HOME' | 'CATALOGO' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'SETTINGS'>('HOME');
+  // Persistência da Aba Atual para Refresh
+  const [activeTab, setActiveTab] = useState<TabType>(() => loadLocalState('admin_activeTab', 'HOME'));
+  const [selectedSale, setSelectedSale] = useState<Sale | null>(() => loadLocalState('admin_selectedSale', null));
+
+  useEffect(() => {
+    saveLocalState('admin_activeTab', activeTab);
+  }, [activeTab]);
+
+  useEffect(() => {
+    saveLocalState('admin_selectedSale', selectedSale);
+  }, [selectedSale]);
+
+  // Integração com o Botão Voltar Nativo
+  useEffect(() => {
+    const handlePopState = (event: PopStateEvent) => {
+      const state = event.state;
+      if (state) {
+        if (state.tab) setActiveTab(state.tab);
+        setSelectedSale(state.sale || null);
+      } else {
+        setActiveTab('HOME');
+        setSelectedSale(null);
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    
+    // Inicializa o estado se não existir
+    if (!window.history.state) {
+      window.history.replaceState({ tab: activeTab, sale: selectedSale }, '');
+    }
+
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  useEffect(() => {
+    const currentState = window.history.state;
+    const isDifferent = !currentState || 
+                        currentState.tab !== activeTab || 
+                        currentState.sale?.id !== selectedSale?.id;
+    
+    if (isDifferent) {
+      window.history.pushState({ tab: activeTab, sale: selectedSale }, '');
+    }
+  }, [activeTab, selectedSale]);
+
   const [search, setSearch] = useState('');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   
@@ -93,7 +141,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [showConfirmSync, setShowConfirmSync] = useState(false);
   const [showConfirmApply, setShowConfirmApply] = useState(false);
   const [filtroPeriodo, setFiltroPeriodo] = useState<'HOJE' | 'SEMANA' | 'MES' | 'GERAL'>('HOJE');
-  const [selectedSale, setSelectedSale] = useState<Sale | null>(null);
   const [showUserModal, setShowUserModal] = useState<User | 'NEW' | null>(null);
   const [expandedDay, setExpandedDay] = useState<number | null>(null);
   const [showReceiveModal, setShowReceiveModal] = useState<Sale | null>(null);
@@ -856,7 +903,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       {showReceiveModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[250] flex items-center justify-center p-6">
            <div className="bg-white w-full max-w-xs rounded-3xl p-8 shadow-2xl text-center">
-              <h3 className="font-black text-gray-800 text-sm uppercase mb-6">Confirmar Recebimento</h3>
+              <h3 className="font-black text-gray-800 text-sm uppercase mb-4">Confirmar Recebimento</h3>
               <div className="bg-gray-50 p-4 rounded-2xl mb-6"><p className="text-[10px] font-black text-gray-400 uppercase mb-1">Saldo em Aberto</p><p className="text-xl font-black text-rose-600">R$ {((showReceiveModal.valorTotal ?? 0) - (showReceiveModal.valorPago ?? 0)).toFixed(2)}</p></div>
               <div className="space-y-4 mb-6"><p className="text-[10px] font-black text-gray-400 uppercase text-left ml-1">Valor a Receber</p><input type="number" value={valorRecebidoParcial} onChange={e => setValorRecebidoParcial(e.target.value)} className="w-full p-4 bg-white border border-gray-200 rounded-2xl font-black text-xl text-center outline-none" /></div>
               <div className="space-y-3"><button onClick={() => handleConfirmReceive('DINHEIRO')} className="w-full bg-gray-900 text-white py-4 rounded-2xl shadow-lg font-black uppercase text-xs tracking-widest">Dinheiro</button><button onClick={() => handleConfirmReceive('PIX')} className="w-full bg-blue-600 text-white py-4 rounded-2xl shadow-lg font-black uppercase text-xs tracking-widest">PIX</button><button onClick={() => setShowReceiveModal(null)} className="w-full py-3 text-gray-400 font-bold text-[9px] uppercase">Cancelar</button></div>

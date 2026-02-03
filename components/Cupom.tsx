@@ -48,10 +48,10 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
     
     // Definição das larguras das colunas
     const qtyLen = 4; // Ex: ' 1X'
-    const finalValLen = width === '80MM' ? 13 : 9; // Ex: ' R$ 10.99'
-    const finalNameLen = totalWidth - qtyLen - finalValLen; // Largura restante para a descrição
+    const valLen = width === '80MM' ? 13 : 9; // Ex: ' R$ 10.99' (inclui R$ e espaços)
+    const nameLen = totalWidth - qtyLen - valLen; // Largura restante para a descrição
 
-    t += pad('DESCRICAO', finalNameLen) + padL('QTD', qtyLen) + padL('VALOR', finalValLen) + '\n';
+    t += pad('DESCRICAO', nameLen) + padL('QTD', qtyLen) + padL('VALOR', valLen) + '\n';
     t += '-'.repeat(totalWidth) + '\n';
     
     // --- LISTA DE ITENS ---
@@ -59,22 +59,26 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
       const p = products.find(prod => prod.id === i.produtoId);
       const nomeProduto = (p?.nome ?? 'PRODUTO DESCONHECIDO').toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/Ç/g, 'C');
       
-      const maxLineLength = finalNameLen;
+      const maxLineLength = nameLen;
       let remainingName = nomeProduto;
+      let isFirstLine = true;
 
       while (remainingName.length > 0) {
         const line = remainingName.substring(0, maxLineLength);
         remainingName = remainingName.substring(maxLineLength);
 
-        if (remainingName.length === 0) {
-          // Última linha do item: inclui QTD e VALOR
-          const qty = padL(`${(i.quantidade ?? 0)}X`, qtyLen);
+        if (isFirstLine) {
+          // Primeira linha do item: inclui QTD e VALOR
+          const qtyStr = padL(`${(i.quantidade ?? 0)}X`, qtyLen);
           const subtotal = ((i.quantidade ?? 0) * (i.precoVenda ?? 0)).toFixed(2);
-          const val = padL(subtotal, finalValLen);
+          const valStr = padL(`R$ ${subtotal}`, valLen);
           
-          t += `${pad(line, finalNameLen)}${qty}${val}\n`;
+          t += `${pad(line, nameLen)}${qtyStr}${valStr}\n`;
+          isFirstLine = false;
         } else {
           // Linhas de continuação: apenas o nome, preenchido até a largura total
+          // Usamos pad(line, totalWidth) para garantir que a linha de continuação
+          // ocupe o espaço total e não interfira no próximo item.
           t += `${pad(line, totalWidth)}\n`;
         }
       }
@@ -89,7 +93,12 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
     
     // --- FORMA DE PAGAMENTO ---
     const paymentMethod = (sale.metodoPagamento ?? 'N/D').toUpperCase().replace('_', '/');
-    t += `FORMA DE PAGAMENTO: ${paymentMethod}\n\n`; 
+    t += `FORMA DE PAGAMENTO: ${paymentMethod}\n`; 
+    if (sale.detalhePagamento) {
+        t += `DETALHE: ${sale.detalhePagamento.toUpperCase()}\n\n`;
+    } else {
+        t += '\n';
+    }
     
     // --- FOOTER ---
     t += '-'.repeat(totalWidth) + '\n';

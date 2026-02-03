@@ -39,7 +39,7 @@ interface VendedorDashboardProps {
   companyCnpj: string;
 }
 
-type TabType = 'HOME' | 'ROTEIRO' | 'CARGA' | 'HISTORY' | 'FINANCE' | 'CREDIT' | 'CLIENTS' | 'WEEKLY' | 'STOCK_VIEW';
+type TabType = 'HOME' | 'ROTEIRO' | 'CARGA' | 'HISTORY' | 'FINANCE' | 'CREDIT' | 'CLIENTES' | 'WEEKLY' | 'STOCK_VIEW';
 
 const VendedorDashboard: React.FC<VendedorDashboardProps> = ({ 
   user, products, clients, cargas, cargasPendentes, sales, commissions, payoutLogs, expenses, messages, markMessageAsRead, processSale, addClient, updateClient, deleteClient, receivePayment, deleteSale, aceitarCarga, addExpense, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, updateDailyRoute, companyName, companyCnpj
@@ -406,7 +406,22 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
             return (
               <div key={c.id} className={`p-4 rounded-3xl border flex flex-col transition-all ${isVisited ? 'bg-gray-100 border-gray-200 grayscale opacity-60' : 'bg-white border-gray-100 shadow-sm'}`}>
                 <div className="flex justify-between items-center">
-                  <div className="flex-1 cursor-pointer" onClick={() => setViewingClientHistory(c)}><p className="font-bold text-gray-800 leading-tight uppercase">{c.nomeFantasia ?? 'Cliente'}</p><p className="text-[10px] text-gray-400 mt-1 uppercase font-semibold"><i className="fa-solid fa-location-dot mr-1"></i> {(c.bairro || 'S/B')}</p></div>
+                  <div className="flex-1 cursor-pointer" onClick={() => setViewingClientHistory(c)}>
+                    <div className="flex items-center gap-2">
+                      <p className="font-bold text-gray-800 leading-tight uppercase">{c.nomeFantasia ?? 'Cliente'}</p>
+                      {c.telefone && (
+                        <a 
+                          href={`https://wa.me/55${c.telefone.replace(/\D/g, '')}`} 
+                          target="_blank" 
+                          className="text-emerald-500" 
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <i className="fa-brands fa-whatsapp text-lg"></i>
+                        </a>
+                      )}
+                    </div>
+                    <p className="text-[10px] text-gray-400 mt-1 uppercase font-semibold"><i className="fa-solid fa-location-dot mr-1"></i> {(c.bairro || 'S/B')}</p>
+                  </div>
                   {!isVisited ? (
                     <div className="flex gap-2">
                       <button onClick={() => setConfirmSkipId(c.id)} className="w-10 h-10 bg-gray-50 text-gray-400 rounded-2xl flex items-center justify-center"><i className="fa-solid fa-forward"></i></button>
@@ -426,7 +441,22 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
           <div className="grid gap-3">
             {clients.sort((a,b) => a.nomeFantasia.localeCompare(b.nomeFantasia)).map(c => (
               <div key={c.id} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex justify-between items-center transition-all active:scale-95 group">
-                <div className="flex-1 cursor-pointer" onClick={() => setViewingClientHistory(c)}><h4 className="font-bold text-gray-800 text-sm leading-tight uppercase">{c.nomeFantasia ?? 'Cliente'}</h4><p className="text-[10px] text-gray-400 font-semibold uppercase mt-1">{c.telefone} • {DIAS_SEMANA[c.diaRoteiro]}</p></div>
+                <div className="flex-1 cursor-pointer" onClick={() => setViewingClientHistory(c)}>
+                  <div className="flex items-center gap-2">
+                    <h4 className="font-bold text-gray-800 text-sm leading-tight uppercase">{c.nomeFantasia ?? 'Cliente'}</h4>
+                    {c.telefone && (
+                      <a 
+                        href={`https://wa.me/55${c.telefone.replace(/\D/g, '')}`} 
+                        target="_blank" 
+                        className="text-emerald-500" 
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <i className="fa-brands fa-whatsapp text-lg"></i>
+                      </a>
+                    )}
+                  </div>
+                  <p className="text-[10px] text-gray-400 font-semibold uppercase mt-1">{c.telefone} • {DIAS_SEMANA[c.diaRoteiro]}</p>
+                </div>
                 <button onClick={() => handleOpenEditClient(c)} className="w-10 h-10 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center active:scale-95"><i className="fa-solid fa-pencil-alt text-xs"></i></button>
               </div>
             ))}

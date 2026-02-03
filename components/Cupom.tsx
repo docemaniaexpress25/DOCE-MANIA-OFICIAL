@@ -14,8 +14,12 @@ interface CupomProps {
 const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDeleteSale, allowDelete, showToast }) => {
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   
-  // Verifica se a venda é do dia atual (até meia-noite)
-  const isSaleToday = new Date(sale.data).toDateString() === new Date().toDateString();
+  // Comparação robusta de datas (mesmo dia, mês e ano no tempo local)
+  const saleDate = new Date(sale.data);
+  const today = new Date();
+  const isSaleToday = saleDate.getDate() === today.getDate() && 
+                     saleDate.getMonth() === today.getMonth() && 
+                     saleDate.getFullYear() === today.getFullYear();
 
   const padRight = (str: string, length: number) => str.substring(0, length).padEnd(length);
   const padLeft = (str: string, length: number) => str.substring(0, length).padStart(length);
@@ -99,7 +103,7 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
                 className={`w-14 font-black py-4 rounded-xl flex items-center justify-center transition-all text-lg ${
                   isSaleToday 
                     ? 'bg-rose-600 text-white active:scale-95 shadow-md' 
-                    : 'bg-gray-200 text-gray-400 cursor-not-allowed shadow-none'
+                    : 'bg-gray-200 text-gray-400 cursor-not-allowed shadow-none opacity-40'
                 }`}
               >
                 <i className="fa-solid fa-trash-can"></i>

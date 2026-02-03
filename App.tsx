@@ -324,6 +324,21 @@ const App: React.FC = () => {
   };
 
   const deleteSaleInternal = async (saleId: string, isAdmin: boolean) => {
+    const sale = sales.find(s => s.id === saleId);
+    if (!sale) return;
+
+    // Trava de Segurança Crítica: Só exclui se for a mesma data calendária (meia-noite local)
+    const saleDate = new Date(sale.data);
+    const today = new Date();
+    const isToday = saleDate.getDate() === today.getDate() && 
+                    saleDate.getMonth() === today.getMonth() && 
+                    saleDate.getFullYear() === today.getFullYear();
+
+    if (!isToday) {
+      alert("Bloqueio de Segurança: Não é permitido excluir vendas de dias anteriores.");
+      return;
+    }
+
     const success = await saleService.deleteSale(saleId);
     if (success) {
       await fetchTransactionalData();

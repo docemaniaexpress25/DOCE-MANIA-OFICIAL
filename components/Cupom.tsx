@@ -16,7 +16,7 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
   const [printWidth, setPrintWidth] = useState<'56MM' | '80MM'>('56MM');
 
   /**
-   * Formata o texto para ESC/POS com largura fixa rigorosa.
+   * Formata o texto para ESC/POS com largura fixa rigorosa (32 colunas para 56mm).
    */
   const generateText = (width: '56MM' | '80MM') => {
     const totalWidth = width === '80MM' ? 48 : 32; 
@@ -31,7 +31,7 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
 
     let t = '';
     
-    // Cabeçalho
+    // Cabeçalho ESC/POS
     t += '-'.repeat(totalWidth) + '\n';
     t += center('CUPOM NAO FISCAL', totalWidth) + '\n';
     t += '-'.repeat(totalWidth) + '\n';
@@ -55,10 +55,10 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
       const qtyStr = `${item.quantidade}X`;
       const valStr = `R$ ${(item.quantidade * item.precoVenda).toFixed(2)}`;
 
-      // Primeira linha do item
+      // Primeira linha do item (alinhamento fixo)
       t += padR(rawName.substring(0, descW), descW) + padL(qtyStr, qtyW) + padL(valStr, valW) + '\n';
 
-      // Quebra manual de descrição longa (sem ocupar QTD/VALOR)
+      // Quebra manual de descrição longa em linhas de 32 colunas
       let remaining = rawName.substring(descW);
       while (remaining.length > 0) {
         t += padR(remaining.substring(0, totalWidth), totalWidth) + '\n';
@@ -79,6 +79,9 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
     t += center('E PAGUE COM PIX', totalWidth) + '\n';
     t += '-'.repeat(totalWidth) + '\n';
 
+    // Avanço de papel obrigatório para destaque manual
+    t += '\n\n\n\n\n';
+
     return t;
   };
 
@@ -91,7 +94,7 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
       const success = await printerService.printNative(rawText);
       if (success) showToast("Impresso com sucesso!", 'success');
     } catch (error) {
-      showToast("Erro na conexão Bluetooth.", 'error');
+      showToast("Erro na conexão nativa Bluetooth.", 'error');
     }
   };
 

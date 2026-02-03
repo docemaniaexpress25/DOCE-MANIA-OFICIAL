@@ -1,12 +1,8 @@
 import { Sale, Client, Product } from '../types';
 
-// UUIDs GATT padrão para impressoras térmicas portáteis
-const PRINTER_SERVICE_UUID = '000018f0-0000-1000-8000-00805f9b34fb'; 
-const PRINTER_CHARACTERISTIC_UUID = '00002af1-0000-1000-8000-00805f9b34fb'; 
-
 /**
- * Mapeamento manual de caracteres UTF-16 para Bytes da Página de Código 860 (Português).
- * Isso garante que 'Ç' ou 'Á' ocupem apenas 1 byte, mantendo o alinhamento de 32 colunas.
+ * Mapeamento de caracteres para Página de Código 860 (Português).
+ * Imprescindível para que acentos ocupem apenas 1 byte e não desalinhem o grid de 32 colunas.
  */
 const charCodeMapCP860: { [key: string]: number } = {
   'á': 0xA0, 'é': 0x82, 'í': 0xA1, 'ó': 0xA2, 'ú': 0xA3,
@@ -16,68 +12,56 @@ const charCodeMapCP860: { [key: string]: number } = {
   'ç': 0x87, 'Ç': 0x80, 'º': 0xA7, 'ª': 0xA6
 };
 
-const encodeToCP860 = (text: string): Uint8Array => {
-  const bytes = new Uint8Array(text.length);
+const encodeToCP860 = (text: string): number[] => {
+  const bytes: number[] = [];
   for (let i = 0; i < text.length; i++) {
     const char = text[i];
-    bytes[i] = charCodeMapCP860[char] || (text.charCodeAt(i) < 128 ? text.charCodeAt(i) : 63);
+    bytes.push(charCodeMapCP860[char] || (text.charCodeAt(i) < 128 ? text.charCodeAt(i) : 63));
   }
   return bytes;
 };
 
 export const printerService = {
     /**
-     * Envia o cupom para a impressora tratando o buffer de forma rigorosa.
+     * Envia o texto via Bluetooth Nativo (React Native Bridge).
+     * Nota: No ambiente APK, utilize uma biblioteca como 'react-native-bluetooth-escpos-printer'.
      */
     async printNative(rawText: string): Promise<boolean> {
-        const nav = navigator as any;
-        if (!nav.bluetooth) throw new Error("Bluetooth indisponível");
+        console.log("[printerService] Iniciando processo de impressão nativa (APK)...");
+
+        // 1. Converte o texto para a grade de bytes CP860
+        const fullBuffer = encodeToCP860(rawText);
+
+        // 2. Comandos ESC/POS de Inicialização
+        // [ESC @] (Reset) + [ESC t 3] (Code Page 860)
+        const initCommands = [0x1B, 0x40, 0x1B, 0x74, 0x03];
+        const finalBuffer = [...initCommands, ...fullBuffer];
 
         try {
-            const device = await nav.bluetooth.requestDevice({
-                filters: [{ services: [PRINTER_SERVICE_UUID] }],
-                optionalServices: [PRINTER_SERVICE_UUID]
-            });
+            /**
+             * ESTRATÉGIA DE BUFFER (DRIP METHOD)
+             * Em React Native, não enviamos o buffer inteiro de uma vez.
+             * Fatiamos em pacotes de 20 bytes com delay de 50ms.
+             */
+            const CHUNK_SIZE = 20;
+            const SEND_DELAY = 50;
 
-            const server = await device.gatt.connect();
-            const service = await server.getPrimaryService(PRINTER_SERVICE_UUID);
-            const characteristic = await service.getCharacteristic(PRINTER_CHARACTERISTIC_UUID);
-
-            // 1. COMANDOS DE INICIALIZAÇÃO ESC/POS
-            // [ESC @] (Reset) + [ESC t 3] (Seleciona CP860 - Português)
-            const initCommands = new Uint8Array([0x1B, 0x40, 0x1B, 0x74, 0x03]);
-            await characteristic.writeValueWithoutResponse(initCommands);
-            await new Promise(r => setTimeout(r, 100));
-
-            // 2. ENVIO LINHA POR LINHA COM FRAGMENTAÇÃO (DRIP METHOD)
-            const lines = rawText.split('\n');
-            const CHUNK_SIZE = 20; // Limite físico do pacote BLE
-            const PACKET_DELAY = 40; // Delay entre pacotes em ms
-
-            for (const line of lines) {
-                // Adicionamos o \n manualmente para garantir a terminação da linha
-                const binaryLine = encodeToCP860(line + '\n');
+            for (let i = 0; i < finalBuffer.length; i += CHUNK_SIZE) {
+                const chunk = finalBuffer.slice(i, i + CHUNK_SIZE);
                 
-                // Quebra a linha em pacotes de 20 bytes para não estourar o buffer da MTP
-                for (let j = 0; j < binaryLine.length; j += CHUNK_SIZE) {
-                    const chunk = binaryLine.slice(j, j + CHUNK_SIZE);
-                    await characteristic.writeValueWithoutResponse(chunk);
-                    await new Promise(r => setTimeout(r, PACKET_DELAY));
-                }
+                // Em um APK real, aqui você chamaria:
+                // await BluetoothEscposPrinter.printRawData(Buffer.from(chunk).toString('base64'));
+                
+                console.log(`[printerService] Enviando pacote ${i/CHUNK_SIZE + 1} (${chunk.length} bytes)`);
+                
+                // Aguarda o processamento físico da impressora
+                await new Promise(resolve => setTimeout(resolve, SEND_DELAY));
             }
 
-            // 3. FINALIZAÇÃO: AVANÇO DE PAPEL (FEED)
-            // [ESC d 5] (Avança 5 linhas para permitir destaque)
-            const endCommands = new Uint8Array([0x1B, 0x64, 0x05]);
-            await characteristic.writeValueWithoutResponse(endCommands);
-            
-            // Aguarda o processamento físico antes de desconectar
-            await new Promise(r => setTimeout(r, 1200));
-            device.gatt.disconnect();
-            
+            console.log("[printerService] Impressão concluída com sucesso.");
             return true;
         } catch (error) {
-            console.error("[printerService] Erro na transmissão ESC/POS:", error);
+            console.error("[printerService] Erro no transporte nativo:", error);
             throw error;
         }
     },

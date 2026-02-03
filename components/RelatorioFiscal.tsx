@@ -10,13 +10,21 @@ interface RelatorioFiscalProps {
   onClose: () => void;
 }
 
+// Função para remover acentos e caracteres especiais para compatibilidade com impressoras termicas
+const normalizeText = (str: string): string => {
+  return str.toUpperCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/Ç/g, 'C');
+};
+
 const RelatorioFiscal: React.FC<RelatorioFiscalProps> = ({ user, carga, products, companyName, companyCnpj, onClose }) => {
-  const [format, setFormat] = useState<'80MM' | '56MM'>('80MM');
+  const [format, setFormat] = useState<'80MM' | '56MM'>('56MM'); // 56MM como padrao default
 
   const items = carga.filter(c => c.quantidade > 0).map(c => {
     const p = products.find(prod => prod.id === c.produtoId);
     return {
-      nome: p?.nome ?? 'Produto Desconhecido',
+      nome: normalizeText(p?.nome ?? 'PRODUTO DESCONHECIDO'),
       quantidade: c.quantidade
     };
   });
@@ -34,42 +42,40 @@ const RelatorioFiscal: React.FC<RelatorioFiscalProps> = ({ user, carga, products
     };
 
     let t = '-'.repeat(width) + '\n';
-    t += center('RELATÓRIO DE CARGA PARA CONTROLE', width) + '\n';
-    t += center('DE ESTOQUE E FISCALIZAÇÃO', width) + '\n';
+    t += center('DOCUMENTO PARA FISCALIZACAO', width) + '\n';
+    t += center('RELATORIO DE CARGA ATIVA', width) + '\n';
     t += '-'.repeat(width) + '\n\n';
 
-    t += `EMPRESA: ${companyName.toUpperCase()}\n`;
+    t += `EMPRESA: ${normalizeText(companyName)}\n`;
     t += `CNPJ: ${companyCnpj}\n`;
-    t += `VENDEDOR: ${user.nome.toUpperCase()}\n`;
-    t += `PLACA: ${user.placaVeiculo?.toUpperCase() ?? 'NÃO INFORMADA'}\n\n`;
+    t += `VENDEDOR: ${normalizeText(user.nome)}\n`;
+    t += `PLACA VEICULO: ${normalizeText(user.placaVeiculo ?? 'NAO INFORMADA')}\n\n`;
 
     t += '-'.repeat(width) + '\n';
-    if (format === '80MM') {
-      t += pad('PRODUTO', 40) + ' QTD\n';
-    } else {
-      t += pad('PRODUTO', 24) + ' QTD\n';
-    }
+    const nameLen = format === '80MM' ? 38 : 22;
+    const qtyLen = width - nameLen - 1;
+    t += pad('PRODUTO', nameLen) + ' QTD\n';
     t += '-'.repeat(width) + '\n';
 
     items.forEach(item => {
-      const nameLen = format === '80MM' ? 40 : 24;
-      const name = item.nome.toUpperCase();
-      // Se o nome for maior que o espaço, quebra em linhas
+      const name = item.nome;
+      const qtyStr = item.quantidade.toString();
+      
+      // Quebra de linha se o nome for muito longo
       if (name.length > nameLen) {
-        t += name.substring(0, nameLen) + ' ' + item.quantidade.toString().padStart(width - nameLen - 1) + '\n';
-        t += name.substring(nameLen).substring(0, nameLen) + '\n';
+        t += pad(name.substring(0, nameLen), nameLen) + ' ' + qtyStr.padStart(qtyLen) + '\n';
+        t += pad(name.substring(nameLen), nameLen) + '\n';
       } else {
-        t += pad(name, nameLen) + ' ' + item.quantidade.toString().padStart(width - nameLen - 1) + '\n';
+        t += pad(name, nameLen) + ' ' + qtyStr.padStart(qtyLen) + '\n';
       }
     });
 
     t += '-'.repeat(width) + '\n';
-    t += pad('TOTAL DE ITENS:', width - 10) + items.length.toString().padStart(10) + '\n';
     t += pad('QUANTIDADE TOTAL DE UNIDADES:', width - 10) + totalUnidades.toString().padStart(10) + '\n\n';
 
-    t += center(`GERADO EM ${dataGeracao}`, width) + '\n';
-    t += center(`CÓDIGO DE AUTENTICAÇÃO: ${codigoAutenticacao}`, width) + '\n';
-    t += center('--- FIM DO RELATÓRIO ---', width);
+    t += center(`GERADO EM ${normalizeText(dataGeracao)}`, width) + '\n';
+    t += center(`CODIGO DE AUTENTICACAO: ${codigoAutenticacao}`, width) + '\n';
+    t += center('--- FIM DO RELATORIO ---', width);
 
     return t;
   };
@@ -81,7 +87,7 @@ const RelatorioFiscal: React.FC<RelatorioFiscalProps> = ({ user, carga, products
           <button onClick={onClose} className="w-12 h-12 bg-white/10 text-white rounded-2xl flex items-center justify-center active:scale-90 transition-transform">
             <i className="fa-solid fa-chevron-left"></i>
           </button>
-          <h2 className="text-white font-black uppercase text-sm tracking-widest">Relatório Oficial de Carga</h2>
+          <h2 className="text-white font-black uppercase text-sm tracking-widest">Relatorio Oficial de Carga</h2>
           <div className="w-12"></div>
         </header>
 
@@ -90,13 +96,13 @@ const RelatorioFiscal: React.FC<RelatorioFiscalProps> = ({ user, carga, products
             onClick={() => setFormat('80MM')} 
             className={`flex-1 py-4 rounded-xl text-[10px] font-black uppercase transition-all ${format === '80MM' ? 'bg-white text-slate-900 shadow-lg' : 'text-slate-400'}`}
           >
-            80MM (PADRÃO)
+            80MM
           </button>
           <button 
             onClick={() => setFormat('56MM')} 
             className={`flex-1 py-4 rounded-xl text-[10px] font-black uppercase transition-all ${format === '56MM' ? 'bg-white text-slate-900 shadow-lg' : 'text-slate-400'}`}
           >
-            56MM (MÓVEL)
+            56MM (PADRAO)
           </button>
         </div>
 
@@ -113,21 +119,15 @@ const RelatorioFiscal: React.FC<RelatorioFiscalProps> = ({ user, carga, products
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-4 mb-10">
+        <div className="grid grid-cols-1 gap-4 mb-10">
           <button 
             onClick={() => {
               navigator.clipboard.writeText(generateText());
-              alert("Relatório copiado para a área de transferência!");
+              alert("Relatorio copiado para a area de transferencia!");
             }}
             className="bg-blue-600 text-white font-black py-5 rounded-[2rem] shadow-xl active:scale-95 transition-all uppercase text-[10px] tracking-widest flex items-center justify-center gap-3"
           >
             <i className="fa-solid fa-copy text-lg"></i> COPIAR TEXTO
-          </button>
-          <button 
-            className="bg-emerald-600 text-white font-black py-5 rounded-[2rem] shadow-xl active:scale-95 transition-all uppercase text-[10px] tracking-widest flex items-center justify-center gap-3"
-            onClick={() => alert("Função de PDF disponível apenas em aplicativo nativo.")}
-          >
-            <i className="fa-solid fa-file-pdf text-lg"></i> COMPARTILHAR
           </button>
         </div>
       </div>

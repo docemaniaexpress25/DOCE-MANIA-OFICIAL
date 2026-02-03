@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Sale, Client, Product } from '../types';
+import { printerService } from '../services/printerService';
 
 interface CupomProps {
   sale: Sale;
@@ -13,6 +14,7 @@ interface CupomProps {
 
 const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDeleteSale, allowDelete, showToast }) => {
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
+  const [printWidth, setPrintWidth] = useState<'56MM' | '80MM'>('56MM'); // Novo estado para largura
   
   // Comparação robusta de datas (mesmo dia, mês e ano no tempo local)
   const saleDate = new Date(sale.data);
@@ -24,47 +26,80 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
   const padRight = (str: string, length: number) => str.substring(0, length).padEnd(length);
   const padLeft = (str: string, length: number) => str.substring(0, length).padStart(length);
 
-  const generateText = () => {
-    let t = `********************************\n`;
-    t += `        CUPOM NAO FISCAL        \n`;
-    t += `********************************\n\n`;
+  const generateText = (width: '56MM' | '80MM') => {
+    const totalWidth = width === '80MM' ? 48 : 32;
     
-    const clientName = (client.nomeFantasia || 'Nao identificado').substring(0, 24);
-    t += `Cliente: ${padRight(clientName, 24)}\n\n`;
+    const pad = (str: string, len: number) => str.padEnd(len).substring(0, len);
+    const padL = (str: string, len: number) => str.padStart(len).substring(0, len);
+    const center = (str: string, len: number) => {
+      const spaces = Math.max(0, Math.floor((len - str.length) / 2));
+      return ' '.repeat(spaces) + str;
+    };
+
+    let t = '-'.repeat(totalWidth) + '\n';
+    t += center('CUPOM NAO FISCAL', totalWidth) + '\n';
+    t += '-'.repeat(totalWidth) + '\n\n';
     
-    t += `--------------------------------\n`;
-    t += `DESCRICAO          QTD     VALOR\n`;
-    t += `--------------------------------\n`;
+    const clientName = (client.nomeFantasia || 'Nao identificado').substring(0, totalWidth - 1);
+    t += `Cliente: ${pad(clientName, totalWidth)}\n\n`;
+    
+    t += '-'.repeat(totalWidth) + '\n';
+    const nameLen = totalWidth - 13; // 13 = 4 (QTD) + 9 (VALOR)
+    t += pad('DESCRICAO', nameLen) + padL('QTD', 4) + padL('VALOR', 9) + '\n';
+    t += '-'.repeat(totalWidth) + '\n';
     
     sale.itens.forEach(i => {
       const p = products.find(prod => prod.id === i.produtoId);
-      const name = padRight((p?.nome ?? 'PRODUTO').toUpperCase(), 19);
-      const qty = padLeft(`${(i.quantidade ?? 0)}x`, 4);
+      const name = pad((p?.nome ?? 'PRODUTO').toUpperCase(), nameLen);
+      const qty = padL(`${(i.quantidade ?? 0)}x`, 4);
       const subtotal = ((i.quantidade ?? 0) * (i.precoVenda ?? 0)).toFixed(2);
-      const val = padLeft(subtotal, 9);
+      const val = padL(subtotal, 9);
       
       t += `${name}${qty}${val}\n`;
     });
     
-    t += `--------------------------------\n`;
+    t += '-'.repeat(totalWidth) + '\n';
     const totalLabel = "TOTAL:";
     const totalVal = `R$ ${(sale.valorTotal ?? 0).toFixed(2)}`;
-    t += `${padRight(totalLabel, 15)}${padLeft(totalVal, 17)}\n\n`;
+    t += `${pad(totalLabel, totalWidth - totalVal.length)}${totalVal}\n\n`;
     
     const paymentMethod = (sale.metodoPagamento ?? 'N/D').replace('_', '/');
     t += `Forma de Pagamento: ${paymentMethod}\n\n`;
     
-    t += `--------------------------------\n`;
-    t += `   OBRIGADO PELA PREFERENCIA!   \n`;
-    t += `       ESCANEIE O QR CODE       \n`;
-    t += `        E PAGUE COM PIX         \n`;
-    t += `********************************`;
+    t += '-'.repeat(totalWidth) + '\n';
+    t += center('OBRIGADO PELA PREFERENCIA!', totalWidth) + '\n';
+    t += center('ESCANEIE O QR CODE', totalWidth) + '\n';
+    t += center('E PAGUE COM PIX', totalWidth) + '\n';
+    t += '-'.repeat(totalWidth);
     return t;
   };
 
   const handleCopyText = () => {
-    navigator.clipboard.writeText(generateText());
+    // Usa a largura padrão para copiar
+    navigator.clipboard.writeText(generateText('56MM')); 
     if (showToast) showToast("Texto para 56mm copiado!");
+  };
+
+  const handlePrint = async () => {
+    if (!showToast) return;
+    
+    // 1. Gerar o texto formatado (que será a base para os comandos ESC/POS)
+    const rawText = generateText(printWidth);
+    
+    showToast(`Tentando conectar à impressora ${printWidth}...`);
+
+    try {
+        // 2. Chamar o serviço de impressão
+        const success = await printerService.printSale(sale, client, products, printWidth === '56MM' ? 56 : 80, rawText);
+        
+        if (success) {
+            showToast("Impressão enviada com sucesso!", 'success');
+        }
+    } catch (error) {
+        // 3. Tratar falha (exibir erro e sugerir cópia)
+        const errorMessage = error instanceof Error ? error.message : "Erro desconhecido na conexão.";
+        showToast(`Erro de Impressão: ${errorMessage}. Tente copiar o texto.`, 'error');
+    }
   };
 
   const handleDelete = () => {
@@ -78,7 +113,7 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
       <div className="bg-white w-full max-w-[340px] shadow-2xl flex flex-col animate-in zoom-in-95 duration-200">
         <div className="p-6 bg-white overflow-hidden">
           <div className="font-mono text-[13px] leading-[1.3] text-black bg-white uppercase whitespace-pre select-none">
-            {generateText()}
+            {generateText(printWidth)}
           </div>
           <div className="flex justify-between mt-4 text-gray-200 select-none overflow-hidden h-2">
             {Array.from({ length: 40 }).map((_, i) => (
@@ -88,14 +123,39 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
         </div>
 
         <div className="bg-gray-100 p-4 flex flex-col gap-2 border-t border-gray-200">
+          
+          {/* Seletor de Largura */}
+          <div className="flex bg-gray-200 p-1 rounded-xl">
+            <button 
+              onClick={() => setPrintWidth('56MM')} 
+              className={`flex-1 py-2 rounded-lg text-[9px] font-black uppercase ${printWidth === '56MM' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500'}`}
+            >
+              56MM
+            </button>
+            <button 
+              onClick={() => setPrintWidth('80MM')} 
+              className={`flex-1 py-2 rounded-lg text-[9px] font-black uppercase ${printWidth === '80MM' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500'}`}
+            >
+              80MM
+            </button>
+          </div>
+
           <div className="flex gap-2">
             <button 
-              onClick={handleCopyText}
+              onClick={handlePrint}
               className="flex-1 bg-blue-600 text-white font-black py-4 rounded-xl flex items-center justify-center gap-2 active:scale-95 transition-all text-[10px] tracking-widest uppercase"
             >
-              <i className="fa-solid fa-copy"></i>
-              COPIAR TEXTO
+              <i className="fa-solid fa-print"></i>
+              IMPRIMIR CUPOM
             </button>
+            
+            <button 
+              onClick={handleCopyText}
+              className="w-14 bg-gray-200 text-gray-600 font-black py-4 rounded-xl flex items-center justify-center gap-2 active:scale-95 transition-all text-[10px] tracking-widest uppercase"
+            >
+              <i className="fa-solid fa-copy"></i>
+            </button>
+
             {allowDelete && onDeleteSale && (
               <button
                 onClick={() => isSaleToday && setShowConfirmDelete(true)}

@@ -188,36 +188,49 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
   const handlePinLocation = async () => {
     if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(async (p) => {
-        const lat = p.coords.latitude;
-        const lng = p.coords.longitude;
-        setCForm(prev => ({ ...prev, pinLocalizacao: `${lat.toFixed(6)}, ${lng.toFixed(6)}` }));
-        
-        try {
-          const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}`);
-          const data = await response.json();
-          if (data && data.address) {
-            const addr = data.address;
-            const rua = addr.road || addr.pedestrian || addr.street || '';
-            const numero = addr.house_number || '';
-            const bairro = addr.suburb || addr.neighbourhood || addr.city_district || addr.village || '';
-            const fullAddr = `${rua}${numero ? ', ' + numero : ''}`;
-            
-            setCForm(prev => ({ 
-              ...prev, 
-              endereco: fullAddr || prev.endereco,
-              bairro: bairro || prev.bairro
-            }));
-            showToast("Endereço capturado!");
-          } else {
-            showToast("Coordenadas capturadas!");
+      showToast("Aguardando GPS...");
+      navigator.geolocation.getCurrentPosition(
+        async (p) => {
+          const lat = p.coords.latitude;
+          const lng = p.coords.longitude;
+          setCForm(prev => ({ ...prev, pinLocalizacao: `${lat.toFixed(6)}, ${lng.toFixed(6)}` }));
+          
+          try {
+            const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}`, {
+              headers: { 'Accept-Language': 'pt-BR' }
+            });
+            const data = await response.json();
+            if (data && data.address) {
+              const addr = data.address;
+              const rua = addr.road || addr.pedestrian || addr.street || '';
+              const numero = addr.house_number || '';
+              const bairro = addr.suburb || addr.neighbourhood || addr.city_district || addr.village || '';
+              const fullAddr = `${rua}${numero ? ', ' + numero : ''}`;
+              
+              setCForm(prev => ({ 
+                ...prev, 
+                endereco: fullAddr || prev.endereco,
+                bairro: bairro || prev.bairro
+              }));
+              showToast("Endereço capturado!");
+            } else {
+              showToast("Coordenadas capturadas!");
+            }
+          } catch (error) {
+            showToast("Coordenadas capturadas, erro ao obter endereço.", "error");
           }
-        } catch (error) {
-          showToast("Erro ao obter endereço.", "error");
-        }
-      }, () => {
-        showToast("Erro ao acessar GPS.", "error");
-      });
+        }, 
+        (error) => {
+          let msg = "Erro ao acessar GPS.";
+          if (error.code === 1) msg = "Permissão de localização negada.";
+          if (error.code === 2) msg = "Sinal de GPS indisponível.";
+          if (error.code === 3) msg = "Tempo esgotado ao buscar GPS.";
+          showToast(msg, "error");
+        },
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+      );
+    } else {
+      showToast("GPS não suportado neste navegador.", "error");
     }
   };
 

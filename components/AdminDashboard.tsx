@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Product, User, Carga, Sale, Commission, Client, PaymentMethod, CommissionPaymentLog, Expense } from '../types';
 import { DIAS_SEMANA } from '../constants';
 import Cupom from './Cupom';
+import ClientHistory from './ClientHistory';
 import { loadLocalState, saveLocalState } from '../utils/persistence';
 
 interface AdminDashboardProps {
@@ -63,9 +64,9 @@ interface AdminDashboardProps {
 type TabType = 'HOME' | 'CATALOGO' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'SETTINGS';
 
 const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
-  // Persistência da Aba Atual para Refresh
   const [activeTab, setActiveTab] = useState<TabType>(() => loadLocalState('admin_activeTab', 'HOME'));
   const [selectedSale, setSelectedSale] = useState<Sale | null>(() => loadLocalState('admin_selectedSale', null));
+  const [viewingClientHistory, setViewingClientHistory] = useState<Client | null>(null);
 
   useEffect(() => {
     saveLocalState('admin_activeTab', activeTab);
@@ -75,7 +76,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     saveLocalState('admin_selectedSale', selectedSale);
   }, [selectedSale]);
 
-  // Integração com o Botão Voltar Nativo
   useEffect(() => {
     const handlePopState = (event: PopStateEvent) => {
       const state = event.state;
@@ -89,12 +89,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     };
 
     window.addEventListener('popstate', handlePopState);
-    
-    // Inicializa o estado se não existir
     if (!window.history.state) {
       window.history.replaceState({ tab: activeTab, sale: selectedSale }, '');
     }
-
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
@@ -111,7 +108,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
   const [search, setSearch] = useState('');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
-  
   const [localOrderedProductIds, setLocalOrderedProductIds] = useState<string[]>(props.orderedProductIds);
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
@@ -137,6 +133,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
   const [showProductModal, setShowProductModal] = useState<Product | 'NEW' | null>(null);
   const [showEntryModal, setShowEntryModal] = useState<Product | null>(null);
+  const [entryForm, setEntryForm] = useState({ qtd: '', custo: '' }); // missing state added
   const [showClientModal, setShowClientModal] = useState<Client | 'NEW' | null>(null);
   const [showConfirmSync, setShowConfirmSync] = useState(false);
   const [showConfirmApply, setShowConfirmApply] = useState(false);
@@ -150,14 +147,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [partialAmount, setPartialAmount] = useState<string>('');
   const [periodoRelatorio, setPeriodoRelatorio] = useState<'HOJE' | 'SEMANA' | 'MES' | 'GERAL'>('MES');
 
-  // Estado para Confirmação de Exclusão
   const [confirmDelete, setConfirmDelete] = useState<{ id: string, type: 'PRODUCT' | 'CLIENT', name: string } | null>(null);
 
   const [pwUser, setPwUser] = useState<string>('');
   const [pwNew, setPwNew] = useState<string>('');
 
   const [pForm, setPForm] = useState({ nome: '', custo: '', venda: '', comissao: '', margem: '', ativo: true, estoquePrincipal: '' });
-  const [entryForm, setEntryForm] = useState({ qtd: '', custo: '' });
   const [clientForm, setClientForm] = useState<Partial<Client>>({ nomeFantasia: '', telefone: '', endereco: '', bairro: '', diaRoteiro: 1, ativo: true, ativarCnpj: false, cnpj: '', pinLocalizacao: '', ordem: 0 });
   const [userForm, setUserForm] = useState<Partial<User>>({ nome: '', foto: '', telefone: '', pin: '', placaVeiculo: '' });
   const [selectedVendedorId, setSelectedVendedorId] = useState('');
@@ -169,7 +164,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const userPhotoInputRef = useRef<HTMLInputElement>(null);
 
   const getClientAvgRevenue = (id: string) => {
-    const cSales = props.sales.filter(s => s.clientId === id).slice(-3);
+    const cSales = props.sales.filter(s => s.clientId === id);
     if (cSales.length === 0) return "0.00";
     return (cSales.reduce((acc, curr) => acc + (curr.valorTotal ?? 0), 0) / cSales.length).toFixed(2);
   };
@@ -244,9 +239,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     
     const jaPago = sellerLogs.reduce((acc, curr) => acc + (curr.valorPago ?? 0), 0);
     const totalDespesas = sellerExps.reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
-
     const disponivel = totalCommsEligible - jaPago - totalDespesas;
-    
     const aReceber = sellerComms
       .filter(c => c.status === 'A_RECEBER')
       .reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
@@ -608,7 +601,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           <div className="grid gap-2 px-1">
             {props.clients.filter(c => c.nomeFantasia.toLowerCase().includes(search.toLowerCase())).sort((a,b) => (a.nomeFantasia||'').toLowerCase().localeCompare((b.nomeFantasia||'').toLowerCase())).map(c => ( 
               <div key={c.id} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex items-center justify-between transition-all hover:border-blue-200">
-                <div className="flex-1 min-w-0 pr-2">
+                <div className="flex-1 min-w-0 pr-2 cursor-pointer" onClick={() => setViewingClientHistory(c)}>
                   <div className="flex items-center gap-2"><h3 className="font-bold text-gray-800 text-[13px] leading-tight uppercase truncate">{c.nomeFantasia}</h3>{c.telefone && <a href={`https://wa.me/55${c.telefone.replace(/\D/g, '')}`} target="_blank" className="text-emerald-500" onClick={(e) => e.stopPropagation()}><i className="fa-brands fa-whatsapp text-lg"></i></a>}</div>
                   <div className="flex items-center gap-3 mt-1.5"><p className="text-[10px] text-gray-400 font-black uppercase truncate">{DIAS_SEMANA[c.diaRoteiro]}</p><div className="flex items-center gap-1.5 bg-blue-50 px-2 py-0.5 rounded border border-blue-100 shadow-inner whitespace-nowrap"><i className="fa-solid fa-chart-line text-blue-400 text-[10px]"></i><span className="text-[11px] font-black text-blue-600">R$ {getClientAvgRevenue(c.id)}</span></div></div>
                 </div>
@@ -714,7 +707,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                   {isOpen && (
                     <div className="p-4 bg-white space-y-2 border-t border-indigo-50 animate-in slide-in-from-top duration-300">
                       {clientsInDay.map(c => (
-                        <div key={c.id} className="p-3 bg-gray-50 rounded-2xl flex justify-between items-center group">
+                        <div key={c.id} className="p-3 bg-gray-50 rounded-2xl flex justify-between items-center group cursor-pointer" onClick={() => setViewingClientHistory(c)}>
                           <div className="flex items-center gap-3">
                              <div className="flex flex-col gap-1">
                                 <button onClick={(e) => { e.stopPropagation(); moveClient(c.id, 'UP', dia); }} className="text-gray-300 hover:text-indigo-600 active:scale-125 transition-all"><i className="fa-solid fa-chevron-up text-[10px]"></i></button>
@@ -761,7 +754,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
               <h3 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-6 flex items-center gap-2"><i className="fa-solid fa-star text-orange-500"></i> Top 10 Clientes (Ticket)</h3>
               <div className="space-y-4">
                 {reportStats.topClients.map((c, idx) => (
-                  <div key={c.id} className="flex justify-between items-center pb-3 border-b border-gray-50 last:border-0">
+                  <div key={c.id} className="flex justify-between items-center pb-3 border-b border-gray-50 last:border-0 cursor-pointer" onClick={() => setViewingClientHistory(props.clients.find(cli => cli.id === c.id)!)}>
                     <div className="flex items-center gap-3">
                       <span className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black ${idx < 3 ? 'bg-orange-100 text-orange-700' : 'bg-gray-100 text-gray-400'}`}>{idx + 1}</span>
                       <span className="text-xs font-bold text-gray-700 uppercase truncate max-w-[180px]">{c.nome}</span>
@@ -797,7 +790,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                    <span className={`text-[9px] font-black px-2 py-0.5 rounded uppercase ${isOverdue ? 'bg-rose-600 text-white animate-pulse' : 'bg-orange-50 text-orange-600'}`}>{isOverdue ? 'VENCIDO / HOJE' : 'EM ABERTO'}</span>
                 </div>
                 <div className="flex justify-between items-end">
-                   <div>
+                   <div className="cursor-pointer" onClick={() => setViewingClientHistory(props.clients.find(c => c.id === s.clientId)!)}>
                      <h4 className={`font-bold text-sm leading-tight ${isOverdue ? 'text-rose-900' : 'text-gray-800'}`}>{props.clients.find(c => c.id === s.clientId)?.nomeFantasia || 'Cliente'}</h4>
                      <p className="text-[10px] text-gray-400 font-bold uppercase mt-1">Vend: {props.users.find(u => u.id === s.vendedorId)?.nome ?? 'Desc.'}</p> 
                      {(s.valorPago ?? 0) > 0 && <p className="text-[9px] text-emerald-600 font-bold uppercase mt-1">Já pago: R$ {(s.valorPago ?? 0).toFixed(2)}</p>} 
@@ -1049,6 +1042,15 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             <div className="p-6 bg-gray-50 border-t border-gray-100 flex flex-col gap-2"><button onClick={() => setSelectedSale(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Voltar</button></div>
           </div>
         </div>
+      )}
+
+      {viewingClientHistory && (
+        <ClientHistory 
+          client={viewingClientHistory} 
+          sales={props.sales} 
+          products={props.products} 
+          onClose={() => setViewingClientHistory(null)} 
+        />
       )}
     </div>
   );

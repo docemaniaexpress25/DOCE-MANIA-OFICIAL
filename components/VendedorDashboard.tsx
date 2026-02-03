@@ -4,6 +4,7 @@ import { DIAS_SEMANA } from '../constants';
 import PDV from './PDV';
 import Cupom from './Cupom';
 import RelatorioFiscal from './RelatorioFiscal';
+import ClientHistory from './ClientHistory';
 import { DailyRouteState, loadLocalState, saveLocalState } from '../utils/persistence';
 
 interface VendedorDashboardProps {
@@ -43,18 +44,17 @@ type TabType = 'HOME' | 'ROTEIRO' | 'CARGA' | 'HISTORY' | 'FINANCE' | 'CREDIT' |
 const VendedorDashboard: React.FC<VendedorDashboardProps> = ({ 
   user, products, clients, cargas, cargasPendentes, sales, commissions, payoutLogs, expenses, messages, markMessageAsRead, processSale, addClient, updateClient, deleteClient, receivePayment, deleteSale, aceitarCarga, addExpense, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, updateDailyRoute, companyName, companyCnpj
 }) => {
-  // Persistência Completa para Sobreviver ao Refresh
   const [activeTab, setActiveTab] = useState<TabType>(() => loadLocalState('v_activeTab', 'HOME'));
   const [selectedClient, setSelectedClient] = useState<Client | null>(() => loadLocalState('v_selectedClient', null));
   const [viewingSale, setViewingSale] = useState<Sale | null>(() => loadLocalState('v_viewingSale', null));
   const [showFiscalization, setShowFiscalization] = useState(() => loadLocalState('v_showFiscalization', false));
+  const [viewingClientHistory, setViewingClientHistory] = useState<Client | null>(null);
 
   useEffect(() => { saveLocalState('v_activeTab', activeTab); }, [activeTab]);
   useEffect(() => { saveLocalState('v_selectedClient', selectedClient); }, [selectedClient]);
   useEffect(() => { saveLocalState('v_viewingSale', viewingSale); }, [viewingSale]);
   useEffect(() => { saveLocalState('v_showFiscalization', showFiscalization); }, [showFiscalization]);
 
-  // Integração com o Botão Voltar Nativo
   useEffect(() => {
     const handlePopState = (event: PopStateEvent) => {
       const state = event.state;
@@ -72,11 +72,9 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     };
 
     window.addEventListener('popstate', handlePopState);
-    
     if (!window.history.state) {
       window.history.replaceState({ tab: activeTab, client: selectedClient, sale: viewingSale, fiscal: showFiscalization }, '');
     }
-
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
@@ -103,11 +101,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const [weeklySearch, setWeeklySearch] = useState('');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [cForm, setCForm] = useState<Partial<Client>>({});
-
-  // Estado para Confirmação de Pular Cliente
   const [confirmSkipId, setConfirmSkipId] = useState<string | null>(null);
-
-  // Estados para Despesa
   const [showExpenseForm, setShowExpenseForm] = useState(false);
   const [expenseDesc, setExpenseDesc] = useState('');
   const [expenseVal, setExpenseVal] = useState('');
@@ -284,10 +278,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     
     const jaPago = payoutLogs.reduce((acc, curr) => acc + (curr.valorPago ?? 0), 0);
     const totalDespesas = expenses.reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
-
-    // Saldo = Liberado - Pagos - Despesas
     const disponivel = totalCommsEligible - jaPago - totalDespesas;
-    
     const pendente = vCommsAll
       .filter(c => c.status === 'A_RECEBER')
       .reduce((acc, curr) => acc + (curr.valor ?? 0), 0); 
@@ -316,7 +307,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
   const totalUnidadesCarga = useMemo(() => minhaCarga.reduce((acc, curr) => acc + (curr.quantidade ?? 0), 0), [minhaCarga]);
 
-  // Unificando Histórico Financeiro (Repasses e Despesas)
   const unifiedHistory = useMemo(() => {
     const combined = [
       ...payoutLogs.map(p => ({ 
@@ -403,7 +393,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
             return (
               <div key={c.id} className={`p-4 rounded-3xl border flex flex-col transition-all ${isVisited ? 'bg-gray-100 border-gray-200 grayscale opacity-60' : 'bg-white border-gray-100 shadow-sm'}`}>
                 <div className="flex justify-between items-center">
-                  <div className="flex-1"><p className="font-bold text-gray-800 leading-tight uppercase">{c.nomeFantasia ?? 'Cliente'}</p><p className="text-[10px] text-gray-400 mt-1 uppercase font-semibold"><i className="fa-solid fa-location-dot mr-1"></i> {(c.bairro || 'S/B')}</p></div>
+                  <div className="flex-1 cursor-pointer" onClick={() => setViewingClientHistory(c)}><p className="font-bold text-gray-800 leading-tight uppercase">{c.nomeFantasia ?? 'Cliente'}</p><p className="text-[10px] text-gray-400 mt-1 uppercase font-semibold"><i className="fa-solid fa-location-dot mr-1"></i> {(c.bairro || 'S/B')}</p></div>
                   {!isVisited ? (
                     <div className="flex gap-2">
                       <button onClick={() => setConfirmSkipId(c.id)} className="w-10 h-10 bg-gray-50 text-gray-400 rounded-2xl flex items-center justify-center"><i className="fa-solid fa-forward"></i></button>
@@ -423,7 +413,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
           <div className="grid gap-3">
             {clients.sort((a,b) => a.nomeFantasia.localeCompare(b.nomeFantasia)).map(c => (
               <div key={c.id} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex justify-between items-center transition-all active:scale-95 group">
-                <div><h4 className="font-bold text-gray-800 text-sm leading-tight uppercase">{c.nomeFantasia ?? 'Cliente'}</h4><p className="text-[10px] text-gray-400 font-semibold uppercase mt-1">{c.telefone} • {DIAS_SEMANA[c.diaRoteiro]}</p></div>
+                <div className="flex-1 cursor-pointer" onClick={() => setViewingClientHistory(c)}><h4 className="font-bold text-gray-800 text-sm leading-tight uppercase">{c.nomeFantasia ?? 'Cliente'}</h4><p className="text-[10px] text-gray-400 font-semibold uppercase mt-1">{c.telefone} • {DIAS_SEMANA[c.diaRoteiro]}</p></div>
                 <button onClick={() => handleOpenEditClient(c)} className="w-10 h-10 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center active:scale-95"><i className="fa-solid fa-pencil-alt text-xs"></i></button>
               </div>
             ))}
@@ -450,8 +440,8 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                   {isOpen && (
                     <div className="p-4 bg-white space-y-2 border-t border-indigo-50">
                       {clientsInDay.map(c => (
-                        <div key={c.id} className="p-3 bg-gray-50 rounded-2xl flex justify-between items-center">
-                          <div><p className="font-bold text-gray-800 text-xs uppercase">{c.nomeFantasia}</p><p className="text-[9px] text-gray-400 font-bold mt-0.5">{c.bairro || 'Sem Bairro'}</p></div>
+                        <div key={c.id} className="p-3 bg-gray-50 rounded-2xl flex justify-between items-center group">
+                          <div className="flex-1 cursor-pointer" onClick={() => setViewingClientHistory(c)}><p className="font-bold text-gray-800 text-xs uppercase">{c.nomeFantasia}</p><p className="text-[9px] text-gray-400 font-bold mt-0.5">{c.bairro || 'Sem Bairro'}</p></div>
                           <button onClick={() => handleAddToTodayRoute(c.id)} className="w-8 h-8 bg-indigo-100 text-indigo-600 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-plus text-xs"></i></button>
                         </div>
                       ))}
@@ -516,7 +506,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 <div className="text-center bg-orange-50 p-3 rounded-xl"><p className="text-[9px] font-black text-orange-600 uppercase mb-1">A Prazo</p><p className="text-sm font-black text-orange-700">R$ {historySummary.prazo.toFixed(2)}</p></div>
              </div>
           </div>
-          {filteredHistory.map(s => (<div key={s.id} className="bg-white p-4 rounded-3xl border border-gray-100 flex flex-col shadow-sm"><div className="flex justify-between items-center mb-2"><p className="font-bold text-gray-800 text-sm uppercase">{clients.find(c => c.id === s.clientId)?.nomeFantasia ?? 'Cliente'}</p><p className="text-sm font-semibold text-emerald-600">R$ {s.valorTotal.toFixed(2)}</p></div><div className="flex justify-between items-end"><p className="text-[10px] text-gray-400 font-semibold">{s.metodoPagamento} • {new Date(s.data).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</p><div className="flex gap-3"><button onClick={() => setViewingSale(s)} className="text-[#1E3A5F] text-lg"><i className="fa-solid fa-file-invoice"></i></button></div></div></div>))} 
+          {filteredHistory.map(s => (<div key={s.id} className="bg-white p-4 rounded-3xl border border-gray-100 flex flex-col shadow-sm"><div className="flex justify-between items-center mb-2"><p className="font-bold text-gray-800 text-sm uppercase cursor-pointer" onClick={() => setViewingClientHistory(clients.find(c => c.id === s.clientId)!)}>{clients.find(c => c.id === s.clientId)?.nomeFantasia ?? 'Cliente'}</p><p className="text-sm font-semibold text-emerald-600">R$ {s.valorTotal.toFixed(2)}</p></div><div className="flex justify-between items-end"><p className="text-[10px] text-gray-400 font-semibold">{s.metodoPagamento} • {new Date(s.data).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</p><div className="flex gap-3"><button onClick={() => setViewingSale(s)} className="text-[#1E3A5F] text-lg"><i className="fa-solid fa-file-invoice"></i></button></div></div></div>))} 
         </div>
       )}
 
@@ -548,7 +538,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
               </div>
            </div>
 
-           {/* Sistema de Despesas */}
            <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-xs font-black text-gray-800 uppercase tracking-widest">Lançar Despesa</h3>
@@ -591,7 +580,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
               )}
            </div>
 
-           {/* LOG UNIFICADO: RECEBIMENTOS E DESPESAS */}
            <div className="space-y-2 pt-4">
              <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">Histórico Financeiro</h3>
              <div className="bg-white rounded-3xl border border-gray-100 shadow-sm divide-y divide-gray-50 overflow-hidden">
@@ -662,7 +650,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
               <div key={s.id} className={`p-5 rounded-3xl border shadow-sm flex flex-col transition-all ${isOverdue ? 'bg-rose-50 border-rose-200' : 'bg-white border-gray-100'}`}>
                 <div className="flex justify-between items-start mb-2">
                    <div>
-                      <h4 className={`font-bold text-sm leading-tight uppercase ${isOverdue ? 'text-rose-900' : 'text-gray-800'}`}>{clients.find(c => c.id === s.clientId)?.nomeFantasia || 'Cliente'}</h4>
+                      <h4 className={`font-bold text-sm leading-tight uppercase cursor-pointer ${isOverdue ? 'text-rose-900' : 'text-gray-800'}`} onClick={() => setViewingClientHistory(clients.find(c => c.id === s.clientId)!)}>{clients.find(c => c.id === s.clientId)?.nomeFantasia || 'Cliente'}</h4>
                       <div className="flex flex-col mt-2">
                         <span className={`text-[9px] font-black uppercase ${isOverdue ? 'text-rose-600' : 'text-gray-400'}`}>Vencimento</span>
                         <span className={`text-xs font-black ${isOverdue ? 'text-rose-700' : 'text-gray-800'}`}>{s.dataVencimento ? new Date(s.dataVencimento).toLocaleDateString() : 'N/D'}</span>
@@ -742,6 +730,15 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
              </div>
           </div>
         </div>
+      )}
+
+      {viewingClientHistory && (
+        <ClientHistory 
+          client={viewingClientHistory} 
+          sales={sales} 
+          products={products} 
+          onClose={() => setViewingClientHistory(null)} 
+        />
       )}
     </div>
   );

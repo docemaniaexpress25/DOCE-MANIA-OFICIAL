@@ -1,44 +1,54 @@
 import { Sale, Client, Product } from '../types';
 
 // UUIDs de serviço e característica comuns para impressoras térmicas Bluetooth
-// ATENÇÃO: Estes são UUIDs genéricos de exemplo. Eles DEVEM ser substituídos pelos UUIDs
-// específicos das suas impressoras (56mm e 80mm) para que a conexão funcione.
+// Estes UUIDs são os padrões para a maioria das impressoras de 58mm/80mm baratas
 const PRINTER_SERVICE_UUID = '000018f0-0000-1000-8000-00805f9b34fb'; 
 const PRINTER_CHARACTERISTIC_UUID = '00002af1-0000-1000-8000-00805f9b34fb'; 
 
-// Função utilitária para converter string em ArrayBuffer (simulando comandos ESC/POS)
-const generateEscPosCommands = (text: string, width: 56 | 80): ArrayBuffer => {
+// Função utilitária para converter string em ArrayBuffer com comandos ESC/POS
+const generateEscPosCommands = (text: string): ArrayBuffer => {
     const encoder = new TextEncoder();
     
-    // Comandos ESC/POS Conceituais:
-    // 1. Inicialização (ESC @)
+    // Comandos ESC/POS Fundamentais:
+    // 1. Inicialização da impressora (ESC @) -> 1B 40
     const initCommand = new Uint8Array([0x1B, 0x40]); 
-    // 2. Corte de papel (GS V 0)
+    
+    // 2. Selecionar Página de Código (ESC t n) -> 1B 74 n
+    // n=2 costuma ser CP850 (Multilingual), n=3 CP860 (Português)
+    // Vamos usar n=2 (CP850) que é o padrão mais compatível para acentos
+    const codePageCommand = new Uint8Array([0x1B, 0x74, 0x02]); 
+    
+    // 3. Comando de Corte de Papel (GS V 1) -> 1D 56 01
     const cutCommand = new Uint8Array([0x1D, 0x56, 0x01]); 
     
+    // Codifica o texto (o Cupom.tsx já removeu acentos, o que garante compatibilidade ASCII)
     const textBytes = encoder.encode(text);
 
-    // Calculando o tamanho total do buffer: Inicialização + Texto + Corte + 5 linhas vazias
-    const totalLength = initCommand.byteLength + textBytes.byteLength + cutCommand.byteLength + 5; 
+    // Calculando o tamanho total: Init + CodePage + Texto + 5 Newlines + Cut
+    const totalLength = initCommand.byteLength + codePageCommand.byteLength + textBytes.byteLength + 5 + cutCommand.byteLength; 
     const buffer = new Uint8Array(totalLength);
     
     let offset = 0;
     
-    // Adiciona comando de inicialização
+    // 1. Adiciona comando de inicialização
     buffer.set(initCommand, offset);
     offset += initCommand.byteLength;
     
-    // Adiciona o texto formatado
+    // 2. Adiciona comando de página de código
+    buffer.set(codePageCommand, offset);
+    offset += codePageCommand.byteLength;
+    
+    // 3. Adiciona o texto formatado
     buffer.set(textBytes, offset);
     offset += textBytes.byteLength;
     
-    // Adiciona 5 linhas vazias para empurrar o papel
+    // 4. Adiciona 5 linhas vazias para garantir que o texto saia da impressora antes do corte
     for (let i = 0; i < 5; i++) {
         buffer.set(encoder.encode('\n'), offset);
         offset += 1;
     }
 
-    // Adiciona comando de corte
+    // 5. Adiciona comando de corte
     buffer.set(cutCommand, offset);
     
     return buffer.buffer;
@@ -47,68 +57,56 @@ const generateEscPosCommands = (text: string, width: 56 | 80): ArrayBuffer => {
 export const printerService = {
     /**
      * Conecta à impressora Bluetooth e envia os dados de impressão.
-     * @param dataBuffer ArrayBuffer contendo os comandos ESC/POS.
-     * @param width Largura da impressora para filtragem (56 ou 80).
      */
-    async connectAndPrint(dataBuffer: ArrayBuffer, width: 56 | 80): Promise<boolean> {
-        const nav = navigator as any; // Asserção de tipo para acessar a API Bluetooth
+    async connectAndPrint(dataBuffer: ArrayBuffer): Promise<boolean> {
+        const nav = navigator as any;
 
         if (typeof nav === 'undefined' || !nav.bluetooth) {
-            console.error("Web Bluetooth API não suportada neste ambiente.");
-            throw new Error("Web Bluetooth API não suportada.");
+            console.error("[printerService] Web Bluetooth API não suportada.");
+            throw new Error("Seu navegador não suporta impressão Bluetooth direta.");
         }
 
         try {
-            // 1. Solicitar dispositivo (o navegador abre a janela de seleção)
+            // 1. Solicitar dispositivo
             const device = await nav.bluetooth.requestDevice({
                 filters: [{ services: [PRINTER_SERVICE_UUID] }],
                 optionalServices: [PRINTER_SERVICE_UUID]
             });
 
-            if (!device.gatt) {
-                throw new Error("GATT Server não encontrado no dispositivo.");
-            }
-
-            // 2. Conectar ao servidor GATT
+            console.log("[printerService] Conectando ao dispositivo:", device.name);
             const server = await device.gatt.connect();
 
-            // 3. Obter o serviço de impressão
+            // 2. Obter o serviço e característica
             const service = await server.getPrimaryService(PRINTER_SERVICE_UUID);
-
-            // 4. Obter a característica de escrita
             const characteristic = await service.getCharacteristic(PRINTER_CHARACTERISTIC_UUID);
 
-            // 5. Enviar os dados em chunks (necessário para grandes volumes de dados)
-            const chunkSize = 512; // Tamanho comum de chunk
-            for (let i = 0; i < dataBuffer.byteLength; i += chunkSize) {
-                const chunk = dataBuffer.slice(i, i + chunkSize);
-                // Usamos writeValueWithoutResponse para maior velocidade em impressoras
+            // 3. Enviar os dados em chunks menores com um pequeno atraso entre eles
+            // Isso evita o estouro do buffer da impressora (comum em BLE)
+            const chunkSize = 20; // Chunks de 20 bytes são mais seguros para BLE genérico
+            const view = new Uint8Array(dataBuffer);
+            
+            for (let i = 0; i < view.length; i += chunkSize) {
+                const chunk = view.slice(i, i + chunkSize);
                 await characteristic.writeValueWithoutResponse(chunk);
+                // Pequena pausa de 20ms entre chunks para a impressora processar
+                await new Promise(resolve => setTimeout(resolve, 20));
             }
 
-            // 6. Desconectar (opcional, mas recomendado)
-            // server.disconnect(); 
+            console.log("[printerService] Impressão concluída com sucesso.");
+            
+            // Desconecta após a impressão para liberar o dispositivo
+            setTimeout(() => {
+                if (device.gatt.connected) {
+                    device.gatt.disconnect();
+                    console.log("[printerService] Desconectado.");
+                }
+            }, 1000);
 
             return true;
 
         } catch (error) {
-            let errorMessage = "Erro desconhecido na impressão.";
-            
-            if (error instanceof Error) {
-                // Erro de cancelamento do usuário (ex: DOMException: User cancelled the request)
-                if (error.name === 'NotFoundError' || error.message.includes('cancelled')) {
-                    errorMessage = "Conexão cancelada ou impressora não encontrada. Verifique o Bluetooth.";
-                } else {
-                    errorMessage = `Falha na conexão: ${error.message}`;
-                }
-            } else if (typeof error === 'string') {
-                errorMessage = error;
-            }
-
-            console.error("[printerService] Erro durante a impressão Bluetooth:", errorMessage, error);
-            
-            // Lançar o erro para que o Cupom.tsx possa exibir o toast de falha
-            throw new Error(errorMessage);
+            console.error("[printerService] Erro na impressão Bluetooth:", error);
+            throw error;
         }
     },
 
@@ -116,10 +114,10 @@ export const printerService = {
      * Prepara os dados da venda e inicia o processo de impressão.
      */
     async printSale(sale: Sale, client: Client, products: Product[], width: 56 | 80, rawText: string): Promise<boolean> {
-        // 1. Gerar comandos ESC/POS a partir do texto formatado
-        const escposData = generateEscPosCommands(rawText, width);
+        // Gerar comandos ESC/POS
+        const escposData = generateEscPosCommands(rawText);
         
-        // 2. Conectar e imprimir
-        return this.connectAndPrint(escposData, width);
+        // Conectar e imprimir
+        return this.connectAndPrint(escposData);
     }
 };

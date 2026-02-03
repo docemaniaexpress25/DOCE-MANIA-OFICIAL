@@ -39,7 +39,7 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
     t += '-'.repeat(totalWidth) + '\n';
     
     const clientName = (client.nomeFantasia || 'CONSUMIDOR').toUpperCase();
-    t += `CLIENTE: ${padR(clientName, totalWidth - 9)}\n`;
+    t += `CLIENTE: ${clientName}\n`;
     t += '-'.repeat(totalWidth) + '\n';
 
     // Colunas Rígidas: DESC(20) | QTD(4) | VAL(8) = 32
@@ -60,7 +60,7 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
       // Primeira linha do item (alinhamento fixo)
       t += padR(rawName.substring(0, descW), descW) + padL(qtyStr, qtyW) + padL(valStr, valW) + '\n';
 
-      // Quebra manual de descrição longa em linhas de 32 colunas
+      // Quebra manual de descrição longa
       let remaining = rawName.substring(descW);
       while (remaining.length > 0) {
         t += padR(remaining.substring(0, totalWidth), totalWidth) + '\n';
@@ -72,12 +72,9 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
     const totalVal = `R$ ${sale.valorTotal.toFixed(2)}`;
     t += padR('TOTAL:', totalWidth - totalVal.length) + totalVal + '\n';
     
-    // Espaçamento solicitado antes da forma de pagamento
-    t += '\n'; 
-    
     t += `FORMA DE PAGAMENTO: ${sale.metodoPagamento}\n`;
     
-    // Remove a linha de detalhe se for apenas "Dinheiro"
+    // Mostra detalhe apenas se não for Dinheiro
     if (sale.detalhePagamento && sale.detalhePagamento.toUpperCase() !== 'DINHEIRO') {
       t += `DETALHE: ${sale.detalhePagamento.toUpperCase()}\n`;
     }
@@ -88,7 +85,7 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
     t += center('E PAGUE COM PIX', totalWidth) + '\n';
     t += '-'.repeat(totalWidth) + '\n';
 
-    // Avanço de papel obrigatório para destaque manual
+    // Avanço de papel para destaque
     t += '\n\n\n\n\n';
 
     return t;

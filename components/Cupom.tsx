@@ -23,18 +23,16 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
                      saleDate.getMonth() === today.getMonth() && 
                      saleDate.getFullYear() === today.getFullYear();
 
-  const padRight = (str: string, length: number) => str.substring(0, length).padEnd(length);
-  const padLeft = (str: string, length: number) => str.substring(0, length).padStart(length);
-
   const center = (str: string, len: number) => {
     const spaces = Math.max(0, Math.floor((len - str.length) / 2));
     return ' '.repeat(spaces) + str;
   };
 
   const generateText = (width: '56MM' | '80MM') => {
-    const totalWidth = width === '80MM' ? 48 : 32; // 48 caracteres para 80mm, 32 para 56mm
+    // Define a largura total da linha: 32 para 56mm, 48 para 80mm (padrão seguro)
+    const totalWidth = width === '80MM' ? 48 : 32; 
     
-    // Funções auxiliares ajustadas para a largura total
+    // Funções auxiliares
     const pad = (str: string, len: number) => str.padEnd(len).substring(0, len);
     const padL = (str: string, len: number) => str.padStart(len).substring(0, len);
     
@@ -42,22 +40,23 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
     t += center('CUPOM NAO FISCAL', totalWidth) + '\n';
     t += '-'.repeat(totalWidth) + '\n\n';
     
-    const clientName = (client.nomeFantasia || 'Nao identificado').substring(0, totalWidth - 1);
-    t += `Cliente: ${pad(clientName, totalWidth)}\n\n`;
-    
+    const clientName = (client.nomeFantasia || 'CLIENTE NAO IDENTIFICADO').toUpperCase().substring(0, totalWidth - 1);
+    t += `CLIENTE: ${clientName}\n\n`; 
+
+    // --- CABEÇALHO DA TABELA DE ITENS ---
     t += '-'.repeat(totalWidth) + '\n';
     
     // Definição das larguras das colunas
-    const qtyLen = 4;
-    const finalValLen = width === '80MM' ? 13 : 9; // R$ 00.000,00 (13) ou R$ 0.000,00 (9)
-    const finalNameLen = totalWidth - qtyLen - finalValLen; // Largura restante para o nome
+    const qtyLen = 4; // Ex: ' 1X'
+    const finalValLen = width === '80MM' ? 13 : 9; // Ex: ' R$ 10.99'
+    const finalNameLen = totalWidth - qtyLen - finalValLen; // Largura restante para a descrição
 
     t += pad('DESCRICAO', finalNameLen) + padL('QTD', qtyLen) + padL('VALOR', finalValLen) + '\n';
     t += '-'.repeat(totalWidth) + '\n';
     
+    // --- LISTA DE ITENS ---
     sale.itens.forEach(i => {
       const p = products.find(prod => prod.id === i.produtoId);
-      // Normaliza o texto para evitar problemas de codificação na impressora
       const nomeProduto = (p?.nome ?? 'PRODUTO DESCONHECIDO').toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/Ç/g, 'C');
       
       const maxLineLength = finalNameLen;
@@ -69,27 +68,30 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
 
         if (remainingName.length === 0) {
           // Última linha do item: inclui QTD e VALOR
-          const qty = padL(`${(i.quantidade ?? 0)}x`, qtyLen);
+          const qty = padL(`${(i.quantidade ?? 0)}X`, qtyLen);
           const subtotal = ((i.quantidade ?? 0) * (i.precoVenda ?? 0)).toFixed(2);
           const val = padL(subtotal, finalValLen);
           
           t += `${pad(line, finalNameLen)}${qty}${val}\n`;
         } else {
-          // Linhas de continuação: apenas o nome, preenchendo a largura total
+          // Linhas de continuação: apenas o nome, preenchido até a largura total
           t += `${pad(line, totalWidth)}\n`;
         }
       }
     });
     
+    // --- TOTAL ---
     t += '-'.repeat(totalWidth) + '\n';
     const totalLabel = "TOTAL:";
     const totalVal = `R$ ${(sale.valorTotal ?? 0).toFixed(2)}`;
     // Alinha o total à direita
     t += `${pad(totalLabel, totalWidth - totalVal.length)}${totalVal}\n\n`;
     
-    const paymentMethod = (sale.metodoPagamento ?? 'N/D').replace('_', '/');
-    t += `Forma de Pagamento: ${paymentMethod}\n\n`;
+    // --- FORMA DE PAGAMENTO ---
+    const paymentMethod = (sale.metodoPagamento ?? 'N/D').toUpperCase().replace('_', '/');
+    t += `FORMA DE PAGAMENTO: ${paymentMethod}\n\n`; 
     
+    // --- FOOTER ---
     t += '-'.repeat(totalWidth) + '\n';
     t += center('OBRIGADO PELA PREFERENCIA!', totalWidth) + '\n';
     t += center('ESCANEIE O QR CODE', totalWidth) + '\n';

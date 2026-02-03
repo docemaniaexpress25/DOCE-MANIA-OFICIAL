@@ -77,8 +77,6 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
           isFirstLine = false;
         } else {
           // Linhas de continuação: apenas o nome, preenchido até a largura total
-          // Usamos pad(line, totalWidth) para garantir que a linha de continuação
-          // ocupe o espaço total e não interfira no próximo item.
           t += `${pad(line, totalWidth)}\n`;
         }
       }
@@ -94,7 +92,11 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
     // --- FORMA DE PAGAMENTO ---
     const paymentMethod = (sale.metodoPagamento ?? 'N/D').toUpperCase().replace('_', '/');
     t += `FORMA DE PAGAMENTO: ${paymentMethod}\n`; 
-    if (sale.detalhePagamento) {
+    
+    // Verifica se deve incluir o detalhe
+    const shouldIncludeDetalhe = sale.detalhePagamento && !(sale.metodoPagamento === 'DINHEIRO' && sale.detalhePagamento.toLowerCase().includes('dinheiro'));
+
+    if (shouldIncludeDetalhe) {
         t += `DETALHE: ${sale.detalhePagamento.toUpperCase()}\n\n`;
     } else {
         t += '\n';

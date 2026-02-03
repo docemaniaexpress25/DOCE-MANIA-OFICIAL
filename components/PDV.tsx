@@ -28,9 +28,12 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const [valorRecebido, setValorRecebido] = useState<string>('');
   const [selectedPixSlot, setSelectedPixSlot] = useState<1 | 2 | null>(null);
 
+  // Estados para o sistema de troca
+  const [isTrocaActive, setIsTrocaActive] = useState(false);
+  const [valorTroca, setValorTroca] = useState('');
+
   const todayStr = new Date().toISOString().split('T')[0];
   
-  // A lista 'products' já está ordenada pelo App.tsx.
   const productIdsInCarga = useMemo(() => new Set(minhaCarga.map(c => c.produtoId)), [minhaCarga]);
   const orderedProductsInCarga = useMemo(() => products.filter(p => productIdsInCarga.has(p.id)), [products, productIdsInCarga]);
 
@@ -70,11 +73,14 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     });
   };
 
-  const total = Object.entries(cart).reduce((acc, [_, item]) => {
+  const subtotal = Object.entries(cart).reduce((acc, [_, item]) => {
     const cartItem = item as { quantidade: number, precoVenda: string };
     const price = parseFloat(cartItem.precoVenda) || 0;
     return acc + ((cartItem.quantidade ?? 0) * price); 
   }, 0);
+
+  // Calcula o total subtraindo o desconto de troca se ativo
+  const total = Math.max(0, subtotal - (isTrocaActive ? parseFloat(valorTroca) || 0 : 0));
 
   const marginViolationInfo = useMemo(() => {
     if (!margemMinimaAtiva) return null;
@@ -106,10 +112,14 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         precoVenda: parseFloat(cartItem.precoVenda) || 0
       };
     });
-    const finalDetalhe = metodo === 'PIX' ? (selectedPixSlot === 1 ? pix1Name : pix2Name) : detalheMetodo;
+
+    const descontoInfo = isTrocaActive && parseFloat(valorTroca) > 0 ? ` (Troca: R$ ${parseFloat(valorTroca).toFixed(2)})` : '';
+    const finalDetalhe = (metodo === 'PIX' ? (selectedPixSlot === 1 ? pix1Name : pix2Name) : detalheMetodo) + descontoInfo;
+    
     const salePayload: any = { vendedorId, clientId: client.id, valorTotal: total, metodoPagamento: metodo, detalhePagamento: finalDetalhe, itens };
     if (metodo === 'A_PRAZO') { salePayload.statusPagamento = 'PENDENTE'; salePayload.dataVencimento = new Date(prazoData); }
     else { salePayload.statusPagamento = 'PAGO'; }
+    
     const newSale = await processSale(salePayload);
     if (newSale) { localStorage.removeItem(`pdv_cart_${vendedorId}_${client.id}`); onFinish(newSale); }
   };
@@ -122,10 +132,10 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           <p className="text-[9px] text-gray-400 uppercase font-black tracking-tighter">Atendimento</p>
           <h2 className="font-black text-xs text-gray-800 uppercase truncate">{client.nomeFantasia}</h2> 
         </div>
-        <button onClick={() => setCart({})} className="w-9 h-9 bg-rose-50 text-rose-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-trash-can text-sm"></i></button>
+        <button onClick={() => { setCart({}); setValorTroca(''); setIsTrocaActive(false); }} className="w-9 h-9 bg-rose-50 text-rose-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-trash-can text-sm"></i></button>
       </header>
 
-      <div className="flex-1 overflow-y-auto p-2 space-y-1.5 pb-32">
+      <div className="flex-1 overflow-y-auto p-2 space-y-1.5 pb-44">
         {orderedProductsInCarga.map(p => { 
           const itemNoCart = cart[p.id];
           const cargaOriginal = minhaCarga.find(c => c.produtoId === p.id)?.quantidade || 0;
@@ -166,10 +176,36 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           </div>
         )}
         
+        {/* Seletor discreto de troca/desconto */}
+        <div className="flex items-center justify-between px-1 mb-1 bg-gray-50/50 p-2 rounded-xl border border-gray-100/50">
+          <div className="flex items-center gap-2">
+            <button 
+              onClick={() => { setIsTrocaActive(!isTrocaActive); if(isTrocaActive) setValorTroca(''); }}
+              className={`w-8 h-4 rounded-full relative transition-colors ${isTrocaActive ? 'bg-orange-500' : 'bg-gray-300'}`}
+            >
+              <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-all ${isTrocaActive ? 'left-4.5' : 'left-0.5'}`}></div>
+            </button>
+            <span className="text-[10px] font-black text-gray-500 uppercase tracking-tighter">Troca / Vencidos</span>
+          </div>
+          {isTrocaActive && (
+            <div className="flex items-center gap-1.5 bg-white border border-orange-100 px-2 py-1 rounded-lg shadow-inner animate-in fade-in slide-in-from-right-2 duration-200">
+              <span className="text-[10px] font-black text-orange-400">R$</span>
+              <input 
+                type="number" 
+                inputMode="decimal"
+                value={valorTroca} 
+                onChange={(e) => setValorTroca(e.target.value)} 
+                placeholder="0.00"
+                className="w-16 bg-transparent border-none p-0 text-[11px] font-black outline-none text-orange-600 text-right"
+              />
+            </div>
+          )}
+        </div>
+
         <div className="flex justify-between items-end px-1">
             <div className="flex flex-col">
               <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Total Pedido</span>
-              <span className="text-xl font-black text-gray-800 leading-none">R$ {total.toFixed(2)}</span>
+              <span className={`text-xl font-black leading-none ${isTrocaActive && parseFloat(valorTroca) > 0 ? 'text-orange-600' : 'text-gray-800'}`}>R$ {total.toFixed(2)}</span>
             </div>
             <div className="flex gap-1.5">
               {(['DINHEIRO', 'PIX', 'A_PRAZO'] as PaymentMethod[]).map(m => (

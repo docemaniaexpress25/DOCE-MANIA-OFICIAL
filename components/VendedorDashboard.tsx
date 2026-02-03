@@ -506,7 +506,39 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 <div className="text-center bg-orange-50 p-3 rounded-xl"><p className="text-[9px] font-black text-orange-600 uppercase mb-1">A Prazo</p><p className="text-sm font-black text-orange-700">R$ {historySummary.prazo.toFixed(2)}</p></div>
              </div>
           </div>
-          {filteredHistory.map(s => (<div key={s.id} className="bg-white p-4 rounded-3xl border border-gray-100 flex flex-col shadow-sm"><div className="flex justify-between items-center mb-2"><p className="font-bold text-gray-800 text-sm uppercase cursor-pointer" onClick={() => setViewingClientHistory(clients.find(c => c.id === s.clientId)!)}>{clients.find(c => c.id === s.clientId)?.nomeFantasia ?? 'Cliente'}</p><p className="text-sm font-semibold text-emerald-600">R$ {s.valorTotal.toFixed(2)}</p></div><div className="flex justify-between items-end"><p className="text-[10px] text-gray-400 font-semibold">{s.metodoPagamento} • {new Date(s.data).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</p><div className="flex gap-3"><button onClick={() => setViewingSale(s)} className="text-[#1E3A5F] text-lg"><i className="fa-solid fa-file-invoice"></i></button></div></div></div>))} 
+          <div className="grid gap-3 px-1">
+            {filteredHistory.map(s => {
+              const client = clients.find(c => c.id === s.clientId);
+              return (
+                <div key={s.id} className="bg-white p-5 rounded-[2rem] border border-gray-100 shadow-sm flex items-center justify-between transition-all active:scale-[0.98] hover:border-blue-200 group">
+                  <div className="flex-1 min-w-0 pr-4">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className={`text-[8px] font-black px-2 py-0.5 rounded-full uppercase tracking-widest ${
+                        s.metodoPagamento === 'DINHEIRO' ? 'bg-emerald-50 text-emerald-600' : 
+                        s.metodoPagamento === 'PIX' ? 'bg-blue-50 text-blue-600' : 
+                        'bg-orange-50 text-orange-600'
+                      }`}>
+                        {s.metodoPagamento === 'A_PRAZO' ? 'PRAZO' : s.metodoPagamento}
+                      </span>
+                      <span className="text-[9px] text-gray-300 font-bold">{new Date(s.data).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
+                    </div>
+                    <h4 className="font-black text-gray-800 text-[13px] leading-tight uppercase truncate cursor-pointer hover:text-blue-600" onClick={() => setViewingClientHistory(client!)}>
+                      {client?.nomeFantasia ?? 'Cliente'}
+                    </h4>
+                  </div>
+                  <div className="text-right flex items-center gap-4">
+                    <div>
+                      <p className="text-sm font-black text-gray-800 leading-none">R$ {s.valorTotal.toFixed(2)}</p>
+                      <p className="text-[9px] text-gray-400 font-bold uppercase mt-1">Total</p>
+                    </div>
+                    <button onClick={() => setViewingSale(s)} className="w-10 h-10 bg-gray-50 text-gray-400 group-hover:bg-blue-600 group-hover:text-white rounded-2xl flex items-center justify-center transition-all">
+                      <i className="fa-solid fa-file-invoice text-sm"></i>
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 

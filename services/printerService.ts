@@ -7,21 +7,40 @@ const PRINTER_SERVICE_UUID = '000018f0-0000-1000-8000-00805f9b34fb';
 const PRINTER_CHARACTERISTIC_UUID = '00002af1-0000-1000-8000-00805f9b34fb'; 
 
 // Função utilitária para converter string em ArrayBuffer (simulando comandos ESC/POS)
-// Na implementação real, esta função usaria uma biblioteca ESC/POS para gerar comandos binários
 const generateEscPosCommands = (text: string, width: 56 | 80): ArrayBuffer => {
-    // Para fins conceituais, vamos apenas converter a string em bytes UTF-8
     const encoder = new TextEncoder();
-    const header = encoder.encode(`\n--- IMPRESSAO ${width}MM ---\n\n`);
-    const footer = encoder.encode(`\n--- FIM ---\n\n\n`);
+    
+    // Comandos ESC/POS Conceituais:
+    // 1. Inicialização (ESC @)
+    const initCommand = new Uint8Array([0x1B, 0x40]); 
+    // 2. Corte de papel (GS V 0)
+    const cutCommand = new Uint8Array([0x1D, 0x56, 0x01]); 
+    
     const textBytes = encoder.encode(text);
 
-    const totalLength = header.byteLength + textBytes.byteLength + footer.byteLength;
+    // Calculando o tamanho total do buffer: Inicialização + Texto + Corte + 5 linhas vazias
+    const totalLength = initCommand.byteLength + textBytes.byteLength + cutCommand.byteLength + 5; 
     const buffer = new Uint8Array(totalLength);
     
-    buffer.set(header, 0);
-    buffer.set(textBytes, header.byteLength);
-    buffer.set(footer, header.byteLength + textBytes.byteLength);
+    let offset = 0;
+    
+    // Adiciona comando de inicialização
+    buffer.set(initCommand, offset);
+    offset += initCommand.byteLength;
+    
+    // Adiciona o texto formatado
+    buffer.set(textBytes, offset);
+    offset += textBytes.byteLength;
+    
+    // Adiciona 5 linhas vazias para empurrar o papel
+    for (let i = 0; i < 5; i++) {
+        buffer.set(encoder.encode('\n'), offset);
+        offset += 1;
+    }
 
+    // Adiciona comando de corte
+    buffer.set(cutCommand, offset);
+    
     return buffer.buffer;
 };
 

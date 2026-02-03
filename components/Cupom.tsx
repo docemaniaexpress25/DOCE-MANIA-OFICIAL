@@ -26,16 +26,18 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
   const padRight = (str: string, length: number) => str.substring(0, length).padEnd(length);
   const padLeft = (str: string, length: number) => str.substring(0, length).padStart(length);
 
+  const center = (str: string, len: number) => {
+    const spaces = Math.max(0, Math.floor((len - str.length) / 2));
+    return ' '.repeat(spaces) + str;
+  };
+
   const generateText = (width: '56MM' | '80MM') => {
-    const totalWidth = width === '80MM' ? 48 : 32;
+    const totalWidth = width === '80MM' ? 48 : 32; // 48 caracteres para 80mm, 32 para 56mm
     
+    // Funções auxiliares ajustadas para a largura total
     const pad = (str: string, len: number) => str.padEnd(len).substring(0, len);
     const padL = (str: string, len: number) => str.padStart(len).substring(0, len);
-    const center = (str: string, len: number) => {
-      const spaces = Math.max(0, Math.floor((len - str.length) / 2));
-      return ' '.repeat(spaces) + str;
-    };
-
+    
     let t = '-'.repeat(totalWidth) + '\n';
     t += center('CUPOM NAO FISCAL', totalWidth) + '\n';
     t += '-'.repeat(totalWidth) + '\n\n';
@@ -44,18 +46,38 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
     t += `Cliente: ${pad(clientName, totalWidth)}\n\n`;
     
     t += '-'.repeat(totalWidth) + '\n';
-    const nameLen = totalWidth - 13; // 13 = 4 (QTD) + 9 (VALOR)
-    t += pad('DESCRICAO', nameLen) + padL('QTD', 4) + padL('VALOR', 9) + '\n';
+    
+    // Ajuste de colunas:
+    const qtyLen = 4;
+    const finalValLen = width === '80MM' ? 13 : 9; // 9 para 56mm (R$ 0.000,00), 13 para 80mm (R$ 00.000,00)
+    const finalNameLen = totalWidth - qtyLen - finalValLen;
+
+    t += pad('DESCRICAO', finalNameLen) + padL('QTD', qtyLen) + padL('VALOR', finalValLen) + '\n';
     t += '-'.repeat(totalWidth) + '\n';
     
     sale.itens.forEach(i => {
       const p = products.find(prod => prod.id === i.produtoId);
-      const name = pad((p?.nome ?? 'PRODUTO').toUpperCase(), nameLen);
-      const qty = padL(`${(i.quantidade ?? 0)}x`, 4);
-      const subtotal = ((i.quantidade ?? 0) * (i.precoVenda ?? 0)).toFixed(2);
-      const val = padL(subtotal, 9);
+      const nomeProduto = (p?.nome ?? 'PRODUTO').toUpperCase();
       
-      t += `${name}${qty}${val}\n`;
+      // Quebra de linha se o nome for muito longo
+      const maxLineLength = finalNameLen;
+      let remainingName = nomeProduto;
+
+      while (remainingName.length > 0) {
+        const line = remainingName.substring(0, maxLineLength);
+        remainingName = remainingName.substring(maxLineLength);
+
+        if (remainingName.length === 0) {
+          // Última linha do item: inclui QTD e VALOR
+          const qty = padL(`${(i.quantidade ?? 0)}x`, qtyLen);
+          const subtotal = ((i.quantidade ?? 0) * (i.precoVenda ?? 0)).toFixed(2);
+          const val = padL(subtotal, finalValLen);
+          t += `${pad(line, finalNameLen)}${qty}${val}\n`;
+        } else {
+          // Linhas de continuação: apenas o nome
+          t += `${pad(line, totalWidth)}\n`;
+        }
+      }
     });
     
     t += '-'.repeat(totalWidth) + '\n';

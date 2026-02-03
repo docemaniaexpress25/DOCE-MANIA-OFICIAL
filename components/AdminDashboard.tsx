@@ -466,24 +466,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     showToast("Recebimento registrado!");
   };
 
-  const MenuCard = ({ icon, title, tab, color }: any) => (
-    <button onClick={() => setActiveTab(tab)} className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col items-center justify-center gap-3 active:scale-95 transition-all text-center group">
-      <div className={`w-14 h-14 ${color} rounded-2xl flex items-center justify-center text-xl shadow-inner group-hover:scale-110 transition-transform`}><i className={`fa-solid ${icon}`}></i></div>
-      <span className="text-[11px] font-black uppercase text-gray-700 tracking-tight">{title}</span>
-    </button>
-  );
-
-  const filteredProducts = useMemo(() => {
-    const filtered = props.products.filter(p => (p.nome ?? '').toLowerCase().includes(search.toLowerCase()));
-    if (search) return filtered;
-    const productMap = new Map(filtered.map(p => [p.id, p]));
-    return localOrderedProductIds.map(id => productMap.get(id)).filter((p): p is Product => !!p);
-  }, [props.products, localOrderedProductIds, search]);
-
-  const filteredHistory = useMemo(() => {
-    return props.sales.filter(s => filterByPeriod(s.data, filtroPeriodo)).sort((a, b) => (b.data?.getTime() ?? 0) - (a.data?.getTime() ?? 0)); 
-  }, [props.sales, filtroPeriodo]);
-
   const updateStaging = (pId: string, delta: number) => {
     const p = props.products.find(prod => prod.id === pId);
     if (!p) return;
@@ -505,6 +487,24 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   };
 
   const contasAReceber = useMemo(() => props.sales.filter(s => s.metodoPagamento === 'A_PRAZO' && s.statusPagamento === 'PENDENTE'), [props.sales]);
+
+  const MenuCard = ({ icon, title, tab, color }: any) => (
+    <button onClick={() => setActiveTab(tab)} className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col items-center justify-center gap-3 active:scale-95 transition-all text-center group">
+      <div className={`w-14 h-14 ${color} rounded-2xl flex items-center justify-center text-xl shadow-inner group-hover:scale-110 transition-transform`}><i className={`fa-solid ${icon}`}></i></div>
+      <span className="text-[11px] font-black uppercase text-gray-700 tracking-tight">{title}</span>
+    </button>
+  );
+
+  const filteredProducts = useMemo(() => {
+    const filtered = props.products.filter(p => (p.nome ?? '').toLowerCase().includes(search.toLowerCase()));
+    if (search) return filtered;
+    const productMap = new Map(filtered.map(p => [p.id, p]));
+    return localOrderedProductIds.map(id => productMap.get(id)).filter((p): p is Product => !!p);
+  }, [props.products, localOrderedProductIds, search]);
+
+  const filteredHistory = useMemo(() => {
+    return props.sales.filter(s => filterByPeriod(s.data, filtroPeriodo)).sort((a, b) => (b.data?.getTime() ?? 0) - (a.data?.getTime() ?? 0)); 
+  }, [props.sales, filtroPeriodo]);
 
   return (
     <div className="space-y-6 pb-10">
@@ -615,7 +615,20 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             {props.clients.filter(c => c.nomeFantasia.toLowerCase().includes(search.toLowerCase())).sort((a,b) => (a.nomeFantasia||'').toLowerCase().localeCompare((b.nomeFantasia||'').toLowerCase())).map(c => ( 
               <div key={c.id} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex items-center justify-between transition-all hover:border-blue-200">
                 <div className="flex-1 min-w-0 pr-2 cursor-pointer" onClick={() => setViewingClientHistory(c)}>
-                  <div className="flex items-center gap-2"><h3 className="font-bold text-gray-800 text-[13px] leading-tight uppercase truncate">{c.nomeFantasia}</h3>{c.telefone && <a href={`https://wa.me/55${c.telefone.replace(/\D/g, '')}`} target="_blank" className="text-emerald-500" onClick={(e) => e.stopPropagation()}><i className="fa-brands fa-whatsapp text-lg"></i></a>}</div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-bold text-gray-800 text-[13px] leading-tight uppercase truncate">{c.nomeFantasia}</h3>
+                    {/* Ícone do WhatsApp visível apenas na tela de clientes */}
+                    {c.telefone && (
+                      <a 
+                        href={`https://wa.me/55${c.telefone.replace(/\D/g, '')}`} 
+                        target="_blank" 
+                        className="text-emerald-500" 
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <i className="fa-brands fa-whatsapp text-lg"></i>
+                      </a>
+                    )}
+                  </div>
                   <div className="flex items-center gap-3 mt-1.5"><p className="text-[10px] text-gray-400 font-black uppercase truncate">{DIAS_SEMANA[c.diaRoteiro]}</p><div className="flex items-center gap-1.5 bg-blue-50 px-2 py-0.5 rounded border border-blue-100 shadow-inner whitespace-nowrap"><i className="fa-solid fa-chart-line text-blue-400 text-[10px]"></i><span className="text-[11px] font-black text-blue-600">R$ {getClientAvgRevenue(c.id)}</span></div></div>
                 </div>
                 <div className="flex gap-2"><button onClick={(e) => { e.stopPropagation(); handleOpenClient(c); }} className="bg-blue-50 text-blue-600 w-9 h-9 rounded-lg border border-blue-100 flex items-center justify-center active:scale-90 transition-all shadow-sm"><i className="fa-solid fa-pencil-alt text-sm"></i></button><button onClick={(e) => { e.stopPropagation(); setConfirmDelete({ id: c.id, type: 'CLIENT', name: c.nomeFantasia }); }} className="bg-rose-50 text-rose-600 w-9 h-9 rounded-lg border border-rose-100 flex items-center justify-center active:scale-90 transition-all shadow-sm"><i className="fa-solid fa-trash-can text-sm"></i></button></div>

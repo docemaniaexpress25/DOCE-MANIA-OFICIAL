@@ -409,16 +409,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                   <div className="flex-1 cursor-pointer" onClick={() => setViewingClientHistory(c)}>
                     <div className="flex items-center gap-2">
                       <p className="font-bold text-gray-800 leading-tight uppercase">{c.nomeFantasia ?? 'Cliente'}</p>
-                      {c.telefone && (
-                        <a 
-                          href={`https://wa.me/55${c.telefone.replace(/\D/g, '')}`} 
-                          target="_blank" 
-                          className="text-emerald-500" 
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <i className="fa-brands fa-whatsapp text-lg"></i>
-                        </a>
-                      )}
+                      {/* Ícone do WhatsApp removido da Rota do Dia */}
                     </div>
                     <p className="text-[10px] text-gray-400 mt-1 uppercase font-semibold"><i className="fa-solid fa-location-dot mr-1"></i> {(c.bairro || 'S/B')}</p>
                   </div>
@@ -444,6 +435,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 <div className="flex-1 cursor-pointer" onClick={() => setViewingClientHistory(c)}>
                   <div className="flex items-center gap-2">
                     <h4 className="font-bold text-gray-800 text-sm leading-tight uppercase">{c.nomeFantasia ?? 'Cliente'}</h4>
+                    {/* Ícone do WhatsApp visível na lista de clientes */}
                     {c.telefone && (
                       <a 
                         href={`https://wa.me/55${c.telefone.replace(/\D/g, '')}`} 
@@ -675,7 +667,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                   </div>
                 ))}
                 {unifiedHistory.length === 0 && (
-                  <div className="text-center py-8 opacity-30 italic text-[9px] uppercase font-bold tracking-widest">Nenhuma movimentação registrada.</div>
+                    <div className="text-center py-8 opacity-30 italic text-[9px] uppercase font-bold tracking-widest">Nenhuma movimentação registrada.</div>
                 )}
              </div>
            </div>

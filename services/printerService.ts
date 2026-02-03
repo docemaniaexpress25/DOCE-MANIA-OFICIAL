@@ -5,33 +5,31 @@ const PRINTER_SERVICE_UUID = '000018f0-0000-1000-8000-00805f9b34fb';
 const PRINTER_CHARACTERISTIC_UUID = '00002af1-0000-1000-8000-00805f9b34fb'; 
 
 /**
- * Prepara comandos binários ESC/POS puros.
+ * Mapeamento manual de caracteres UTF-16 para Bytes da Página de Código 860 (Português).
+ * Isso garante que 'Ç' ou 'Á' ocupem apenas 1 byte, mantendo o alinhamento de 32 colunas.
  */
-const prepareBinaryData = (text: string): Uint8Array => {
-    const encoder = new TextEncoder(); // UTF-8 por padrão
-    
-    // COMANDOS ESC/POS HEX
-    const ESC = 0x1B;
-    const AT = 0x40;   // Reset
-    const T = 0x74;    // Select Code Page
-    const CP850 = 0x02; // Página de Código Multilingual
+const charCodeMapCP860: { [key: string]: number } = {
+  'á': 0xA0, 'é': 0x82, 'í': 0xA1, 'ó': 0xA2, 'ú': 0xA3,
+  'â': 0x83, 'ê': 0x88, 'ô': 0x93, 'ã': 0xC6, 'õ': 0xE4,
+  'Á': 0xB5, 'É': 0x90, 'Í': 0xD6, 'Ó': 0xE0, 'Ú': 0xE9,
+  'Â': 0xB6, 'Ê': 0xD2, 'Ô': 0xE2, 'Ã': 0xC7, 'Õ': 0xE5,
+  'ç': 0x87, 'Ç': 0x80, 'º': 0xA7, 'ª': 0xA6
+};
 
-    const init = new Uint8Array([ESC, AT, ESC, T, CP850]);
-    const body = encoder.encode(text);
-    
-    const combined = new Uint8Array(init.length + body.length);
-    combined.set(init);
-    combined.set(body, init.length);
-    
-    return combined;
+const encodeToCP860 = (text: string): Uint8Array => {
+  const bytes = new Uint8Array(text.length);
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    bytes[i] = charCodeMapCP860[char] || (text.charCodeAt(i) < 128 ? text.charCodeAt(i) : 63);
+  }
+  return bytes;
 };
 
 export const printerService = {
     /**
-     * Envia dados via GATT com fragmentação (Drip Method)
-     * Essencial para impressoras MTP-1/3 que possuem buffer pequeno.
+     * Envia o cupom para a impressora tratando o buffer de forma rigorosa.
      */
-    async printNative(data: Uint8Array): Promise<boolean> {
+    async printNative(rawText: string): Promise<boolean> {
         const nav = navigator as any;
         if (!nav.bluetooth) throw new Error("Bluetooth indisponível");
 
@@ -45,33 +43,46 @@ export const printerService = {
             const service = await server.getPrimaryService(PRINTER_SERVICE_UUID);
             const characteristic = await service.getCharacteristic(PRINTER_CHARACTERISTIC_UUID);
 
-            // DRIP METHOD: 20 bytes por pacote | 50ms de intervalo
-            const CHUNK_SIZE = 20;
-            const DELAY_MS = 50;
+            // 1. COMANDOS DE INICIALIZAÇÃO ESC/POS
+            // [ESC @] (Reset) + [ESC t 3] (Seleciona CP860 - Português)
+            const initCommands = new Uint8Array([0x1B, 0x40, 0x1B, 0x74, 0x03]);
+            await characteristic.writeValueWithoutResponse(initCommands);
+            await new Promise(r => setTimeout(r, 100));
 
-            for (let i = 0; i < data.length; i += CHUNK_SIZE) {
-                const chunk = data.slice(i, i + CHUNK_SIZE);
+            // 2. ENVIO LINHA POR LINHA COM FRAGMENTAÇÃO (DRIP METHOD)
+            const lines = rawText.split('\n');
+            const CHUNK_SIZE = 20; // Limite físico do pacote BLE
+            const PACKET_DELAY = 40; // Delay entre pacotes em ms
+
+            for (const line of lines) {
+                // Adicionamos o \n manualmente para garantir a terminação da linha
+                const binaryLine = encodeToCP860(line + '\n');
                 
-                // Write sem resposta para maior compatibilidade e velocidade em BLE
-                await characteristic.writeValueWithoutResponse(chunk);
-                
-                // Espera o buffer térmico processar o pacote
-                await new Promise(r => setTimeout(r, DELAY_MS));
+                // Quebra a linha em pacotes de 20 bytes para não estourar o buffer da MTP
+                for (let j = 0; j < binaryLine.length; j += CHUNK_SIZE) {
+                    const chunk = binaryLine.slice(j, j + CHUNK_SIZE);
+                    await characteristic.writeValueWithoutResponse(chunk);
+                    await new Promise(r => setTimeout(r, PACKET_DELAY));
+                }
             }
 
-            // Garante o esvaziamento do buffer antes de desconectar
-            await new Promise(r => setTimeout(r, 1000));
+            // 3. FINALIZAÇÃO: AVANÇO DE PAPEL (FEED)
+            // [ESC d 5] (Avança 5 linhas para permitir destaque)
+            const endCommands = new Uint8Array([0x1B, 0x64, 0x05]);
+            await characteristic.writeValueWithoutResponse(endCommands);
+            
+            // Aguarda o processamento físico antes de desconectar
+            await new Promise(r => setTimeout(r, 1200));
             device.gatt.disconnect();
             
             return true;
         } catch (error) {
-            console.error("[printerService] Erro GATT:", error);
+            console.error("[printerService] Erro na transmissão ESC/POS:", error);
             throw error;
         }
     },
 
     async printSale(sale: Sale, client: Client, products: Product[], width: 56 | 80, rawText: string): Promise<boolean> {
-        const binaryData = prepareBinaryData(rawText);
-        return this.printNative(binaryData);
+        return this.printNative(rawText);
     }
 };

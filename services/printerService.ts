@@ -73,9 +73,23 @@ export const printerService = {
             return true;
 
         } catch (error) {
-            console.error("Erro durante a impressão Bluetooth:", error);
+            let errorMessage = "Erro desconhecido na impressão.";
+            
+            if (error instanceof Error) {
+                // Erro de cancelamento do usuário (ex: DOMException: User cancelled the request)
+                if (error.name === 'NotFoundError' || error.message.includes('cancelled')) {
+                    errorMessage = "Conexão cancelada ou impressora não encontrada. Verifique o Bluetooth.";
+                } else {
+                    errorMessage = `Falha na conexão: ${error.message}`;
+                }
+            } else if (typeof error === 'string') {
+                errorMessage = error;
+            }
+
+            console.error("[printerService] Erro durante a impressão Bluetooth:", errorMessage, error);
+            
             // Lançar o erro para que o Cupom.tsx possa exibir o toast de falha
-            throw new Error(`Falha na impressão: ${error instanceof Error ? error.message : String(error)}`);
+            throw new Error(errorMessage);
         }
     },
 

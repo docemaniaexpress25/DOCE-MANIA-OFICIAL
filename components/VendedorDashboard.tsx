@@ -340,6 +340,11 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     return combined.sort((a, b) => b.data.getTime() - a.data.getTime());
   }, [payoutLogs, expenses]);
 
+  const handleNavigateToCredit = () => {
+    setSelectedClient(null);
+    setActiveTab('CREDIT');
+  };
+
   if (selectedClient) {
     const pdvClient = clients.find(c => c.id === selectedClient.id);
     if (!pdvClient) { setSelectedClient(null); return null; }
@@ -348,6 +353,8 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         client={pdvClient} products={products} minhaCarga={minhaCarga} vendedorId={user.id} onCancel={() => setSelectedClient(null)}
         onFinish={(s) => { setViewingSale(s); setSelectedClient(null); showToast("Venda realizada"); }}
         processSale={processSale} margemMinima={margemMinima} margemMinimaAtiva={margemMinimaAtiva} pix1Name={pix1Name} pix1Code={pix1Code} pix2Name={pix2Name} pix2Code={pix2Code}
+        sales={sales} // Passando sales para o PDV
+        onNavigateToCredit={handleNavigateToCredit} // Passando a função de navegação
       />
     );
   }

@@ -15,9 +15,11 @@ interface PDVProps {
   pix1Code: string | null;
   pix2Name: string;
   pix2Code: string | null;
+  sales: Sale[]; // Adicionado para verificar dívidas
+  onNavigateToCredit: () => void; // Adicionado para navegação
 }
 
-const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onCancel, onFinish, processSale, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code }) => {
+const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onCancel, onFinish, processSale, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, sales, onNavigateToCredit }) => {
   const [cart, setCart] = useState<{ [key: string]: { quantidade: number, precoVenda: string } }>({});
   const [metodo, setMetodo] = useState<PaymentMethod>('DINHEIRO');
   const [detalheMetodo, setDetalheMetodo] = useState<string>('Dinheiro');
@@ -36,6 +38,11 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   
   const productIdsInCarga = useMemo(() => new Set(minhaCarga.map(c => c.produtoId)), [minhaCarga]);
   const orderedProductsInCarga = useMemo(() => products.filter(p => productIdsInCarga.has(p.id)), [products, productIdsInCarga]);
+
+  const clientDebt = useMemo(() => {
+    const pendingSales = sales.filter(s => s.clientId === client.id && s.statusPagamento === 'PENDENTE');
+    return pendingSales.reduce((acc, s) => acc + (s.valorTotal - s.valorPago), 0);
+  }, [sales, client.id]);
 
   useEffect(() => {
     const savedCart = localStorage.getItem(`pdv_cart_${vendedorId}_${client.id}`);
@@ -134,6 +141,18 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         </div>
         <button onClick={() => { setCart({}); setValorTroca(''); setIsTrocaActive(false); }} className="w-9 h-9 bg-rose-50 text-rose-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-trash-can text-sm"></i></button>
       </header>
+
+      {clientDebt > 0 && (
+        <button 
+          onClick={() => { onCancel(); onNavigateToCredit(); }}
+          className="w-full bg-rose-600 text-white p-3 flex items-center justify-center gap-3 shadow-md active:scale-[0.99] transition-all"
+        >
+          <i className="fa-solid fa-triangle-exclamation text-sm"></i>
+          <span className="text-[10px] font-black uppercase tracking-widest">
+            CLIENTE COM DÍVIDA PENDENTE: R$ {clientDebt.toFixed(2)} - CLIQUE PARA RECEBER
+          </span>
+        </button>
+      )}
 
       <div className="flex-1 overflow-y-auto p-2 space-y-1.5 pb-44">
         {orderedProductsInCarga.map(p => { 

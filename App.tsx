@@ -115,6 +115,7 @@ const App: React.FC = () => {
       if (route) {
         setDailyRouteState(route);
       } else {
+        // Se não houver rota para hoje, ou o dia mudou (midnight reset)
         const todayDay = new Date().getDay();
         const initialClientIds = currentClients
           .filter(c => c.diaRoteiro === todayDay && c.ativo)
@@ -167,6 +168,18 @@ const App: React.FC = () => {
     }
     
   }, [fetchUsers, fetchClients, fetchTransactionalData, fetchDailyRoute, fetchProducts]);
+
+  // Monitoramento de Meia-Noite: Verifica a cada minuto se a data mudou
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const today = getTodayDateString();
+      if (dailyRouteState.date !== today) {
+        console.log("Detectada mudança de dia. Reiniciando rota...");
+        fetchCoreData();
+      }
+    }, 60000); // 1 minuto
+    return () => clearInterval(interval);
+  }, [dailyRouteState.date, fetchCoreData]);
 
   useEffect(() => { fetchCoreData(); }, [fetchCoreData]);
 

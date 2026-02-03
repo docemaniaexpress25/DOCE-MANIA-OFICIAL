@@ -237,6 +237,9 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
             <div className="w-48 h-48 mx-auto bg-gray-50 p-2 rounded-2xl border-2 border-dashed border-gray-200 mb-6 flex items-center justify-center overflow-hidden">
                {showPixOverlay === 1 ? (pix1Code ? <img src={pix1Code} className="w-full h-full object-contain" /> : <i className="fa-solid fa-qrcode text-gray-200 text-4xl"></i>) : (pix2Code ? <img src={pix2Code} className="w-full h-full object-contain" /> : <i className="fa-solid fa-qrcode text-gray-200 text-4xl"></i>)}
             </div>
+            <p className="text-[10px] font-black text-rose-600 uppercase mb-6 animate-pulse">
+              Confirme o PIX antes de finalizar a venda
+            </p>
             <button onClick={() => setShowPixOverlay(null)} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-xl uppercase text-[10px]">Fechar QR Code</button>
           </div>
         </div>

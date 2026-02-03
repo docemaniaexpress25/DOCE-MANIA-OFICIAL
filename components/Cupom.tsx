@@ -47,19 +47,19 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
     
     t += '-'.repeat(totalWidth) + '\n';
     
-    // Ajuste de colunas:
+    // Definição das larguras das colunas
     const qtyLen = 4;
-    const finalValLen = width === '80MM' ? 13 : 9; // 9 para 56mm (R$ 0.000,00), 13 para 80mm (R$ 00.000,00)
-    const finalNameLen = totalWidth - qtyLen - finalValLen;
+    const finalValLen = width === '80MM' ? 13 : 9; // R$ 00.000,00 (13) ou R$ 0.000,00 (9)
+    const finalNameLen = totalWidth - qtyLen - finalValLen; // Largura restante para o nome
 
     t += pad('DESCRICAO', finalNameLen) + padL('QTD', qtyLen) + padL('VALOR', finalValLen) + '\n';
     t += '-'.repeat(totalWidth) + '\n';
     
     sale.itens.forEach(i => {
       const p = products.find(prod => prod.id === i.produtoId);
-      const nomeProduto = (p?.nome ?? 'PRODUTO').toUpperCase();
+      // Normaliza o texto para evitar problemas de codificação na impressora
+      const nomeProduto = (p?.nome ?? 'PRODUTO DESCONHECIDO').toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/Ç/g, 'C');
       
-      // Quebra de linha se o nome for muito longo
       const maxLineLength = finalNameLen;
       let remainingName = nomeProduto;
 
@@ -72,9 +72,10 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
           const qty = padL(`${(i.quantidade ?? 0)}x`, qtyLen);
           const subtotal = ((i.quantidade ?? 0) * (i.precoVenda ?? 0)).toFixed(2);
           const val = padL(subtotal, finalValLen);
+          
           t += `${pad(line, finalNameLen)}${qty}${val}\n`;
         } else {
-          // Linhas de continuação: apenas o nome
+          // Linhas de continuação: apenas o nome, preenchendo a largura total
           t += `${pad(line, totalWidth)}\n`;
         }
       }
@@ -83,6 +84,7 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
     t += '-'.repeat(totalWidth) + '\n';
     const totalLabel = "TOTAL:";
     const totalVal = `R$ ${(sale.valorTotal ?? 0).toFixed(2)}`;
+    // Alinha o total à direita
     t += `${pad(totalLabel, totalWidth - totalVal.length)}${totalVal}\n\n`;
     
     const paymentMethod = (sale.metodoPagamento ?? 'N/D').replace('_', '/');

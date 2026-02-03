@@ -1,3 +1,5 @@
+"use client";
+
 import React, { useState } from 'react';
 import { Sale, Client, Product } from '../types';
 import { printerService } from '../services/printerService';
@@ -70,8 +72,15 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
     const totalVal = `R$ ${sale.valorTotal.toFixed(2)}`;
     t += padR('TOTAL:', totalWidth - totalVal.length) + totalVal + '\n';
     
+    // Espaçamento solicitado antes da forma de pagamento
+    t += '\n'; 
+    
     t += `FORMA DE PAGAMENTO: ${sale.metodoPagamento}\n`;
-    if (sale.detalhePagamento) t += `DETALHE: ${sale.detalhePagamento.toUpperCase()}\n`;
+    
+    // Remove a linha de detalhe se for apenas "Dinheiro"
+    if (sale.detalhePagamento && sale.detalhePagamento.toUpperCase() !== 'DINHEIRO') {
+      t += `DETALHE: ${sale.detalhePagamento.toUpperCase()}\n`;
+    }
     
     t += '-'.repeat(totalWidth) + '\n';
     t += center('OBRIGADO PELA PREFERENCIA!', totalWidth) + '\n';

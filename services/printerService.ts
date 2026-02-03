@@ -1,123 +1,95 @@
 import { Sale, Client, Product } from '../types';
 
-// UUIDs de serviço e característica comuns para impressoras térmicas Bluetooth
-// Estes UUIDs são os padrões para a maioria das impressoras de 58mm/80mm baratas
+// UUIDs de serviço e característica para impressoras térmicas portáteis (MTP e similares)
 const PRINTER_SERVICE_UUID = '000018f0-0000-1000-8000-00805f9b34fb'; 
 const PRINTER_CHARACTERISTIC_UUID = '00002af1-0000-1000-8000-00805f9b34fb'; 
 
-// Função utilitária para converter string em ArrayBuffer com comandos ESC/POS
-const generateEscPosCommands = (text: string): ArrayBuffer => {
+/**
+ * Gera os comandos ESC/POS básicos para MTP-1 e MTP-3.
+ */
+const generateEscPosCommands = (text: string): Uint8Array => {
     const encoder = new TextEncoder();
     
-    // Comandos ESC/POS Fundamentais:
-    // 1. Inicialização da impressora (ESC @) -> 1B 40
+    // ESC @ (Inicialização)
     const initCommand = new Uint8Array([0x1B, 0x40]); 
     
-    // 2. Selecionar Página de Código (ESC t n) -> 1B 74 n
-    // n=2 costuma ser CP850 (Multilingual), n=3 CP860 (Português)
-    // Vamos usar n=2 (CP850) que é o padrão mais compatível para acentos
+    // ESC t 2 (Página de código CP850 - Multilingual)
     const codePageCommand = new Uint8Array([0x1B, 0x74, 0x02]); 
     
-    // 3. Comando de Corte de Papel (GS V 1) -> 1D 56 01
-    const cutCommand = new Uint8Array([0x1D, 0x56, 0x01]); 
-    
-    // Codifica o texto (o Cupom.tsx já removeu acentos, o que garante compatibilidade ASCII)
+    // ESC d 5 (Avança 5 linhas ao final para permitir o destaque manual)
+    const feedLines = new Uint8Array([0x1B, 0x64, 0x05]); 
+
     const textBytes = encoder.encode(text);
 
-    // Calculando o tamanho total: Init + CodePage + Texto + 5 Newlines + Cut
-    const totalLength = initCommand.byteLength + codePageCommand.byteLength + textBytes.byteLength + 5 + cutCommand.byteLength; 
+    // Concatenando comandos: Init + CodePage + Texto + Feed
+    const totalLength = initCommand.length + codePageCommand.length + textBytes.length + feedLines.length;
     const buffer = new Uint8Array(totalLength);
     
     let offset = 0;
+    buffer.set(initCommand, offset); offset += initCommand.length;
+    buffer.set(codePageCommand, offset); offset += codePageCommand.length;
+    buffer.set(textBytes, offset); offset += textBytes.length;
+    buffer.set(feedLines, offset);
     
-    // 1. Adiciona comando de inicialização
-    buffer.set(initCommand, offset);
-    offset += initCommand.byteLength;
-    
-    // 2. Adiciona comando de página de código
-    buffer.set(codePageCommand, offset);
-    offset += codePageCommand.byteLength;
-    
-    // 3. Adiciona o texto formatado
-    buffer.set(textBytes, offset);
-    offset += textBytes.byteLength;
-    
-    // 4. Adiciona 5 linhas vazias para garantir que o texto saia da impressora antes do corte
-    for (let i = 0; i < 5; i++) {
-        buffer.set(encoder.encode('\n'), offset);
-        offset += 1;
-    }
-
-    // 5. Adiciona comando de corte
-    buffer.set(cutCommand, offset);
-    
-    return buffer.buffer;
+    return buffer;
 };
 
 export const printerService = {
     /**
-     * Conecta à impressora Bluetooth e envia os dados de impressão.
+     * Gerencia a conexão GATT e o envio "gota a gota" (Drip Method) para MTP-1/3.
      */
-    async connectAndPrint(dataBuffer: ArrayBuffer): Promise<boolean> {
+    async connectAndPrint(dataBuffer: Uint8Array): Promise<boolean> {
         const nav = navigator as any;
 
-        if (typeof nav === 'undefined' || !nav.bluetooth) {
-            console.error("[printerService] Web Bluetooth API não suportada.");
-            throw new Error("Seu navegador não suporta impressão Bluetooth direta.");
+        if (!nav.bluetooth) {
+            throw new Error("Bluetooth não suportado ou bloqueado no navegador.");
         }
 
         try {
-            // 1. Solicitar dispositivo
+            // Solicita o dispositivo com os UUIDs configurados
             const device = await nav.bluetooth.requestDevice({
                 filters: [{ services: [PRINTER_SERVICE_UUID] }],
                 optionalServices: [PRINTER_SERVICE_UUID]
             });
 
-            console.log("[printerService] Conectando ao dispositivo:", device.name);
+            console.log("[printerService] Conectando a:", device.name);
             const server = await device.gatt.connect();
-
-            // 2. Obter o serviço e característica
             const service = await server.getPrimaryService(PRINTER_SERVICE_UUID);
             const characteristic = await service.getCharacteristic(PRINTER_CHARACTERISTIC_UUID);
 
-            // 3. Enviar os dados em chunks menores com um pequeno atraso entre eles
-            // Isso evita o estouro do buffer da impressora (comum em BLE)
-            const chunkSize = 20; // Chunks de 20 bytes são mais seguros para BLE genérico
-            const view = new Uint8Array(dataBuffer);
+            // Fragmentação Crítica para MTP-1 e MTP-3 (Máximo 20 bytes por pacote)
+            const chunkSize = 20; 
             
-            for (let i = 0; i < view.length; i += chunkSize) {
-                const chunk = view.slice(i, i + chunkSize);
+            for (let i = 0; i < dataBuffer.length; i += chunkSize) {
+                const chunk = dataBuffer.slice(i, i + chunkSize);
+                
+                // Escreve sem esperar resposta (mais rápido e compatível com impressoras genéricas)
                 await characteristic.writeValueWithoutResponse(chunk);
-                // Pequena pausa de 20ms entre chunks para a impressora processar
-                await new Promise(resolve => setTimeout(resolve, 20));
+                
+                // Delay de 50ms: Essencial para evitar que a MTP-1/3 perca dados
+                await new Promise(resolve => setTimeout(resolve, 50));
             }
 
-            console.log("[printerService] Impressão concluída com sucesso.");
+            console.log("[printerService] Impressão finalizada.");
             
-            // Desconecta após a impressão para liberar o dispositivo
+            // Aguarda o buffer físico da impressora terminar antes de desconectar
             setTimeout(() => {
-                if (device.gatt.connected) {
-                    device.gatt.disconnect();
-                    console.log("[printerService] Desconectado.");
-                }
-            }, 1000);
+                if (device.gatt.connected) device.gatt.disconnect();
+            }, 1500);
 
             return true;
 
         } catch (error) {
-            console.error("[printerService] Erro na impressão Bluetooth:", error);
+            console.error("[printerService] Erro:", error);
             throw error;
         }
     },
 
     /**
-     * Prepara os dados da venda e inicia o processo de impressão.
+     * Prepara e imprime a venda.
      */
     async printSale(sale: Sale, client: Client, products: Product[], width: 56 | 80, rawText: string): Promise<boolean> {
-        // Gerar comandos ESC/POS
-        const escposData = generateEscPosCommands(rawText);
-        
-        // Conectar e imprimir
-        return this.connectAndPrint(escposData);
+        const commands = generateEscPosCommands(rawText);
+        return this.connectAndPrint(commands);
     }
 };

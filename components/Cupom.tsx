@@ -104,6 +104,12 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
     }
   };
 
+  const handleCopy = () => {
+    const rawText = generateText(printWidth);
+    navigator.clipboard.writeText(rawText);
+    if (showToast) showToast("Texto copiado!", 'success');
+  };
+
   return (
     <div className="fixed inset-0 bg-black bg-opacity-90 z-[100] flex flex-col items-center justify-center p-4 overflow-y-auto">
       <div className="bg-white w-full max-w-[340px] shadow-2xl flex flex-col animate-in zoom-in-95 duration-200">
@@ -113,14 +119,21 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
           </div>
         </div>
         <div className="bg-gray-100 p-4 flex flex-col gap-2 border-t border-gray-200">
-          <div className="flex bg-gray-200 p-1 rounded-xl">
+          <div className="flex bg-gray-200 p-1 rounded-xl mb-1">
             <button onClick={() => setPrintWidth('56MM')} className={`flex-1 py-2 rounded-lg text-[10px] font-black uppercase ${printWidth === '56MM' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500'}`}>56MM</button>
             <button onClick={() => setPrintWidth('80MM')} className={`flex-1 py-2 rounded-lg text-[10px] font-black uppercase ${printWidth === '80MM' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500'}`}>80MM</button>
           </div>
-          <button onClick={handlePrint} className="w-full bg-blue-600 text-white font-black py-4 rounded-xl flex items-center justify-center gap-2 active:scale-95 text-[10px] uppercase">
-            <i className="fa-solid fa-print"></i> IMPRIMIR CUPOM
-          </button>
-          <button onClick={onClose} className="w-full bg-slate-800 text-white font-black py-3 rounded-xl active:scale-95 text-[10px] uppercase">VOLTAR</button>
+          
+          <div className="flex gap-2">
+            <button onClick={handlePrint} className="flex-[2] bg-blue-600 text-white font-black py-3 rounded-xl flex items-center justify-center gap-2 active:scale-95 text-[9px] uppercase tracking-tighter">
+              <i className="fa-solid fa-print"></i> IMPRIMIR
+            </button>
+            <button onClick={handleCopy} className="flex-1 bg-emerald-600 text-white font-black py-3 rounded-xl flex items-center justify-center gap-2 active:scale-95 text-[9px] uppercase tracking-tighter">
+              <i className="fa-solid fa-copy"></i> COPIAR
+            </button>
+          </div>
+          
+          <button onClick={onClose} className="w-full bg-slate-800 text-white font-black py-3 rounded-xl active:scale-95 text-[9px] uppercase">VOLTAR</button>
         </div>
       </div>
     </div>

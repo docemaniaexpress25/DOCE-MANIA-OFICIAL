@@ -17,9 +17,6 @@ interface CupomProps {
 const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDeleteSale, allowDelete, showToast }) => {
   const [printWidth, setPrintWidth] = useState<'56MM' | '80MM'>('56MM');
 
-  /**
-   * Formata o texto para ESC/POS com largura fixa rigorosa (32 colunas para 56mm).
-   */
   const generateText = (width: '56MM' | '80MM') => {
     const totalWidth = width === '80MM' ? 48 : 32; 
     
@@ -33,16 +30,16 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
 
     let t = '';
     
-    // Cabeçalho ESC/POS
-    t += '-'.repeat(totalWidth) + '\n';
+    // Início com Asteriscos
+    t += '*'.repeat(totalWidth) + '\n';
     t += center('CUPOM NAO FISCAL', totalWidth) + '\n';
-    t += '-'.repeat(totalWidth) + '\n';
+    t += '*'.repeat(totalWidth) + '\n';
     
-    const clientName = (client.nomeFantasia || 'CONSUMIDOR').toUpperCase();
-    t += `CLIENTE: ${clientName}\n`;
+    const clientName = client.nomeFantasia || 'Consumidor';
+    t += `Cliente: ${clientName}\n`;
     t += '-'.repeat(totalWidth) + '\n';
 
-    // Colunas Rígidas: DESC(20) | QTD(4) | VAL(8) = 32
+    // Definição de larguras para 32 colunas: Desc(20), Qtd(4), Val(8)
     const qtyW = 4;
     const valW = width === '80MM' ? 13 : 8;
     const descW = totalWidth - qtyW - valW;
@@ -52,16 +49,17 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
 
     sale.itens.forEach(item => {
       const p = products.find(prod => prod.id === item.produtoId);
-      const rawName = (p?.nome ?? 'PRODUTO').toUpperCase();
+      const productName = (p?.nome ?? 'Produto');
       
-      const qtyStr = `${item.quantidade}X`;
-      const valStr = `R$ ${(item.quantidade * item.precoVenda).toFixed(2)}`;
+      const qtyStr = `${item.quantidade}x`;
+      // Valor sem R$ na lista de itens conforme solicitado
+      const valStr = `${(item.quantidade * item.precoVenda).toFixed(2)}`;
 
-      // Primeira linha do item (alinhamento fixo)
-      t += padR(rawName.substring(0, descW), descW) + padL(qtyStr, qtyW) + padL(valStr, valW) + '\n';
+      // Primeira linha do item
+      t += padR(productName.substring(0, descW), descW) + padL(qtyStr, qtyW) + padL(valStr, valW) + '\n';
 
-      // Quebra manual de descrição longa
-      let remaining = rawName.substring(descW);
+      // Quebra de linha para nomes longos
+      let remaining = productName.substring(descW);
       while (remaining.length > 0) {
         t += padR(remaining.substring(0, totalWidth), totalWidth) + '\n';
         remaining = remaining.substring(totalWidth);
@@ -69,23 +67,27 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
     });
 
     t += '-'.repeat(totalWidth) + '\n';
+    
+    // Linha de Total com R$ alinhado à direita
+    const totalLabel = 'TOTAL:';
     const totalVal = `R$ ${sale.valorTotal.toFixed(2)}`;
-    t += padR('TOTAL:', totalWidth - totalVal.length) + totalVal + '\n';
+    t += padR(totalLabel, totalWidth - totalVal.length) + totalVal + '\n';
     
-    t += `FORMA DE PAGAMENTO: ${sale.metodoPagamento}\n`;
+    t += `Forma de Pagamento: ${sale.metodoPagamento}\n`;
     
-    // Mostra detalhe apenas se não for Dinheiro
-    if (sale.detalhePagamento && sale.detalhePagamento.toUpperCase() !== 'DINHEIRO') {
-      t += `DETALHE: ${sale.detalhePagamento.toUpperCase()}\n`;
+    if (sale.detalhePagamento && sale.metodoPagamento !== 'DINHEIRO') {
+      t += `Detalhe: ${sale.detalhePagamento}\n`;
     }
     
     t += '-'.repeat(totalWidth) + '\n';
     t += center('OBRIGADO PELA PREFERENCIA!', totalWidth) + '\n';
     t += center('ESCANEIE O QR CODE', totalWidth) + '\n';
     t += center('E PAGUE COM PIX', totalWidth) + '\n';
-    t += '-'.repeat(totalWidth) + '\n';
+    
+    // Fim com Asteriscos
+    t += '*'.repeat(totalWidth) + '\n';
 
-    // Avanço de papel para destaque
+    // Espaço para corte
     t += '\n\n\n\n\n';
 
     return t;
@@ -114,7 +116,7 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
     <div className="fixed inset-0 bg-black bg-opacity-90 z-[100] flex flex-col items-center justify-center p-4 overflow-y-auto">
       <div className="bg-white w-full max-w-[340px] shadow-2xl flex flex-col animate-in zoom-in-95 duration-200">
         <div className="p-6 bg-white overflow-hidden">
-          <div className="font-mono text-[12px] leading-tight text-black bg-white uppercase whitespace-pre select-none">
+          <div className="font-mono text-[12px] leading-tight text-black bg-white whitespace-pre select-none">
             {generateText(printWidth)}
           </div>
         </div>

@@ -52,7 +52,6 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
       const productName = (p?.nome ?? 'Produto');
       
       const qtyStr = `${item.quantidade}x`;
-      // Valor sem R$ na lista de itens conforme solicitado
       const valStr = `${(item.quantidade * item.precoVenda).toFixed(2)}`;
 
       // Primeira linha do item
@@ -112,6 +111,13 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
     if (showToast) showToast("Texto copiado!", 'success');
   };
 
+  const handleDelete = () => {
+    if (onDeleteSale && window.confirm("Tem certeza que deseja excluir esta venda? Esta ação é irreversível e estornará o estoque do vendedor.")) {
+      onDeleteSale(sale.id);
+      onClose();
+    }
+  };
+
   return (
     <div className="fixed inset-0 bg-black bg-opacity-90 z-[100] flex flex-col items-center justify-center p-4 overflow-y-auto">
       <div className="bg-white w-full max-w-[340px] shadow-2xl flex flex-col animate-in zoom-in-95 duration-200">
@@ -134,6 +140,12 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
               <i className="fa-solid fa-copy"></i> COPIAR
             </button>
           </div>
+
+          {allowDelete && onDeleteSale && (
+            <button onClick={handleDelete} className="w-full bg-rose-50 text-rose-600 border border-rose-100 font-black py-3 rounded-xl active:scale-95 text-[9px] uppercase flex items-center justify-center gap-2">
+              <i className="fa-solid fa-trash-can"></i> Excluir Venda
+            </button>
+          )}
           
           <button onClick={onClose} className="w-full bg-slate-800 text-white font-black py-3 rounded-xl active:scale-95 text-[9px] uppercase">VOLTAR</button>
         </div>

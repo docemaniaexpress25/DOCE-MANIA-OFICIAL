@@ -55,6 +55,9 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const [showReceiveModal, setShowReceiveModal] = useState<Sale | null>(null);
   const [valorRecebidoParcial, setValorRecebidoParcial] = useState<string>('');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [search, setSearch] = useState('');
+  const [weeklySearch, setWeeklySearch] = useState('');
+  const [expandedDay, setExpandedDay] = useState<number | null>(null);
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
@@ -153,6 +156,131 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
              <div className="w-14 h-14 bg-green-50 text-green-600 rounded-2xl flex items-center justify-center text-xl shadow-inner"><i className="fa-solid fa-users"></i></div>
              <span className="text-[11px] font-black uppercase text-gray-700">Clientes</span>
           </button>
+          <button onClick={() => setActiveTab('WEEKLY')} className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col items-center gap-3 active:scale-95 transition-all text-center">
+             <div className="w-14 h-14 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center text-xl shadow-inner"><i className="fa-solid fa-calendar-days"></i></div>
+             <span className="text-[11px] font-black uppercase text-gray-700">Roteiro Semanal</span>
+          </button>
+          <button onClick={() => setActiveTab('STOCK_VIEW')} className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col items-center gap-3 active:scale-95 transition-all text-center">
+             <div className="w-14 h-14 bg-slate-50 text-slate-600 rounded-2xl flex items-center justify-center text-xl shadow-inner"><i className="fa-solid fa-boxes-stacked"></i></div>
+             <span className="text-[11px] font-black uppercase text-gray-700">Estoque</span>
+          </button>
+        </div>
+      )}
+
+      {activeTab === 'ROTEIRO' && (
+        <div className="space-y-4">
+          <header className="px-1"><h2 className="text-xs font-black text-gray-400 uppercase tracking-wider">Rota do Dia</h2></header>
+          <div className="grid gap-3">
+             {dailyRouteState.clientIds.map(cId => {
+                const c = clients.find(cl => cl.id === cId);
+                if (!c) return null;
+                const isSkipped = dailyRouteState.skippedClientIds.includes(cId);
+                const hasSale = sales.some(s => s.clientId === cId && s.data.toDateString() === new Date().toDateString());
+                
+                return (
+                  <div key={cId} className={`p-4 rounded-3xl border shadow-sm flex items-center gap-4 transition-all ${isSkipped ? 'bg-gray-100 opacity-60' : hasSale ? 'bg-emerald-50 border-emerald-100' : 'bg-white border-gray-100'}`}>
+                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-xl ${isSkipped ? 'bg-gray-200 text-gray-400' : hasSale ? 'bg-emerald-100 text-emerald-600' : 'bg-blue-50 text-blue-600'}`}><i className={`fa-solid ${hasSale ? 'fa-check' : 'fa-shop'}`}></i></div>
+                    <div className="flex-1 min-w-0">
+                       <h4 className="font-black text-xs text-gray-800 uppercase truncate leading-tight">{c.nomeFantasia}</h4>
+                       <p className="text-[9px] text-gray-400 font-bold uppercase mt-1">{c.bairro}</p>
+                    </div>
+                    {!isSkipped && !hasSale && <button onClick={() => setSelectedClient(c)} className="bg-blue-600 text-white px-4 py-2 rounded-xl text-[9px] font-black uppercase active:scale-95">Atender</button>}
+                  </div>
+                );
+             })}
+             {dailyRouteState.clientIds.length === 0 && <div className="text-center py-20 opacity-20 italic font-black uppercase text-sm">Nenhum cliente na rota hoje</div>}
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'CARGA' && (
+        <div className="space-y-6">
+           <header className="px-1"><h2 className="text-xs font-black text-gray-400 uppercase tracking-wider">Minha Carga</h2></header>
+           
+           {cargasPendentes.length > 0 && (
+             <div className="bg-orange-50 border-2 border-orange-200 p-6 rounded-[2.5rem] shadow-lg animate-bounce-slow">
+                <div className="flex items-center gap-4 mb-4">
+                   <div className="w-12 h-12 bg-orange-100 text-orange-600 rounded-2xl flex items-center justify-center text-2xl shadow-inner"><i className="fa-solid fa-truck-ramp-box"></i></div>
+                   <div className="flex-1"><h3 className="font-black text-gray-800 text-sm uppercase">Nova Carga Disponível!</h3><p className="text-[9px] font-bold text-orange-600 uppercase">Aguardando seu aceite</p></div>
+                </div>
+                <button onClick={() => aceitarCarga(cargasPendentes[0].id)} className="w-full bg-orange-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 transition-all uppercase text-[10px] tracking-widest">ACEITAR CARGA AGORA</button>
+             </div>
+           )}
+
+           <div className="grid gap-3">
+              {minhaCarga.map(c => {
+                 const p = products.find(prod => prod.id === c.produtoId);
+                 if (!p) return null;
+                 return (
+                   <div key={c.produtoId} className="p-4 bg-white rounded-3xl border border-gray-100 shadow-sm flex items-center gap-4">
+                      <div className="w-10 h-10 bg-slate-50 text-slate-600 rounded-xl flex items-center justify-center text-lg"><i className="fa-solid fa-box-archive"></i></div>
+                      <div className="flex-1 min-w-0">
+                         <h4 className="font-black text-[11px] text-gray-800 uppercase truncate leading-tight">{p.nome}</h4>
+                         <span className="text-[9px] font-black text-gray-400 uppercase">Disp: {c.quantidade} UN</span>
+                      </div>
+                      <div className="text-right"><span className="text-xs font-black text-emerald-600">R$ {p.precoVenda.toFixed(2)}</span></div>
+                   </div>
+                 );
+              })}
+              {minhaCarga.length === 0 && <div className="text-center py-20 opacity-20 italic font-black uppercase text-sm">Carga vazia</div>}
+           </div>
+
+           <button onClick={() => setShowFiscalization(true)} className="w-full bg-slate-800 text-white font-black py-5 rounded-[2.5rem] shadow-xl active:scale-95 transition-all uppercase text-[10px] tracking-widest flex items-center justify-center gap-3">
+             <i className="fa-solid fa-shield-halved text-lg"></i> MODO FISCALIZACAO
+           </button>
+        </div>
+      )}
+
+      {activeTab === 'HISTORY' && (
+        <div className="space-y-4">
+           <header className="px-1"><h2 className="text-xs font-black text-gray-400 uppercase tracking-wider">Histórico de Vendas</h2></header>
+           <div className="grid gap-3">
+              {sales.filter(s => s.vendedorId === user.id).sort((a,b) => new Date(b.data).getTime() - new Date(a.data).getTime()).map(s => (
+                <div key={s.id} onClick={() => setViewingSale(s)} className="p-4 bg-white rounded-3xl border border-gray-100 shadow-sm flex items-center gap-4 active:scale-95 transition-all hover:border-blue-200">
+                  <div className="w-10 h-10 bg-blue-50 text-[#1E3A5F] rounded-xl flex items-center justify-center text-lg shadow-inner"><i className="fa-solid fa-file-invoice"></i></div>
+                  <div className="flex-1 min-w-0">
+                    <h4 className="font-bold text-gray-800 text-xs uppercase truncate leading-tight">{clients.find(c => c.id === s.clientId)?.nomeFantasia || 'Consumidor'}</h4>
+                    <p className="text-[10px] text-gray-400 font-bold uppercase mt-1">{new Date(s.data).toLocaleDateString()} - {s.metodoPagamento}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-sm font-black text-gray-800 leading-none">R$ {s.valorTotal.toFixed(2)}</p>
+                    <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded ${s.statusPagamento === 'PAGO' ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>{s.statusPagamento}</span>
+                  </div>
+                </div>
+              ))}
+              {sales.filter(s => s.vendedorId === user.id).length === 0 && <div className="text-center py-20 opacity-20 italic font-black uppercase text-sm">Nenhuma venda realizada</div>}
+           </div>
+        </div>
+      )}
+
+      {activeTab === 'FINANCE' && (
+        <div className="space-y-6 py-4">
+           <header className="px-1"><h2 className="text-xs font-black text-gray-400 uppercase tracking-wider">Meu Financeiro</h2></header>
+           <div className="grid grid-cols-1 gap-4">
+              <div className="bg-emerald-600 p-6 rounded-[2.5rem] shadow-lg text-white">
+                 <p className="text-[10px] font-black uppercase opacity-60 mb-1">Vendas Acumuladas</p>
+                 <p className="text-2xl font-black tracking-tight">R$ {sales.filter(s => s.vendedorId === user.id).reduce((acc, curr) => acc + (curr.valorTotal ?? 0), 0).toFixed(2)}</p>
+              </div>
+              <div className="bg-blue-600 p-6 rounded-[2.5rem] shadow-lg text-white">
+                 <p className="text-[10px] font-black uppercase opacity-60 mb-1">Comissões Recebidas</p>
+                 <p className="text-2xl font-black tracking-tight">R$ {payoutLogs.reduce((acc, curr) => acc + (curr.valorPago ?? 0), 0).toFixed(2)}</p>
+              </div>
+           </div>
+           
+           <div className="space-y-3 pt-4">
+              <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">Histórico de Mensagens</h3>
+              {messages.length === 0 && <div className="text-center py-10 opacity-20 italic text-[10px] font-bold uppercase tracking-widest">Nenhuma notificação</div>}
+              {messages.sort((a,b) => new Date(b.data).getTime() - new Date(a.data).getTime()).map(msg => (
+                <div key={msg.id} onClick={() => markMessageAsRead(msg.id)} className={`p-5 rounded-[2rem] border transition-all ${msg.lida ? 'bg-white border-gray-100 opacity-60' : 'bg-white border-blue-200 shadow-md ring-1 ring-blue-50'}`}>
+                   <div className="flex justify-between items-start mb-2">
+                      <h4 className="font-black text-xs text-gray-800 uppercase leading-tight">{msg.titulo}</h4>
+                      {!msg.lida && <div className="w-2 h-2 bg-blue-600 rounded-full"></div>}
+                   </div>
+                   <p className="text-[11px] text-gray-500 font-medium leading-relaxed">{msg.mensagem}</p>
+                   <p className="text-[8px] text-gray-400 font-black uppercase mt-3">{new Date(msg.data).toLocaleString()}</p>
+                </div>
+              ))}
+           </div>
         </div>
       )}
 
@@ -203,7 +331,96 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         </div>
       )}
 
-      {/* Tabs omitidas para brevidade */}
+      {activeTab === 'CLIENTES' && (
+        <div className="space-y-4">
+          <header className="px-1"><h2 className="text-xs font-black text-gray-400 uppercase tracking-wider">Meus Clientes</h2></header>
+          <div className="bg-white p-3 rounded-2xl border border-gray-100 shadow-sm flex items-center gap-3">
+            <i className="fa-solid fa-magnifying-glass text-gray-400 text-xs"></i>
+            <input type="text" placeholder="Buscar cliente..." value={search} onChange={e => setSearch(e.target.value)} className="flex-1 bg-transparent border-none outline-none text-sm font-semibold" />
+          </div>
+          <div className="grid gap-3">
+            {clients.filter(c => c.nomeFantasia.toLowerCase().includes(search.toLowerCase())).map(c => (
+              <div key={c.id} onClick={() => setViewingClientHistory(c)} className={`p-4 rounded-3xl border shadow-sm flex items-center gap-4 transition-all bg-white border-gray-100 active:scale-95`}>
+                <div className="w-12 h-12 bg-green-50 text-green-600 rounded-2xl flex items-center justify-center text-xl shadow-inner"><i className="fa-solid fa-shop"></i></div>
+                <div className="flex-1 min-w-0 text-left">
+                  <h3 className="font-black text-gray-800 text-xs uppercase truncate leading-tight">{c.nomeFantasia}</h3>
+                  <div className="flex items-center gap-3 mt-1.5">
+                    <span className="text-[9px] font-black text-gray-400 uppercase">{DIAS_SEMANA[c.diaRoteiro]}</span>
+                    <span className="text-[9px] font-black text-gray-400 uppercase">{c.bairro}</span>
+                  </div>
+                </div>
+                <i className="fa-solid fa-chevron-right text-gray-200"></i>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'WEEKLY' && (
+        <div className="space-y-4">
+           <header className="px-1"><h2 className="text-xs font-black text-gray-400 uppercase tracking-wider">Roteiro Semanal</h2></header>
+           <div className="bg-white p-3 rounded-2xl border border-gray-100 shadow-sm flex items-center gap-3 mb-4">
+              <i className="fa-solid fa-magnifying-glass text-gray-400 text-xs"></i>
+              <input type="text" placeholder="Pesquisar no roteiro..." value={weeklySearch} onChange={e => setWeeklySearch(e.target.value)} className="flex-1 bg-transparent border-none outline-none text-sm font-semibold" />
+           </div>
+           <div className="grid gap-3">
+              {DIAS_SEMANA.map((dia, idx) => {
+                 const clientesDia = clients.filter(c => c.diaRoteiro === idx && c.ativo && c.nomeFantasia.toLowerCase().includes(weeklySearch.toLowerCase()));
+                 if (weeklySearch && clientesDia.length === 0) return null;
+                 return (
+                 <div key={dia} className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
+                    <button onClick={() => setExpandedDay(expandedDay === idx ? null : idx)} className={`w-full p-5 flex items-center justify-between transition-colors ${expandedDay === idx ? 'bg-indigo-50' : 'bg-white'}`}>
+                       <span className="font-black text-xs text-gray-800 uppercase tracking-widest">{dia}</span>
+                       <div className="flex items-center gap-3">
+                          <span className="text-[10px] font-black bg-indigo-100 text-indigo-600 px-2 py-0.5 rounded-full">{clientesDia.length}</span>
+                          <i className={`fa-solid ${expandedDay === idx ? 'fa-chevron-up' : 'fa-chevron-down'} text-gray-300 text-xs`}></i>
+                       </div>
+                    </button>
+                    {expandedDay === idx && (
+                       <div className="p-4 grid gap-2 animate-in slide-in-from-top-2 duration-300">
+                          {clientesDia.map(c => (
+                             <div key={c.id} className="p-3 bg-gray-50 rounded-2xl flex items-center justify-between border border-gray-100/50">
+                                <div className="min-w-0 pr-4">
+                                  <p className="text-[11px] font-black text-gray-800 uppercase truncate">{c.nomeFantasia}</p>
+                                  <p className="text-[9px] text-gray-400 font-bold uppercase truncate">{c.bairro}</p>
+                                </div>
+                                <button onClick={() => {
+                                  if (!dailyRouteState.clientIds.includes(c.id)) {
+                                    updateDailyRoute([...dailyRouteState.clientIds, c.id], dailyRouteState.skippedClientIds);
+                                    showToast("Cliente adicionado à rota!");
+                                  }
+                                }} className="bg-indigo-600 text-white p-2 rounded-lg active:scale-90"><i className="fa-solid fa-plus text-[10px]"></i></button>
+                             </div>
+                          ))}
+                       </div>
+                    )}
+                 </div>
+              )})}
+           </div>
+        </div>
+      )}
+
+      {activeTab === 'STOCK_VIEW' && (
+        <div className="space-y-4">
+           <header className="px-1"><h2 className="text-xs font-black text-gray-400 uppercase tracking-wider">Estoque Geral</h2></header>
+           <div className="bg-white p-3 rounded-2xl border border-gray-100 shadow-sm flex items-center gap-3 mb-4">
+              <i className="fa-solid fa-magnifying-glass text-gray-400 text-xs"></i>
+              <input type="text" placeholder="Pesquisar produto..." value={search} onChange={e => setSearch(e.target.value)} className="flex-1 bg-transparent border-none outline-none text-sm font-semibold" />
+           </div>
+           <div className="grid gap-3">
+              {products.filter(p => p.nome.toLowerCase().includes(search.toLowerCase()) && p.ativo).map(p => (
+                 <div key={p.id} className="p-4 bg-white rounded-3xl border border-gray-100 shadow-sm flex items-center gap-4">
+                    <div className="w-10 h-10 bg-slate-50 text-slate-600 rounded-xl flex items-center justify-center text-lg shadow-inner"><i className="fa-solid fa-boxes-stacked"></i></div>
+                    <div className="flex-1 min-w-0 text-left">
+                       <h4 className="font-black text-[11px] text-gray-800 uppercase truncate leading-tight">{p.nome}</h4>
+                       <span className={`text-[9px] font-black uppercase ${p.estoquePrincipal > 0 ? 'text-blue-500' : 'text-rose-500'}`}>Estoque: {p.estoquePrincipal} UN</span>
+                    </div>
+                    <div className="text-right"><p className="text-xs font-black text-emerald-600">R$ {p.precoVenda.toFixed(2)}</p></div>
+                 </div>
+              ))}
+           </div>
+        </div>
+      )}
 
       {showReceiveModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[250] flex items-center justify-center p-6">

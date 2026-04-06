@@ -147,9 +147,7 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
             </button>
           )}
           
-          <button onClick={onClose} className="w-full bg-slate-800 text-white font-black py-4 rounded-xl active:scale-95 text-[9px] uppercase tracking-widest">
-            REGISTRAR VENDA E VOLTAR
-          </button>
+          <button onClick={onClose} className="w-full bg-slate-800 text-white font-black py-3 rounded-xl active:scale-95 text-[9px] uppercase">VOLTAR</button>
         </div>
       </div>
     </div>

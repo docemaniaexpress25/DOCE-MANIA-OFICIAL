@@ -41,10 +41,19 @@ export const commissionService = {
     return !error;
   },
 
-  async updateCommissionStatus(id: string, status: string): Promise<boolean> {
-    const { error } = await supabase.from('commissions').update({ status: status }).eq('id', id);
-    if (error) console.error('Erro ao atualizar status da comissão:', error);
+  async updateCommission(id: string, updates: Partial<Commission>): Promise<boolean> {
+    const payload: any = {};
+    if (updates.status !== undefined) payload.status = updates.status;
+    if (updates.valor !== undefined) payload.valor_comissao = updates.valor;
+    if (updates.valorBase !== undefined) payload.valor_base = updates.valorBase;
+    
+    const { error } = await supabase.from('commissions').update(payload).eq('id', id);
+    if (error) console.error('Erro ao atualizar comissão:', error);
     return !error;
+  },
+
+  async updateCommissionStatus(id: string, status: string): Promise<boolean> {
+    return this.updateCommission(id, { status: status as any });
   },
 
   async bulkUpdateStatusByVendedor(vId: string, oldStatus: string, newStatus: string): Promise<boolean> {

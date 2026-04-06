@@ -358,6 +358,7 @@ const App: React.FC = () => {
     if (!s) return;
     
     const valorRecebido = amount || (s.valorTotal - s.valorPago);
+    const saldoDevedorAntes = Number((s.valorTotal - (s.valorPago || 0)).toFixed(2));
     const novoValorPago = Number(((s.valorPago ?? 0) + valorRecebido).toFixed(2));
     const totalQuitado = novoValorPago >= s.valorTotal;
     
@@ -367,18 +368,43 @@ const App: React.FC = () => {
     const historicoAtual = s.detalhePagamento || '';
     const novoHistorico = historicoAtual ? `${historicoAtual} | ${novoLog}` : novoLog;
 
-    // IMPORTANTE: Não alteramos o metodoPagamento original (A_PRAZO) para que a venda
-    // continue aparecendo no filtro de Contas a Receber até ser totalmente quitada.
+    // Atualiza a venda
     await saleService.updateSale(saleId, { 
       valorPago: novoValorPago, 
       statusPagamento: totalQuitado ? 'PAGO' : 'PENDENTE', 
       detalhePagamento: novoHistorico
     });
 
-    if (totalQuitado) {
-      const comm = commissions.find(c => c.saleId === saleId && c.status === 'A_RECEBER');
-      if (comm) await commissionService.updateCommissionStatus(comm.id, 'DISPONIVEL');
+    // Lógica de Comissão Proporcional
+    const comm = commissions.find(c => c.saleId === saleId && c.status === 'A_RECEBER');
+    if (comm) {
+      if (totalQuitado) {
+        // Se quitou tudo, libera o que restava da comissão pendente
+        await commissionService.updateCommission(comm.id, { status: 'DISPONIVEL' });
+      } else {
+        // Se foi parcial, calcula a proporção da comissão a ser liberada
+        const ratio = valorRecebido / saldoDevedorAntes;
+        const valorComissaoLiberada = Number((comm.valor * ratio).toFixed(2));
+        
+        // 1. Cria uma nova comissão DISPONIVEL para a parte paga
+        await commissionService.insertCommission({
+          saleId: s.id,
+          vendedorId: s.vendedorId,
+          valor: valorComissaoLiberada,
+          valorBase: valorRecebido,
+          percentual: comm.percentual || 0,
+          status: 'DISPONIVEL',
+          dataGeracao: new Date()
+        });
+        
+        // 2. Reduz o valor da comissão que continua A_RECEBER
+        await commissionService.updateCommission(comm.id, {
+          valor: Number((comm.valor - valorComissaoLiberada).toFixed(2)),
+          valorBase: Number(((comm.valorBase || 0) - valorRecebido).toFixed(2))
+        });
+      }
     }
+
     await fetchTransactionalData();
   };
 

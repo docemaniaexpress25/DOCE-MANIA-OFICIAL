@@ -27,8 +27,6 @@ export const saleService = {
   },
 
   async insertSale(sale: Omit<Sale, 'id'>): Promise<Sale | null> {
-    // Mapeia os itens para chaves minúsculas (ex: produtoid) para que o Postgres 
-    // consiga ler corretamente via jsonb_to_recordset sem problemas de case sensitivity
     const rpcItems = sale.itens.map(item => ({
       produtoid: item.produtoId,
       quantidade: item.quantidade,
@@ -61,6 +59,7 @@ export const saleService = {
     if (updates.valorPago !== undefined) payload.valor_pago = updates.valorPago;
     if (updates.statusPagamento !== undefined) payload.status_pagamento = updates.statusPagamento;
     if (updates.metodoPagamento !== undefined) payload.metodo_pagamento = updates.metodoPagamento;
+    if (updates.detalhePagamento !== undefined) payload.detalhe_pagamento = updates.detalhePagamento;
     const { error } = await supabase.from('sales').update(payload).eq('id', id);
     return !error;
   },

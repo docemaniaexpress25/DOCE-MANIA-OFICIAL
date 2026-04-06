@@ -115,7 +115,6 @@ const App: React.FC = () => {
       if (route) {
         setDailyRouteState(route);
       } else {
-        // Se não houver rota para hoje, ou o dia mudou (midnight reset)
         const todayDay = new Date().getDay();
         const initialClientIds = currentClients
           .filter(c => c.diaRoteiro === todayDay && c.ativo)
@@ -169,15 +168,13 @@ const App: React.FC = () => {
     
   }, [fetchUsers, fetchClients, fetchTransactionalData, fetchDailyRoute, fetchProducts]);
 
-  // Monitoramento de Meia-Noite: Verifica a cada minuto se a data mudou
   useEffect(() => {
     const interval = setInterval(() => {
       const today = getTodayDateString();
       if (dailyRouteState.date !== today) {
-        console.log("Detectada mudança de dia. Reiniciando rota...");
         fetchCoreData();
       }
-    }, 60000); // 1 minuto
+    }, 60000);
     return () => clearInterval(interval);
   }, [dailyRouteState.date, fetchCoreData]);
 
@@ -281,7 +278,6 @@ const App: React.FC = () => {
   const syncVendedorCarga = async (vId: string, itens: { produtoId: string, quantidade: number }[]) => {
     const res = await cargaService.insertCargaPendente({ vendedorId: vId, itens, data: new Date() });
     if (res) {
-      // Restaurando a mensagem para o vendedor
       await messageService.insertMessage({
         vendedorId: vId,
         titulo: "🚚 Nova Carga Sincronizada",
@@ -340,7 +336,6 @@ const App: React.FC = () => {
     const sale = sales.find(s => s.id === saleId);
     if (!sale) return;
 
-    // Trava de Segurança Crítica: Só exclui se for a mesma data calendária (meia-noite local)
     const saleDate = new Date(sale.data);
     const today = new Date();
     const isToday = saleDate.getDate() === today.getDate() && 
@@ -361,13 +356,24 @@ const App: React.FC = () => {
   const receiveAccount = async (saleId: string, method: PaymentMethod, amount?: number) => {
     const s = sales.find(sale => sale.id === saleId);
     if (!s) return;
-    const novoValorPago = Number(((s.valorPago ?? 0) + (amount || s.valorTotal)).toFixed(2));
+    
+    const valorRecebido = amount || (s.valorTotal - s.valorPago);
+    const novoValorPago = Number(((s.valorPago ?? 0) + valorRecebido).toFixed(2));
     const totalQuitado = novoValorPago >= s.valorTotal;
+    
+    // Gerar log de recebimento no campo detalhePagamento
+    const dataStr = new Date().toLocaleDateString('pt-BR');
+    const novoLog = `[${dataStr}] R$ ${valorRecebido.toFixed(2)} (${method})`;
+    const historicoAtual = s.detalhePagamento || '';
+    const novoHistorico = historicoAtual ? `${historicoAtual} | ${novoLog}` : novoLog;
+
     await saleService.updateSale(saleId, { 
       valorPago: novoValorPago, 
       statusPagamento: totalQuitado ? 'PAGO' : 'PENDENTE', 
-      metodoPagamento: method 
+      metodoPagamento: method,
+      detalhePagamento: novoHistorico
     });
+
     if (totalQuitado) {
       const comm = commissions.find(c => c.saleId === saleId && c.status === 'A_RECEBER');
       if (comm) await commissionService.updateCommissionStatus(comm.id, 'DISPONIVEL');

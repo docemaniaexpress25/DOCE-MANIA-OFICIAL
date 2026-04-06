@@ -617,7 +617,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                 <div className="flex-1 min-w-0 pr-2 cursor-pointer" onClick={() => setViewingClientHistory(c)}>
                   <div className="flex items-center gap-2">
                     <h3 className="font-bold text-gray-800 text-[13px] leading-tight uppercase truncate">{c.nomeFantasia}</h3>
-                    {/* Ícone do WhatsApp visível apenas na tela de clientes */}
                     {c.telefone && (
                       <a 
                         href={`https://wa.me/55${c.telefone.replace(/\D/g, '')}`} 
@@ -971,9 +970,21 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
       {showReceiveModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[250] flex items-center justify-center p-6">
-           <div className="bg-white w-full max-w-xs rounded-3xl p-8 shadow-2xl text-center">
+           <div className="bg-white w-full max-w-xs rounded-3xl p-8 shadow-2xl text-center max-h-[90vh] overflow-y-auto">
               <h3 className="font-black text-gray-800 text-sm uppercase mb-6">Confirmar Recebimento</h3>
-              <div className="bg-gray-50 p-4 rounded-2xl mb-6"><p className="text-[10px] font-black text-gray-400 uppercase mb-1">Saldo em Aberto</p><p className="text-xl font-black text-rose-600">R$ {((showReceiveModal.valorTotal ?? 0) - (showReceiveModal.valorPago ?? 0)).toFixed(2)}</p></div>
+              <div className="bg-gray-50 p-4 rounded-2xl mb-4"><p className="text-[10px] font-black text-gray-400 uppercase mb-1">Saldo Devedor</p><p className="text-xl font-black text-rose-600">R$ {((showReceiveModal.valorTotal ?? 0) - (showReceiveModal.valorPago ?? 0)).toFixed(2)}</p></div>
+              
+              {showReceiveModal.detalhePagamento && (
+                <div className="mb-6 text-left">
+                  <p className="text-[9px] font-black text-gray-400 uppercase mb-2 ml-1">Histórico de Recebimentos</p>
+                  <div className="bg-gray-50 p-3 rounded-xl space-y-1 max-h-32 overflow-y-auto border border-gray-100">
+                    {showReceiveModal.detalhePagamento.split('|').map((log, i) => (
+                      <p key={i} className="text-[10px] font-bold text-gray-600 border-b border-gray-200 pb-1 last:border-0">{log.trim()}</p>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div className="space-y-4 mb-6"><p className="text-[10px] font-black text-gray-400 uppercase text-left ml-1">Valor a Receber</p><input type="number" value={valorRecebidoParcial} onChange={e => setValorRecebidoParcial(e.target.value)} className="w-full p-4 bg-white border border-gray-200 rounded-2xl font-black text-xl text-center outline-none" /></div>
               <div className="grid grid-cols-2 gap-3 mb-3">
                 <button onClick={() => handleConfirmReceive('DINHEIRO')} className="w-full bg-gray-900 text-white py-4 rounded-2xl shadow-lg font-black uppercase text-xs tracking-widest active:scale-95">Dinheiro</button>

@@ -353,8 +353,8 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         client={pdvClient} products={products} minhaCarga={minhaCarga} vendedorId={user.id} onCancel={() => setSelectedClient(null)}
         onFinish={(s) => { setViewingSale(s); setSelectedClient(null); showToast("Venda realizada"); }}
         processSale={processSale} margemMinima={margemMinima} margemMinimaAtiva={margemMinimaAtiva} pix1Name={pix1Name} pix1Code={pix1Code} pix2Name={pix2Name} pix2Code={pix2Code}
-        sales={sales} // Passando sales para o PDV
-        onNavigateToCredit={handleNavigateToCredit} // Passando a função de navegação
+        sales={sales} 
+        onNavigateToCredit={handleNavigateToCredit} 
       />
     );
   }
@@ -416,7 +416,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                   <div className="flex-1 cursor-pointer" onClick={() => setViewingClientHistory(c)}>
                     <div className="flex items-center gap-2">
                       <p className="font-bold text-gray-800 leading-tight uppercase">{c.nomeFantasia ?? 'Cliente'}</p>
-                      {/* Ícone do WhatsApp removido da Rota do Dia */}
                     </div>
                     <p className="text-[10px] text-gray-400 mt-1 uppercase font-semibold"><i className="fa-solid fa-location-dot mr-1"></i> {(c.bairro || 'S/B')}</p>
                   </div>
@@ -442,7 +441,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 <div className="flex-1 cursor-pointer" onClick={() => setViewingClientHistory(c)}>
                   <div className="flex items-center gap-2">
                     <h4 className="font-bold text-gray-800 text-sm leading-tight uppercase">{c.nomeFantasia ?? 'Cliente'}</h4>
-                    {/* Ícone do WhatsApp visível na lista de clientes */}
                     {c.telefone && (
                       <a 
                         href={`https://wa.me/55${c.telefone.replace(/\D/g, '')}`} 
@@ -776,9 +774,21 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
       {showReceiveModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[250] flex items-center justify-center p-6">
-           <div className="bg-white w-full max-w-xs rounded-3xl p-8 shadow-2xl animate-in zoom-in-95 duration-200">
+           <div className="bg-white w-full max-w-xs rounded-3xl p-8 shadow-2xl animate-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto">
               <h3 className="font-black text-gray-800 text-sm uppercase mb-4 text-center tracking-tight">Confirmar Recebimento</h3>
-              <div className="bg-gray-50 p-4 rounded-2xl mb-6"><p className="text-[10px] font-black text-gray-400 uppercase mb-1">Saldo em Aberto</p><p className="text-xl font-black text-rose-600">R$ {((showReceiveModal.valorTotal ?? 0) - (showReceiveModal.valorPago ?? 0)).toFixed(2)}</p></div>
+              <div className="bg-gray-50 p-4 rounded-2xl mb-4"><p className="text-[10px] font-black text-gray-400 uppercase mb-1">Saldo Devedor</p><p className="text-xl font-black text-rose-600">R$ {((showReceiveModal.valorTotal ?? 0) - (showReceiveModal.valorPago ?? 0)).toFixed(2)}</p></div>
+              
+              {showReceiveModal.detalhePagamento && (
+                <div className="mb-6 text-left">
+                  <p className="text-[9px] font-black text-gray-400 uppercase mb-2 ml-1">Histórico de Recebimentos</p>
+                  <div className="bg-gray-50 p-3 rounded-xl space-y-1 max-h-32 overflow-y-auto border border-gray-100">
+                    {showReceiveModal.detalhePagamento.split('|').map((log, i) => (
+                      <p key={i} className="text-[10px] font-bold text-gray-600 border-b border-gray-200 pb-1 last:border-0">{log.trim()}</p>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div className="space-y-4 mb-6"><p className="text-[10px] font-black text-gray-400 uppercase text-left ml-1">Valor a Receber</p><input type="number" value={valorRecebidoParcial} onChange={e => setValorRecebidoParcial(e.target.value)} className="w-full p-4 bg-white border border-gray-200 rounded-2xl font-black text-xl text-center outline-none" /></div>
               <div className="grid grid-cols-2 gap-3 mb-3">
                  <button onClick={() => handleConfirmReceive('DINHEIRO')} className="w-full bg-gray-900 text-white py-4 rounded-2xl shadow-lg active:scale-95 font-black uppercase text-xs tracking-widest">DINHEIRO</button>

@@ -367,10 +367,11 @@ const App: React.FC = () => {
     const historicoAtual = s.detalhePagamento || '';
     const novoHistorico = historicoAtual ? `${historicoAtual} | ${novoLog}` : novoLog;
 
+    // IMPORTANTE: Não alteramos o metodoPagamento original (A_PRAZO) para que a venda
+    // continue aparecendo no filtro de Contas a Receber até ser totalmente quitada.
     await saleService.updateSale(saleId, { 
       valorPago: novoValorPago, 
       statusPagamento: totalQuitado ? 'PAGO' : 'PENDENTE', 
-      metodoPagamento: method,
       detalhePagamento: novoHistorico
     });
 

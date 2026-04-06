@@ -353,7 +353,7 @@ const App: React.FC = () => {
     }
   };
 
-  const receiveAccount = async (saleId: string, method: PaymentMethod, amount?: number) => {
+  const receiveAccount = async (saleId: string, method: PaymentMethod, amount?: number, receiverName?: string) => {
     const s = sales.find(sale => sale.id === saleId);
     if (!s) return;
     
@@ -362,13 +362,14 @@ const App: React.FC = () => {
     const novoValorPago = Number(((s.valorPago ?? 0) + valorRecebido).toFixed(2));
     const totalQuitado = novoValorPago >= s.valorTotal;
     
-    // Gerar log de recebimento no campo detalhePagamento
+    // Gerar log de recebimento formatado para parse visual
     const dataStr = new Date().toLocaleDateString('pt-BR');
-    const novoLog = `[${dataStr}] R$ ${valorRecebido.toFixed(2)} (${method})`;
+    const nomeRec = receiverName || currentUser?.nome || 'Desc.';
+    const novoLog = `[${dataStr}] R$ ${valorRecebido.toFixed(2)} (${method}) - Por: ${nomeRec}`;
     const historicoAtual = s.detalhePagamento || '';
     const novoHistorico = historicoAtual ? `${historicoAtual} | ${novoLog}` : novoLog;
 
-    // Atualiza a venda
+    // Atualiza a venda preservando o método A_PRAZO original
     await saleService.updateSale(saleId, { 
       valorPago: novoValorPago, 
       statusPagamento: totalQuitado ? 'PAGO' : 'PENDENTE', 
@@ -379,14 +380,11 @@ const App: React.FC = () => {
     const comm = commissions.find(c => c.saleId === saleId && c.status === 'A_RECEBER');
     if (comm) {
       if (totalQuitado) {
-        // Se quitou tudo, libera o que restava da comissão pendente
         await commissionService.updateCommission(comm.id, { status: 'DISPONIVEL' });
       } else {
-        // Se foi parcial, calcula a proporção da comissão a ser liberada
         const ratio = valorRecebido / saldoDevedorAntes;
         const valorComissaoLiberada = Number((comm.valor * ratio).toFixed(2));
         
-        // 1. Cria uma nova comissão DISPONIVEL para a parte paga
         await commissionService.insertCommission({
           saleId: s.id,
           vendedorId: s.vendedorId,
@@ -397,7 +395,6 @@ const App: React.FC = () => {
           dataGeracao: new Date()
         });
         
-        // 2. Reduz o valor da comissão que continua A_RECEBER
         await commissionService.updateCommission(comm.id, {
           valor: Number((comm.valor - valorComissaoLiberada).toFixed(2)),
           valorBase: Number(((comm.valorBase || 0) - valorRecebido).toFixed(2))
@@ -486,7 +483,8 @@ const App: React.FC = () => {
             adjustStockManual={()=>{}} syncVendedorCarga={syncVendedorCarga} applyCargaDirectly={applyCargaDirectly} addClient={addClient} updateClient={updateClient}
             deleteClient={deleteClient} addUser={addUser} updateUser={updateUser} payCommission={handlePayCommission}
             setCommissions={()=>{}} updateEstoqueCentral={()=>{}} reinforceCarga={()=>{}} deleteSale={(id) => deleteSaleInternal(id, true)}
-            receiveAccount={receiveAccount} logo={logo} setLogo={(val) => updateSetting('logo', val)} adminUser={currentUser} margemGlobalAtiva={margemGlobalAtiva}
+            receiveAccount={(id, method, amount) => receiveAccount(id, method, amount, currentUser.nome)} 
+            logo={logo} setLogo={(val) => updateSetting('logo', val)} adminUser={currentUser} margemGlobalAtiva={margemGlobalAtiva}
             setMargemGlobalAtiva={(val) => updateSetting('margemGlobalAtiva', val)} margemGlobalValor={margemGlobalValor} setMargemGlobalValor={(val) => updateSetting('margemGlobalValor', val)}
             margemMinima={margemMinima} setMargemMinima={(val) => updateSetting('margemMinima', val)} margemMinimaAtiva={margemMinimaAtiva}
             setMargemMinimaAtiva={(val) => updateSetting('margemMinimaAtiva', val)} pix1Name={pix1Name} setPix1Name={(val) => updateSetting('pix1Name', val)} pix1Code={pix1Code} setPix1Code={(val) => updateSetting('pix1Code', val)}
@@ -506,7 +504,8 @@ const App: React.FC = () => {
             cargasPendentes={cargasPendentes.filter(cp => cp.vendedorId === currentUser.id)}
             messages={messages.filter(m => m.vendedorId === currentUser.id)}
             markMessageAsRead={markMessageAsRead} processSale={processSale} 
-            receivePayment={receiveAccount} deleteSale={(id) => deleteSaleInternal(id, false)} aceitarCarga={aceitarCarga}
+            receivePayment={(id, method, amount) => receiveAccount(id, method, amount, currentUser.nome)} 
+            deleteSale={(id) => deleteSaleInternal(id, false)} aceitarCarga={aceitarCarga}
             addExpense={addExpense}
             margemMinima={margemMinima} margemMinimaAtiva={margemMinimaAtiva} pix1Name={pix1Name} pix1Code={pix1Code}
             pix2Name={pix2Name} setPix2Name={(val) => updateSetting('pix2Name', val)} pix2Code={pix2Code} setPix2Code={(val) => updateSetting('pix2Code', val)}

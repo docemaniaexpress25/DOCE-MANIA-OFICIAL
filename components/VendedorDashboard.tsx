@@ -721,12 +721,23 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
               return (
               <div key={s.id} className={`p-5 rounded-3xl border shadow-sm flex flex-col transition-all ${isOverdue ? 'bg-rose-50 border-rose-200' : 'bg-white border-gray-100'}`}>
                 <div className="flex justify-between items-start mb-2">
-                   <div>
+                   <div className="flex-1 pr-4">
                       <h4 className={`font-bold text-sm leading-tight uppercase cursor-pointer ${isOverdue ? 'text-rose-900' : 'text-gray-800'}`} onClick={() => setViewingClientHistory(clients.find(c => c.id === s.clientId)!)}>{clients.find(c => c.id === s.clientId)?.nomeFantasia || 'Cliente'}</h4>
                       <div className="flex flex-col mt-2">
                         <span className={`text-[9px] font-black uppercase ${isOverdue ? 'text-rose-600' : 'text-gray-400'}`}>Vencimento</span>
                         <span className={`text-xs font-black ${isOverdue ? 'text-rose-700' : 'text-gray-800'}`}>{s.dataVencimento ? new Date(s.dataVencimento).toLocaleDateString() : 'N/D'}</span>
                       </div>
+                      
+                      {s.detalhePagamento && (
+                        <div className="mt-3 space-y-1">
+                          <p className="text-[8px] font-black text-gray-400 uppercase">Histórico de Recebimentos:</p>
+                          <div className="bg-gray-50/50 p-2 rounded-xl border border-gray-100 max-h-24 overflow-y-auto">
+                            {s.detalhePagamento.split('|').map((log, i) => (
+                              <p key={i} className="text-[8px] font-bold text-gray-500 border-b border-gray-100 last:border-0 pb-1 mb-1">{log.trim()}</p>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                    </div>
                    <div className="text-right">
                       <span className={`text-[8px] font-black px-2 py-0.5 rounded uppercase ${isOverdue ? 'bg-rose-600 text-white animate-pulse' : 'bg-orange-100 text-orange-600'}`}>

@@ -310,17 +310,36 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     const clientsInDay = props.clients.filter(c => c.diaRoteiro === day && c.ativo).sort((a, b) => (a.ordem || 0) - (b.ordem || 0));
     const currentIndex = clientsInDay.findIndex(c => c.id === id);
     if (currentIndex === -1) return;
+    
     let targetIndex = -1;
     if (direction === 'UP' && currentIndex > 0) targetIndex = currentIndex - 1;
     if (direction === 'DOWN' && currentIndex < clientsInDay.length - 1) targetIndex = currentIndex + 1;
+    
     if (targetIndex !== -1) {
       const currentClient = clientsInDay[currentIndex];
       const targetClient = clientsInDay[targetIndex];
-      const oldOrdem = currentClient.ordem || 0;
-      const newOrdem = targetClient.ordem || 0;
-      const finalTargetOrdem = oldOrdem === newOrdem ? (direction === 'UP' ? newOrdem - 1 : newOrdem + 1) : newOrdem;
-      props.updateClient(currentClient.id, { ordem: finalTargetOrdem });
-      props.updateClient(targetClient.id, { ordem: oldOrdem });
+      
+      // Lógica de troca de ordem persistente
+      const currentOrdem = currentClient.ordem || 0;
+      const targetOrdem = targetClient.ordem || 0;
+      
+      // Se as ordens forem iguais, precisamos garantir que sejam diferentes antes de trocar
+      if (currentOrdem === targetOrdem) {
+        // Atribui ordens sequenciais para todos os clientes do dia para normalizar
+        for (let i = 0; i < clientsInDay.length; i++) {
+          if (clientsInDay[i].id === id) {
+            const newPos = direction === 'UP' ? i - 1 : i + 1;
+            props.updateClient(clientsInDay[i].id, { ordem: newPos });
+          } else {
+            props.updateClient(clientsInDay[i].id, { ordem: i });
+          }
+        }
+      } else {
+        // Troca simples de valores de ordem
+        props.updateClient(currentClient.id, { ordem: targetOrdem });
+        props.updateClient(targetClient.id, { ordem: currentOrdem });
+      }
+      
       showToast("Ordem atualizada!");
     }
   };
@@ -815,10 +834,21 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                    <span className={`text-[9px] font-black px-2 py-0.5 rounded uppercase ${isOverdue ? 'bg-rose-600 text-white animate-pulse' : 'bg-orange-50 text-orange-600'}`}>{isOverdue ? 'VENCIDO / HOJE' : 'EM ABERTO'}</span>
                 </div>
                 <div className="flex justify-between items-end">
-                   <div className="cursor-pointer" onClick={() => setViewingClientHistory(props.clients.find(c => c.id === s.clientId)!)}>
+                   <div className="cursor-pointer flex-1 pr-4" onClick={() => setViewingClientHistory(props.clients.find(c => c.id === s.clientId)!)}>
                      <h4 className={`font-bold text-sm leading-tight ${isOverdue ? 'text-rose-900' : 'text-gray-800'}`}>{props.clients.find(c => c.id === s.clientId)?.nomeFantasia || 'Cliente'}</h4>
                      <p className="text-[10px] text-gray-400 font-bold uppercase mt-1">Vend: {props.users.find(u => u.id === s.vendedorId)?.nome ?? 'Desc.'}</p> 
                      {(s.valorPago ?? 0) > 0 && <p className="text-[9px] text-emerald-600 font-bold uppercase mt-1">Já pago: R$ {(s.valorPago ?? 0).toFixed(2)}</p>} 
+                     
+                     {s.detalhePagamento && (
+                        <div className="mt-2 space-y-1">
+                          <p className="text-[8px] font-black text-gray-400 uppercase">Histórico:</p>
+                          <div className="bg-gray-50/50 p-2 rounded-lg border border-gray-100 max-h-20 overflow-y-auto">
+                            {s.detalhePagamento.split('|').map((log, i) => (
+                              <p key={i} className="text-[8px] font-bold text-gray-500 border-b border-gray-100 last:border-0 pb-0.5">{log.trim()}</p>
+                            ))}
+                          </div>
+                        </div>
+                     )}
                    </div>
                    <div className="text-right">
                      <p className={`text-sm font-black mb-2 ${isOverdue ? 'text-rose-700' : 'text-gray-800'}`}>Saldo: R$ {saldo.toFixed(2)}</p>
@@ -999,7 +1029,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6">
            <div className="bg-white w-full max-w-sm rounded-[2rem] p-8 shadow-2xl overflow-y-auto max-h-[90vh]">
               <h3 className="font-black text-gray-800 uppercase text-sm mb-6 text-center">{showUserModal === 'NEW' ? 'Novo Vendedor' : 'Editar Vendedor'}</h3>
-              <div className="flex flex-col items-center mb-6"><div onClick={() => userPhotoInputRef.current?.click()} className="w-24 h-24 bg-purple-100 text-purple-600 rounded-[2rem] flex items-center justify-center font-black overflow-hidden border-4 border-white shadow-xl cursor-pointer relative group transition-all hover:scale-105">{userForm.foto ? <img src={userForm.foto} className="w-full h-full object-cover" /> : <i className="fa-solid fa-camera text-2xl"></i>}</div><input type="file" ref={userPhotoInputRef} onChange={handleUserPhotoUpload} className="hidden" accept="image/*" /></div>
+              <div className="flex flex-col items-center mb-6"><div onClick={() => userPhotoInputRef.current?.click()} className="w-24 h-24 bg-purple-100 text-purple-600 rounded-[2rem] flex items-center justify-center font-black overflow-hidden border-4 border-white shadow-xl cursor-pointer relative group transition-all hover:scale-105">{userForm.foto ? <img src={userForm.foto} className="w-full h-full object-cover" /> : <i className="fa-solid fa-camera text-2xl"></i>}</div><input type="file" ref={userPhotoInputRef} className="hidden" accept="image/*" /></div>
               <div className="space-y-4">
                  <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome do Vendedor</label><input value={userForm.nome ?? ''} onChange={e => setUserForm({...userForm, nome: e.target.value})} placeholder="Nome Completo" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div>
                  <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Telefone / WhatsApp</label><input value={userForm.telefone ?? ''} onChange={e => setUserForm({...userForm, telefone: e.target.value})} placeholder="Telefone" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div>

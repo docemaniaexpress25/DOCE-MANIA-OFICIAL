@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Product, Client, Carga, Sale, SaleItem, PaymentMethod } from '../types';
+import Cupom from './Cupom';
 
 interface PDVProps {
   client: Client;
@@ -15,22 +16,22 @@ interface PDVProps {
   pix1Code: string | null;
   pix2Name: string;
   pix2Code: string | null;
-  sales: Sale[]; // Adicionado para verificar dívidas
-  onNavigateToCredit: () => void; // Adicionado para navegação
+  sales: Sale[];
+  onNavigateToCredit: () => void;
 }
 
+type PDVView = 'CART' | 'RECEIPT_PREVIEW' | 'PAYMENT';
+
 const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onCancel, onFinish, processSale, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, sales, onNavigateToCredit }) => {
+  const [view, setView] = useState<PDVView>('CART');
   const [cart, setCart] = useState<{ [key: string]: { quantidade: number, precoVenda: string } }>({});
   const [metodo, setMetodo] = useState<PaymentMethod>('DINHEIRO');
   const [detalheMetodo, setDetalheMetodo] = useState<string>('Dinheiro');
   const [showPrazoOverlay, setShowPrazoOverlay] = useState(false);
-  const [showFinalizeOverlay, setShowFinalizeOverlay] = useState(false);
   const [showPixOverlay, setShowPixOverlay] = useState<1 | 2 | null>(null);
   const [prazoData, setPrazoData] = useState<string>('');
   const [valorRecebido, setValorRecebido] = useState<string>('');
   const [selectedPixSlot, setSelectedPixSlot] = useState<1 | 2 | null>(null);
-
-  // Estados para o sistema de troca
   const [isTrocaActive, setIsTrocaActive] = useState(false);
   const [valorTroca, setValorTroca] = useState('');
 
@@ -86,7 +87,6 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     return acc + ((cartItem.quantidade ?? 0) * price); 
   }, 0);
 
-  // Calcula o total subtraindo o desconto de troca se ativo
   const total = Math.max(0, subtotal - (isTrocaActive ? parseFloat(valorTroca) || 0 : 0));
 
   const marginViolationInfo = useMemo(() => {
@@ -128,8 +128,58 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     else { salePayload.statusPagamento = 'PAGO'; }
     
     const newSale = await processSale(salePayload);
-    if (newSale) { localStorage.removeItem(`pdv_cart_${vendedorId}_${client.id}`); onFinish(newSale); }
+    if (newSale) { 
+      localStorage.removeItem(`pdv_cart_${vendedorId}_${client.id}`); 
+      onFinish(newSale); 
+    }
   };
+
+  // Mock de venda para a prévia do cupom
+  const previewSale: Sale = {
+    id: 'preview',
+    vendedorId,
+    clientId: client.id,
+    data: new Date(),
+    valorTotal: total,
+    valorPago: 0,
+    metodoPagamento: metodo,
+    statusPagamento: 'PENDENTE',
+    itens: Object.entries(cart).map(([pId, item]) => ({
+      produtoId: pId,
+      quantidade: (item as any).quantidade,
+      precoVenda: parseFloat((item as any).precoVenda) || 0
+    }))
+  };
+
+  if (view === 'RECEIPT_PREVIEW') {
+    return (
+      <div className="fixed inset-0 bg-gray-900 z-[100] flex flex-col">
+        <div className="flex-1 overflow-y-auto">
+          <Cupom 
+            sale={previewSale} 
+            client={client} 
+            products={products} 
+            onClose={() => setView('CART')} 
+            allowDelete={false}
+          />
+        </div>
+        <div className="p-4 bg-white border-t border-gray-200 safe-bottom">
+          <button 
+            onClick={() => setView('PAYMENT')}
+            className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-xl uppercase text-xs tracking-widest flex items-center justify-center gap-3 active:scale-95"
+          >
+            <i className="fa-solid fa-wallet"></i> PROSSEGUIR PARA PAGAMENTO
+          </button>
+          <button 
+            onClick={() => setView('CART')}
+            className="w-full py-3 text-gray-400 font-bold text-[10px] uppercase mt-2"
+          >
+            Voltar ao Carrinho
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 bg-gray-50 z-[60] flex flex-col">
@@ -195,7 +245,6 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           </div>
         )}
         
-        {/* Seletor discreto de troca/desconto */}
         <div className="flex items-center justify-between px-1 mb-1 bg-gray-50/50 p-2 rounded-xl border border-gray-100/50">
           <div className="flex items-center gap-2">
             <button 
@@ -226,24 +275,30 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Total Pedido</span>
               <span className={`text-xl font-black leading-none ${isTrocaActive && parseFloat(valorTroca) > 0 ? 'text-orange-600' : 'text-gray-800'}`}>R$ {total.toFixed(2)}</span>
             </div>
-            <div className="flex gap-1.5">
-              {(['DINHEIRO', 'PIX', 'A_PRAZO'] as PaymentMethod[]).map(m => (
-                <button key={m} onClick={() => handleSelectMetodo(m)} className={`px-3 py-2 rounded-xl text-[8px] font-black uppercase transition-all border-2 ${metodo === m ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-gray-50 text-gray-400 border-gray-100'}`}>
-                  {m === 'A_PRAZO' ? 'PRAZO' : m}
-                </button>
-              ))}
-            </div>
         </div>
 
-        <button onClick={() => setShowFinalizeOverlay(true)} disabled={total === 0 || hasMarginViolation} className={`w-full py-4 rounded-2xl font-black shadow-lg uppercase tracking-widest text-xs transition-all active:scale-95 flex items-center justify-center gap-3 ${total > 0 && !hasMarginViolation ? 'bg-emerald-600 text-white' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}>
-          <i className="fa-solid fa-circle-check"></i> CONFIRMAR VENDA
+        <button 
+          onClick={() => setView('RECEIPT_PREVIEW')} 
+          disabled={total === 0 || hasMarginViolation} 
+          className={`w-full py-4 rounded-2xl font-black shadow-lg uppercase tracking-widest text-xs transition-all active:scale-95 flex items-center justify-center gap-3 ${total > 0 && !hasMarginViolation ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}
+        >
+          <i className="fa-solid fa-file-invoice"></i> GERAR CUPOM
         </button>
       </footer>
 
-      {showFinalizeOverlay && (
+      {view === 'PAYMENT' && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-end justify-center p-4">
            <div className="bg-white w-full max-w-sm rounded-[2.5rem] p-8 animate-in slide-in-from-bottom duration-300 shadow-2xl">
               <h3 className="font-black text-gray-800 text-lg mb-4 text-center uppercase">Pagamento</h3>
+              
+              <div className="flex gap-1.5 mb-6 justify-center">
+                {(['DINHEIRO', 'PIX', 'A_PRAZO'] as PaymentMethod[]).map(m => (
+                  <button key={m} onClick={() => handleSelectMetodo(m)} className={`px-3 py-2 rounded-xl text-[8px] font-black uppercase transition-all border-2 ${metodo === m ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-gray-50 text-gray-400 border-gray-100'}`}>
+                    {m === 'A_PRAZO' ? 'PRAZO' : m}
+                  </button>
+                ))}
+              </div>
+
               {metodo === 'DINHEIRO' && (
                 <div className="space-y-4 mb-6">
                   <div className="bg-gray-50 p-4 rounded-2xl text-center"><p className="text-[9px] font-black text-gray-400 uppercase mb-1">Total</p><p className="text-2xl font-black text-gray-800">R$ {total.toFixed(2)}</p></div>
@@ -263,8 +318,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               )}
               {metodo === 'A_PRAZO' && <div className="bg-indigo-50 p-4 rounded-2xl mb-6 text-center"><p className="text-[9px] font-black text-indigo-400 uppercase mb-1">Vencimento</p><p className="text-lg font-black text-indigo-700">{prazoData ? new Date(prazoData).toLocaleDateString() : 'N/D'}</p></div>}
               
-              <button onClick={handleConfirmFinalize} disabled={(metodo === 'DINHEIRO' && (parseFloat(valorRecebido) || 0) < total) || (metodo === 'PIX' && !selectedPixSlot)} className={`w-full py-4 rounded-2xl font-black shadow-xl uppercase text-xs transition-all ${((metodo === 'DINHEIRO' && (parseFloat(valorRecebido) || 0) >= total) || (metodo === 'PIX' && selectedPixSlot) || metodo === 'A_PRAZO') ? 'bg-emerald-600 text-white active:scale-95' : 'bg-gray-100 text-gray-300 cursor-not-allowed'}`}>FINALIZAR AGORA</button>
-              <button onClick={() => setShowFinalizeOverlay(false)} className="w-full py-3 text-gray-400 font-bold text-[9px] uppercase mt-2">Voltar ao Pedido</button>
+              <button onClick={handleConfirmFinalize} disabled={(metodo === 'DINHEIRO' && (parseFloat(valorRecebido) || 0) < total) || (metodo === 'PIX' && !selectedPixSlot)} className={`w-full py-4 rounded-2xl font-black shadow-xl uppercase text-xs transition-all ${((metodo === 'DINHEIRO' && (parseFloat(valorRecebido) || 0) >= total) || (metodo === 'PIX' && selectedPixSlot) || metodo === 'A_PRAZO') ? 'bg-emerald-600 text-white active:scale-95' : 'bg-gray-100 text-gray-300 cursor-not-allowed'}`}>FINALIZAR VENDA</button>
+              <button onClick={() => setView('RECEIPT_PREVIEW')} className="w-full py-3 text-gray-400 font-bold text-[9px] uppercase mt-2">Voltar ao Cupom</button>
            </div>
         </div>
       )}

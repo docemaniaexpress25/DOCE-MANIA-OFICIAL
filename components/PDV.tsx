@@ -134,7 +134,6 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     }
   };
 
-  // Mock de venda para a prévia do cupom
   const previewSale: Sale = {
     id: 'preview',
     vendedorId,
@@ -159,23 +158,10 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
             sale={previewSale} 
             client={client} 
             products={products} 
-            onClose={() => setView('CART')} 
+            onClose={() => setView('PAYMENT')} 
             allowDelete={false}
+            closeLabel="ESCOLHER PAGAMENTO"
           />
-        </div>
-        <div className="p-4 bg-white border-t border-gray-200 safe-bottom">
-          <button 
-            onClick={() => setView('PAYMENT')}
-            className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-xl uppercase text-xs tracking-widest flex items-center justify-center gap-3 active:scale-95"
-          >
-            <i className="fa-solid fa-wallet"></i> PROSSEGUIR PARA PAGAMENTO
-          </button>
-          <button 
-            onClick={() => setView('CART')}
-            className="w-full py-3 text-gray-400 font-bold text-[10px] uppercase mt-2"
-          >
-            Voltar ao Carrinho
-          </button>
         </div>
       </div>
     );

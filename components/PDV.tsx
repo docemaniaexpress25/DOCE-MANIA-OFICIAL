@@ -160,7 +160,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
             products={products} 
             onClose={() => setView('PAYMENT')} 
             allowDelete={false}
-            closeLabel="IR PARA PAGAMENTO"
+            closeLabel="ESCOLHER PAGAMENTO"
           />
         </div>
       </div>
@@ -304,7 +304,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               )}
               {metodo === 'A_PRAZO' && <div className="bg-indigo-50 p-4 rounded-2xl mb-6 text-center"><p className="text-[9px] font-black text-indigo-400 uppercase mb-1">Vencimento</p><p className="text-lg font-black text-indigo-700">{prazoData ? new Date(prazoData).toLocaleDateString() : 'N/D'}</p></div>}
               
-              <button onClick={handleConfirmFinalize} disabled={(metodo === 'DINHEIRO' && (parseFloat(valorRecebido) || 0) < total) || (metodo === 'PIX' && !selectedPixSlot)} className={`w-full py-4 rounded-2xl font-black shadow-xl uppercase text-xs transition-all ${((metodo === 'DINHEIRO' && (parseFloat(valorRecebido) || 0) >= total) || (metodo === 'PIX' && selectedPixSlot) || metodo === 'A_PRAZO') ? 'bg-emerald-600 text-white active:scale-95' : 'bg-gray-100 text-gray-300 cursor-not-allowed'}`}>IR PARA PAGAMENTO</button>
+              <button onClick={handleConfirmFinalize} disabled={(metodo === 'DINHEIRO' && (parseFloat(valorRecebido) || 0) < total) || (metodo === 'PIX' && !selectedPixSlot)} className={`w-full py-4 rounded-2xl font-black shadow-xl uppercase text-xs transition-all ${((metodo === 'DINHEIRO' && (parseFloat(valorRecebido) || 0) >= total) || (metodo === 'PIX' && selectedPixSlot) || metodo === 'A_PRAZO') ? 'bg-emerald-600 text-white active:scale-95' : 'bg-gray-100 text-gray-300 cursor-not-allowed'}`}>FINALIZAR VENDA</button>
               <button onClick={() => setView('RECEIPT_PREVIEW')} className="w-full py-3 text-gray-400 font-bold text-[9px] uppercase mt-2">Voltar ao Cupom</button>
            </div>
         </div>

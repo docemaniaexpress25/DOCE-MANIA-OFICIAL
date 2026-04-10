@@ -160,7 +160,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
             products={products} 
             onClose={() => setView('PAYMENT')} 
             allowDelete={false}
-            closeLabel="ESCOLHER PAGAMENTO"
+            closeLabel="IR PARA PAGAMENTO"
           />
         </div>
       </div>

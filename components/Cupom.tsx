@@ -12,9 +12,10 @@ interface CupomProps {
   onDeleteSale?: (saleId: string) => void;
   allowDelete?: boolean;
   showToast?: (msg: string, type?: 'success' | 'error') => void;
+  closeLabel?: string; // Adicionado suporte a rótulo personalizado
 }
 
-const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDeleteSale, allowDelete, showToast }) => {
+const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDeleteSale, allowDelete, showToast, closeLabel }) => {
   const [printWidth, setPrintWidth] = useState<'56MM' | '80MM'>('56MM');
 
   const generateText = (width: '56MM' | '80MM') => {
@@ -129,7 +130,7 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
         <div className="bg-gray-100 p-4 flex flex-col gap-2 border-t border-gray-200">
           <div className="flex bg-gray-200 p-1 rounded-xl mb-1">
             <button onClick={() => setPrintWidth('56MM')} className={`flex-1 py-2 rounded-lg text-[10px] font-black uppercase ${printWidth === '56MM' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500'}`}>56MM</button>
-            <button onClick={() => setPrintWidth('80MM')} className={`flex-1 py-2 rounded-lg text-[10px] font-black uppercase ${printWidth === '80MM' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500'}`}>80MM</button>
+            <button onClick={() => setPrintWidth('80MM')} className={`flex-1 py-2 rounded-lg text-[10px] font-black uppercase ${printWidth === '80MM' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-400'}`}>80MM</button>
           </div>
           
           <div className="flex gap-2">
@@ -147,7 +148,9 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
             </button>
           )}
           
-          <button onClick={onClose} className="w-full bg-slate-800 text-white font-black py-3 rounded-xl active:scale-95 text-[9px] uppercase">FINALIZAR VENDA E VOLTAR</button>
+          <button onClick={onClose} className="w-full bg-slate-800 text-white font-black py-3 rounded-xl active:scale-95 text-[9px] uppercase">
+            {closeLabel || "FECHAR"}
+          </button>
         </div>
       </div>
     </div>

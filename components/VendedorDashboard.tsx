@@ -155,7 +155,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     const clientsInRoute = dailyRouteState.clientIds
       .map(id => clientMap.get(id))
       .filter((c): c is Client => !!c && (c.ativo ?? false));
-    return clientsInRoute.sort((a, b) => (a.ordem || 0) - (b.ordem || 0)); 
+    return clientsInRoute.sort((a, b) => (a.ordem || 0) - (b.ordem || 0)) || []; 
   }, [clients, dailyRouteState.clientIds]); 
 
   const handleSkipClient = () => { 
@@ -351,7 +351,11 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     return (
       <PDV
         client={pdvClient} products={products} minhaCarga={minhaCarga} vendedorId={user.id} onCancel={() => setSelectedClient(null)}
-        onFinish={(s) => { setViewingSale(s); setSelectedClient(null); showToast("Venda realizada"); }}
+        onFinish={() => { 
+          setSelectedClient(null); 
+          setActiveTab('ROTEIRO'); 
+          showToast("Venda realizada com sucesso!", 'success'); 
+        }}
         processSale={processSale} margemMinima={margemMinima} margemMinimaAtiva={margemMinimaAtiva} pix1Name={pix1Name} pix1Code={pix1Code} pix2Name={pix2Name} pix2Code={pix2Code}
         sales={sales} 
         onNavigateToCredit={handleNavigateToCredit} 

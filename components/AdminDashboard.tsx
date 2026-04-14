@@ -297,6 +297,15 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     setShowConfirmApply(false);
   };
 
+  const handleZeroCarga = () => {
+    if (!selectedVendedorId) return;
+    if (window.confirm("Deseja realmente ZERAR toda a carga deste vendedor? Isso retornará todos os itens ao estoque central ao clicar em 'Aplicar Agora'.")) {
+      const zeroed = Object.keys(stagingCarga).reduce((acc, key) => ({ ...acc, [key]: 0 }), {});
+      setStagingCarga(zeroed);
+      showToast("Carga zerada no rascunho. Clique em 'Aplicar Agora' para confirmar.");
+    }
+  };
+
   const moveProduct = (id: string, dir: 'UP' | 'DOWN') => {
     const idx = localOrderedProductIds.indexOf(id);
     const newOrder = [...localOrderedProductIds];
@@ -577,7 +586,17 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         <div className="space-y-4">
           <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Gestão de Cargas</h2></div>
           <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
-            <h3 className="font-black text-gray-800 mb-4 uppercase text-[10px]">Vendedor Responsável</h3>
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="font-black text-gray-800 uppercase text-[10px]">Vendedor Responsável</h3>
+              {selectedVendedorId && (
+                <button 
+                  onClick={handleZeroCarga}
+                  className="text-[9px] font-black text-rose-500 uppercase hover:text-rose-700 transition-colors flex items-center gap-1"
+                >
+                  <i className="fa-solid fa-rotate-left"></i> Zerar Carga
+                </button>
+              )}
+            </div>
             <select value={selectedVendedorId} onChange={e => setSelectedVendedorId(e.target.value)} className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl outline-none font-semibold text-sm">
               <option value="">Selecione um vendedor...</option>
               {props.users.filter(u => u.role === 'VENDEDOR' && u.ativo).map(u => <option key={u.id} value={u.id}>{u.nome}</option>)} 

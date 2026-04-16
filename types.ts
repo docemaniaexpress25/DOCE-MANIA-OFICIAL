@@ -95,7 +95,6 @@ export interface CommissionPaymentLog {
   tipo: 'TOTAL' | 'PARCIAL';
   dataPagamento: Date;
   adminId: string;
-  status: 'PENDENTE' | 'CONFIRMADO';
 }
 
 export interface Expense {
@@ -114,7 +113,6 @@ export interface SystemMessage {
   data: Date;
   lida: boolean;
   type?: 'INFO' | 'COMMISSION_CONFIRMATION' | 'CARGA_PENDENTE'; 
-  payoutId?: string; // ID do pagamento vinculado para confirmação
 }
 
 export interface DailyRouteState {

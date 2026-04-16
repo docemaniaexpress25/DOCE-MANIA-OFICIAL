@@ -98,21 +98,14 @@ const App: React.FC = () => {
       cargaService.getAllCargasPendentes(),
       expenseService.getAllExpenses()
     ]);
-    
-    // Mapear nomes dos vendedores nos logs de pagamento
-    const logsWithNames = p.map(log => {
-      const v = users.find(u => u.id === log.vendedorId);
-      return { ...log, vendedorNome: v?.nome || 'N/D' };
-    });
-
     setSales(s);
     setCommissions(c);
-    setPayoutLogs(logsWithNames);
+    setPayoutLogs(p);
     setMessages(m);
     setCargas(cg);
     setCargasPendentes(cgp);
     setExpenses(ex);
-  }, [users]);
+  }, []);
 
   const fetchDailyRoute = useCallback(async (currentClients: Client[]) => {
     if (currentUser && currentUser.role === 'VENDEDOR') {
@@ -419,35 +412,25 @@ const App: React.FC = () => {
     const v = users.find(u => u.id === vendedorId);
     if (!v) return;
     
-    const payoutId = await commissionService.insertPayout({
+    const logSuccess = await commissionService.insertPayout({
       vendedorId,
       vendedorNome: v.nome,
       valorPago: amount,
       valorRestante: 0,
       tipo: type,
       dataPagamento: new Date(),
-      adminId,
-      status: 'PENDENTE'
+      adminId
     });
     
-    if (payoutId) {
+    if (logSuccess) {
       await messageService.insertMessage({
         vendedorId,
         titulo: "💰 Pagamento de Comissão",
-        mensagem: `O administrador registrou um pagamento de R$ ${amount.toFixed(2)}. Por favor, confirme o recebimento.`,
+        mensagem: `O administrador registrou um pagamento de R$ ${amount.toFixed(2)}.`,
         data: new Date(),
         lida: false,
-        type: 'COMMISSION_CONFIRMATION',
-        payoutId: payoutId
+        type: 'INFO'
       });
-      await fetchTransactionalData();
-    }
-  };
-
-  const confirmCommissionPayment = async (msgId: string, payoutId: string) => {
-    const success = await commissionService.confirmPayout(payoutId);
-    if (success) {
-      await messageService.updateMessage(msgId, { lida: true });
       await fetchTransactionalData();
     }
   };
@@ -531,7 +514,6 @@ const App: React.FC = () => {
             updateDailyRoute={handleUpdateDailyRoute}
             companyName={companyName}
             companyCnpj={companyCnpj}
-            confirmCommissionPayment={confirmCommissionPayment}
           />
         )}
       </main>

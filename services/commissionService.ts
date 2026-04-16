@@ -76,36 +76,21 @@ export const commissionService = {
       valorRestante: 0,
       tipo: 'TOTAL',
       dataPagamento: new Date(l.created_at),
-      adminId: 'N/D',
-      status: l.observacao?.includes('CONFIRMADO') ? 'CONFIRMADO' : 'PENDENTE'
+      adminId: 'N/D'
     })) as CommissionPaymentLog[];
   },
 
-  async insertPayout(log: Omit<CommissionPaymentLog, 'id'>): Promise<string | null> {
+  async insertPayout(log: Omit<CommissionPaymentLog, 'id'>): Promise<boolean> {
     const payload = {
       seller_id: log.vendedorId,
       valor_pago: log.valorPago,
       metodo_pagamento: 'DINHEIRO',
-      observacao: `Pagamento ${log.tipo} por Admin ${log.adminId}. STATUS: PENDENTE`,
+      observacao: `Pagamento ${log.tipo} por Admin ${log.adminId}.`,
       created_at: log.dataPagamento.toISOString(),
     };
     
-    const { data, error } = await supabase.from('commission_payment_logs').insert(payload).select('id').single();
-    if (error) {
-      console.error('Erro ao inserir log de pagamento:', error);
-      return null;
-    }
-    return data.id;
-  },
-
-  async confirmPayout(payoutId: string): Promise<boolean> {
-    const { data: current } = await supabase.from('commission_payment_logs').select('observacao').eq('id', payoutId).single();
-    const newObs = (current?.observacao || '').replace('STATUS: PENDENTE', 'STATUS: CONFIRMADO');
-    
-    const { error } = await supabase.from('commission_payment_logs')
-      .update({ observacao: newObs })
-      .eq('id', payoutId);
-    
+    const { error } = await supabase.from('commission_payment_logs').insert(payload);
+    if (error) console.error('Erro ao inserir log de pagamento:', error);
     return !error;
   },
 

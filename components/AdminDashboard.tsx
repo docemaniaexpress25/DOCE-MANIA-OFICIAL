@@ -721,10 +721,18 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                 {props.payoutLogs.sort((a, b) => b.dataPagamento.getTime() - a.dataPagamento.getTime()).map(log => (
                   <div key={log.id} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex justify-between items-center">
                     <div className="flex-1 min-w-0 pr-3">
-                      <p className="font-bold text-gray-800 text-[11px] leading-tight uppercase truncate">{log.vendedorNome}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="font-bold text-gray-800 text-[11px] leading-tight uppercase truncate">{log.vendedorNome}</p>
+                        {log.status === 'CONFIRMADO' && <i className="fa-solid fa-circle-check text-emerald-500 text-[10px]"></i>}
+                      </div>
                       <p className="text-[9px] text-gray-400 font-semibold uppercase mt-0.5">{log.dataPagamento.toLocaleDateString()} {log.dataPagamento.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})} • {log.tipo}</p>
                     </div>
-                    <p className="text-xs font-black text-emerald-600 whitespace-nowrap">R$ {log.valorPago.toFixed(2)}</p>
+                    <div className="text-right">
+                      <p className="text-xs font-black text-emerald-600 whitespace-nowrap">R$ {log.valorPago.toFixed(2)}</p>
+                      <p className={`text-[8px] font-black uppercase ${log.status === 'CONFIRMADO' ? 'text-emerald-500' : 'text-orange-400'}`}>
+                        {log.status === 'CONFIRMADO' ? 'Recebido' : 'Pendente'}
+                      </p>
+                    </div>
                   </div>
                 ))}
                 {props.payoutLogs.length === 0 && <div className="text-center py-10 opacity-30 italic text-[10px] uppercase font-bold">Nenhum pagamento registrado.</div>}

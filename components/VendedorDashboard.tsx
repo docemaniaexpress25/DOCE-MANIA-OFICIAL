@@ -573,11 +573,13 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                   <div className="flex-1 min-w-0 pr-4">
                     <div className="flex items-center gap-2 mb-1">
                       <span className={`text-[8px] font-black px-2 py-0.5 rounded-full uppercase tracking-widest ${
-                        s.metodoPagamento === 'DINHEIRO' ? 'bg-emerald-50 text-emerald-600' : 
-                        s.metodoPagamento === 'PIX' ? 'bg-blue-50 text-blue-600' : 
-                        'bg-orange-50 text-orange-600'
+                        s.statusPagamento === 'PAGO'
+                          ? s.metodoPagamento === 'A_PRAZO' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-50 text-emerald-600'
+                          : 'bg-rose-50 text-rose-600'
                       }`}>
-                        {s.metodoPagamento === 'A_PRAZO' ? 'PRAZO' : s.metodoPagamento}
+                        {s.statusPagamento === 'PAGO'
+                          ? s.metodoPagamento === 'A_PRAZO' ? 'RECEBIDA (PRAZO)' : 'RECEBIDA'
+                          : 'EM ABERTO'}
                       </span>
                       <span className="text-[9px] text-gray-300 font-bold">{new Date(s.data).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
                     </div>

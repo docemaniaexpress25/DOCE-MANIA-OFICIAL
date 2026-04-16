@@ -588,7 +588,18 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           <div className="grid gap-3 px-1">
             {filteredHistory.map(s => (
               <button key={s.id} onClick={() => setSelectedSale(s)} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex flex-col text-left transition-all hover:border-blue-200">
-                <div className="flex justify-between items-start mb-2"><span className="text-[9px] font-black text-gray-400 uppercase">{s.data.toLocaleDateString()} {s.data.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span><span className={`text-[9px] font-black px-2 py-0.5 rounded uppercase ${s.statusPagamento === 'PAGO' ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>{s.statusPagamento === 'PAGO' ? 'RECEBIDA' : 'EM ABERTO'}</span></div>
+                <div className="flex justify-between items-start mb-2">
+                  <span className="text-[9px] font-black text-gray-400 uppercase">{s.data.toLocaleDateString()} {s.data.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
+                  <span className={`text-[9px] font-black px-2 py-0.5 rounded uppercase ${
+                    s.statusPagamento === 'PAGO' 
+                      ? s.metodoPagamento === 'A_PRAZO' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-50 text-emerald-600'
+                      : 'bg-rose-50 text-rose-600'
+                  }`}>
+                    {s.statusPagamento === 'PAGO' 
+                      ? s.metodoPagamento === 'A_PRAZO' ? 'RECEBIDA (PRAZO)' : 'RECEBIDA'
+                      : 'EM ABERTO'}
+                  </span>
+                </div>
                 <div className="flex justify-between items-end"><div><h4 className="font-bold text-gray-800 text-sm leading-tight">{props.clients.find(c => c.id === s.clientId)?.nomeFantasia || 'Cliente'}</h4><p className="text-[10px] text-gray-400 font-bold uppercase mt-1">Vend: {props.users.find(u => u.id === s.vendedorId)?.nome ?? 'Desc.'}</p></div><p className="text-sm font-black text-gray-800">R$ {s.valorTotal.toFixed(2)}</p></div>
               </button>
             ))}
@@ -1094,7 +1105,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                 <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Preço de Custo R$</label><input type="number" value={pForm.custo ?? ''} onChange={e => { const c = e.target.value; const nv = updatePriceFromMargin(parseFloat(c)||0, parseFloat(pForm.margem)||0).toFixed(2); setPForm({...pForm, custo: c, venda: nv}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl font-bold outline-none" /></div>
                 <div className="space-y-1">
                   <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Margem %</label>
-                  <div className="relative"><input type="number" value={pForm.margem ?? ''} disabled={props.margemGlobalAtiva} onChange={e => { const m = e.target.value; const nv = updatePriceFromMargin(parseFloat(pForm.custo)||0, parseFloat(m)||0).toFixed(2); setPForm({...pForm, margem: m, venda: nv}); }} placeholder="0" className={`w-full p-4 border rounded-2xl font-bold outline-none ${props.margemGlobalAtiva ? 'bg-gray-100 text-gray-400' : 'bg-gray-50'}`} />{props.margemGlobalAtiva && <i className="fa-solid fa-lock absolute right-4 top-1/2 -translate-y-1/2 text-gray-300 text-[10px]"></i>}</div>
+                  <div className="relative"><input type="number" value={pForm.margem ?? ''} disabled={props.margemGlobalAtiva} onChange={e => { const m = e.target.value; const nv = updatePriceFromMargin(parseFloat(pForm.custo)||0, parseFloat(pForm.margem)||0).toFixed(2); setPForm({...pForm, margem: m, venda: nv}); }} placeholder="0" className={`w-full p-4 border rounded-2xl font-bold outline-none ${props.margemGlobalAtiva ? 'bg-gray-100 text-gray-400' : 'bg-gray-50'}`} />{props.margemGlobalAtiva && <i className="fa-solid fa-lock absolute right-4 top-1/2 -translate-y-1/2 text-gray-300 text-[10px]"></i>}</div>
                 </div>
               </div>
               <div className="space-y-1">

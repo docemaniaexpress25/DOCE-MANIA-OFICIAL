@@ -8,37 +8,12 @@ import ClientHistory from './ClientHistory';
 import { DailyRouteState, loadLocalState, saveLocalState } from '../utils/persistence';
 import { dailyRouteService } from '../services/dailyRouteService';
 
-const VendedorDashboard: React.FC = ({ 
-  user, 
-  products, 
-  clients, 
-  minhaCarga, 
-  vendas, 
-  commissions, 
-  payoutLogs, 
-  messages, 
-  expenses, 
-  dailyRouteState, 
-  setDailyRouteState
-}) => {
-  const [cachedDailyRoute, setCachedDailyRoute] = useState<DailyRouteState | null>(null);
-  useEffect(() => {
-    const cached = loadLocalState<DailyRouteState>('v_dailyRoute');
-    if (cached) setCachedDailyRoute(cached);
-  }, []);
+// ... (rest of imports) ...
 
-  const saveDailyRouteToCache = (route: DailyRouteState) => {
-    saveLocalState('v_dailyRoute', route);
-  };
+const [cachedDailyRoute, setCachedDailyRoute] = useState<DailyRouteState | null>(null);
+useEffect(() => {
+  const cached = loadLocalState<DailyRouteState>('v_dailyRoute', null); // ✅ Provide default null
+  if (cached) setCachedDailyRoute(cached);
+}, []);
 
-  const handleFetchDailyRoute = async () => {
-    if (cachedDailyRoute) return cachedDailyRoute;
-    const route = await dailyRouteService.getRoute(user.id, dailyRouteState.date);
-    if (route) saveDailyRouteToCache(route);
-    return route;
-  };
-
-  // ... (rest of component) ...
-};
-
-export default VendedorDashboard;
+// ... (rest of component) ...

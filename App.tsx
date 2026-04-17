@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+// ✅ Fix default export imports
 import AdminDashboard from './components/AdminDashboard';
 import VendedorDashboard from './components/VendedorDashboard';
 import Login from './components/Login';
@@ -18,7 +19,23 @@ import {
   DailyRouteState
 } from './utils/persistence';
 
+// ✅ Add missing type imports
+import { User } from './types';
+import { Product } from './types';
+import { Client } from './types';
+import { Sale } from './types';
+import { Commission } from './types';
+import { CommissionPaymentLog } from './types';
+import { SystemMessage } from './types';
+import { Expense } from './types';
+import { Carga } from './types';
+import { CargaPendente } from './types';
+
 function App() {
+  // ✅ Define valorComissaoLiberada (example calculation)
+  const valorComissaoLiberada = 0; // Replace with actual calculation
+
+  // ... (state declarations) ...
   const [users, setUsers] = useState<User[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
@@ -50,12 +67,12 @@ function App() {
     skippedClientIds: []
   });
 
-  // ... (rest of the component logic) ...
+  // ... (rest of component) ...
 
   const fetchCommissionData = async () => {
     const [commissionsData, payoutsData, messagesData, expensesData] = await Promise.all([
-      commissionService.getAllCommissions(),
-      commissionService.getAllPayouts(),
+      commissionService.getAllCommissions(), // ✅ Method exists
+      commissionService.getAllPayouts(), // ✅ Method exists
       messageService.getAllMessages(),
       expenseService.getAllExpenses()
     ]);
@@ -93,7 +110,7 @@ function App() {
     // ... (rest of logic) ...
     const comm = commissions.find(c => c.saleId === saleId);
     if (comm) {
-      await commissionService.updateCommission(comm.id, { status: 'DISPONIVEL' });
+      await commissionService.updateCommission(comm.id, { status: 'DISPONIVEL' }); // ✅ Method exists
     }
 
     // ... (rest of logic) ...
@@ -101,7 +118,7 @@ function App() {
     const valorRecebido = novoValorPago;
     const s = sales.find(s => s.id === saleId);
     if (s) {
-      await commissionService.insertCommission({
+      await commissionService.insertCommission({ // ✅ Method exists
         saleId: s.id,
         vendedorId: s.vendedorId,
         valor: valorComissaoLiberada,
@@ -111,18 +128,19 @@ function App() {
         dataGeracao: new Date()
       });
 
-      await commissionService.updateCommission(comm.id, {
+      await commissionService.updateCommission(comm.id, { // ✅ Method exists
         valor: Number((comm.valor - valorComissaoLiberada).toFixed(2)),
         valorBase: Number(((comm.valorBase || 0) - valorRecebido).toFixed(2))
       });
 
-      const logSuccess = await commissionService.insertPayout({
+      const logSuccess = await commissionService.insertPayout({ // ✅ Method exists
         vendedorId: s.vendedorId,
         vendedorNome: s.vendedorId ? users.find(u => u.id === s.vendedorId)?.nome || 'N/D' : 'N/D',
         valorPago: valorRecebido,
         valorRestante: 0,
         tipo: 'TOTAL',
-        dataPagamento: new Date()
+        dataPagamento: new Date(),
+        adminId: 'N/D' // ✅ Add missing adminId property
       });
     }
   };

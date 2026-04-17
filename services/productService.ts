@@ -15,7 +15,7 @@ export const productService = {
       precoVenda: Number(p.preco_venda) || 0,
       comissaoPercentual: Number(p.comissao_percentual) || 0,
       estoquePrincipal: Number(p.estoque_principal) || 0,
-      ativo: !!p.ativo,
+      ativo: !!p.ativo
     })) as Product[];
   },
 
@@ -26,7 +26,7 @@ export const productService = {
       preco_venda: product.precoVenda,
       comissao_percentual: product.comissaoPercentual,
       estoque_principal: product.estoquePrincipal,
-      ativo: product.estoquePrincipal <= 0 ? false : product.ativo,
+      ativo: product.estoquePrincipal <= 0 ? false : product.ativo
     };
 
     const { data, error } = await supabase.from('products').insert(payload).select().single();
@@ -80,10 +80,10 @@ export const productService = {
   async deleteProduct(id: string): Promise<boolean> {
     const { error } = await supabase.from('products').delete().eq('id', id);
     if (error) {
-      // Se houver vínculo com outras tabelas (vendas, etc), desativa em vez de excluir
+      // Se houver FK, desativa o produto ao invés de excluir
       if (error.code === '23503') {
-        const { error: updateError } = await supabase.from('products').update({ ativo: false }).eq('id', id);
-        return !updateError;
+        const { error: upError } = await supabase.from('products').update({ ativo: false }).eq('id', id);
+        return !upError;
       }
       console.error('Erro ao excluir produto:', error);
       return false;

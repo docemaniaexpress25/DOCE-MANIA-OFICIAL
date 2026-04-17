@@ -5,7 +5,7 @@ const safeNumber = (value: any): number => Number(value || 0);
 
 export const saleService = {
   async getAllSales(): Promise<Sale[]> {
-    const { data, error } = await supabase.from('sales').select('*, sale_items(*)');
+    const { data, error } = await supabase.from('sales').select('id, vendedor_id, client_id, valor_total, valor_pago, metodo_pagamento, detalhe_pagamento, status_pagamento, data_venda, data_vencimento, sale_items(id, produto_id, quantidade, preco_venda)');
     if (error) return [];
     return data.map(s => ({
       id: s.id,
@@ -28,22 +28,22 @@ export const saleService = {
 
   async insertSale(sale: Omit<Sale, 'id'>): Promise<Sale | null> {
     const rpcItems = sale.itens.map(item => ({
-      produtoid: item.produtoId,
+      produtoId: item.produtoId,
       quantidade: item.quantidade,
-      precovenda: item.precoVenda
+      precoVenda: item.precoVenda
     }));
 
     const { data: saleId, error } = await supabase.rpc('processar_venda_v2', {
       p_vendedor_id: sale.vendedorId,
       p_client_id: sale.clientId,
-      p_valor_total: sale.valorTotal,
-      p_valor_pago: sale.valorPago,
+      p_valor_total: Number(sale.valorTotal.toFixed(2)),
+      p_valor_pago: Number(sale.valorPago.toFixed(2)),
       p_metodo_pagamento: sale.metodoPagamento,
       p_detalhe_pagamento: sale.detalhePagamento || '',
       p_status_pagamento: sale.statusPagamento,
       p_data_venda: sale.data.toISOString(),
       p_data_vencimento: sale.dataVencimento ? sale.dataVencimento.toISOString() : null,
-      p_itens: rpcItems
+      p_itens: JSON.stringify(rpcItems)
     });
 
     if (error) {

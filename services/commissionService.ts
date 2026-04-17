@@ -1,7 +1,6 @@
 import { supabase } from '../supabaseClient';
 import { Commission, CommissionPaymentLog } from '../types';
 
-// Helper function to safely convert database numeric values (which might be null or string) to number
 const safeNumber = (value: any): number => Number(value || 0);
 
 export const commissionService = {
@@ -18,17 +17,30 @@ export const commissionService = {
       valor: safeNumber(c.valor_comissao),
       valorBase: safeNumber(c.valor_base),
       percentual: safeNumber(c.percentual),
-      status: (c.status || 'DISPONIVEL').toUpperCase(), // Normaliza o status para maiúsculo
+      status: (c.status || 'DISPONIVEL').toUpperCase(),
       dataGeracao: new Date(c.created_at)
     })) as Commission[];
   },
 
+  async getAllPayouts(): Promise<CommissionPaymentLog[]> {
+    const { data, error } = await supabase.from('commission_payment_logs').select('*');
+    if (error) return [];
+    return data.map(l => ({
+      id: l.id,
+      vendedorId: l.seller_id,
+      vendedorNome: 'N/D',
+      valorPago: safeNumber(l.valor_pago),
+      valorRestante: 0,
+      tipo: 'TOTAL',
+      dataPagamento: new Date(l.created_at)
+    })) as CommissionPaymentLog[];
+  },
+
   async insertCommission(comm: Omit<Commission, 'id'>): Promise<boolean> {
     if (comm.valorBase === undefined || comm.percentual === undefined) {
-        console.error('Erro: valorBase e percentual são obrigatórios para inserir comissão.');
-        return false;
+      console.error('Erro: valorBase e percentual são obrigatórios para inserir comissão.');
+      return false;
     }
-    
     const { error } = await supabase.from('commissions').insert({
       sale_id: comm.saleId,
       seller_id: comm.vendedorId,
@@ -65,19 +77,9 @@ export const commissionService = {
     return !error;
   },
 
-  async getAllPayouts(): Promise<CommissionPaymentLog[]> {
-    const { data, error } = await supabase.from('commission_payment_logs').select('*');
-    if (error) return [];
-    return data.map(l => ({
-      id: l.id,
-      vendedorId: l.seller_id,
-      vendedorNome: 'N/D',
-      valorPago: safeNumber(l.valor_pago),
-      valorRestante: 0,
-      tipo: 'TOTAL',
-      dataPagamento: new Date(l.created_at),
-      adminId: 'N/D'
-    })) as CommissionPaymentLog[];
+  async deleteCommissionBySale(saleId: string): Promise<boolean> {
+    const { error } = await supabase.from('commissions').delete().eq('sale_id', saleId);
+    return !error;
   },
 
   async insertPayout(log: Omit<CommissionPaymentLog, 'id'>): Promise<boolean> {
@@ -86,16 +88,10 @@ export const commissionService = {
       valor_pago: log.valorPago,
       metodo_pagamento: 'DINHEIRO',
       observacao: `Pagamento ${log.tipo} por Admin ${log.adminId}.`,
-      created_at: log.dataPagamento.toISOString(),
+      created_at: log.dataPagamento.toISOString()
     };
-    
     const { error } = await supabase.from('commission_payment_logs').insert(payload);
     if (error) console.error('Erro ao inserir log de pagamento:', error);
-    return !error;
-  },
-
-  async deleteCommissionBySale(saleId: string): Promise<boolean> {
-    const { error } = await supabase.from('commissions').delete().eq('sale_id', saleId);
     return !error;
   }
 };

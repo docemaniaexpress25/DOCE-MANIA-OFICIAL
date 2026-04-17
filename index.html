@@ -3,14 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Pronta Entrega Pro</title>
+    <title>Doce Mania - Gestão de Vendas</title>
     <link rel="manifest" href="/manifest.json">
     
-    <!-- Configurações PWA para iOS (Apple) -->
+    <!-- Configurações PWA para iOS -->
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="DoceMania">
-    <link rel="apple-touch-icon" href="/icons/icon-512x512.png"> <!-- Adicionado para iOS -->
 
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
@@ -26,46 +25,27 @@
       .safe-bottom {
         padding-bottom: env(safe-area-inset-bottom);
       }
-      .font-semibold { font-weight: 600; }
-      .font-medium { font-weight: 500; }
-      .font-regular { font-weight: 400; }
     </style>
-<script type="importmap">
-{
-  "imports": {
-    "react/": "https://esm.sh/react@^19.2.3/",
-    "react": "https://esm.sh/react@^19.2.3",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
-    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@^2.91.1"
-  }
-}
-</script>
-<link rel="stylesheet" href="/index.css">
 </head>
 <body>
     <div id="root"></div>
-<script type="module" src="/index.tsx"></script>
-<script>
-  // Garante que process.env exista em um contexto de navegador para variáveis de ambiente
-  window.process = window.process || {};
-  window.process.env = window.process.env || {};
+    <!-- O Vite cuidará do carregamento do index.tsx automaticamente no build -->
+    <script type="module" src="/index.tsx"></script>
+    <script>
+      // Configuração global de ambiente
+      window.process = window.process || {};
+      window.process.env = window.process.env || {};
+      window.process.env.SUPABASE_URL = 'https://eyjhqjrczzpfthsddlpg.supabase.co';
+      window.process.env.SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV5amhxanJjenpwZnRoc2RkbHBnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk0MjczNTYsImV4cCI6MjA4NTAwMzM1Nn0.seIcDpp3VMz44Zuziahln1NTI4Hrqv879Hzzp-pUrl0';
 
-  // Configura as variáveis de ambiente do Supabase
-  // A chave de publicação foi corrigida para o valor real do projeto.
-  window.process.env.SUPABASE_URL = 'https://eyjhqjrczzpfthsddlpg.supabase.co';
-  window.process.env.SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV5amhxanJjenpwZnRoc2RkbHBnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk0MjczNTYsImV4cCI6MjA4NTAwMzM1Nn0.seIcDpp3VMz44Zuziahln1NTI4Hrqv879Hzzp-pUrl0';
-
-  // PWA: Register Service Worker
-  if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('/sw.js')
-        .then(registration => {
-          console.log('Service Worker registered: ', registration);
-        })
-        .catch(registrationError => {
-          console.log('Service Worker registration failed: ', registrationError);
+      // Registro do Service Worker corrigido
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js')
+            .then(reg => console.log('SW registrado'))
+            .catch(err => console.log('Erro SW:', err));
         });
-    });
-  }
-</script>
+      }
+    </script>
+</body>
 </html>

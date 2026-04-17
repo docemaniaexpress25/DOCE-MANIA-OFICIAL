@@ -362,31 +362,25 @@ const App: React.FC = () => {
     const novoValorPago = Number(((s.valorPago ?? 0) + valorRecebido).toFixed(2));
     const totalQuitado = novoValorPago >= s.valorTotal;
     
-    // Gerar log de recebimento no campo detalhePagamento
     const dataStr = new Date().toLocaleDateString('pt-BR');
     const novoLog = `[${dataStr}] R$ ${valorRecebido.toFixed(2)} (${method})`;
     const historicoAtual = s.detalhePagamento || '';
     const novoHistorico = historicoAtual ? `${historicoAtual} | ${novoLog}` : novoLog;
 
-    // Atualiza a venda
     await saleService.updateSale(saleId, { 
       valorPago: novoValorPago, 
       statusPagamento: totalQuitado ? 'PAGO' : 'PENDENTE', 
       detalhePagamento: novoHistorico
     });
 
-    // Lógica de Comissão Proporcional
     const comm = commissions.find(c => c.saleId === saleId && c.status === 'A_RECEBER');
     if (comm) {
       if (totalQuitado) {
-        // Se quitou tudo, libera o que restava da comissão pendente
         await commissionService.updateCommission(comm.id, { status: 'DISPONIVEL' });
       } else {
-        // Se foi parcial, calcula a proporção da comissão a ser liberada
         const ratio = valorRecebido / saldoDevedorAntes;
         const valorComissaoLiberada = Number((comm.valor * ratio).toFixed(2));
         
-        // 1. Cria uma nova comissão DISPONIVEL para a parte paga
         await commissionService.insertCommission({
           saleId: s.id,
           vendedorId: s.vendedorId,
@@ -397,7 +391,6 @@ const App: React.FC = () => {
           dataGeracao: new Date()
         });
         
-        // 2. Reduz o valor da comissão que continua A_RECEBER
         await commissionService.updateCommission(comm.id, {
           valor: Number((comm.valor - valorComissaoLiberada).toFixed(2)),
           valorBase: Number(((comm.valorBase || 0) - valorRecebido).toFixed(2))

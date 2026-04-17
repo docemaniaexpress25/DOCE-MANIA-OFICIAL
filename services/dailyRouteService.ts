@@ -5,7 +5,7 @@ export const dailyRouteService = {
   async getRoute(vendedorId: string, date: string): Promise<DailyRouteState | null> {
     const { data, error } = await supabase
       .from('daily_routes')
-      .select('data, client_ids, skipped_client_ids') // ✅ Added 'data' column
+      .select('*')
       .eq('vendedor_id', vendedorId)
       .eq('data', date)
       .maybeSingle();
@@ -18,7 +18,7 @@ export const dailyRouteService = {
     if (!data) return null;
 
     return {
-      date: data.data as string,
+      date: data.data,
       clientIds: data.client_ids || [],
       skippedClientIds: data.skipped_client_ids || []
     };
@@ -31,9 +31,15 @@ export const dailyRouteService = {
       client_ids: route.clientIds,
       skipped_client_ids: route.skippedClientIds
     };
+
     const { error } = await supabase
       .from('daily_routes')
       .upsert(payload, { onConflict: 'vendedor_id,data' });
-    return !error;
+
+    if (error) {
+      console.error('Erro ao salvar rota diária:', error);
+      return false;
+    }
+    return true;
   }
 };

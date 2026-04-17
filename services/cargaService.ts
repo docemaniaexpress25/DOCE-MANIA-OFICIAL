@@ -58,6 +58,7 @@ export const cargaService = {
     return !error;
   },
 
+  // Nova função RPC para Aceite Atômico
   async aceitarCargaRPC(pendenciaId: string): Promise<boolean> {
     const { error } = await supabase.rpc('aceitar_carga_vendedor', {
       p_carga_pendente_id: pendenciaId

@@ -49,6 +49,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const [viewingSale, setViewingSale] = useState<Sale | null>(() => loadLocalState('v_viewingSale', null));
   const [showFiscalization, setShowFiscalization] = useState(() => loadLocalState('v_showFiscalization', false));
   const [viewingClientHistory, setViewingClientHistory] = useState<Client | null>(null);
+  const [filterOverdueOnly, setFilterOverdueOnly] = useState(false);
 
   useEffect(() => { saveLocalState('v_activeTab', activeTab); }, [activeTab]);
   useEffect(() => { saveLocalState('v_selectedClient', selectedClient); }, [selectedClient]);
@@ -155,7 +156,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     const clientsInRoute = dailyRouteState.clientIds
       .map(id => clientMap.get(id))
       .filter((c): c is Client => !!c && (c.ativo ?? false));
-    return clientsInRoute.sort((a, b) => (a.ordem || 0) - (b.ordem || 0)); 
+    return clientsInRoute.sort((a, b) => (a.ordem || 0) - (b.ordem || 0)) || []; 
   }, [clients, dailyRouteState.clientIds]); 
 
   const handleSkipClient = () => { 
@@ -312,7 +313,21 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     return acc;
   }, { total: 0, dinheiro: 0, pix: 0, prazo: 0 }), [filteredHistory]);
 
-  const contasAReceber = useMemo(() => sales.filter(s => s.vendedorId === user.id && s.metodoPagamento === 'A_PRAZO' && s.statusPagamento === 'PENDENTE'), [sales, user.id]);
+  const contasAReceber = useMemo(() => {
+    let filtered = sales.filter(s => s.vendedorId === user.id && s.metodoPagamento === 'A_PRAZO' && s.statusPagamento === 'PENDENTE');
+    if (filterOverdueOnly) {
+      const today = new Date();
+      today.setHours(0,0,0,0);
+      filtered = filtered.filter(s => {
+        if (!s.dataVencimento) return false;
+        const dueDate = new Date(s.dataVencimento);
+        dueDate.setHours(0,0,0,0);
+        return dueDate <= today;
+      });
+    }
+    return filtered;
+  }, [sales, user.id, filterOverdueOnly]);
+
   const valorTotalCarga = useMemo(() => minhaCarga.reduce((acc, curr) => {
     const p = products.find(prod => prod.id === curr.produtoId);
     return acc + ((curr.quantidade ?? 0) * (p?.precoVenda ?? 0)); 
@@ -351,7 +366,11 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     return (
       <PDV
         client={pdvClient} products={products} minhaCarga={minhaCarga} vendedorId={user.id} onCancel={() => setSelectedClient(null)}
-        onFinish={(s) => { setViewingSale(s); setSelectedClient(null); showToast("Venda realizada"); }}
+        onFinish={() => { 
+          setSelectedClient(null); 
+          setActiveTab('ROTEIRO'); 
+          showToast("Venda realizada com sucesso!", 'success'); 
+        }}
         processSale={processSale} margemMinima={margemMinima} margemMinimaAtiva={margemMinimaAtiva} pix1Name={pix1Name} pix1Code={pix1Code} pix2Name={pix2Name} pix2Code={pix2Code}
         sales={sales} 
         onNavigateToCredit={handleNavigateToCredit} 
@@ -708,7 +727,16 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
       {activeTab === 'CREDIT' && (
         <div className="space-y-4">
-          <header className="px-1"><h2 className="text-xs font-black text-gray-400 uppercase tracking-wider">Contas a Receber</h2></header>
+          <header className="px-1 flex justify-between items-center">
+            <h2 className="text-xs font-black text-gray-400 uppercase tracking-wider">Contas a Receber</h2>
+            <button 
+              onClick={() => setFilterOverdueOnly(!filterOverdueOnly)}
+              className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all flex items-center gap-2 shadow-sm ${filterOverdueOnly ? 'bg-rose-600 text-white' : 'bg-white text-gray-400 border border-gray-100'}`}
+            >
+              <i className={`fa-solid ${filterOverdueOnly ? 'fa-calendar-exclamation' : 'fa-calendar-days'}`}></i>
+              {filterOverdueOnly ? 'Vencidas/Hoje' : 'Todas'}
+            </button>
+          </header>
           <div className="grid gap-3">
             {contasAReceber.map(s => {
               const saldo = Number(((s.valorTotal ?? 0) - (s.valorPago ?? 0)).toFixed(2)); 

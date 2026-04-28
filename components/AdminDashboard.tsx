@@ -67,6 +67,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [activeTab, setActiveTab] = useState<TabType>(() => loadLocalState('admin_activeTab', 'HOME'));
   const [selectedSale, setSelectedSale] = useState<Sale | null>(() => loadLocalState('admin_selectedSale', null));
   const [viewingClientHistory, setViewingClientHistory] = useState<Client | null>(null);
+  const [filterOverdueOnly, setFilterOverdueOnly] = useState(false);
 
   useEffect(() => {
     saveLocalState('admin_activeTab', activeTab);
@@ -297,6 +298,15 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     setShowConfirmApply(false);
   };
 
+  const handleZeroCarga = () => {
+    if (!selectedVendedorId) return;
+    if (window.confirm("Deseja realmente ZERAR toda a carga deste vendedor? Isso retornará todos os itens ao estoque central ao clicar em 'Aplicar Agora'.")) {
+      const zeroed = Object.keys(stagingCarga).reduce((acc, key) => ({ ...acc, [key]: 0 }), {});
+      setStagingCarga(zeroed);
+      showToast("Carga zerada no rascunho. Clique em 'Aplicar Agora' para confirmar.");
+    }
+  };
+
   const moveProduct = (id: string, dir: 'UP' | 'DOWN') => {
     const idx = localOrderedProductIds.indexOf(id);
     const newOrder = [...localOrderedProductIds];
@@ -505,7 +515,20 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     setStagingCarga(prev => ({ ...prev, [pId]: novaQ }));
   };
 
-  const contasAReceber = useMemo(() => props.sales.filter(s => s.metodoPagamento === 'A_PRAZO' && s.statusPagamento === 'PENDENTE'), [props.sales]);
+  const contasAReceber = useMemo(() => {
+    let filtered = props.sales.filter(s => s.metodoPagamento === 'A_PRAZO' && s.statusPagamento === 'PENDENTE');
+    if (filterOverdueOnly) {
+      const today = new Date();
+      today.setHours(0,0,0,0);
+      filtered = filtered.filter(s => {
+        if (!s.dataVencimento) return false;
+        const dueDate = new Date(s.dataVencimento);
+        dueDate.setHours(0,0,0,0);
+        return dueDate <= today;
+      });
+    }
+    return filtered;
+  }, [props.sales, filterOverdueOnly]);
 
   const MenuCard = ({ icon, title, tab, color }: any) => (
     <button onClick={() => setActiveTab(tab)} className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col items-center justify-center gap-3 active:scale-95 transition-all text-center group">
@@ -577,7 +600,17 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         <div className="space-y-4">
           <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Gestão de Cargas</h2></div>
           <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
-            <h3 className="font-black text-gray-800 mb-4 uppercase text-[10px]">Vendedor Responsável</h3>
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="font-black text-gray-800 uppercase text-[10px]">Vendedor Responsável</h3>
+              {selectedVendedorId && (
+                <button 
+                  onClick={handleZeroCarga}
+                  className="text-[9px] font-black text-rose-500 uppercase hover:text-rose-700 transition-colors flex items-center gap-1"
+                >
+                  <i className="fa-solid fa-rotate-left"></i> Zerar Carga
+                </button>
+              )}
+            </div>
             <select value={selectedVendedorId} onChange={e => setSelectedVendedorId(e.target.value)} className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl outline-none font-semibold text-sm">
               <option value="">Selecione um vendedor...</option>
               {props.users.filter(u => u.role === 'VENDEDOR' && u.ativo).map(u => <option key={u.id} value={u.id}>{u.nome}</option>)} 
@@ -815,7 +848,16 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
       {activeTab === 'CONTAS_RECEBER' && (
         <div className="space-y-6 py-4">
-          <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Contas a Receber</h2></div>
+          <div className="px-2 flex justify-between items-center">
+            <h2 className="text-2xl font-black text-gray-800 tracking-tight">Contas a Receber</h2>
+            <button 
+              onClick={() => setFilterOverdueOnly(!filterOverdueOnly)}
+              className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all flex items-center gap-2 shadow-sm ${filterOverdueOnly ? 'bg-rose-600 text-white' : 'bg-white text-gray-400 border border-gray-100'}`}
+            >
+              <i className={`fa-solid ${filterOverdueOnly ? 'fa-calendar-exclamation' : 'fa-calendar-days'}`}></i>
+              {filterOverdueOnly ? 'Vencidas/Hoje' : 'Todas'}
+            </button>
+          </div>
           <div className="grid gap-3 px-1">
             {contasAReceber.map(s => {
               const saldo = Number(((s.valorTotal ?? 0) - (s.valorPago ?? 0)).toFixed(2)); 

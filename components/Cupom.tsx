@@ -12,7 +12,7 @@ interface CupomProps {
   onDeleteSale?: (saleId: string) => void;
   allowDelete?: boolean;
   showToast?: (msg: string, type?: 'success' | 'error') => void;
-  closeLabel?: string; // Adicionado suporte a rótulo personalizado
+  closeLabel?: string; 
 }
 
 const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDeleteSale, allowDelete, showToast, closeLabel }) => {
@@ -31,7 +31,6 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
 
     let t = '';
     
-    // Início com Asteriscos
     t += '*'.repeat(totalWidth) + '\n';
     t += center('CUPOM NAO FISCAL', totalWidth) + '\n';
     t += '*'.repeat(totalWidth) + '\n';
@@ -40,7 +39,6 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
     t += `Cliente: ${clientName}\n`;
     t += '-'.repeat(totalWidth) + '\n';
 
-    // Definição de larguras para 32 colunas: Desc(20), Qtd(4), Val(8)
     const qtyW = 4;
     const valW = width === '80MM' ? 13 : 8;
     const descW = totalWidth - qtyW - valW;
@@ -55,10 +53,8 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
       const qtyStr = `${item.quantidade}x`;
       const valStr = `${(item.quantidade * item.precoVenda).toFixed(2)}`;
 
-      // Primeira linha do item
       t += padR(productName.substring(0, descW), descW) + padL(qtyStr, qtyW) + padL(valStr, valW) + '\n';
 
-      // Quebra de linha para nomes longos
       let remaining = productName.substring(descW);
       while (remaining.length > 0) {
         t += padR(remaining.substring(0, totalWidth), totalWidth) + '\n';
@@ -68,7 +64,6 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
 
     t += '-'.repeat(totalWidth) + '\n';
     
-    // Linha de Total com R$ alinhado à direita
     const totalLabel = 'TOTAL:';
     const totalVal = `R$ ${sale.valorTotal.toFixed(2)}`;
     t += padR(totalLabel, totalWidth - totalVal.length) + totalVal + '\n';
@@ -84,10 +79,7 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
     t += center('ESCANEIE O QR CODE', totalWidth) + '\n';
     t += center('E PAGUE COM PIX', totalWidth) + '\n';
     
-    // Fim com Asteriscos
     t += '*'.repeat(totalWidth) + '\n';
-
-    // Espaço para corte
     t += '\n\n\n\n\n';
 
     return t;
@@ -121,7 +113,15 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-90 z-[100] flex flex-col items-center justify-center p-4 overflow-y-auto">
-      <div className="bg-white w-full max-w-[340px] shadow-2xl flex flex-col animate-in zoom-in-95 duration-200">
+      <div className="bg-white w-full max-w-[340px] shadow-2xl flex flex-col animate-in zoom-in-95 duration-200 relative">
+        {/* Botão de Voltar solicitado */}
+        <button 
+          onClick={onClose} 
+          className="absolute top-4 right-4 w-10 h-10 bg-gray-100 text-gray-500 rounded-2xl flex items-center justify-center active:scale-90 transition-transform z-10 shadow-sm"
+        >
+          <i className="fa-solid fa-arrow-left"></i>
+        </button>
+
         <div className="p-6 bg-white overflow-hidden">
           <div className="font-mono text-[12px] leading-tight text-black bg-white whitespace-pre select-none">
             {generateText(printWidth)}

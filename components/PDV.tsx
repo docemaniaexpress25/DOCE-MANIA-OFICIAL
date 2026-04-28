@@ -158,7 +158,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
             sale={previewSale} 
             client={client} 
             products={products} 
-            onClose={() => setView('PAYMENT')} 
+            onBack={() => setView('CART')} // Volta para o carrinho
+            onClose={() => setView('PAYMENT')} // Avança para o pagamento
             allowDelete={false}
             closeLabel="IR PARA PAGAMENTO"
           />

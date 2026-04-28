@@ -9,13 +9,14 @@ interface CupomProps {
   client: Client;
   products: Product[];
   onClose: () => void;
+  onBack?: () => void; // Nova prop para ação de voltar
   onDeleteSale?: (saleId: string) => void;
   allowDelete?: boolean;
   showToast?: (msg: string, type?: 'success' | 'error') => void;
   closeLabel?: string; 
 }
 
-const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDeleteSale, allowDelete, showToast, closeLabel }) => {
+const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, onDeleteSale, allowDelete, showToast, closeLabel }) => {
   const [printWidth, setPrintWidth] = useState<'56MM' | '80MM'>('56MM');
 
   const generateText = (width: '56MM' | '80MM') => {
@@ -114,9 +115,9 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onDelete
   return (
     <div className="fixed inset-0 bg-black bg-opacity-90 z-[100] flex flex-col items-center justify-center p-4 overflow-y-auto">
       <div className="bg-white w-full max-w-[340px] shadow-2xl flex flex-col animate-in zoom-in-95 duration-200 relative">
-        {/* Botão de Voltar solicitado */}
+        {/* Botão de Voltar que retorna à edição de produtos quando acionado do PDV */}
         <button 
-          onClick={onClose} 
+          onClick={onBack || onClose} 
           className="absolute top-4 right-4 w-10 h-10 bg-gray-100 text-gray-500 rounded-2xl flex items-center justify-center active:scale-90 transition-transform z-10 shadow-sm"
         >
           <i className="fa-solid fa-arrow-left"></i>

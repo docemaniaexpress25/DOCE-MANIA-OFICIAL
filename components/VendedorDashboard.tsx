@@ -42,7 +42,7 @@ interface VendedorDashboardProps {
 type TabType = 'HOME' | 'ROTEIRO' | 'CARGA' | 'HISTORY' | 'FINANCE' | 'CREDIT' | 'CLIENTES' | 'WEEKLY' | 'STOCK_VIEW';
 
 const VendedorDashboard: React.FC<VendedorDashboardProps> = ({ 
-  user, products, clients, cargas, cargasPendentes, sales, commissions, payoutLogs, expenses, messages, markMessageAsRead, processSale, addClient, updateClient, deleteClient, receivePayment, deleteSale, aceitarCarga, addExpense, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, updateDailyRoute, companyName, companyCnpj
+  user, products = [], clients = [], cargas = [], cargasPendentes = [], sales = [], commissions = [], payoutLogs = [], expenses = [], messages = [], markMessageAsRead, processSale, addClient, updateClient, deleteClient, receivePayment, deleteSale, aceitarCarga, addExpense, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, updateDailyRoute, companyName, companyCnpj
 }) => {
   const [activeTab, setActiveTab] = useState<TabType>(() => loadLocalState('v_activeTab', 'HOME'));
   const [selectedClient, setSelectedClient] = useState<Client | null>(() => loadLocalState('v_selectedClient', null));
@@ -139,11 +139,11 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   };
 
   const diaAtual = new Date().getDay();
-  const minhaCarga = useMemo(() => cargas.filter(c => c.vendedorId === user.id), [cargas, user.id]);
+  const minhaCarga = useMemo(() => (cargas || []).filter(c => c.vendedorId === user.id), [cargas, user.id]);
   
   const orderedCargaProducts = useMemo(() => {
     const cargaMap = new Map(minhaCarga.map(c => [c.produtoId, c]));
-    return products
+    return (products || [])
       .filter(p => cargaMap.has(p.id))
       .map(p => ({
         product: p,
@@ -152,31 +152,32 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   }, [products, minhaCarga]);
 
   const rotaDeHoje = useMemo(() => {
-    const clientMap = new Map(clients.map(c => [c.id, c]));
-    const clientsInRoute = dailyRouteState.clientIds
+    const clientMap = new Map((clients || []).map(c => [c.id, c]));
+    const clientIds = dailyRouteState?.clientIds || [];
+    const clientsInRoute = clientIds
       .map(id => clientMap.get(id))
       .filter((c): c is Client => !!c && (c.ativo ?? false));
     return clientsInRoute.sort((a, b) => (a.ordem || 0) - (b.ordem || 0)) || []; 
-  }, [clients, dailyRouteState.clientIds]); 
+  }, [clients, dailyRouteState]); 
 
   const handleSkipClient = () => { 
     if (!confirmSkipId) return;
-    const newSkipped = [...dailyRouteState.skippedClientIds, confirmSkipId];
+    const newSkipped = [...(dailyRouteState?.skippedClientIds || []), confirmSkipId];
     updateDailyRoute(dailyRouteState.clientIds, newSkipped);
     setConfirmSkipId(null);
     showToast("Visita pulada.");
   };
 
   const handleReopenClient = (clientId: string) => {
-    const newSkipped = dailyRouteState.skippedClientIds.filter(id => id !== clientId);
+    const newSkipped = (dailyRouteState?.skippedClientIds || []).filter(id => id !== clientId);
     updateDailyRoute(dailyRouteState.clientIds, newSkipped);
     setReopenedClientIds(prev => [...prev, clientId]);
   };
 
   const handleAddToTodayRoute = (clientId: string) => { 
-    if (!dailyRouteState.clientIds.includes(clientId)) { 
-      const newRoute = [...dailyRouteState.clientIds, clientId];
-      updateDailyRoute(newRoute, dailyRouteState.skippedClientIds);
+    if (!(dailyRouteState?.clientIds || []).includes(clientId)) { 
+      const newRoute = [...(dailyRouteState?.clientIds || []), clientId];
+      updateDailyRoute(newRoute, dailyRouteState?.skippedClientIds || []);
       showToast("Cliente adicionado à rota do dia!"); 
     } 
   };
@@ -279,19 +280,19 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     </button>
   );
 
-  const filteredHistory = useMemo(() => sales.filter(s => s.vendedorId === user.id && filterByPeriod(s.data, historyFilter)).sort((a, b) => (new Date(b.data).getTime() ?? 0) - (new Date(a.data).getTime() ?? 0)), [sales, user.id, historyFilter]); 
+  const filteredHistory = useMemo(() => (sales || []).filter(s => s.vendedorId === user.id && filterByPeriod(s.data, historyFilter)).sort((a, b) => (new Date(b.data).getTime() ?? 0) - (new Date(a.data).getTime() ?? 0)), [sales, user.id, historyFilter]); 
   
   const financeStats = useMemo(() => {
-    const vCommsAll = commissions.filter(c => c.vendedorId === user.id);
-    const vSalesFiltered = sales.filter(s => s.vendedorId === user.id && filterByPeriod(s.data, financeFilter)); 
+    const vCommsAll = (commissions || []).filter(c => c.vendedorId === user.id);
+    const vSalesFiltered = (sales || []).filter(s => s.vendedorId === user.id && filterByPeriod(s.data, financeFilter)); 
     const vCommsFiltered = vCommsAll.filter(c => filterByPeriod(c.dataGeracao, financeFilter));
 
     const totalCommsEligible = vCommsAll
       .filter(c => c.status !== 'A_RECEBER')
       .reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
     
-    const jaPago = payoutLogs.reduce((acc, curr) => acc + (curr.valorPago ?? 0), 0);
-    const totalDespesas = expenses.reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
+    const jaPago = (payoutLogs || []).reduce((acc, curr) => acc + (curr.valorPago ?? 0), 0);
+    const totalDespesas = (expenses || []).reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
     const disponivel = totalCommsEligible - jaPago - totalDespesas;
     const pendente = vCommsAll
       .filter(c => c.status === 'A_RECEBER')
@@ -314,7 +315,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   }, { total: 0, dinheiro: 0, pix: 0, prazo: 0 }), [filteredHistory]);
 
   const contasAReceber = useMemo(() => {
-    let filtered = sales.filter(s => s.vendedorId === user.id && s.metodoPagamento === 'A_PRAZO' && s.statusPagamento === 'PENDENTE');
+    let filtered = (sales || []).filter(s => s.vendedorId === user.id && s.metodoPagamento === 'A_PRAZO' && s.statusPagamento === 'PENDENTE');
     if (filterOverdueOnly) {
       const today = new Date();
       today.setHours(0,0,0,0);
@@ -337,14 +338,14 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
   const unifiedHistory = useMemo(() => {
     const combined = [
-      ...payoutLogs.map(p => ({ 
+      ...(payoutLogs || []).map(p => ({ 
         id: p.id, 
         data: new Date(p.dataPagamento), 
         desc: p.tipo === 'TOTAL' ? 'Pagamento Integral' : 'Repasse Parcial', 
         valor: p.valorPago, 
         tipo: 'REPASSE' as const 
       })),
-      ...expenses.map(e => ({ 
+      ...(expenses || []).map(e => ({ 
         id: e.id, 
         data: new Date(e.createdAt), 
         desc: e.descricao, 
@@ -409,9 +410,9 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       {activeTab === 'HOME' && (
         <div className="py-4 grid grid-cols-2 gap-4">
           <MenuCard icon="fa-route" title="Rota do Dia" tab="ROTEIRO" color="bg-blue-50 text-blue-600" />
-          <MenuCard icon="fa-truck-fast" title="Minha Carga" tab="CARGA" color="bg-purple-50 text-purple-600" badge={cargasPendentes.length > 0} />
+          <MenuCard icon="fa-truck-fast" title="Minha Carga" tab="CARGA" color="bg-purple-50 text-purple-600" badge={(cargasPendentes || []).length > 0} />
           <MenuCard icon="fa-receipt" title="Vendas" tab="HISTORY" color="bg-blue-50 text-[#1E3A5F]" />
-          <MenuCard icon="fa-wallet" title="Financeiro" tab="FINANCE" color="bg-emerald-50 text-[#1F7A4D]" badge={messages.some(m => !m.lida && m.type === 'COMMISSION_CONFIRMATION')} />
+          <MenuCard icon="fa-wallet" title="Financeiro" tab="FINANCE" color="bg-emerald-50 text-[#1F7A4D]" badge={(messages || []).some(m => !m.lida && m.type === 'COMMISSION_CONFIRMATION')} />
           <MenuCard icon="fa-file-invoice-dollar" title="Contas a Receber" tab="CREDIT" color="bg-rose-50 text-rose-600" />
           <MenuCard icon="fa-users" title="Clientes" tab="CLIENTES" color="bg-green-50 text-green-600" />
           <MenuCard icon="fa-calendar-days" title="Roteiro Semanal" tab="WEEKLY" color="bg-indigo-50 text-indigo-600" />
@@ -426,8 +427,8 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
             <span className="bg-blue-100 text-blue-600 text-[10px] px-2 py-1 rounded-lg font-black uppercase">{rotaDeHoje.length} VISITAS</span>
           </header>
           {rotaDeHoje.map(c => {
-            const isSold = sales.some(s => s.clientId === c.id && isSameDay(s.data));
-            const isSkipped = dailyRouteState.skippedClientIds.includes(c.id);
+            const isSold = (sales || []).some(s => s.clientId === c.id && isSameDay(s.data));
+            const isSkipped = (dailyRouteState?.skippedClientIds || []).includes(c.id);
             const isVisited = (isSold || isSkipped) && !reopenedClientIds.includes(c.id);
             return (
               <div key={c.id} className={`p-4 rounded-3xl border flex flex-col transition-all ${isVisited ? 'bg-gray-100 border-gray-200 grayscale opacity-60' : 'bg-white border-gray-100 shadow-sm'}`}>
@@ -455,7 +456,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         <div className="space-y-4">
           <header className="px-1 flex justify-between items-center"><h2 className="text-xs font-black text-gray-400 uppercase tracking-wider">Meus Clientes</h2><button onClick={() => handleOpenEditClient('NEW')} className="bg-green-600 text-white px-4 py-2 rounded-xl font-black text-xs uppercase shadow-md active:scale-95"><i className="fa-solid fa-user-plus mr-2"></i>Novo</button></header>
           <div className="grid gap-3">
-            {clients.sort((a,b) => a.nomeFantasia.localeCompare(b.nomeFantasia)).map(c => (
+            {(clients || []).sort((a,b) => (a.nomeFantasia || '').localeCompare(b.nomeFantasia || '')).map(c => (
               <div key={c.id} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex justify-between items-center transition-all active:scale-95 group">
                 <div className="flex-1 cursor-pointer" onClick={() => setViewingClientHistory(c)}>
                   <div className="flex items-center gap-2">
@@ -487,8 +488,8 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
           <div className="space-y-3 px-1">
             {[1, 2, 3, 4, 5, 6].map(dia => {
               const isOpen = expandedDay === dia;
-              const clientsInDay = clients
-                .filter(c => c.diaRoteiro === dia && c.ativo && (weeklySearch === '' || c.nomeFantasia.toLowerCase().includes(weeklySearch.toLowerCase())))
+              const clientsInDay = (clients || [])
+                .filter(c => c.diaRoteiro === dia && c.ativo && (weeklySearch === '' || (c.nomeFantasia || '').toLowerCase().includes(weeklySearch.toLowerCase())))
                 .sort((a, b) => (a.ordem || 0) - (b.ordem || 0)); 
               return (
                 <div key={dia} className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
@@ -515,7 +516,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
       {activeTab === 'CARGA' && (
         <div className="space-y-4">
-          {cargasPendentes.length > 0 ? (
+          {(cargasPendentes || []).length > 0 ? (
             <div className="bg-orange-50 p-6 rounded-3xl shadow-xl flex flex-col gap-4 items-center text-center">
               <i className="fa-solid fa-truck-loading text-orange-600 text-4xl mb-2"></i>
               <h3 className="text-xl font-black text-orange-800 uppercase">Nova Carga Disponível!</h3>
@@ -623,7 +624,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 <p className={`text-[8px] font-bold ${financeStats.disponivel < 0 ? 'text-rose-400' : 'text-emerald-400'} uppercase mt-1`}>Saldo acumulado</p>
               </div>
               <div className="bg-orange-50 p-5 rounded-3xl shadow-sm border border-orange-100">
-                <p className="text-[9px] font-black text-orange-600 uppercase mb-1">A receber</p>
+                <p className={`text-[9px] font-black text-orange-600 uppercase mb-1`}>A receber</p>
                 <p className="text-xl font-black text-orange-700">R$ {financeStats.pendente.toFixed(2)}</p>
                 <p className={`text-[8px] font-bold text-orange-400 uppercase mt-1`}>Vendas a prazo</p>
               </div>

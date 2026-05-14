@@ -109,7 +109,6 @@ const App: React.FC = () => {
     }
   }, [fetchTransactionalData]);
 
-  // Supabase Realtime Subscription
   useEffect(() => {
     const channel = supabase
       .channel('schema-db-changes')
@@ -198,10 +197,9 @@ const App: React.FC = () => {
           />
         ) : (
           <VendedorDashboard 
-            {...{ products, users, cargas, clients, sales, commissions, payoutLogs, expenses, messages, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, companyName, companyCnpj, user: currentUser }}
+            {...{ products, users, cargas, cargasPendentes, clients, sales, commissions, payoutLogs, expenses, messages, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, companyName, companyCnpj, user: currentUser }}
             markMessageAsRead={markMessageAsRead} processSale={processSale} addClient={clientService.insertClient} updateClient={clientService.updateClient} deleteClient={clientService.deleteClient}
             receivePayment={()=>{}} deleteSale={saleService.deleteSale} aceitarCarga={aceitarCarga} addExpense={expenseService.insertExpense} updateDailyRoute={()=>{}}
-            setPix2Name={(v)=>updateSetting('pix2Name', v)} setPix2Code={(v)=>updateSetting('pix2Code', v)}
           />
         )}
       </main>

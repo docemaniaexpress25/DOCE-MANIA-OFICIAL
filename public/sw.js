@@ -1,38 +1,37 @@
-const CACHE_NAME = 'doce-mania-cache-v1';
+const CACHE_NAME = 'doce-mania-v2'; // Incrementado para forçar atualização
 const urlsToCache = [
   '/',
   '/index.html',
   '/index.css',
   '/index.tsx',
-  '/manifest.json',
-  // Assuming static assets like icons and fonts are here
-  '/icons/icon-192x192.png',
-  '/icons/icon-512x512.png',
-  'https://cdn.tailwindcss.com',
-  'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css',
-  'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap'
+  '/manifest.json'
 ];
 
 self.addEventListener('install', (event) => {
+  self.skipWaiting();
   event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then((cache) => {
-        console.log('Service Worker: Caching app shell');
-        return cache.addAll(urlsToCache);
-      })
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(urlsToCache))
+  );
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys().then((cacheNames) => {
+      return Promise.all(
+        cacheNames.map((cacheName) => {
+          if (cacheName !== CACHE_NAME) {
+            return caches.delete(cacheName);
+          }
+        })
+      );
+    }).then(() => self.clients.claim())
   );
 });
 
 self.addEventListener('fetch', (event) => {
   event.respondWith(
-    caches.match(event.request)
-      .then((response) => {
-        // Cache hit - return response
-        if (response) {
-          return response;
-        }
-        // No cache match - fetch from network
-        return fetch(event.request);
-      })
+    caches.match(event.request).then((response) => {
+      return response || fetch(event.request);
+    })
   );
 });

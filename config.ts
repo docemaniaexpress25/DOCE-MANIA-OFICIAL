@@ -1,10 +1,7 @@
 // config.ts
-// Fix: Use type assertion to allow accessing 'process' on 'window'
-export const supabaseUrl: string = (window as any).process?.env?.SUPABASE_URL || '';
-export const supabaseAnonKey: string = (window as any).process?.env?.SUPABASE_ANON_KEY || '';
+export const supabaseUrl: string = "https://eyjhqjrczzpfthsddlpg.supabase.co";
+export const supabaseAnonKey: string = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV5amhxanJjenpwZnRoc2RkbHBnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk0MjczNTYsImV4cCI6MjA4NTAwMzM1Nn0.seIcDpp3VMz44Zuziahln1NTI4Hrqv879Hzzp-pUrl0";
 
 if (!supabaseUrl || !supabaseAnonKey) {
-  console.error('Erro de Configuração: SUPABASE_URL e SUPABASE_ANON_KEY são obrigatórios.');
-  console.error('Por favor, verifique se estão definidos no <script> em index.html.');
-  throw new Error('As variáveis de ambiente do Supabase não estão configuradas corretamente.');
+  throw new Error('Configuração do Supabase ausente.');
 }

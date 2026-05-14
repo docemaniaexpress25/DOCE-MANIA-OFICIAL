@@ -13,10 +13,8 @@ import { messageService } from './services/messageService';
 import { cargaService } from './services/cargaService';
 import { dailyRouteService } from './services/dailyRouteService';
 import { expenseService } from './services/expenseService';
-import { 
-  loadLocalState, saveLocalState, 
-  DailyRouteState
-} from './utils/persistence';
+import { supabase } from './supabaseClient';
+import { loadLocalState, saveLocalState, DailyRouteState } from './utils/persistence';
 
 const getTodayDateString = () => new Date().toISOString().split('T')[0];
 
@@ -58,85 +56,32 @@ const App: React.FC = () => {
 
   useEffect(() => { saveLocalState('currentUser', currentUser); }, [currentUser]);
 
-  const fetchUsers = useCallback(async () => { 
-    const data = await userService.getAllUsers();
-    setUsers(data); 
-    return data;
-  }, []);
-  
-  const fetchClients = useCallback(async () => { 
-    const data = await clientService.getAllClients();
-    setClients(data); 
-    return data;
-  }, []);
-  
-  const fetchProducts = useCallback(async (order: string[]) => { 
-    const fetchedProducts = await productService.getAllProducts();
-    const productMap: Map<string, Product> = new Map(fetchedProducts.map(p => [p.id, p]));
-    const orderedProducts: Product[] = [];
-    const remainingProducts: Product[] = [];
-    order.forEach(id => {
-      const product = productMap.get(id);
-      if (product) {
-        orderedProducts.push(product);
-        productMap.delete(id);
-      }
-    });
-    productMap.forEach(product => {
-      remainingProducts.push(product);
-    });
-    setProducts([...orderedProducts, ...remainingProducts]);
-  }, []);
-
   const fetchTransactionalData = useCallback(async () => {
-    const [s, c, p, m, cg, cgp, ex] = await Promise.all([
-      saleService.getAllSales(),
-      commissionService.getAllCommissions(),
-      commissionService.getAllPayouts(),
-      messageService.getAllMessages(),
-      cargaService.getAllCargas(),
-      cargaService.getAllCargasPendentes(),
-      expenseService.getAllExpenses()
-    ]);
-    setSales(s);
-    setCommissions(c);
-    setPayoutLogs(p);
-    setMessages(m);
-    setCargas(cg);
-    setCargasPendentes(cgp);
-    setExpenses(ex);
-  }, []);
-
-  const fetchDailyRoute = useCallback(async (currentClients: Client[]) => {
-    if (currentUser && currentUser.role === 'VENDEDOR') {
-      const today = getTodayDateString();
-      const route = await dailyRouteService.getRoute(currentUser.id, today);
-      
-      if (route) {
-        setDailyRouteState(route);
-      } else {
-        const todayDay = new Date().getDay();
-        const initialClientIds = currentClients
-          .filter(c => c.diaRoteiro === todayDay && c.ativo)
-          .sort((a, b) => (a.ordem || 0) - (b.ordem || 0))
-          .map(c => c.id);
-
-        const newRoute: DailyRouteState = { 
-          date: today, 
-          clientIds: initialClientIds, 
-          skippedClientIds: [] 
-        };
-        
-        await dailyRouteService.updateRoute(currentUser.id, newRoute);
-        setDailyRouteState(newRoute);
-      }
+    try {
+      const [s, c, p, m, cg, cgp, ex] = await Promise.all([
+        saleService.getAllSales(),
+        commissionService.getAllCommissions(),
+        commissionService.getAllPayouts(),
+        messageService.getAllMessages(),
+        cargaService.getAllCargas(),
+        cargaService.getAllCargasPendentes(),
+        expenseService.getAllExpenses()
+      ]);
+      setSales(s);
+      setCommissions(c);
+      setPayoutLogs(p);
+      setMessages(m);
+      setCargas(cg);
+      setCargasPendentes(cgp);
+      setExpenses(ex);
+    } catch (e) {
+      console.error("Erro ao carregar dados transacionais:", e);
     }
-  }, [currentUser]);
+  }, []);
 
   const fetchCoreData = useCallback(async () => {
-    let settings: AppSettings;
     try {
-      settings = await appSettingsService.getSettings();
+      const settings = await appSettingsService.getSettings();
       setLogo(settings.logo);
       setMargemGlobalAtiva(settings.margemGlobalAtiva);
       setMargemGlobalValor(settings.margemGlobalValor);
@@ -149,371 +94,114 @@ const App: React.FC = () => {
       setProductOrder(settings.productOrder);
       setCompanyName(settings.companyName ?? "DOCE MANIA DISTRIBUIDORA");
       setCompanyCnpj(settings.companyCnpj ?? "00.000.000/0001-00");
+
+      const [u, cl, p] = await Promise.all([
+        userService.getAllUsers(),
+        clientService.getAllClients(),
+        productService.getAllProducts()
+      ]);
+      setUsers(u);
+      setClients(cl);
+      setProducts(p);
+      await fetchTransactionalData();
     } catch (e) {
-      console.error("Erro ao carregar configurações:", e);
-      return;
+      console.error("Erro ao carregar dados principais:", e);
     }
+  }, [fetchTransactionalData]);
 
-    const [_, fetchedClients] = await Promise.all([
-      fetchUsers(),
-      fetchClients(),
-      fetchTransactionalData()
-    ]);
-    
-    await fetchProducts(settings.productOrder);
-    
-    if (fetchedClients) {
-      await fetchDailyRoute(fetchedClients);
-    }
-    
-  }, [fetchUsers, fetchClients, fetchTransactionalData, fetchDailyRoute, fetchProducts]);
-
+  // Supabase Realtime Subscription
   useEffect(() => {
-    const interval = setInterval(() => {
-      const today = getTodayDateString();
-      if (dailyRouteState.date !== today) {
+    const channel = supabase
+      .channel('schema-db-changes')
+      .on('postgres_changes', { event: '*', schema: 'public' }, () => {
+        fetchTransactionalData();
         fetchCoreData();
-      }
-    }, 60000);
-    return () => clearInterval(interval);
-  }, [dailyRouteState.date, fetchCoreData]);
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [fetchTransactionalData, fetchCoreData]);
 
   useEffect(() => { fetchCoreData(); }, [fetchCoreData]);
 
-  const updateSetting = useCallback(async (key: keyof AppSettings, value: any) => {
-    const success = await appSettingsService.updateSettings({ [key]: value });
-    if (success) {
-        switch (key) {
-            case 'logo': setLogo(value); break;
-            case 'margemGlobalAtiva': setMargemGlobalAtiva(value); break;
-            case 'margemGlobalValor': setMargemGlobalValor(value); break;
-            case 'margemMinimaAtiva': setMargemMinimaAtiva(value); break;
-            case 'margemMinima': setMargemMinima(value); break;
-            case 'pix1Name': setPix1Name(value); break;
-            case 'pix1Code': setPix1Code(value); break;
-            case 'pix2Name': setPix2Name(value); break;
-            case 'pix2Code': setPix2Code(value); break;
-            case 'companyName': setCompanyName(value); break;
-            case 'companyCnpj': setCompanyCnpj(value); break;
-            case 'productOrder': setProductOrder(value); 
-              const productMap: Map<string, Product> = new Map(products.map(p => [p.id, p]));
-              const orderedProducts: Product[] = [];
-              value.forEach((id: string) => {
-                const product = productMap.get(id);
-                if (product) {
-                  orderedProducts.push(product);
-                  productMap.delete(id);
-                }
-              });
-              productMap.forEach(product => orderedProducts.push(product));
-              setProducts(orderedProducts);
-              break;
-        }
-    }
-  }, [products]);
-
-  const addUser = async (nome: string, foto?: string, telefone?: string) => {
-    const newUser: Omit<User, 'id'> = { nome, email: `${nome.toLowerCase().replace(/\s/g, '')}@sistema.com`, role: 'VENDEDOR', ativo: true, foto, telefone, pin: '123456' };
-    const res = await userService.insertUser(newUser);
-    if (res) await fetchUsers();
+  const updateSetting = async (key: keyof AppSettings, value: any) => {
+    await appSettingsService.updateSettings({ [key]: value });
   };
 
-  const updateUser = async (id: string, data: Partial<User>) => {
-    const res = await userService.updateUser(id, data);
-    if (res) await fetchUsers();
+  const addUser = async (nome: string, foto?: string, telefone?: string) => {
+    await userService.insertUser({ nome, email: `${nome.toLowerCase().replace(/\s/g, '')}@sistema.com`, role: 'VENDEDOR', ativo: true, foto, telefone, pin: '123456' });
   };
 
   const addProduct = async (nome: string, custo: number, venda: number, comissao: number, estoque: number = 0) => {
-    const newProduct: Omit<Product, 'id'> = { nome, precoCusto: Number(custo.toFixed(2)), precoVenda: Number(venda.toFixed(2)), comissaoPercentual: Number(comissao.toFixed(2)), estoquePrincipal: estoque, ativo: true };
-    const res = await productService.insertProduct(newProduct);
-    if (res) {
-      await updateSetting('productOrder', [...productOrder, res.id]);
-    }
-  };
-
-  const updateProduct = async (id: string, data: Partial<Product>) => {
-    const res = await productService.updateProduct(id, data);
-    if (res) await fetchProducts(productOrder);
-  };
-
-  const deleteProduct = async (id: string) => {
-    const res = await productService.deleteProduct(id);
-    if (res) {
-      await updateSetting('productOrder', productOrder.filter(pId => pId !== id));
-    }
-  };
-
-  const registerStockEntry = async (id: string, qtd: number, custo: number) => {
-    const p = products.find(prod => prod.id === id);
-    if (!p) return;
-    const novoTotal = p.estoquePrincipal + qtd;
-    const novoCusto = novoTotal > 0 ? ((p.estoquePrincipal * p.precoCusto) + (qtd * custo)) / novoTotal : custo;
-    const finalCusto = Number(novoCusto.toFixed(2));
-    const finalVenda = margemGlobalAtiva ? Number((finalCusto / (1 - margemGlobalValor / 100)).toFixed(2)) : p.precoVenda;
-    const res = await productService.updateProduct(id, { estoquePrincipal: novoTotal, precoCusto: finalCusto, precoVenda: finalVenda });
-    if (res) await fetchProducts(productOrder);
-  };
-
-  const addClient = async (data: Omit<Client, 'id'>) => {
-    const res = await clientService.insertClient(data);
-    if (res) {
-      await fetchClients();
-      const todayDay = new Date().getDay();
-      if (res.diaRoteiro === todayDay && currentUser?.role === 'VENDEDOR') {
-        await handleUpdateDailyRoute([...dailyRouteState.clientIds, res.id], dailyRouteState.skippedClientIds);
-      }
-    }
-  };
-
-  const updateClient = async (id: string, data: Partial<Client>) => {
-    const res = await clientService.updateClient(id, data);
-    if (res) await fetchClients();
-  };
-
-  const deleteClient = async (id: string) => {
-    const res = await clientService.deleteClient(id);
-    if (res) await fetchClients();
-  };
-
-  const syncVendedorCarga = async (vId: string, itens: { produtoId: string, quantidade: number }[]) => {
-    const res = await cargaService.insertCargaPendente({ vendedorId: vId, itens, data: new Date() });
-    if (res) {
-      await messageService.insertMessage({
-        vendedorId: vId,
-        titulo: "🚚 Nova Carga Sincronizada",
-        mensagem: "Uma nova carga foi preparada pelo administrador. Verifique na aba 'Minha Carga' para aceitar.",
-        data: new Date(),
-        lida: false,
-        type: 'INFO'
-      });
-      await fetchTransactionalData();
-    }
+    const res = await productService.insertProduct({ nome, precoCusto: custo, precoVenda: venda, comissaoPercentual: comissao, estoquePrincipal: estoque, ativo: true });
+    if (res) await updateSetting('productOrder', [...productOrder, res.id]);
   };
 
   const applyCargaDirectly = async (vId: string, itens: { produtoId: string, quantidade: number }[]) => {
-    for (const item of itens) {
-      const p = products.find(prod => prod.id === item.produtoId);
-      const noVAnterior = cargas.find(c => c.vendedorId === vId && c.produtoId === item.produtoId)?.quantidade || 0;
-      const delta = item.quantidade - noVAnterior;
-      if (p) {
-        await productService.updateProduct(p.id, { estoquePrincipal: p.estoquePrincipal - delta });
-      }
-    }
-    const res = await cargaService.updateActiveCarga(vId, itens);
-    if (res) {
-      await fetchCoreData();
+    try {
+      await cargaService.applyCargaAdminRPC(vId, itens);
+      setAdminNotification("Carga aplicada com sucesso!");
+    } catch (e) {
+      console.error(e);
+      setAdminNotification("Erro ao aplicar carga.");
     }
   };
 
   const aceitarCarga = async (pendenciaId: string) => {
-    const pendencia = cargasPendentes.find(p => p.id === pendenciaId);
-    if (!pendencia) return;
-    
-    const success = await cargaService.aceitarCargaRPC(pendenciaId);
-    if (success) {
-      await fetchCoreData();
-      setAdminNotification("Carga aceita com sucesso.");
+    try {
+      await cargaService.aceitarCargaRPC(pendenciaId);
+      setAdminNotification("Carga aceita!");
+    } catch (e) {
+      console.error(e);
     }
+  };
+
+  const markMessageAsRead = async (id: string) => {
+    await messageService.updateMessage(id, { lida: true });
+    fetchTransactionalData();
   };
 
   const processSale = async (saleData: any) => {
-    const valorTotalFixed = Number(saleData.valorTotal.toFixed(2));
-    const salePayload: Omit<Sale, 'id'> = { 
-      ...saleData, 
-      data: new Date(), 
-      valorTotal: valorTotalFixed, 
-      valorPago: saleData.statusPagamento === 'PAGO' ? valorTotalFixed : 0 
-    };
-    
-    const savedSale = await saleService.insertSale(salePayload);
-    if (savedSale) {
-      await fetchTransactionalData();
-    }
-    return savedSale;
-  };
-
-  const deleteSaleInternal = async (saleId: string, isAdmin: boolean) => {
-    const sale = sales.find(s => s.id === saleId);
-    if (!sale) return;
-
-    const saleDate = new Date(sale.data);
-    const today = new Date();
-    const isToday = saleDate.getDate() === today.getDate() && 
-                    saleDate.getMonth() === today.getMonth() && 
-                    saleDate.getFullYear() === today.getFullYear();
-
-    if (!isToday) {
-      alert("Bloqueio de Segurança: Não é permitido excluir vendas de dias anteriores.");
-      return;
-    }
-
-    const success = await saleService.deleteSale(saleId);
-    if (success) {
-      await fetchTransactionalData();
-    }
-  };
-
-  const receiveAccount = async (saleId: string, method: PaymentMethod, amount?: number) => {
-    const s = sales.find(sale => sale.id === saleId);
-    if (!s) return;
-    
-    const valorRecebido = amount || (s.valorTotal - s.valorPago);
-    const saldoDevedorAntes = Number((s.valorTotal - (s.valorPago || 0)).toFixed(2));
-    const novoValorPago = Number(((s.valorPago ?? 0) + valorRecebido).toFixed(2));
-    const totalQuitado = novoValorPago >= s.valorTotal;
-    
-    // Gerar log de recebimento no campo detalhePagamento
-    const dataStr = new Date().toLocaleDateString('pt-BR');
-    const novoLog = `[${dataStr}] R$ ${valorRecebido.toFixed(2)} (${method})`;
-    const historicoAtual = s.detalhePagamento || '';
-    const novoHistorico = historicoAtual ? `${historicoAtual} | ${novoLog}` : novoLog;
-
-    // Atualiza a venda
-    await saleService.updateSale(saleId, { 
-      valorPago: novoValorPago, 
-      statusPagamento: totalQuitado ? 'PAGO' : 'PENDENTE', 
-      detalhePagamento: novoHistorico
-    });
-
-    // Lógica de Comissão Proporcional
-    const comm = commissions.find(c => c.saleId === saleId && c.status === 'A_RECEBER');
-    if (comm) {
-      if (totalQuitado) {
-        // Se quitou tudo, libera o que restava da comissão pendente
-        await commissionService.updateCommission(comm.id, { status: 'DISPONIVEL' });
-      } else {
-        // Se foi parcial, calcula a proporção da comissão a ser liberada
-        const ratio = valorRecebido / saldoDevedorAntes;
-        const valorComissaoLiberada = Number((comm.valor * ratio).toFixed(2));
-        
-        // 1. Cria uma nova comissão DISPONIVEL para a parte paga
-        await commissionService.insertCommission({
-          saleId: s.id,
-          vendedorId: s.vendedorId,
-          valor: valorComissaoLiberada,
-          valorBase: valorRecebido,
-          percentual: comm.percentual || 0,
-          status: 'DISPONIVEL',
-          dataGeracao: new Date()
-        });
-        
-        // 2. Reduz o valor da comissão que continua A_RECEBER
-        await commissionService.updateCommission(comm.id, {
-          valor: Number((comm.valor - valorComissaoLiberada).toFixed(2)),
-          valorBase: Number(((comm.valorBase || 0) - valorRecebido).toFixed(2))
-        });
-      }
-    }
-
-    await fetchTransactionalData();
-  };
-
-  const handlePayCommission = async (vendedorId: string, amount: number, type: 'TOTAL' | 'PARCIAL', adminId: string) => {
-    const v = users.find(u => u.id === vendedorId);
-    if (!v) return;
-    
-    const logSuccess = await commissionService.insertPayout({
-      vendedorId,
-      vendedorNome: v.nome,
-      valorPago: amount,
-      valorRestante: 0,
-      tipo: type,
-      dataPagamento: new Date(),
-      adminId
-    });
-    
-    if (logSuccess) {
-      await messageService.insertMessage({
-        vendedorId,
-        titulo: "💰 Pagamento de Comissão",
-        mensagem: `O administrador registrou um pagamento de R$ ${amount.toFixed(2)}.`,
-        data: new Date(),
-        lida: false,
-        type: 'INFO'
-      });
-      await fetchTransactionalData();
-    }
-  };
-
-  const addExpense = async (sellerId: string, descricao: string, valor: number) => {
-    const success = await expenseService.insertExpense({ sellerId, descricao, valor });
-    if (success) await fetchTransactionalData();
-    return success;
-  };
-
-  const markMessageAsRead = async (msgId: string) => {
-    await messageService.updateMessage(msgId, { lida: true });
-    await fetchTransactionalData();
-  };
-
-  const handleUpdateDailyRoute = async (clientIds: string[], skippedClientIds: string[]) => {
-    if (currentUser && currentUser.role === 'VENDEDOR') {
-      const newState = { date: dailyRouteState.date, clientIds, skippedClientIds };
-      setDailyRouteState(newState);
-      await dailyRouteService.updateRoute(currentUser.id, newState);
+    try {
+      return await saleService.insertSale(saleData);
+    } catch (e) {
+      console.error(e);
+      return null;
     }
   };
 
   if (!currentUser) return <Login users={users} onLogin={setCurrentUser} logo={logo} />;
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-20 md:pb-0 flex flex-col">
-      <header className="bg-white text-gray-800 h-20 px-6 shadow-sm flex justify-between items-center sticky top-0 z-50 border-b border-gray-100">
-        <div className="flex items-center h-full">
-          {logo ? ( <img src={logo} alt="Logo" className="h-16 w-auto object-contain" /> ) : (
-            <div className="h-10 w-32 bg-gray-100 rounded-lg flex items-center justify-center border border-gray-200">
-               <span className="text-[10px] font-black uppercase text-gray-400">Logo</span>
-            </div>
-          )}
-        </div>
+    <div className="min-h-screen bg-gray-50 flex flex-col">
+      <header className="bg-white h-20 px-6 shadow-sm flex justify-between items-center sticky top-0 z-50 border-b">
+        {logo ? <img src={logo} alt="Logo" className="h-14 w-auto object-contain" /> : <span className="font-black text-gray-300">LOGO</span>}
         <div className="flex items-center gap-3">
-          <div className="text-right">
-            <p className="text-[10px] font-black uppercase text-gray-400 mb-0.5">{currentUser.role}</p>
-            <p className="text-sm font-bold text-gray-800 leading-none">{currentUser.nome}</p>
-          </div>
-          <button onClick={() => setCurrentUser(null)} className="bg-gray-50 text-gray-400 hover:text-rose-500 p-2.5 rounded-xl border border-gray-100 transition-colors">
-            <i className="fa-solid fa-right-from-bracket"></i>
-          </button>
+          <div className="text-right"><p className="text-[10px] font-black uppercase text-gray-400">{currentUser.role}</p><p className="text-sm font-bold text-gray-800">{currentUser.nome}</p></div>
+          <button onClick={() => setCurrentUser(null)} className="text-gray-400 p-2"><i className="fa-solid fa-right-from-bracket"></i></button>
         </div>
       </header>
       
       <main className="container mx-auto p-4 max-w-lg">
         {currentUser.role === 'ADMIN' ? (
           <AdminDashboard 
-            products={products} users={users} cargas={cargas} clients={clients} sales={sales} commissions={commissions} payoutLogs={payoutLogs}
-            expenses={expenses}
-            addProduct={addProduct} updateProduct={updateProduct} deleteProduct={deleteProduct} registerStockEntry={registerStockEntry}
-            adjustStockManual={()=>{}} syncVendedorCarga={syncVendedorCarga} applyCargaDirectly={applyCargaDirectly} addClient={addClient} updateClient={updateClient}
-            deleteClient={deleteClient} addUser={addUser} updateUser={updateUser} payCommission={handlePayCommission}
-            setCommissions={()=>{}} updateEstoqueCentral={()=>{}} reinforceCarga={()=>{}} deleteSale={(id) => deleteSaleInternal(id, true)}
-            receiveAccount={receiveAccount} logo={logo} setLogo={(val) => updateSetting('logo', val)} adminUser={currentUser} margemGlobalAtiva={margemGlobalAtiva}
-            setMargemGlobalAtiva={(val) => updateSetting('margemGlobalAtiva', val)} margemGlobalValor={margemGlobalValor} setMargemGlobalValor={(val) => updateSetting('margemGlobalValor', val)}
-            margemMinima={margemMinima} setMargemMinima={(val) => updateSetting('margemMinima', val)} margemMinimaAtiva={margemMinimaAtiva}
-            setMargemMinimaAtiva={(val) => updateSetting('margemMinimaAtiva', val)} pix1Name={pix1Name} setPix1Name={(val) => updateSetting('pix1Name', val)} pix1Code={pix1Code} setPix1Code={(val) => updateSetting('pix1Code', val)}
-            pix2Name={pix2Name} setPix2Name={(val) => updateSetting('pix2Name', val)} pix2Code={pix2Code} setPix2Code={(val) => updateSetting('pix2Code', val)}
-            adminNotification={adminNotification} clearAdminNotification={() => setAdminNotification(null)}
-            orderedProductIds={productOrder} setOrderedProductIds={(ids) => updateSetting('productOrder', ids)}
-            companyName={companyName} setCompanyName={(val) => updateSetting('companyName', val)}
-            companyCnpj={companyCnpj} setCompanyCnpj={(val) => updateSetting('companyCnpj', val)}
+            {...{ products, users, cargas, clients, sales, commissions, payoutLogs, expenses, logo, margemGlobalAtiva, margemGlobalValor, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, adminNotification, companyName, companyCnpj, orderedProductIds: productOrder }}
+            addProduct={addProduct} updateProduct={productService.updateProduct} deleteProduct={productService.deleteProduct} registerStockEntry={()=>{}} adjustStockManual={()=>{}}
+            syncVendedorCarga={cargaService.insertCargaPendente} applyCargaDirectly={applyCargaDirectly} addClient={clientService.insertClient} updateClient={clientService.updateClient} deleteClient={clientService.deleteClient}
+            addUser={addUser} updateUser={userService.updateUser} payCommission={()=>{}} setCommissions={()=>{}} updateEstoqueCentral={()=>{}} reinforceCarga={()=>{}} deleteSale={saleService.deleteSale} receiveAccount={()=>{}}
+            setLogo={(v)=>updateSetting('logo', v)} adminUser={currentUser} setMargemGlobalAtiva={(v)=>updateSetting('margemGlobalAtiva', v)} setMargemGlobalValor={(v)=>updateSetting('margemGlobalValor', v)}
+            setMargemMinima={(v)=>updateSetting('margemMinima', v)} setMargemMinimaAtiva={(v)=>updateSetting('margemMinimaAtiva', v)} setPix1Name={(v)=>updateSetting('pix1Name', v)} setPix1Code={(v)=>updateSetting('pix1Code', v)}
+            setPix2Name={(v)=>updateSetting('pix2Name', v)} setPix2Code={(v)=>updateSetting('pix2Code', v)} clearAdminNotification={() => setAdminNotification(null)} setOrderedProductIds={(v)=>updateSetting('productOrder', v)}
+            setCompanyName={(v)=>updateSetting('companyName', v)} setCompanyCnpj={(v)=>updateSetting('companyCnpj', v)}
           />
         ) : (
           <VendedorDashboard 
-            products={products} users={users} cargas={cargas} clients={clients} sales={sales} commissions={commissions}
-            expenses={expenses.filter(e => e.sellerId === currentUser.id)}
-            addClient={addClient} updateClient={updateClient} deleteClient={deleteClient}
-            user={currentUser} 
-            payoutLogs={payoutLogs.filter(l => l.vendedorId === currentUser.id)}
-            cargasPendentes={cargasPendentes.filter(cp => cp.vendedorId === currentUser.id)}
-            messages={messages.filter(m => m.vendedorId === currentUser.id)}
-            markMessageAsRead={markMessageAsRead} processSale={processSale} 
-            receivePayment={receiveAccount} deleteSale={(id) => deleteSaleInternal(id, false)} aceitarCarga={aceitarCarga}
-            addExpense={addExpense}
-            margemMinima={margemMinima} margemMinimaAtiva={margemMinimaAtiva} pix1Name={pix1Name} pix1Code={pix1Code}
-            pix2Name={pix2Name} setPix2Name={(val) => updateSetting('pix2Name', val)} pix2Code={pix2Code} setPix2Code={(val) => updateSetting('pix2Code', val)}
-            dailyRouteState={dailyRouteState}
-            updateDailyRoute={handleUpdateDailyRoute}
-            companyName={companyName}
-            companyCnpj={companyCnpj}
+            {...{ products, users, cargas, clients, sales, commissions, payoutLogs, expenses, messages, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, companyName, companyCnpj, user: currentUser }}
+            markMessageAsRead={markMessageAsRead} processSale={processSale} addClient={clientService.insertClient} updateClient={clientService.updateClient} deleteClient={clientService.deleteClient}
+            receivePayment={()=>{}} deleteSale={saleService.deleteSale} aceitarCarga={aceitarCarga} addExpense={expenseService.insertExpense} updateDailyRoute={()=>{}}
+            setPix2Name={(v)=>updateSetting('pix2Name', v)} setPix2Code={(v)=>updateSetting('pix2Code', v)}
           />
         )}
       </main>

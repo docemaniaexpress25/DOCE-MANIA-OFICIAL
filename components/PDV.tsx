@@ -40,6 +40,17 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const productIdsInCarga = useMemo(() => new Set(minhaCarga.map(c => c.produtoId)), [minhaCarga]);
   const orderedProductsInCarga = useMemo(() => products.filter(p => productIdsInCarga.has(p.id)), [products, productIdsInCarga]);
 
+  // Função central para gerar os itens do carrinho SEMPRE na ordem de exibição (estoque)
+  const getOrderedItems = (): SaleItem[] => {
+    return products
+      .filter(p => cart[p.id] && cart[p.id].quantidade > 0)
+      .map(p => ({
+        produtoId: p.id,
+        quantidade: cart[p.id].quantidade,
+        precoVenda: parseFloat(cart[p.id].precoVenda) || 0
+      }));
+  };
+
   const clientDebt = useMemo(() => {
     const pendingSales = sales.filter(s => s.clientId === client.id && s.statusPagamento === 'PENDENTE');
     return pendingSales.reduce((acc, s) => acc + (s.valorTotal - s.valorPago), 0);
@@ -111,14 +122,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   };
 
   const handleConfirmFinalize = async () => {
-    const itens: SaleItem[] = Object.entries(cart).map(([pId, item]) => {
-      const cartItem = item as { quantidade: number, precoVenda: string };
-      return {
-        produtoId: pId, 
-        quantidade: cartItem.quantidade, 
-        precoVenda: parseFloat(cartItem.precoVenda) || 0
-      };
-    });
+    const itens = getOrderedItems(); // Itens ordenados conforme o estoque
 
     const descontoInfo = isTrocaActive && parseFloat(valorTroca) > 0 ? ` (Troca: R$ ${parseFloat(valorTroca).toFixed(2)})` : '';
     const finalDetalhe = (metodo === 'PIX' ? (selectedPixSlot === 1 ? pix1Name : pix2Name) : detalheMetodo) + descontoInfo;
@@ -143,11 +147,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     valorPago: 0,
     metodoPagamento: metodo,
     statusPagamento: 'PENDENTE',
-    itens: Object.entries(cart).map(([pId, item]) => ({
-      produtoId: pId,
-      quantidade: (item as any).quantidade,
-      precoVenda: parseFloat((item as any).precoVenda) || 0
-    }))
+    itens: getOrderedItems() // Preview ordenado conforme o estoque
   };
 
   if (view === 'RECEIPT_PREVIEW') {
@@ -158,8 +158,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
             sale={previewSale} 
             client={client} 
             products={products} 
-            onBack={() => setView('CART')} // Volta para o carrinho
-            onClose={() => setView('PAYMENT')} // Avança para o pagamento
+            onBack={() => setView('CART')} 
+            onClose={() => setView('PAYMENT')} 
             allowDelete={false}
             closeLabel="IR PARA PAGAMENTO"
           />

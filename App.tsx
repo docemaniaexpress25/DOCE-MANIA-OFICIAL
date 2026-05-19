@@ -181,27 +181,68 @@ const App: React.FC = () => {
 
   const addUser = async (nome: string, foto?: string, telefone?: string) => {
     await userService.insertUser({ nome, email: `${nome.toLowerCase().replace(/\s/g, '')}@sistema.com`, role: 'VENDEDOR', ativo: true, foto, telefone, pin: '123456' });
+    fetchCoreData();
+  };
+
+  const updateUser = async (id: string, data: Partial<User>) => {
+    await userService.updateUser(id, data);
+    fetchCoreData();
   };
 
   const addProduct = async (nome: string, custo: number, venda: number, comissao: number, estoque: number = 0) => {
     const res = await productService.insertProduct({ nome, precoCusto: custo, precoVenda: venda, comissaoPercentual: comissao, estoquePrincipal: estoque, ativo: true });
-    if (res) await updateSetting('productOrder', [...productOrder, res.id]);
+    if (res) {
+      await appSettingsService.updateSettings({ productOrder: [...productOrder, res.id] });
+      fetchCoreData();
+    }
+  };
+
+  const updateProduct = async (id: string, data: Partial<Product>) => {
+    await productService.updateProduct(id, data);
+    fetchCoreData();
+  };
+
+  const deleteProduct = async (id: string) => {
+    await productService.deleteProduct(id);
+    fetchCoreData();
+  };
+
+  const addClient = async (data: Omit<Client, 'id'>) => {
+    await clientService.insertClient(data);
+    fetchCoreData();
+  };
+
+  const updateClient = async (id: string, data: Partial<Client>) => {
+    await clientService.updateClient(id, data);
+    fetchCoreData();
+  };
+
+  const deleteClient = async (id: string) => {
+    await clientService.deleteClient(id);
+    fetchCoreData();
   };
 
   const applyCargaDirectly = async (vId: string, itens: { produtoId: string, quantidade: number }[]) => {
     try {
       await cargaService.applyCargaAdminRPC(vId, itens);
       setAdminNotification("Carga aplicada com sucesso!");
+      fetchTransactionalData();
     } catch (e) {
       console.error(e);
       setAdminNotification("Erro ao aplicar carga.");
     }
   };
 
+  const syncVendedorCarga = async (vId: string, itens: { produtoId: string, quantidade: number }[]) => {
+    await cargaService.insertCargaPendente({ vendedorId: vId, itens, data: new Date() });
+    fetchTransactionalData();
+  };
+
   const aceitarCarga = async (pendenciaId: string) => {
     try {
       await cargaService.aceitarCargaRPC(pendenciaId);
       setAdminNotification("Carga aceita!");
+      fetchTransactionalData();
     } catch (e) {
       console.error(e);
     }
@@ -214,11 +255,18 @@ const App: React.FC = () => {
 
   const processSale = async (saleData: any) => {
     try {
-      return await saleService.insertSale(saleData);
+      const res = await saleService.insertSale(saleData);
+      if (res) fetchTransactionalData();
+      return res;
     } catch (e) {
       console.error(e);
       return null;
     }
+  };
+
+  const deleteSale = async (id: string) => {
+    const success = await saleService.deleteSale(id);
+    if (success) fetchTransactionalData();
   };
 
   const receiveAccount = async (saleId: string, method: PaymentMethod, amount?: number) => {
@@ -250,6 +298,12 @@ const App: React.FC = () => {
     }
   };
 
+  const addExpense = async (vId: string, desc: string, val: number) => {
+    const success = await expenseService.insertExpense({ sellerId: vId, descricao: desc, valor: val });
+    if (success) fetchTransactionalData();
+    return success;
+  };
+
   const updateDailyRoute = (clientIds: string[], skippedClientIds: string[]) => {
     setDailyRouteState(prev => ({ ...prev, clientIds, skippedClientIds }));
   };
@@ -270,9 +324,9 @@ const App: React.FC = () => {
         {currentUser.role === 'ADMIN' ? (
           <AdminDashboard 
             {...{ products, users, cargas, clients, sales, commissions, payoutLogs, expenses, logo, margemGlobalAtiva, margemGlobalValor, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, adminNotification, companyName, companyCnpj, orderedProductIds: productOrder }}
-            addProduct={addProduct} updateProduct={productService.updateProduct} deleteProduct={productService.deleteProduct} registerStockEntry={()=>{}} adjustStockManual={()=>{}}
-            syncVendedorCarga={cargaService.insertCargaPendente} applyCargaDirectly={applyCargaDirectly} addClient={clientService.insertClient} updateClient={clientService.updateClient} deleteClient={clientService.deleteClient}
-            addUser={addUser} updateUser={userService.updateUser} payCommission={()=>{}} setCommissions={()=>{}} updateEstoqueCentral={()=>{}} reinforceCarga={()=>{}} deleteSale={saleService.deleteSale} receiveAccount={receiveAccount}
+            addProduct={addProduct} updateProduct={updateProduct} deleteProduct={deleteProduct} registerStockEntry={()=>{}} adjustStockManual={()=>{}}
+            syncVendedorCarga={syncVendedorCarga} applyCargaDirectly={applyCargaDirectly} addClient={addClient} updateClient={updateClient} deleteClient={deleteClient}
+            addUser={addUser} updateUser={updateUser} payCommission={()=>{}} setCommissions={()=>{}} updateEstoqueCentral={()=>{}} reinforceCarga={()=>{}} deleteSale={deleteSale} receiveAccount={receiveAccount}
             setLogo={(v)=>updateSetting('logo', v)} adminUser={currentUser} setMargemGlobalAtiva={(v)=>updateSetting('margemGlobalAtiva', v)} setMargemGlobalValor={(v)=>updateSetting('margemGlobalValor', v)}
             setMargemMinima={(v)=>updateSetting('margemMinima', v)} setMargemMinimaAtiva={(v)=>updateSetting('margemMinimaAtiva', v)} setPix1Name={(v)=>updateSetting('pix1Name', v)} setPix1Code={(v)=>updateSetting('pix1Code', v)}
             setPix2Name={(v)=>updateSetting('pix2Name', v)} setPix2Code={(v)=>updateSetting('pix2Code', v)} clearAdminNotification={() => setAdminNotification(null)} setOrderedProductIds={(v)=>updateSetting('productOrder', v)}
@@ -281,8 +335,8 @@ const App: React.FC = () => {
         ) : (
           <VendedorDashboard 
             {...{ products, users, cargas, cargasPendentes, clients, sales, commissions, payoutLogs, expenses, messages, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, companyName, companyCnpj, user: currentUser }}
-            markMessageAsRead={markMessageAsRead} processSale={processSale} addClient={clientService.insertClient} updateClient={clientService.updateClient} deleteClient={clientService.deleteClient}
-            receivePayment={receiveAccount} deleteSale={saleService.deleteSale} aceitarCarga={aceitarCarga} addExpense={expenseService.insertExpense} updateDailyRoute={updateDailyRoute}
+            markMessageAsRead={markMessageAsRead} processSale={processSale} addClient={addClient} updateClient={updateClient} deleteClient={deleteClient}
+            receivePayment={receiveAccount} deleteSale={deleteSale} aceitarCarga={aceitarCarga} addExpense={addExpense} updateDailyRoute={updateDailyRoute}
           />
         )}
       </main>

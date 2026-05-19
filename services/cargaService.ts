@@ -13,9 +13,15 @@ export const cargaService = {
   },
 
   async applyCargaAdminRPC(vId: string, items: { produtoId: string, quantidade: number }[]): Promise<void> {
+    // Normaliza chaves para minúsculas para compatibilidade com o RPC no Postgres
+    const rpcItems = items.map(item => ({
+      produtoid: item.produtoId,
+      quantidade: item.quantidade
+    }));
+
     const { error } = await supabase.rpc('apply_carga_admin', {
       p_vendedor_id: vId,
-      p_itens: items
+      p_itens: rpcItems
     });
     if (error) throw error;
   },
@@ -25,18 +31,29 @@ export const cargaService = {
     if (vId) query = query.eq('vendedor_id', vId);
     const { data, error } = await query;
     if (error) throw error;
+    
     return data.map(cp => ({
       id: cp.id,
       vendedorId: cp.vendedor_id,
       data: new Date(cp.data_criacao),
-      itens: cp.itens
+      // Mapeia de volta para o padrão da aplicação (produtoId)
+      itens: (cp.itens || []).map((i: any) => ({
+        produtoId: i.produtoid || i.produtoId,
+        quantidade: i.quantidade
+      }))
     })) as CargaPendente[];
   },
 
   async insertCargaPendente(cp: Omit<CargaPendente, 'id'>): Promise<void> {
+    // Normaliza chaves para minúsculas antes de persistir o JSON
+    const rpcItems = cp.itens.map(item => ({
+      produtoid: item.produtoId,
+      quantidade: item.quantidade
+    }));
+
     const { error } = await supabase.from('cargas_pendentes').insert({
       vendedor_id: cp.vendedorId,
-      itens: cp.itens,
+      itens: rpcItems,
       data_criacao: cp.data.toISOString(),
       status: 'PENDENTE'
     });

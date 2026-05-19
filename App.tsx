@@ -51,7 +51,6 @@ const App: React.FC = () => {
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [messages, setMessages] = useState<SystemMessage[]>([]);
 
-  // Estado da rota com validação de data rigorosa
   const [dailyRouteState, setDailyRouteState] = useState<DailyRouteState>(() => {
     const saved = loadLocalState('dailyRouteState', null);
     const today = getTodayDateString();
@@ -112,7 +111,6 @@ const App: React.FC = () => {
       setUsers(u);
       setClients(cl);
       
-      // ORDENAÇÃO SOBERANA: Aplica a ordem salva no banco de dados
       const order = settings.productOrder || [];
       const sortedProducts = [...p].sort((a, b) => {
         const idxA = order.indexOf(a.id);
@@ -124,7 +122,6 @@ const App: React.FC = () => {
       });
       setProducts(sortedProducts);
 
-      // CARGA AUTOMÁTICA DA ROTA: Se a rota estiver vazia para hoje, carrega os clientes do dia
       const today = getTodayDateString();
       if (dailyRouteState.date === today && dailyRouteState.clientIds.length === 0) {
         const todayDay = new Date().getDay();
@@ -144,19 +141,17 @@ const App: React.FC = () => {
     }
   }, [fetchTransactionalData, dailyRouteState.date, dailyRouteState.clientIds.length]);
 
-  // Monitoramento de virada de dia em tempo real
   useEffect(() => {
     const checkDate = () => {
       const today = getTodayDateString();
       if (dailyRouteState.date !== today) {
-        console.log("Virada de dia detectada! Resetando rota...");
         setDailyRouteState({ date: today, clientIds: [], skippedClientIds: [] });
         fetchCoreData();
       }
     };
 
-    const interval = setInterval(checkDate, 30000); // Checa a cada 30 segundos
-    window.addEventListener('focus', checkDate); // Checa quando o app volta para o foco
+    const interval = setInterval(checkDate, 30000);
+    window.addEventListener('focus', checkDate);
     
     return () => {
       clearInterval(interval);
@@ -226,6 +221,35 @@ const App: React.FC = () => {
     }
   };
 
+  const receiveAccount = async (saleId: string, method: PaymentMethod, amount?: number) => {
+    const sale = sales.find(s => s.id === saleId);
+    if (!sale) return;
+
+    const valorRecebido = amount || (sale.valorTotal - sale.valorPago);
+    const novoValorPago = Number((sale.valorPago + valorRecebido).toFixed(2));
+    const statusPagamento = novoValorPago >= sale.valorTotal ? 'PAGO' : 'PENDENTE';
+    
+    const timestamp = new Date().toLocaleString('pt-BR');
+    const novoLog = `${timestamp}: R$ ${valorRecebido.toFixed(2)} (${method})`;
+    const novoDetalhe = sale.detalhePagamento ? `${sale.detalhePagamento} | ${novoLog}` : novoLog;
+
+    const success = await saleService.updateSale(saleId, {
+      valorPago: novoValorPago,
+      statusPagamento,
+      detalhePagamento: novoDetalhe
+    });
+
+    if (success) {
+      if (statusPagamento === 'PAGO') {
+        const comm = commissions.find(c => c.saleId === saleId);
+        if (comm && comm.status === 'A_RECEBER') {
+          await commissionService.updateCommissionStatus(comm.id, 'DISPONIVEL');
+        }
+      }
+      fetchTransactionalData();
+    }
+  };
+
   const updateDailyRoute = (clientIds: string[], skippedClientIds: string[]) => {
     setDailyRouteState(prev => ({ ...prev, clientIds, skippedClientIds }));
   };
@@ -248,7 +272,7 @@ const App: React.FC = () => {
             {...{ products, users, cargas, clients, sales, commissions, payoutLogs, expenses, logo, margemGlobalAtiva, margemGlobalValor, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, adminNotification, companyName, companyCnpj, orderedProductIds: productOrder }}
             addProduct={addProduct} updateProduct={productService.updateProduct} deleteProduct={productService.deleteProduct} registerStockEntry={()=>{}} adjustStockManual={()=>{}}
             syncVendedorCarga={cargaService.insertCargaPendente} applyCargaDirectly={applyCargaDirectly} addClient={clientService.insertClient} updateClient={clientService.updateClient} deleteClient={clientService.deleteClient}
-            addUser={addUser} updateUser={userService.updateUser} payCommission={()=>{}} setCommissions={()=>{}} updateEstoqueCentral={()=>{}} reinforceCarga={()=>{}} deleteSale={saleService.deleteSale} receiveAccount={()=>{}}
+            addUser={addUser} updateUser={userService.updateUser} payCommission={()=>{}} setCommissions={()=>{}} updateEstoqueCentral={()=>{}} reinforceCarga={()=>{}} deleteSale={saleService.deleteSale} receiveAccount={receiveAccount}
             setLogo={(v)=>updateSetting('logo', v)} adminUser={currentUser} setMargemGlobalAtiva={(v)=>updateSetting('margemGlobalAtiva', v)} setMargemGlobalValor={(v)=>updateSetting('margemGlobalValor', v)}
             setMargemMinima={(v)=>updateSetting('margemMinima', v)} setMargemMinimaAtiva={(v)=>updateSetting('margemMinimaAtiva', v)} setPix1Name={(v)=>updateSetting('pix1Name', v)} setPix1Code={(v)=>updateSetting('pix1Code', v)}
             setPix2Name={(v)=>updateSetting('pix2Name', v)} setPix2Code={(v)=>updateSetting('pix2Code', v)} clearAdminNotification={() => setAdminNotification(null)} setOrderedProductIds={(v)=>updateSetting('productOrder', v)}
@@ -258,7 +282,7 @@ const App: React.FC = () => {
           <VendedorDashboard 
             {...{ products, users, cargas, cargasPendentes, clients, sales, commissions, payoutLogs, expenses, messages, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, companyName, companyCnpj, user: currentUser }}
             markMessageAsRead={markMessageAsRead} processSale={processSale} addClient={clientService.insertClient} updateClient={clientService.updateClient} deleteClient={clientService.deleteClient}
-            receivePayment={()=>{}} deleteSale={saleService.deleteSale} aceitarCarga={aceitarCarga} addExpense={expenseService.insertExpense} updateDailyRoute={updateDailyRoute}
+            receivePayment={receiveAccount} deleteSale={saleService.deleteSale} aceitarCarga={aceitarCarga} addExpense={expenseService.insertExpense} updateDailyRoute={updateDailyRoute}
           />
         )}
       </main>

@@ -38,6 +38,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     d.setDate(d.getDate() + 7);
     return d.toISOString().split('T')[0];
   });
+  const [valorRecebido, setValorRecebido] = useState<string>('');
   const [selectedPixSlot, setSelectedPixSlot] = useState<1 | 2>(1);
   const [isTrocaActive, setIsTrocaActive] = useState(false);
   const [valorTroca, setValorTroca] = useState('');
@@ -94,6 +95,17 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     const vt = parseFloat(valorTroca) || 0;
     return Math.max(0, subtotal - (isTrocaActive ? vt : 0));
   }, [subtotal, isTrocaActive, valorTroca]);
+
+  const troco = useMemo(() => {
+    const rec = parseFloat(valorRecebido) || 0;
+    return Math.max(0, rec - total);
+  }, [valorRecebido, total]);
+
+  const setPrazoDays = (days: number) => {
+    const d = new Date();
+    d.setDate(d.getDate() + days);
+    setPrazoData(d.toISOString().split('T')[0]);
+  };
 
   const handleConfirmFinalize = async () => {
     if (total <= 0 && getOrderedItems().length === 0) return;
@@ -224,7 +236,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
 
       {view === 'PAYMENT' && (
         <div className="fixed inset-0 bg-black/60 z-[110] flex items-end justify-center p-4">
-           <div className="bg-white w-full max-w-sm rounded-[2.5rem] p-8 animate-in slide-in-from-bottom max-h-[90vh] overflow-y-auto">
+           <div className="bg-white w-full max-w-sm rounded-[2.5rem] p-8 animate-in slide-in-from-bottom max-h-[95vh] overflow-y-auto">
               <h3 className="font-black text-gray-800 text-lg mb-4 text-center uppercase tracking-tight">Finalizar Pagamento</h3>
               
               <div className="bg-gray-50 p-4 rounded-2xl mb-6 text-center border border-gray-100">
@@ -238,10 +250,39 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                 ))}
               </div>
 
+              {metodo === 'DINHEIRO' && (
+                <div className="mb-6 space-y-4 animate-in fade-in duration-300">
+                   <div className="space-y-1">
+                      <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Valor Recebido R$</label>
+                      <input 
+                        type="number" 
+                        value={valorRecebido} 
+                        onChange={e => setValorRecebido(e.target.value)} 
+                        placeholder="0.00" 
+                        className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-2xl font-black text-center outline-none" 
+                        autoFocus
+                      />
+                   </div>
+                   {parseFloat(valorRecebido) > total && (
+                     <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100 text-center animate-in zoom-in-95">
+                        <p className="text-[10px] font-black text-emerald-600 uppercase mb-1">Troco a Devolver</p>
+                        <p className="text-2xl font-black text-emerald-700">R$ {troco.toFixed(2)}</p>
+                     </div>
+                   )}
+                </div>
+              )}
+
               {metodo === 'A_PRAZO' && (
-                <div className="mb-6 space-y-2 animate-in fade-in duration-300">
-                   <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Data de Vencimento</label>
-                   <input type="date" value={prazoData} onChange={e => setPrazoData(e.target.value)} className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-bold outline-none focus:ring-2 focus:ring-blue-100" />
+                <div className="mb-6 space-y-4 animate-in fade-in duration-300">
+                   <div className="grid grid-cols-4 gap-2">
+                     {[7, 14, 21, 30].map(days => (
+                       <button key={days} onClick={() => setPrazoDays(days)} className="py-3 bg-gray-50 border border-gray-100 rounded-xl text-[10px] font-black text-gray-600 hover:bg-blue-50 hover:text-blue-600 transition-colors">{days}D</button>
+                     ))}
+                   </div>
+                   <div className="space-y-1">
+                      <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Data de Vencimento</label>
+                      <input type="date" value={prazoData} onChange={e => setPrazoData(e.target.value)} className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-bold outline-none focus:ring-2 focus:ring-blue-100" />
+                   </div>
                 </div>
               )}
 

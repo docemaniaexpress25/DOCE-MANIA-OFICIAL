@@ -35,16 +35,15 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const [detalheMetodo, setDetalheMetodo] = useState<string>('Dinheiro');
   const [showPrazoOverlay, setShowPrazoOverlay] = useState(false);
   const [showPixOverlay, setShowPixOverlay] = useState<1 | 2 | null>(null);
-  const [prazoData, setPrazoData] = useState<string>('');
+  const [prazoData, setPrazoData] = useState<string>(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 7);
+    return d.toISOString().split('T')[0];
+  });
   const [valorRecebido, setValorRecebido] = useState<string>('');
   const [selectedPixSlot, setSelectedPixSlot] = useState<1 | 2 | null>(null);
   const [isTrocaActive, setIsTrocaActive] = useState(false);
   const [valorTroca, setValorTroca] = useState('');
-
-  const todayStr = new Date().toISOString().split('T')[0];
-  
-  const productIdsInCarga = useMemo(() => new Set(minhaCarga.map(c => c.produtoId)), [minhaCarga]);
-  const orderedProductsInCarga = useMemo(() => products.filter(p => productIdsInCarga.has(p.id)), [products, productIdsInCarga]);
 
   useEffect(() => {
     saveLocalState(cartKey, cart);
@@ -86,20 +85,39 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     });
   };
 
-  const subtotal = Object.entries(cart).reduce((acc, [_, item]) => {
-    const cartItem = item as { quantidade: number, precoVenda: string };
-    const price = parseFloat(cartItem.precoVenda) || 0;
-    return acc + ((cartItem.quantidade ?? 0) * price); 
-  }, 0);
+  const subtotal = useMemo(() => {
+    return Object.entries(cart).reduce((acc, [_, item]) => {
+      const cartItem = item as { quantidade: number, precoVenda: string };
+      const price = parseFloat(cartItem.precoVenda) || 0;
+      return acc + ((cartItem.quantidade ?? 0) * price); 
+    }, 0);
+  }, [cart]);
 
-  const total = Math.max(0, subtotal - (isTrocaActive ? parseFloat(valorTroca) || 0 : 0));
+  const total = useMemo(() => {
+    const vt = parseFloat(valorTroca) || 0;
+    return Math.max(0, subtotal - (isTrocaActive ? vt : 0));
+  }, [subtotal, isTrocaActive, valorTroca]);
 
   const handleConfirmFinalize = async () => {
+    if (total <= 0 && getOrderedItems().length === 0) return;
+
     const itens = getOrderedItems();
-    const descontoInfo = isTrocaActive && parseFloat(valorTroca) > 0 ? ` (Troca: R$ ${parseFloat(valorTroca).toFixed(2)})` : '';
+    const vt = parseFloat(valorTroca) || 0;
+    const descontoInfo = isTrocaActive && vt > 0 ? ` (Troca: R$ ${vt.toFixed(2)})` : '';
     const finalDetalhe = (metodo === 'PIX' ? (selectedPixSlot === 1 ? pix1Name : pix2Name) : detalheMetodo) + descontoInfo;
     
-    const salePayload: any = { vendedorId, clientId: client.id, valorTotal: total, metodoPagamento: metodo, detalhePagamento: finalDetalhe, itens };
+    // Payload completo com todos os campos obrigatórios
+    const salePayload: any = { 
+      vendedorId, 
+      clientId: client.id, 
+      valorTotal: total, 
+      valorPago: metodo === 'A_PRAZO' ? 0 : total,
+      metodoPagamento: metodo, 
+      detalhePagamento: finalDetalhe, 
+      itens,
+      data: new Date() 
+    };
+
     if (metodo === 'A_PRAZO') { 
       salePayload.statusPagamento = 'PENDENTE'; 
       salePayload.dataVencimento = new Date(prazoData); 
@@ -114,12 +132,25 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     }
   };
 
+  const productIdsInCarga = useMemo(() => new Set(minhaCarga.map(c => c.produtoId)), [minhaCarga]);
+  const orderedProductsInCarga = useMemo(() => products.filter(p => productIdsInCarga.has(p.id)), [products, productIdsInCarga]);
+
   if (view === 'RECEIPT_PREVIEW') {
     return (
       <div className="fixed inset-0 bg-gray-900 z-[100] flex flex-col">
         <div className="flex-1 overflow-y-auto">
           <Cupom 
-            sale={{ id: 'preview', vendedorId, clientId: client.id, data: new Date(), valorTotal: total, valorPago: 0, metodoPagamento: metodo, statusPagamento: 'PENDENTE', itens: getOrderedItems() }} 
+            sale={{ 
+              id: 'preview', 
+              vendedorId, 
+              clientId: client.id, 
+              data: new Date(), 
+              valorTotal: total, 
+              valorPago: 0, 
+              metodoPagamento: metodo, 
+              statusPagamento: metodo === 'A_PRAZO' ? 'PENDENTE' : 'PAGO', 
+              itens: getOrderedItems() 
+            }} 
             client={client} 
             products={products} 
             onBack={() => setView('CART')} 
@@ -178,14 +209,20 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
 
       <footer className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 p-4 pb-8 space-y-3 shadow-lg max-w-lg mx-auto z-[70]">
         <div className="flex items-center justify-between px-1 mb-1 bg-gray-50/50 p-2 rounded-xl">
-          <button onClick={() => setIsTrocaActive(!isTrocaActive)} className={`w-8 h-4 rounded-full relative transition-colors ${isTrocaActive ? 'bg-orange-500' : 'bg-gray-300'}`}>
-            <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-all ${isTrocaActive ? 'left-4.5' : 'left-0.5'}`}></div>
-          </button>
-          {isTrocaActive && <input type="number" value={valorTroca} onChange={e => setValorTroca(e.target.value)} placeholder="VALOR TROCA" className="w-20 bg-white border border-orange-100 rounded-lg text-[11px] font-black text-orange-600 p-1 text-right" />}
+          <div className="flex items-center gap-2">
+            <button onClick={() => setIsTrocaActive(!isTrocaActive)} className={`w-10 h-6 rounded-full relative transition-colors ${isTrocaActive ? 'bg-orange-500' : 'bg-gray-300'}`}>
+              <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${isTrocaActive ? 'left-5' : 'left-1'}`}></div>
+            </button>
+            <span className="text-[9px] font-black text-gray-400 uppercase">Habilitar Troca/Desc.</span>
+          </div>
+          {isTrocaActive && <input type="number" value={valorTroca} onChange={e => setValorTroca(e.target.value)} placeholder="R$ 0.00" className="w-24 bg-white border border-orange-100 rounded-lg text-[11px] font-black text-orange-600 p-2 text-right outline-none" />}
         </div>
         <div className="flex justify-between items-end px-1">
-          <p className="text-xl font-black text-gray-800">R$ {total.toFixed(2)}</p>
-          <button onClick={() => setView('RECEIPT_PREVIEW')} disabled={total === 0} className={`px-6 py-4 rounded-2xl font-black uppercase text-xs ${total > 0 ? 'bg-blue-600 text-white shadow-lg' : 'bg-gray-200 text-gray-400'}`}>Gerar Cupom</button>
+          <div>
+            <p className="text-[9px] font-black text-gray-400 uppercase mb-0.5">Total a Pagar</p>
+            <p className="text-xl font-black text-gray-800">R$ {total.toFixed(2)}</p>
+          </div>
+          <button onClick={() => setView('RECEIPT_PREVIEW')} disabled={total <= 0 && getOrderedItems().length === 0} className={`px-6 py-4 rounded-2xl font-black uppercase text-xs ${total > 0 || getOrderedItems().length > 0 ? 'bg-blue-600 text-white shadow-lg' : 'bg-gray-200 text-gray-400'}`}>Gerar Cupom</button>
         </div>
       </footer>
 
@@ -194,10 +231,18 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
            <div className="bg-white w-full max-w-sm rounded-[2.5rem] p-8 animate-in slide-in-from-bottom">
               <h3 className="font-black text-gray-800 text-lg mb-4 text-center uppercase">Pagamento</h3>
               <div className="flex gap-1.5 mb-6 justify-center">
-                {['DINHEIRO', 'PIX', 'A_PRAZO'].map(m => (
-                  <button key={m} onClick={() => setMetodo(m as PaymentMethod)} className={`px-3 py-2 rounded-xl text-[8px] font-black uppercase ${metodo === m ? 'bg-blue-600 text-white' : 'bg-gray-50 text-gray-400'}`}>{m}</button>
+                {(['DINHEIRO', 'PIX', 'A_PRAZO'] as const).map(m => (
+                  <button key={m} onClick={() => setMetodo(m)} className={`px-3 py-2 rounded-xl text-[8px] font-black uppercase ${metodo === m ? 'bg-blue-600 text-white' : 'bg-gray-50 text-gray-400'}`}>{m}</button>
                 ))}
               </div>
+
+              {metodo === 'A_PRAZO' && (
+                <div className="mb-6 space-y-2">
+                   <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Vencimento</label>
+                   <input type="date" value={prazoData} onChange={e => setPrazoData(e.target.value)} className="w-full p-4 bg-gray-50 border rounded-2xl text-sm font-bold" />
+                </div>
+              )}
+
               <button onClick={handleConfirmFinalize} className="w-full bg-emerald-600 text-white py-4 rounded-2xl font-black uppercase text-xs shadow-xl">Finalizar Venda</button>
               <button onClick={() => setView('RECEIPT_PREVIEW')} className="w-full py-3 text-gray-400 font-bold text-[9px] uppercase mt-2">Voltar</button>
            </div>

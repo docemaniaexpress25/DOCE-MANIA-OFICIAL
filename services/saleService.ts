@@ -33,15 +33,18 @@ export const saleService = {
       precovenda: item.precoVenda
     }));
 
+    // Garante que a data seja um objeto Date válido antes de converter para ISO string
+    const saleDate = sale.data instanceof Date ? sale.data : new Date();
+
     const { data: saleId, error } = await supabase.rpc('processar_venda_v2', {
       p_vendedor_id: sale.vendedorId,
       p_client_id: sale.clientId,
       p_valor_total: sale.valorTotal,
-      p_valor_pago: sale.valorPago,
+      p_valor_pago: sale.valorPago ?? (sale.statusPagamento === 'PAGO' ? sale.valorTotal : 0),
       p_metodo_pagamento: sale.metodoPagamento,
       p_detalhe_pagamento: sale.detalhePagamento || '',
       p_status_pagamento: sale.statusPagamento,
-      p_data_venda: sale.data.toISOString(),
+      p_data_venda: saleDate.toISOString(),
       p_data_vencimento: sale.dataVencimento ? sale.dataVencimento.toISOString() : null,
       p_itens: rpcItems
     });

@@ -77,39 +77,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     saveLocalState('admin_selectedSale', selectedSale);
   }, [selectedSale]);
 
-  useEffect(() => {
-    const handlePopState = (event: PopStateEvent) => {
-      const state = event.state;
-      if (state) {
-        if (state.tab) setActiveTab(state.tab);
-        setSelectedSale(state.sale || null);
-      } else {
-        setActiveTab('HOME');
-        setSelectedSale(null);
-      }
-    };
-
-    window.addEventListener('popstate', handlePopState);
-    if (!window.history.state) {
-      window.history.replaceState({ tab: activeTab, sale: selectedSale }, '');
-    }
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, []);
-
-  useEffect(() => {
-    const currentState = window.history.state;
-    const isDifferent = !currentState || 
-                        currentState.tab !== activeTab || 
-                        currentState.sale?.id !== selectedSale?.id;
-    
-    if (isDifferent) {
-      window.history.pushState({ tab: activeTab, sale: selectedSale }, '');
-    }
-  }, [activeTab, selectedSale]);
-
   const [search, setSearch] = useState('');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
-  const [localOrderedProductIds, setLocalOrderedProductIds] = useState<string[]>(props.orderedProductIds);
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
@@ -122,15 +91,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       props.clearAdminNotification?.();
     }
   }, [props.adminNotification]);
-
-  useEffect(() => {
-    const currentIds = props.products.map(p => p.id);
-    const validOrder = props.orderedProductIds.filter(id => currentIds.includes(id));
-    const newIds = currentIds.filter(id => !validOrder.includes(id));
-    const finalOrder = [...validOrder, ...newIds];
-    setLocalOrderedProductIds(finalOrder);
-  }, [props.products, props.orderedProductIds]);
-
 
   const [showProductModal, setShowProductModal] = useState<Product | 'NEW' | null>(null);
   const [showEntryModal, setShowEntryModal] = useState<Product | null>(null);
@@ -308,12 +268,19 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   };
 
   const moveProduct = (id: string, dir: 'UP' | 'DOWN') => {
-    const idx = localOrderedProductIds.indexOf(id);
-    const newOrder = [...localOrderedProductIds];
+    const currentOrder = props.orderedProductIds.length > 0 
+      ? props.orderedProductIds 
+      : props.products.map(p => p.id);
+      
+    const idx = currentOrder.indexOf(id);
+    if (idx === -1) return;
+    
+    const newOrder = [...currentOrder];
     if (dir === 'UP' && idx > 0) [newOrder[idx], newOrder[idx-1]] = [newOrder[idx-1], newOrder[idx]];
     else if (dir === 'DOWN' && idx < newOrder.length - 1) [newOrder[idx], newOrder[idx+1]] = [newOrder[idx+1], newOrder[idx]];
-    setLocalOrderedProductIds(newOrder);
+    
     props.setOrderedProductIds(newOrder); 
+    showToast("Ordem atualizada!");
   };
 
   const moveClient = async (id: string, direction: 'UP' | 'DOWN', day: number) => {
@@ -329,13 +296,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       const currentClient = clientsInDay[currentIndex];
       const targetClient = clientsInDay[targetIndex];
       
-      // Lógica de troca de ordem persistente
       const currentOrdem = currentClient.ordem || 0;
       const targetOrdem = targetClient.ordem || 0;
       
-      // Se as ordens forem iguais, precisamos garantir que sejam diferentes antes de trocar
       if (currentOrdem === targetOrdem) {
-        // Atribui ordens sequenciais para todos os clientes do dia para normalizar
         for (let i = 0; i < clientsInDay.length; i++) {
           if (clientsInDay[i].id === id) {
             const newPos = direction === 'UP' ? i - 1 : i + 1;
@@ -345,7 +309,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           }
         }
       } else {
-        // Troca simples de valores de ordem
         props.updateClient(currentClient.id, { ordem: targetOrdem });
         props.updateClient(targetClient.id, { ordem: currentOrdem });
       }
@@ -538,11 +501,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   );
 
   const filteredProducts = useMemo(() => {
-    const filtered = props.products.filter(p => (p.nome ?? '').toLowerCase().includes(search.toLowerCase()));
-    if (search) return filtered;
-    const productMap = new Map(filtered.map(p => [p.id, p]));
-    return localOrderedProductIds.map(id => productMap.get(id)).filter((p): p is Product => !!p);
-  }, [props.products, localOrderedProductIds, search]);
+    return props.products.filter(p => (p.nome ?? '').toLowerCase().includes(search.toLowerCase()));
+  }, [props.products, search]);
 
   const filteredHistory = useMemo(() => {
     return props.sales.filter(s => filterByPeriod(s.data, filtroPeriodo)).sort((a, b) => (b.data?.getTime() ?? 0) - (a.data?.getTime() ?? 0)); 
@@ -1150,7 +1110,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
       {selectedSale && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[250] flex items-center justify-center p-4">
-          <div className="bg-white w-full max-w-sm rounded-[2rem] overflow-hidden flex flex-col shadow-2xl animate-in zoom-in-95 duration-200 max-h-[90vh]">
+          <div className="bg-white w-full max-sm rounded-[2rem] overflow-hidden flex flex-col shadow-2xl animate-in zoom-in-95 duration-200 max-h-[90vh]">
             <div className="flex-1 overflow-y-auto p-2"><Cupom sale={selectedSale} client={props.clients.find(c => c.id === selectedSale.clientId) || {} as Client} products={props.products} onClose={() => setSelectedSale(null)} onDeleteSale={props.deleteSale} allowDelete={true} /></div>
             <div className="p-6 bg-gray-50 border-t border-gray-100 flex flex-col gap-2"><button onClick={() => setSelectedSale(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Voltar</button></div>
           </div>

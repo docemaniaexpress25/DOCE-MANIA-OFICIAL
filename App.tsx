@@ -16,7 +16,10 @@ import { expenseService } from './services/expenseService';
 import { supabase } from './supabaseClient';
 import { loadLocalState, saveLocalState, DailyRouteState } from './utils/persistence';
 
-const getTodayDateString = () => new Date().toISOString().split('T')[0];
+const getTodayDateString = () => {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+};
 
 const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(() => loadLocalState('currentUser', null));
@@ -48,13 +51,18 @@ const App: React.FC = () => {
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [messages, setMessages] = useState<SystemMessage[]>([]);
 
-  const [dailyRouteState, setDailyRouteState] = useState<DailyRouteState>({ 
-    date: getTodayDateString(), 
-    clientIds: [], 
-    skippedClientIds: [] 
+  // Estado da rota com validação de data rigorosa
+  const [dailyRouteState, setDailyRouteState] = useState<DailyRouteState>(() => {
+    const saved = loadLocalState('dailyRouteState', null);
+    const today = getTodayDateString();
+    if (!saved || saved.date !== today) {
+      return { date: today, clientIds: [], skippedClientIds: [] };
+    }
+    return saved;
   });
 
   useEffect(() => { saveLocalState('currentUser', currentUser); }, [currentUser]);
+  useEffect(() => { saveLocalState('dailyRouteState', dailyRouteState); }, [dailyRouteState]);
 
   const fetchTransactionalData = useCallback(async () => {
     try {
@@ -91,7 +99,7 @@ const App: React.FC = () => {
       setPix1Code(settings.pix1Code);
       setPix2Name(settings.pix2Name ?? "Pix Banco B");
       setPix2Code(settings.pix2Code);
-      setProductOrder(settings.productOrder);
+      setProductOrder(settings.productOrder || []);
       setCompanyName(settings.companyName ?? "DOCE MANIA DISTRIBUIDORA");
       setCompanyCnpj(settings.companyCnpj ?? "00.000.000/0001-00");
 
@@ -100,20 +108,66 @@ const App: React.FC = () => {
         clientService.getAllClients(),
         productService.getAllProducts()
       ]);
+      
       setUsers(u);
       setClients(cl);
-      setProducts(p);
+      
+      // ORDENAÇÃO SOBERANA: Aplica a ordem salva no banco de dados
+      const order = settings.productOrder || [];
+      const sortedProducts = [...p].sort((a, b) => {
+        const idxA = order.indexOf(a.id);
+        const idxB = order.indexOf(b.id);
+        if (idxA === -1 && idxB === -1) return 0;
+        if (idxA === -1) return 1;
+        if (idxB === -1) return -1;
+        return idxA - idxB;
+      });
+      setProducts(sortedProducts);
+
+      // CARGA AUTOMÁTICA DA ROTA: Se a rota estiver vazia para hoje, carrega os clientes do dia
+      const today = getTodayDateString();
+      if (dailyRouteState.date === today && dailyRouteState.clientIds.length === 0) {
+        const todayDay = new Date().getDay();
+        const routeClients = cl
+          .filter(c => c.diaRoteiro === todayDay && c.ativo)
+          .sort((a, b) => (a.ordem || 0) - (b.ordem || 0))
+          .map(c => c.id);
+        
+        if (routeClients.length > 0) {
+          setDailyRouteState(prev => ({ ...prev, clientIds: routeClients }));
+        }
+      }
+
       await fetchTransactionalData();
     } catch (e) {
       console.error("Erro ao carregar dados principais:", e);
     }
-  }, [fetchTransactionalData]);
+  }, [fetchTransactionalData, dailyRouteState.date, dailyRouteState.clientIds.length]);
+
+  // Monitoramento de virada de dia em tempo real
+  useEffect(() => {
+    const checkDate = () => {
+      const today = getTodayDateString();
+      if (dailyRouteState.date !== today) {
+        console.log("Virada de dia detectada! Resetando rota...");
+        setDailyRouteState({ date: today, clientIds: [], skippedClientIds: [] });
+        fetchCoreData();
+      }
+    };
+
+    const interval = setInterval(checkDate, 30000); // Checa a cada 30 segundos
+    window.addEventListener('focus', checkDate); // Checa quando o app volta para o foco
+    
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', checkDate);
+    };
+  }, [dailyRouteState.date, fetchCoreData]);
 
   useEffect(() => {
     const channel = supabase
       .channel('schema-db-changes')
       .on('postgres_changes', { event: '*', schema: 'public' }, () => {
-        fetchTransactionalData();
         fetchCoreData();
       })
       .subscribe();
@@ -121,12 +175,13 @@ const App: React.FC = () => {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [fetchTransactionalData, fetchCoreData]);
+  }, [fetchCoreData]);
 
   useEffect(() => { fetchCoreData(); }, [fetchCoreData]);
 
   const updateSetting = async (key: keyof AppSettings, value: any) => {
     await appSettingsService.updateSettings({ [key]: value });
+    fetchCoreData();
   };
 
   const addUser = async (nome: string, foto?: string, telefone?: string) => {
@@ -171,6 +226,10 @@ const App: React.FC = () => {
     }
   };
 
+  const updateDailyRoute = (clientIds: string[], skippedClientIds: string[]) => {
+    setDailyRouteState(prev => ({ ...prev, clientIds, skippedClientIds }));
+  };
+
   if (!currentUser) return <Login users={users} onLogin={setCurrentUser} logo={logo} />;
 
   return (
@@ -199,7 +258,7 @@ const App: React.FC = () => {
           <VendedorDashboard 
             {...{ products, users, cargas, cargasPendentes, clients, sales, commissions, payoutLogs, expenses, messages, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, companyName, companyCnpj, user: currentUser }}
             markMessageAsRead={markMessageAsRead} processSale={processSale} addClient={clientService.insertClient} updateClient={clientService.updateClient} deleteClient={clientService.deleteClient}
-            receivePayment={()=>{}} deleteSale={saleService.deleteSale} aceitarCarga={aceitarCarga} addExpense={expenseService.insertExpense} updateDailyRoute={()=>{}}
+            receivePayment={()=>{}} deleteSale={saleService.deleteSale} aceitarCarga={aceitarCarga} addExpense={expenseService.insertExpense} updateDailyRoute={updateDailyRoute}
           />
         )}
       </main>

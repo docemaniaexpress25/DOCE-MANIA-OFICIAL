@@ -152,6 +152,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     }
   };
 
+  // Inicializa o stagingCarga apenas quando mudar o vendedor
+  // Isso evita que resets de dados globais (realtime) limpem o que o administrador está digitando
   useEffect(() => {
     if (selectedVendedorId) {
       const atual = props.cargas
@@ -161,19 +163,17 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     } else {
       setStagingCarga({});
     }
-  }, [selectedVendedorId, props.cargas]);
+  }, [selectedVendedorId]); // Removido props.cargas da dependência para evitar resets indesejados
 
   const hasCargaChanges = useMemo(() => {
     if (!selectedVendedorId) return false;
     const cargaAtualMap = props.cargas
       .filter(c => c.vendedorId === selectedVendedorId)
       .reduce((acc, curr) => ({ ...acc, [curr.produtoId]: curr.quantidade ?? 0 }), {} as { [id: string]: number }); 
-    const allProdIds = new Set([...Object.keys(cargaAtualMap), ...Object.keys(stagingCarga)]);
-    for (const pId of allProdIds) {
-      if ((cargaAtualMap[pId] ?? 0) !== (stagingCarga[pId] ?? 0)) return true;
-    }
-    return false;
-  }, [stagingCarga, props.cargas, selectedVendedorId]);
+    
+    // Verifica se houve mudança em qualquer produto do catálogo
+    return props.products.some(p => (cargaAtualMap[p.id] ?? 0) !== (stagingCarga[p.id] ?? 0));
+  }, [stagingCarga, props.cargas, selectedVendedorId, props.products]);
 
   const filterByPeriod = (date: Date, period: string) => {
     const d = new Date(date);
@@ -246,14 +246,22 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
   const handleSync = () => {
     if (!selectedVendedorId) return;
-    const itens = Object.entries(stagingCarga).map(([produtoId, quantidade]) => ({ produtoId, quantidade: quantidade ?? 0 })); 
+    // Sincroniza TODOS os produtos para garantir que o que foi removido ou zerado também seja atualizado no banco
+    const itens = props.products.map(p => ({ 
+      produtoId: p.id, 
+      quantidade: stagingCarga[p.id] || 0 
+    })); 
     props.syncVendedorCarga(selectedVendedorId, itens);
     setShowConfirmSync(false);
   };
 
   const handleApply = () => {
     if (!selectedVendedorId) return;
-    const itens = Object.entries(stagingCarga).map(([produtoId, quantidade]) => ({ produtoId, quantidade: quantidade ?? 0 })); 
+    // Envia a lista completa de produtos para garantir que itens removidos (0) sejam processados pela RPC
+    const itens = props.products.map(p => ({ 
+      produtoId: p.id, 
+      quantidade: stagingCarga[p.id] || 0 
+    })); 
     props.applyCargaDirectly(selectedVendedorId, itens);
     setShowConfirmApply(false);
   };
@@ -261,7 +269,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const handleZeroCarga = () => {
     if (!selectedVendedorId) return;
     if (window.confirm("Deseja realmente ZERAR toda a carga deste vendedor? Isso retornará todos os itens ao estoque central ao clicar em 'Aplicar Agora'.")) {
-      const zeroed = Object.keys(stagingCarga).reduce((acc, key) => ({ ...acc, [key]: 0 }), {});
+      // Zera explicitamente todos os produtos do catálogo para esse vendedor no rascunho
+      const zeroed = props.products.reduce((acc, p) => ({ ...acc, [p.id]: 0 }), {});
       setStagingCarga(zeroed);
       showToast("Carga zerada no rascunho. Clique em 'Aplicar Agora' para confirmar.");
     }

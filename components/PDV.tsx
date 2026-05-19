@@ -33,15 +33,12 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
 
   const [metodo, setMetodo] = useState<PaymentMethod>('DINHEIRO');
   const [detalheMetodo, setDetalheMetodo] = useState<string>('Dinheiro');
-  const [showPrazoOverlay, setShowPrazoOverlay] = useState(false);
-  const [showPixOverlay, setShowPixOverlay] = useState<1 | 2 | null>(null);
   const [prazoData, setPrazoData] = useState<string>(() => {
     const d = new Date();
     d.setDate(d.getDate() + 7);
     return d.toISOString().split('T')[0];
   });
-  const [valorRecebido, setValorRecebido] = useState<string>('');
-  const [selectedPixSlot, setSelectedPixSlot] = useState<1 | 2 | null>(null);
+  const [selectedPixSlot, setSelectedPixSlot] = useState<1 | 2>(1);
   const [isTrocaActive, setIsTrocaActive] = useState(false);
   const [valorTroca, setValorTroca] = useState('');
 
@@ -106,7 +103,6 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     const descontoInfo = isTrocaActive && vt > 0 ? ` (Troca: R$ ${vt.toFixed(2)})` : '';
     const finalDetalhe = (metodo === 'PIX' ? (selectedPixSlot === 1 ? pix1Name : pix2Name) : detalheMetodo) + descontoInfo;
     
-    // Payload completo com todos os campos obrigatórios
     const salePayload: any = { 
       vendedorId, 
       clientId: client.id, 
@@ -213,38 +209,65 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
             <button onClick={() => setIsTrocaActive(!isTrocaActive)} className={`w-10 h-6 rounded-full relative transition-colors ${isTrocaActive ? 'bg-orange-500' : 'bg-gray-300'}`}>
               <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${isTrocaActive ? 'left-5' : 'left-1'}`}></div>
             </button>
-            <span className="text-[9px] font-black text-gray-400 uppercase">Habilitar Troca/Desc.</span>
+            <span className="text-[9px] font-black text-gray-400 uppercase">Troca/Desc.</span>
           </div>
           {isTrocaActive && <input type="number" value={valorTroca} onChange={e => setValorTroca(e.target.value)} placeholder="R$ 0.00" className="w-24 bg-white border border-orange-100 rounded-lg text-[11px] font-black text-orange-600 p-2 text-right outline-none" />}
         </div>
         <div className="flex justify-between items-end px-1">
           <div>
-            <p className="text-[9px] font-black text-gray-400 uppercase mb-0.5">Total a Pagar</p>
+            <p className="text-[9px] font-black text-gray-400 uppercase mb-0.5">Total Líquido</p>
             <p className="text-xl font-black text-gray-800">R$ {total.toFixed(2)}</p>
           </div>
-          <button onClick={() => setView('RECEIPT_PREVIEW')} disabled={total <= 0 && getOrderedItems().length === 0} className={`px-6 py-4 rounded-2xl font-black uppercase text-xs ${total > 0 || getOrderedItems().length > 0 ? 'bg-blue-600 text-white shadow-lg' : 'bg-gray-200 text-gray-400'}`}>Gerar Cupom</button>
+          <button onClick={() => setView('RECEIPT_PREVIEW')} disabled={total <= 0 && getOrderedItems().length === 0} className={`px-6 py-4 rounded-2xl font-black uppercase text-xs ${total > 0 || getOrderedItems().length > 0 ? 'bg-blue-600 text-white shadow-lg' : 'bg-gray-200 text-gray-400'}`}>Avançar</button>
         </div>
       </footer>
 
       {view === 'PAYMENT' && (
         <div className="fixed inset-0 bg-black/60 z-[110] flex items-end justify-center p-4">
-           <div className="bg-white w-full max-w-sm rounded-[2.5rem] p-8 animate-in slide-in-from-bottom">
-              <h3 className="font-black text-gray-800 text-lg mb-4 text-center uppercase">Pagamento</h3>
+           <div className="bg-white w-full max-w-sm rounded-[2.5rem] p-8 animate-in slide-in-from-bottom max-h-[90vh] overflow-y-auto">
+              <h3 className="font-black text-gray-800 text-lg mb-4 text-center uppercase tracking-tight">Finalizar Pagamento</h3>
+              
+              <div className="bg-gray-50 p-4 rounded-2xl mb-6 text-center border border-gray-100">
+                <p className="text-[10px] font-black text-gray-400 uppercase mb-1">Valor Total Devido</p>
+                <p className="text-3xl font-black text-blue-600">R$ {total.toFixed(2)}</p>
+              </div>
+
               <div className="flex gap-1.5 mb-6 justify-center">
                 {(['DINHEIRO', 'PIX', 'A_PRAZO'] as const).map(m => (
-                  <button key={m} onClick={() => setMetodo(m)} className={`px-3 py-2 rounded-xl text-[8px] font-black uppercase ${metodo === m ? 'bg-blue-600 text-white' : 'bg-gray-50 text-gray-400'}`}>{m}</button>
+                  <button key={m} onClick={() => setMetodo(m)} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${metodo === m ? 'bg-blue-600 text-white shadow-md' : 'bg-gray-50 text-gray-400'}`}>{m === 'A_PRAZO' ? 'PRAZO' : m}</button>
                 ))}
               </div>
 
               {metodo === 'A_PRAZO' && (
-                <div className="mb-6 space-y-2">
-                   <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Vencimento</label>
-                   <input type="date" value={prazoData} onChange={e => setPrazoData(e.target.value)} className="w-full p-4 bg-gray-50 border rounded-2xl text-sm font-bold" />
+                <div className="mb-6 space-y-2 animate-in fade-in duration-300">
+                   <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Data de Vencimento</label>
+                   <input type="date" value={prazoData} onChange={e => setPrazoData(e.target.value)} className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-bold outline-none focus:ring-2 focus:ring-blue-100" />
                 </div>
               )}
 
-              <button onClick={handleConfirmFinalize} className="w-full bg-emerald-600 text-white py-4 rounded-2xl font-black uppercase text-xs shadow-xl">Finalizar Venda</button>
-              <button onClick={() => setView('RECEIPT_PREVIEW')} className="w-full py-3 text-gray-400 font-bold text-[9px] uppercase mt-2">Voltar</button>
+              {metodo === 'PIX' && (
+                <div className="mb-6 space-y-4 animate-in fade-in duration-300">
+                   <p className="text-[9px] font-black text-gray-400 uppercase text-center">Selecione o Banco para Receber</p>
+                   <div className="grid grid-cols-2 gap-2">
+                     <button onClick={() => setSelectedPixSlot(1)} className={`p-3 rounded-xl border text-[10px] font-black uppercase transition-all ${selectedPixSlot === 1 ? 'border-blue-600 bg-blue-50 text-blue-600' : 'border-gray-100 text-gray-400'}`}>{pix1Name}</button>
+                     <button onClick={() => setSelectedPixSlot(2)} className={`p-3 rounded-xl border text-[10px] font-black uppercase transition-all ${selectedPixSlot === 2 ? 'border-blue-600 bg-blue-50 text-blue-600' : 'border-gray-100 text-gray-400'}`}>{pix2Name}</button>
+                   </div>
+                   
+                   <div className="bg-gray-50 p-4 rounded-2xl flex flex-col items-center border border-gray-100">
+                     <p className="text-[8px] font-black text-gray-400 uppercase mb-3">QR CODE PARA PAGAMENTO</p>
+                     <div className="w-32 h-32 bg-white rounded-xl flex items-center justify-center border border-gray-200 overflow-hidden shadow-inner">
+                        {selectedPixSlot === 1 ? (
+                          pix1Code ? <img src={pix1Code} className="w-full h-full object-contain" /> : <i className="fa-solid fa-qrcode text-gray-200 text-3xl"></i>
+                        ) : (
+                          pix2Code ? <img src={pix2Code} className="w-full h-full object-contain" /> : <i className="fa-solid fa-qrcode text-gray-200 text-3xl"></i>
+                        )}
+                     </div>
+                   </div>
+                </div>
+              )}
+
+              <button onClick={handleConfirmFinalize} className="w-full bg-emerald-600 text-white py-5 rounded-2xl font-black uppercase text-xs shadow-xl active:scale-95 transition-all mb-2 tracking-widest">Concluir Venda</button>
+              <button onClick={() => setView('RECEIPT_PREVIEW')} className="w-full py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Voltar ao Cupom</button>
            </div>
         </div>
       )}

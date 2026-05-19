@@ -218,7 +218,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
             <p className="text-[9px] font-black text-gray-400 uppercase mb-0.5">Total Líquido</p>
             <p className="text-xl font-black text-gray-800">R$ {total.toFixed(2)}</p>
           </div>
-          <button onClick={() => setView('RECEIPT_PREVIEW')} disabled={total <= 0 && getOrderedItems().length === 0} className={`px-6 py-4 rounded-2xl font-black uppercase text-xs ${total > 0 || getOrderedItems().length > 0 ? 'bg-blue-600 text-white shadow-lg' : 'bg-gray-200 text-gray-400'}`}>Avançar</button>
+          <button onClick={() => setView('RECEIPT_PREVIEW')} disabled={total <= 0 && getOrderedItems().length === 0} className={`px-6 py-4 rounded-2xl font-black uppercase text-xs ${total > 0 || getOrderedItems().length > 0 ? 'bg-blue-600 text-white shadow-lg' : 'bg-gray-200 text-gray-400'}`}>Gerar Cupom</button>
         </div>
       </footer>
 

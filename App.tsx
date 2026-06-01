@@ -159,15 +159,25 @@ const App: React.FC = () => {
     };
   }, [dailyRouteState.date, fetchCoreData]);
 
+  // Sincronização em tempo real com debounce para evitar race conditions e reloads múltiplos
   useEffect(() => {
+    let timeoutId: any;
+    const debouncedFetch = () => {
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => {
+        fetchCoreData();
+      }, 300);
+    };
+
     const channel = supabase
       .channel('schema-db-changes')
       .on('postgres_changes', { event: '*', schema: 'public' }, () => {
-        fetchCoreData();
+        debouncedFetch();
       })
       .subscribe();
 
     return () => {
+      clearTimeout(timeoutId);
       supabase.removeChannel(channel);
     };
   }, [fetchCoreData]);
@@ -175,8 +185,35 @@ const App: React.FC = () => {
   useEffect(() => { fetchCoreData(); }, [fetchCoreData]);
 
   const updateSetting = async (key: keyof AppSettings, value: any) => {
+    // Atualização otimista imediata do estado local para evitar lag visual e race conditions
+    if (key === 'logo') setLogo(value);
+    else if (key === 'margemGlobalAtiva') setMargemGlobalAtiva(value);
+    else if (key === 'margemGlobalValor') setMargemGlobalValor(value);
+    else if (key === 'margemMinimaAtiva') setMargemMinimaAtiva(value);
+    else if (key === 'margemMinima') setMargemMinima(value);
+    else if (key === 'pix1Name') setPix1Name(value);
+    else if (key === 'pix1Code') setPix1Code(value);
+    else if (key === 'pix2Name') setPix2Name(value);
+    else if (key === 'pix2Code') setPix2Code(value);
+    else if (key === 'companyName') setCompanyName(value);
+    else if (key === 'companyCnpj') setCompanyCnpj(value);
+    else if (key === 'productOrder') {
+      setProductOrder(value);
+      // Ordena os produtos localmente de forma instantânea
+      setProducts(prev => {
+        return [...prev].sort((a, b) => {
+          const idxA = value.indexOf(a.id);
+          const idxB = value.indexOf(b.id);
+          if (idxA === -1 && idxB === -1) return 0;
+          if (idxA === -1) return 1;
+          if (idxB === -1) return -1;
+          return idxA - idxB;
+        });
+      });
+    }
+
+    // Persiste no banco de dados em segundo plano
     await appSettingsService.updateSettings({ [key]: value });
-    fetchCoreData();
   };
 
   const addUser = async (nome: string, foto?: string, telefone?: string) => {

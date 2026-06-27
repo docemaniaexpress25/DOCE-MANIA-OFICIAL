@@ -128,7 +128,6 @@ const App: React.FC = () => {
     }
   }, [fetchTransactionalData]);
 
-  // Carrega a rota diária dinamicamente para o vendedor logado
   useEffect(() => {
     const loadRoute = async () => {
       if (currentUser && currentUser.role === 'VENDEDOR') {
@@ -172,7 +171,6 @@ const App: React.FC = () => {
     };
   }, [dailyRouteState.date, fetchCoreData]);
 
-  // Sincronização em tempo real com debounce para evitar race conditions e reloads múltiplos
   useEffect(() => {
     let timeoutId: any;
     const debouncedFetch = () => {
@@ -345,6 +343,39 @@ const App: React.FC = () => {
     }
   };
 
+  const payCommission = async (vId: string, amount: number, type: 'TOTAL' | 'PARCIAL', adminId: string) => {
+    // 1. Registra o Log de Pagamento
+    const vendedor = users.find(u => u.id === vId);
+    const success = await commissionService.insertPayout({
+      vendedorId: vId,
+      vendedorNome: vendedor?.nome || 'Vendedor',
+      valorPago: amount,
+      valorRestante: 0,
+      tipo: type,
+      dataPagamento: new Date(),
+      adminId: adminId
+    });
+
+    if (success) {
+      // 2. Atualiza o status das comissões LIBERADAS para PAGO (apenas se for pagamento total para simplificar o fluxo)
+      if (type === 'TOTAL') {
+        await commissionService.bulkUpdateStatusByVendedor(vId, 'DISPONIVEL', 'PAGO');
+      }
+
+      // 3. Cria a mensagem de notificação para o vendedor
+      await messageService.insertMessage({
+        vendedorId: vId,
+        titulo: "Comissão Paga",
+        mensagem: `O Admin confirmou seu pagamento de R$ ${amount.toFixed(2)}.`,
+        data: new Date(),
+        lida: false,
+        type: 'COMMISSION_CONFIRMATION'
+      });
+
+      fetchTransactionalData();
+    }
+  };
+
   const addExpense = async (vId: string, desc: string, val: number) => {
     const success = await expenseService.insertExpense({ sellerId: vId, descricao: desc, valor: val });
     if (success) fetchTransactionalData();
@@ -361,7 +392,6 @@ const App: React.FC = () => {
 
   if (!currentUser) return <Login users={users} onLogin={setCurrentUser} logo={logo} />;
 
-  // Filtra os clientes para o vendedor ver apenas os clientes da sua rota
   const sellerClients = currentUser.role === 'VENDEDOR' 
     ? clients.filter(c => c.rota === (currentUser.rota || 'ROTA_01'))
     : clients;
@@ -382,7 +412,7 @@ const App: React.FC = () => {
             {...{ products, users, cargas, clients, sales, commissions, payoutLogs, expenses, logo, margemGlobalAtiva, margemGlobalValor, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, adminNotification, companyName, companyCnpj, orderedProductIds: productOrder }}
             addProduct={addProduct} updateProduct={updateProduct} deleteProduct={deleteProduct} registerStockEntry={()=>{}} adjustStockManual={()=>{}}
             syncVendedorCarga={syncVendedorCarga} applyCargaDirectly={applyCargaDirectly} addClient={addClient} updateClient={updateClient} deleteClient={deleteClient}
-            addUser={addUser} updateUser={updateUser} payCommission={()=>{}} setCommissions={()=>{}} updateEstoqueCentral={()=>{}} reinforceCarga={()=>{}} deleteSale={deleteSale} receiveAccount={receiveAccount}
+            addUser={addUser} updateUser={updateUser} payCommission={payCommission} setCommissions={()=>{}} updateEstoqueCentral={()=>{}} reinforceCarga={()=>{}} deleteSale={deleteSale} receiveAccount={receiveAccount}
             setLogo={(v)=>updateSetting('logo', v)} adminUser={currentUser} setMargemGlobalAtiva={(v)=>updateSetting('margemGlobalAtiva', v)} setMargemGlobalValor={(v)=>updateSetting('margemGlobalValor', v)}
             setMargemMinima={(v)=>updateSetting('margemMinima', v)} setMargemMinimaAtiva={(v)=>updateSetting('margemMinimaAtiva', v)} setPix1Name={(v)=>updateSetting('pix1Name', v)} setPix1Code={(v)=>updateSetting('pix1Code', v)}
             setPix2Name={(v)=>updateSetting('pix2Name', v)} setPix2Code={(v)=>updateSetting('pix2Code', v)} clearAdminNotification={() => setAdminNotification(null)} setOrderedProductIds={(v)=>updateSetting('productOrder', v)}

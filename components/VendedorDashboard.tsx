@@ -284,27 +284,20 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   
   const financeStats = useMemo(() => {
     const vCommsAll = (commissions || []).filter(c => c.vendedorId === user.id);
-    const vSalesFiltered = (sales || []).filter(s => s.vendedorId === user.id && filterByPeriod(s.data, financeFilter)); 
     const vCommsFiltered = vCommsAll.filter(c => filterByPeriod(c.dataGeracao, financeFilter));
 
-    const totalCommsEligible = vCommsAll
-      .filter(c => c.status !== 'A_RECEBER')
-      .reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
-    
-    const jaPago = (payoutLogs || []).reduce((acc, curr) => acc + (curr.valorPago ?? 0), 0);
-    const totalDespesas = (expenses || []).reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
-    const disponivel = totalCommsEligible - jaPago - totalDespesas;
-    const pendente = vCommsAll
-      .filter(c => c.status === 'A_RECEBER')
-      .reduce((acc, curr) => acc + (curr.valor ?? 0), 0); 
+    const totalGerado = vCommsFiltered.reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
+    const aReceber = vCommsAll.filter(c => c.status === 'A_RECEBER').reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
+    const liberadas = vCommsAll.filter(c => c.status === 'DISPONIVEL').reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
+    const pagas = vCommsAll.filter(c => c.status === 'PAGO').reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
     
     return { 
-      totalVendido: Number(vSalesFiltered.reduce((acc, curr) => acc + (curr.valorTotal ?? 0), 0).toFixed(2)), 
-      comissaoGerada: Number(vCommsFiltered.reduce((acc, curr) => acc + (curr.valor ?? 0), 0).toFixed(2)),
-      disponivel: Number(disponivel.toFixed(2)), 
-      pendente: Number(pendente.toFixed(2)) 
+      totalGerado: Number(totalGerado.toFixed(2)),
+      aReceber: Number(aReceber.toFixed(2)),
+      liberadas: Number(liberadas.toFixed(2)), 
+      pagas: Number(pagas.toFixed(2)) 
     };
-  }, [commissions, user.id, sales, financeFilter, payoutLogs, expenses]);
+  }, [commissions, user.id, financeFilter]);
 
   const historySummary = useMemo(() => filteredHistory.reduce((acc, sale) => {
     acc.total += (sale.valorTotal ?? 0); 
@@ -606,28 +599,30 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         <div className="space-y-6">
            <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner">{(['DIA', 'SEMANA', 'MES', 'GERAL'] as const).map(f => (<button key={f} onClick={() => setFinanceFilter(f)} className={`flex-1 py-2 rounded-xl text-[9px] font-black uppercase ${financeFilter === f ? 'bg-white text-emerald-600 shadow-sm' : 'text-gray-400'}`}>{f}</button>))}</div>
            
-           <div className="grid grid-cols-2 gap-4">
-              <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col">
-                <p className="text-[9px] font-black uppercase text-gray-400 mb-1">Vendido no Período</p>
-                <h2 className="text-xl font-black text-gray-800">R$ {financeStats.totalVendido.toFixed(2)}</h2>
-              </div>
-              <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col">
-                <p className="text-[9px] font-black uppercase text-gray-400 mb-1">Comissão no Período</p>
-                <h2 className="text-xl font-black text-blue-600">R$ {financeStats.comissaoGerada.toFixed(2)}</h2>
-              </div>
+           <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col text-center">
+              <p className="text-[9px] font-black uppercase text-gray-400 mb-1">Comissões Geradas no Período</p>
+              <h2 className="text-2xl font-black text-blue-600">R$ {financeStats.totalGerado.toFixed(2)}</h2>
            </div>
 
            <div className="grid grid-cols-2 gap-4">
-              <div className={`${financeStats.disponivel < 0 ? 'bg-rose-50 border-rose-100' : 'bg-emerald-50 border-emerald-100'} p-5 rounded-3xl shadow-md border`}>
-                <p className={`text-[9px] font-black ${financeStats.disponivel < 0 ? 'text-rose-600' : 'text-emerald-600'} uppercase mb-1`}>Carteira Disponível</p>
-                <p className={`text-xl font-black ${financeStats.disponivel < 0 ? 'text-rose-700' : 'text-emerald-700'}`}>R$ {financeStats.disponivel.toFixed(2)}</p>
-                <p className={`text-[8px] font-bold ${financeStats.disponivel < 0 ? 'text-rose-400' : 'text-emerald-400'} uppercase mt-1`}>Saldo acumulado</p>
-              </div>
               <div className="bg-orange-50 p-5 rounded-3xl shadow-sm border border-orange-100">
                 <p className={`text-[9px] font-black text-orange-600 uppercase mb-1`}>A receber</p>
-                <p className="text-xl font-black text-orange-700">R$ {financeStats.pendente.toFixed(2)}</p>
+                <p className="text-xl font-black text-orange-700">R$ {financeStats.aReceber.toFixed(2)}</p>
                 <p className={`text-[8px] font-bold text-orange-400 uppercase mt-1`}>Vendas a prazo</p>
               </div>
+              <div className={`${financeStats.liberadas < 0 ? 'bg-rose-50 border-rose-100' : 'bg-emerald-50 border-emerald-100'} p-5 rounded-3xl shadow-md border`}>
+                <p className={`text-[9px] font-black ${financeStats.liberadas < 0 ? 'text-rose-600' : 'text-emerald-600'} uppercase mb-1`}>Liberadas</p>
+                <p className={`text-xl font-black ${financeStats.liberadas < 0 ? 'text-rose-700' : 'text-emerald-700'}`}>R$ {financeStats.liberadas.toFixed(2)}</p>
+                <p className={`text-[8px] font-bold ${financeStats.liberadas < 0 ? 'text-rose-400' : 'text-emerald-400'} uppercase mt-1`}>Disponível para saque</p>
+              </div>
+           </div>
+
+           <div className="bg-gray-900 text-white p-6 rounded-[2.5rem] shadow-xl flex justify-between items-center">
+              <div>
+                 <p className="text-[10px] font-black uppercase opacity-60 mb-1">Total Já Pago pelo Admin</p>
+                 <h3 className="text-2xl font-black text-emerald-400">R$ {financeStats.pagas.toFixed(2)}</h3>
+              </div>
+              <i className="fa-solid fa-circle-check text-emerald-400 text-3xl opacity-30"></i>
            </div>
 
            <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm">
@@ -673,31 +668,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
            </div>
 
            <div className="space-y-2 pt-4">
-             <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">Histórico Financeiro</h3>
-             <div className="bg-white rounded-3xl border border-gray-100 shadow-sm divide-y divide-gray-50 overflow-hidden">
-                {unifiedHistory.map(item => (
-                  <div key={item.id} className="p-4 flex justify-between items-center active:bg-gray-50 transition-colors">
-                    <div className="flex-1 pr-3">
-                      <p className="text-[9px] font-black text-gray-400 uppercase leading-none mb-1">{item.data.toLocaleDateString()} {item.data.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</p>
-                      <p className={`text-[11px] font-bold uppercase tracking-tight ${item.tipo === 'REPASSE' ? 'text-emerald-700' : 'text-rose-700'}`}>{item.desc}</p>
-                      <span className={`text-[8px] font-black px-1.5 py-0.5 rounded uppercase ${item.tipo === 'REPASSE' ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
-                        {item.tipo}
-                      </span>
-                    </div>
-                    <div className="text-right">
-                       <p className={`text-xs font-black ${item.tipo === 'REPASSE' ? 'text-emerald-600' : 'text-rose-600'}`}>
-                         {item.tipo === 'REPASSE' ? '+' : '-'} R$ {item.valor.toFixed(2)}
-                       </p>
-                    </div>
-                  </div>
-                ))}
-                {unifiedHistory.length === 0 && (
-                    <div className="text-center py-8 opacity-30 italic text-[9px] uppercase font-bold tracking-widest">Nenhuma movimentação registrada.</div>
-                )}
-             </div>
-           </div>
-
-           <div className="space-y-2 pt-2">
              <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">Notificações</h3>
              <div className="bg-white rounded-3xl border border-gray-100 shadow-sm divide-y divide-gray-50 overflow-hidden">
                 {messages.filter(m => m.vendedorId === user.id).sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime()).map(m => (

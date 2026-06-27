@@ -84,7 +84,7 @@ export interface Commission {
   valor: number;
   valorBase?: number;
   percentual?: number;
-  status: 'DISPONIVEL' | 'A_RECEBER' | 'PAGO' | 'PENDENTE_CONFIRMACAO';
+  status: 'DISPONIVEL' | 'A_RECEBER' | 'PAGO';
   dataGeracao: Date;
 }
 

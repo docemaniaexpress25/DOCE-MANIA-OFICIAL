@@ -19,11 +19,15 @@ const ClientHistory: React.FC<ClientHistoryProps> = ({ client, sales, products, 
   }, [sales, client.id]);
 
   const stats = useMemo(() => {
-    if (clientSales.length === 0) return { avg: 0, count: 0 };
-    const total = clientSales.reduce((acc, curr) => acc + (curr.valorTotal || 0), 0);
+    // Pega os últimos 25 pedidos para calcular a média
+    const last25 = clientSales.slice(0, 25);
+    
+    if (last25.length === 0) return { avg: 0, count: 0 };
+    
+    const total = last25.reduce((acc, curr) => acc + (curr.valorTotal || 0), 0);
     return {
-      avg: total / clientSales.length,
-      count: clientSales.length
+      avg: total / last25.length,
+      count: clientSales.length // Mantém o contador total de pedidos realizados
     };
   }, [clientSales]);
 
@@ -57,7 +61,7 @@ const ClientHistory: React.FC<ClientHistoryProps> = ({ client, sales, products, 
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
           <div className="grid grid-cols-2 gap-4">
             <div className="bg-blue-50 p-4 rounded-3xl border border-blue-100 text-center">
-              <p className="text-[9px] font-black text-blue-400 uppercase mb-1">Média p/ Venda</p>
+              <p className="text-[9px] font-black text-blue-400 uppercase mb-1">Média (Últ. 25)</p>
               <p className="text-lg font-black text-blue-700">R$ {stats.avg.toFixed(2)}</p>
             </div>
             <div className="bg-emerald-50 p-4 rounded-3xl border border-emerald-100 text-center">

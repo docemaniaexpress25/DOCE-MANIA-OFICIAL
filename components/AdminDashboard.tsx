@@ -127,9 +127,16 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const userPhotoInputRef = useRef<HTMLInputElement>(null);
 
   const getClientAvgRevenue = (id: string) => {
-    const cSales = props.sales.filter(s => s.clientId === id);
-    if (cSales.length === 0) return "0.00";
-    return (cSales.reduce((acc, curr) => acc + (curr.valorTotal ?? 0), 0) / cSales.length).toFixed(2);
+    // Busca as últimas 25 vendas ordenadas por data
+    const last25Sales = props.sales
+      .filter(s => s.clientId === id)
+      .sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime())
+      .slice(0, 25);
+
+    if (last25Sales.length === 0) return "0.00";
+    
+    const totalRevenue = last25Sales.reduce((acc, curr) => acc + (curr.valorTotal ?? 0), 0);
+    return (totalRevenue / last25Sales.length).toFixed(2);
   };
 
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1146,7 +1153,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
       {showClientModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-end sm:items-center justify-center p-4">
-          <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6 animate-in slide-in-from-bottom duration-300 shadow-2xl overflow-y-auto max-h-[95vh]">
+          <div className="bg-white w-full max-md rounded-t-3xl sm:rounded-3xl p-6 animate-in slide-in-from-bottom duration-300 shadow-2xl overflow-y-auto max-h-[95vh]">
             <h3 className="font-black text-gray-800 uppercase text-sm mb-6">{showClientModal === 'NEW' ? 'Novo Cliente' : 'Editar Cliente'}</h3>
             <div className="space-y-4">
               <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome Fantasia</label><input value={clientForm.nomeFantasia ?? ''} onChange={e => setClientForm({...clientForm, nomeFantasia: e.target.value})} placeholder="Nome Fantasia" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div>

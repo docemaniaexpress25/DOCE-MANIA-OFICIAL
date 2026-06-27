@@ -247,6 +247,18 @@ const App: React.FC = () => {
     fetchCoreData();
   };
 
+  const activateAllProducts = async () => {
+    const inactiveOnes = products.filter(p => !p.ativo);
+    if (inactiveOnes.length === 0) return;
+    
+    setAdminNotification(`Ativando ${inactiveOnes.length} produtos...`);
+    for (const p of inactiveOnes) {
+      await productService.updateProduct(p.id, { ativo: true });
+    }
+    setAdminNotification("Todos os produtos foram ativados!");
+    fetchCoreData();
+  };
+
   const deleteProduct = async (id: string) => {
     await productService.deleteProduct(id);
     fetchCoreData();
@@ -417,6 +429,7 @@ const App: React.FC = () => {
             setMargemMinima={(v)=>updateSetting('margemMinima', v)} setMargemMinimaAtiva={(v)=>updateSetting('margemMinimaAtiva', v)} setPix1Name={(v)=>updateSetting('pix1Name', v)} setPix1Code={(v)=>updateSetting('pix1Code', v)}
             setPix2Name={(v)=>updateSetting('pix2Name', v)} setPix2Code={(v)=>updateSetting('pix2Code', v)} clearAdminNotification={() => setAdminNotification(null)} setOrderedProductIds={(v)=>updateSetting('productOrder', v)}
             setCompanyName={(v)=>updateSetting('companyName', v)} setCompanyCnpj={(v)=>updateSetting('companyCnpj', v)}
+            activateAllProducts={activateAllProducts}
           />
         ) : (
           <VendedorDashboard 

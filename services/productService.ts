@@ -26,7 +26,7 @@ export const productService = {
       preco_venda: product.precoVenda,
       comissao_percentual: product.comissaoPercentual,
       estoque_principal: product.estoquePrincipal,
-      ativo: product.estoquePrincipal <= 0 ? false : product.ativo,
+      ativo: product.ativo, // Removida a trava de estoque <= 0
     };
 
     const { data, error } = await supabase.from('products').insert(payload).select().single();
@@ -52,13 +52,8 @@ export const productService = {
     if (updates.precoCusto !== undefined) payload.preco_custo = updates.precoCusto;
     if (updates.precoVenda !== undefined) payload.preco_venda = updates.precoVenda;
     if (updates.comissaoPercentual !== undefined) payload.comissao_percentual = updates.comissaoPercentual;
-    if (updates.estoquePrincipal !== undefined) {
-      payload.estoque_principal = updates.estoquePrincipal;
-      if (updates.estoquePrincipal <= 0) payload.ativo = false;
-      else if (updates.ativo !== undefined) payload.ativo = updates.ativo;
-    } else if (updates.ativo !== undefined) {
-      payload.ativo = updates.ativo;
-    }
+    if (updates.estoquePrincipal !== undefined) payload.estoque_principal = updates.estoquePrincipal;
+    if (updates.ativo !== undefined) payload.ativo = updates.ativo;
 
     const { data, error } = await supabase.from('products').update(payload).eq('id', id).select().single();
     if (error) {
@@ -80,7 +75,6 @@ export const productService = {
   async deleteProduct(id: string): Promise<boolean> {
     const { error } = await supabase.from('products').delete().eq('id', id);
     if (error) {
-      // Se houver vínculo com outras tabelas (vendas, etc), desativa em vez de excluir
       if (error.code === '23503') {
         const { error: updateError } = await supabase.from('products').update({ ativo: false }).eq('id', id);
         return !updateError;

@@ -59,6 +59,7 @@ interface AdminDashboardProps {
   setCompanyName: (val: string) => void;
   companyCnpj: string;
   setCompanyCnpj: (val: string) => void;
+  activateAllProducts?: () => void;
 }
 
 type TabType = 'HOME' | 'CATALOGO' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'SETTINGS';
@@ -526,6 +527,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     });
   }, [props.clients, search, routeFilter]);
 
+  const handleActivateAll = () => {
+    if (window.confirm("Deseja marcar TODOS os produtos inativos como ATIVOS agora?")) {
+      props.activateAllProducts?.();
+    }
+  };
+
   return (
     <div className="space-y-6 pb-10">
       {toast && (
@@ -561,7 +568,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
       {activeTab === 'CATALOGO' && (
         <div className="space-y-4">
-          <div className="px-2 flex justify-between items-center"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Estoque Central</h2><button onClick={() => handleOpenProduct('NEW')} className="bg-blue-600 text-white w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg active:scale-90 transition-transform"><i className="fa-solid fa-plus text-lg"></i></button></div>
+          <div className="px-2 flex justify-between items-center"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Estoque Central</h2><div className="flex gap-2"><button onClick={handleActivateAll} className="bg-emerald-100 text-emerald-600 px-4 py-2 rounded-xl font-black text-[9px] uppercase shadow-sm active:scale-95 transition-all"><i className="fa-solid fa-check-double mr-2"></i>Ativar Todos</button><button onClick={() => handleOpenProduct('NEW')} className="bg-blue-600 text-white w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg active:scale-90 transition-transform"><i className="fa-solid fa-plus text-lg"></i></button></div></div>
           <div className="px-1"><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar produto..." className="w-full p-4 bg-white border border-gray-100 rounded-2xl shadow-sm text-sm focus:ring-2 focus:ring-blue-100 outline-none" /></div>
           <div className="grid gap-2 px-1">
             {filteredProducts.map(p => (

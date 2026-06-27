@@ -290,7 +290,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     else if (dir === 'DOWN' && idx < newOrder.length - 1) [newOrder[idx], newOrder[idx+1]] = [newOrder[idx+1], newOrder[idx]];
     
     props.setOrderedProductIds(newOrder); 
-    showToast("Ordem updated!");
+    showToast("Ordem atualizada!");
   };
 
   const moveClient = async (id: string, direction: 'UP' | 'DOWN', day: number) => {
@@ -323,7 +323,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         props.updateClient(targetClient.id, { ordem: currentOrdem });
       }
       
-      showToast("Ordem updated!");
+      showToast("Ordem atualizada!");
     }
   };
 
@@ -555,6 +555,34 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             <MenuCard icon="fa-chart-line" title="Relatórios" tab="REPORTS" color="bg-emerald-50 text-emerald-600" />
             <MenuCard icon="fa-file-invoice-dollar" title="Contas a Receber" tab="CONTAS_RECEBER" color="bg-rose-50 text-rose-600" />
             <MenuCard icon="fa-gear" title="Configurações" tab="SETTINGS" color="bg-slate-50 text-slate-600" />
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'CATALOGO' && (
+        <div className="space-y-4">
+          <div className="px-2 flex justify-between items-center"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Estoque Central</h2><button onClick={() => handleOpenProduct('NEW')} className="bg-blue-600 text-white w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg active:scale-90 transition-transform"><i className="fa-solid fa-plus text-lg"></i></button></div>
+          <div className="px-1"><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar produto..." className="w-full p-4 bg-white border border-gray-100 rounded-2xl shadow-sm text-sm focus:ring-2 focus:ring-blue-100 outline-none" /></div>
+          <div className="grid gap-2 px-1">
+            {filteredProducts.map(p => (
+              <div key={p.id} className={`bg-white p-4 rounded-3xl border shadow-sm flex items-center justify-between transition-all hover:border-blue-200 ${!p.ativo ? 'opacity-50 grayscale' : ''}`}>
+                <div className="flex-1 min-w-0 pr-3 cursor-pointer" onClick={() => handleOpenProduct(p)}>
+                  <h3 className="font-bold text-gray-800 text-[13px] leading-tight uppercase truncate">{p.nome}</h3>
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className="text-[10px] font-black text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg border border-blue-100 uppercase tracking-tighter">Estoque: {p.estoquePrincipal} un</span>
+                    <span className="text-[10px] font-black text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-lg border border-emerald-100 uppercase tracking-tighter">R$ {p.precoVenda.toFixed(2)}</span>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <div className="flex flex-col gap-1">
+                     <button onClick={() => moveProduct(p.id, 'UP')} className="w-6 h-6 bg-gray-50 text-gray-400 rounded flex items-center justify-center active:scale-90"><i className="fa-solid fa-chevron-up text-[10px]"></i></button>
+                     <button onClick={() => moveProduct(p.id, 'DOWN')} className="w-6 h-6 bg-gray-50 text-gray-400 rounded flex items-center justify-center active:scale-90"><i className="fa-solid fa-chevron-down text-[10px]"></i></button>
+                  </div>
+                  <button onClick={() => setShowEntryModal(p)} className="bg-emerald-50 text-emerald-600 w-10 h-10 rounded-xl border border-emerald-100 flex items-center justify-center active:scale-90 shadow-sm"><i className="fa-solid fa-plus-circle text-lg"></i></button>
+                  <button onClick={() => handleOpenProduct(p)} className="bg-blue-50 text-blue-600 w-10 h-10 rounded-xl border border-blue-100 flex items-center justify-center active:scale-90 shadow-sm"><i className="fa-solid fa-pencil-alt text-sm"></i></button>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}

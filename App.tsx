@@ -122,24 +122,37 @@ const App: React.FC = () => {
       });
       setProducts(sortedProducts);
 
-      const today = getTodayDateString();
-      if (dailyRouteState.date === today && dailyRouteState.clientIds.length === 0) {
-        const todayDay = new Date().getDay();
-        const routeClients = cl
-          .filter(c => c.diaRoteiro === todayDay && c.ativo)
-          .sort((a, b) => (a.ordem || 0) - (b.ordem || 0))
-          .map(c => c.id);
-        
-        if (routeClients.length > 0) {
-          setDailyRouteState(prev => ({ ...prev, clientIds: routeClients }));
-        }
-      }
-
       await fetchTransactionalData();
     } catch (e) {
       console.error("Erro ao carregar dados principais:", e);
     }
-  }, [fetchTransactionalData, dailyRouteState.date, dailyRouteState.clientIds.length]);
+  }, [fetchTransactionalData]);
+
+  // Carrega a rota diária dinamicamente para o vendedor logado
+  useEffect(() => {
+    const loadRoute = async () => {
+      if (currentUser && currentUser.role === 'VENDEDOR') {
+        const today = getTodayDateString();
+        const route = await dailyRouteService.getRoute(currentUser.id, today);
+        if (route) {
+          setDailyRouteState(route);
+        } else {
+          const todayDay = new Date().getDay();
+          const routeClients = clients
+            .filter(c => c.diaRoteiro === todayDay && c.ativo && c.rota === (currentUser.rota || 'ROTA_01'))
+            .sort((a, b) => (a.ordem || 0) - (b.ordem || 0))
+            .map(c => c.id);
+          
+          const newRoute = { date: today, clientIds: routeClients, skippedClientIds: [] };
+          setDailyRouteState(newRoute);
+          await dailyRouteService.updateRoute(currentUser.id, newRoute);
+        }
+      }
+    };
+    if (clients.length > 0) {
+      loadRoute();
+    }
+  }, [currentUser, clients]);
 
   useEffect(() => {
     const checkDate = () => {
@@ -185,7 +198,6 @@ const App: React.FC = () => {
   useEffect(() => { fetchCoreData(); }, [fetchCoreData]);
 
   const updateSetting = async (key: keyof AppSettings, value: any) => {
-    // Atualização otimista imediata do estado local para evitar lag visual e race conditions
     if (key === 'logo') setLogo(value);
     else if (key === 'margemGlobalAtiva') setMargemGlobalAtiva(value);
     else if (key === 'margemGlobalValor') setMargemGlobalValor(value);
@@ -199,7 +211,6 @@ const App: React.FC = () => {
     else if (key === 'companyCnpj') setCompanyCnpj(value);
     else if (key === 'productOrder') {
       setProductOrder(value);
-      // Ordena os produtos localmente de forma instantânea
       setProducts(prev => {
         return [...prev].sort((a, b) => {
           const idxA = value.indexOf(a.id);
@@ -212,12 +223,11 @@ const App: React.FC = () => {
       });
     }
 
-    // Persiste no banco de dados em segundo plano
     await appSettingsService.updateSettings({ [key]: value });
   };
 
   const addUser = async (nome: string, foto?: string, telefone?: string) => {
-    await userService.insertUser({ nome, email: `${nome.toLowerCase().replace(/\s/g, '')}@sistema.com`, role: 'VENDEDOR', ativo: true, foto, telefone, pin: '123456' });
+    await userService.insertUser({ nome, email: `${nome.toLowerCase().replace(/\s/g, '')}@sistema.com`, role: 'VENDEDOR', ativo: true, foto, telefone, pin: '123456', rota: 'ROTA_01' });
     fetchCoreData();
   };
 
@@ -341,11 +351,20 @@ const App: React.FC = () => {
     return success;
   };
 
-  const updateDailyRoute = (clientIds: string[], skippedClientIds: string[]) => {
-    setDailyRouteState(prev => ({ ...prev, clientIds, skippedClientIds }));
+  const updateDailyRoute = async (clientIds: string[], skippedClientIds: string[]) => {
+    if (currentUser) {
+      const newRoute = { date: dailyRouteState.date, clientIds, skippedClientIds };
+      setDailyRouteState(newRoute);
+      await dailyRouteService.updateRoute(currentUser.id, newRoute);
+    }
   };
 
   if (!currentUser) return <Login users={users} onLogin={setCurrentUser} logo={logo} />;
+
+  // Filtra os clientes para o vendedor ver apenas os clientes da sua rota
+  const sellerClients = currentUser.role === 'VENDEDOR' 
+    ? clients.filter(c => c.rota === (currentUser.rota || 'ROTA_01'))
+    : clients;
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
@@ -371,7 +390,7 @@ const App: React.FC = () => {
           />
         ) : (
           <VendedorDashboard 
-            {...{ products, users, cargas, cargasPendentes, clients, sales, commissions, payoutLogs, expenses, messages, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, companyName, companyCnpj, user: currentUser }}
+            {...{ products, users, cargas, cargasPendentes, sales, commissions, payoutLogs, expenses, messages, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, companyName, companyCnpj, user: currentUser, clients: sellerClients }}
             markMessageAsRead={markMessageAsRead} processSale={processSale} addClient={addClient} updateClient={updateClient} deleteClient={deleteClient}
             receivePayment={receiveAccount} deleteSale={deleteSale} aceitarCarga={aceitarCarga} addExpense={addExpense} updateDailyRoute={updateDailyRoute}
           />

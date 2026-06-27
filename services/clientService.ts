@@ -15,11 +15,12 @@ export const clientService = {
       diaRoteiro: c.dia_roteiro,
       ordem: c.ordem || 0,
       pinLocalizacao: c.pin_localizacao,
+      rota: c.rota || 'ROTA_01',
     })) as Client[];
   },
 
   async insertClient(client: Omit<Client, 'id'>): Promise<Client | null> {
-    const { nomeFantasia, nome, ativarCnpj, cnpj, telefone, endereco, bairro, ativo, localizacao, diaRoteiro, ordem, observacoes, pinLocalizacao } = client;
+    const { nomeFantasia, nome, ativarCnpj, cnpj, telefone, endereco, bairro, ativo, localizacao, diaRoteiro, ordem, observacoes, pinLocalizacao, rota } = client;
     const payload = {
       nome_fantasia: nomeFantasia,
       nome,
@@ -34,6 +35,7 @@ export const clientService = {
       ordem: ordem || 0,
       observacoes,
       pin_localizacao: pinLocalizacao,
+      rota: rota || 'ROTA_01',
     };
 
     const { data, error } = await supabase.from('clients').insert(payload).select().single();
@@ -48,6 +50,7 @@ export const clientService = {
       diaRoteiro: data.dia_roteiro,
       ordem: data.ordem,
       pinLocalizacao: data.pin_localizacao,
+      rota: data.rota,
     } as Client;
   },
 
@@ -66,6 +69,7 @@ export const clientService = {
     if (updates.ordem !== undefined) payload.ordem = updates.ordem;
     if (updates.observacoes !== undefined) payload.observacoes = updates.observacoes;
     if (updates.pinLocalizacao !== undefined) payload.pin_localizacao = updates.pinLocalizacao;
+    if (updates.rota !== undefined) payload.rota = updates.rota;
 
     const { data, error } = await supabase.from('clients').update(payload).eq('id', id).select().single();
     if (error) {
@@ -79,6 +83,7 @@ export const clientService = {
       diaRoteiro: data.dia_roteiro,
       ordem: data.ordem,
       pinLocalizacao: data.pin_localizacao,
+      rota: data.rota,
     } as Client;
   },
 

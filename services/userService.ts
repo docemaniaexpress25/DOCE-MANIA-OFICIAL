@@ -20,15 +20,17 @@ export const userService = {
       foto: u.foto,
       pin: u.pin,
       placaVeiculo: u.placa_veiculo,
+      rota: u.rota || 'ROTA_01',
     })) as User[];
   },
 
   async insertUser(user: Omit<User, 'id'>): Promise<User | null> {
-    const { role, placaVeiculo, ...rest } = user;
+    const { role, placaVeiculo, rota, ...rest } = user;
     const payload = { 
       ...rest, 
       perfil: role,
-      placa_veiculo: placaVeiculo
+      placa_veiculo: placaVeiculo,
+      rota: rota || 'ROTA_01'
     };
 
     const { data, error } = await supabase.from('app_users').insert(payload).select().single();
@@ -47,7 +49,8 @@ export const userService = {
       whatsapp: data.whatsapp,
       foto: data.foto,
       pin: data.pin,
-      placaVeiculo: data.placa_veiculo
+      placaVeiculo: data.placa_veiculo,
+      rota: data.rota
     } as User;
   },
 
@@ -73,7 +76,8 @@ export const userService = {
       whatsapp: data.whatsapp,
       foto: data.foto,
       pin: data.pin,
-      placaVeiculo: data.placa_veiculo
+      placaVeiculo: data.placa_veiculo,
+      rota: data.rota
     } as User;
   },
 };

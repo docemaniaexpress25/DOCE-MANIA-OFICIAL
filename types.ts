@@ -11,6 +11,7 @@ export interface User {
   foto?: string;
   pin?: string;
   placaVeiculo?: string;
+  rota?: string;
 }
 
 export interface Product {
@@ -53,6 +54,7 @@ export interface Client {
   ordem: number; 
   observacoes?: string;
   pinLocalizacao?: string;
+  rota?: string;
 }
 
 export interface SaleItem {

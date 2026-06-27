@@ -68,6 +68,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [selectedSale, setSelectedSale] = useState<Sale | null>(() => loadLocalState('admin_selectedSale', null));
   const [viewingClientHistory, setViewingClientHistory] = useState<Client | null>(null);
   const [filterOverdueOnly, setFilterOverdueOnly] = useState(false);
+  const [routeFilter, setRouteFilter] = useState<'TODOS' | 'ROTA_01' | 'ROTA_02'>('TODOS');
 
   useEffect(() => {
     saveLocalState('admin_activeTab', activeTab);
@@ -114,8 +115,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [pwNew, setPwNew] = useState<string>('');
 
   const [pForm, setPForm] = useState({ nome: '', custo: '', venda: '', comissao: '', margem: '', ativo: true, estoquePrincipal: '' });
-  const [clientForm, setClientForm] = useState<Partial<Client>>({ nomeFantasia: '', telefone: '', endereco: '', bairro: '', diaRoteiro: 1, ativo: true, ativarCnpj: false, cnpj: '', pinLocalizacao: '', ordem: 0 });
-  const [userForm, setUserForm] = useState<Partial<User>>({ nome: '', foto: '', telefone: '', pin: '', placaVeiculo: '' });
+  const [clientForm, setClientForm] = useState<Partial<Client>>({ nomeFantasia: '', telefone: '', endereco: '', bairro: '', diaRoteiro: 1, ativo: true, ativarCnpj: false, cnpj: '', pinLocalizacao: '', ordem: 0, rota: 'ROTA_01' });
+  const [userForm, setUserForm] = useState<Partial<User>>({ nome: '', foto: '', telefone: '', pin: '', placaVeiculo: '', rota: 'ROTA_01' });
   const [selectedVendedorId, setSelectedVendedorId] = useState('');
   const [stagingCarga, setStagingCarga] = useState<{ [pId: string]: number }>({});
 
@@ -146,14 +147,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       reader.onloadend = () => {
         if (slot === 1) props.setPix1Code(reader.result as string);
         else props.setPix2Code(reader.result as string);
-        showToast(`QR Code Pix ${slot} atualizado!`);
+        showToast(`QR Code Pix ${slot} updated!`);
       };
       reader.readAsDataURL(file);
     }
   };
 
-  // Inicializa o stagingCarga apenas quando mudar o vendedor
-  // Isso evita que resets de dados globais (realtime) limpem o que o administrador está digitando
   useEffect(() => {
     if (selectedVendedorId) {
       const atual = props.cargas
@@ -163,7 +162,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     } else {
       setStagingCarga({});
     }
-  }, [selectedVendedorId]); // Removido props.cargas da dependência para evitar resets indesejados
+  }, [selectedVendedorId]);
 
   const hasCargaChanges = useMemo(() => {
     if (!selectedVendedorId) return false;
@@ -171,7 +170,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       .filter(c => c.vendedorId === selectedVendedorId)
       .reduce((acc, curr) => ({ ...acc, [curr.produtoId]: curr.quantidade ?? 0 }), {} as { [id: string]: number }); 
     
-    // Verifica se houve mudança em qualquer produto do catálogo
     return props.products.some(p => (cargaAtualMap[p.id] ?? 0) !== (stagingCarga[p.id] ?? 0));
   }, [stagingCarga, props.cargas, selectedVendedorId, props.products]);
 
@@ -203,12 +201,18 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     const disponivel = totalCommsEligible - jaPago - totalDespesas;
     const aReceber = sellerComms
       .filter(c => c.status === 'A_RECEBER')
-      .reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
+      .reduce((acc, curr) => acc + (curr.valor ?? 0), 0); 
 
-    return {
-      vendasHoje: Number(vSales.reduce((acc, curr) => acc + (curr.valorTotal ?? 0), 0).toFixed(2)), 
-      comissaoDisponivel: Number(disponivel.toFixed(2)),
-      comissaoAReceber: Number(aReceber.toFixed(2))
+    const vendasHoje = vSales.reduce((acc, curr) => acc + (curr.valorTotal ?? 0), 0);
+    const comissaoGerada = sellerComms
+      .filter(c => filterByPeriod(c.dataGeracao, 'HOJE'))
+      .reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
+    
+    return { 
+      vendasHoje: Number(vendasHoje.toFixed(2)),
+      comissaoGerada: Number(comissaoGerada.toFixed(2)),
+      comissaoDisponivel: Number(disponivel.toFixed(2)), 
+      comissaoAReceber: Number(aReceber.toFixed(2)) 
     };
   };
 
@@ -246,7 +250,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
   const handleSync = () => {
     if (!selectedVendedorId) return;
-    // Sincroniza TODOS os produtos para garantir que o que foi removido ou zerado também seja atualizado no banco
     const itens = props.products.map(p => ({ 
       produtoId: p.id, 
       quantidade: stagingCarga[p.id] || 0 
@@ -257,7 +260,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
   const handleApply = () => {
     if (!selectedVendedorId) return;
-    // Envia a lista completa de produtos para garantir que itens removidos (0) sejam processados pela RPC
     const itens = props.products.map(p => ({ 
       produtoId: p.id, 
       quantidade: stagingCarga[p.id] || 0 
@@ -269,7 +271,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const handleZeroCarga = () => {
     if (!selectedVendedorId) return;
     if (window.confirm("Deseja realmente ZERAR toda a carga deste vendedor? Isso retornará todos os itens ao estoque central ao clicar em 'Aplicar Agora'.")) {
-      // Zera explicitamente todos os produtos do catálogo para esse vendedor no rascunho
       const zeroed = props.products.reduce((acc, p) => ({ ...acc, [p.id]: 0 }), {});
       setStagingCarga(zeroed);
       showToast("Carga zerada no rascunho. Clique em 'Aplicar Agora' para confirmar.");
@@ -289,7 +290,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     else if (dir === 'DOWN' && idx < newOrder.length - 1) [newOrder[idx], newOrder[idx+1]] = [newOrder[idx+1], newOrder[idx]];
     
     props.setOrderedProductIds(newOrder); 
-    showToast("Ordem atualizada!");
+    showToast("Ordem updated!");
   };
 
   const moveClient = async (id: string, direction: 'UP' | 'DOWN', day: number) => {
@@ -322,7 +323,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         props.updateClient(targetClient.id, { ordem: currentOrdem });
       }
       
-      showToast("Ordem atualizada!");
+      showToast("Ordem updated!");
     }
   };
 
@@ -367,8 +368,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   };
 
   const handleOpenClient = (c: Client | 'NEW') => {
-    if (c === 'NEW') setClientForm({ nomeFantasia: '', telefone: '', endereco: '', bairro: '', diaRoteiro: 1, ativo: true, ativarCnpj: false, cnpj: '', pinLocalizacao: '', ordem: 0 });
-    else setClientForm({ ...c });
+    if (c === 'NEW') setClientForm({ nomeFantasia: '', telefone: '', endereco: '', bairro: '', diaRoteiro: 1, ativo: true, ativarCnpj: false, cnpj: '', pinLocalizacao: '', ordem: 0, rota: 'ROTA_01' });
+    else setClientForm({ ...c, rota: c.rota || 'ROTA_01' });
     setShowClientModal(c);
   };
 
@@ -422,7 +423,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
   const handleSaveClient = () => {
     if (!clientForm.nomeFantasia || !clientForm.telefone || !clientForm.endereco || !clientForm.bairro) { showToast("Preencha Nome Fantasia, Telefone, Endereço e Bairro.", 'error'); return; }
-    const clientPayload: Omit<Client, 'id'> = { nomeFantasia: clientForm.nomeFantasia, telefone: clientForm.telefone, endereco: clientForm.endereco, bairro: clientForm.bairro, diaRoteiro: clientForm.diaRoteiro ?? 1, ativo: clientForm.ativo ?? true, ativarCnpj: clientForm.ativarCnpj ?? false, cnpj: clientForm.cnpj, pinLocalizacao: clientForm.pinLocalizacao, ordem: clientForm.ordem ?? 0, nome: clientForm.nome, observacoes: clientForm.observacoes };
+    const clientPayload: Omit<Client, 'id'> = { nomeFantasia: clientForm.nomeFantasia, telefone: clientForm.telefone, endereco: clientForm.endereco, bairro: clientForm.bairro, diaRoteiro: clientForm.diaRoteiro ?? 1, ativo: clientForm.ativo ?? true, ativarCnpj: clientForm.ativarCnpj ?? false, cnpj: clientForm.cnpj, pinLocalizacao: clientForm.pinLocalizacao, ordem: clientForm.ordem ?? 0, nome: clientForm.nome, observacoes: clientForm.observacoes, rota: clientForm.rota || 'ROTA_01' };
     if (showClientModal === 'NEW') props.addClient(clientPayload);
     else if (typeof showClientModal === 'object') props.updateClient(showClientModal.id, clientPayload);
     setShowClientModal(null);
@@ -430,8 +431,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   };
 
   const handleOpenUserModal = (u: User | 'NEW') => {
-    if (u === 'NEW') setUserForm({ nome: '', telefone: '', foto: '', pin: '123456', placaVeiculo: '' });
-    else setUserForm({ nome: u.nome ?? '', telefone: u.telefone ?? '', foto: u.foto ?? '', pin: u.pin ?? '', placaVeiculo: u.placaVeiculo ?? '' }); 
+    if (u === 'NEW') setUserForm({ nome: '', telefone: '', foto: '', pin: '123456', placaVeiculo: '', rota: 'ROTA_01' });
+    else setUserForm({ nome: u.nome ?? '', telefone: u.telefone ?? '', foto: u.foto ?? '', pin: u.pin ?? '', placaVeiculo: u.placaVeiculo ?? '', rota: u.rota || 'ROTA_01' }); 
     setShowUserModal(u);
   };
 
@@ -517,6 +518,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     return props.sales.filter(s => filterByPeriod(s.data, filtroPeriodo)).sort((a, b) => (b.data?.getTime() ?? 0) - (a.data?.getTime() ?? 0)); 
   }, [props.sales, filtroPeriodo]);
 
+  const filteredClients = useMemo(() => {
+    return props.clients.filter(c => {
+      const matchesSearch = c.nomeFantasia.toLowerCase().includes(search.toLowerCase());
+      const matchesRoute = routeFilter === 'TODOS' || c.rota === routeFilter;
+      return matchesSearch && matchesRoute;
+    });
+  }, [props.clients, search, routeFilter]);
+
   return (
     <div className="space-y-6 pb-10">
       {toast && (
@@ -582,7 +591,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             </div>
             <select value={selectedVendedorId} onChange={e => setSelectedVendedorId(e.target.value)} className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl outline-none font-semibold text-sm">
               <option value="">Selecione um vendedor...</option>
-              {props.users.filter(u => u.role === 'VENDEDOR' && u.ativo).map(u => <option key={u.id} value={u.id}>{u.nome}</option>)} 
+              {props.users.filter(u => u.role === 'VENDEDOR' && u.ativo).map(u => <option key={u.id} value={u.id}>{u.nome} ({u.rota === 'ROTA_02' ? 'Rota 02' : 'Rota 01'})</option>)} 
             </select>
           </div>
           {selectedVendedorId && (
@@ -628,12 +637,19 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       {activeTab === 'CLIENTES' && (
         <div className="space-y-4">
           <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Gestão de Clientes</h2></div>
+          
+          <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner">
+            <button onClick={() => setRouteFilter('TODOS')} className={`flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all ${routeFilter === 'TODOS' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>Todos</button>
+            <button onClick={() => setRouteFilter('ROTA_01')} className={`flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all ${routeFilter === 'ROTA_01' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>Rota 01</button>
+            <button onClick={() => setRouteFilter('ROTA_02')} className={`flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all ${routeFilter === 'ROTA_02' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>Rota 02</button>
+          </div>
+
           <div className="flex gap-2">
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar cliente..." className="flex-1 px-4 py-3 bg-white border border-gray-200 rounded-xl text-sm" />
             <button onClick={() => handleOpenClient('NEW')} className="bg-blue-600 text-white w-12 h-12 rounded-xl flex items-center justify-center shadow-lg active:scale-90 transition-transform"><i className="fa-solid fa-user-plus"></i></button>
           </div>
           <div className="grid gap-2 px-1">
-            {props.clients.filter(c => c.nomeFantasia.toLowerCase().includes(search.toLowerCase())).sort((a,b) => (a.nomeFantasia||'').toLowerCase().localeCompare((b.nomeFantasia||'').toLowerCase())).map(c => ( 
+            {filteredClients.sort((a,b) => (a.nomeFantasia||'').toLowerCase().localeCompare((b.nomeFantasia||'').toLowerCase())).map(c => ( 
               <div key={c.id} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex items-center justify-between transition-all hover:border-blue-200">
                 <div className="flex-1 min-w-0 pr-2 cursor-pointer" onClick={() => setViewingClientHistory(c)}>
                   <div className="flex items-center gap-2">
@@ -649,7 +665,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                       </a>
                     )}
                   </div>
-                  <div className="flex items-center gap-3 mt-1.5"><p className="text-[10px] text-gray-400 font-black uppercase truncate">{DIAS_SEMANA[c.diaRoteiro]}</p><div className="flex items-center gap-1.5 bg-blue-50 px-2 py-0.5 rounded border border-blue-100 shadow-inner whitespace-nowrap"><i className="fa-solid fa-chart-line text-blue-400 text-[10px]"></i><span className="text-[11px] font-black text-blue-600">R$ {getClientAvgRevenue(c.id)}</span></div></div>
+                  <div className="flex items-center gap-3 mt-1.5">
+                    <p className="text-[10px] text-gray-400 font-black uppercase truncate">{DIAS_SEMANA[c.diaRoteiro]}</p>
+                    <span className={`text-[8px] font-black px-1.5 py-0.5 rounded uppercase ${c.rota === 'ROTA_02' ? 'bg-purple-100 text-purple-600' : 'bg-blue-100 text-blue-600'}`}>
+                      {c.rota === 'ROTA_02' ? 'Rota 02' : 'Rota 01'}
+                    </span>
+                    <div className="flex items-center gap-1.5 bg-blue-50 px-2 py-0.5 rounded border border-blue-100 shadow-inner whitespace-nowrap"><i className="fa-solid fa-chart-line text-blue-400 text-[10px]"></i><span className="text-[11px] font-black text-blue-600">R$ {getClientAvgRevenue(c.id)}</span></div>
+                  </div>
                 </div>
                 <div className="flex gap-2"><button onClick={(e) => { e.stopPropagation(); handleOpenClient(c); }} className="bg-blue-50 text-blue-600 w-9 h-9 rounded-lg border border-blue-100 flex items-center justify-center active:scale-90 transition-all shadow-sm"><i className="fa-solid fa-pencil-alt text-sm"></i></button><button onClick={(e) => { e.stopPropagation(); setConfirmDelete({ id: c.id, type: 'CLIENT', name: c.nomeFantasia }); }} className="bg-rose-50 text-rose-600 w-9 h-9 rounded-lg border border-rose-100 flex items-center justify-center active:scale-90 transition-all shadow-sm"><i className="fa-solid fa-trash-can text-sm"></i></button></div>
               </div>
@@ -666,7 +688,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
               const stats = getVendedorStats(v.id);
               return (
                 <div key={v.id} className="bg-white rounded-[2.5rem] shadow-xl border-t-4 border-blue-500 p-8 flex flex-col gap-6">
-                  <div className="flex items-center gap-4"><div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-3xl flex items-center justify-center font-black overflow-hidden border-4 border-white shadow-md">{v.foto ? <img src={v.foto} className="w-full h-full object-cover" /> : <i className="fa-solid fa-user text-2xl"></i>}</div><div><h3 className="font-black text-gray-800 text-lg leading-none mb-1 uppercase truncate max-w-[150px]">{v.nome}</h3><p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">Performance Hoje</p></div></div>
+                  <div className="flex items-center gap-4"><div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-3xl flex items-center justify-center font-black overflow-hidden border-4 border-white shadow-md">{v.foto ? <img src={v.foto} className="w-full h-full object-cover" /> : <i className="fa-solid fa-user text-2xl"></i>}</div><div><h3 className="font-black text-gray-800 text-lg leading-none mb-1 uppercase truncate max-w-[150px]">{v.nome}</h3><p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">{v.rota === 'ROTA_02' ? 'Rota 02 (Emanuel)' : 'Rota 01 (Daniel)'}</p></div></div>
                   <div className="space-y-4"><div className="grid grid-cols-2 gap-4"><div className="bg-gray-50 p-5 rounded-[2rem] border border-gray-100 flex flex-col items-center"><p className="text-[9px] text-gray-400 font-black uppercase mb-2 text-center leading-none">Vendas Hoje</p><p className="text-lg font-black text-gray-800">R$ {stats.vendasHoje.toFixed(2)}</p></div><div className={`${stats.comissaoDisponivel < 0 ? 'bg-rose-50 border-rose-100' : 'bg-emerald-50 border-emerald-100'} p-5 rounded-[2rem] border flex flex-col items-center`}><p className={`text-[9px] ${stats.comissaoDisponivel < 0 ? 'text-rose-600' : 'text-emerald-600'} font-black uppercase mb-2 text-center leading-none`}>Disponível</p><p className={`text-lg font-black ${stats.comissaoDisponivel < 0 ? 'text-rose-700' : 'text-gray-800'}`}>R$ {stats.comissaoDisponivel.toFixed(2)}</p></div></div><div className="bg-orange-50 p-4 rounded-2xl border border-orange-100 flex justify-between items-center"><span className="text-[9px] font-black text-orange-600 uppercase">Comissão a Receber (Prazo)</span><span className="text-sm font-black text-orange-700">R$ {stats.comissaoAReceber.toFixed(2)}</span></div></div>
                   <button onClick={() => handleOpenPayout(v)} className="w-full bg-emerald-600 text-white py-5 rounded-3xl font-black text-xs uppercase shadow-xl active:scale-95 transition-all tracking-widest">Pagar Comissão</button>
                 </div>
@@ -685,52 +707,36 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                     <p className="text-xs font-black text-emerald-600 whitespace-nowrap">R$ {log.valorPago.toFixed(2)}</p>
                   </div>
                 ))}
-                {props.payoutLogs.length === 0 && <div className="text-center py-10 opacity-30 italic text-[10px] uppercase font-bold">Nenhum pagamento registrado.</div>}
+                {props.payoutLogs.length === 0 && (
+                    <div className="text-center py-8 opacity-30 italic text-[9px] uppercase font-bold tracking-widest">Nenhuma movimentação registrada.</div>
+                )}
              </div>
-          </div>
+           </div>
         </div>
       )}
 
       {activeTab === 'VENDEDORES' && (
         <div className="space-y-4">
-          <div className="px-2 flex justify-between items-center"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Vendedores</h2><button onClick={() => handleOpenUserModal('NEW')} className="bg-purple-600 text-white px-4 py-2 rounded-xl font-black text-xs uppercase shadow-md active:scale-95"><i className="fa-solid fa-plus mr-2"></i>Novo</button></div>
+          <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Gestão de Vendedores</h2></div>
+          <div className="flex justify-end px-1">
+            <button onClick={() => handleOpenUserModal('NEW')} className="bg-blue-600 text-white px-4 py-2 rounded-xl font-black text-xs uppercase shadow-md active:scale-95"><i className="fa-solid fa-user-plus mr-2"></i>Novo Vendedor</button>
+          </div>
           <div className="grid gap-3 px-1">
             {props.users.filter(u => u.role === 'VENDEDOR').map(u => (
-              <div key={u.id} className={`bg-white p-4 rounded-3xl border transition-all shadow-sm flex items-center justify-between ${!u.ativo ? 'opacity-60 grayscale' : 'border-gray-100'}`}> 
-                <div onClick={() => handleOpenUserModal(u)} className="flex items-center gap-4 flex-1 cursor-pointer min-w-0 pr-2">
-                  <div className="w-14 h-14 bg-purple-100 text-purple-600 rounded-2xl flex items-center justify-center font-black overflow-hidden border-4 border-white shadow-md flex-shrink-0">{(u.foto) ? <img src={u.foto} className="w-full h-full object-cover" /> : <i className="fa-solid fa-user-tie text-xl"></i>}</div>
-                  <div className="min-w-0"><p className="font-bold text-gray-800 text-sm leading-tight uppercase truncate">{u.nome}</p><p className="text-[10px] text-gray-400 font-bold mt-1 uppercase truncate">{u.telefone || 'Sem telefone'}</p></div>
-                </div>
-                <button onClick={(e) => { e.stopPropagation(); props.updateUser(u.id, { ativo: !u.ativo }); }} className={`w-12 h-6 rounded-full flex-shrink-0 relative transition-colors ${u.ativo ? 'bg-green-500' : 'bg-gray-300'}`}><div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${u.ativo ? 'left-7' : 'left-1'}`}></div></button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {activeTab === 'CATALOGO' && (
-        <div className="space-y-4">
-          <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Estoque Central</h2></div>
-          <div className="flex gap-2"><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar produto..." className="flex-1 px-4 py-3 bg-white border border-gray-200 rounded-xl text-sm font-medium" /><button onClick={() => handleOpenProduct('NEW')} className="bg-blue-600 text-white w-12 h-12 rounded-xl flex items-center justify-center shadow-lg active:scale-90 transition-transform"><i className="fa-solid fa-plus"></i></button></div>
-          <div className="grid gap-3 px-1">
-            {filteredProducts.map(p => ( 
-              <div key={p.id} className="bg-white px-4 py-4 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between transition-all hover:border-blue-200 group">
-                <div className="flex items-center gap-3 flex-1 min-w-0" onClick={() => handleOpenProduct(p)}>
-                  {!search && (
-                    <div className="flex flex-col gap-1 pr-2 border-r border-gray-50">
-                      <button onClick={(e) => { e.stopPropagation(); moveProduct(p.id, 'UP'); }} className="text-gray-300 hover:text-blue-500 active:scale-125 transition-all"><i className="fa-solid fa-chevron-up text-[10px]"></i></button>
-                      <button onClick={(e) => { e.stopPropagation(); moveProduct(p.id, 'DOWN'); }} className="text-gray-300 hover:text-blue-500 active:scale-125 transition-all"><i className="fa-solid fa-chevron-down text-[10px]"></i></button>
-                    </div>
-                  )}
-                  <div className="flex-1 min-w-0">
-                    <h3 className="font-bold text-gray-800 text-[13px] leading-tight line-clamp-2 uppercase">{p.nome}</h3> 
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5"><span className="text-[10px] font-black bg-blue-50 text-blue-600 px-2 py-0.5 rounded border border-blue-100 shadow-inner whitespace-nowrap">{(p.estoquePrincipal ?? 0)} UN</span><span className="text-[13px] font-black text-emerald-600">R$ {(p.precoVenda ?? 0).toFixed(2)}</span></div>
+              <div key={u.id} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 bg-gray-100 rounded-2xl overflow-hidden flex items-center justify-center">
+                    {u.foto ? <img src={u.foto} className="w-full h-full object-cover" /> : <i className="fa-solid fa-user text-gray-400 text-xl"></i>}
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-gray-800 text-sm uppercase">{u.nome}</h4>
+                    <p className="text-[10px] text-gray-400 font-semibold uppercase mt-0.5">{u.telefone || 'Sem Telefone'}</p>
+                    <span className={`text-[8px] font-black px-1.5 py-0.5 rounded uppercase ${u.rota === 'ROTA_02' ? 'bg-purple-100 text-purple-600' : 'bg-blue-100 text-blue-600'}`}>
+                      {u.rota === 'ROTA_02' ? 'Rota 02 (Emanuel)' : 'Rota 01 (Daniel)'}
+                    </span>
                   </div>
                 </div>
-                <div className="flex items-center gap-2 flex-shrink-0">
-                  <button onClick={(e) => { e.stopPropagation(); setShowEntryModal(p); setEntryForm({ qtd: '', custo: (p.precoCusto ?? 0).toString() }); }} className="bg-emerald-600 text-white w-9 h-9 rounded-lg flex items-center justify-center shadow-md active:scale-90 transition-all"><i className="fa-solid fa-plus-circle text-base"></i></button>
-                  <button onClick={(e) => { e.stopPropagation(); handleOpenProduct(p); }} className="bg-blue-50 text-blue-600 w-9 h-9 rounded-lg border border-blue-100 flex items-center justify-center active:scale-90 transition-all shadow-sm"><i className="fa-solid fa-pencil-alt text-base"></i></button>
-                </div>
+                <button onClick={() => handleOpenUserModal(u)} className="w-10 h-10 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center active:scale-95"><i className="fa-solid fa-pencil-alt text-xs"></i></button>
               </div>
             ))}
           </div>
@@ -740,27 +746,36 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       {activeTab === 'ROTEIRO' && (
         <div className="space-y-6 py-4">
           <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Roteiro Semanal</h2></div>
+          
+          <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner">
+            <button onClick={() => setRouteFilter('TODOS')} className={`flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all ${routeFilter === 'TODOS' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>Todos</button>
+            <button onClick={() => setRouteFilter('ROTA_01')} className={`flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all ${routeFilter === 'ROTA_01' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>Rota 01</button>
+            <button onClick={() => setRouteFilter('ROTA_02')} className={`flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all ${routeFilter === 'ROTA_02' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>Rota 02</button>
+          </div>
+
           <div className="space-y-3 px-1">
             {[1, 2, 3, 4, 5, 6].map(dia => {
               const isOpen = expandedDay === dia;
-              const clientsInDay = props.clients.filter(c => (c.diaRoteiro ?? 0) === dia && (c.ativo ?? false)).sort((a, b) => (a.ordem || 0) - (b.ordem || 0)); 
+              const clientsInDay = props.clients
+                .filter(c => c.diaRoteiro === dia && c.ativo && (routeFilter === 'TODOS' || c.rota === routeFilter))
+                .sort((a, b) => (a.ordem || 0) - (b.ordem || 0)); 
               return (
-                <div key={dia} className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden transition-all">
-                  <button onClick={() => setExpandedDay(isOpen ? null : dia)} className={`w-full flex items-center justify-between p-5 text-left transition-colors ${isOpen ? 'bg-indigo-50 text-indigo-700' : 'bg-white text-gray-700'}`}>
+                <div key={dia} className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
+                  <button onClick={() => setExpandedDay(isOpen ? null : dia)} className={`w-full flex items-center justify-between p-5 text-left ${isOpen ? 'bg-indigo-50 text-indigo-700' : 'bg-white text-gray-700'}`}>
                     <div className="flex items-center gap-3"><div className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-[10px] ${isOpen ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-400'}`}>{dia}</div><span className="font-black uppercase text-xs tracking-tight">{DIAS_SEMANA[dia] ?? 'N/D'}</span></div>
                     <div className="flex items-center gap-2"><span className="text-[9px] font-black uppercase opacity-40">{clientsInDay.length} clientes</span><i className={`fa-solid ${isOpen ? 'fa-chevron-up' : 'fa-chevron-down'} text-[10px]`}></i></div>
                   </button>
                   {isOpen && (
                     <div className="p-4 bg-white space-y-2 border-t border-indigo-50 animate-in slide-in-from-top duration-300">
                       {clientsInDay.map(c => (
-                        <div key={c.id} className="p-3 bg-gray-50 rounded-2xl flex justify-between items-center group cursor-pointer" onClick={() => setViewingClientHistory(c)}>
-                          <div className="flex items-center gap-3">
-                             <div className="flex flex-col gap-1">
-                                <button onClick={(e) => { e.stopPropagation(); moveClient(c.id, 'UP', dia); }} className="text-gray-300 hover:text-indigo-600 active:scale-125 transition-all"><i className="fa-solid fa-chevron-up text-[10px]"></i></button>
-                                <button onClick={(e) => { e.stopPropagation(); moveClient(c.id, 'DOWN', dia); }} className="text-gray-300 hover:text-indigo-600 active:scale-125 transition-all"><i className="fa-solid fa-chevron-down text-[10px]"></i></button>
-                             </div>
-                             <div><p className="font-bold text-gray-800 text-xs">{c.nomeFantasia ?? 'Cliente'}</p><p className="text-[9px] text-gray-400 font-bold mt-0.5">{c.telefone || 'Sem fone'} {c.bairro ? `• ${c.bairro}` : ''}</p></div>
+                        <div key={c.id} className="p-3 bg-gray-50 rounded-2xl flex justify-between items-center group">
+                          <div className="flex-1 cursor-pointer" onClick={() => setViewingClientHistory(c)}>
+                            <p className="font-bold text-gray-800 text-xs uppercase">{c.nomeFantasia}</p>
+                            <p className="text-[9px] text-gray-400 font-bold mt-0.5">{c.bairro || 'Sem Bairro'}</p>
                           </div>
+                          <span className={`text-[8px] font-black px-1.5 py-0.5 rounded uppercase ${c.rota === 'ROTA_02' ? 'bg-purple-100 text-purple-600' : 'bg-blue-100 text-blue-600'}`}>
+                            {c.rota === 'ROTA_02' ? 'Rota 02' : 'Rota 01'}
+                          </span>
                         </div>
                       ))}
                     </div>
@@ -773,52 +788,51 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       )}
 
       {activeTab === 'REPORTS' && (
-        <div className="space-y-6 py-4 px-1">
+        <div className="space-y-6 py-4">
           <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Relatórios</h2></div>
-          <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner">{(['HOJE', 'SEMANA', 'MES', 'GERAL'] as const).map(p => (<button key={p} onClick={() => setPeriodoRelatorio(p)} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${periodoRelatorio === p ? 'bg-white text-emerald-600 shadow-sm' : 'text-gray-400'}`}>{p}</button>))}</div>
+          <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner">{(['HOJE', 'SEMANA', 'MES', 'GERAL'] as const).map(p => (<button key={p} onClick={() => setPeriodoRelatorio(p)} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${periodoRelatorio === p ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>{p}</button>))}</div>
+          
           <div className="grid grid-cols-2 gap-4">
-             <div className="bg-white p-6 rounded-[2rem] shadow-sm border-b-4 border-emerald-500"><p className="text-[10px] font-black text-gray-400 uppercase mb-2">Vendas Totais</p><p className="text-xl font-black text-gray-800">R$ {reportStats.totalVendas.toFixed(2)}</p></div>
-             <div className="bg-white p-6 rounded-[2rem] shadow-sm border-b-4 border-blue-500"><p className="text-[10px] font-black text-gray-400 uppercase mb-2">Comissão Paga</p><p className="text-xl font-black text-xl font-black text-gray-800">R$ {reportStats.totalComissaoPaga.toFixed(2)}</p></div>
-          </div>
-          <div className="space-y-6 pt-4">
-            <div className="bg-white rounded-[2.5rem] p-8 shadow-sm border border-gray-100">
-              <h3 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-6 flex items-center gap-2"><i className="fa-solid fa-crown text-yellow-500"></i> Top 10 Produtos (Qtd)</h3>
-              <div className="space-y-4">
-                {reportStats.topProducts.map((p, idx) => (
-                  <div key={p.id} className="flex justify-between items-center pb-3 border-b border-gray-50 last:border-0">
-                    <div className="flex items-center gap-3">
-                      <span className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black ${idx < 3 ? 'bg-yellow-100 text-yellow-700' : 'bg-gray-100 text-gray-400'}`}>{idx + 1}</span>
-                      <span className="text-xs font-bold text-gray-700 uppercase truncate max-w-[180px]">{p.nome}</span>
-                    </div>
-                    <span className="text-xs font-black text-blue-600">{p.qtd} UN</span>
-                  </div>
-                ))}
-                {reportStats.topProducts.length === 0 && <p className="text-center py-4 text-[10px] font-bold text-gray-300 uppercase italic">Nenhum dado no período</p>}
-              </div>
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
+              <p className="text-[9px] font-black uppercase text-gray-400 mb-1">Total Vendido</p>
+              <h2 className="text-xl font-black text-gray-800">R$ {reportStats.totalVendas.toFixed(2)}</h2>
             </div>
-            <div className="bg-white rounded-[2.5rem] p-8 shadow-sm border border-gray-100">
-              <h3 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-6 flex items-center gap-2"><i className="fa-solid fa-star text-orange-500"></i> Top 10 Clientes (Ticket)</h3>
-              <div className="space-y-4">
-                {reportStats.topClients.map((c, idx) => (
-                  <div key={c.id} className="flex justify-between items-center pb-3 border-b border-gray-50 last:border-0 cursor-pointer" onClick={() => setViewingClientHistory(props.clients.find(cli => cli.id === c.id)!)}>
-                    <div className="flex items-center gap-3">
-                      <span className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black ${idx < 3 ? 'bg-orange-100 text-orange-700' : 'bg-gray-100 text-gray-400'}`}>{idx + 1}</span>
-                      <span className="text-xs font-bold text-gray-700 uppercase truncate max-w-[180px]">{c.nome}</span>
-                    </div>
-                    <span className="text-xs font-black text-emerald-600">R$ {c.total.toFixed(2)}</span>
-                  </div>
-                ))}
-                {reportStats.topClients.length === 0 && <p className="text-center py-4 text-[10px] font-bold text-gray-300 uppercase italic">Nenhum dado no período</p>}
-              </div>
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
+              <p className="text-[9px] font-black uppercase text-gray-400 mb-1">Comissões Pagas</p>
+              <h2 className="text-xl font-black text-emerald-600">R$ {reportStats.totalComissaoPaga.toFixed(2)}</h2>
+            </div>
+          </div>
+
+          <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 space-y-4">
+            <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider">Top 10 Clientes</h3>
+            <div className="divide-y divide-gray-50">
+              {reportStats.topClients.map((c, i) => (
+                <div key={c.id} className="py-3 flex justify-between items-center">
+                  <div className="flex items-center gap-3"><span className="text-xs font-black text-gray-300">#{i+1}</span><span className="text-xs font-bold text-gray-700 uppercase">{c.nome}</span></div>
+                  <span className="text-xs font-black text-gray-900">R$ {c.total.toFixed(2)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 space-y-4">
+            <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider">Top 10 Produtos</h3>
+            <div className="divide-y divide-gray-50">
+              {reportStats.topProducts.map((p, i) => (
+                <div key={p.id} className="py-3 flex justify-between items-center">
+                  <div className="flex items-center gap-3"><span className="text-xs font-black text-gray-300">#{i+1}</span><span className="text-xs font-bold text-gray-700 uppercase">{p.nome}</span></div>
+                  <span className="text-xs font-black text-blue-600">{p.qtd} un</span>
+                </div>
+              ))}
             </div>
           </div>
         </div>
       )}
 
       {activeTab === 'CONTAS_RECEBER' && (
-        <div className="space-y-6 py-4">
-          <div className="px-2 flex justify-between items-center">
-            <h2 className="text-2xl font-black text-gray-800 tracking-tight">Contas a Receber</h2>
+        <div className="space-y-4">
+          <header className="px-1 flex justify-between items-center">
+            <h2 className="text-xs font-black text-gray-400 uppercase tracking-wider">Contas a Receber</h2>
             <button 
               onClick={() => setFilterOverdueOnly(!filterOverdueOnly)}
               className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all flex items-center gap-2 shadow-sm ${filterOverdueOnly ? 'bg-rose-600 text-white' : 'bg-white text-gray-400 border border-gray-100'}`}
@@ -826,7 +840,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
               <i className={`fa-solid ${filterOverdueOnly ? 'fa-calendar-exclamation' : 'fa-calendar-days'}`}></i>
               {filterOverdueOnly ? 'Vencidas/Hoje' : 'Todas'}
             </button>
-          </div>
+          </header>
           <div className="grid gap-3 px-1">
             {contasAReceber.map(s => {
               const saldo = Number(((s.valorTotal ?? 0) - (s.valorPago ?? 0)).toFixed(2)); 
@@ -836,36 +850,23 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
               if (dueDate) dueDate.setHours(0,0,0,0);
               const isOverdue = dueDate ? dueDate <= today : false;
               return (
-              <div key={s.id} className={`p-5 rounded-3xl border shadow-sm transition-all ${isOverdue ? 'bg-rose-50 border-rose-200' : 'bg-white border-gray-100'}`}>
+              <div key={s.id} className={`p-5 rounded-3xl border shadow-sm flex flex-col transition-all ${isOverdue ? 'bg-rose-50 border-rose-200' : 'bg-white border-gray-100'}`}>
                 <div className="flex justify-between items-start mb-2">
-                   <div className="flex flex-col">
-                      <span className={`text-[10px] font-black uppercase ${isOverdue ? 'text-rose-600' : 'text-gray-400'}`}>Vencimento</span>
-                      <span className={`text-xs font-black ${isOverdue ? 'text-rose-700' : 'text-gray-800'}`}>{s.dataVencimento ? new Date(s.dataVencimento).toLocaleDateString() : 'N/D'}</span>
+                   <div className="flex-1 pr-4">
+                      <h4 className={`font-bold text-sm leading-tight uppercase cursor-pointer ${isOverdue ? 'text-rose-900' : 'text-gray-800'}`} onClick={() => setViewingClientHistory(props.clients.find(c => c.id === s.clientId)!)}>{props.clients.find(c => c.id === s.clientId)?.nomeFantasia || 'Cliente'}</h4>
+                      <div className="flex flex-col mt-2">
+                        <span className={`text-[9px] font-black uppercase ${isOverdue ? 'text-rose-600' : 'text-gray-400'}`}>Vencimento</span>
+                        <span className={`text-xs font-black ${isOverdue ? 'text-rose-700' : 'text-gray-800'}`}>{s.dataVencimento ? new Date(s.dataVencimento).toLocaleDateString() : 'N/D'}</span>
+                      </div>
                    </div>
-                   <span className={`text-[9px] font-black px-2 py-0.5 rounded uppercase ${isOverdue ? 'bg-rose-600 text-white animate-pulse' : 'bg-orange-50 text-orange-600'}`}>{isOverdue ? 'VENCIDO / HOJE' : 'EM ABERTO'}</span>
-                </div>
-                <div className="flex justify-between items-end">
-                   <div className="cursor-pointer flex-1 pr-4" onClick={() => setViewingClientHistory(props.clients.find(c => c.id === s.clientId)!)}>
-                     <h4 className={`font-bold text-sm leading-tight ${isOverdue ? 'text-rose-900' : 'text-gray-800'}`}>{props.clients.find(c => c.id === s.clientId)?.nomeFantasia || 'Cliente'}</h4>
-                     <p className="text-[10px] text-gray-400 font-bold uppercase mt-1">Vend: {props.users.find(u => u.id === s.vendedorId)?.nome ?? 'Desc.'}</p> 
-                     {(s.valorPago ?? 0) > 0 && <p className="text-[9px] text-emerald-600 font-bold uppercase mt-1">Já pago: R$ {(s.valorPago ?? 0).toFixed(2)}</p>} 
-                     
-                     {s.detalhePagamento && (
-                        <div className="mt-2 space-y-1">
-                          <p className="text-[8px] font-black text-gray-400 uppercase">Histórico:</p>
-                          <div className="bg-gray-50/50 p-2 rounded-lg border border-gray-100 max-h-20 overflow-y-auto">
-                            {s.detalhePagamento.split('|').map((log, i) => (
-                              <p key={i} className="text-[8px] font-bold text-gray-500 border-b border-gray-100 last:border-0 pb-0.5">{log.trim()}</p>
-                            ))}
-                          </div>
-                        </div>
-                     )}
-                   </div>
-                   <div className="text-right">
-                     <p className={`text-sm font-black mb-2 ${isOverdue ? 'text-rose-700' : 'text-gray-800'}`}>Saldo: R$ {saldo.toFixed(2)}</p>
-                     <button onClick={() => { setShowReceiveModal(s); setValorRecebidoParcial(saldo.toString()); }} className={`px-4 py-2 rounded-xl text-[9px] font-black uppercase shadow-lg active:scale-95 ${isOverdue ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white'}`}>RECEBER</button>
+                   <div className="text-right flex items-center gap-4">
+                     <div>
+                       <p className="text-sm font-black text-gray-800 leading-none">R$ {saldo.toFixed(2)}</p>
+                       <p className="text-[9px] text-gray-400 font-bold uppercase mt-1">Saldo</p>
+                     </div>
                    </div>
                 </div>
+                <button onClick={() => { setShowReceiveModal(s); setValorRecebidoParcial(saldo.toString()); }} className={`w-full py-3 rounded-2xl text-[10px] font-black uppercase mt-3 shadow-lg active:scale-95 ${isOverdue ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white'}`}>RECEBER</button>
               </div>
             )})}
             {contasAReceber.length === 0 && <div className="text-center py-20 opacity-20 italic font-black uppercase tracking-widest">Nenhuma conta pendente</div>}
@@ -1038,13 +1039,24 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
       {showUserModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6">
-           <div className="bg-white w-full max-w-sm rounded-[2rem] p-8 shadow-2xl overflow-y-auto max-h-[90vh]">
+           <div className="bg-white w-full max-sm rounded-[2rem] p-8 shadow-2xl overflow-y-auto max-h-[90vh]">
               <h3 className="font-black text-gray-800 uppercase text-sm mb-6 text-center">{showUserModal === 'NEW' ? 'Novo Vendedor' : 'Editar Vendedor'}</h3>
               <div className="flex flex-col items-center mb-6"><div onClick={() => userPhotoInputRef.current?.click()} className="w-24 h-24 bg-purple-100 text-purple-600 rounded-[2rem] flex items-center justify-center font-black overflow-hidden border-4 border-white shadow-xl cursor-pointer relative group transition-all hover:scale-105">{userForm.foto ? <img src={userForm.foto} className="w-full h-full object-cover" /> : <i className="fa-solid fa-camera text-2xl"></i>}</div><input type="file" ref={userPhotoInputRef} className="hidden" accept="image/*" /></div>
               <div className="space-y-4">
                  <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome do Vendedor</label><input value={userForm.nome ?? ''} onChange={e => setUserForm({...userForm, nome: e.target.value})} placeholder="Nome Completo" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div>
                  <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Telefone / WhatsApp</label><input value={userForm.telefone ?? ''} onChange={e => setUserForm({...userForm, telefone: e.target.value})} placeholder="Telefone" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div>
                  <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Placa do Veículo</label><input value={userForm.placaVeiculo ?? ''} onChange={e => setUserForm({...userForm, placaVeiculo: e.target.value})} placeholder="Ex: ABC-1234" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div>
+                 <div className="space-y-1">
+                    <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Rota Responsável</label>
+                    <select 
+                      value={userForm.rota || 'ROTA_01'} 
+                      onChange={e => setUserForm({...userForm, rota: e.target.value})} 
+                      className="w-full p-4 bg-gray-50 border rounded-2xl font-bold"
+                    >
+                      <option value="ROTA_01">Rota 01 (Daniel Gomes)</option>
+                      <option value="ROTA_02">Rota 02 (Emanuel)</option>
+                    </select>
+                 </div>
                  <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">PIN de Acesso (6 dígitos)</label><input type="password" value={userForm.pin ?? ''} onChange={e => setUserForm({...userForm, pin: e.target.value})} placeholder="123456" maxLength={6} className="w-full p-4 bg-gray-50 border rounded-2xl font-black text-center text-xl tracking-[0.5em]" /></div>
                  <button onClick={handleSaveUser} className="w-full bg-purple-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 uppercase text-xs mt-4 tracking-widest">Salvar Vendedor</button>
                  <button onClick={() => setShowUserModal(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button>
@@ -1109,6 +1121,17 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
               <div className="flex items-center gap-4 bg-gray-50 p-4 rounded-2xl border"><input type="checkbox" checked={clientForm.ativarCnpj ?? false} onChange={e => setClientForm({...clientForm, ativarCnpj: e.target.checked})} className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500" /><label className="text-xs font-bold text-gray-700 uppercase">Ativar CNPJ</label></div>
               {clientForm.ativarCnpj && <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">CNPJ</label><input value={clientForm.cnpj ?? ''} onChange={e => setClientForm({...clientForm, cnpj: e.target.value})} placeholder="00.000.000/0000-00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div>}
               <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Dia de Roteiro</label><select value={clientForm.diaRoteiro ?? 1} onChange={e => setClientForm({...clientForm, diaRoteiro: parseInt(e.target.value)})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold">{[1, 2, 3, 4, 5, 6].map(d => (<option key={d} value={d}>{DIAS_SEMANA[d] ?? 'N/D'}</option>))}</select></div>
+              <div className="space-y-1">
+                <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Rota de Atendimento</label>
+                <select 
+                  value={clientForm.rota || 'ROTA_01'} 
+                  onChange={e => setClientForm({...clientForm, rota: e.target.value})} 
+                  className="w-full p-4 bg-gray-50 border rounded-2xl font-bold"
+                >
+                  <option value="ROTA_01">Rota 01 (Daniel Gomes)</option>
+                  <option value="ROTA_02">Rota 02 (Emanuel)</option>
+                </select>
+              </div>
               <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">PIN Localização</label><input value={clientForm.pinLocalizacao ?? ''} onChange={e => setClientForm({...clientForm, pinLocalizacao: e.target.value})} placeholder="Latitude, Longitude" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div>
               <button onClick={handlePinLocation} className="w-full bg-indigo-50 text-indigo-600 font-black py-3 rounded-2xl uppercase text-[10px] tracking-widest flex items-center justify-center gap-2"><i className="fa-solid fa-location-dot"></i> Capturar Localização Atual</button>
               <div className="flex flex-col gap-2 pt-2"><button onClick={handleSaveClient} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 transition-all uppercase text-xs tracking-widest">SALVAR CLIENTE</button><button onClick={() => setShowClientModal(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button></div>

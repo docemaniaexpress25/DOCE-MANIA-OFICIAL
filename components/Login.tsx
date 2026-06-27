@@ -11,6 +11,8 @@ const Login: React.FC<LoginProps> = ({ users, onLogin, logo }) => {
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
+  const [logoClicks, setLogoClicks] = useState(0);
+  const [isAdminUnlocked, setIsAdminUnlocked] = useState(false);
 
   const handleSelectUser = (user: User) => {
     setSelectedUser(user);
@@ -24,22 +26,29 @@ const Login: React.FC<LoginProps> = ({ users, onLogin, logo }) => {
     setError("");
   };
 
+  const handleLogoClick = () => {
+    const newClicks = logoClicks + 1;
+    if (newClicks >= 5) {
+      setIsAdminUnlocked(true);
+      setLogoClicks(0);
+    } else {
+      setLogoClicks(newClicks);
+    }
+    
+    // Opcional: Resetar cliques após 3 segundos de inatividade
+    setTimeout(() => {
+      setLogoClicks(0);
+    }, 3000);
+  };
+
   const handleConfirm = (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedUser) return;
 
-    // --- Debug logs START ---
-    console.log("PIN digitado:", pin, typeof pin);
-    console.log("PIN do usuário:", selectedUser.pin, typeof selectedUser.pin);
-    console.log("Usuário selecionado:", selectedUser);
-    // --- Debug logs END ---
-
-    // Login agora utiliza APENAS o PIN dinâmico do objeto do usuário,
-    // que deve vir do Supabase no campo 'pin'.
     const correctPin = selectedUser.pin;
 
     if (!correctPin) {
-      setError("Erro: PIN de login não configurado para este usuário. Por favor, contate o administrador.");
+      setError("Erro: PIN de login não configurado.");
       setPin("");
       return;
     }
@@ -108,10 +117,15 @@ const Login: React.FC<LoginProps> = ({ users, onLogin, logo }) => {
     );
   }
 
+  // Filtra os usuários: se não estiver desbloqueado, remove os administradores da lista
+  const visibleUsers = isAdminUnlocked 
+    ? users 
+    : users.filter(u => u.role !== 'ADMIN');
+
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-blue-600 p-6">
       <div className="bg-white p-8 pt-12 rounded-3xl shadow-2xl w-full max-w-md text-center">
-        <div className="mb-12 flex justify-center">
+        <div className="mb-12 flex justify-center cursor-pointer active:scale-95 transition-transform" onClick={handleLogoClick}>
           {logo ? (
             <img src={logo} alt="Empresa" className="max-h-48 max-w-full object-contain" />
           ) : (
@@ -122,7 +136,7 @@ const Login: React.FC<LoginProps> = ({ users, onLogin, logo }) => {
         </div>
         
         <div className="space-y-3">
-          {users.map(user => (
+          {visibleUsers.map(user => (
             <button
               key={user.id}
               onClick={() => handleSelectUser(user)}
@@ -137,6 +151,16 @@ const Login: React.FC<LoginProps> = ({ users, onLogin, logo }) => {
               <i className="fa-solid fa-chevron-right text-gray-300 group-hover:text-blue-500 transition-colors"></i>
             </button>
           ))}
+          {!isAdminUnlocked && users.some(u => u.role === 'ADMIN') && (
+             <div className="pt-2">
+                <div className="w-full h-1 bg-gray-50 rounded-full overflow-hidden opacity-20">
+                  <div 
+                    className="h-full bg-blue-500 transition-all duration-300" 
+                    style={{ width: `${(logoClicks / 5) * 100}%` }}
+                  ></div>
+                </div>
+             </div>
+          )}
         </div>
       </div>
       <p className="text-white text-[10px] mt-8 opacity-50 font-bold uppercase tracking-widest">Base Operacional v1.0</p>

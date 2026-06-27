@@ -62,6 +62,27 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     return pendingSales.reduce((acc, s) => acc + (s.valorTotal - s.valorPago), 0);
   }, [sales, client.id]);
 
+  const getMinPrice = (product: Product) => {
+    if (!margemMinimaAtiva) return 0;
+    const cost = product.precoCusto || 0;
+    const margin = margemMinima || 0;
+    if (margin >= 100) return cost;
+    return cost / (1 - margin / 100);
+  };
+
+  const hasMarginViolation = useMemo(() => {
+    if (!margemMinimaAtiva) return false;
+    return Object.entries(cart).some(([pId, item]) => {
+      const cartItem = item as { quantidade: number, precoVenda: string };
+      if (cartItem.quantidade <= 0) return false;
+      const p = products.find(prod => prod.id === pId);
+      if (!p) return false;
+      const price = parseFloat(cartItem.precoVenda) || 0;
+      const minPrice = getMinPrice(p);
+      return price < minPrice;
+    });
+  }, [cart, products, margemMinimaAtiva, margemMinima]);
+
   const updateCart = (pId: string, delta: number, basePrice: number) => {
     setCart(prev => {
       const current = prev[pId] || { quantidade: 0, precoVenda: basePrice.toString() };
@@ -109,6 +130,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
 
   const handleConfirmFinalize = async () => {
     if (total <= 0 && getOrderedItems().length === 0) return;
+    if (hasMarginViolation) return;
 
     const itens = getOrderedItems();
     const vt = parseFloat(valorTroca) || 0;
@@ -193,29 +215,51 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         {orderedProductsInCarga.map(p => { 
           const item = cart[p.id];
           const cargaOriginal = minhaCarga.find(c => c.produtoId === p.id)?.quantidade || 0;
+          const minPrice = getMinPrice(p);
+          const itemPrice = item ? parseFloat(item.precoVenda) || 0 : p.precoVenda;
+          const isBelowMin = margemMinimaAtiva && item && item.quantidade > 0 && itemPrice < minPrice;
+
           return (
-            <div key={p.id} className={`bg-white p-2.5 rounded-2xl border flex items-center gap-3 ${item?.quantidade ? 'border-blue-200 bg-blue-50/30' : 'border-gray-100'}`}>
-              <div className="flex-1 min-w-0">
-                <h3 className="font-bold text-gray-800 text-[11px] leading-tight uppercase truncate">{p.nome}</h3> 
-                <div className="flex items-center gap-2 mt-1">
-                   <div className="flex items-center gap-1.5 bg-white border border-gray-100 px-2 py-0.5 rounded-lg">
-                      <span className="text-[9px] font-black text-gray-300">R$</span>
-                      <input type="text" value={item?.precoVenda ?? (p.precoVenda ?? 0).toFixed(2)} onChange={(e) => handlePriceChange(p.id, e.target.value)} className="w-14 bg-transparent border-none p-0 text-[11px] font-black outline-none text-emerald-600" />
-                   </div>
-                   <span className="text-[9px] font-bold uppercase text-blue-500">{cargaOriginal - (item?.quantidade ?? 0)} UN</span>
+            <div key={p.id} className={`bg-white p-2.5 rounded-2xl border flex flex-col gap-1 ${item?.quantidade ? 'border-blue-200 bg-blue-50/30' : 'border-gray-100'}`}>
+              <div className="flex items-center gap-3 w-full">
+                <div className="flex-1 min-w-0">
+                  <h3 className="font-bold text-gray-800 text-[11px] leading-tight uppercase truncate">{p.nome}</h3> 
+                  <div className="flex items-center gap-2 mt-1">
+                     <div className={`flex items-center gap-1.5 bg-white border px-2 py-0.5 rounded-lg ${isBelowMin ? 'border-rose-500 bg-rose-50' : 'border-gray-100'}`}>
+                        <span className={`text-[9px] font-black ${isBelowMin ? 'text-rose-500' : 'text-gray-300'}`}>R$</span>
+                        <input 
+                          type="text" 
+                          value={item?.precoVenda ?? (p.precoVenda ?? 0).toFixed(2)} 
+                          onChange={(e) => handlePriceChange(p.id, e.target.value)} 
+                          className={`w-14 bg-transparent border-none p-0 text-[11px] font-black outline-none ${isBelowMin ? 'text-rose-600' : 'text-emerald-600'}`} 
+                        />
+                     </div>
+                     <span className="text-[9px] font-bold uppercase text-blue-500">{cargaOriginal - (item?.quantidade ?? 0)} UN</span>
+                  </div>
+                </div>
+                <div className="flex items-center bg-white rounded-xl p-0.5 border border-gray-100 shadow-sm">
+                  <button onClick={() => updateCart(p.id, -1, p.precoVenda)} className="w-8 h-8 text-gray-400 active:scale-90 flex items-center justify-center"><i className="fa-solid fa-minus text-[10px]"></i></button> 
+                  <span className="font-black text-xs min-w-[22px] text-center">{item?.quantidade ?? 0}</span> 
+                  <button onClick={() => updateCart(p.id, 1, p.precoVenda)} className="w-8 h-8 text-blue-600 active:scale-90 flex items-center justify-center"><i className="fa-solid fa-plus text-[10px]"></i></button> 
                 </div>
               </div>
-              <div className="flex items-center bg-white rounded-xl p-0.5 border border-gray-100 shadow-sm">
-                <button onClick={() => updateCart(p.id, -1, p.precoVenda)} className="w-8 h-8 text-gray-400 active:scale-90 flex items-center justify-center"><i className="fa-solid fa-minus text-[10px]"></i></button> 
-                <span className="font-black text-xs min-w-[22px] text-center">{item?.quantidade ?? 0}</span> 
-                <button onClick={() => updateCart(p.id, 1, p.precoVenda)} className="w-8 h-8 text-blue-600 active:scale-90 flex items-center justify-center"><i className="fa-solid fa-plus text-[10px]"></i></button> 
-              </div>
+              {isBelowMin && (
+                <p className="text-[8px] text-rose-600 font-black uppercase mt-1 animate-pulse">
+                  <i className="fa-solid fa-circle-exclamation mr-1"></i> Mínimo permitido: R$ {minPrice.toFixed(2)}
+                </p>
+              )}
             </div>
           );
         })}
       </div>
 
       <footer className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 p-4 pb-8 space-y-3 shadow-lg max-w-lg mx-auto z-[70]">
+        {hasMarginViolation && (
+          <div className="bg-rose-600 text-white p-3 rounded-xl text-center font-black text-[9px] uppercase tracking-widest animate-pulse flex items-center justify-center gap-2">
+            <i className="fa-solid fa-circle-exclamation text-sm"></i>
+            Venda Bloqueada: Preço abaixo da margem mínima!
+          </div>
+        )}
         <div className="flex items-center justify-between px-1 mb-1 bg-gray-50/50 p-2 rounded-xl">
           <div className="flex items-center gap-2">
             <button onClick={() => setIsTrocaActive(!isTrocaActive)} className={`w-10 h-6 rounded-full relative transition-colors ${isTrocaActive ? 'bg-orange-500' : 'bg-gray-300'}`}>
@@ -230,7 +274,13 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
             <p className="text-[9px] font-black text-gray-400 uppercase mb-0.5">Total Líquido</p>
             <p className="text-xl font-black text-gray-800">R$ {total.toFixed(2)}</p>
           </div>
-          <button onClick={() => setView('RECEIPT_PREVIEW')} disabled={total <= 0 && getOrderedItems().length === 0} className={`px-6 py-4 rounded-2xl font-black uppercase text-xs ${total > 0 || getOrderedItems().length > 0 ? 'bg-blue-600 text-white shadow-lg' : 'bg-gray-200 text-gray-400'}`}>Gerar Cupom</button>
+          <button 
+            onClick={() => setView('RECEIPT_PREVIEW')} 
+            disabled={(total <= 0 && getOrderedItems().length === 0) || hasMarginViolation} 
+            className={`px-6 py-4 rounded-2xl font-black uppercase text-xs ${(total > 0 || getOrderedItems().length > 0) && !hasMarginViolation ? 'bg-blue-600 text-white shadow-lg' : 'bg-gray-200 text-gray-400'}`}
+          >
+            Gerar Cupom
+          </button>
         </div>
       </footer>
 
@@ -307,7 +357,13 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                 </div>
               )}
 
-              <button onClick={handleConfirmFinalize} className="w-full bg-emerald-600 text-white py-5 rounded-2xl font-black uppercase text-xs shadow-xl active:scale-95 transition-all mb-2 tracking-widest">Concluir Venda</button>
+              <button 
+                onClick={handleConfirmFinalize} 
+                disabled={hasMarginViolation}
+                className={`w-full bg-emerald-600 text-white py-5 rounded-2xl font-black uppercase text-xs shadow-xl active:scale-95 transition-all mb-2 tracking-widest ${hasMarginViolation ? 'opacity-50 cursor-not-allowed' : ''}`}
+              >
+                Concluir Venda
+              </button>
               <button onClick={() => setView('RECEIPT_PREVIEW')} className="w-full py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Voltar ao Cupom</button>
            </div>
         </div>

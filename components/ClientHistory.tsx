@@ -31,7 +31,8 @@ const ClientHistory: React.FC<ClientHistoryProps> = ({ client, sales, products, 
     };
   }, [clientSales]);
 
-  const lastThreeSales = clientSales.slice(0, 3);
+  // Agora pegamos as últimas 25 vendas para exibir na lista
+  const lastSales = clientSales.slice(0, 25);
 
   if (selectedHistoricalSale) {
     return (
@@ -71,8 +72,8 @@ const ClientHistory: React.FC<ClientHistoryProps> = ({ client, sales, products, 
           </div>
 
           <div className="space-y-3">
-            <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Últimos 3 Pedidos</h4>
-            {lastThreeSales.map(sale => (
+            <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Últimos Pedidos (até 25)</h4>
+            {lastSales.map(sale => (
               <button 
                 key={sale.id} 
                 onClick={() => setSelectedHistoricalSale(sale)}
@@ -88,7 +89,7 @@ const ClientHistory: React.FC<ClientHistoryProps> = ({ client, sales, products, 
                 </div>
               </button>
             ))}
-            {lastThreeSales.length === 0 && (
+            {lastSales.length === 0 && (
               <div className="py-10 text-center opacity-20 italic text-[10px] font-black uppercase tracking-widest">Nenhuma venda encontrada</div>
             )}
           </div>

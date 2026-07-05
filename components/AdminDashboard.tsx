@@ -439,7 +439,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   };
 
   const handleOpenUserModal = (u: User | 'NEW') => {
-    if (u === 'NEW') setUserForm({ nome: '', telefone: '', foto: '', pin: '123456', placaVeiculo: '', rota: 'ROTA_01' });
+    if (u === 'NEW') setUserForm({ nome: '', telefone: '', foto: '', pin: '123456', placaVeiculo: '', rota: 'AUTO' });
     else setUserForm({ nome: u.nome ?? '', telefone: u.telefone ?? '', foto: u.foto ?? '', pin: u.pin ?? '', placaVeiculo: u.placaVeiculo ?? '', rota: u.rota || 'ROTA_01' }); 
     setShowUserModal(u);
   };
@@ -1108,17 +1108,23 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                  <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome do Vendedor</label><input value={userForm.nome ?? ''} onChange={e => setUserForm({...userForm, nome: e.target.value})} placeholder="Nome Completo" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div>
                  <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Telefone / WhatsApp</label><input value={userForm.telefone ?? ''} onChange={e => setUserForm({...userForm, telefone: e.target.value})} placeholder="Telefone" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div>
                  <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Placa do Veículo</label><input value={userForm.placaVeiculo ?? ''} onChange={e => setUserForm({...userForm, placaVeiculo: e.target.value})} placeholder="Ex: ABC-1234" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div>
-                 <div className="space-y-1">
-                    <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Rota Responsável</label>
-                    <select 
-                      value={userForm.rota || 'ROTA_01'} 
-                      onChange={e => setUserForm({...userForm, rota: e.target.value})} 
-                      className="w-full p-4 bg-gray-50 border rounded-2xl font-bold"
-                    >
-                      <option value="ROTA_01">Rota 01 (Daniel Gomes)</option>
-                      <option value="ROTA_02">Rota 02 (Emanuel)</option>
-                    </select>
-                 </div>
+                 
+                 {showUserModal !== 'NEW' && (
+                   <div className="space-y-1">
+                      <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Rota Responsável</label>
+                      <select 
+                        value={userForm.rota || 'ROTA_01'} 
+                        onChange={e => setUserForm({...userForm, rota: e.target.value})} 
+                        className="w-full p-4 bg-gray-50 border rounded-2xl font-bold"
+                      >
+                        {Array.from({ length: 20 }).map((_, i) => {
+                          const r = `ROTA_${String(i + 1).padStart(2, '0')}`;
+                          return <option key={r} value={r}>Rota {String(i + 1).padStart(2, '0')}</option>;
+                        })}
+                      </select>
+                   </div>
+                 )}
+
                  <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">PIN de Acesso (6 dígitos)</label><input type="password" value={userForm.pin ?? ''} onChange={e => setUserForm({...userForm, pin: e.target.value})} placeholder="123456" maxLength={6} className="w-full p-4 bg-gray-50 border rounded-2xl font-black text-center text-xl tracking-[0.5em]" /></div>
                  <button onClick={handleSaveUser} className="w-full bg-purple-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 uppercase text-xs mt-4 tracking-widest">Salvar Vendedor</button>
                  <button onClick={() => setShowUserModal(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button>
@@ -1190,8 +1196,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                   onChange={e => setClientForm({...clientForm, rota: e.target.value})} 
                   className="w-full p-4 bg-gray-50 border rounded-2xl font-bold"
                 >
-                  <option value="ROTA_01">Rota 01 (Daniel Gomes)</option>
-                  <option value="ROTA_02">Rota 02 (Emanuel)</option>
+                  {Array.from({ length: 20 }).map((_, i) => {
+                    const r = `ROTA_${String(i + 1).padStart(2, '0')}`;
+                    return <option key={r} value={r}>Rota {String(i + 1).padStart(2, '0')}</option>;
+                  })}
                 </select>
               </div>
               <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">PIN Localização</label><input value={clientForm.pinLocalizacao ?? ''} onChange={e => setClientForm({...clientForm, pinLocalizacao: e.target.value})} placeholder="Latitude, Longitude" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div>

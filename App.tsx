@@ -225,10 +225,14 @@ const App: React.FC = () => {
   };
 
   const addUser = async (nome: string, foto?: string, telefone?: string) => {
-    // Calcula a próxima rota sequencial com base no número de vendedores existentes
-    const sellerCount = users.filter(u => u.role === 'VENDEDOR').length;
-    const nextRouteNum = sellerCount + 1;
-    const nextRoute = `ROTA_${String(nextRouteNum).padStart(2, '0')}`;
+    // Calcula a próxima rota sequencial com base no maior número de rota existente
+    const sellerRoutes = users
+      .filter(u => u.role === 'VENDEDOR' && u.rota?.startsWith('ROTA_'))
+      .map(u => parseInt(u.rota!.replace('ROTA_', '')))
+      .filter(n => !isNaN(n));
+    
+    const maxRouteNum = sellerRoutes.length > 0 ? Math.max(...sellerRoutes) : 0;
+    const nextRoute = `ROTA_${String(maxRouteNum + 1).padStart(2, '0')}`;
 
     await userService.insertUser({ 
       nome, 

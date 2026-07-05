@@ -253,14 +253,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
   const handleSync = () => {
     if (!selectedVendedorId) return;
-    const itens = props.products.map(p => ({ produtoId: p.id, quantidade: stagingCarga[p.id] || 0 })); 
+    const itens = props.products.map(p => ({ produtoId: p.id, quantity: stagingCarga[p.id] || 0 })).map(item => ({ produtoId: item.produtoId, quantidade: item.quantity })); 
     props.syncVendedorCarga(selectedVendedorId, itens);
     setShowConfirmSync(false);
   };
 
   const handleApply = () => {
     if (!selectedVendedorId) return;
-    const itens = props.products.map(p => ({ produtoId: p.id, quantidade: stagingCarga[p.id] || 0 })); 
+    const itens = props.products.map(p => ({ produtoId: p.id, quantity: stagingCarga[p.id] || 0 })).map(item => ({ produtoId: item.produtoId, quantidade: item.quantity })); 
     props.applyCargaDirectly(selectedVendedorId, itens);
     setShowConfirmApply(false);
   };
@@ -814,6 +814,229 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                  <button onClick={() => setShowUserModal(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button>
               </div>
            </div>
+        </div>
+      )}
+
+      {/* MODAL DE CLIENTE (ADICIONAR / EDITAR) */}
+      {showClientModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6">
+          <div className="bg-white w-full max-w-md rounded-[2rem] p-8 shadow-2xl overflow-y-auto max-h-[90vh]">
+            <h3 className="font-black text-gray-800 uppercase text-sm mb-6 text-center">
+              {showClientModal === 'NEW' ? 'Novo Cliente' : 'Editar Cliente'}
+            </h3>
+            <div className="space-y-4">
+              <div className="space-y-1">
+                <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome Fantasia</label>
+                <input value={clientForm.nomeFantasia || ''} onChange={e => setClientForm({...clientForm, nomeFantasia: e.target.value})} placeholder="Nome Fantasia" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Telefone</label>
+                <input value={clientForm.telefone || ''} onChange={e => setClientForm({...clientForm, telefone: e.target.value})} placeholder="Telefone" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Endereço</label>
+                <input value={clientForm.endereco || ''} onChange={e => setClientForm({...clientForm, endereco: e.target.value})} placeholder="Endereço" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Bairro</label>
+                <input value={clientForm.bairro || ''} onChange={e => setClientForm({...clientForm, bairro: e.target.value})} placeholder="Bairro" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Dia de Atendimento</label>
+                <select value={clientForm.diaRoteiro ?? 1} onChange={e => setClientForm({...clientForm, diaRoteiro: parseInt(e.target.value)})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold">
+                  {[1, 2, 3, 4, 5, 6].map(d => (
+                    <option key={d} value={d}>{DIAS_SEMANA[d]}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Rota</label>
+                <select value={clientForm.rota || 'ROTA_01'} onChange={e => setClientForm({...clientForm, rota: e.target.value})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold">
+                  {Array.from({ length: 50 }).map((_, i) => {
+                    const r = `ROTA_${String(i + 1).padStart(2, '0')}`;
+                    return <option key={r} value={r}>Rota {String(i + 1).padStart(2, '0')}</option>;
+                  })}
+                </select>
+              </div>
+              <button onClick={handlePinLocation} className="w-full bg-indigo-50 text-indigo-600 font-black py-3 rounded-2xl uppercase text-[10px] tracking-widest flex items-center justify-center gap-2 mb-2">
+                <i className="fa-solid fa-location-dot"></i> Capturar Localização Atual
+              </button>
+              <button onClick={handleSaveClient} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 uppercase text-xs mt-4 tracking-widest">
+                Salvar Cliente
+              </button>
+              <button onClick={() => setShowClientModal(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE PRODUTO (ADICIONAR / EDITAR) */}
+      {showProductModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6">
+          <div className="bg-white w-full max-w-md rounded-[2rem] p-8 shadow-2xl overflow-y-auto max-h-[90vh]">
+            <h3 className="font-black text-gray-800 uppercase text-sm mb-6 text-center">
+              {showProductModal === 'NEW' ? 'Novo Produto' : 'Editar Produto'}
+            </h3>
+            <div className="space-y-4">
+              <div className="space-y-1">
+                <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome do Produto</label>
+                <input value={pForm.nome} onChange={e => setPForm({...pForm, nome: e.target.value})} placeholder="Nome do Produto" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Custo R$</label>
+                <input type="number" value={pForm.custo} onChange={e => {
+                  const val = parseFloat(e.target.value) || 0;
+                  const venda = props.margemGlobalAtiva ? updatePriceFromMargin(val, props.margemGlobalValor) : parseFloat(pForm.venda) || 0;
+                  const margem = props.margemGlobalAtiva ? props.margemGlobalValor : updateMarginFromPrice(val, venda);
+                  setPForm({...pForm, custo: e.target.value, venda: venda.toFixed(2), margem: margem.toFixed(2)});
+                }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Venda R$</label>
+                <input type="number" disabled={props.margemGlobalAtiva} value={pForm.venda} onChange={e => {
+                  const val = parseFloat(e.target.value) || 0;
+                  const margem = updateMarginFromPrice(parseFloat(pForm.custo) || 0, val);
+                  setPForm({...pForm, venda: e.target.value, margem: margem.toFixed(2)});
+                }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold disabled:opacity-50" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Margem %</label>
+                <input type="number" disabled={props.margemGlobalAtiva} value={pForm.margem} onChange={e => {
+                  const val = parseFloat(e.target.value) || 0;
+                  const venda = updatePriceFromMargin(parseFloat(pForm.custo) || 0, val);
+                  setPForm({...pForm, margem: e.target.value, venda: venda.toFixed(2)});
+                }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold disabled:opacity-50" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Comissão %</label>
+                <input type="number" value={pForm.comissao} onChange={e => setPForm({...pForm, comissao: e.target.value})} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Estoque Inicial</label>
+                <input type="number" disabled={showProductModal !== 'NEW'} value={pForm.estoquePrincipal} onChange={e => setPForm({...pForm, estoquePrincipal: e.target.value})} placeholder="0" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold disabled:opacity-50" />
+              </div>
+              <div className="flex items-center gap-2 py-2">
+                <input type="checkbox" id="prod_ativo" checked={pForm.ativo} onChange={e => setPForm({...pForm, ativo: e.target.checked})} className="w-5 h-5" />
+                <label htmlFor="prod_ativo" className="text-xs font-bold text-gray-700 uppercase">Produto Ativo</label>
+              </div>
+              <button onClick={handleSaveProduct} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 uppercase text-xs mt-4 tracking-widest">
+                Salvar Produto
+              </button>
+              <button onClick={() => setShowProductModal(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE ENTRADA DE ESTOQUE */}
+      {showEntryModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6">
+          <div className="bg-white w-full max-w-xs rounded-3xl p-8 shadow-2xl text-center">
+            <h3 className="font-black text-gray-800 uppercase text-sm mb-4">Entrada de Estoque</h3>
+            <p className="text-xs text-gray-400 font-bold uppercase mb-4">{showEntryModal.nome}</p>
+            <div className="space-y-4 text-left">
+              <div className="space-y-1">
+                <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Quantidade de Entrada</label>
+                <input type="number" value={entryForm.qtd} onChange={e => setEntryForm({...entryForm, qtd: e.target.value})} placeholder="0" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-center" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Custo Unitário R$</label>
+                <input type="number" value={entryForm.custo} onChange={e => setEntryForm({...entryForm, custo: e.target.value})} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-center" />
+              </div>
+              <button onClick={() => {
+                const q = parseInt(entryForm.qtd) || 0;
+                const c = parseFloat(entryForm.custo) || 0;
+                if (q <= 0 || c <= 0) { showToast("Valores inválidos", "error"); return; }
+                
+                const estoqueAntigo = showEntryModal.estoquePrincipal || 0;
+                const custoAntigo = showEntryModal.precoCusto || 0;
+                const novoEstoque = estoqueAntigo + q;
+                const novoCusto = ((estoqueAntigo * custoAntigo) + (q * c)) / novoEstoque;
+                const novoPrecoVenda = props.margemGlobalAtiva ? updatePriceFromMargin(novoCusto, props.margemGlobalValor) : showEntryModal.precoVenda;
+
+                props.updateProduct(showEntryModal.id, {
+                  estoquePrincipal: novoEstoque,
+                  precoCusto: Number(novoCusto.toFixed(2)),
+                  precoVenda: Number(novoPrecoVenda.toFixed(2))
+                });
+
+                setShowEntryModal(null);
+                setEntryForm({ qtd: '', custo: '' });
+                showToast("Entrada registrada com sucesso!");
+              }} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest">
+                Confirmar Entrada
+              </button>
+              <button onClick={() => { setShowEntryModal(null); setEntryForm({ qtd: '', custo: '' }); }} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CONFIRMAÇÃO DE ENVIO DE CARGA PENDENTE */}
+      {showConfirmSync && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6">
+          <div className="bg-white w-full max-w-xs rounded-3xl p-8 text-center shadow-2xl">
+            <h3 className="font-black text-gray-800 text-lg mb-4">Enviar Carga Pendente?</h3>
+            <p className="text-sm text-gray-500 mb-6 font-medium uppercase">Deseja enviar esta carga como pendente para o vendedor aceitar?</p>
+            <div className="flex flex-col gap-2">
+              <button onClick={handleSync} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest">Sim, Enviar</button>
+              <button onClick={() => setShowConfirmSync(false)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CONFIRMAÇÃO DE APLICAÇÃO DIRETA DE CARGA */}
+      {showConfirmApply && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6">
+          <div className="bg-white w-full max-w-xs rounded-3xl p-8 text-center shadow-2xl">
+            <h3 className="font-black text-gray-800 text-lg mb-4">Aplicar Carga Diretamente?</h3>
+            <p className="text-sm text-gray-500 mb-6 font-medium uppercase">Isso atualizará o estoque do vendedor imediatamente sem necessidade de aceite.</p>
+            <div className="flex flex-col gap-2">
+              <button onClick={handleApply} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest">Sim, Aplicar</button>
+              <button onClick={() => setShowConfirmApply(false)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE PAGAMENTO DE COMISSÃO */}
+      {payoutVendedor && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6">
+          <div className="bg-white w-full max-w-xs rounded-3xl p-8 shadow-2xl text-center">
+            <h3 className="font-black text-gray-800 uppercase text-sm mb-4">Pagar Comissão</h3>
+            <p className="text-xs text-gray-400 font-bold uppercase mb-4">{payoutVendedor.nome}</p>
+            <div className="space-y-4 text-left">
+              <div className="flex gap-2 mb-4">
+                <button onClick={() => setPayoutType('TOTAL')} className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase ${payoutType === 'TOTAL' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-400'}`}>Total</button>
+                <button onClick={() => setPayoutType('PARCIAL')} className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase ${payoutType === 'PARCIAL' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-400'}`}>Parcial</button>
+              </div>
+              {payoutType === 'PARCIAL' && (
+                <div className="space-y-1">
+                  <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Valor do Pagamento R$</label>
+                  <input type="number" value={partialAmount} onChange={e => setPartialAmount(e.target.value)} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-center" />
+                </div>
+              )}
+              <button onClick={handleConfirmPayout} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest">
+                Confirmar Pagamento
+              </button>
+              <button onClick={() => setPayoutVendedor(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CONFIRMAÇÃO DE EXCLUSÃO (PRODUTO / CLIENTE) */}
+      {confirmDelete && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6">
+          <div className="bg-white w-full max-w-xs rounded-3xl p-8 text-center shadow-2xl">
+            <h3 className="font-black text-gray-800 text-lg mb-4">Excluir Item?</h3>
+            <p className="text-sm text-gray-500 mb-6 font-medium uppercase">Deseja realmente excluir "{confirmDelete.name}"?</p>
+            <div className="flex flex-col gap-2">
+              <button onClick={handleConfirmDelete} className="w-full bg-rose-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest">Sim, Excluir</button>
+              <button onClick={() => setConfirmDelete(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button>
+            </div>
+          </div>
         </div>
       )}
 

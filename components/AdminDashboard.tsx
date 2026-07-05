@@ -526,6 +526,15 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     return props.sales.filter(s => filterByPeriod(s.data, filtroPeriodo)).sort((a, b) => (b.data?.getTime() ?? 0) - (a.data?.getTime() ?? 0)); 
   }, [props.sales, filtroPeriodo]);
 
+  // Calcula o resumo financeiro das vendas filtradas para o Administrador
+  const historySummary = useMemo(() => filteredHistory.reduce((acc, sale) => {
+    acc.total += (sale.valorTotal ?? 0); 
+    if (sale.metodoPagamento === 'DINHEIRO') acc.dinheiro += (sale.valorTotal ?? 0);
+    if (sale.metodoPagamento === 'PIX') acc.pix += (sale.valorTotal ?? 0);
+    if (sale.metodoPagamento === 'A_PRAZO') acc.prazo += (sale.valorTotal ?? 0);
+    return acc;
+  }, { total: 0, dinheiro: 0, pix: 0, prazo: 0 }), [filteredHistory]);
+
   const filteredClients = useMemo(() => {
     return props.clients.filter(c => {
       const matchesSearch = c.nomeFantasia.toLowerCase().includes(search.toLowerCase());
@@ -605,6 +614,17 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         <div className="space-y-6 py-4">
           <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Vendas Realizadas</h2></div>
           <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner">{(['HOJE', 'SEMANA', 'MES', 'GERAL'] as const).map(p => (<button key={p} onClick={() => setFiltroPeriodo(p)} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${filtroPeriodo === p ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>{p}</button>))}</div>
+          
+          {/* Card de Resumo Acumulado de Vendas para o Administrador */}
+          <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-md flex flex-col gap-4 mx-2">
+             <div className="flex justify-between items-center border-b border-gray-100 pb-3"><span className="text-xs font-black text-gray-400 uppercase">Total Geral</span><span className="text-2xl font-black text-gray-900">R$ {historySummary.total.toFixed(2)}</span></div>
+             <div className="grid grid-cols-3 gap-3">
+                <div className="text-center bg-emerald-50 p-3 rounded-xl"><p className="text-[9px] font-black text-emerald-600 uppercase mb-1">Dinheiro</p><p className="text-sm font-black text-emerald-700">R$ {historySummary.dinheiro.toFixed(2)}</p></div>
+                <div className="text-center bg-blue-50 p-3 rounded-xl"><p className="text-[9px] font-black text-blue-600 uppercase mb-1">Pix</p><p className="text-sm font-black text-blue-700">R$ {historySummary.pix.toFixed(2)}</p></div>
+                <div className="text-center bg-orange-50 p-3 rounded-xl"><p className="text-[9px] font-black text-orange-600 uppercase mb-1">A Prazo</p><p className="text-sm font-black text-orange-700">R$ {historySummary.prazo.toFixed(2)}</p></div>
+             </div>
+          </div>
+
           <div className="grid gap-3 px-1">
             {filteredHistory.map(s => (
               <button key={s.id} onClick={() => setSelectedSale(s)} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex flex-col text-left transition-all hover:border-blue-200">
@@ -1054,7 +1074,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
       {showReceiveModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[250] flex items-center justify-center p-6">
-           <div className="bg-white w-full max-w-xs rounded-3xl p-8 shadow-2xl text-center max-h-[90vh] overflow-y-auto">
+           <div className="bg-white w-full max-xs rounded-3xl p-8 shadow-2xl text-center max-h-[90vh] overflow-y-auto">
               <h3 className="font-black text-gray-800 text-sm uppercase mb-6">Confirmar Recebimento</h3>
               <div className="bg-gray-50 p-4 rounded-2xl mb-4"><p className="text-[10px] font-black text-gray-400 uppercase mb-1">Saldo Devedor</p><p className="text-xl font-black text-rose-600">R$ {((showReceiveModal.valorTotal ?? 0) - (showReceiveModal.valorPago ?? 0)).toFixed(2)}</p></div>
               

@@ -225,7 +225,21 @@ const App: React.FC = () => {
   };
 
   const addUser = async (nome: string, foto?: string, telefone?: string) => {
-    await userService.insertUser({ nome, email: `${nome.toLowerCase().replace(/\s/g, '')}@sistema.com`, role: 'VENDEDOR', ativo: true, foto, telefone, pin: '123456', rota: 'ROTA_01' });
+    // Calcula a próxima rota sequencial com base no número de vendedores existentes
+    const sellerCount = users.filter(u => u.role === 'VENDEDOR').length;
+    const nextRouteNum = sellerCount + 1;
+    const nextRoute = `ROTA_${String(nextRouteNum).padStart(2, '0')}`;
+
+    await userService.insertUser({ 
+      nome, 
+      email: `${nome.toLowerCase().replace(/\s/g, '')}@sistema.com`, 
+      role: 'VENDEDOR', 
+      ativo: true, 
+      foto, 
+      telefone, 
+      pin: '123456', 
+      rota: nextRoute 
+    });
     fetchCoreData();
   };
 

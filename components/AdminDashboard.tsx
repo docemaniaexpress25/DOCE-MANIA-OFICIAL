@@ -133,10 +133,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     return `Rota ${num}`;
   };
 
-  // Pega todas as rotas únicas existentes para os filtros
+  // Pega todas as rotas únicas existentes para os filtros e para alocação de clientes
   const availableRoutes = useMemo(() => {
     const routes = new Set(props.users.filter(u => u.role === 'VENDEDOR').map(u => u.rota).filter(Boolean));
-    return Array.from(routes).sort();
+    return Array.from(routes).sort() as string[];
   }, [props.users]);
 
   const getClientAvgRevenue = (id: string) => {
@@ -326,8 +326,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   };
 
   const handleOpenClient = (c: Client | 'NEW') => {
-    if (c === 'NEW') setClientForm({ nomeFantasia: '', telefone: '', endereco: '', bairro: '', diaRoteiro: 1, ativo: true, ativarCnpj: false, cnpj: '', pinLocalizacao: '', ordem: 0, rota: 'ROTA_01' });
-    else setClientForm({ ...c, rota: c.rota || 'ROTA_01' });
+    if (c === 'NEW') setClientForm({ nomeFantasia: '', telefone: '', endereco: '', bairro: '', diaRoteiro: 1, ativo: true, ativarCnpj: false, cnpj: '', pinLocalizacao: '', ordem: 0, rota: availableRoutes[0] || 'ROTA_01' });
+    else setClientForm({ ...c, rota: c.rota || availableRoutes[0] || 'ROTA_01' });
     setShowClientModal(c);
   };
 
@@ -367,7 +367,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
   const handleSaveClient = () => {
     if (!clientForm.nomeFantasia || !clientForm.telefone || !clientForm.endereco || !clientForm.bairro) { showToast("Preencha Nome Fantasia, Telefone, Endereço e Bairro.", 'error'); return; }
-    const clientPayload: Omit<Client, 'id'> = { nomeFantasia: clientForm.nomeFantasia, telefone: clientForm.telefone, endereco: clientForm.endereco, bairro: clientForm.bairro, diaRoteiro: clientForm.diaRoteiro ?? 1, ativo: clientForm.ativo ?? true, ativarCnpj: clientForm.ativarCnpj ?? false, cnpj: clientForm.cnpj, pinLocalizacao: clientForm.pinLocalizacao, ordem: clientForm.ordem ?? 0, nome: clientForm.nome, observacoes: clientForm.observacoes, rota: clientForm.rota || 'ROTA_01' };
+    const clientPayload: Omit<Client, 'id'> = { nomeFantasia: clientForm.nomeFantasia, telefone: clientForm.telefone, endereco: clientForm.endereco, bairro: clientForm.bairro, diaRoteiro: clientForm.diaRoteiro ?? 1, ativo: clientForm.ativo ?? true, ativarCnpj: clientForm.ativarCnpj ?? false, cnpj: clientForm.cnpj, pinLocalizacao: clientForm.pinLocalizacao, ordem: clientForm.ordem ?? 0, nome: clientForm.nome, observacoes: clientForm.observacoes, rota: clientForm.rota || availableRoutes[0] || 'ROTA_01' };
     if (showClientModal === 'NEW') props.addClient(clientPayload);
     else if (typeof showClientModal === 'object') props.updateClient(showClientModal.id, clientPayload);
     setShowClientModal(null);
@@ -677,7 +677,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             <button onClick={() => handleOpenUserModal('NEW')} className="bg-blue-600 text-white px-4 py-2 rounded-xl font-black text-xs uppercase shadow-md active:scale-95"><i className="fa-solid fa-user-plus mr-2"></i>Novo Vendedor</button>
           </div>
           <div className="grid gap-3 px-1">
-            {props.users.filter(u => u.role === 'VENDEDOR').map(u => (
+            {props.users.filter(u => u.role === 'VENDEDOR').sort((a, b) => (a.rota || '').localeCompare(b.rota || '')).map(u => (
               <div key={u.id} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <div className="w-12 h-12 bg-gray-100 rounded-2xl overflow-hidden flex items-center justify-center">{u.foto ? <img src={u.foto} className="w-full h-full object-cover" /> : <i className="fa-solid fa-user text-gray-400 text-xl"></i>}</div>
@@ -851,11 +851,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
               </div>
               <div className="space-y-1">
                 <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Rota</label>
-                <select value={clientForm.rota || 'ROTA_01'} onChange={e => setClientForm({...clientForm, rota: e.target.value})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold">
-                  {Array.from({ length: 50 }).map((_, i) => {
-                    const r = `ROTA_${String(i + 1).padStart(2, '0')}`;
-                    return <option key={r} value={r}>Rota {String(i + 1).padStart(2, '0')}</option>;
-                  })}
+                <select value={clientForm.rota || availableRoutes[0] || 'ROTA_01'} onChange={e => setClientForm({...clientForm, rota: e.target.value})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold">
+                  {availableRoutes.length > 0 ? (
+                    availableRoutes.map(r => (
+                      <option key={r} value={r}>{formatRouteName(r)}</option>
+                    ))
+                  ) : (
+                    <option value="ROTA_01">Sem rotas disponíveis</option>
+                  )}
                 </select>
               </div>
               <button onClick={handlePinLocation} className="w-full bg-indigo-50 text-indigo-600 font-black py-3 rounded-2xl uppercase text-[10px] tracking-widest flex items-center justify-center gap-2 mb-2">

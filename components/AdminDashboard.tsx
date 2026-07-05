@@ -26,6 +26,7 @@ interface AdminDashboardProps {
   deleteClient: (id: string) => void;
   addUser: (nome: string, foto?: string, telefone?: string) => void;
   updateUser: (id: string, data: Partial<User>) => void;
+  deleteUser: (id: string) => Promise<boolean>;
   payCommission: (vId: string, amount: number, type: 'TOTAL' | 'PARCIAL', adminId: string) => void;
   setCommissions: any;
   updateEstoqueCentral: any;
@@ -110,7 +111,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [partialAmount, setPartialAmount] = useState<string>('');
   const [periodoRelatorio, setPeriodoRelatorio] = useState<'HOJE' | 'SEMANA' | 'MES' | 'GERAL'>('MES');
 
-  const [confirmDelete, setConfirmDelete] = useState<{ id: string, type: 'PRODUCT' | 'CLIENT', name: string } | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<{ id: string, type: 'PRODUCT' | 'CLIENT' | 'USER', name: string } | null>(null);
 
   const [pwUser, setPwUser] = useState<string>('');
   const [pwNew, setPwNew] = useState<string>('');
@@ -126,14 +127,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const pix2InputRef = useRef<HTMLInputElement>(null);
   const userPhotoInputRef = useRef<HTMLInputElement>(null);
 
-  // Helper para formatar o nome da rota (ex: ROTA_01 -> Rota 01)
   const formatRouteName = (rota: string | undefined) => {
     if (!rota) return "Sem Rota";
     const num = rota.replace('ROTA_', '');
     return `Rota ${num}`;
   };
 
-  // Pega todas as rotas únicas existentes para os filtros e para alocação de clientes
   const availableRoutes = useMemo(() => {
     const routes = new Set(props.users.filter(u => u.role === 'VENDEDOR').map(u => u.rota).filter(Boolean));
     return Array.from(routes).sort() as string[];
@@ -223,13 +222,64 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     const salesInPeriod = props.sales.filter(s => filterByPeriod(s.data, periodoRelatorio));
     const totalVendas = salesInPeriod.reduce((acc, curr) => acc + (curr.valorTotal ?? 0), 0);
     const paidCommissions = props.payoutLogs.filter(l => filterByPeriod(l.dataPagamento, periodoRelatorio)).reduce((acc, curr) => acc + (curr.valorPago ?? 0), 0);
+    
+    // Mapas de análise
     const clientMap: { [id: string]: number } = {};
-    salesInPeriod.forEach(s => { clientMap[s.clientId] = (clientMap[s.clientId] || 0) + (s.valorTotal || 0); });
-    const topClients = Object.entries(clientMap).map(([id, total]) => ({ id, nome: props.clients.find(c => c.id === id)?.nomeFantasia || 'Cliente Desconhecido', total: Number(total.toFixed(2)) })).sort((a, b) => b.total - a.total).slice(0, 10);
-    const prodMap: { [id: string]: number } = {};
-    salesInPeriod.forEach(s => { s.itens.forEach(i => { prodMap[i.produtoId] = (prodMap[i.produtoId] || 0) + (i.quantidade || 0); }); });
-    const topProducts = Object.entries(prodMap).map(([id, qtd]) => ({ id, nome: props.products.find(p => p.id === id)?.nome || 'Produto Desconhecido', qtd })).sort((a, b) => b.qtd - a.qtd).slice(0, 10);
-    return { totalVendas: Number(totalVendas.toFixed(2)), totalComissaoPaga: Number(paidCommissions.toFixed(2)), topClients, topProducts };
+    const prodQtyMap: { [id: string]: number } = {};
+    const prodProfitMap: { [id: string]: number } = {};
+    const prodSalesMap: { [id: string]: number } = {};
+
+    salesInPeriod.forEach(s => { 
+      clientMap[s.clientId] = (clientMap[s.clientId] || 0) + (s.valorTotal || 0); 
+      s.itens.forEach(i => {
+        const product = props.products.find(p => p.id === i.produtoId);
+        const qty = i.quantidade || 0;
+        const salePrice = i.precoVenda || 0;
+        const costPrice = product?.precoCusto || 0;
+        
+        prodQtyMap[i.produtoId] = (prodQtyMap[i.produtoId] || 0) + qty;
+        prodSalesMap[i.produtoId] = (prodSalesMap[i.produtoId] || 0) + (salePrice * qty);
+        
+        // Lucro = (Preço Venda - Preço Custo) * Qtd
+        const profit = (salePrice - costPrice) * qty;
+        prodProfitMap[i.produtoId] = (prodProfitMap[i.produtoId] || 0) + profit;
+      });
+    });
+
+    const topClients = Object.entries(clientMap)
+      .map(([id, total]) => ({ id, nome: props.clients.find(c => c.id === id)?.nomeFantasia || 'Cliente Desconhecido', total: Number(total.toFixed(2)) }))
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 10);
+
+    const topProducts = Object.entries(prodQtyMap)
+      .map(([id, qtd]) => ({ id, nome: props.products.find(p => p.id === id)?.nome || 'Produto Desconhecido', qtd }))
+      .sort((a, b) => b.qtd - a.qtd)
+      .slice(0, 10);
+
+    // Produtos mais rentáveis (Maior Lucro Total)
+    const profitableProducts = Object.entries(prodProfitMap)
+      .map(([id, profit]) => ({ id, nome: props.products.find(p => p.id === id)?.nome || 'Produto', profit: Number(profit.toFixed(2)) }))
+      .sort((a, b) => b.profit - a.profit)
+      .slice(0, 10);
+
+    // Produtos menos rentáveis (Vendem, mas dão pouco lucro total)
+    const leastProfitableProducts = Object.entries(prodProfitMap)
+      .filter(([_, profit]) => profit > 0)
+      .map(([id, profit]) => {
+        const qty = prodQtyMap[id] || 0;
+        const sales = prodSalesMap[id] || 0;
+        return { 
+          id, 
+          nome: props.products.find(p => p.id === id)?.nome || 'Produto', 
+          profit: Number(profit.toFixed(2)),
+          qty,
+          margin: sales > 0 ? (profit / sales) * 100 : 0
+        };
+      })
+      .sort((a, b) => a.profit - b.profit)
+      .slice(0, 10);
+
+    return { totalVendas: Number(totalVendas.toFixed(2)), totalComissaoPaga: Number(paidCommissions.toFixed(2)), topClients, topProducts, profitableProducts, leastProfitableProducts };
   }, [props.sales, props.payoutLogs, props.clients, props.products, periodoRelatorio]);
 
   const handleOpenPayout = (v: User) => {
@@ -317,12 +367,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     showToast("Produto salvo!");
   };
 
-  const handleConfirmDelete = () => {
+  const handleConfirmDelete = async () => {
     if (!confirmDelete) return;
     if (confirmDelete.type === 'PRODUCT') props.deleteProduct(confirmDelete.id);
     else if (confirmDelete.type === 'CLIENT') props.deleteClient(confirmDelete.id);
+    else if (confirmDelete.type === 'USER') await props.deleteUser(confirmDelete.id);
     setConfirmDelete(null);
-    showToast(confirmDelete.type === 'PRODUCT' ? "Produto removido" : "Cliente removido");
+    showToast(`${confirmDelete.type === 'USER' ? 'Vendedor' : confirmDelete.type === 'PRODUCT' ? 'Produto' : 'Cliente'} removido`);
   };
 
   const handleOpenClient = (c: Client | 'NEW') => {
@@ -687,7 +738,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                     <span className="text-[8px] font-black px-1.5 py-0.5 rounded uppercase bg-blue-100 text-blue-600">{formatRouteName(u.rota)}</span>
                   </div>
                 </div>
-                <button onClick={() => handleOpenUserModal(u)} className="w-10 h-10 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center active:scale-95"><i className="fa-solid fa-pencil-alt text-xs"></i></button>
+                <div className="flex gap-2">
+                  <button onClick={() => handleOpenUserModal(u)} className="w-10 h-10 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center active:scale-95"><i className="fa-solid fa-pencil-alt text-xs"></i></button>
+                  <button onClick={() => setConfirmDelete({ id: u.id, type: 'USER', name: u.nome })} className="bg-rose-50 text-rose-600 w-10 h-10 rounded-2xl border border-rose-100 flex items-center justify-center active:scale-90 transition-all shadow-sm"><i className="fa-solid fa-trash-can text-sm"></i></button>
+                </div>
               </div>
             ))}
           </div>
@@ -734,20 +788,58 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         <div className="space-y-6 py-4">
           <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Relatórios</h2></div>
           <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner">{(['HOJE', 'SEMANA', 'MES', 'GERAL'] as const).map(p => (<button key={p} onClick={() => setPeriodoRelatorio(p)} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${periodoRelatorio === p ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>{p}</button>))}</div>
+          
           <div className="grid grid-cols-2 gap-4">
             <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100"><p className="text-[9px] font-black uppercase text-gray-400 mb-1">Total Vendido</p><h2 className="text-xl font-black text-gray-800">R$ {reportStats.totalVendas.toFixed(2)}</h2></div>
             <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100"><p className="text-[9px] font-black uppercase text-gray-400 mb-1">Comissões Pagas</p><h2 className="text-xl font-black text-emerald-600">R$ {reportStats.totalComissaoPaga.toFixed(2)}</h2></div>
           </div>
+
+          <div className="bg-blue-600 p-6 rounded-[2.5rem] shadow-xl text-white">
+            <h3 className="font-black uppercase text-xs tracking-widest mb-4 flex items-center gap-2"><i className="fa-solid fa-crown text-yellow-400"></i> Mais Rentáveis (Lucro Total)</h3>
+            <div className="space-y-3">
+              {reportStats.profitableProducts.map((p, i) => (
+                <div key={p.id} className="flex justify-between items-center bg-white/10 p-3 rounded-2xl border border-white/10">
+                  <div className="flex items-center gap-3">
+                    <span className="text-[10px] font-black opacity-40">#{i+1}</span>
+                    <span className="text-[11px] font-bold uppercase truncate max-w-[140px]">{p.nome}</span>
+                  </div>
+                  <span className="text-xs font-black">R$ {p.profit.toFixed(2)}</span>
+                </div>
+              ))}
+              {reportStats.profitableProducts.length === 0 && <div className="text-center py-4 text-[10px] uppercase font-bold opacity-40">Nenhum dado no período</div>}
+            </div>
+          </div>
+
+          <div className="bg-rose-600 p-6 rounded-[2.5rem] shadow-xl text-white">
+            <h3 className="font-black uppercase text-xs tracking-widest mb-4 flex items-center gap-2"><i className="fa-solid fa-triangle-exclamation"></i> Menos Rentáveis (Baixo Lucro)</h3>
+            <div className="space-y-3">
+              {reportStats.leastProfitableProducts.map((p, i) => (
+                <div key={p.id} className="flex justify-between items-center bg-white/10 p-3 rounded-2xl border border-white/10">
+                  <div className="flex items-center gap-3">
+                    <span className="text-[10px] font-black opacity-40">#{i+1}</span>
+                    <span className="text-[11px] font-bold uppercase truncate max-w-[140px]">{p.nome}</span>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-xs font-black">R$ {p.profit.toFixed(2)}</p>
+                    <p className="text-[8px] font-bold opacity-60">{p.qty} un • {p.margin.toFixed(1)}% margem</p>
+                  </div>
+                </div>
+              ))}
+              {reportStats.leastProfitableProducts.length === 0 && <div className="text-center py-4 text-[10px] uppercase font-bold opacity-40">Nenhum dado no período</div>}
+            </div>
+          </div>
+
           <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 space-y-4">
-            <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider">Top 10 Clientes</h3>
+            <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider flex items-center gap-2"><i className="fa-solid fa-users text-blue-500"></i> Top 10 Clientes</h3>
             <div className="divide-y divide-gray-50">
               {reportStats.topClients.map((c, i) => (
                 <div key={c.id} className="py-3 flex justify-between items-center"><div className="flex items-center gap-3"><span className="text-xs font-black text-gray-300">#{i+1}</span><span className="text-xs font-bold text-gray-700 uppercase">{c.nome}</span></div><span className="text-xs font-black text-gray-900">R$ {c.total.toFixed(2)}</span></div>
               ))}
             </div>
           </div>
+
           <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 space-y-4">
-            <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider">Top 10 Produtos</h3>
+            <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider flex items-center gap-2"><i className="fa-solid fa-box text-orange-500"></i> Top 10 Mais Vendidos (Qtd)</h3>
             <div className="divide-y divide-gray-50">
               {reportStats.topProducts.map((p, i) => (
                 <div key={p.id} className="py-3 flex justify-between items-center"><div className="flex items-center gap-3"><span className="text-xs font-black text-gray-300">#{i+1}</span><span className="text-xs font-bold text-gray-700 uppercase">{p.nome}</span></div><span className="text-xs font-black text-blue-600">{p.qtd} un</span></div>
@@ -817,7 +909,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         </div>
       )}
 
-      {/* MODAL DE CLIENTE (ADICIONAR / EDITAR) */}
       {showClientModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6">
           <div className="bg-white w-full max-w-md rounded-[2rem] p-8 shadow-2xl overflow-y-auto max-h-[90vh]">
@@ -873,7 +964,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         </div>
       )}
 
-      {/* MODAL DE PRODUTO (ADICIONAR / EDITAR) */}
       {showProductModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6">
           <div className="bg-white w-full max-w-md rounded-[2rem] p-8 shadow-2xl overflow-y-auto max-h-[90vh]">
@@ -931,7 +1021,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         </div>
       )}
 
-      {/* MODAL DE ENTRADA DE ESTOQUE */}
       {showEntryModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6">
           <div className="bg-white w-full max-w-xs rounded-3xl p-8 shadow-2xl text-center">
@@ -975,7 +1064,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         </div>
       )}
 
-      {/* CONFIRMAÇÃO DE ENVIO DE CARGA PENDENTE */}
       {showConfirmSync && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6">
           <div className="bg-white w-full max-w-xs rounded-3xl p-8 text-center shadow-2xl">
@@ -989,7 +1077,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         </div>
       )}
 
-      {/* CONFIRMAÇÃO DE APLICAÇÃO DIRETA DE CARGA */}
       {showConfirmApply && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6">
           <div className="bg-white w-full max-w-xs rounded-3xl p-8 text-center shadow-2xl">
@@ -1003,7 +1090,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         </div>
       )}
 
-      {/* MODAL DE PAGAMENTO DE COMISSÃO */}
       {payoutVendedor && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6">
           <div className="bg-white w-full max-w-xs rounded-3xl p-8 shadow-2xl text-center">
@@ -1029,7 +1115,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         </div>
       )}
 
-      {/* CONFIRMAÇÃO DE EXCLUSÃO (PRODUTO / CLIENTE) */}
       {confirmDelete && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6">
           <div className="bg-white w-full max-w-xs rounded-3xl p-8 text-center shadow-2xl">

@@ -80,4 +80,13 @@ export const userService = {
       rota: data.rota
     } as User;
   },
+
+  async deleteUser(id: string): Promise<boolean> {
+    const { error } = await supabase.from('app_users').delete().eq('id', id);
+    if (error) {
+      console.error('Erro ao excluir usuário:', error);
+      return false;
+    }
+    return true;
+  }
 };

@@ -10,7 +10,7 @@ export const categoryService = {
       .order('name', { ascending: true });
       
     if (error) {
-      console.error('Erro ao buscar categorias:', error);
+      console.error('[categoryService] Erro ao buscar categorias:', error);
       return [];
     }
     return data as Category[];
@@ -24,7 +24,7 @@ export const categoryService = {
       .single();
       
     if (error) {
-      console.error('Erro ao inserir categoria:', error);
+      console.error('[categoryService] Erro ao inserir categoria:', error);
       return null;
     }
     return data as Category;
@@ -41,7 +41,7 @@ export const categoryService = {
       .eq('id', id);
       
     if (error) {
-      console.error('Erro ao atualizar categoria:', error);
+      console.error('[categoryService] Erro ao atualizar categoria:', error);
       return false;
     }
     return true;
@@ -50,7 +50,7 @@ export const categoryService = {
   async deleteCategory(id: string): Promise<boolean> {
     const { error } = await supabase.from('product_categories').delete().eq('id', id);
     if (error) {
-      console.error('Erro ao excluir categoria:', error);
+      console.error('[categoryService] Erro ao excluir categoria:', error);
       return false;
     }
     return true;

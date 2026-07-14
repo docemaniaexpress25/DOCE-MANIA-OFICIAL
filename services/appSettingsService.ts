@@ -38,23 +38,25 @@ export const appSettingsService = {
       .from('app_settings')
       .select('*')
       .eq('id', 'global_settings')
-      .single();
+      .maybeSingle(); // Usando maybeSingle para evitar erros de 'nenhuma linha encontrada'
 
-    if (error && error.code !== 'PGRST116') {
+    if (error) {
       console.error('Erro ao buscar configurações:', error);
+      return DEFAULT_SETTINGS;
     }
 
     if (!data) {
-      await this.updateSettings(DEFAULT_SETTINGS);
+      // Retorna os padrões APENAS para exibição se a linha não existir, 
+      // mas NÃO salva no banco automaticamente para não apagar dados por erro de rede.
       return DEFAULT_SETTINGS;
     }
 
     return {
       logo: data.logo ?? DEFAULT_SETTINGS.logo,
-      margemGlobalAtiva: !!data.margem_global_ativa,
-      margemGlobalValor: safeNumber(data.margem_global_valor),
-      margemMinimaAtiva: !!data.margem_minima_ativa,
-      margemMinima: safeNumber(data.margem_minima),
+      margemGlobalAtiva: data.margem_global_ativa !== undefined ? !!data.margem_global_ativa : DEFAULT_SETTINGS.margemGlobalAtiva,
+      margemGlobalValor: data.margem_global_valor !== undefined ? safeNumber(data.margem_global_valor) : DEFAULT_SETTINGS.margemGlobalValor,
+      margemMinimaAtiva: data.margem_minima_ativa !== undefined ? !!data.margem_minima_ativa : DEFAULT_SETTINGS.margemMinimaAtiva,
+      margemMinima: data.margem_minima !== undefined ? safeNumber(data.margem_minima) : DEFAULT_SETTINGS.margemMinima,
       pix1Name: data.pix1_name ?? DEFAULT_SETTINGS.pix1Name,
       pix1Code: data.pix1_code ?? DEFAULT_SETTINGS.pix1Code,
       pix2Name: data.pix2_name ?? DEFAULT_SETTINGS.pix2Name,

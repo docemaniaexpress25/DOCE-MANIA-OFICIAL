@@ -14,6 +14,11 @@ export interface User {
   rota?: string;
 }
 
+export interface Category {
+  id: string;
+  name: string;
+}
+
 export interface Product {
   id: string;
   nome: string;
@@ -22,6 +27,7 @@ export interface Product {
   comissaoPercentual: number;
   estoquePrincipal: number;
   ativo: boolean;
+  categoryId?: string;
 }
 
 export interface Carga {

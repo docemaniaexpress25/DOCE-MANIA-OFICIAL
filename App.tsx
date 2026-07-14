@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { User, Product, Carga, Sale, Commission, Client, PaymentMethod, CargaPendente, CommissionPaymentLog, SystemMessage, Expense } from './types';
+import { User, Product, Carga, Sale, Commission, Client, PaymentMethod, CargaPendente, CommissionPaymentLog, SystemMessage, Expense, Category } from './types';
 import AdminDashboard from './components/AdminDashboard';
 import VendedorDashboard from './components/VendedorDashboard';
 import Login from './components/Login';
@@ -13,6 +13,7 @@ import { messageService } from './services/messageService';
 import { cargaService } from './services/cargaService';
 import { dailyRouteService } from './services/dailyRouteService';
 import { expenseService } from './services/expenseService';
+import { categoryService } from './services/categoryService';
 import { supabase } from './supabaseClient';
 import { loadLocalState, saveLocalState, DailyRouteState } from './utils/persistence';
 
@@ -42,6 +43,7 @@ const App: React.FC = () => {
   const [users, setUsers] = useState<User[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
 
   const [cargas, setCargas] = useState<Carga[]>([]);
   const [cargasPendentes, setCargasPendentes] = useState<CargaPendente[]>([]);
@@ -102,14 +104,16 @@ const App: React.FC = () => {
       setCompanyName(settings.companyName ?? "DOCE MANIA DISTRIBUIDORA");
       setCompanyCnpj(settings.companyCnpj ?? "00.000.000/0001-00");
 
-      const [u, cl, p] = await Promise.all([
+      const [u, cl, p, cats] = await Promise.all([
         userService.getAllUsers(),
         clientService.getAllClients(),
-        productService.getAllProducts()
+        productService.getAllProducts(),
+        categoryService.getAllCategories()
       ]);
       
       setUsers(u);
       setClients(cl);
+      setCategories(cats);
       
       const order = settings.productOrder || [];
       const sortedProducts = [...p].sort((a, b) => {
@@ -257,8 +261,8 @@ const App: React.FC = () => {
     return success;
   };
 
-  const addProduct = async (nome: string, custo: number, venda: number, comissao: number, estoque: number = 0) => {
-    const res = await productService.insertProduct({ nome, precoCusto: custo, precoVenda: venda, comissaoPercentual: comissao, estoquePrincipal: estoque, ativo: true });
+  const addProduct = async (nome: string, custo: number, venda: number, comissao: number, estoque: number = 0, categoryId?: string) => {
+    const res = await productService.insertProduct({ nome, precoCusto: custo, precoVenda: venda, comissaoPercentual: comissao, estoquePrincipal: estoque, ativo: true, categoryId });
     if (res) {
       await appSettingsService.updateSettings({ productOrder: [...productOrder, res.id] });
       fetchCoreData();
@@ -299,6 +303,16 @@ const App: React.FC = () => {
 
   const deleteClient = async (id: string) => {
     await clientService.deleteClient(id);
+    fetchCoreData();
+  };
+
+  const addCategory = async (name: string) => {
+    await categoryService.insertCategory(name);
+    fetchCoreData();
+  };
+
+  const deleteCategory = async (id: string) => {
+    await categoryService.deleteCategory(id);
     fetchCoreData();
   };
 
@@ -441,7 +455,7 @@ const App: React.FC = () => {
       <main className="container mx-auto p-4 max-w-lg">
         {currentUser.role === 'ADMIN' ? (
           <AdminDashboard 
-            {...{ products, users, cargas, clients, sales, commissions, payoutLogs, expenses, logo, margemGlobalAtiva, margemGlobalValor, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, adminNotification, companyName, companyCnpj, orderedProductIds: productOrder }}
+            {...{ products, users, cargas, clients, sales, commissions, payoutLogs, expenses, logo, margemGlobalAtiva, margemGlobalValor, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, adminNotification, companyName, companyCnpj, orderedProductIds: productOrder, categories }}
             addProduct={addProduct} updateProduct={updateProduct} deleteProduct={deleteProduct} registerStockEntry={()=>{}} adjustStockManual={()=>{}}
             syncVendedorCarga={syncVendedorCarga} applyCargaDirectly={applyCargaDirectly} addClient={addClient} updateClient={updateClient} deleteClient={deleteClient}
             addUser={addUser} updateUser={updateUser} deleteUser={deleteUser} payCommission={payCommission} setCommissions={()=>{}} updateEstoqueCentral={()=>{}} reinforceCarga={()=>{}} deleteSale={deleteSale} receiveAccount={receiveAccount}
@@ -449,7 +463,7 @@ const App: React.FC = () => {
             setMargemMinima={(v)=>updateSetting('margemMinima', v)} setMargemMinimaAtiva={(v)=>updateSetting('margemMinimaAtiva', v)} setPix1Name={(v)=>updateSetting('pix1Name', v)} setPix1Code={(v)=>updateSetting('pix1Code', v)}
             setPix2Name={(v)=>updateSetting('pix2Name', v)} setPix2Code={(v)=>updateSetting('pix2Code', v)} clearAdminNotification={() => setAdminNotification(null)} setOrderedProductIds={(v)=>updateSetting('productOrder', v)}
             setCompanyName={(v)=>updateSetting('companyName', v)} setCompanyCnpj={(v)=>updateSetting('companyCnpj', v)}
-            activateAllProducts={activateAllProducts}
+            activateAllProducts={activateAllProducts} addCategory={addCategory} deleteCategory={deleteCategory}
           />
         ) : (
           <VendedorDashboard 

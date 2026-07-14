@@ -30,6 +30,7 @@ interface AdminDashboardProps {
   deleteUser: (id: string) => Promise<boolean>;
   payCommission: (vId: string, amount: number, type: 'TOTAL' | 'PARCIAL', adminId: string) => void;
   addCategory: (name: string) => void;
+  updateCategory: (id: string, updates: Partial<Category>) => void;
   deleteCategory: (id: string) => void;
   setCommissions: any;
   updateEstoqueCentral: any;
@@ -114,6 +115,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [pwUser, setPwUser] = useState<string>('');
   const [pwNew, setPwNew] = useState<string>('');
   const [newCatName, setNewCatName] = useState('');
+  const [editingCategory, setEditingCategory] = useState<Category | null>(null);
 
   const [pForm, setPForm] = useState({ nome: '', custo: '', venda: '', comissao: '', margem: '', ativo: true, estoquePrincipal: '', categoryId: '' });
   const [clientForm, setClientForm] = useState<Partial<Client>>({ nomeFantasia: '', telefone: '', endereco: '', bairro: '', diaRoteiro: 1, ativo: true, ativarCnpj: false, cnpj: '', pinLocalizacao: '', ordem: 0, rota: 'ROTA_01' });
@@ -301,6 +303,20 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     showToast("Ordem atualizada!");
   };
 
+  const moveCategory = (id: string, dir: 'UP' | 'DOWN') => {
+    const idx = props.categories.findIndex(c => c.id === id);
+    if (idx === -1) return;
+    const targetIdx = dir === 'UP' ? idx - 1 : idx + 1;
+    if (targetIdx < 0 || targetIdx >= props.categories.length) return;
+    
+    const current = props.categories[idx];
+    const target = props.categories[targetIdx];
+    
+    props.updateCategory(current.id, { display_order: target.display_order || 0 });
+    props.updateCategory(target.id, { display_order: current.display_order || 0 });
+    showToast("Ordem atualizada!");
+  };
+
   const updatePriceFromMargin = (custo: number, margemPercent: number) => {
     const c = Number(custo) || 0;
     const m = Number(margemPercent) || 0;
@@ -419,6 +435,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     props.addCategory(newCatName);
     setNewCatName('');
     showToast("Categoria adicionada!");
+  };
+
+  const handleUpdateCategoryName = () => {
+    if (!editingCategory || !newCatName) return;
+    props.updateCategory(editingCategory.id, { name: newCatName });
+    setEditingCategory(null);
+    setNewCatName('');
+    showToast("Categoria atualizada!");
   };
 
   const handleConfirmReceive = (method: PaymentMethod) => {
@@ -602,16 +626,28 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 space-y-6">
             <h3 className="font-black text-gray-800 uppercase text-xs tracking-widest mb-4">Categorias de Produto</h3>
             <div className="flex gap-2">
-              <input value={newCatName} onChange={e => setNewCatName(e.target.value)} placeholder="Nova Categoria" className="flex-1 p-3 bg-gray-50 border rounded-xl font-bold" />
-              <button onClick={handleAddCategory} className="bg-blue-600 text-white px-4 py-2 rounded-xl font-black text-xs uppercase shadow-md active:scale-95"><i className="fa-solid fa-plus"></i></button>
+              <input value={newCatName} onChange={e => setNewCatName(e.target.value)} placeholder={editingCategory ? "Novo nome categoria" : "Nova Categoria"} className="flex-1 p-3 bg-gray-50 border rounded-xl font-bold" />
+              {editingCategory ? (
+                <div className="flex gap-2">
+                   <button onClick={handleUpdateCategoryName} className="bg-emerald-600 text-white px-4 py-2 rounded-xl font-black text-xs uppercase shadow-md active:scale-95"><i className="fa-solid fa-check"></i></button>
+                   <button onClick={() => { setEditingCategory(null); setNewCatName(''); }} className="bg-gray-400 text-white px-4 py-2 rounded-xl font-black text-xs uppercase shadow-md active:scale-95"><i className="fa-solid fa-xmark"></i></button>
+                </div>
+              ) : (
+                <button onClick={handleAddCategory} className="bg-blue-600 text-white px-4 py-2 rounded-xl font-black text-xs uppercase shadow-md active:scale-95"><i className="fa-solid fa-plus"></i></button>
+              )}
             </div>
             <div className="grid gap-2">
               {props.categories.map(cat => (
                 <div key={cat.id} className="flex justify-between items-center bg-gray-50 p-3 rounded-xl">
                   <span className="font-bold text-sm uppercase text-gray-700">{cat.name}</span>
-                  {cat.name !== 'Elma Chips' && (
-                    <button onClick={() => setConfirmDelete({ id: cat.id, type: 'CATEGORY', name: cat.name })} className="text-rose-500 p-2"><i className="fa-solid fa-trash-can text-xs"></i></button>
-                  )}
+                  <div className="flex items-center gap-1">
+                    <button onClick={() => moveCategory(cat.id, 'UP')} className="w-8 h-8 bg-white border text-gray-400 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-chevron-up text-[10px]"></i></button>
+                    <button onClick={() => moveCategory(cat.id, 'DOWN')} className="w-8 h-8 bg-white border text-gray-400 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-chevron-down text-[10px]"></i></button>
+                    <button onClick={() => { setEditingCategory(cat); setNewCatName(cat.name); }} className="w-8 h-8 bg-blue-50 text-blue-600 rounded-lg flex items-center justify-center active:scale-90 ml-2"><i className="fa-solid fa-pencil text-[10px]"></i></button>
+                    {cat.name !== 'Elma Chips' && (
+                      <button onClick={() => setConfirmDelete({ id: cat.id, type: 'CATEGORY', name: cat.name })} className="w-8 h-8 bg-rose-50 text-rose-500 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-trash-can text-[10px]"></i></button>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -687,11 +723,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       )}
 
       {showClientModal && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-w-md rounded-[2rem] p-8 shadow-2xl overflow-y-auto max-h-[90vh]"><h3 className="font-black text-gray-800 uppercase text-sm mb-6 text-center">{showClientModal === 'NEW' ? 'Novo Cliente' : 'Editar Cliente'}</h3><div className="space-y-4"><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome Fantasia</label><input value={clientForm.nomeFantasia || ''} onChange={e => setClientForm({...clientForm, nomeFantasia: e.target.value})} placeholder="Nome Fantasia" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Telefone</label><input value={clientForm.telefone || ''} onChange={e => setClientForm({...clientForm, telefone: e.target.value})} placeholder="Telefone" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Endereço</label><input value={clientForm.endereco || ''} onChange={e => setClientForm({...clientForm, endereco: e.target.value})} placeholder="Endereço" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Bairro</label><input value={clientForm.bairro || ''} onChange={e => setClientForm({...clientForm, bairro: e.target.value})} placeholder="Bairro" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Dia de Atendimento</label><select value={clientForm.diaRoteiro ?? 1} onChange={e => setClientForm({...clientForm, diaRoteiro: parseInt(e.target.value)})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold">{[1, 2, 3, 4, 5, 6].map(d => (<option key={d} value={d}>{DIAS_SEMANA[d]}</option>))}</select></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Rota</label><select value={clientForm.rota || availableRoutes[0] || 'ROTA_01'} onChange={e => setClientForm({...clientForm, rota: e.target.value})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold">{availableRoutes.length > 0 ? availableRoutes.map(r => (<option key={r} value={r}>{formatRouteName(r)}</option>)) : <option value="ROTA_01">Sem rotas disponíveis</option>}</select></div><button onClick={handlePinLocation} className="w-full bg-indigo-50 text-indigo-600 font-black py-3 rounded-2xl uppercase text-[10px] tracking-widest flex items-center justify-center gap-2 mb-2"><i className="fa-solid fa-location-dot"></i> Localização Atual</button><button onClick={handleSaveClient} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 uppercase text-xs mt-4 tracking-widest">Salvar Cliente</button><button onClick={() => setShowClientModal(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button></div></div></div>
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-md rounded-[2rem] p-8 shadow-2xl overflow-y-auto max-h-[90vh]"><h3 className="font-black text-gray-800 uppercase text-sm mb-6 text-center">{showClientModal === 'NEW' ? 'Novo Cliente' : 'Editar Cliente'}</h3><div className="space-y-4"><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome Fantasia</label><input value={clientForm.nomeFantasia || ''} onChange={e => setClientForm({...clientForm, nomeFantasia: e.target.value})} placeholder="Nome Fantasia" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Telefone</label><input value={clientForm.telefone || ''} onChange={e => setClientForm({...clientForm, telefone: e.target.value})} placeholder="Telefone" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Endereço</label><input value={clientForm.endereco || ''} onChange={e => setClientForm({...clientForm, endereco: e.target.value})} placeholder="Endereço" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Bairro</label><input value={clientForm.bairro || ''} onChange={e => setClientForm({...clientForm, bairro: e.target.value})} placeholder="Bairro" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Dia de Atendimento</label><select value={clientForm.diaRoteiro ?? 1} onChange={e => setClientForm({...clientForm, diaRoteiro: parseInt(e.target.value)})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold">{[1, 2, 3, 4, 5, 6].map(d => (<option key={d} value={d}>{DIAS_SEMANA[d]}</option>))}</select></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Rota</label><select value={clientForm.rota || availableRoutes[0] || 'ROTA_01'} onChange={e => setClientForm({...clientForm, rota: e.target.value})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold">{availableRoutes.length > 0 ? availableRoutes.map(r => (<option key={r} value={r}>{formatRouteName(r)}</option>)) : <option value="ROTA_01">Sem rotas disponíveis</option>}</select></div><button onClick={handlePinLocation} className="w-full bg-indigo-50 text-indigo-600 font-black py-3 rounded-2xl uppercase text-[10px] tracking-widest flex items-center justify-center gap-2 mb-2"><i className="fa-solid fa-location-dot"></i> Localização Atual</button><button onClick={handleSaveClient} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 uppercase text-xs mt-4 tracking-widest">Salvar Cliente</button><button onClick={() => setShowClientModal(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button></div></div></div>
       )}
 
       {showProductModal && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-md rounded-[2rem] p-8 shadow-2xl overflow-y-auto max-h-[90vh]"><h3 className="font-black text-gray-800 uppercase text-sm mb-6 text-center">{showProductModal === 'NEW' ? 'Novo Produto' : 'Editar Produto'}</h3><div className="space-y-4"><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome do Produto</label><input value={pForm.nome} onChange={e => setPForm({...pForm, nome: e.target.value})} placeholder="Nome do Produto" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div>
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-w-md rounded-[2rem] p-8 shadow-2xl overflow-y-auto max-h-[90vh]"><h3 className="font-black text-gray-800 uppercase text-sm mb-6 text-center">{showProductModal === 'NEW' ? 'Novo Produto' : 'Editar Produto'}</h3><div className="space-y-4"><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome do Produto</label><input value={pForm.nome} onChange={e => setPForm({...pForm, nome: e.target.value})} placeholder="Nome do Produto" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div>
         <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Categoria</label><select value={pForm.categoryId} onChange={e => setPForm({...pForm, categoryId: e.target.value})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase">{props.categories.map(cat => (<option key={cat.id} value={cat.id}>{cat.name}</option>))}</select></div>
         <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Custo R$</label><input type="number" value={pForm.custo} onChange={e => { const val = parseFloat(e.target.value) || 0; const venda = props.margemGlobalAtiva ? updatePriceFromMargin(val, props.margemGlobalValor) : parseFloat(pForm.venda) || 0; const margem = props.margemGlobalAtiva ? props.margemGlobalValor : updateMarginFromPrice(val, venda); setPForm({...pForm, custo: e.target.value, venda: venda.toFixed(2), margem: margem.toFixed(2)}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Venda R$</label><input type="number" disabled={props.margemGlobalAtiva} value={pForm.venda} onChange={e => { const val = parseFloat(e.target.value) || 0; const margem = updateMarginFromPrice(parseFloat(pForm.custo) || 0, val); setPForm({...pForm, venda: e.target.value, margem: margem.toFixed(2)}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold disabled:opacity-50" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Margem %</label><input type="number" disabled={props.margemGlobalAtiva} value={pForm.margem} onChange={e => { const val = parseFloat(e.target.value) || 0; const venda = updatePriceFromMargin(parseFloat(pForm.custo) || 0, val); setPForm({...pForm, margem: e.target.value, venda: venda.toFixed(2)}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold disabled:opacity-50" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Comissão %</label><input type="number" value={pForm.comissao} onChange={e => setPForm({...pForm, comissao: e.target.value})} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Estoque Inicial</label><input type="number" disabled={showProductModal !== 'NEW'} value={pForm.estoquePrincipal} onChange={e => setPForm({...pForm, estoquePrincipal: e.target.value})} placeholder="0" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold disabled:opacity-50" /></div><div className="flex items-center gap-2 py-2"><input type="checkbox" id="prod_ativo" checked={pForm.ativo} onChange={e => setPForm({...pForm, ativo: e.target.checked})} className="w-5 h-5" /><label htmlFor="prod_ativo" className="text-xs font-bold text-gray-700 uppercase">Produto Ativo</label></div><button onClick={handleSaveProduct} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 uppercase text-xs mt-4 tracking-widest">Salvar Produto</button><button onClick={() => setShowProductModal(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button></div></div></div>
       )}

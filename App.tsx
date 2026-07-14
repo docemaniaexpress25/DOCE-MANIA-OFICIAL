@@ -307,7 +307,13 @@ const App: React.FC = () => {
   };
 
   const addCategory = async (name: string) => {
-    await categoryService.insertCategory(name);
+    const maxOrder = categories.length > 0 ? Math.max(...categories.map(c => c.display_order || 0)) : 0;
+    await categoryService.insertCategory(name, maxOrder + 1);
+    fetchCoreData();
+  };
+
+  const updateCategory = async (id: string, updates: Partial<Category>) => {
+    await categoryService.updateCategory(id, updates);
     fetchCoreData();
   };
 
@@ -463,7 +469,7 @@ const App: React.FC = () => {
             setMargemMinima={(v)=>updateSetting('margemMinima', v)} setMargemMinimaAtiva={(v)=>updateSetting('margemMinimaAtiva', v)} setPix1Name={(v)=>updateSetting('pix1Name', v)} setPix1Code={(v)=>updateSetting('pix1Code', v)}
             setPix2Name={(v)=>updateSetting('pix2Name', v)} setPix2Code={(v)=>updateSetting('pix2Code', v)} clearAdminNotification={() => setAdminNotification(null)} setOrderedProductIds={(v)=>updateSetting('productOrder', v)}
             setCompanyName={(v)=>updateSetting('companyName', v)} setCompanyCnpj={(v)=>updateSetting('companyCnpj', v)}
-            activateAllProducts={activateAllProducts} addCategory={addCategory} deleteCategory={deleteCategory}
+            activateAllProducts={activateAllProducts} addCategory={addCategory} updateCategory={updateCategory} deleteCategory={deleteCategory}
           />
         ) : (
           <VendedorDashboard 

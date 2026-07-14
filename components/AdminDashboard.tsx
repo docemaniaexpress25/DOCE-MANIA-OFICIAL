@@ -67,7 +67,7 @@ interface AdminDashboardProps {
   activateAllProducts?: () => void;
 }
 
-type TabType = 'HOME' | 'CATALOGO' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'SETTINGS';
+type TabType = 'HOME' | 'CATALOGO' | 'CATEGORIAS' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'SETTINGS';
 
 const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [activeTab, setActiveTab] = useState<TabType>(() => loadLocalState('admin_activeTab', 'HOME'));
@@ -539,6 +539,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Painel Administrativo</h2><p className="text-xs text-gray-400 font-semibold uppercase tracking-wider">Gestão e Controle Total</p></div>
           <div className="grid grid-cols-2 gap-4">
             <MenuCard icon="fa-boxes-stacked" title="Estoque" tab="CATALOGO" color="bg-blue-50 text-blue-600" />
+            <MenuCard icon="fa-tags" title="Categorias" tab="CATEGORIAS" color="bg-indigo-50 text-indigo-600" />
             <MenuCard icon="fa-truck-ramp-box" title="Cargas" tab="CARGAS" color="bg-orange-50 text-orange-600" />
             <MenuCard icon="fa-users" title="Clientes" tab="CLIENTES" color="bg-green-50 text-green-600" />
             <MenuCard icon="fa-wallet" title="Caixa" tab="CAIXA" color="bg-yellow-50 text-yellow-600" />
@@ -563,6 +564,42 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                 <div className="flex gap-2"><div className="flex flex-col gap-1"><button onClick={() => moveProduct(p.id, 'UP')} className="w-6 h-6 bg-gray-50 text-gray-400 rounded flex items-center justify-center active:scale-90"><i className="fa-solid fa-chevron-up text-[10px]"></i></button><button onClick={() => moveProduct(p.id, 'DOWN')} className="w-6 h-6 bg-gray-50 text-gray-400 rounded flex items-center justify-center active:scale-90"><i className="fa-solid fa-chevron-down text-[10px]"></i></button></div><button onClick={() => setShowEntryModal(p)} className="bg-emerald-50 text-emerald-600 w-10 h-10 rounded-xl border border-emerald-100 flex items-center justify-center active:scale-90 shadow-sm"><i className="fa-solid fa-plus-circle text-lg"></i></button><button onClick={() => handleOpenProduct(p)} className="bg-blue-50 text-blue-600 w-10 h-10 rounded-xl border border-blue-100 flex items-center justify-center active:scale-90 shadow-sm"><i className="fa-solid fa-pencil-alt text-sm"></i></button></div>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'CATEGORIAS' && (
+        <div className="space-y-6 py-4">
+          <div className="px-2 flex justify-between items-center"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Categorias</h2><button onClick={() => { setEditingCategory(null); setNewCatName(''); }} className="bg-blue-600 text-white px-4 py-2 rounded-xl font-black text-xs uppercase shadow-md active:scale-95"><i className="fa-solid fa-plus mr-2"></i>Nova</button></div>
+          <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 space-y-6">
+            <div className="flex gap-2">
+              <input value={newCatName} onChange={e => setNewCatName(e.target.value)} placeholder={editingCategory ? "Editar nome..." : "Nome da Categoria"} className="flex-1 p-4 bg-gray-50 border border-gray-100 rounded-2xl font-bold uppercase outline-none focus:ring-2 focus:ring-indigo-100" />
+              {editingCategory ? (
+                <div className="flex gap-2">
+                   <button onClick={handleUpdateCategoryName} className="bg-emerald-600 text-white w-14 h-14 rounded-2xl flex items-center justify-center shadow-lg active:scale-95 transition-all"><i className="fa-solid fa-check"></i></button>
+                   <button onClick={() => { setEditingCategory(null); setNewCatName(''); }} className="bg-gray-400 text-white w-14 h-14 rounded-2xl flex items-center justify-center shadow-lg active:scale-95 transition-all"><i className="fa-solid fa-xmark"></i></button>
+                </div>
+              ) : (
+                <button onClick={handleAddCategory} className="bg-blue-600 text-white w-14 h-14 rounded-2xl flex items-center justify-center shadow-lg active:scale-95 transition-all"><i className="fa-solid fa-plus"></i></button>
+              )}
+            </div>
+            <div className="grid gap-3">
+              {props.categories.map(cat => (
+                <div key={cat.id} className="flex justify-between items-center bg-gray-50 p-4 rounded-3xl border border-gray-100">
+                  <span className="font-black text-sm uppercase text-gray-700">{cat.name}</span>
+                  <div className="flex items-center gap-2">
+                    <div className="flex flex-col gap-1 mr-2">
+                      <button onClick={() => moveCategory(cat.id, 'UP')} className="w-8 h-8 bg-white border text-gray-400 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-chevron-up text-[10px]"></i></button>
+                      <button onClick={() => moveCategory(cat.id, 'DOWN')} className="w-8 h-8 bg-white border text-gray-400 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-chevron-down text-[10px]"></i></button>
+                    </div>
+                    <button onClick={() => { setEditingCategory(cat); setNewCatName(cat.name); }} className="w-10 h-10 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center active:scale-90 border border-blue-100 shadow-sm"><i className="fa-solid fa-pencil text-xs"></i></button>
+                    {cat.name !== 'Elma Chips' && (
+                      <button onClick={() => setConfirmDelete({ id: cat.id, type: 'CATEGORY', name: cat.name })} className="w-10 h-10 bg-rose-50 text-rose-500 rounded-xl flex items-center justify-center active:scale-90 border border-rose-100 shadow-sm"><i className="fa-solid fa-trash-can text-xs"></i></button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       )}
@@ -623,36 +660,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         <div className="space-y-8 py-4">
           <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Configurações</h2></div>
           
-          <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 space-y-6">
-            <h3 className="font-black text-gray-800 uppercase text-xs tracking-widest mb-4">Categorias de Produto</h3>
-            <div className="flex gap-2">
-              <input value={newCatName} onChange={e => setNewCatName(e.target.value)} placeholder={editingCategory ? "Novo nome categoria" : "Nova Categoria"} className="flex-1 p-3 bg-gray-50 border rounded-xl font-bold" />
-              {editingCategory ? (
-                <div className="flex gap-2">
-                   <button onClick={handleUpdateCategoryName} className="bg-emerald-600 text-white px-4 py-2 rounded-xl font-black text-xs uppercase shadow-md active:scale-95"><i className="fa-solid fa-check"></i></button>
-                   <button onClick={() => { setEditingCategory(null); setNewCatName(''); }} className="bg-gray-400 text-white px-4 py-2 rounded-xl font-black text-xs uppercase shadow-md active:scale-95"><i className="fa-solid fa-xmark"></i></button>
-                </div>
-              ) : (
-                <button onClick={handleAddCategory} className="bg-blue-600 text-white px-4 py-2 rounded-xl font-black text-xs uppercase shadow-md active:scale-95"><i className="fa-solid fa-plus"></i></button>
-              )}
-            </div>
-            <div className="grid gap-2">
-              {props.categories.map(cat => (
-                <div key={cat.id} className="flex justify-between items-center bg-gray-50 p-3 rounded-xl">
-                  <span className="font-bold text-sm uppercase text-gray-700">{cat.name}</span>
-                  <div className="flex items-center gap-1">
-                    <button onClick={() => moveCategory(cat.id, 'UP')} className="w-8 h-8 bg-white border text-gray-400 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-chevron-up text-[10px]"></i></button>
-                    <button onClick={() => moveCategory(cat.id, 'DOWN')} className="w-8 h-8 bg-white border text-gray-400 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-chevron-down text-[10px]"></i></button>
-                    <button onClick={() => { setEditingCategory(cat); setNewCatName(cat.name); }} className="w-8 h-8 bg-blue-50 text-blue-600 rounded-lg flex items-center justify-center active:scale-90 ml-2"><i className="fa-solid fa-pencil text-[10px]"></i></button>
-                    {cat.name !== 'Elma Chips' && (
-                      <button onClick={() => setConfirmDelete({ id: cat.id, type: 'CATEGORY', name: cat.name })} className="w-8 h-8 bg-rose-50 text-rose-500 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-trash-can text-[10px]"></i></button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
           <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 flex flex-col items-center gap-6"><h3 className="font-black text-gray-800 uppercase text-xs tracking-widest">Logo da Empresa</h3><div onClick={() => logoInputRef.current?.click()} className="w-full aspect-[2/1] bg-gray-50 border-4 border-dashed border-gray-200 rounded-3xl flex items-center justify-center cursor-pointer overflow-hidden group transition-all hover:bg-gray-100">{props.logo ? <img src={props.logo} className="w-full h-full object-contain" /> : <div className="text-center"><i className="fa-solid fa-cloud-arrow-up text-3xl text-gray-300 mb-2"></i><p className="text-[10px] font-black text-gray-400 uppercase">Fazer Upload</p></div>}</div><input type="file" ref={logoInputRef} className="hidden" accept="image/*" onChange={handleLogoUpload} /></div>
           
           <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 space-y-6"><h3 className="font-black text-gray-800 uppercase text-xs tracking-widest mb-4">Regras de Margem</h3>
@@ -727,7 +734,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       )}
 
       {showProductModal && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-w-md rounded-[2rem] p-8 shadow-2xl overflow-y-auto max-h-[90vh]"><h3 className="font-black text-gray-800 uppercase text-sm mb-6 text-center">{showProductModal === 'NEW' ? 'Novo Produto' : 'Editar Produto'}</h3><div className="space-y-4"><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome do Produto</label><input value={pForm.nome} onChange={e => setPForm({...pForm, nome: e.target.value})} placeholder="Nome do Produto" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div>
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-md rounded-[2rem] p-8 shadow-2xl overflow-y-auto max-h-[90vh]"><h3 className="font-black text-gray-800 uppercase text-sm mb-6 text-center">{showProductModal === 'NEW' ? 'Novo Produto' : 'Editar Produto'}</h3><div className="space-y-4"><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome do Produto</label><input value={pForm.nome} onChange={e => setPForm({...pForm, nome: e.target.value})} placeholder="Nome do Produto" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div>
         <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Categoria</label><select value={pForm.categoryId} onChange={e => setPForm({...pForm, categoryId: e.target.value})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase">{props.categories.map(cat => (<option key={cat.id} value={cat.id}>{cat.name}</option>))}</select></div>
         <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Custo R$</label><input type="number" value={pForm.custo} onChange={e => { const val = parseFloat(e.target.value) || 0; const venda = props.margemGlobalAtiva ? updatePriceFromMargin(val, props.margemGlobalValor) : parseFloat(pForm.venda) || 0; const margem = props.margemGlobalAtiva ? props.margemGlobalValor : updateMarginFromPrice(val, venda); setPForm({...pForm, custo: e.target.value, venda: venda.toFixed(2), margem: margem.toFixed(2)}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Venda R$</label><input type="number" disabled={props.margemGlobalAtiva} value={pForm.venda} onChange={e => { const val = parseFloat(e.target.value) || 0; const margem = updateMarginFromPrice(parseFloat(pForm.custo) || 0, val); setPForm({...pForm, venda: e.target.value, margem: margem.toFixed(2)}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold disabled:opacity-50" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Margem %</label><input type="number" disabled={props.margemGlobalAtiva} value={pForm.margem} onChange={e => { const val = parseFloat(e.target.value) || 0; const venda = updatePriceFromMargin(parseFloat(pForm.custo) || 0, val); setPForm({...pForm, margem: e.target.value, venda: venda.toFixed(2)}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold disabled:opacity-50" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Comissão %</label><input type="number" value={pForm.comissao} onChange={e => setPForm({...pForm, comissao: e.target.value})} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Estoque Inicial</label><input type="number" disabled={showProductModal !== 'NEW'} value={pForm.estoquePrincipal} onChange={e => setPForm({...pForm, estoquePrincipal: e.target.value})} placeholder="0" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold disabled:opacity-50" /></div><div className="flex items-center gap-2 py-2"><input type="checkbox" id="prod_ativo" checked={pForm.ativo} onChange={e => setPForm({...pForm, ativo: e.target.checked})} className="w-5 h-5" /><label htmlFor="prod_ativo" className="text-xs font-bold text-gray-700 uppercase">Produto Ativo</label></div><button onClick={handleSaveProduct} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 uppercase text-xs mt-4 tracking-widest">Salvar Produto</button><button onClick={() => setShowProductModal(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button></div></div></div>
       )}

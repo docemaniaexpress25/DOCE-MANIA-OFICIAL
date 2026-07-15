@@ -71,6 +71,19 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
 
   const allCategoriesVisited = visitedCategoryIds.length >= categories.length;
 
+  const soldProductIds = useMemo(() => {
+    const clientSales = sales.filter(s => s.clientId === client.id);
+    const ids = new Set<string>();
+    clientSales.forEach(s => {
+      s.itens?.forEach(item => {
+        if (item.produtoId) {
+          ids.add(item.produtoId);
+        }
+      });
+    });
+    return ids;
+  }, [sales, client.id]);
+
   const formatCategoryName = (name: string) => {
     const n = name.toUpperCase();
     if (n.includes('ELMA')) return 'ELMA';
@@ -276,12 +289,19 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           const minPrice = getMinPrice(p);
           const itemPrice = item ? parseFloat(item.precoVenda) || 0 : p.precoVenda;
           const isBelowMin = margemMinimaAtiva && item && item.quantidade > 0 && itemPrice < minPrice;
+          const hasBeenSold = soldProductIds.has(p.id);
 
           return (
             <div key={p.id} className={`bg-white p-2.5 rounded-2xl border flex flex-col gap-1 ${item?.quantidade ? 'border-blue-200 bg-blue-50/30' : 'border-gray-100'}`}>
               <div className="flex items-center gap-3 w-full">
                 <div className="flex-1 min-w-0">
-                  <h3 className="font-bold text-gray-800 text-[11px] leading-tight uppercase truncate">{p.nome}</h3> 
+                  <h3 className="font-bold text-gray-800 text-[11px] leading-tight uppercase truncate flex items-center gap-1.5">
+                    <span 
+                      className={`w-2 h-2 rounded-full flex-shrink-0 ${hasBeenSold ? 'bg-emerald-500' : 'bg-rose-500'}`} 
+                      title={hasBeenSold ? 'Este produto já foi vendido para este cliente' : 'Este produto nunca foi vendido para este cliente'}
+                    />
+                    {p.nome}
+                  </h3> 
                   <div className="flex items-center gap-2 mt-1">
                      <div className={`flex items-center gap-1.5 bg-white border px-2 py-0.5 rounded-lg ${isBelowMin ? 'border-rose-500 bg-rose-50' : 'border-gray-100'}`}>
                         <span className={`text-[9px] font-black ${isBelowMin ? 'text-rose-500' : 'text-gray-300'}`}>R$</span>

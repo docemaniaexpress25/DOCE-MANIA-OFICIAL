@@ -28,7 +28,6 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const [view, setView] = useState<PDVView>('CART');
   const cartKey = `pdv_cart_${vendedorId}_${client.id}`;
   
-  // Inicializa com a primeira categoria disponível se não houver 'TODOS'
   const [activeCategoryId, setActiveCategoryId] = useState<string>(() => {
     return categories.length > 0 ? categories[0].id : '';
   });
@@ -49,7 +48,6 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const [isTrocaActive, setIsTrocaActive] = useState(false);
   const [valorTroca, setValorTroca] = useState('');
 
-  // Sincroniza a categoria ativa caso a lista mude e o ID atual suma
   useEffect(() => {
     if (activeCategoryId === '' && categories.length > 0) {
       setActiveCategoryId(categories[0].id);
@@ -59,6 +57,16 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   useEffect(() => {
     saveLocalState(cartKey, cart);
   }, [cart, cartKey]);
+
+  // Função para abreviar nomes de categoria conforme solicitado
+  const formatCategoryName = (name: string) => {
+    const n = name.toUpperCase();
+    if (n.includes('ELMA')) return 'ELMA';
+    if (n.includes('SALTY')) return 'SALTY';
+    if (n.includes('DOCE')) return 'DOCES';
+    if (n.includes('BEBIDA')) return 'BEBIDAS';
+    return n.substring(0, 5);
+  };
 
   const getOrderedItems = (): SaleItem[] => {
     return products
@@ -223,14 +231,14 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           <button onClick={() => setCart({})} className="w-9 h-9 bg-rose-50 text-rose-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-trash-can text-sm"></i></button>
         </div>
 
-        <div className="grid grid-cols-2 gap-1 px-0.5">
+        <div className="grid grid-cols-4 gap-1 px-0.5">
           {categories.map(cat => (
             <button 
               key={cat.id}
               onClick={() => setActiveCategoryId(cat.id)}
-              className={`py-1.5 px-2 rounded-lg text-[8px] font-black uppercase transition-all truncate border ${activeCategoryId === cat.id ? 'bg-blue-600 text-white border-blue-600 shadow-sm' : 'bg-gray-50 text-gray-400 border-gray-100'}`}
+              className={`py-2 px-1 rounded-lg text-[8px] font-black uppercase transition-all truncate border ${activeCategoryId === cat.id ? 'bg-blue-600 text-white border-blue-600 shadow-sm' : 'bg-gray-50 text-gray-400 border-gray-100'}`}
             >
-              {cat.name}
+              {formatCategoryName(cat.name)}
             </button>
           ))}
         </div>

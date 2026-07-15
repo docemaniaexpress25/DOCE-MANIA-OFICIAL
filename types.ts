@@ -20,6 +20,13 @@ export interface Category {
   display_order?: number;
 }
 
+export interface Subcategory {
+  id: string;
+  categoryId: string;
+  name: string;
+  display_order?: number;
+}
+
 export interface Product {
   id: string;
   nome: string;
@@ -29,6 +36,7 @@ export interface Product {
   estoquePrincipal: number;
   ativo: boolean;
   categoryId?: string;
+  subcategoryId?: string;
 }
 
 export interface Carga {

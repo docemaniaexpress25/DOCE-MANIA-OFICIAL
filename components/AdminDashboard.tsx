@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Product, User, Carga, Sale, Commission, Client, PaymentMethod, CommissionPaymentLog, Expense, Category } from '../types';
+import { Product, User, Carga, Sale, Commission, Client, PaymentMethod, CommissionPaymentLog, Expense, Category, Subcategory } from '../types';
 import { DIAS_SEMANA } from '../constants';
 import Cupom from './Cupom';
 import ClientHistory from './ClientHistory';
@@ -15,7 +15,8 @@ interface AdminDashboardProps {
   payoutLogs: CommissionPaymentLog[];
   expenses: Expense[];
   categories: Category[];
-  addProduct: (n: string, c: number, v: number, com: number, estoque?: number, categoryId?: string) => void;
+  subcategories: Subcategory[];
+  addProduct: (n: string, c: number, v: number, com: number, estoque?: number, categoryId?: string, subcategoryId?: string) => void;
   updateProduct: (id: string, data: Partial<Product>) => void;
   deleteProduct: (id: string) => void;
   registerStockEntry: (id: string, q: number, c: number) => void;
@@ -32,6 +33,9 @@ interface AdminDashboardProps {
   addCategory: (name: string) => void;
   updateCategory: (id: string, updates: Partial<Category>) => void;
   deleteCategory: (id: string) => void;
+  addSubcategory: (catId: string, name: string) => void;
+  updateSubcategory: (id: string, updates: Partial<Subcategory>) => void;
+  deleteSubcategory: (id: string) => void;
   setCommissions: any;
   updateEstoqueCentral: any;
   reinforceCarga: any;
@@ -110,14 +114,18 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [partialAmount, setPartialAmount] = useState<string>('');
   const [periodoRelatorio, setPeriodoRelatorio] = useState<'HOJE' | 'SEMANA' | 'MES' | 'GERAL'>('MES');
 
-  const [confirmDelete, setConfirmDelete] = useState<{ id: string, type: 'PRODUCT' | 'CLIENT' | 'USER' | 'CATEGORY', name: string } | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<{ id: string, type: 'PRODUCT' | 'CLIENT' | 'USER' | 'CATEGORY' | 'SUBCATEGORY', name: string } | null>(null);
 
   const [pwUser, setPwUser] = useState<string>('');
   const [pwNew, setPwNew] = useState<string>('');
   const [newCatName, setNewCatName] = useState('');
   const [editingCategory, setEditingCategory] = useState<Category | null>(null);
+  
+  const [expandedCategorySub, setExpandedCategorySub] = useState<string | null>(null);
+  const [newSubName, setNewSubName] = useState('');
+  const [editingSub, setEditingSub] = useState<Subcategory | null>(null);
 
-  const [pForm, setPForm] = useState({ nome: '', custo: '', venda: '', comissao: '', margem: '', ativo: true, estoquePrincipal: '', categoryId: '' });
+  const [pForm, setPForm] = useState({ nome: '', custo: '', venda: '', comissao: '', margem: '', ativo: true, estoquePrincipal: '', categoryId: '', subcategoryId: '' });
   const [clientForm, setClientForm] = useState<Partial<Client>>({ nomeFantasia: '', telefone: '', endereco: '', bairro: '', diaRoteiro: 1, ativo: true, ativarCnpj: false, cnpj: '', pinLocalizacao: '', ordem: 0, rota: 'ROTA_01' });
   const [userForm, setUserForm] = useState<Partial<User>>({ nome: '', foto: '', telefone: '', pin: '', placaVeiculo: '', rota: 'ROTA_01' });
   const [selectedVendedorId, setSelectedVendedorId] = useState('');
@@ -246,7 +254,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         return d > latest ? d : latest;
       }, new Date(0));
       const diffDays = Math.ceil(Math.abs(today.getTime() - lastSale.getTime()) / (1000 * 60 * 60 * 24));
-      return diffDays >= 25; // Atualizado para 25 dias
+      return diffDays >= 25; 
     }).map(c => {
       const cSales = props.sales.filter(s => s.clientId === c.id);
       const lastSale = cSales.reduce((latest, s) => {
@@ -339,20 +347,20 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const handleOpenProduct = (p: Product | 'NEW') => {
     const elmaChipsCat = props.categories.find(c => c.name === 'Elma Chips');
     if (p === 'NEW') {
-      setPForm({ nome: '', custo: '0.00', venda: props.margemGlobalAtiva ? updatePriceFromMargin(0, props.margemGlobalValor).toFixed(2) : '0.00', comissao: '0.00', margem: props.margemGlobalAtiva ? props.margemGlobalValor.toFixed(2) : '0.00', ativo: true, estoquePrincipal: '0', categoryId: elmaChipsCat?.id || '' });
+      setPForm({ nome: '', custo: '0.00', venda: props.margemGlobalAtiva ? updatePriceFromMargin(0, props.margemGlobalValor).toFixed(2) : '0.00', comissao: '0.00', margem: props.margemGlobalAtiva ? props.margemGlobalValor.toFixed(2) : '0.00', ativo: true, estoquePrincipal: '0', categoryId: elmaChipsCat?.id || '', subcategoryId: '' });
     } else {
       const precoVenda = Number(p.precoVenda) || 0;
       const precoCusto = Number(p.precoCusto) || 0;
       const margemCalculada = updateMarginFromPrice(precoCusto, precoVenda);
-      setPForm({ nome: p.nome ?? '', custo: precoCusto.toFixed(2), venda: precoVenda.toFixed(2), comissao: (p.comissaoPercentual ?? 0).toFixed(2), margem: margemCalculada.toFixed(2), ativo: p.ativo ?? true, estoquePrincipal: (p.estoquePrincipal ?? 0).toString(), categoryId: p.categoryId || elmaChipsCat?.id || '' });
+      setPForm({ nome: p.nome ?? '', custo: precoCusto.toFixed(2), venda: precoVenda.toFixed(2), comissao: (p.comissaoPercentual ?? 0).toFixed(2), margem: margemCalculada.toFixed(2), ativo: p.ativo ?? true, estoquePrincipal: (p.estoquePrincipal ?? 0).toString(), categoryId: p.categoryId || elmaChipsCat?.id || '', subcategoryId: p.subcategoryId || '' });
     }
     setShowProductModal(p);
   };
 
   const handleSaveProduct = () => {
     if (!pForm.nome || pForm.custo === '' || pForm.venda === '' || pForm.comissao === '') { showToast("Preencha todos os campos.", 'error'); return; }
-    const data: Partial<Product> = { nome: pForm.nome, precoCusto: parseFloat(pForm.custo), precoVenda: parseFloat(pForm.venda), comissaoPercentual: parseFloat(pForm.comissao), ativo: pForm.ativo ?? true, estoquePrincipal: parseInt(pForm.estoquePrincipal) || 0, categoryId: pForm.categoryId || undefined };
-    if (showProductModal === 'NEW') props.addProduct(data.nome!, data.precoCusto!, data.precoVenda!, data.comissaoPercentual!, data.estoquePrincipal, data.categoryId);
+    const data: Partial<Product> = { nome: pForm.nome, precoCusto: parseFloat(pForm.custo), precoVenda: parseFloat(pForm.venda), comissaoPercentual: parseFloat(pForm.comissao), ativo: pForm.ativo ?? true, estoquePrincipal: parseInt(pForm.estoquePrincipal) || 0, categoryId: pForm.categoryId || undefined, subcategoryId: pForm.subcategoryId || undefined };
+    if (showProductModal === 'NEW') props.addProduct(data.nome!, data.precoCusto!, data.precoVenda!, data.comissaoPercentual!, data.estoquePrincipal, data.categoryId, data.subcategoryId);
     else if (typeof showProductModal === 'object') props.updateProduct(showProductModal.id, data);
     setShowProductModal(null);
     showToast("Produto salvo!");
@@ -364,6 +372,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     else if (confirmDelete.type === 'CLIENT') props.deleteClient(confirmDelete.id);
     else if (confirmDelete.type === 'USER') await props.deleteUser(confirmDelete.id);
     else if (confirmDelete.type === 'CATEGORY') props.deleteCategory(confirmDelete.id);
+    else if (confirmDelete.type === 'SUBCATEGORY') props.deleteSubcategory(confirmDelete.id);
     setConfirmDelete(null);
     showToast(`Removido com sucesso`);
   };
@@ -451,6 +460,21 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     setEditingCategory(null);
     setNewCatName('');
     showToast("Categoria atualizada!");
+  };
+  
+  const handleAddSubcategory = (catId: string) => {
+    if (!newSubName) return;
+    props.addSubcategory(catId, newSubName);
+    setNewSubName('');
+    showToast("Subcategoria adicionada!");
+  };
+
+  const handleUpdateSubName = () => {
+    if (!editingSub || !newSubName) return;
+    props.updateSubcategory(editingSub.id, { name: newSubName });
+    setEditingSub(null);
+    setNewSubName('');
+    showToast("Subcategoria atualizada!");
   };
 
   const handleConfirmReceive = (method: PaymentMethod) => {
@@ -591,7 +615,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
       {activeTab === 'CATEGORIAS' && (
         <div className="space-y-6 py-4">
-          <div className="px-2 flex justify-between items-center"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Categorias</h2></div>
+          <div className="px-2 flex justify-between items-center"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Categorias & Subs</h2></div>
           <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 space-y-6">
             <div className="flex gap-2">
               <input value={newCatName} onChange={e => setNewCatName(e.target.value)} placeholder={editingCategory ? "Editar nome..." : "Nome da Categoria"} className="flex-1 p-4 bg-gray-50 border border-gray-100 rounded-2xl font-bold uppercase outline-none focus:ring-2 focus:ring-indigo-100" />
@@ -606,18 +630,51 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             </div>
             <div className="grid gap-3">
               {props.categories.map(cat => (
-                <div key={cat.id} className="flex items-center bg-gray-50 p-4 rounded-3xl border border-gray-100">
-                  <div className="flex flex-col gap-1 mr-4">
-                    <button onClick={() => moveCategory(cat.id, 'UP')} className="w-8 h-8 bg-white border text-gray-400 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-chevron-up text-[10px]"></i></button>
-                    <button onClick={() => moveCategory(cat.id, 'DOWN')} className="w-8 h-8 bg-white border text-gray-400 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-chevron-down text-[10px]"></i></button>
+                <div key={cat.id} className="space-y-2">
+                  <div className="flex items-center bg-gray-50 p-4 rounded-3xl border border-gray-100">
+                    <div className="flex flex-col gap-1 mr-4">
+                      <button onClick={() => moveCategory(cat.id, 'UP')} className="w-8 h-8 bg-white border text-gray-400 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-chevron-up text-[10px]"></i></button>
+                      <button onClick={() => moveCategory(cat.id, 'DOWN')} className="w-8 h-8 bg-white border text-gray-400 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-chevron-down text-[10px]"></i></button>
+                    </div>
+                    <span className="flex-1 font-black text-sm uppercase text-gray-700 cursor-pointer" onClick={() => setExpandedCategorySub(expandedCategorySub === cat.id ? null : cat.id)}>
+                      {cat.name} 
+                      <span className="ml-2 text-[10px] text-indigo-400 font-bold">({props.subcategories.filter(s => s.categoryId === cat.id).length})</span>
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => setExpandedCategorySub(expandedCategorySub === cat.id ? null : cat.id)} className={`w-10 h-10 rounded-xl flex items-center justify-center active:scale-90 border shadow-sm ${expandedCategorySub === cat.id ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-indigo-400 border-gray-100'}`}><i className="fa-solid fa-list-ul text-xs"></i></button>
+                      <button onClick={() => { setEditingCategory(cat); setNewCatName(cat.name); }} className="w-10 h-10 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center active:scale-90 border border-blue-100 shadow-sm"><i className="fa-solid fa-pencil text-xs"></i></button>
+                      {cat.name !== 'Elma Chips' && (
+                        <button onClick={() => setConfirmDelete({ id: cat.id, type: 'CATEGORY', name: cat.name })} className="w-10 h-10 bg-rose-50 text-rose-500 rounded-xl flex items-center justify-center active:scale-90 border border-rose-100 shadow-sm"><i className="fa-solid fa-trash-can text-xs"></i></button>
+                      )}
+                    </div>
                   </div>
-                  <span className="flex-1 font-black text-sm uppercase text-gray-700">{cat.name}</span>
-                  <div className="flex items-center gap-2">
-                    <button onClick={() => { setEditingCategory(cat); setNewCatName(cat.name); }} className="w-10 h-10 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center active:scale-90 border border-blue-100 shadow-sm"><i className="fa-solid fa-pencil text-xs"></i></button>
-                    {cat.name !== 'Elma Chips' && (
-                      <button onClick={() => setConfirmDelete({ id: cat.id, type: 'CATEGORY', name: cat.name })} className="w-10 h-10 bg-rose-50 text-rose-500 rounded-xl flex items-center justify-center active:scale-90 border border-rose-100 shadow-sm"><i className="fa-solid fa-trash-can text-xs"></i></button>
-                    )}
-                  </div>
+                  
+                  {expandedCategorySub === cat.id && (
+                    <div className="ml-8 p-4 bg-indigo-50/30 rounded-2xl space-y-3 animate-in slide-in-from-top-2 duration-300">
+                      <div className="flex gap-2">
+                        <input value={newSubName} onChange={e => setNewSubName(e.target.value)} placeholder={editingSub ? "Editar sub..." : "Nova Subcategoria"} className="flex-1 p-3 bg-white border border-indigo-100 rounded-xl font-bold uppercase text-[10px] outline-none" />
+                        {editingSub ? (
+                          <div className="flex gap-1">
+                             <button onClick={handleUpdateSubName} className="bg-emerald-600 text-white w-10 h-10 rounded-xl flex items-center justify-center active:scale-95"><i className="fa-solid fa-check text-xs"></i></button>
+                             <button onClick={() => { setEditingSub(null); setNewSubName(''); }} className="bg-gray-400 text-white w-10 h-10 rounded-xl flex items-center justify-center active:scale-95"><i className="fa-solid fa-xmark text-xs"></i></button>
+                          </div>
+                        ) : (
+                          <button onClick={() => handleAddSubcategory(cat.id)} className="bg-indigo-600 text-white w-10 h-10 rounded-xl flex items-center justify-center active:scale-95"><i className="fa-solid fa-plus text-xs"></i></button>
+                        )}
+                      </div>
+                      <div className="grid gap-2">
+                        {props.subcategories.filter(s => s.categoryId === cat.id).map(sub => (
+                          <div key={sub.id} className="flex items-center bg-white p-3 rounded-xl border border-indigo-100">
+                            <span className="flex-1 font-bold text-[10px] uppercase text-gray-600">{sub.name}</span>
+                            <div className="flex gap-1">
+                              <button onClick={() => { setEditingSub(sub); setNewSubName(sub.name); }} className="w-8 h-8 text-blue-400 hover:text-blue-600"><i className="fa-solid fa-pencil text-[10px]"></i></button>
+                              <button onClick={() => setConfirmDelete({ id: sub.id, type: 'SUBCATEGORY', name: sub.name })} className="w-8 h-8 text-rose-400 hover:text-rose-600"><i className="fa-solid fa-trash-can text-[10px]"></i></button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -815,7 +872,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
       {showProductModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-md rounded-[2rem] p-8 shadow-2xl overflow-y-auto max-h-[90vh]"><h3 className="font-black text-gray-800 uppercase text-sm mb-6 text-center">{showProductModal === 'NEW' ? 'Novo Produto' : 'Editar Produto'}</h3><div className="space-y-4"><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome do Produto</label><input value={pForm.nome} onChange={e => setPForm({...pForm, nome: e.target.value})} placeholder="Nome do Produto" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div>
-        <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Categoria</label><select value={pForm.categoryId} onChange={e => setPForm({...pForm, categoryId: e.target.value})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase">{props.categories.map(cat => (<option key={cat.id} value={cat.id}>{cat.name}</option>))}</select></div>
+        <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Categoria</label><select value={pForm.categoryId} onChange={e => setPForm({...pForm, categoryId: e.target.value, subcategoryId: ''})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase">{props.categories.map(cat => (<option key={cat.id} value={cat.id}>{cat.name}</option>))}</select></div>
+        {pForm.categoryId && props.subcategories.filter(s => s.categoryId === pForm.categoryId).length > 0 && (
+          <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Subcategoria</label><select value={pForm.subcategoryId} onChange={e => setPForm({...pForm, subcategoryId: e.target.value})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase"><option value="">Nenhuma</option>{props.subcategories.filter(s => s.categoryId === pForm.categoryId).map(sub => (<option key={sub.id} value={sub.id}>{sub.name}</option>))}</select></div>
+        )}
         <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Custo R$</label><input type="number" value={pForm.custo} onChange={e => { const val = parseFloat(e.target.value) || 0; const venda = props.margemGlobalAtiva ? updatePriceFromMargin(val, props.margemGlobalValor) : parseFloat(pForm.venda) || 0; const margem = props.margemGlobalAtiva ? props.margemGlobalValor : updateMarginFromPrice(val, venda); setPForm({...pForm, custo: e.target.value, venda: venda.toFixed(2), margem: margem.toFixed(2)}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Venda R$</label><input type="number" disabled={props.margemGlobalAtiva} value={pForm.venda} onChange={e => { const val = parseFloat(e.target.value) || 0; const margem = updateMarginFromPrice(parseFloat(pForm.custo) || 0, val); setPForm({...pForm, venda: e.target.value, margem: margem.toFixed(2)}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold disabled:opacity-50" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Margem %</label><input type="number" disabled={props.margemGlobalAtiva} value={pForm.margem} onChange={e => { const val = parseFloat(e.target.value) || 0; const venda = updatePriceFromMargin(parseFloat(pForm.custo) || 0, val); setPForm({...pForm, margem: e.target.value, venda: venda.toFixed(2)}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold disabled:opacity-50" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Comissão %</label><input type="number" value={pForm.comissao} onChange={e => setPForm({...pForm, comissao: e.target.value})} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Estoque Central</label><input type="number" value={pForm.estoquePrincipal} onChange={e => setPForm({...pForm, estoquePrincipal: e.target.value})} placeholder="0" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="flex items-center gap-2 py-2"><input type="checkbox" id="prod_ativo" checked={pForm.ativo} onChange={e => setPForm({...pForm, ativo: e.target.checked})} className="w-5 h-5" /><label htmlFor="prod_ativo" className="text-xs font-bold text-gray-700 uppercase">Produto Ativo</label></div><button onClick={handleSaveProduct} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 uppercase text-xs mt-4 tracking-widest">Salvar Produto</button><button onClick={() => setShowProductModal(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button></div></div></div>
       )}
 

@@ -16,7 +16,8 @@ export const productService = {
       comissaoPercentual: Number(p.comissao_percentual) || 0,
       estoquePrincipal: Number(p.estoque_principal) || 0,
       ativo: !!p.ativo,
-      categoryId: p.category_id
+      categoryId: p.category_id,
+      subcategoryId: p.subcategory_id
     })) as Product[];
   },
 
@@ -28,7 +29,8 @@ export const productService = {
       comissao_percentual: product.comissaoPercentual,
       estoque_principal: product.estoquePrincipal,
       ativo: product.ativo,
-      category_id: product.categoryId
+      category_id: product.categoryId,
+      subcategory_id: product.subcategoryId
     };
 
     const { data, error } = await supabase.from('products').insert(payload).select().single();
@@ -45,7 +47,8 @@ export const productService = {
       comissaoPercentual: data.comissao_percentual,
       estoquePrincipal: data.estoque_principal,
       ativo: data.ativo,
-      categoryId: data.category_id
+      categoryId: data.category_id,
+      subcategoryId: data.subcategory_id
     } as Product;
   },
 
@@ -58,6 +61,7 @@ export const productService = {
     if (updates.estoquePrincipal !== undefined) payload.estoque_principal = updates.estoquePrincipal;
     if (updates.ativo !== undefined) payload.ativo = updates.ativo;
     if (updates.categoryId !== undefined) payload.category_id = updates.categoryId;
+    if (updates.subcategoryId !== undefined) payload.subcategory_id = updates.subcategoryId;
 
     const { data, error } = await supabase.from('products').update(payload).eq('id', id).select().single();
     if (error) {
@@ -73,7 +77,8 @@ export const productService = {
       comissaoPercentual: data.comissao_percentual,
       estoquePrincipal: data.estoque_principal,
       ativo: data.ativo,
-      categoryId: data.category_id
+      categoryId: data.category_id,
+      subcategoryId: data.subcategory_id
     } as Product;
   },
 

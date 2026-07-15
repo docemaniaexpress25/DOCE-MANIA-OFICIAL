@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { User, Product, Carga, Sale, Commission, Client, PaymentMethod, CargaPendente, CommissionPaymentLog, SystemMessage, Expense, Category } from './types';
+import { User, Product, Carga, Sale, Commission, Client, PaymentMethod, CargaPendente, CommissionPaymentLog, SystemMessage, Expense, Category, Subcategory } from './types';
 import AdminDashboard from './components/AdminDashboard';
 import VendedorDashboard from './components/VendedorDashboard';
 import Login from './components/Login';
@@ -44,6 +44,7 @@ const App: React.FC = () => {
   const [products, setProducts] = useState<Product[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [subcategories, setSubcategories] = useState<Subcategory[]>([]);
 
   const [cargas, setCargas] = useState<Carga[]>([]);
   const [cargasPendentes, setCargasPendentes] = useState<CargaPendente[]>([]);
@@ -104,16 +105,18 @@ const App: React.FC = () => {
       setCompanyName(settings.companyName ?? "DOCE MANIA DISTRIBUIDORA");
       setCompanyCnpj(settings.companyCnpj ?? "00.000.000/0001-00");
 
-      const [u, cl, p, cats] = await Promise.all([
+      const [u, cl, p, cats, subs] = await Promise.all([
         userService.getAllUsers(),
         clientService.getAllClients(),
         productService.getAllProducts(),
-        categoryService.getAllCategories()
+        categoryService.getAllCategories(),
+        categoryService.getAllSubcategories()
       ]);
       
       setUsers(u);
       setClients(cl);
       setCategories(cats);
+      setSubcategories(subs);
       
       const order = settings.productOrder || [];
       const sortedProducts = [...p].sort((a, b) => {
@@ -261,8 +264,8 @@ const App: React.FC = () => {
     return success;
   };
 
-  const addProduct = async (nome: string, custo: number, venda: number, comissao: number, estoque: number = 0, categoryId?: string) => {
-    const res = await productService.insertProduct({ nome, precoCusto: custo, precoVenda: venda, comissaoPercentual: comissao, estoquePrincipal: estoque, ativo: true, categoryId });
+  const addProduct = async (nome: string, custo: number, venda: number, comissao: number, estoque: number = 0, categoryId?: string, subcategoryId?: string) => {
+    const res = await productService.insertProduct({ nome, precoCusto: custo, precoVenda: venda, comissaoPercentual: comissao, estoquePrincipal: estoque, ativo: true, categoryId, subcategoryId });
     if (res) {
       await appSettingsService.updateSettings({ productOrder: [...productOrder, res.id] });
       fetchCoreData();
@@ -321,8 +324,25 @@ const App: React.FC = () => {
     await categoryService.deleteCategory(id);
     fetchCoreData();
   };
+  
+  const addSubcategory = async (catId: string, name: string) => {
+    const relevantSubs = subcategories.filter(s => s.categoryId === catId);
+    const maxOrder = relevantSubs.length > 0 ? Math.max(...relevantSubs.map(s => s.display_order || 0)) : 0;
+    await categoryService.insertSubcategory(catId, name, maxOrder + 1);
+    fetchCoreData();
+  };
 
-  const applyCargaDirectly = async (vId: string, itens: { produtoId: string, quantidade: number }[]) => {
+  const updateSubcategory = async (id: string, updates: Partial<Subcategory>) => {
+    await categoryService.updateSubcategory(id, updates);
+    fetchCoreData();
+  };
+
+  const deleteSubcategory = async (id: string) => {
+    await categoryService.deleteSubcategory(id);
+    fetchCoreData();
+  };
+
+  const applyCargaDirectly = async (vId: string, itens: { produtoId: string, nickname: string, quantidade: number }[]) => {
     try {
       await cargaService.applyCargaAdminRPC(vId, itens);
       setAdminNotification("Carga aplicada com sucesso!");
@@ -333,7 +353,7 @@ const App: React.FC = () => {
     }
   };
 
-  const syncVendedorCarga = async (vId: string, itens: { produtoId: string, quantidade: number }[]) => {
+  const syncVendedorCarga = async (vId: string, itens: { produtoId: string, nickname: string, quantidade: number }[]) => {
     await cargaService.insertCargaPendente({ vendedorId: vId, itens, data: new Date() });
     fetchTransactionalData();
   };
@@ -461,7 +481,7 @@ const App: React.FC = () => {
       <main className="container mx-auto p-4 max-w-lg">
         {currentUser.role === 'ADMIN' ? (
           <AdminDashboard 
-            {...{ products, users, cargas, clients, sales, commissions, payoutLogs, expenses, logo, margemGlobalAtiva, margemGlobalValor, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, adminNotification, companyName, companyCnpj, orderedProductIds: productOrder, categories }}
+            {...{ products, users, cargas, clients, sales, commissions, payoutLogs, expenses, logo, margemGlobalAtiva, margemGlobalValor, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, adminNotification, companyName, companyCnpj, orderedProductIds: productOrder, categories, subcategories }}
             addProduct={addProduct} updateProduct={updateProduct} deleteProduct={deleteProduct} registerStockEntry={()=>{}} adjustStockManual={()=>{}}
             syncVendedorCarga={syncVendedorCarga} applyCargaDirectly={applyCargaDirectly} addClient={addClient} updateClient={updateClient} deleteClient={deleteClient}
             addUser={addUser} updateUser={updateUser} deleteUser={deleteUser} payCommission={payCommission} setCommissions={()=>{}} updateEstoqueCentral={()=>{}} reinforceCarga={()=>{}} deleteSale={deleteSale} receiveAccount={receiveAccount}
@@ -470,6 +490,7 @@ const App: React.FC = () => {
             setPix2Name={(v)=>updateSetting('pix2Name', v)} setPix2Code={(v)=>updateSetting('pix2Code', v)} clearAdminNotification={() => setAdminNotification(null)} setOrderedProductIds={(v)=>updateSetting('productOrder', v)}
             setCompanyName={(v)=>updateSetting('companyName', v)} setCompanyCnpj={(v)=>updateSetting('companyCnpj', v)}
             activateAllProducts={activateAllProducts} addCategory={addCategory} updateCategory={updateCategory} deleteCategory={deleteCategory}
+            addSubcategory={addSubcategory} updateSubcategory={updateSubcategory} deleteSubcategory={deleteSubcategory}
           />
         ) : (
           <VendedorDashboard 

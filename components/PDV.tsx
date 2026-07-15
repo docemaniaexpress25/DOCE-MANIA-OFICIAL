@@ -28,7 +28,10 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const [view, setView] = useState<PDVView>('CART');
   const cartKey = `pdv_cart_${vendedorId}_${client.id}`;
   
-  const [activeCategoryId, setActiveCategoryId] = useState<string>('TODOS');
+  // Inicializa com a primeira categoria disponível se não houver 'TODOS'
+  const [activeCategoryId, setActiveCategoryId] = useState<string>(() => {
+    return categories.length > 0 ? categories[0].id : '';
+  });
   
   const [cart, setCart] = useState<{ [key: string]: { quantidade: number, precoVenda: string } }>(() => 
     loadLocalState(cartKey, {})
@@ -45,6 +48,13 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const [selectedPixSlot, setSelectedPixSlot] = useState<1 | 2>(1);
   const [isTrocaActive, setIsTrocaActive] = useState(false);
   const [valorTroca, setValorTroca] = useState('');
+
+  // Sincroniza a categoria ativa caso a lista mude e o ID atual suma
+  useEffect(() => {
+    if (activeCategoryId === '' && categories.length > 0) {
+      setActiveCategoryId(categories[0].id);
+    }
+  }, [categories, activeCategoryId]);
 
   useEffect(() => {
     saveLocalState(cartKey, cart);
@@ -169,7 +179,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   
   const filteredProducts = useMemo(() => {
     const productsInCarga = products.filter(p => productIdsInCarga.has(p.id));
-    if (activeCategoryId === 'TODOS') return productsInCarga;
+    if (!activeCategoryId) return productsInCarga;
     return productsInCarga.filter(p => p.categoryId === activeCategoryId);
   }, [products, productIdsInCarga, activeCategoryId]);
 
@@ -213,18 +223,12 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           <button onClick={() => setCart({})} className="w-9 h-9 bg-rose-50 text-rose-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-trash-can text-sm"></i></button>
         </div>
 
-        <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar -mx-3 px-3">
-          <button 
-            onClick={() => setActiveCategoryId('TODOS')}
-            className={`flex-shrink-0 px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${activeCategoryId === 'TODOS' ? 'bg-blue-600 text-white shadow-md' : 'bg-gray-100 text-gray-400'}`}
-          >
-            Todos
-          </button>
+        <div className="grid grid-cols-2 gap-1.5 px-0.5">
           {categories.map(cat => (
             <button 
               key={cat.id}
               onClick={() => setActiveCategoryId(cat.id)}
-              className={`flex-shrink-0 px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${activeCategoryId === cat.id ? 'bg-blue-600 text-white shadow-md' : 'bg-gray-100 text-gray-400'}`}
+              className={`py-2 px-2 rounded-xl text-[9px] font-black uppercase transition-all truncate border ${activeCategoryId === cat.id ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-gray-50 text-gray-400 border-gray-100'}`}
             >
               {cat.name}
             </button>
@@ -279,9 +283,15 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
             </div>
           );
         })}
+        {filteredProducts.length === 0 && (
+          <div className="py-20 text-center opacity-30 flex flex-col items-center gap-4">
+            <i className="fa-solid fa-box-open text-5xl"></i>
+            <p className="font-black uppercase tracking-widest text-[10px]">Nenhum produto desta categoria na sua carga.</p>
+          </div>
+        )}
       </div>
 
-      <footer className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 p-4 pb-8 space-y-3 shadow-lg max-w-lg mx-auto z-[70]">
+      <footer className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 p-4 pb-8 space-y-3 shadow-[0_-10px_20px_rgba(0,0,0,0.05)] max-w-lg mx-auto z-[70]">
         {hasMarginViolation && (
           <div className="bg-rose-600 text-white p-3 rounded-xl text-center font-black text-[9px] uppercase tracking-widest animate-pulse flex items-center justify-center gap-2">
             <i className="fa-solid fa-circle-exclamation text-sm"></i>

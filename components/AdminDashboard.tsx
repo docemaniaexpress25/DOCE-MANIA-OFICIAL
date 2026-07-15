@@ -224,33 +224,19 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     const paidCommissions = props.payoutLogs.filter(l => filterByPeriod(l.dataPagamento, periodoRelatorio)).reduce((acc, curr) => acc + (curr.valorPago ?? 0), 0);
     const clientMap: { [id: string]: number } = {};
     const prodQtyMap: { [id: string]: number } = {};
-    const prodProfitMap: { [id: string]: number } = {};
-    const prodSalesMap: { [id: string]: number } = {};
 
     salesInPeriod.forEach(s => { 
       clientMap[s.clientId] = (clientMap[s.clientId] || 0) + (s.valorTotal || 0); 
       s.itens.forEach(i => {
-        const product = props.products.find(p => p.id === i.produtoId);
         const qty = i.quantidade || 0;
-        const salePrice = i.precoVenda || 0;
-        const costPrice = product?.precoCusto || 0;
         prodQtyMap[i.produtoId] = (prodQtyMap[i.produtoId] || 0) + qty;
-        prodSalesMap[i.produtoId] = (prodSalesMap[i.produtoId] || 0) + (salePrice * qty);
-        const profit = (salePrice - costPrice) * qty;
-        prodProfitMap[i.produtoId] = (prodProfitMap[i.produtoId] || 0) + profit;
       });
     });
 
     const topClients = Object.entries(clientMap).map(([id, total]) => ({ id, nome: props.clients.find(c => c.id === id)?.nomeFantasia || 'Cliente Desconhecido', total: Number(total.toFixed(2)) })).sort((a, b) => b.total - a.total).slice(0, 10);
     const topProducts = Object.entries(prodQtyMap).map(([id, qtd]) => ({ id, nome: props.products.find(p => p.id === id)?.nome || 'Produto Desconhecido', qtd })).sort((a, b) => b.qtd - a.qtd).slice(0, 10);
-    const profitableProducts = Object.entries(prodProfitMap).map(([id, profit]) => ({ id, nome: props.products.find(p => p.id === id)?.nome || 'Produto', profit: Number(profit.toFixed(2)) })).sort((a, b) => b.profit - a.profit).slice(0, 10);
-    const leastProfitableProducts = Object.entries(prodProfitMap).filter(([_, profit]) => profit > 0).map(([id, profit]) => {
-        const qty = prodQtyMap[id] || 0;
-        const sales = prodSalesMap[id] || 0;
-        return { id, nome: props.products.find(p => p.id === id)?.nome || 'Produto', profit: Number(profit.toFixed(2)), qty, margin: sales > 0 ? (profit / sales) * 100 : 0 };
-      }).sort((a, b) => a.profit - b.profit).slice(0, 10);
 
-    return { totalVendas: Number(totalVendas.toFixed(2)), totalComissaoPaga: Number(paidCommissions.toFixed(2)), topClients, topProducts, profitableProducts, leastProfitableProducts };
+    return { totalVendas: Number(totalVendas.toFixed(2)), totalComissaoPaga: Number(paidCommissions.toFixed(2)), topClients, topProducts };
   }, [props.sales, props.payoutLogs, props.clients, props.products, periodoRelatorio]);
 
   const handleOpenPayout = (v: User) => {
@@ -559,7 +545,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           <div className="px-1"><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar produto..." className="w-full p-4 bg-white border border-gray-100 rounded-2xl shadow-sm text-sm focus:ring-2 focus:ring-blue-100 outline-none" /></div>
           <div className="grid gap-2 px-1">
             {filteredProducts.map(p => (
-              <div key={p.id} className={`bg-white p-4 rounded-3xl border shadow-sm flex items-center justify-between transition-all hover:border-blue-200 ${!p.ativo ? 'opacity-50 grayscale' : ''}`}>
+              <div key={p.id} className={`bg-white p-4 rounded-3xl border shadow-sm flex items-center transition-all hover:border-blue-200 ${!p.ativo ? 'opacity-50 grayscale' : ''}`}>
                 <div className="flex flex-col gap-1 mr-4">
                   <button onClick={() => moveProduct(p.id, 'UP')} className="w-8 h-8 bg-gray-50 text-gray-400 rounded-lg flex items-center justify-center active:scale-90 border border-gray-100"><i className="fa-solid fa-chevron-up text-[10px]"></i></button>
                   <button onClick={() => moveProduct(p.id, 'DOWN')} className="w-8 h-8 bg-gray-50 text-gray-400 rounded-lg flex items-center justify-center active:scale-90 border border-gray-100"><i className="fa-solid fa-chevron-down text-[10px]"></i></button>
@@ -663,9 +649,38 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100"><p className="text-[9px] font-black uppercase text-gray-400 mb-1">Total Vendido</p><h2 className="text-xl font-black text-gray-800">R$ {reportStats.totalVendas.toFixed(2)}</h2></div>
             <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100"><p className="text-[9px] font-black uppercase text-gray-400 mb-1">Comissões Pagas</p><h2 className="text-xl font-black text-emerald-600">R$ {reportStats.totalComissaoPaga.toFixed(2)}</h2></div>
           </div>
-          <div className="bg-blue-600 p-6 rounded-[2.5rem] shadow-xl text-white"><h3 className="font-black uppercase text-xs tracking-widest mb-4 flex items-center gap-2"><i className="fa-solid fa-crown text-yellow-400"></i> Mais Rentáveis (Lucro Total)</h3><div className="space-y-3">{reportStats.profitableProducts.map((p, i) => (<div key={p.id} className="flex justify-between items-center bg-white/10 p-3 rounded-2xl border border-white/10"><div className="flex items-center gap-3"><span className="text-[10px] font-black opacity-40">#{i+1}</span><span className="text-[11px] font-bold uppercase truncate max-w-[140px]">{p.nome}</span></div><span className="text-xs font-black">R$ {p.profit.toFixed(2)}</span></div>))}</div></div>
-          <div className="bg-rose-600 p-6 rounded-[2.5rem] shadow-xl text-white"><h3 className="font-black uppercase text-xs tracking-widest mb-4 flex items-center gap-2"><i className="fa-solid fa-triangle-exclamation"></i> Menos Rentáveis (Baixo Lucro)</h3><div className="space-y-3">{reportStats.leastProfitableProducts.map((p, i) => (<div key={p.id} className="flex justify-between items-center bg-white/10 p-3 rounded-2xl border border-white/10"><div className="flex items-center gap-3"><span className="text-[10px] font-black opacity-40">#{i+1}</span><span className="text-[11px] font-bold uppercase truncate max-w-[140px]">{p.nome}</span></div><div className="text-right"><p className="text-xs font-black">R$ {p.profit.toFixed(2)}</p><p className="text-[8px] font-bold opacity-60">{p.qty} un • {p.margin.toFixed(1)}%</p></div></div>))}</div></div>
-          <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 space-y-4"><h3 className="font-black text-gray-800 uppercase text-xs tracking-wider">Top 10 Clientes</h3><div className="divide-y divide-gray-50">{reportStats.topClients.map((c, i) => (<div key={c.id} className="py-3 flex justify-between items-center"><div className="flex items-center gap-3"><span className="text-xs font-black text-gray-300">#{i+1}</span><span className="text-xs font-bold text-gray-700 uppercase">{c.nome}</span></div><span className="text-xs font-black text-gray-900">R$ {c.total.toFixed(2)}</span></div>))}</div></div>
+          <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 space-y-4">
+            <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider flex items-center gap-2">
+              <i className="fa-solid fa-boxes-stacked text-blue-600"></i> Produtos Mais Vendidos (Qtd)
+            </h3>
+            <div className="divide-y divide-gray-50">
+              {reportStats.topProducts.map((p, i) => (
+                <div key={p.id} className="py-3 flex justify-between items-center">
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs font-black text-gray-300">#{i+1}</span>
+                    <span className="text-xs font-bold text-gray-700 uppercase">{p.nome}</span>
+                  </div>
+                  <span className="text-xs font-black text-blue-600 bg-blue-50 px-2 py-1 rounded-lg">{p.qtd} un</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 space-y-4">
+            <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider flex items-center gap-2">
+              <i className="fa-solid fa-star text-yellow-500"></i> Top 10 Clientes (Volume R$)
+            </h3>
+            <div className="divide-y divide-gray-50">
+              {reportStats.topClients.map((c, i) => (
+                <div key={c.id} className="py-3 flex justify-between items-center">
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs font-black text-gray-300">#{i+1}</span>
+                    <span className="text-xs font-bold text-gray-700 uppercase">{c.nome}</span>
+                  </div>
+                  <span className="text-xs font-black text-gray-900">R$ {c.total.toFixed(2)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       )}
 
@@ -710,12 +725,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       {activeTab === 'CLIENTES' && (
         <div className="space-y-4">
           <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Gestão de Clientes</h2></div>
-          <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner overflow-x-auto">
-            <button onClick={() => setRouteFilter('TODOS')} className={`flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all ${routeFilter === 'TODOS' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>Todos</button>
-            {availableRoutes.map(r => (
-              <button key={r} onClick={() => setRouteFilter(r)} className={`flex-1 px-1 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all ${routeFilter === r ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>{formatRouteName(r)}</button>
-            ))}
-          </div>
+          <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner overflow-x-auto"><button onClick={() => setRouteFilter('TODOS')} className={`flex-shrink-0 px-6 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all ${routeFilter === 'TODOS' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>Todos</button>{availableRoutes.map(r => (<button key={r} onClick={() => setRouteFilter(r)} className={`flex-shrink-0 px-6 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all ${routeFilter === r ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>{formatRouteName(r)}</button>))}</div>
           <div className="flex gap-2"><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar cliente..." className="flex-1 px-4 py-3 bg-white border border-gray-200 rounded-xl text-sm" /><button onClick={() => handleOpenClient('NEW')} className="bg-blue-600 text-white w-12 h-12 rounded-xl flex items-center justify-center shadow-lg active:scale-90 transition-transform"><i className="fa-solid fa-user-plus"></i></button></div>
           <div className="grid gap-2 px-1">{filteredClients.sort((a,b) => (a.nomeFantasia||'').toLowerCase().localeCompare((b.nomeFantasia||'').toLowerCase())).map(c => (<div key={c.id} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex items-center justify-between transition-all hover:border-blue-200"><div className="flex-1 min-w-0 pr-2 cursor-pointer" onClick={() => setViewingClientHistory(c)}><div className="flex items-center gap-2"><h3 className="font-bold text-gray-800 text-[13px] leading-tight uppercase truncate">{c.nomeFantasia}</h3>{c.telefone && <a href={`https://wa.me/55${c.telefone.replace(/\D/g, '')}`} target="_blank" className="text-emerald-500" onClick={(e) => e.stopPropagation()}><i className="fa-brands fa-whatsapp text-lg"></i></a>}</div><div className="flex items-center gap-3 mt-1.5"><p className="text-[10px] text-gray-400 font-black uppercase truncate">{DIAS_SEMANA[c.diaRoteiro]}</p><span className="text-[8px] font-black px-1.5 py-0.5 rounded uppercase bg-blue-100 text-blue-600">{formatRouteName(c.rota)}</span><div className="flex items-center gap-1.5 bg-blue-50 px-2 py-0.5 rounded border border-blue-100 shadow-inner whitespace-nowrap"><i className="fa-solid fa-chart-line text-blue-400 text-[10px]"></i><span className="text-[11px] font-black text-blue-600">R$ {getClientAvgRevenue(c.id)}</span></div></div></div><div className="flex gap-2"><button onClick={(e) => { e.stopPropagation(); handleOpenClient(c); }} className="bg-blue-50 text-blue-600 w-9 h-9 rounded-lg border border-blue-100 flex items-center justify-center active:scale-90 shadow-sm"><i className="fa-solid fa-pencil-alt text-sm"></i></button><button onClick={(e) => { e.stopPropagation(); setConfirmDelete({ id: c.id, type: 'CLIENT', name: c.nomeFantasia }); }} className="bg-rose-50 text-rose-600 w-9 h-9 rounded-lg border border-rose-100 flex items-center justify-center active:scale-90 shadow-sm"><i className="fa-solid fa-trash-can text-sm"></i></button></div></div>))}</div>
         </div>
@@ -731,12 +741,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       {activeTab === 'ROTEIRO' && (
         <div className="space-y-6 py-4">
           <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Roteiro Semanal</h2></div>
-          <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner overflow-x-auto">
-            <button onClick={() => setRouteFilter('TODOS')} className={`flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all ${routeFilter === 'TODOS' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>Todos</button>
-            {availableRoutes.map(r => (
-              <button key={r} onClick={() => setRouteFilter(r)} className={`flex-1 px-1 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all ${routeFilter === r ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>{formatRouteName(r)}</button>
-            ))}
-          </div>
+          <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner overflow-x-auto"><button onClick={() => setRouteFilter('TODOS')} className={`flex-shrink-0 px-6 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all ${routeFilter === 'TODOS' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>Todos</button>{availableRoutes.map(r => (<button key={r} onClick={() => setRouteFilter(r)} className={`flex-shrink-0 px-6 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all ${routeFilter === r ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>{formatRouteName(r)}</button>))}</div>
           <div className="space-y-3 px-1">{[1, 2, 3, 4, 5, 6].map(dia => { const isOpen = expandedDay === dia; const clientsInDay = props.clients.filter(c => c.diaRoteiro === dia && c.ativo && (routeFilter === 'TODOS' || c.rota === routeFilter)).sort((a, b) => (a.ordem || 0) - (b.ordem || 0)); return (<div key={dia} className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden"><button onClick={() => setExpandedDay(isOpen ? null : dia)} className={`w-full flex items-center justify-between p-5 text-left ${isOpen ? 'bg-indigo-50 text-indigo-700' : 'bg-white text-gray-700'}`}><div className="flex items-center gap-3"><div className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-[10px] ${isOpen ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-400'}`}>{dia}</div><span className="font-black uppercase text-xs tracking-tight">{DIAS_SEMANA[dia] ?? 'N/D'}</span></div><div className="flex items-center gap-2"><span className="text-[9px] font-black uppercase opacity-40">{clientsInDay.length} clientes</span><i className={`fa-solid ${isOpen ? 'fa-chevron-up' : 'fa-chevron-down'} text-[10px]`}></i></div></button>{isOpen && (<div className="p-4 bg-white space-y-2 border-t border-indigo-50 animate-in slide-in-from-top duration-300">{clientsInDay.map(c => (<div key={c.id} className="p-3 bg-gray-50 rounded-2xl flex justify-between items-center group"><div className="flex-1 cursor-pointer" onClick={() => setViewingClientHistory(c)}><p className="font-bold text-gray-800 text-xs uppercase">{c.nomeFantasia}</p><p className="text-[9px] text-gray-400 font-bold mt-0.5">{c.bairro || 'Sem Bairro'}</p></div><span className="text-[8px] font-black px-1.5 py-0.5 rounded uppercase bg-blue-100 text-blue-600">{formatRouteName(c.rota)}</span></div>))}</div>)}</div>); })}</div>
         </div>
       )}
@@ -757,7 +762,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       )}
 
       {showProductModal && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-w-md rounded-[2rem] p-8 shadow-2xl overflow-y-auto max-h-[90vh]"><h3 className="font-black text-gray-800 uppercase text-sm mb-6 text-center">{showProductModal === 'NEW' ? 'Novo Produto' : 'Editar Produto'}</h3><div className="space-y-4"><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome do Produto</label><input value={pForm.nome} onChange={e => setPForm({...pForm, nome: e.target.value})} placeholder="Nome do Produto" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div>
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-md rounded-[2rem] p-8 shadow-2xl overflow-y-auto max-h-[90vh]"><h3 className="font-black text-gray-800 uppercase text-sm mb-6 text-center">{showProductModal === 'NEW' ? 'Novo Produto' : 'Editar Produto'}</h3><div className="space-y-4"><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome do Produto</label><input value={pForm.nome} onChange={e => setPForm({...pForm, nome: e.target.value})} placeholder="Nome do Produto" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div>
         <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Categoria</label><select value={pForm.categoryId} onChange={e => setPForm({...pForm, categoryId: e.target.value})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase">{props.categories.map(cat => (<option key={cat.id} value={cat.id}>{cat.name}</option>))}</select></div>
         <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Custo R$</label><input type="number" value={pForm.custo} onChange={e => { const val = parseFloat(e.target.value) || 0; const venda = props.margemGlobalAtiva ? updatePriceFromMargin(val, props.margemGlobalValor) : parseFloat(pForm.venda) || 0; const margem = props.margemGlobalAtiva ? props.margemGlobalValor : updateMarginFromPrice(val, venda); setPForm({...pForm, custo: e.target.value, venda: venda.toFixed(2), margem: margem.toFixed(2)}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Venda R$</label><input type="number" disabled={props.margemGlobalAtiva} value={pForm.venda} onChange={e => { const val = parseFloat(e.target.value) || 0; const margem = updateMarginFromPrice(parseFloat(pForm.custo) || 0, val); setPForm({...pForm, venda: e.target.value, margem: margem.toFixed(2)}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold disabled:opacity-50" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Margem %</label><input type="number" disabled={props.margemGlobalAtiva} value={pForm.margem} onChange={e => { const val = parseFloat(e.target.value) || 0; const venda = updatePriceFromMargin(parseFloat(pForm.custo) || 0, val); setPForm({...pForm, margem: e.target.value, venda: venda.toFixed(2)}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold disabled:opacity-50" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Comissão %</label><input type="number" value={pForm.comissao} onChange={e => setPForm({...pForm, comissao: e.target.value})} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Estoque Central</label><input type="number" value={pForm.estoquePrincipal} onChange={e => setPForm({...pForm, estoquePrincipal: e.target.value})} placeholder="0" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="flex items-center gap-2 py-2"><input type="checkbox" id="prod_ativo" checked={pForm.ativo} onChange={e => setPForm({...pForm, ativo: e.target.checked})} className="w-5 h-5" /><label htmlFor="prod_ativo" className="text-xs font-bold text-gray-700 uppercase">Produto Ativo</label></div><button onClick={handleSaveProduct} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 uppercase text-xs mt-4 tracking-widest">Salvar Produto</button><button onClick={() => setShowProductModal(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button></div></div></div>
       )}

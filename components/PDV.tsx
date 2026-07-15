@@ -223,12 +223,12 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           <button onClick={() => setCart({})} className="w-9 h-9 bg-rose-50 text-rose-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-trash-can text-sm"></i></button>
         </div>
 
-        <div className="grid grid-cols-2 gap-1.5 px-0.5">
+        <div className="grid grid-cols-2 gap-1 px-0.5">
           {categories.map(cat => (
             <button 
               key={cat.id}
               onClick={() => setActiveCategoryId(cat.id)}
-              className={`py-2 px-2 rounded-xl text-[9px] font-black uppercase transition-all truncate border ${activeCategoryId === cat.id ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-gray-50 text-gray-400 border-gray-100'}`}
+              className={`py-1.5 px-2 rounded-lg text-[8px] font-black uppercase transition-all truncate border ${activeCategoryId === cat.id ? 'bg-blue-600 text-white border-blue-600 shadow-sm' : 'bg-gray-50 text-gray-400 border-gray-100'}`}
             >
               {cat.name}
             </button>

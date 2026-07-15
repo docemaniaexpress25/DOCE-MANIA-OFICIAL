@@ -57,6 +57,67 @@ export const saleService = {
     return { ...sale, id: saleId };
   },
 
+  async insertPreOrder(sale: Omit<Sale, 'id'>): Promise<Sale | null> {
+    const saleDate = sale.data instanceof Date ? sale.data : new Date();
+    
+    // 1. Insere o pré-pedido como venda pendente
+    const { data: insertedSale, error: saleError } = await supabase
+      .from('sales')
+      .insert({
+        vendedor_id: sale.vendedorId,
+        client_id: sale.clientId,
+        valor_total: sale.valorTotal,
+        valor_pago: 0,
+        metodo_pagamento: 'PRE_PEDIDO',
+        detalhe_pagamento: sale.detalhePagamento || 'Pré-pedido para entrega futura',
+        status_pagamento: 'PENDENTE',
+        data_venda: saleDate.toISOString(),
+        data_vencimento: sale.dataVencimento ? sale.dataVencimento.toISOString() : null
+      })
+      .select()
+      .single();
+
+    if (saleError || !insertedSale) {
+      console.error('[saleService] Erro ao inserir pré-pedido:', saleError);
+      return null;
+    }
+
+    // 2. Insere os itens e reduz diretamente o estoque principal central
+    for (const item of sale.itens) {
+      const { error: itemError } = await supabase
+        .from('sale_items')
+        .insert({
+          sale_id: insertedSale.id,
+          produto_id: item.produtoId,
+          product_id: item.produtoId,
+          quantidade: item.quantidade,
+          preco_venda: item.precoVenda
+        });
+
+      if (itemError) {
+        console.error('[saleService] Erro ao salvar item do pré-pedido:', itemError);
+      }
+
+      // Reduz o estoque principal
+      const { data: prodData } = await supabase
+        .from('products')
+        .select('estoque_principal')
+        .eq('id', item.produtoId)
+        .single();
+
+      if (prodData) {
+        const currentStock = Number(prodData.estoque_principal || 0);
+        const newStock = Math.max(0, currentStock - item.quantidade);
+        await supabase
+          .from('products')
+          .update({ estoque_principal: newStock })
+          .eq('id', item.produtoId);
+      }
+    }
+
+    return { ...sale, id: insertedSale.id };
+  },
+
   async updateSale(id: string, updates: Partial<Sale>): Promise<boolean> {
     const payload: any = {};
     if (updates.valorPago !== undefined) payload.valor_pago = updates.valorPago;

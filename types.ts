@@ -52,7 +52,7 @@ export interface CargaPendente {
   data: Date;
 }
 
-export type PaymentMethod = 'DINHEIRO' | 'PIX' | 'A_PRAZO';
+export type PaymentMethod = 'DINHEIRO' | 'PIX' | 'A_PRAZO' | 'PRE_PEDIDO';
 
 export interface Client {
   id: string;

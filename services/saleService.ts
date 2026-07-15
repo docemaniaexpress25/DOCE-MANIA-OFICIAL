@@ -33,7 +33,6 @@ export const saleService = {
       precovenda: item.precoVenda
     }));
 
-    // Garante que a data seja um objeto Date válido antes de converter para ISO string
     const saleDate = sale.data instanceof Date ? sale.data : new Date();
 
     const { data: saleId, error } = await supabase.rpc('processar_venda_v2', {
@@ -45,7 +44,7 @@ export const saleService = {
       p_detalhe_pagamento: sale.detalhePagamento || '',
       p_status_pagamento: sale.statusPagamento,
       p_data_venda: saleDate.toISOString(),
-      p_data_vencimento: sale.dataVencimento ? sale.dataVencimento.toISOString() : null,
+      p_data_vencimento: sale.dataVencimento ? (sale.dataVencimento instanceof Date ? sale.dataVencimento.toISOString().split('T')[0] : new Date(sale.dataVencimento).toISOString().split('T')[0]) : null,
       p_itens: rpcItems
     });
 
@@ -60,6 +59,16 @@ export const saleService = {
   async insertPreOrder(sale: Omit<Sale, 'id'>): Promise<Sale | null> {
     const saleDate = sale.data instanceof Date ? sale.data : new Date();
     
+    let formattedDueDate: string | null = null;
+    if (sale.dataVencimento) {
+      try {
+        const dueDateObj = sale.dataVencimento instanceof Date ? sale.dataVencimento : new Date(sale.dataVencimento);
+        formattedDueDate = dueDateObj.toISOString().split('T')[0];
+      } catch (e) {
+        console.error('Erro ao formatar data_vencimento:', e);
+      }
+    }
+
     // 1. Insere o pré-pedido como venda pendente
     const { data: insertedSale, error: saleError } = await supabase
       .from('sales')
@@ -72,7 +81,7 @@ export const saleService = {
         detalhe_pagamento: sale.detalhePagamento || 'Pré-pedido para entrega futura',
         status_pagamento: 'PENDENTE',
         data_venda: saleDate.toISOString(),
-        data_vencimento: sale.dataVencimento ? sale.dataVencimento.toISOString() : null
+        data_vencimento: formattedDueDate
       })
       .select()
       .single();
@@ -112,6 +121,36 @@ export const saleService = {
           .from('products')
           .update({ estoque_principal: newStock })
           .eq('id', item.produtoId);
+      }
+    }
+
+    // 3. Calcular e Inserir Comissão
+    let totalComissao = 0;
+    for (const item of sale.itens) {
+      const { data: prodData } = await supabase
+        .from('products')
+        .select('comissao_percentual')
+        .eq('id', item.produtoId)
+        .single();
+      
+      if (prodData) {
+        const pct = safeNumber(prodData.comissao_percentual);
+        totalComissao += (item.precoVenda * item.quantidade * (pct / 100));
+      }
+    }
+
+    if (totalComissao > 0) {
+      const { error: commError } = await supabase.from('commissions').insert({
+        sale_id: insertedSale.id,
+        seller_id: sale.vendedorId,
+        valor_comissao: totalComissao,
+        valor_base: sale.valorTotal,
+        percentual: sale.valorTotal > 0 ? (totalComissao / sale.valorTotal) * 100 : 0,
+        status: 'A_RECEBER',
+        created_at: saleDate.toISOString()
+      });
+      if (commError) {
+        console.error('[saleService] Erro ao criar comissão para o pré-pedido:', commError);
       }
     }
 

@@ -71,37 +71,6 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
 
   const allCategoriesVisited = visitedCategoryIds.length >= categories.length;
 
-  const subcategoryAnalysis = useMemo(() => {
-    if (!activeCategoryId) return [];
-    
-    const last4Sales = sales
-      .filter(s => s.clientId === client.id)
-      .sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime())
-      .slice(0, 4);
-    
-    const soldSubIds = new Set<string>();
-    last4Sales.forEach(s => {
-      s.itens.forEach(item => {
-        const prod = products.find(p => p.id === item.produtoId);
-        if (prod?.subcategoryId) soldSubIds.add(prod.subcategoryId);
-      });
-    });
-
-    // Filtra produtos da categoria ativa que possuem subcategoria válida
-    const prodsInCategory = products.filter(p => p.categoryId === activeCategoryId && p.subcategoryId && p.subcategoryId.trim() !== '');
-    const subIdsInCategory = Array.from(new Set(prodsInCategory.map(p => p.subcategoryId as string)));
-
-    return subIdsInCategory.map((subId: string) => {
-      // Busca o nome oficial da subcategoria cadastrada no banco de dados
-      const sub = subcategories.find(s => s.id === subId);
-      return {
-        id: subId,
-        name: sub ? sub.name : 'Outros',
-        wasSold: soldSubIds.has(subId)
-      };
-    });
-  }, [activeCategoryId, client.id, sales, products, subcategories]);
-
   const formatCategoryName = (name: string) => {
     const n = name.toUpperCase();
     if (n.includes('ELMA')) return 'ELMA';
@@ -291,18 +260,6 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
             );
           })}
         </div>
-        
-        {subcategoryAnalysis.length > 0 && (
-          <div className="flex items-center gap-2 overflow-x-auto py-2 mt-2 border-t border-gray-50 no-scrollbar">
-            <span className="text-[8px] font-black text-gray-300 uppercase whitespace-nowrap">Histórico (Mix):</span>
-            {subcategoryAnalysis.map(sub => (
-              <div key={sub.id} className={`flex items-center gap-1.5 px-2 py-1 rounded-lg border whitespace-nowrap ${sub.wasSold ? 'bg-emerald-50 border-emerald-100' : 'bg-rose-50 border-rose-100 animate-pulse'}`}>
-                <div className={`w-1.5 h-1.5 rounded-full ${sub.wasSold ? 'bg-emerald-500' : 'bg-rose-500'}`}></div>
-                <span className={`text-[8px] font-black uppercase ${sub.wasSold ? 'text-emerald-700' : 'text-rose-700'}`}>{sub.name}</span>
-              </div>
-            ))}
-          </div>
-        )}
       </header>
 
       {clientDebt > 0 && (

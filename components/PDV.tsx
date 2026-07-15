@@ -295,7 +295,13 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
             <div key={p.id} className={`bg-white p-2.5 rounded-2xl border flex flex-col gap-1 ${item?.quantidade ? 'border-blue-200 bg-blue-50/30' : 'border-gray-100'}`}>
               <div className="flex items-center gap-3 w-full">
                 <div className="flex-1 min-w-0">
-                  <h3 className="font-bold text-gray-800 text-[11px] leading-tight uppercase truncate">
+                  <h3 className="font-bold text-gray-800 text-[11px] leading-tight uppercase truncate flex items-center gap-1.5">
+                    {hasBeenSold && (
+                      <i 
+                        className="fa-solid fa-check text-[11px] text-emerald-500 flex-shrink-0" 
+                        title="Este produto já foi vendido para este cliente"
+                      />
+                    )}
                     {p.nome}
                   </h3> 
                   <div className="flex items-center gap-2 mt-1">
@@ -309,9 +315,6 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                         />
                      </div>
                      <span className="text-[9px] font-bold uppercase text-blue-500">{cargaOriginal - (item?.quantidade ?? 0)} UN</span>
-                     {hasBeenSold && (
-                       <span className="bg-emerald-50 text-emerald-600 border border-emerald-200 text-[8px] font-black w-4 h-4 rounded flex items-center justify-center" title="Este produto já foi vendido para este cliente em compras anteriores">V</span>
-                     )}
                   </div>
                 </div>
                 <div className="flex items-center bg-white rounded-xl p-0.5 border border-gray-100 shadow-sm">

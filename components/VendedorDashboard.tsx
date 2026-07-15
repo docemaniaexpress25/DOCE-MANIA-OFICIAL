@@ -39,7 +39,7 @@ interface VendedorDashboardProps {
   companyCnpj: string;
 }
 
-type TabType = 'HOME' | 'ROTEIRO' | 'CARGA' | 'HISTORY' | 'FINANCE' | 'CREDIT' | 'CLIENTES' | 'WEEKLY' | 'STOCK_VIEW';
+type TabType = 'HOME' | 'ROTEIRO' | 'CARGA' | 'HISTORY' | 'FINANCE' | 'CREDIT' | 'CLIENTES' | 'WEEKLY' | 'STOCK_VIEW' | 'AVISOS';
 
 const VendedorDashboard: React.FC<VendedorDashboardProps> = ({ 
   user, products = [], clients = [], cargas = [], cargasPendentes = [], sales = [], commissions = [], payoutLogs = [], expenses = [], messages = [], markMessageAsRead, processSale, addClient, updateClient, deleteClient, receivePayment, deleteSale, aceitarCarga, addExpense, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, updateDailyRoute, companyName, companyCnpj
@@ -55,42 +55,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   useEffect(() => { saveLocalState('v_selectedClient', selectedClient); }, [selectedClient]);
   useEffect(() => { saveLocalState('v_viewingSale', viewingSale); }, [viewingSale]);
   useEffect(() => { saveLocalState('v_showFiscalization', showFiscalization); }, [showFiscalization]);
-
-  useEffect(() => {
-    const handlePopState = (event: PopStateEvent) => {
-      const state = event.state;
-      if (state) {
-        if (state.tab) setActiveTab(state.tab);
-        setSelectedClient(state.client || null);
-        setViewingSale(state.sale || null);
-        setShowFiscalization(!!state.fiscal);
-      } else {
-        setActiveTab('HOME');
-        setSelectedClient(null);
-        setViewingSale(null);
-        setShowFiscalization(false);
-      }
-    };
-
-    window.addEventListener('popstate', handlePopState);
-    if (!window.history.state) {
-      window.history.replaceState({ tab: activeTab, client: selectedClient, sale: viewingSale, fiscal: showFiscalization }, '');
-    }
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, []);
-
-  useEffect(() => {
-    const currentState = window.history.state;
-    const isDifferent = !currentState || 
-                        currentState.tab !== activeTab || 
-                        currentState.client?.id !== selectedClient?.id || 
-                        currentState.sale?.id !== viewingSale?.id ||
-                        !!currentState.fiscal !== showFiscalization;
-    
-    if (isDifferent) {
-      window.history.pushState({ tab: activeTab, client: selectedClient, sale: viewingSale, fiscal: showFiscalization }, '');
-    }
-  }, [activeTab, selectedClient, viewingSale, showFiscalization]);
 
   const [reopenedClientIds, setReopenedClientIds] = useState<string[]>([]);
   const [showReceiveModal, setShowReceiveModal] = useState<Sale | null>(null);
@@ -111,6 +75,29 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
   };
+
+  const atRiskClients = useMemo(() => {
+    const today = new Date();
+    return clients.filter(c => {
+      if (!c.ativo) return false;
+      const cSales = sales.filter(s => s.clientId === c.id);
+      if (cSales.length === 0) return false;
+      const lastSale = cSales.reduce((latest, s) => {
+        const d = new Date(s.data);
+        return d > latest ? d : latest;
+      }, new Date(0));
+      const diffDays = Math.ceil(Math.abs(today.getTime() - lastSale.getTime()) / (1000 * 60 * 60 * 24));
+      return diffDays >= 10;
+    }).map(c => {
+      const cSales = sales.filter(s => s.clientId === c.id);
+      const lastSale = cSales.reduce((latest, s) => {
+        const d = new Date(s.data);
+        return d > latest ? d : latest;
+      }, new Date(0));
+      const diffDays = Math.ceil(Math.abs(today.getTime() - lastSale.getTime()) / (1000 * 60 * 60 * 24));
+      return { ...c, diasSemCompra: diffDays, dataUltimaVenda: lastSale };
+    }).sort((a, b) => b.diasSemCompra - a.diasSemCompra);
+  }, [clients, sales]);
 
   const handleMarkMessageAsRead = (msgId: string) => {
     markMessageAsRead(msgId);
@@ -239,7 +226,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const handleSaveClientBasic = () => {
     if (!cForm.nomeFantasia || !cForm.telefone) { showToast("Preencha ao menos Nome e Telefone.", 'error'); return; }
     
-    // Regra de Negócio: Vendedor só cria clientes para a sua própria rota
     const clientData: Omit<Client, 'id'> = { 
       nomeFantasia: cForm.nomeFantasia!, 
       telefone: cForm.telefone!, 
@@ -253,7 +239,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       pinLocalizacao: cForm.pinLocalizacao, 
       nome: cForm.nome, 
       observacoes: cForm.observacoes,
-      rota: user.rota // Força a rota do vendedor logado
+      rota: user.rota 
     };
 
     if (editingClient === 'NEW') addClient(clientData);
@@ -291,7 +277,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
   const MenuCard = ({ icon, title, tab, color, badge }: any) => (
     <button onClick={() => setActiveTab(tab)} className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col items-center gap-3 active:scale-95 transition-all text-center relative">
-      {badge && <div className="absolute top-4 right-4 w-3 h-3 bg-red-500 rounded-full border-2 border-white"></div>}
+      {badge && <div className="absolute top-4 right-4 bg-red-600 text-white text-[8px] font-black w-5 h-5 rounded-full flex items-center justify-center border-2 border-white animate-bounce">{badge === true ? '' : badge}</div>}
       <div className={`w-14 h-14 ${color} rounded-2xl flex items-center justify-center text-xl shadow-inner`}><i className={`fa-solid ${icon}`}></i></div>
       <span className="text-[11px] font-black uppercase text-gray-700">{title}</span>
     </button>
@@ -420,6 +406,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       {activeTab === 'HOME' && (
         <div className="py-4 grid grid-cols-2 gap-4">
           <MenuCard icon="fa-route" title="Rota do Dia" tab="ROTEIRO" color="bg-blue-50 text-blue-600" />
+          <MenuCard icon="fa-bell" title="Avisos" tab="AVISOS" color="bg-rose-50 text-rose-600" badge={atRiskClients.length > 0 ? atRiskClients.length : false} />
           <MenuCard icon="fa-truck-fast" title="Minha Carga" tab="CARGA" color="bg-purple-50 text-purple-600" badge={(cargasPendentes || []).length > 0} />
           <MenuCard icon="fa-receipt" title="Vendas" tab="HISTORY" color="bg-blue-50 text-[#1E3A5F]" />
           <MenuCard icon="fa-wallet" title="Financeiro" tab="FINANCE" color="bg-emerald-50 text-[#1F7A4D]" badge={(messages || []).some(m => !m.lida && m.type === 'COMMISSION_CONFIRMATION')} />
@@ -427,6 +414,49 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
           <MenuCard icon="fa-users" title="Clientes" tab="CLIENTES" color="bg-green-50 text-green-600" />
           <MenuCard icon="fa-calendar-days" title="Roteiro Semanal" tab="WEEKLY" color="bg-indigo-50 text-indigo-600" />
           <MenuCard icon="fa-boxes-stacked" title="Estoque" tab="STOCK_VIEW" color="bg-yellow-50 text-yellow-600" />
+        </div>
+      )}
+
+      {activeTab === 'AVISOS' && (
+        <div className="space-y-4">
+          <header className="px-1 flex flex-col gap-1">
+            <h2 className="text-xl font-black text-gray-800 tracking-tight leading-none">Avisos e Alertas</h2>
+            <p className="text-[10px] font-black uppercase text-gray-400">Clientes que precisam de atenção</p>
+          </header>
+          <div className="grid gap-3">
+            {atRiskClients.map(c => (
+              <div key={c.id} className="bg-white p-5 rounded-[2.5rem] border border-rose-100 shadow-md flex flex-col gap-4 relative overflow-hidden">
+                <div className="absolute top-0 right-0 bg-rose-600 text-white px-4 py-1.5 rounded-bl-3xl font-black text-[9px] uppercase tracking-tighter shadow-lg">
+                  {c.diasSemCompra} DIAS SEM COMPRAR
+                </div>
+                <div className="flex-1 pr-12 pt-2">
+                  <h4 className="font-black text-gray-800 text-[13px] leading-tight uppercase truncate">{c.nomeFantasia}</h4>
+                  <p className="text-[10px] text-gray-400 font-semibold uppercase mt-1">Último pedido: {new Date(c.dataUltimaVenda).toLocaleDateString()}</p>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <a 
+                    href={`https://wa.me/55${c.telefone.replace(/\D/g, '')}?text=Olá ${c.nomeFantasia}, tudo bem? Faz um tempinho que não passamos por aí. Precisando de alguma reposição?`} 
+                    target="_blank" 
+                    className="bg-emerald-500 text-white py-3 rounded-2xl flex items-center justify-center gap-2 font-black text-[10px] uppercase shadow-lg active:scale-95 transition-all"
+                  >
+                    <i className="fa-brands fa-whatsapp text-lg"></i> WhatsApp
+                  </a>
+                  <button 
+                    onClick={() => setSelectedClient(c)}
+                    className="bg-blue-600 text-white py-3 rounded-2xl flex items-center justify-center gap-2 font-black text-[10px] uppercase shadow-lg active:scale-95 transition-all"
+                  >
+                    <i className="fa-solid fa-cart-shopping text-sm"></i> Atender Agora
+                  </button>
+                </div>
+              </div>
+            ))}
+            {atRiskClients.length === 0 && (
+              <div className="text-center py-20 opacity-30 flex flex-col items-center gap-4">
+                <i className="fa-solid fa-circle-check text-5xl"></i>
+                <p className="font-black uppercase tracking-widest text-[10px]">Tudo certo! Seus clientes estão em dia.</p>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -828,7 +858,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
       {editingClient && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[310] flex items-end sm:items-center justify-center p-4">
-          <div className="bg-white w-full max-w-md rounded-t-[2rem] sm:rounded-[2rem] shadow-2xl p-8 animate-in slide-in-from-bottom duration-300 max-h-[90vh] overflow-y-auto">
+          <div className="bg-white w-full max-md rounded-t-[2rem] sm:rounded-[2rem] shadow-2xl p-8 animate-in slide-in-from-bottom duration-300 max-h-[90vh] overflow-y-auto">
              <div className="flex justify-between items-center mb-6"><h3 className="font-black text-gray-800 uppercase text-sm tracking-tight">{editingClient === 'NEW' ? 'Novo Cliente' : 'Editar Cliente'}</h3></div>
              <div className="space-y-4 pb-6">
                 <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Nome Fantasia</label><input value={cForm.nomeFantasia || ''} onChange={e => setCForm({...cForm, nomeFantasia: e.target.value})} placeholder="Nome Fantasia" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100 uppercase" /></div>
@@ -837,7 +867,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Bairro</label><input value={cForm.bairro || ''} onChange={e => setCForm({...cForm, bairro: e.target.value})} placeholder="Bairro" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100 uppercase" /></div>
                 <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Dia de Atendimento</label><select value={cForm.diaRoteiro ?? 1} onChange={e => setCForm({...cForm, diaRoteiro: parseInt(e.target.value)})} className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100">{[1, 2, 3, 4, 5, 6].map(d => (<option key={d} value={d}>{DIAS_SEMANA[d] ?? 'N/D'}</option>))}</select></div> 
                 
-                {/* Visualização informativa da rota para o vendedor (apenas leitura) */}
                 <div className="space-y-1">
                   <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Rota de Atendimento</label>
                   <div className="w-full p-4 bg-gray-100 rounded-2xl font-black text-blue-600 text-xs uppercase shadow-inner border border-blue-50 flex justify-between items-center">

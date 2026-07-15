@@ -51,11 +51,17 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const [showFiscalization, setShowFiscalization] = useState(() => loadLocalState('v_showFiscalization', false));
   const [viewingClientHistory, setViewingClientHistory] = useState<Client | null>(null);
   const [filterOverdueOnly, setFilterOverdueOnly] = useState(false);
+  
+  // Novo estado para controlar avisos arquivados/visualizados
+  const [dismissedClientRiskIds, setDismissedClientRiskIds] = useState<string[]>(() => 
+    loadLocalState(`v_dismissed_risk_${user.id}`, [])
+  );
 
   useEffect(() => { saveLocalState('v_activeTab', activeTab); }, [activeTab]);
   useEffect(() => { saveLocalState('v_selectedClient', selectedClient); }, [selectedClient]);
   useEffect(() => { saveLocalState('v_viewingSale', viewingSale); }, [viewingSale]);
   useEffect(() => { saveLocalState('v_showFiscalization', showFiscalization); }, [showFiscalization]);
+  useEffect(() => { saveLocalState(`v_dismissed_risk_${user.id}`, dismissedClientRiskIds); }, [dismissedClientRiskIds, user.id]);
 
   const [reopenedClientIds, setReopenedClientIds] = useState<string[]>([]);
   const [showReceiveModal, setShowReceiveModal] = useState<Sale | null>(null);
@@ -81,6 +87,9 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     const today = new Date();
     return clients.filter(c => {
       if (!c.ativo) return false;
+      // Filtra clientes que já foram "marcados" pelo vendedor
+      if (dismissedClientRiskIds.includes(c.id)) return false;
+
       const cSales = sales.filter(s => s.clientId === c.id);
       if (cSales.length === 0) return false;
       const lastSale = cSales.reduce((latest, s) => {
@@ -88,7 +97,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         return d > latest ? d : latest;
       }, new Date(0));
       const diffDays = Math.ceil(Math.abs(today.getTime() - lastSale.getTime()) / (1000 * 60 * 60 * 24));
-      return diffDays >= 25; // Atualizado para 25 dias
+      return diffDays >= 25; 
     }).map(c => {
       const cSales = sales.filter(s => s.clientId === c.id);
       const lastSale = cSales.reduce((latest, s) => {
@@ -98,7 +107,12 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       const diffDays = Math.ceil(Math.abs(today.getTime() - lastSale.getTime()) / (1000 * 60 * 60 * 24));
       return { ...c, diasSemCompra: diffDays, dataUltimaVenda: lastSale };
     }).sort((a, b) => b.diasSemCompra - a.diasSemCompra);
-  }, [clients, sales]);
+  }, [clients, sales, dismissedClientRiskIds]);
+
+  const handleDismissRisk = (clientId: string) => {
+    setDismissedClientRiskIds(prev => [...prev, clientId]);
+    showToast("Aviso arquivado.");
+  };
 
   const handleMarkMessageAsRead = (msgId: string) => {
     markMessageAsRead(msgId);
@@ -166,7 +180,11 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     if (!(dailyRouteState?.clientIds || []).includes(clientId)) { 
       const newRoute = [...(dailyRouteState?.clientIds || []), clientId];
       updateDailyRoute(newRoute, dailyRouteState?.skippedClientIds || []);
-      showToast("Cliente adicionado à rota do dia!"); 
+      
+      // Ao adicionar à rota, removemos o aviso de risco
+      setDismissedClientRiskIds(prev => [...prev, clientId]);
+      
+      showToast("Adicionado à rota e aviso removido!"); 
     } 
   };
 
@@ -435,13 +453,22 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                     <span className="text-[9px] text-gray-400 font-bold uppercase truncate">Ult: {new Date(c.dataUltimaVenda).toLocaleDateString()}</span>
                   </div>
                 </div>
-                <button 
-                  onClick={() => handleAddToTodayRoute(c.id)}
-                  className="bg-blue-600 text-white w-10 h-10 rounded-2xl flex items-center justify-center shadow-lg active:scale-90 transition-all"
-                  title="Puxar p/ hoje"
-                >
-                  <i className="fa-solid fa-plus"></i>
-                </button>
+                <div className="flex gap-2">
+                  <button 
+                    onClick={() => handleDismissRisk(c.id)}
+                    className="bg-emerald-50 text-emerald-600 w-10 h-10 rounded-2xl flex items-center justify-center border border-emerald-100 active:scale-90 transition-all"
+                    title="Marcar como visto"
+                  >
+                    <i className="fa-solid fa-check"></i>
+                  </button>
+                  <button 
+                    onClick={() => handleAddToTodayRoute(c.id)}
+                    className="bg-blue-600 text-white w-10 h-10 rounded-2xl flex items-center justify-center shadow-lg active:scale-90 transition-all"
+                    title="Puxar p/ hoje"
+                  >
+                    <i className="fa-solid fa-plus"></i>
+                  </button>
+                </div>
               </div>
             ))}
             {atRiskClients.length === 0 && (

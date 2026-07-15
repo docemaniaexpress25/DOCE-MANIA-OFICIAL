@@ -296,10 +296,12 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               <div className="flex items-center gap-3 w-full">
                 <div className="flex-1 min-w-0">
                   <h3 className="font-bold text-gray-800 text-[11px] leading-tight uppercase truncate flex items-center gap-1.5">
-                    <span 
-                      className={`w-2 h-2 rounded-full flex-shrink-0 ${hasBeenSold ? 'bg-emerald-500' : 'bg-rose-500'}`} 
-                      title={hasBeenSold ? 'Este produto já foi vendido para este cliente' : 'Este produto nunca foi vendido para este cliente'}
-                    />
+                    {hasBeenSold && (
+                      <i 
+                        className="fa-solid fa-check text-[11px] text-emerald-500 flex-shrink-0" 
+                        title="Este produto já foi vendido para este cliente"
+                      />
+                    )}
                     {p.nome}
                   </h3> 
                   <div className="flex items-center gap-2 mt-1">

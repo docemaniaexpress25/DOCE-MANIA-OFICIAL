@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { User, Product, Client, Carga, Sale, Commission, PaymentMethod, CargaPendente, CommissionPaymentLog, SystemMessage, Expense } from '../types';
+import { User, Product, Client, Carga, Sale, Commission, PaymentMethod, CargaPendente, CommissionPaymentLog, SystemMessage, Expense, Category } from '../types';
 import { DIAS_SEMANA } from '../constants';
 import PDV from './PDV';
 import Cupom from './Cupom';
@@ -18,6 +18,7 @@ interface VendedorDashboardProps {
   payoutLogs: CommissionPaymentLog[];
   expenses: Expense[];
   messages: SystemMessage[];
+  categories: Category[];
   markMessageAsRead: (id: string) => void;
   processSale: (data: any) => Promise<Sale | null>;
   addClient: (data: Omit<Client, 'id'>) => Promise<void>; 
@@ -42,7 +43,7 @@ interface VendedorDashboardProps {
 type TabType = 'HOME' | 'ROTEIRO' | 'CARGA' | 'HISTORY' | 'FINANCE' | 'CREDIT' | 'CLIENTES' | 'WEEKLY' | 'STOCK_VIEW' | 'AVISOS';
 
 const VendedorDashboard: React.FC<VendedorDashboardProps> = ({ 
-  user, products = [], clients = [], cargas = [], cargasPendentes = [], sales = [], commissions = [], payoutLogs = [], expenses = [], messages = [], markMessageAsRead, processSale, addClient, updateClient, deleteClient, receivePayment, deleteSale, aceitarCarga, addExpense, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, updateDailyRoute, companyName, companyCnpj
+  user, products = [], clients = [], cargas = [], cargasPendentes = [], sales = [], commissions = [], payoutLogs = [], expenses = [], messages = [], categories = [], markMessageAsRead, processSale, addClient, updateClient, deleteClient, receivePayment, deleteSale, aceitarCarga, addExpense, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, updateDailyRoute, companyName, companyCnpj
 }) => {
   const [activeTab, setActiveTab] = useState<TabType>(() => loadLocalState('v_activeTab', 'HOME'));
   const [selectedClient, setSelectedClient] = useState<Client | null>(() => loadLocalState('v_selectedClient', null));
@@ -370,7 +371,8 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         }}
         processSale={processSale} margemMinima={margemMinima} margemMinimaAtiva={margemMinimaAtiva} pix1Name={pix1Name} pix1Code={pix1Code} pix2Name={pix2Name} pix2Code={pix2Code}
         sales={sales} 
-        onNavigateToCredit={handleNavigateToCredit} 
+        onNavigateToCredit={handleNavigateToCredit}
+        categories={categories}
       />
     );
   }

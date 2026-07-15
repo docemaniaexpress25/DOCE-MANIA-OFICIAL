@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Product, Client, Carga, Sale, SaleItem, PaymentMethod } from '../types';
+import { Product, Client, Carga, Sale, SaleItem, PaymentMethod, Category } from '../types';
 import Cupom from './Cupom';
 import { loadLocalState, saveLocalState } from '../utils/persistence';
 
@@ -19,13 +19,16 @@ interface PDVProps {
   pix2Code: string | null;
   sales: Sale[];
   onNavigateToCredit: () => void;
+  categories: Category[];
 }
 
 type PDVView = 'CART' | 'RECEIPT_PREVIEW' | 'PAYMENT';
 
-const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onCancel, onFinish, processSale, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, sales, onNavigateToCredit }) => {
+const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onCancel, onFinish, processSale, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, sales, onNavigateToCredit, categories }) => {
   const [view, setView] = useState<PDVView>('CART');
   const cartKey = `pdv_cart_${vendedorId}_${client.id}`;
+  
+  const [activeCategoryId, setActiveCategoryId] = useState<string>('TODOS');
   
   const [cart, setCart] = useState<{ [key: string]: { quantidade: number, precoVenda: string } }>(() => 
     loadLocalState(cartKey, {})
@@ -163,7 +166,12 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   };
 
   const productIdsInCarga = useMemo(() => new Set(minhaCarga.map(c => c.produtoId)), [minhaCarga]);
-  const orderedProductsInCarga = useMemo(() => products.filter(p => productIdsInCarga.has(p.id)), [products, productIdsInCarga]);
+  
+  const filteredProducts = useMemo(() => {
+    const productsInCarga = products.filter(p => productIdsInCarga.has(p.id));
+    if (activeCategoryId === 'TODOS') return productsInCarga;
+    return productsInCarga.filter(p => p.categoryId === activeCategoryId);
+  }, [products, productIdsInCarga, activeCategoryId]);
 
   if (view === 'RECEIPT_PREVIEW') {
     return (
@@ -195,13 +203,33 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
 
   return (
     <div className="fixed inset-0 bg-gray-50 z-[60] flex flex-col">
-      <header className="bg-white border-b border-gray-100 p-3 flex justify-between items-center shadow-sm">
-        <button onClick={onCancel} className="w-9 h-9 bg-gray-50 text-gray-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-arrow-left"></i></button>
-        <div className="text-center px-4 truncate">
-          <p className="text-[9px] text-gray-400 uppercase font-black tracking-tighter">Atendimento</p>
-          <h2 className="font-black text-xs text-gray-800 uppercase truncate">{client.nomeFantasia}</h2> 
+      <header className="bg-white border-b border-gray-100 p-3 flex flex-col shadow-sm">
+        <div className="flex justify-between items-center mb-3">
+          <button onClick={onCancel} className="w-9 h-9 bg-gray-50 text-gray-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-arrow-left"></i></button>
+          <div className="text-center px-4 truncate">
+            <p className="text-[9px] text-gray-400 uppercase font-black tracking-tighter">Atendimento</p>
+            <h2 className="font-black text-xs text-gray-800 uppercase truncate">{client.nomeFantasia}</h2> 
+          </div>
+          <button onClick={() => setCart({})} className="w-9 h-9 bg-rose-50 text-rose-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-trash-can text-sm"></i></button>
         </div>
-        <button onClick={() => setCart({})} className="w-9 h-9 bg-rose-50 text-rose-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-trash-can text-sm"></i></button>
+
+        <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar -mx-3 px-3">
+          <button 
+            onClick={() => setActiveCategoryId('TODOS')}
+            className={`flex-shrink-0 px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${activeCategoryId === 'TODOS' ? 'bg-blue-600 text-white shadow-md' : 'bg-gray-100 text-gray-400'}`}
+          >
+            Todos
+          </button>
+          {categories.map(cat => (
+            <button 
+              key={cat.id}
+              onClick={() => setActiveCategoryId(cat.id)}
+              className={`flex-shrink-0 px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${activeCategoryId === cat.id ? 'bg-blue-600 text-white shadow-md' : 'bg-gray-100 text-gray-400'}`}
+            >
+              {cat.name}
+            </button>
+          ))}
+        </div>
       </header>
 
       {clientDebt > 0 && (
@@ -212,7 +240,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       )}
 
       <div className="flex-1 overflow-y-auto p-2 space-y-1.5 pb-44">
-        {orderedProductsInCarga.map(p => { 
+        {filteredProducts.map(p => { 
           const item = cart[p.id];
           const cargaOriginal = minhaCarga.find(c => c.produtoId === p.id)?.quantidade || 0;
           const minPrice = getMinPrice(p);

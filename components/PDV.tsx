@@ -214,20 +214,21 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   return (
     <div className="fixed inset-0 bg-gray-50 z-[60] flex flex-col">
       <header className="bg-white border-b border-gray-100 p-3 flex flex-col shadow-sm">
-        <div className="flex justify-between items-center mb-2">
-          <button onClick={onCancel} className="w-8 h-8 bg-gray-50 text-gray-400 rounded-lg flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-arrow-left text-xs"></i></button>
-          <div className="text-center px-4 truncate max-w-[200px]">
-            <h2 className="font-black text-[10px] text-gray-800 uppercase truncate">{client.nomeFantasia}</h2> 
+        <div className="flex justify-between items-center mb-3">
+          <button onClick={onCancel} className="w-9 h-9 bg-gray-50 text-gray-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-arrow-left"></i></button>
+          <div className="text-center px-4 truncate">
+            <p className="text-[9px] text-gray-400 uppercase font-black tracking-tighter">Atendimento</p>
+            <h2 className="font-black text-xs text-gray-800 uppercase truncate">{client.nomeFantasia}</h2> 
           </div>
-          <button onClick={() => setCart({})} className="w-8 h-8 bg-rose-50 text-rose-400 rounded-lg flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-trash-can text-xs"></i></button>
+          <button onClick={() => setCart({})} className="w-9 h-9 bg-rose-50 text-rose-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-trash-can text-sm"></i></button>
         </div>
 
-        <div className="flex flex-wrap gap-1 justify-center">
+        <div className="grid grid-cols-2 gap-1.5 px-0.5">
           {categories.map(cat => (
             <button 
               key={cat.id}
               onClick={() => setActiveCategoryId(cat.id)}
-              className={`px-3 py-1 rounded-lg text-[8px] font-black uppercase transition-all border ${activeCategoryId === cat.id ? 'bg-blue-600 text-white border-blue-600 shadow-sm' : 'bg-gray-50 text-gray-400 border-gray-100'}`}
+              className={`py-2 px-2 rounded-xl text-[9px] font-black uppercase transition-all truncate border ${activeCategoryId === cat.id ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-gray-50 text-gray-400 border-gray-100'}`}
             >
               {cat.name}
             </button>
@@ -236,13 +237,13 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       </header>
 
       {clientDebt > 0 && (
-        <button onClick={() => { onCancel(); onNavigateToCredit(); }} className="w-full bg-rose-600 text-white p-2 flex items-center justify-center gap-3 shadow-md">
-          <i className="fa-solid fa-triangle-exclamation text-xs"></i>
-          <span className="text-[9px] font-black uppercase tracking-widest">DÍVIDA: R$ {clientDebt.toFixed(2)}</span>
+        <button onClick={() => { onCancel(); onNavigateToCredit(); }} className="w-full bg-rose-600 text-white p-3 flex items-center justify-center gap-3 shadow-md">
+          <i className="fa-solid fa-triangle-exclamation text-sm"></i>
+          <span className="text-[10px] font-black uppercase tracking-widest">DÍVIDA PENDENTE: R$ {clientDebt.toFixed(2)}</span>
         </button>
       )}
 
-      <div className="flex-1 overflow-y-auto p-2 space-y-1 pb-44">
+      <div className="flex-1 overflow-y-auto p-2 space-y-1.5 pb-44">
         {filteredProducts.map(p => { 
           const item = cart[p.id];
           const cargaOriginal = minhaCarga.find(c => c.produtoId === p.id)?.quantidade || 0;
@@ -251,72 +252,72 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           const isBelowMin = margemMinimaAtiva && item && item.quantidade > 0 && itemPrice < minPrice;
 
           return (
-            <div key={p.id} className={`bg-white p-2 rounded-xl border flex flex-col gap-1 ${item?.quantidade ? 'border-blue-200 bg-blue-50/30' : 'border-gray-100'}`}>
-              <div className="flex items-center gap-2 w-full">
+            <div key={p.id} className={`bg-white p-2.5 rounded-2xl border flex flex-col gap-1 ${item?.quantidade ? 'border-blue-200 bg-blue-50/30' : 'border-gray-100'}`}>
+              <div className="flex items-center gap-3 w-full">
                 <div className="flex-1 min-w-0">
-                  <h3 className="font-bold text-gray-800 text-[10px] leading-tight uppercase truncate">{p.nome}</h3> 
-                  <div className="flex items-center gap-2 mt-0.5">
-                     <div className={`flex items-center gap-1 bg-white border px-1.5 py-0.5 rounded ${isBelowMin ? 'border-rose-500 bg-rose-50' : 'border-gray-100'}`}>
-                        <span className={`text-[8px] font-black ${isBelowMin ? 'text-rose-500' : 'text-gray-300'}`}>R$</span>
+                  <h3 className="font-bold text-gray-800 text-[11px] leading-tight uppercase truncate">{p.nome}</h3> 
+                  <div className="flex items-center gap-2 mt-1">
+                     <div className={`flex items-center gap-1.5 bg-white border px-2 py-0.5 rounded-lg ${isBelowMin ? 'border-rose-500 bg-rose-50' : 'border-gray-100'}`}>
+                        <span className={`text-[9px] font-black ${isBelowMin ? 'text-rose-500' : 'text-gray-300'}`}>R$</span>
                         <input 
                           type="text" 
                           value={item?.precoVenda ?? (p.precoVenda ?? 0).toFixed(2)} 
                           onChange={(e) => handlePriceChange(p.id, e.target.value)} 
-                          className={`w-12 bg-transparent border-none p-0 text-[10px] font-black outline-none ${isBelowMin ? 'text-rose-600' : 'text-emerald-600'}`} 
+                          className={`w-14 bg-transparent border-none p-0 text-[11px] font-black outline-none ${isBelowMin ? 'text-rose-600' : 'text-emerald-600'}`} 
                         />
                      </div>
-                     <span className="text-[8px] font-bold uppercase text-blue-500">{cargaOriginal - (item?.quantidade ?? 0)} DISP</span>
+                     <span className="text-[9px] font-bold uppercase text-blue-500">{cargaOriginal - (item?.quantidade ?? 0)} UN</span>
                   </div>
                 </div>
-                <div className="flex items-center bg-white rounded-lg p-0.5 border border-gray-100 shadow-sm">
-                  <button onClick={() => updateCart(p.id, -1, p.precoVenda)} className="w-7 h-7 text-gray-400 active:scale-90 flex items-center justify-center"><i className="fa-solid fa-minus text-[8px]"></i></button> 
-                  <span className="font-black text-[11px] min-w-[20px] text-center">{item?.quantidade ?? 0}</span> 
-                  <button onClick={() => updateCart(p.id, 1, p.precoVenda)} className="w-7 h-7 text-blue-600 active:scale-90 flex items-center justify-center"><i className="fa-solid fa-plus text-[8px]"></i></button> 
+                <div className="flex items-center bg-white rounded-xl p-0.5 border border-gray-100 shadow-sm">
+                  <button onClick={() => updateCart(p.id, -1, p.precoVenda)} className="w-8 h-8 text-gray-400 active:scale-90 flex items-center justify-center"><i className="fa-solid fa-minus text-[10px]"></i></button> 
+                  <span className="font-black text-xs min-w-[22px] text-center">{item?.quantidade ?? 0}</span> 
+                  <button onClick={() => updateCart(p.id, 1, p.precoVenda)} className="w-8 h-8 text-blue-600 active:scale-90 flex items-center justify-center"><i className="fa-solid fa-plus text-[10px]"></i></button> 
                 </div>
               </div>
               {isBelowMin && (
-                <p className="text-[7px] text-rose-600 font-black uppercase animate-pulse">
-                  <i className="fa-solid fa-circle-exclamation mr-1"></i> Mínimo: R$ {minPrice.toFixed(2)}
+                <p className="text-[8px] text-rose-600 font-black uppercase mt-1 animate-pulse">
+                  <i className="fa-solid fa-circle-exclamation mr-1"></i> Mínimo permitido: R$ {minPrice.toFixed(2)}
                 </p>
               )}
             </div>
           );
         })}
         {filteredProducts.length === 0 && (
-          <div className="py-10 text-center opacity-30 flex flex-col items-center gap-2">
-            <i className="fa-solid fa-box-open text-3xl"></i>
-            <p className="font-black uppercase tracking-widest text-[8px]">Vazio nesta categoria.</p>
+          <div className="py-20 text-center opacity-30 flex flex-col items-center gap-4">
+            <i className="fa-solid fa-box-open text-5xl"></i>
+            <p className="font-black uppercase tracking-widest text-[10px]">Nenhum produto desta categoria na sua carga.</p>
           </div>
         )}
       </div>
 
-      <footer className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 p-3 pb-8 space-y-2 shadow-lg max-w-lg mx-auto z-[70]">
+      <footer className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 p-4 pb-8 space-y-3 shadow-[0_-10px_20px_rgba(0,0,0,0.05)] max-w-lg mx-auto z-[70]">
         {hasMarginViolation && (
-          <div className="bg-rose-600 text-white p-2 rounded-lg text-center font-black text-[8px] uppercase tracking-widest animate-pulse flex items-center justify-center gap-1">
-            <i className="fa-solid fa-circle-exclamation text-xs"></i>
-            Bloqueado: Margem Mínima!
+          <div className="bg-rose-600 text-white p-3 rounded-xl text-center font-black text-[9px] uppercase tracking-widest animate-pulse flex items-center justify-center gap-2">
+            <i className="fa-solid fa-circle-exclamation text-sm"></i>
+            Venda Bloqueada: Preço abaixo da margem mínima!
           </div>
         )}
-        <div className="flex items-center justify-between px-1 mb-0.5 bg-gray-50/50 p-1.5 rounded-lg">
+        <div className="flex items-center justify-between px-1 mb-1 bg-gray-50/50 p-2 rounded-xl">
           <div className="flex items-center gap-2">
-            <button onClick={() => setIsTrocaActive(!isTrocaActive)} className={`w-8 h-5 rounded-full relative transition-colors ${isTrocaActive ? 'bg-orange-500' : 'bg-gray-300'}`}>
-              <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full transition-all ${isTrocaActive ? 'left-3.5' : 'left-0.5'}`}></div>
+            <button onClick={() => setIsTrocaActive(!isTrocaActive)} className={`w-10 h-6 rounded-full relative transition-colors ${isTrocaActive ? 'bg-orange-500' : 'bg-gray-300'}`}>
+              <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${isTrocaActive ? 'left-5' : 'left-1'}`}></div>
             </button>
-            <span className="text-[8px] font-black text-gray-400 uppercase">Troca</span>
+            <span className="text-[9px] font-black text-gray-400 uppercase">Troca/Desc.</span>
           </div>
-          {isTrocaActive && <input type="number" value={valorTroca} onChange={e => setValorTroca(e.target.value)} placeholder="R$ 0.00" className="w-20 bg-white border border-orange-100 rounded-md text-[10px] font-black text-orange-600 p-1.5 text-right outline-none" />}
+          {isTrocaActive && <input type="number" value={valorTroca} onChange={e => setValorTroca(e.target.value)} placeholder="R$ 0.00" className="w-24 bg-white border border-orange-100 rounded-lg text-[11px] font-black text-orange-600 p-2 text-right outline-none" />}
         </div>
-        <div className="flex justify-between items-center px-1">
+        <div className="flex justify-between items-end px-1">
           <div>
-            <p className="text-[8px] font-black text-gray-400 uppercase leading-none mb-0.5">Total</p>
-            <p className="text-lg font-black text-gray-800 leading-none">R$ {total.toFixed(2)}</p>
+            <p className="text-[9px] font-black text-gray-400 uppercase mb-0.5">Total Líquido</p>
+            <p className="text-xl font-black text-gray-800">R$ {total.toFixed(2)}</p>
           </div>
           <button 
             onClick={() => setView('RECEIPT_PREVIEW')} 
             disabled={(total <= 0 && getOrderedItems().length === 0) || hasMarginViolation} 
-            className={`px-5 py-3.5 rounded-xl font-black uppercase text-[10px] ${(total > 0 || getOrderedItems().length > 0) && !hasMarginViolation ? 'bg-blue-600 text-white shadow-lg' : 'bg-gray-200 text-gray-400'}`}
+            className={`px-6 py-4 rounded-2xl font-black uppercase text-xs ${(total > 0 || getOrderedItems().length > 0) && !hasMarginViolation ? 'bg-blue-600 text-white shadow-lg' : 'bg-gray-200 text-gray-400'}`}
           >
-            Ver Cupom
+            Gerar Cupom
           </button>
         </div>
       </footer>

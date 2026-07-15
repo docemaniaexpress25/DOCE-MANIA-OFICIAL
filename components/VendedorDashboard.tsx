@@ -87,7 +87,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         return d > latest ? d : latest;
       }, new Date(0));
       const diffDays = Math.ceil(Math.abs(today.getTime() - lastSale.getTime()) / (1000 * 60 * 60 * 24));
-      return diffDays >= 10;
+      return diffDays >= 25; // Atualizado para 25 dias
     }).map(c => {
       const cSales = sales.filter(s => s.clientId === c.id);
       const lastSale = cSales.reduce((latest, s) => {
@@ -420,40 +420,32 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       {activeTab === 'AVISOS' && (
         <div className="space-y-4">
           <header className="px-1 flex flex-col gap-1">
-            <h2 className="text-xl font-black text-gray-800 tracking-tight leading-none">Avisos e Alertas</h2>
-            <p className="text-[10px] font-black uppercase text-gray-400">Clientes que precisam de atenção</p>
+            <h2 className="text-xl font-black text-gray-800 tracking-tight leading-none">Avisos</h2>
+            <p className="text-[10px] font-black uppercase text-gray-400">Clientes ausentes há mais de 25 dias</p>
           </header>
-          <div className="grid gap-3">
+          <div className="grid gap-2">
             {atRiskClients.map(c => (
-              <div key={c.id} className="bg-white p-5 rounded-[2.5rem] border border-rose-100 shadow-md flex flex-col gap-4 relative overflow-hidden">
-                <div className="absolute top-0 right-0 bg-rose-600 text-white px-4 py-1.5 rounded-bl-3xl font-black text-[9px] uppercase tracking-tighter shadow-lg">
-                  {c.diasSemCompra} DIAS SEM COMPRAR
+              <div key={c.id} className="bg-white p-4 rounded-3xl border border-rose-50 shadow-sm flex items-center justify-between transition-all group">
+                <div className="flex-1 min-w-0 pr-3">
+                  <h4 className="font-black text-gray-800 text-xs uppercase truncate">{c.nomeFantasia}</h4>
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className="text-[9px] font-black text-rose-600 uppercase bg-rose-50 px-2 py-0.5 rounded-lg">{c.diasSemCompra} dias</span>
+                    <span className="text-[9px] text-gray-400 font-bold uppercase truncate">Ult: {new Date(c.dataUltimaVenda).toLocaleDateString()}</span>
+                  </div>
                 </div>
-                <div className="flex-1 pr-12 pt-2">
-                  <h4 className="font-black text-gray-800 text-[13px] leading-tight uppercase truncate">{c.nomeFantasia}</h4>
-                  <p className="text-[10px] text-gray-400 font-semibold uppercase mt-1">Último pedido: {new Date(c.dataUltimaVenda).toLocaleDateString()}</p>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <a 
-                    href={`https://wa.me/55${c.telefone.replace(/\D/g, '')}?text=Olá ${c.nomeFantasia}, tudo bem? Faz um tempinho que não passamos por aí. Precisando de alguma reposição?`} 
-                    target="_blank" 
-                    className="bg-emerald-500 text-white py-3 rounded-2xl flex items-center justify-center gap-2 font-black text-[10px] uppercase shadow-lg active:scale-95 transition-all"
-                  >
-                    <i className="fa-brands fa-whatsapp text-lg"></i> WhatsApp
-                  </a>
-                  <button 
-                    onClick={() => setSelectedClient(c)}
-                    className="bg-blue-600 text-white py-3 rounded-2xl flex items-center justify-center gap-2 font-black text-[10px] uppercase shadow-lg active:scale-95 transition-all"
-                  >
-                    <i className="fa-solid fa-cart-shopping text-sm"></i> Atender Agora
-                  </button>
-                </div>
+                <button 
+                  onClick={() => handleAddToTodayRoute(c.id)}
+                  className="bg-blue-600 text-white w-10 h-10 rounded-2xl flex items-center justify-center shadow-lg active:scale-90 transition-all"
+                  title="Puxar p/ hoje"
+                >
+                  <i className="fa-solid fa-plus"></i>
+                </button>
               </div>
             ))}
             {atRiskClients.length === 0 && (
               <div className="text-center py-20 opacity-30 flex flex-col items-center gap-4">
                 <i className="fa-solid fa-circle-check text-5xl"></i>
-                <p className="font-black uppercase tracking-widest text-[10px]">Tudo certo! Seus clientes estão em dia.</p>
+                <p className="font-black uppercase tracking-widest text-[10px]">Tudo em dia!</p>
               </div>
             )}
           </div>

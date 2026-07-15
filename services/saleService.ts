@@ -7,23 +7,28 @@ export const saleService = {
   async getAllSales(): Promise<Sale[]> {
     const { data, error } = await supabase.from('sales').select('*, sale_items(*)');
     if (error) return [];
-    return data.map(s => ({
-      id: s.id,
-      vendedorId: s.vendedor_id,
-      clientId: s.client_id,
-      valorTotal: safeNumber(s.valor_total),
-      valorPago: safeNumber(s.valor_pago),
-      metodoPagamento: s.metodo_pagamento,
-      detalhePagamento: s.detalhe_pagamento,
-      statusPagamento: s.status_pagamento,
-      dataVencimento: s.data_vencimento ? new Date(s.data_vencimento) : undefined,
-      data: new Date(s.data_venda),
-      itens: (s.sale_items || []).map((i: any) => ({
-        produtoId: i.produto_id,
-        quantidade: safeNumber(i.quantidade),
-        precoVenda: safeNumber(i.preco_venda)
-      }))
-    })) as Sale[];
+    return data.map(s => {
+      // Mapeia de volta para 'PRE_PEDIDO' se for 'A_PRAZO' e o detalhe começar com 'PRE_PEDIDO:'
+      const isPreOrder = s.metodo_pagamento === 'A_PRAZO' && s.detalhe_pagamento?.startsWith('PRE_PEDIDO:');
+      
+      return {
+        id: s.id,
+        vendedorId: s.vendedor_id,
+        clientId: s.client_id,
+        valorTotal: safeNumber(s.valor_total),
+        valorPago: safeNumber(s.valor_pago),
+        metodoPagamento: isPreOrder ? 'PRE_PEDIDO' : s.metodo_pagamento,
+        detalhePagamento: isPreOrder ? s.detalhe_pagamento.replace('PRE_PEDIDO: ', '') : s.detalhe_pagamento,
+        statusPagamento: s.status_pagamento,
+        dataVencimento: s.data_vencimento ? new Date(s.data_vencimento) : undefined,
+        data: new Date(s.data_venda),
+        itens: (s.sale_items || []).map((i: any) => ({
+          produtoId: i.produto_id,
+          quantidade: safeNumber(i.quantidade),
+          precoVenda: safeNumber(i.preco_venda)
+        }))
+      };
+    }) as Sale[];
   },
 
   async insertSale(sale: Omit<Sale, 'id'>): Promise<Sale | null> {
@@ -69,7 +74,8 @@ export const saleService = {
       }
     }
 
-    // 1. Insere o pré-pedido como venda pendente
+    // 1. Insere o pré-pedido no banco como 'A_PRAZO' para respeitar a constraint,
+    // mas identificamos com o prefixo 'PRE_PEDIDO:' para podermos mapear de volta.
     const { data: insertedSale, error: saleError } = await supabase
       .from('sales')
       .insert({
@@ -77,8 +83,8 @@ export const saleService = {
         client_id: sale.clientId,
         valor_total: sale.valorTotal,
         valor_pago: 0,
-        metodo_pagamento: 'PRE_PEDIDO',
-        detalhe_pagamento: sale.detalhePagamento || 'Pré-pedido para entrega futura',
+        metodo_pagamento: 'A_PRAZO', 
+        detalhe_pagamento: `PRE_PEDIDO: ${sale.detalhePagamento || 'Pré-pedido para entrega futura'}`,
         status_pagamento: 'PENDENTE',
         data_venda: saleDate.toISOString(),
         data_vencimento: formattedDueDate

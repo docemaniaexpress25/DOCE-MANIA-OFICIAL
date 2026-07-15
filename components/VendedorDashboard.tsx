@@ -1,5 +1,5 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { User, Product, Client, Carga, Sale, Commission, PaymentMethod, CargaPendente, CommissionPaymentLog, SystemMessage, Expense, Category } from '../types';
+import React, { useState, useMemo, useEffect } from 'react';
+import { User, Product, Client, Carga, Sale, Commission, PaymentMethod, CargaPendente, CommissionPaymentLog, SystemMessage, Expense, Category, Subcategory } from '../types';
 import { DIAS_SEMANA } from '../constants';
 import PDV from './PDV';
 import Cupom from './Cupom';
@@ -19,6 +19,7 @@ interface VendedorDashboardProps {
   expenses: Expense[];
   messages: SystemMessage[];
   categories: Category[];
+  subcategories: Subcategory[];
   markMessageAsRead: (id: string) => void;
   processSale: (data: any) => Promise<Sale | null>;
   addClient: (data: Omit<Client, 'id'>) => Promise<void>; 
@@ -43,7 +44,7 @@ interface VendedorDashboardProps {
 type TabType = 'HOME' | 'ROTEIRO' | 'CARGA' | 'HISTORY' | 'FINANCE' | 'CREDIT' | 'CLIENTES' | 'WEEKLY' | 'STOCK_VIEW' | 'AVISOS';
 
 const VendedorDashboard: React.FC<VendedorDashboardProps> = ({ 
-  user, products = [], clients = [], cargas = [], cargasPendentes = [], sales = [], commissions = [], payoutLogs = [], expenses = [], messages = [], categories = [], markMessageAsRead, processSale, addClient, updateClient, deleteClient, receivePayment, deleteSale, aceitarCarga, addExpense, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, updateDailyRoute, companyName, companyCnpj
+  user, products = [], clients = [], cargas = [], cargasPendentes = [], sales = [], commissions = [], payoutLogs = [], expenses = [], messages = [], categories = [], subcategories = [], markMessageAsRead, processSale, addClient, updateClient, deleteClient, receivePayment, deleteSale, aceitarCarga, addExpense, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, updateDailyRoute, companyName, companyCnpj
 }) => {
   const [activeTab, setActiveTab] = useState<TabType>(() => loadLocalState('v_activeTab', 'HOME'));
   const [selectedClient, setSelectedClient] = useState<Client | null>(() => loadLocalState('v_selectedClient', null));
@@ -52,7 +53,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const [viewingClientHistory, setViewingClientHistory] = useState<Client | null>(null);
   const [filterOverdueOnly, setFilterOverdueOnly] = useState(false);
   
-  // Novo estado para controlar avisos arquivados/visualizados
   const [dismissedClientRiskIds, setDismissedClientRiskIds] = useState<string[]>(() => 
     loadLocalState(`v_dismissed_risk_${user.id}`, [])
   );
@@ -87,7 +87,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     const today = new Date();
     return clients.filter(c => {
       if (!c.ativo) return false;
-      // Filtra clientes que já foram "marcados" pelo vendedor
       if (dismissedClientRiskIds.includes(c.id)) return false;
 
       const cSales = sales.filter(s => s.clientId === c.id);
@@ -180,10 +179,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     if (!(dailyRouteState?.clientIds || []).includes(clientId)) { 
       const newRoute = [...(dailyRouteState?.clientIds || []), clientId];
       updateDailyRoute(newRoute, dailyRouteState?.skippedClientIds || []);
-      
-      // Ao adicionar à rota, removemos o aviso de risco
       setDismissedClientRiskIds(prev => [...prev, clientId]);
-      
       showToast("Adicionado à rota e aviso removido!"); 
     } 
   };
@@ -391,6 +387,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         sales={sales} 
         onNavigateToCredit={handleNavigateToCredit}
         categories={categories}
+        subcategories={subcategories}
       />
     );
   }

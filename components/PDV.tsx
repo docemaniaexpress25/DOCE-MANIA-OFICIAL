@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Product, Client, Carga, Sale, SaleItem, PaymentMethod, Category } from '../types';
+import { Product, Client, Carga, Sale, SaleItem, PaymentMethod, Category, Subcategory } from '../types';
 import Cupom from './Cupom';
 import { loadLocalState, saveLocalState } from '../utils/persistence';
 
@@ -20,11 +20,12 @@ interface PDVProps {
   sales: Sale[];
   onNavigateToCredit: () => void;
   categories: Category[];
+  subcategories: Subcategory[];
 }
 
 type PDVView = 'CART' | 'RECEIPT_PREVIEW' | 'PAYMENT';
 
-const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onCancel, onFinish, processSale, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, sales, onNavigateToCredit, categories }) => {
+const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onCancel, onFinish, processSale, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, sales, onNavigateToCredit, categories, subcategories }) => {
   const [view, setView] = useState<PDVView>('CART');
   const cartKey = `pdv_cart_${vendedorId}_${client.id}`;
   
@@ -86,19 +87,20 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       });
     });
 
-    const prodsInCategory = products.filter(p => p.categoryId === activeCategoryId && p.subcategoryId);
-    // Garantindo que o Set e o Array sejam tratados como strings para evitar 'unknown'
+    // Filtra produtos da categoria ativa que possuem subcategoria válida
+    const prodsInCategory = products.filter(p => p.categoryId === activeCategoryId && p.subcategoryId && p.subcategoryId.trim() !== '');
     const subIdsInCategory = Array.from(new Set(prodsInCategory.map(p => p.subcategoryId as string)));
 
     return subIdsInCategory.map((subId: string) => {
-      const prodReference = products.find(p => p.subcategoryId === subId);
+      // Busca o nome oficial da subcategoria cadastrada no banco de dados
+      const sub = subcategories.find(s => s.id === subId);
       return {
         id: subId,
-        name: prodReference?.nome?.split(' ')[0] || 'Sub',
+        name: sub ? sub.name : 'Outros',
         wasSold: soldSubIds.has(subId)
       };
     });
-  }, [activeCategoryId, client.id, sales, products]);
+  }, [activeCategoryId, client.id, sales, products, subcategories]);
 
   const formatCategoryName = (name: string) => {
     const n = name.toUpperCase();

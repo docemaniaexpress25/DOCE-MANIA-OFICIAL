@@ -52,9 +52,6 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const [selectedPixSlot, setSelectedPixSlot] = useState<1 | 2>(1);
   const [isTrocaActive, setIsTrocaActive] = useState(false);
   const [valorTroca, setValorTroca] = useState('');
-  
-  // Novo estado para o modo Pré-pedido
-  const [isPreOrder, setIsPreOrder] = useState(false);
 
   useEffect(() => {
     if (activeCategoryId && !visitedCategoryIds.includes(activeCategoryId)) {
@@ -135,13 +132,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const updateCart = (pId: string, delta: number, basePrice: number) => {
     setCart(prev => {
       const current = prev[pId] || { quantidade: 0, precoVenda: basePrice.toString() };
-      
-      // No modo Pré-pedido, o limite é o Estoque Central, caso contrário, a carga física do veículo
-      const maxLimit = isPreOrder 
-        ? (products.find(prod => prod.id === pId)?.estoquePrincipal || 0)
-        : (minhaCarga.find(c => c.produtoId === pId)?.quantidade || 0);
-
-      const novaQtd = Math.max(0, Math.min(maxLimit, (current.quantidade ?? 0) + delta)); 
+      const cargaOriginal = minhaCarga.find(c => c.produtoId === pId)?.quantidade || 0;
+      const novaQtd = Math.max(0, Math.min(cargaOriginal, (current.quantidade ?? 0) + delta)); 
       if (novaQtd === 0 && delta < 0) {
         const { [pId]: _, ...rest } = prev;
         return rest;
@@ -189,22 +181,20 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     const itens = getOrderedItems();
     const vt = parseFloat(valorTroca) || 0;
     const descontoInfo = isTrocaActive && vt > 0 ? ` (Troca: R$ ${vt.toFixed(2)})` : '';
-    const finalDetalhe = isPreOrder 
-      ? 'Pré-pedido para entrega futura' + descontoInfo 
-      : (metodo === 'PIX' ? (selectedPixSlot === 1 ? pix1Name : pix2Name) : detalheMetodo) + descontoInfo;
+    const finalDetalhe = (metodo === 'PIX' ? (selectedPixSlot === 1 ? pix1Name : pix2Name) : detalheMetodo) + descontoInfo;
     
     const salePayload: any = { 
       vendedorId, 
       clientId: client.id, 
       valorTotal: total, 
-      valorPago: isPreOrder || metodo === 'A_PRAZO' ? 0 : total,
-      metodoPagamento: isPreOrder ? 'PRE_PEDIDO' : metodo, 
+      valorPago: metodo === 'A_PRAZO' ? 0 : total,
+      metodoPagamento: metodo, 
       detalhePagamento: finalDetalhe, 
       itens,
       data: new Date() 
     };
 
-    if (isPreOrder || metodo === 'A_PRAZO') { 
+    if (metodo === 'A_PRAZO') { 
       salePayload.statusPagamento = 'PENDENTE'; 
       salePayload.dataVencimento = new Date(prazoData); 
     } else { 
@@ -221,17 +211,10 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const productIdsInCarga = useMemo(() => new Set(minhaCarga.map(c => c.produtoId)), [minhaCarga]);
   
   const filteredProducts = useMemo(() => {
-    if (isPreOrder) {
-      // Pré-pedido mostra TODOS os produtos ativos do Estoque Central
-      if (!activeCategoryId) return products.filter(p => p.ativo);
-      return products.filter(p => p.categoryId === activeCategoryId && p.ativo);
-    } else {
-      // Modo normal mostra apenas o que está na carga física do veículo
-      const productsInCarga = products.filter(p => productIdsInCarga.has(p.id));
-      if (!activeCategoryId) return productsInCarga;
-      return productsInCarga.filter(p => p.categoryId === activeCategoryId);
-    }
-  }, [products, productIdsInCarga, activeCategoryId, isPreOrder]);
+    const productsInCarga = products.filter(p => productIdsInCarga.has(p.id));
+    if (!activeCategoryId) return productsInCarga;
+    return productsInCarga.filter(p => p.categoryId === activeCategoryId);
+  }, [products, productIdsInCarga, activeCategoryId]);
 
   if (view === 'RECEIPT_PREVIEW') {
     return (
@@ -245,8 +228,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               data: new Date(), 
               valorTotal: total, 
               valorPago: 0, 
-              metodoPagamento: isPreOrder ? 'PRE_PEDIDO' : metodo, 
-              statusPagamento: isPreOrder || metodo === 'A_PRAZO' ? 'PENDENTE' : 'PAGO', 
+              metodoPagamento: metodo, 
+              statusPagamento: metodo === 'A_PRAZO' ? 'PENDENTE' : 'PAGO', 
               itens: getOrderedItems() 
             }} 
             client={client} 
@@ -312,13 +295,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
             <div key={p.id} className={`bg-white p-2.5 rounded-2xl border flex flex-col gap-1 ${item?.quantidade ? 'border-blue-200 bg-blue-50/30' : 'border-gray-100'}`}>
               <div className="flex items-center gap-3 w-full">
                 <div className="flex-1 min-w-0">
-                  <h3 className="font-bold text-gray-800 text-[11px] leading-tight uppercase truncate flex items-center gap-1.5">
-                    {hasBeenSold && (
-                      <i 
-                        className="fa-solid fa-check text-[11px] text-emerald-500 flex-shrink-0" 
-                        title="Este produto já foi vendido para este cliente"
-                      />
-                    )}
+                  <h3 className="font-bold text-gray-800 text-[11px] leading-tight uppercase truncate">
                     {p.nome}
                   </h3> 
                   <div className="flex items-center gap-2 mt-1">
@@ -331,12 +308,10 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                           className={`w-14 bg-transparent border-none p-0 text-[11px] font-black outline-none ${isBelowMin ? 'text-rose-600' : 'text-emerald-600'}`} 
                         />
                      </div>
-                     <span className="text-[9px] font-bold uppercase text-blue-500">
-                       {isPreOrder 
-                         ? `Estoque Central: ${p.estoquePrincipal - (item?.quantidade ?? 0)}` 
-                         : `${cargaOriginal - (item?.quantidade ?? 0)} UN`
-                       }
-                     </span>
+                     <span className="text-[9px] font-bold uppercase text-blue-500">{cargaOriginal - (item?.quantidade ?? 0)} UN</span>
+                     {hasBeenSold && (
+                       <span className="bg-emerald-50 text-emerald-600 border border-emerald-200 text-[8px] font-black w-4 h-4 rounded flex items-center justify-center" title="Este produto já foi vendido para este cliente em compras anteriores">V</span>
+                     )}
                   </div>
                 </div>
                 <div className="flex items-center bg-white rounded-xl p-0.5 border border-gray-100 shadow-sm">
@@ -356,12 +331,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         {filteredProducts.length === 0 && (
           <div className="py-20 text-center opacity-30 flex flex-col items-center gap-4">
             <i className="fa-solid fa-box-open text-5xl"></i>
-            <p className="font-black uppercase tracking-widest text-[10px]">
-              {isPreOrder 
-                ? 'Nenhum produto cadastrado no estoque central para esta categoria.' 
-                : 'Nenhum produto desta categoria na sua carga.'
-              }
-            </p>
+            <p className="font-black uppercase tracking-widest text-[10px]">Nenhum produto desta categoria na sua carga.</p>
           </div>
         )}
       </div>
@@ -380,42 +350,18 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           </div>
         )}
 
-        <div className="flex items-center justify-between px-1 mb-1 bg-gray-50/50 p-2 rounded-xl gap-2">
+        <div className="flex items-center justify-between px-1 mb-1 bg-gray-50/50 p-2 rounded-xl">
           <div className="flex items-center gap-2">
             <button onClick={() => setIsTrocaActive(!isTrocaActive)} className={`w-10 h-6 rounded-full relative transition-colors ${isTrocaActive ? 'bg-orange-500' : 'bg-gray-300'}`}>
               <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${isTrocaActive ? 'left-5' : 'left-1'}`}></div>
             </button>
             <span className="text-[9px] font-black text-gray-400 uppercase">Troca/Desc.</span>
           </div>
-          
-          {/* Novo Botão para alternar entre Pronta-Entrega e Pré-Pedido */}
-          <div className="flex items-center gap-2">
-            <button 
-              onClick={() => {
-                const newState = !isPreOrder;
-                setIsPreOrder(newState);
-                setCart({}); // Limpa o carrinho ao trocar de modo para evitar conflitos de carga/estoque central
-                if (newState) {
-                  setMetodo('PRE_PEDIDO');
-                } else {
-                  setMetodo('DINHEIRO');
-                }
-              }} 
-              className={`w-10 h-6 rounded-full relative transition-colors ${isPreOrder ? 'bg-blue-600' : 'bg-gray-300'}`}
-            >
-              <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${isPreOrder ? 'left-5' : 'left-1'}`}></div>
-            </button>
-            <span className="text-[9px] font-black text-gray-400 uppercase">Pré-pedido</span>
-          </div>
-
-          {isTrocaActive && <input type="number" value={valorTroca} onChange={e => setValorTroca(e.target.value)} placeholder="R$ 0.00" className="w-20 bg-white border border-orange-100 rounded-lg text-[11px] font-black text-orange-600 p-2 text-right outline-none" />}
+          {isTrocaActive && <input type="number" value={valorTroca} onChange={e => setValorTroca(e.target.value)} placeholder="R$ 0.00" className="w-24 bg-white border border-orange-100 rounded-lg text-[11px] font-black text-orange-600 p-2 text-right outline-none" />}
         </div>
-        
         <div className="flex justify-between items-end px-1">
           <div>
-            <p className="text-[9px] font-black text-gray-400 uppercase mb-0.5">
-              {isPreOrder ? 'Total Pré-pedido' : 'Total Líquido'}
-            </p>
+            <p className="text-[9px] font-black text-gray-400 uppercase mb-0.5">Total Líquido</p>
             <p className="text-xl font-black text-gray-800">R$ {total.toFixed(2)}</p>
           </div>
           <button 
@@ -423,7 +369,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
             disabled={(total <= 0 && getOrderedItems().length === 0) || hasMarginViolation || !allCategoriesVisited} 
             className={`px-6 py-4 rounded-2xl font-black uppercase text-xs ${(total > 0 || getOrderedItems().length > 0) && !hasMarginViolation && allCategoriesVisited ? 'bg-blue-600 text-white shadow-lg' : 'bg-gray-200 text-gray-400'}`}
           >
-            {isPreOrder ? 'Confirmar Pré-pedido' : 'Gerar Cupom'}
+            Gerar Cupom
           </button>
         </div>
       </footer>
@@ -431,93 +377,74 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       {view === 'PAYMENT' && (
         <div className="fixed inset-0 bg-black/60 z-[110] flex items-end justify-center p-4">
            <div className="bg-white w-full max-w-sm rounded-[2.5rem] p-8 animate-in slide-in-from-bottom max-h-[95vh] overflow-y-auto">
-              <h3 className="font-black text-gray-800 text-lg mb-4 text-center uppercase tracking-tight">
-                {isPreOrder ? 'Confirmar Pré-pedido' : 'Finalizar Pagamento'}
-              </h3>
+              <h3 className="font-black text-gray-800 text-lg mb-4 text-center uppercase tracking-tight">Finalizar Pagamento</h3>
               
               <div className="bg-gray-50 p-4 rounded-2xl mb-6 text-center border border-gray-100">
                 <p className="text-[10px] font-black text-gray-400 uppercase mb-1">Valor Total Devido</p>
                 <p className="text-3xl font-black text-blue-600">R$ {total.toFixed(2)}</p>
               </div>
 
-              {isPreOrder ? (
-                <div className="mb-6 space-y-4 animate-in fade-in duration-300 text-center">
-                  <div className="w-16 h-16 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-3 shadow-inner">
-                    <i className="fa-solid fa-clock-rotate-left text-2xl"></i>
-                  </div>
-                  <p className="text-xs text-gray-500 font-bold uppercase leading-relaxed">
-                    Este pedido será gerado como pré-pedido de entrega futura e será faturado ao cliente posteriormente.
-                  </p>
-                  <div className="space-y-1 text-left">
-                    <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Previsão de Entrega / Prazo</label>
-                    <input type="date" value={prazoData} onChange={e => setPrazoData(e.target.value)} className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-bold outline-none focus:ring-2 focus:ring-blue-100" />
-                  </div>
+              <div className="flex gap-1.5 mb-6 justify-center">
+                {(['DINHEIRO', 'PIX', 'A_PRAZO'] as const).map(m => (
+                  <button key={m} onClick={() => setMetodo(m)} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${metodo === m ? 'bg-blue-600 text-white shadow-md' : 'bg-gray-50 text-gray-400'}`}>{m === 'A_PRAZO' ? 'PRAZO' : m}</button>
+                ))}
+              </div>
+
+              {metodo === 'DINHEIRO' && (
+                <div className="mb-6 space-y-4 animate-in fade-in duration-300">
+                   <div className="space-y-1">
+                      <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Valor Recebido R$</label>
+                      <input 
+                        type="number" 
+                        value={valorRecebido} 
+                        onChange={e => setValorRecebido(e.target.value)} 
+                        placeholder="0.00" 
+                        className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-2xl font-black text-center outline-none" 
+                        autoFocus
+                      />
+                   </div>
+                   {parseFloat(valorRecebido) > total && (
+                     <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100 text-center animate-in zoom-in-95">
+                        <p className="text-[10px] font-black text-emerald-600 uppercase mb-1">Troco a Devolver</p>
+                        <p className="text-2xl font-black text-emerald-700">R$ {troco.toFixed(2)}</p>
+                     </div>
+                   )}
                 </div>
-              ) : (
-                <>
-                  <div className="flex gap-1.5 mb-6 justify-center">
-                    {(['DINHEIRO', 'PIX', 'A_PRAZO'] as const).map(m => (
-                      <button key={m} onClick={() => setMetodo(m)} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${metodo === m ? 'bg-blue-600 text-white shadow-md' : 'bg-gray-50 text-gray-400'}`}>{m === 'A_PRAZO' ? 'PRAZO' : m}</button>
-                    ))}
-                  </div>
+              )}
 
-                  {metodo === 'DINHEIRO' && (
-                    <div className="mb-6 space-y-4 animate-in fade-in duration-300">
-                       <div className="space-y-1">
-                          <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Valor Recebido R$</label>
-                          <input 
-                            type="number" 
-                            value={valorRecebido} 
-                            onChange={e => setValorRecebido(e.target.value)} 
-                            placeholder="0.00" 
-                            className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-2xl font-black text-center outline-none" 
-                            autoFocus
-                          />
-                       </div>
-                       {parseFloat(valorRecebido) > total && (
-                         <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100 text-center animate-in zoom-in-95">
-                            <p className="text-[10px] font-black text-emerald-600 uppercase mb-1">Troco a Devolver</p>
-                            <p className="text-2xl font-black text-emerald-700">R$ {troco.toFixed(2)}</p>
-                         </div>
-                       )}
-                    </div>
-                  )}
+              {metodo === 'A_PRAZO' && (
+                <div className="mb-6 space-y-4 animate-in fade-in duration-300">
+                   <div className="grid grid-cols-4 gap-2">
+                     {[7, 14, 21, 30].map(days => (
+                       <button key={days} onClick={() => setPrazoDays(days)} className="py-3 bg-gray-50 border border-gray-100 rounded-xl text-[10px] font-black text-gray-600 hover:bg-blue-50 hover:text-blue-600 transition-colors">{days}D</button>
+                     ))}
+                   </div>
+                   <div className="space-y-1">
+                      <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Data de Vencimento</label>
+                      <input type="date" value={prazoData} onChange={e => setPrazoData(e.target.value)} className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-bold outline-none focus:ring-2 focus:ring-blue-100" />
+                   </div>
+                </div>
+              )}
 
-                  {metodo === 'A_PRAZO' && (
-                    <div className="mb-6 space-y-4 animate-in fade-in duration-300">
-                       <div className="grid grid-cols-4 gap-2">
-                         {[7, 14, 21, 30].map(days => (
-                           <button key={days} onClick={() => setPrazoDays(days)} className="py-3 bg-gray-50 border border-gray-100 rounded-xl text-[10px] font-black text-gray-600 hover:bg-blue-50 hover:text-blue-600 transition-colors">{days}D</button>
-                         ))}
-                       </div>
-                       <div className="space-y-1">
-                          <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Data de Vencimento</label>
-                          <input type="date" value={prazoData} onChange={e => setPrazoData(e.target.value)} className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-bold outline-none focus:ring-2 focus:ring-blue-100" />
-                       </div>
-                    </div>
-                  )}
-
-                  {metodo === 'PIX' && (
-                    <div className="mb-6 space-y-4 animate-in fade-in duration-300">
-                       <p className="text-[9px] font-black text-gray-400 uppercase text-center">Selecione o Banco para Receber</p>
-                       <div className="grid grid-cols-2 gap-2">
-                         <button onClick={() => setSelectedPixSlot(1)} className={`p-3 rounded-xl border text-[10px] font-black uppercase transition-all ${selectedPixSlot === 1 ? 'border-blue-600 bg-blue-50 text-blue-600' : 'border-gray-100 text-gray-400'}`}>{pix1Name}</button>
-                         <button onClick={() => setSelectedPixSlot(2)} className={`p-3 rounded-xl border text-[10px] font-black uppercase transition-all ${selectedPixSlot === 2 ? 'border-blue-600 bg-blue-50 text-blue-600' : 'border-gray-100 text-gray-400'}`}>{pix2Name}</button>
-                       </div>
-                       
-                       <div className="bg-gray-50 p-4 rounded-2xl flex flex-col items-center border border-gray-100">
-                         <p className="text-[8px] font-black text-gray-400 uppercase mb-3">QR CODE PARA PAGAMENTO</p>
-                         <div className="w-32 h-32 bg-white rounded-xl flex items-center justify-center border border-gray-200 overflow-hidden shadow-inner">
-                            {selectedPixSlot === 1 ? (
-                              pix1Code ? <img src={pix1Code} className="w-full h-full object-contain" /> : <i className="fa-solid fa-qrcode text-gray-200 text-3xl"></i>
-                            ) : (
-                              pix2Code ? <img src={pix2Code} className="w-full h-full object-contain" /> : <i className="fa-solid fa-qrcode text-gray-200 text-3xl"></i>
-                            )}
-                         </div>
-                       </div>
-                    </div>
-                  )}
-                </>
+              {metodo === 'PIX' && (
+                <div className="mb-6 space-y-4 animate-in fade-in duration-300">
+                   <p className="text-[9px] font-black text-gray-400 uppercase text-center">Selecione o Banco para Receber</p>
+                   <div className="grid grid-cols-2 gap-2">
+                     <button onClick={() => setSelectedPixSlot(1)} className={`p-3 rounded-xl border text-[10px] font-black uppercase transition-all ${selectedPixSlot === 1 ? 'border-blue-600 bg-blue-50 text-blue-600' : 'border-gray-100 text-gray-400'}`}>{pix1Name}</button>
+                     <button onClick={() => setSelectedPixSlot(2)} className={`p-3 rounded-xl border text-[10px] font-black uppercase transition-all ${selectedPixSlot === 2 ? 'border-blue-600 bg-blue-50 text-blue-600' : 'border-gray-100 text-gray-400'}`}>{pix2Name}</button>
+                   </div>
+                   
+                   <div className="bg-gray-50 p-4 rounded-2xl flex flex-col items-center border border-gray-100">
+                     <p className="text-[8px] font-black text-gray-400 uppercase mb-3">QR CODE PARA PAGAMENTO</p>
+                     <div className="w-32 h-32 bg-white rounded-xl flex items-center justify-center border border-gray-200 overflow-hidden shadow-inner">
+                        {selectedPixSlot === 1 ? (
+                          pix1Code ? <img src={pix1Code} className="w-full h-full object-contain" /> : <i className="fa-solid fa-qrcode text-gray-200 text-3xl"></i>
+                        ) : (
+                          pix2Code ? <img src={pix2Code} className="w-full h-full object-contain" /> : <i className="fa-solid fa-qrcode text-gray-200 text-3xl"></i>
+                        )}
+                     </div>
+                   </div>
+                </div>
               )}
 
               <button 
@@ -525,7 +452,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                 disabled={hasMarginViolation}
                 className={`w-full bg-emerald-600 text-white py-5 rounded-2xl font-black uppercase text-xs shadow-xl active:scale-95 transition-all mb-2 tracking-widest ${hasMarginViolation ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
-                Concluir Pré-pedido
+                Concluir Venda
               </button>
               <button onClick={() => setView('RECEIPT_PREVIEW')} className="w-full py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Voltar ao Cupom</button>
            </div>

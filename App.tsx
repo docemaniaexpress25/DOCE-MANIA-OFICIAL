@@ -375,12 +375,7 @@ const App: React.FC = () => {
 
   const processSale = async (saleData: any) => {
     try {
-      let res;
-      if (saleData.metodoPagamento === 'PRE_PEDIDO') {
-        res = await saleService.insertPreOrder(saleData);
-      } else {
-        res = await saleService.insertSale(saleData);
-      }
+      const res = await saleService.insertSale(saleData);
       if (res) fetchTransactionalData();
       return res;
     } catch (e) {

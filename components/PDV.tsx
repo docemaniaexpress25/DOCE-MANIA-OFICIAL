@@ -31,6 +31,11 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const [activeCategoryId, setActiveCategoryId] = useState<string>(() => {
     return categories.length > 0 ? categories[0].id : '';
   });
+
+  // Estado para rastrear quais categorias foram visualizadas
+  const [visitedCategoryIds, setVisitedCategoryIds] = useState<string[]>(() => {
+    return categories.length > 0 ? [categories[0].id] : [];
+  });
   
   const [cart, setCart] = useState<{ [key: string]: { quantidade: number, precoVenda: string } }>(() => 
     loadLocalState(cartKey, {})
@@ -48,6 +53,13 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const [isTrocaActive, setIsTrocaActive] = useState(false);
   const [valorTroca, setValorTroca] = useState('');
 
+  // Sempre que a categoria ativa mudar, marca como visitada
+  useEffect(() => {
+    if (activeCategoryId && !visitedCategoryIds.includes(activeCategoryId)) {
+      setVisitedCategoryIds(prev => [...prev, activeCategoryId]);
+    }
+  }, [activeCategoryId, visitedCategoryIds]);
+
   useEffect(() => {
     if (activeCategoryId === '' && categories.length > 0) {
       setActiveCategoryId(categories[0].id);
@@ -58,7 +70,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     saveLocalState(cartKey, cart);
   }, [cart, cartKey]);
 
-  // Função para abreviar nomes de categoria conforme solicitado
+  const allCategoriesVisited = visitedCategoryIds.length >= categories.length;
+
   const formatCategoryName = (name: string) => {
     const n = name.toUpperCase();
     if (n.includes('ELMA')) return 'ELMA';
@@ -232,15 +245,21 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         </div>
 
         <div className="grid grid-cols-4 gap-1 px-0.5">
-          {categories.map(cat => (
-            <button 
-              key={cat.id}
-              onClick={() => setActiveCategoryId(cat.id)}
-              className={`py-2 px-1 rounded-lg text-[8px] font-black uppercase transition-all truncate border ${activeCategoryId === cat.id ? 'bg-blue-600 text-white border-blue-600 shadow-sm' : 'bg-gray-50 text-gray-400 border-gray-100'}`}
-            >
-              {formatCategoryName(cat.name)}
-            </button>
-          ))}
+          {categories.map(cat => {
+            const isVisited = visitedCategoryIds.includes(cat.id);
+            return (
+              <button 
+                key={cat.id}
+                onClick={() => setActiveCategoryId(cat.id)}
+                className={`py-1.5 px-1 rounded-lg text-[8px] font-black uppercase transition-all truncate border relative ${activeCategoryId === cat.id ? 'bg-blue-600 text-white border-blue-600 shadow-sm' : 'bg-gray-50 text-gray-400 border-gray-100'}`}
+              >
+                {formatCategoryName(cat.name)}
+                {isVisited && activeCategoryId !== cat.id && (
+                  <div className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-emerald-500 rounded-full border-2 border-white shadow-sm"></div>
+                )}
+              </button>
+            );
+          })}
         </div>
       </header>
 
@@ -300,12 +319,19 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       </div>
 
       <footer className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 p-4 pb-8 space-y-3 shadow-[0_-10px_20px_rgba(0,0,0,0.05)] max-w-lg mx-auto z-[70]">
+        {!allCategoriesVisited && (
+          <div className="bg-amber-100 text-amber-700 p-2 rounded-xl text-center font-black text-[8px] uppercase tracking-widest animate-in fade-in duration-300">
+            <i className="fa-solid fa-eye mr-1"></i> Visualize todas as abas para liberar o cupom ({visitedCategoryIds.length}/{categories.length})
+          </div>
+        )}
+        
         {hasMarginViolation && (
           <div className="bg-rose-600 text-white p-3 rounded-xl text-center font-black text-[9px] uppercase tracking-widest animate-pulse flex items-center justify-center gap-2">
             <i className="fa-solid fa-circle-exclamation text-sm"></i>
-            Venda Bloqueada: Preço abaixo da margem mínima!
+            Venda Bloqueada: Margem Mínima!
           </div>
         )}
+
         <div className="flex items-center justify-between px-1 mb-1 bg-gray-50/50 p-2 rounded-xl">
           <div className="flex items-center gap-2">
             <button onClick={() => setIsTrocaActive(!isTrocaActive)} className={`w-10 h-6 rounded-full relative transition-colors ${isTrocaActive ? 'bg-orange-500' : 'bg-gray-300'}`}>
@@ -322,8 +348,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           </div>
           <button 
             onClick={() => setView('RECEIPT_PREVIEW')} 
-            disabled={(total <= 0 && getOrderedItems().length === 0) || hasMarginViolation} 
-            className={`px-6 py-4 rounded-2xl font-black uppercase text-xs ${(total > 0 || getOrderedItems().length > 0) && !hasMarginViolation ? 'bg-blue-600 text-white shadow-lg' : 'bg-gray-200 text-gray-400'}`}
+            disabled={(total <= 0 && getOrderedItems().length === 0) || hasMarginViolation || !allCategoriesVisited} 
+            className={`px-6 py-4 rounded-2xl font-black uppercase text-xs ${(total > 0 || getOrderedItems().length > 0) && !hasMarginViolation && allCategoriesVisited ? 'bg-blue-600 text-white shadow-lg' : 'bg-gray-200 text-gray-400'}`}
           >
             Gerar Cupom
           </button>

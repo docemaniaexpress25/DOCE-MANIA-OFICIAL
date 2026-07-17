@@ -52,6 +52,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const [showFiscalization, setShowFiscalization] = useState(() => loadLocalState('v_showFiscalization', false));
   const [viewingClientHistory, setViewingClientHistory] = useState<Client | null>(null);
   const [filterOverdueOnly, setFilterOverdueOnly] = useState(false);
+  const [creditTypeFilter, setCreditTypeFilter] = useState<'TODOS' | 'COMUM' | 'CHEQUE' | 'BOLETO'>('TODOS');
   
   const [dismissedClientRiskIds, setDismissedClientRiskIds] = useState<string[]>(() => 
     loadLocalState(`v_dismissed_risk_${user.id}`, [])
@@ -337,8 +338,19 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         return dueDate <= today;
       });
     }
+
+    if (creditTypeFilter !== 'TODOS') {
+      filtered = filtered.filter(s => {
+        const desc = s.detalhePagamento?.toUpperCase() || '';
+        if (creditTypeFilter === 'CHEQUE') return desc.includes('CHEQUE');
+        if (creditTypeFilter === 'BOLETO') return desc.includes('BOLETO');
+        if (creditTypeFilter === 'COMUM') return desc.includes('COMUM') || (!desc.includes('CHEQUE') && !desc.includes('BOLETO'));
+        return true;
+      });
+    }
+
     return filtered;
-  }, [sales, user.id, filterOverdueOnly]);
+  }, [sales, user.id, filterOverdueOnly, creditTypeFilter]);
 
   const valorTotalCarga = useMemo(() => minhaCarga.reduce((acc, curr) => {
     const p = products.find(prod => prod.id === curr.produtoId);
@@ -776,6 +788,19 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
               {filterOverdueOnly ? 'Vencidas/Hoje' : 'Todas'}
             </button>
           </header>
+
+          <div className="flex bg-gray-100 p-1 rounded-2xl mx-1 shadow-inner overflow-x-auto gap-1">
+            {(['TODOS', 'COMUM', 'CHEQUE', 'BOLETO'] as const).map(t => (
+              <button 
+                key={t} 
+                onClick={() => setCreditTypeFilter(t)} 
+                className={`flex-1 min-w-[70px] py-2 rounded-xl text-[9px] font-black uppercase transition-all ${creditTypeFilter === t ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}
+              >
+                {t === 'COMUM' ? 'Comum' : t}
+              </button>
+            ))}
+          </div>
+
           <div className="grid gap-3">
             {contasAReceber.map(s => {
               const saldo = Number(((s.valorTotal ?? 0) - (s.valorPago ?? 0)).toFixed(2)); 
@@ -793,6 +818,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                       <div className="flex flex-col mt-2">
                         <span className={`text-[9px] font-black uppercase ${isOverdue ? 'text-rose-600' : 'text-gray-400'}`}>Vencimento</span>
                         <span className={`text-xs font-black ${isOverdue ? 'text-rose-700' : 'text-gray-800'}`}>{s.dataVencimento ? new Date(s.dataVencimento).toLocaleDateString() : 'N/D'}</span>
+                        <span className="text-[8px] font-black uppercase text-blue-600 mt-1">{s.detalhePagamento || 'COMUM'}</span>
                       </div>
                       
                       {s.detalhePagamento && (

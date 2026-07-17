@@ -627,6 +627,8 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
           <div className="grid gap-3 px-1">
             {filteredHistory.map(s => {
               const client = clients.find(c => c.id === s.clientId);
+              const isCheque = s.metodoPagamento === 'A_PRAZO' && s.detalhePagamento?.toUpperCase().includes('CHEQUE');
+              
               return (
                 <div key={s.id} className="bg-white p-5 rounded-[2rem] border border-gray-100 shadow-sm flex items-center justify-between transition-all active:scale-[0.98] hover:border-blue-200 group">
                   <div className="flex-1 min-w-0 pr-4">
@@ -634,9 +636,10 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                       <span className={`text-[8px] font-black px-2 py-0.5 rounded-full uppercase tracking-widest ${
                         s.metodoPagamento === 'DINHEIRO' ? 'bg-emerald-50 text-emerald-600' : 
                         s.metodoPagamento === 'PIX' ? 'bg-blue-50 text-blue-600' : 
+                        isCheque ? 'bg-purple-50 text-purple-600' :
                         'bg-orange-50 text-orange-600'
                       }`}>
-                        {s.metodoPagamento === 'A_PRAZO' ? 'PRAZO' : s.metodoPagamento}
+                        {isCheque ? 'CHEQUE' : s.metodoPagamento === 'A_PRAZO' ? 'PRAZO' : s.metodoPagamento}
                       </span>
                       <span className="text-[9px] text-gray-300 font-bold">{new Date(s.data).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
                     </div>
@@ -849,7 +852,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
       {showReceiveModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[250] flex items-center justify-center p-6">
-           <div className="bg-white w-full max-w-xs rounded-3xl p-8 shadow-2xl animate-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto">
+           <div className="bg-white w-full max-xs rounded-3xl p-8 shadow-2xl animate-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto">
               <h3 className="font-black text-gray-800 text-sm uppercase mb-4 text-center tracking-tight">Confirmar Recebimento</h3>
               <div className="bg-gray-50 p-4 rounded-2xl mb-4"><p className="text-[10px] font-black text-gray-400 uppercase mb-1">Saldo Devedor</p><p className="text-xl font-black text-rose-600">R$ {((showReceiveModal.valorTotal ?? 0) - (showReceiveModal.valorPago ?? 0)).toFixed(2)}</p></div>
               

@@ -48,6 +48,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
 
   const [metodo, setMetodo] = useState<PaymentMethod>('DINHEIRO');
   const [detalheMetodo, setDetalheMetodo] = useState<string>('Dinheiro');
+  const [tipoPrazo, setTipoPrazo] = useState<'PRAZO_COMUM' | 'CHEQUE' | 'BOLETO'>('PRAZO_COMUM');
   const [prazoData, setPrazoData] = useState<string>(() => {
     const d = new Date();
     d.setDate(d.getDate() + 7);
@@ -191,7 +192,17 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     const itens = getOrderedItems();
     const vt = parseFloat(valorTroca) || 0;
     const descontoInfo = isTrocaActive && vt > 0 ? ` (Troca: R$ ${vt.toFixed(2)})` : '';
-    const finalDetalhe = (metodo === 'PIX' ? (selectedPixSlot === 1 ? pix1Name : pix2Name) : detalheMetodo) + descontoInfo;
+    
+    let finalDetalhe = '';
+    if (metodo === 'PIX') {
+      finalDetalhe = selectedPixSlot === 1 ? pix1Name : pix2Name;
+    } else if (metodo === 'A_PRAZO') {
+      const tipoLabel = tipoPrazo === 'PRAZO_COMUM' ? 'Prazo Comum' : tipoPrazo === 'CHEQUE' ? 'Cheque' : 'Boleto';
+      finalDetalhe = tipoLabel;
+    } else {
+      finalDetalhe = detalheMetodo;
+    }
+    finalDetalhe += descontoInfo;
     
     const salePayload: any = { 
       vendedorId, 
@@ -580,6 +591,19 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
 
               {metodo === 'A_PRAZO' && (
                 <div className="mb-6 space-y-4 animate-in fade-in duration-300">
+                   <p className="text-[9px] font-black text-gray-400 uppercase text-center mb-1">Tipo de Prazo</p>
+                   <div className="flex gap-1.5 mb-4 justify-center">
+                     {(['PRAZO_COMUM', 'CHEQUE', 'BOLETO'] as const).map(t => (
+                       <button 
+                         key={t} 
+                         onClick={() => setTipoPrazo(t)} 
+                         className={`flex-1 py-2 rounded-lg text-[8px] font-black uppercase transition-all ${tipoPrazo === t ? 'bg-indigo-600 text-white shadow-sm' : 'bg-gray-100 text-gray-400'}`}
+                       >
+                         {t === 'PRAZO_COMUM' ? 'Prazo Comum' : t === 'CHEQUE' ? 'Cheque' : 'Boleto'}
+                       </button>
+                     ))}
+                   </div>
+
                    <div className="grid grid-cols-4 gap-2">
                      {[7, 14, 21, 30].map(days => (
                        <button key={days} onClick={() => setPrazoDays(days)} className="py-3 bg-gray-50 border border-gray-100 rounded-xl text-[10px] font-black text-gray-600 hover:bg-blue-50 hover:text-blue-600 transition-colors">{days}D</button>

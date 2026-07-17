@@ -174,7 +174,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       reader.onloadend = () => {
         if (slot === 1) props.setPix1Code(reader.result as string);
         else props.setPix2Code(reader.result as string);
-        showToast(`QR Code Pix ${slot} updated!`);
+        showToast(`QR Code Pix ${slot} atualizado!`);
       };
       reader.readAsDataURL(file);
     }
@@ -264,7 +264,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       }, new Date(0));
       const diffDays = Math.ceil(Math.abs(today.getTime() - lastSale.getTime()) / (1000 * 60 * 60 * 24));
       const seller = props.users.find(u => u.id === (cSales[0]?.vendedorId))?.nome || 'N/A';
-      return { id: c.id, nome: c.nomeFantasia, dias: diffDays, vendedor: seller };
+      return { id: c.id, nome: c.nomeFantasia, dias: diffDays, seller };
     }).sort((a, b) => b.dias - a.dias);
 
     return { totalVendas: Number(totalVendas.toFixed(2)), totalComissaoPaga: Number(paidCommissions.toFixed(2)), topClients, topProducts, atRisk };
@@ -399,7 +399,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
               const addr = data.address;
               const fullAddr = `${addr.road || ''}${addr.house_number ? ', ' + addr.house_number : ''}`;
               setClientForm(prev => ({ ...prev, endereco: fullAddr || prev.endereco, bairro: addr.suburb || addr.neighbourhood || prev.bairro }));
-              showToast("Localização capturada!");
+              showToast("Localização captured!");
             } else { showToast("Coordenadas capturadas!"); }
           } catch (error) { showToast("GPS capturado, erro no endereço.", "error"); }
         }, 
@@ -528,8 +528,16 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       });
     }
 
+    // Filtro adicional por nome do cliente
+    if (search && activeTab === 'CONTAS_RECEBER') {
+      filtered = filtered.filter(s => {
+        const client = props.clients.find(c => c.id === s.clientId);
+        return client?.nomeFantasia.toLowerCase().includes(search.toLowerCase());
+      });
+    }
+
     return filtered;
-  }, [props.sales, filterOverdueOnly, creditTypeFilter]);
+  }, [props.sales, filterOverdueOnly, creditTypeFilter, search, activeTab, props.clients]);
 
   const MenuCard = ({ icon, title, tab, color }: any) => (
     <button onClick={() => setActiveTab(tab)} className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col items-center justify-center gap-3 active:scale-95 transition-all text-center group">
@@ -576,7 +584,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         </div>
       )}
 
-      {activeTab !== 'HOME' && <button onClick={() => setActiveTab('HOME')} className="w-10 h-10 bg-white text-blue-600 rounded-xl flex items-center justify-center shadow-sm border border-gray-100 mb-2 active:scale-90 transition-transform"><i className="fa-solid fa-arrow-left"></i></button>}
+      {activeTab !== 'HOME' && <button onClick={() => { setActiveTab('HOME'); setSearch(''); }} className="w-10 h-10 bg-white text-blue-600 rounded-xl flex items-center justify-center shadow-sm border border-gray-100 mb-2 active:scale-90 transition-transform"><i className="fa-solid fa-arrow-left"></i></button>}
 
       {activeTab === 'HOME' && (
         <div className="space-y-6 py-4">
@@ -776,11 +784,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             <div className="divide-y divide-gray-50">
               {reportStats.topProducts.map((p, i) => (
                 <div key={p.id} className="py-3 flex justify-between items-center">
-                  <div className="flex items-center gap-3">
-                    <span className="text-xs font-black text-gray-300">#{i+1}</span>
-                    <span className="text-xs font-bold text-gray-700 uppercase truncate max-w-[150px]">{p.nome}</span>
+                  <div className="flex-1 min-w-0 pr-3">
+                    <h4 className="font-bold text-gray-800 text-[13px] leading-tight uppercase truncate">{p.nome}</h4>
+                    <p className="text-[9px] text-gray-400 font-semibold mt-0.5">Estoque: {p.estoquePrincipal} un</p>
                   </div>
-                  <span className="text-xs font-black text-blue-600 bg-blue-50 px-2 py-1 rounded-lg">{p.qtd} un</span>
+                  <p className="text-sm font-black text-gray-800">R$ {p.precoVenda.toFixed(2)}</p>
                 </div>
               ))}
             </div>
@@ -817,12 +825,35 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           </div>
 
           <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 space-y-6"><h3 className="font-black text-gray-800 uppercase text-xs tracking-widest mb-4">Contas Pix</h3>
-            {[1, 2].map(slot => (
-              <div key={slot} className="p-4 bg-gray-50 rounded-3xl border border-gray-100 space-y-4">
-                <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase">Nome Banco {slot}</label><input value={slot === 1 ? props.pix1Name : props.pix2Name} onChange={e => slot === 1 ? props.setPix1Name(e.target.value) : props.setPix2Name(e.target.value)} className="w-full p-3 bg-white border rounded-xl font-bold" /></div>
-                <div className="flex items-center gap-4"><div onClick={() => (slot === 1 ? pix1InputRef : pix2InputRef).current?.click()} className="w-16 h-16 bg-white border rounded-2xl flex items-center justify-center cursor-pointer overflow-hidden">{(slot === 1 ? props.pix1Code : props.pix2Code) ? <img src={(slot === 1 ? props.pix1Code : props.pix2Code)!} className="w-full h-full object-cover" /> : <i className="fa-solid fa-qrcode text-gray-200"></i>}</div><button onClick={() => (slot === 1 ? pix1InputRef : pix2InputRef).current?.click()} className="flex-1 bg-white border border-gray-200 p-3 rounded-2xl text-[9px] font-black uppercase text-gray-400">Alterar QR Code</button></div><input type="file" ref={slot === 1 ? pix1InputRef : pix2InputRef} className="hidden" accept="image/*" onChange={e => handlePixUpload(e, slot as 1 | 2)} />
+            {/* Pix Slot 1 */}
+            <div className="p-4 bg-gray-50 rounded-3xl border border-gray-100 space-y-4">
+              <div className="space-y-1">
+                <label className="text-[9px] font-black text-gray-400 uppercase">Nome Banco 1</label>
+                <input value={props.pix1Name} onChange={e => props.setPix1Name(e.target.value)} className="w-full p-3 bg-white border rounded-xl font-bold" />
               </div>
-            ))}
+              <div className="flex items-center gap-4">
+                <div onClick={() => pix1InputRef.current?.click()} className="w-16 h-16 bg-white border rounded-2xl flex items-center justify-center cursor-pointer overflow-hidden">
+                  {props.pix1Code ? <img src={props.pix1Code} className="w-full h-full object-cover" /> : <i className="fa-solid fa-qrcode text-gray-200"></i>}
+                </div>
+                <button onClick={() => pix1InputRef.current?.click()} className="flex-1 bg-white border border-gray-200 p-3 rounded-2xl text-[9px] font-black uppercase text-gray-400">Alterar QR Code</button>
+              </div>
+              <input type="file" ref={pix1InputRef} className="hidden" accept="image/*" onChange={e => handlePixUpload(e, 1)} />
+            </div>
+
+            {/* Pix Slot 2 */}
+            <div className="p-4 bg-gray-50 rounded-3xl border border-gray-100 space-y-4">
+              <div className="space-y-1">
+                <label className="text-[9px] font-black text-gray-400 uppercase">Nome Banco 2</label>
+                <input value={props.pix2Name} onChange={e => props.setPix2Name(e.target.value)} className="w-full p-3 bg-white border rounded-xl font-bold" />
+              </div>
+              <div className="flex items-center gap-4">
+                <div onClick={() => pix2InputRef.current?.click()} className="w-16 h-16 bg-white border rounded-2xl flex items-center justify-center cursor-pointer overflow-hidden">
+                  {props.pix2Code ? <img src={props.pix2Code} className="w-full h-full object-cover" /> : <i className="fa-solid fa-qrcode text-gray-200"></i>}
+                </div>
+                <button onClick={() => pix2InputRef.current?.click()} className="flex-1 bg-white border border-gray-200 p-3 rounded-2xl text-[9px] font-black uppercase text-gray-400">Alterar QR Code</button>
+              </div>
+              <input type="file" ref={pix2InputRef} className="hidden" accept="image/*" onChange={e => handlePixUpload(e, 2)} />
+            </div>
           </div>
 
           <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 space-y-4"><h3 className="font-black text-gray-800 uppercase text-xs tracking-widest mb-4">Alterar Senhas (PIN)</h3><select value={pwUser} onChange={e => setPwUser(e.target.value)} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase"><option value="">Selecionar Usuário</option>{props.users.map(u => (<option key={u.id} value={u.id}>{u.nome} ({u.role})</option>))}</select><input type="password" value={pwNew} onChange={e => setPwNew(e.target.value)} placeholder="Novo PIN (6 dígitos)" maxLength={6} className="w-full p-4 bg-gray-50 border rounded-2xl font-black text-center text-xl tracking-[0.5em]" /><button onClick={handleUpdatePassword} className="w-full bg-slate-900 text-white py-5 rounded-2xl font-black uppercase text-xs shadow-xl active:scale-95 transition-all">Atualizar PIN</button></div>
@@ -876,11 +907,15 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
               <button 
                 key={t} 
                 onClick={() => setCreditTypeFilter(t)} 
-                className={`flex-1 min-w-[70px] py-2 rounded-xl text-[9px] font-black uppercase transition-all ${creditTypeFilter === t ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}
+                className={`flex-1 py-2 rounded-xl text-[9px] font-black uppercase transition-all ${creditTypeFilter === t ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}
               >
                 {t === 'COMUM' ? 'Comum' : t}
               </button>
             ))}
+          </div>
+
+          <div className="px-1">
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar cliente..." className="w-full p-4 bg-white border border-gray-100 rounded-2xl shadow-sm text-sm outline-none focus:ring-2 focus:ring-blue-100" />
           </div>
 
           <div className="grid gap-3 px-1">{contasAReceber.map(s => { const saldo = Number(((s.valorTotal ?? 0) - (s.valorPago ?? 0)).toFixed(2)); const today = new Date(); today.setHours(0,0,0,0); const dueDate = s.dataVencimento ? new Date(s.dataVencimento) : null; if (dueDate) dueDate.setHours(0,0,0,0); const isOverdue = dueDate ? dueDate <= today : false; return (<div key={s.id} className={`p-5 rounded-3xl border shadow-sm flex flex-col transition-all ${isOverdue ? 'bg-rose-50 border-rose-200' : 'bg-white border-gray-100'}`}><div className="flex justify-between items-start mb-2"><div className="flex-1 pr-4"><h4 className={`font-bold text-sm leading-tight uppercase cursor-pointer ${isOverdue ? 'text-rose-900' : 'text-gray-800'}`} onClick={() => setViewingClientHistory(props.clients.find(c => c.id === s.clientId)!)}>{props.clients.find(c => c.id === s.clientId)?.nomeFantasia || 'Cliente'}</h4><div className="flex flex-col mt-2"><span className="text-[9px] font-black uppercase text-gray-400">Vencimento</span><span className="text-xs font-black text-gray-800">{s.dataVencimento ? new Date(s.dataVencimento).toLocaleDateString() : 'N/D'}</span><span className="text-[8px] font-black uppercase text-blue-600 mt-1">{s.detalhePagamento || 'COMUM'}</span></div></div><div className="text-right flex items-center gap-4"><div><p className="text-sm font-black text-gray-800 leading-none">R$ {saldo.toFixed(2)}</p><p className="text-[9px] text-gray-400 font-bold uppercase mt-1">Saldo</p></div></div></div><button onClick={() => { setShowReceiveModal(s); setValorRecebidoParcial(saldo.toString()); }} className={`w-full py-3 rounded-2xl text-[10px] font-black uppercase mt-3 shadow-lg active:scale-95 ${isOverdue ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white'}`}>RECEBER</button></div>)})}</div>

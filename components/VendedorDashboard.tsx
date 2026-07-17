@@ -53,6 +53,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const [viewingClientHistory, setViewingClientHistory] = useState<Client | null>(null);
   const [filterOverdueOnly, setFilterOverdueOnly] = useState(false);
   const [creditTypeFilter, setCreditTypeFilter] = useState<'TODOS' | 'COMUM' | 'CHEQUE' | 'BOLETO'>('TODOS');
+  const [creditSearch, setCreditSearch] = useState('');
   
   const [dismissedClientRiskIds, setDismissedClientRiskIds] = useState<string[]>(() => 
     loadLocalState(`v_dismissed_risk_${user.id}`, [])
@@ -349,8 +350,16 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       });
     }
 
+    // Filtro adicional por nome do cliente
+    if (creditSearch) {
+      filtered = filtered.filter(s => {
+        const client = clients.find(c => c.id === s.clientId);
+        return client?.nomeFantasia.toLowerCase().includes(creditSearch.toLowerCase());
+      });
+    }
+
     return filtered;
-  }, [sales, user.id, filterOverdueOnly, creditTypeFilter]);
+  }, [sales, user.id, filterOverdueOnly, creditTypeFilter, creditSearch, clients]);
 
   const valorTotalCarga = useMemo(() => minhaCarga.reduce((acc, curr) => {
     const p = products.find(prod => prod.id === curr.produtoId);
@@ -430,7 +439,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         </div>
       )}
 
-      {activeTab !== 'HOME' && <button onClick={() => setActiveTab('HOME')} className="w-10 h-10 bg-white text-blue-600 rounded-xl flex items-center justify-center shadow-sm border border-gray-100 mb-2 active:scale-90 transition-transform"><i className="fa-solid fa-arrow-left"></i></button>}
+      {activeTab !== 'HOME' && <button onClick={() => { setActiveTab('HOME'); setCreditSearch(''); }} className="w-10 h-10 bg-white text-blue-600 rounded-xl flex items-center justify-center shadow-sm border border-gray-100 mb-2 active:scale-90 transition-transform"><i className="fa-solid fa-arrow-left"></i></button>}
 
       {activeTab === 'HOME' && (
         <div className="py-4 grid grid-cols-2 gap-4">
@@ -799,6 +808,10 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 {t === 'COMUM' ? 'Comum' : t}
               </button>
             ))}
+          </div>
+
+          <div className="px-1">
+            <input value={creditSearch} onChange={e => setCreditSearch(e.target.value)} placeholder="Buscar cliente..." className="w-full p-4 bg-white border border-gray-100 rounded-2xl shadow-sm text-sm outline-none focus:ring-2 focus:ring-blue-100" />
           </div>
 
           <div className="grid gap-3">

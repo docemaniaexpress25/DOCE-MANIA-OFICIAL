@@ -144,8 +144,21 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     });
   };
 
+  // Nova função: trava o preço mínimo no input
   const handlePriceChange = (pId: string, value: string) => {
     const sanitized = value.replace(',', '.');
+    const p = products.find(prod => prod.id === pId);
+    const minPrice = p?.precoMinimo || 0;
+    
+    // Se digitou algo e tem preço mínimo, não permite ir abaixo
+    if (sanitized && minPrice > 0) {
+      const numValue = parseFloat(sanitized);
+      if (!isNaN(numValue) && numValue < minPrice) {
+        // Bloqueia: não atualiza o estado, mantém o valor mínimo
+        return;
+      }
+    }
+    
     setCart(prev => {
       if (!prev[pId]) return prev;
       return { ...prev, [pId]: { ...prev[pId], precoVenda: sanitized } };

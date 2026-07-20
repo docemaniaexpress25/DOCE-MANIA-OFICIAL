@@ -265,7 +265,7 @@ const App: React.FC = () => {
   };
 
   const addProduct = async (nome: string, custo: number, venda: number, comissao: number, estoque: number = 0, categoryId?: string, subcategoryId?: string) => {
-    const res = await productService.insertProduct({ nome, precoCusto: custo, precoVenda: venda, comissaoPercentual: comissao, estoquePrincipal: estoque, ativo: true, categoryId, subcategoryId });
+    const res = await productService.insertProduct({ nome, precoCusto: custo, precoVenda: venda, comissaoPercentual: comissao, estoquePrincipal: estoque, ativo: true, categoryId, subcategoryId, precoMinimo: 0 });
     if (res) {
       await appSettingsService.updateSettings({ productOrder: [...productOrder, res.id] });
       fetchCoreData();

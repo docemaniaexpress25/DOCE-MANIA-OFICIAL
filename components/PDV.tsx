@@ -115,7 +115,6 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     return pendingSales.reduce((acc, s) => acc + (s.valorTotal - s.valorPago), 0);
   }, [sales, client.id]);
 
-  // Nova lógica: usa precoMinimo do produto diretamente
   const hasMarginViolation = useMemo(() => {
     if (!margemMinimaAtiva) return false;
     if (isPrePedido) return false;
@@ -453,6 +452,11 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                           onChange={(e) => handlePriceChange(p.id, e.target.value)} 
                           className={`w-14 bg-transparent border-none p-0 text-[11px] font-black outline-none ${isBelowMin ? 'text-rose-600' : 'text-emerald-600'}`} 
                         />
+                        {p.precoMinimo && p.precoMinimo > 0 && (
+                          <span className="text-[8px] font-bold text-rose-600 ml-1">
+                            {p.precoMinimo.toFixed(2)}
+                          </span>
+                        )}
                      </div>
                      <span className={`text-[9px] font-bold uppercase ${isPrePedido ? 'text-indigo-600' : 'text-blue-500'}`}>
                        {isPrePedido ? `Estoque Central: ${cargaOriginal - (item?.quantidade ?? 0)}` : `${cargaOriginal - (item?.quantidade ?? 0)} UN`}

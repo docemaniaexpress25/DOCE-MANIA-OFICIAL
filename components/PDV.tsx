@@ -125,6 +125,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
 
   const hasMarginViolation = useMemo(() => {
     if (!margemMinimaAtiva) return false;
+    // Não valida margem para pré-pedidos/rascunhos simples
     if (isPrePedido) return false;
     return Object.entries(cart).some(([pId, item]) => {
       const cartItem = item as { quantidade: number, precoVenda: string };
@@ -171,7 +172,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const total = useMemo(() => {
     const vt = parseFloat(valorTroca) || 0;
     return Math.max(0, subtotal - (isTrocaActive ? vt : 0));
-  }, [subtotal, [subtotal, isTroca, valorTroca]);
+  }, [subtotal, isTrocaActive, valorTroca]);
 
   const troco = useMemo(() => {
     const rec = parseFloat(valorRecebido) || 0;
@@ -361,7 +362,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
 
           <div className="bg-gray-100 p-5 flex flex-col gap-3 border-t border-gray-200">
             <div className="flex bg-gray-200 p-1 rounded-2xl mb-1">
-              <button onClick={() => setPrintWidth('56MM')} className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${printWidth === '56MM' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400'}`}>56mm</button>
+              <button onClick={() => setPrintWidth('56MM')} className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${printWidth === '56MM' ? 'bg-white shadow-sm text-indigo-600' : 'text-gray-500'}`}>56mm</button>
               <button onClick={() => setPrintWidth('80MM')} className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${printWidth === '80MM' ? 'bg-white shadow-sm text-indigo-600' : 'text-gray-400'}`}>80mm</button>
             </div>
             
@@ -403,6 +404,24 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           </div>
           <button onClick={() => setCart({})} className="w-9 h-9 bg-rose-50 text-rose-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-trash-can text-sm"></i></button>
         </div>
+
+        <div className="grid grid-cols-4 gap-1 px-0.5">
+          {categories.map(cat => {
+            const isVisited = visitedCategoryIds.includes(cat.id);
+            return (
+              <button 
+                key={cat.id}
+                onClick={() => setActiveCategoryId(cat.id)}
+                className={`py-1.5 px-1 rounded-lg text-[8px] font-black uppercase transition-all truncate border relative ${activeCategoryId === cat.id ? 'bg-blue-600 text-white border-blue-600 shadow-sm' : 'bg-gray-50 text-gray-400 border-gray-100'}`}
+              >
+                {formatCategoryName(cat.name)}
+                {isVisited && activeCategoryId !== cat.id && (
+                  <div className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-emerald-500 rounded-full border-2 border-white shadow-sm"></div>
+                )}
+              </button>
+            );
+          })}
+        </div>
       </header>
 
       {clientDebt > 0 && !isPrePedido && (
@@ -422,7 +441,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           const hasBeenSold = soldProductIds.has(p.id);
 
           return (
-            <div key={p.id} className={`bg-white p-2.5 rounded-2xl border flex flex-col gap-1 ${item?.quantidade ? 'border-blue-200 bg-blue-50/30' : 'border-gray-100`}>
+            <div key={p.id} className={`bg-white p-2.5 rounded-2xl border flex flex-col gap-1 ${item?.quantidade ? 'border-blue-200 bg-blue-50/30' : 'border-gray-100'}`}>
               <div className="flex items-center gap-3 w-full">
                 <div className="flex-1 min-w-0">
                   <h3 className="font-bold text-gray-800 text-[11px] leading-tight uppercase truncate flex items-center gap-1.5">
@@ -435,7 +454,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                     {p.nome}
                   </h3> 
                   <div className="flex items-center gap-2 mt-1">
-                     <div className={`flex items-center gap-1.5 bg-white border px-2 py-0.5 rounded-lg ${isBelowMin ? 'border-rose-500 bg-rose-50' : 'border-gray-100`}>
+                     <div className={`flex items-center gap-1.5 bg-white border px-2 py-0.5 rounded-lg ${isBelowMin ? 'border-rose-500 bg-rose-50' : 'border-gray-100'}`}>
                         <span className={`text-[9px] font-black ${isBelowMin ? 'text-rose-500' : 'text-gray-300'}`}>R$</span>
                         <input 
                           type="text" 
@@ -443,11 +462,9 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                           onChange={(e) => handlePriceChange(p.id, e.target.value)} 
                           className={`w-14 bg-transparent border-none p-0 text-[11px] font-black outline-none ${isBelowMin ? 'text-rose-600' : 'text-emerald-600'}`} 
                         />
-                        {/* Display the precoMinimo in a smaller font */}
-                        <span className="ml-1 text-[8px] font-black text-gray-400">(mín: R$ {p.precoMinimo.toFixed(2)})</span>
                      </div>
                      <span className={`text-[9px] font-bold uppercase ${isPrePedido ? 'text-indigo-600' : 'text-blue-500'}`}>
-                       {isPrePedido ? `Estoque Central: ${cargaOriginal - (item?.quantidade ?? 0)}` : `${cargaOriginal - (item?.quantidade ?? 0)}` UN}
+                       {isPrePedido ? `Estoque Central: ${cargaOriginal - (item?.quantidade ?? 0)}` : `${cargaOriginal - (item?.quantidade ?? 0)} UN`}
                      </span>
                   </div>
                 </div>
@@ -490,7 +507,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         <div className="flex items-center justify-between gap-4 px-1 mb-1 bg-gray-50/50 p-2 rounded-xl">
           <div className="flex items-center gap-2">
             <button onClick={() => setIsTrocaActive(!isTrocaActive)} className={`w-10 h-6 rounded-full relative transition-colors ${isTrocaActive ? 'bg-orange-500' : 'bg-gray-300'}`}>
-              <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${isTrocaActive ? 'left-5' : 'left-1`}></div>
+              <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${isTrocaActive ? 'left-5' : 'left-1'}`}></div>
             </button>
             <span className="text-[9px] font-black text-gray-400 uppercase">Troca/Desc.</span>
           </div>
@@ -503,7 +520,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               }} 
               className={`w-10 h-6 rounded-full relative transition-colors ${isPrePedido ? 'bg-indigo-600' : 'bg-gray-300'}`}
             >
-              <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${isPrePedido ? 'left-5' : 'left-1`}></div>
+              <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${isPrePedido ? 'left-5' : 'left-1'}`}></div>
             </button>
             <span className="text-[9px] font-black text-gray-400 uppercase">Pré-Pedido</span>
           </div>
@@ -527,7 +544,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               }
             }} 
             disabled={(total <= 0 && getOrderedItems().length === 0) || hasMarginViolation || (!allCategoriesVisited && !isPrePedido)} 
-            className={`px-6 py-4 rounded-2xl font-black uppercase text-xs ${(total > 0 || getOrderedItems().length > 0) && !hasMarginViolation && (allCategoriesVisited || isPrePedido) ? (isPrePedido ? 'bg-indigo-600 text-white shadow-lg' : 'bg-blue-600 text-white shadow-lg') : 'bg-gray-200 text-gray-400`}`}
+            className={`px-6 py-4 rounded-2xl font-black uppercase text-xs ${(total > 0 || getOrderedItems().length > 0) && !hasMarginViolation && (allCategoriesVisited || isPrePedido) ? (isPrePedido ? 'bg-indigo-600 text-white shadow-lg' : 'bg-blue-600 text-white shadow-lg') : 'bg-gray-200 text-gray-400'}`}
           >
             {isPrePedido ? 'Gerar Rascunho' : 'Gerar Cupom'}
           </button>
@@ -546,7 +563,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
 
               <div className="flex gap-1.5 mb-6 justify-center">
                 {(['DINHEIRO', 'PIX', 'A_PRAZO'] as const).map(m => (
-                  <button key={m} onClick={() => setMetodo(m)} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${metodo === m ? 'bg-blue-600 text-white shadow-md' : 'bg-gray-50 text-gray-400`}`}>{m === 'A_PRAZO' ? 'PRAZO' : m}</button>
+                  <button key={m} onClick={() => setMetodo(m)} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${metodo === m ? 'bg-blue-600 text-white shadow-md' : 'bg-gray-50 text-gray-400'}`}>{m === 'A_PRAZO' ? 'PRAZO' : m}</button>
                 ))}
               </div>
 
@@ -580,13 +597,18 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                        <button 
                          key={t} 
                          onClick={() => setTipoPrazo(t)} 
-                         className={`flex-1 py-2 rounded-lg text-[8px] font-black uppercase transition-all ${tipoPrazo === t ? 'bg-indigo-600 text-white shadow-sm' : 'bg-gray-100 text-gray-400`}`}
+                         className={`flex-1 py-2 rounded-lg text-[8px] font-black uppercase transition-all ${tipoPrazo === t ? 'bg-indigo-600 text-white shadow-sm' : 'bg-gray-100 text-gray-400'}`}
                        >
                          {t === 'PRAZO_COMUM' ? 'Prazo Comum' : t === 'CHEQUE' ? 'Cheque' : 'Boleto'}
                        </button>
                      ))}
                    </div>
 
+                   <div className="grid grid-cols-4 gap-2">
+                     {[7, 14, 21, 30].map(days => (
+                       <button key={days} onClick={() => setPrazoDays(days)} className="py-3 bg-gray-50 border border-gray-100 rounded-xl text-[10px] font-black text-gray-600 hover:bg-blue-50 hover:text-blue-600 transition-colors">{days}D</button>
+                     ))}
+                   </div>
                    <div className="space-y-1">
                       <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Data de Vencimento</label>
                       <input type="date" value={prazoData} onChange={e => setPrazoData(e.target.value)} className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-bold outline-none focus:ring-2 focus:ring-blue-100" />

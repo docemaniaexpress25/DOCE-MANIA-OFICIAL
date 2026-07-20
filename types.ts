@@ -37,7 +37,6 @@ export interface Product {
   ativo: boolean;
   categoryId?: string;
   subcategoryId?: string;
-  precoMinimo: number;
 }
 
 export interface Carga {

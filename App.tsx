@@ -264,8 +264,8 @@ const App: React.FC = () => {
     return success;
   };
 
-  const addProduct = async (nome: string, custo: number, venda: number, comissao: number, estoque: number = 0, categoryId?: string, subcategoryId?: string) => {
-    const res = await productService.insertProduct({ nome, precoCusto: custo, precoVenda: venda, comissaoPercentual: comissao, estoquePrincipal: estoque, ativo: true, categoryId, subcategoryId });
+  const addProduct = async (nome: string, custo: number, venda: number, comissao: number, estoque: number = 0, categoryId?: string, subcategoryId?: string, precoMinimo?: number) => {
+    const res = await productService.insertProduct({ nome, precoCusto: custo, precoVenda: venda, precoMinimo: precoMinimo || 0, comissaoPercentual: comissao, estoquePrincipal: estoque, ativo: true, categoryId, subcategoryId });
     if (res) {
       await appSettingsService.updateSettings({ productOrder: [...productOrder, res.id] });
       fetchCoreData();
@@ -342,7 +342,7 @@ const App: React.FC = () => {
     fetchCoreData();
   };
 
-  const applyCargaDirectly = async (vId: string, itens: { produtoId: string, nickname: string, quantidade: number }[]) => {
+  const applyCargaDirectly = async (vId: string, itens: { produtoId: string, quantidade: number }[]) => {
     try {
       await cargaService.applyCargaAdminRPC(vId, itens);
       setAdminNotification("Carga aplicada com sucesso!");
@@ -353,7 +353,7 @@ const App: React.FC = () => {
     }
   };
 
-  const syncVendedorCarga = async (vId: string, itens: { produtoId: string, nickname: string, quantidade: number }[]) => {
+  const syncVendedorCarga = async (vId: string, itens: { produtoId: string, quantidade: number }[]) => {
     await cargaService.insertCargaPendente({ vendedorId: vId, itens, data: new Date() });
     fetchTransactionalData();
   };

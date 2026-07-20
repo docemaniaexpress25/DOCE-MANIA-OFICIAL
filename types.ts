@@ -32,6 +32,7 @@ export interface Product {
   nome: string;
   precoCusto: number;
   precoVenda: number;
+  precoMinimo: number;
   comissaoPercentual: number;
   estoquePrincipal: number;
   ativo: boolean;

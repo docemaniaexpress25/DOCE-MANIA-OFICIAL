@@ -13,6 +13,7 @@ export const productService = {
       nome: p.nome ?? '',
       precoCusto: Number(p.preco_custo) || 0,
       precoVenda: Number(p.preco_venda) || 0,
+      precoMinimo: Number(p.preco_minimo) || 0,
       comissaoPercentual: Number(p.comissao_percentual) || 0,
       estoquePrincipal: Number(p.estoque_principal) || 0,
       ativo: !!p.ativo,
@@ -26,6 +27,7 @@ export const productService = {
       nome: product.nome,
       preco_custo: product.precoCusto,
       preco_venda: product.precoVenda,
+      preco_minimo: product.precoMinimo,
       comissao_percentual: product.comissaoPercentual,
       estoque_principal: product.estoquePrincipal,
       ativo: product.ativo,
@@ -44,6 +46,7 @@ export const productService = {
       nome: data.nome,
       precoCusto: data.preco_custo,
       precoVenda: data.preco_venda,
+      precoMinimo: data.preco_minimo,
       comissaoPercentual: data.comissao_percentual,
       estoquePrincipal: data.estoque_principal,
       ativo: data.ativo,
@@ -57,6 +60,7 @@ export const productService = {
     if (updates.nome !== undefined) payload.nome = updates.nome;
     if (updates.precoCusto !== undefined) payload.preco_custo = updates.precoCusto;
     if (updates.precoVenda !== undefined) payload.preco_venda = updates.precoVenda;
+    if (updates.precoMinimo !== undefined) payload.preco_minimo = updates.precoMinimo;
     if (updates.comissaoPercentual !== undefined) payload.comissao_percentual = updates.comissaoPercentual;
     if (updates.estoquePrincipal !== undefined) payload.estoque_principal = updates.estoquePrincipal;
     if (updates.ativo !== undefined) payload.ativo = updates.ativo;
@@ -74,6 +78,7 @@ export const productService = {
       nome: data.nome,
       precoCusto: data.preco_custo,
       precoVenda: data.preco_venda,
+      precoMinimo: data.preco_minimo,
       comissaoPercentual: data.comissao_percentual,
       estoquePrincipal: data.estoque_principal,
       ativo: data.ativo,

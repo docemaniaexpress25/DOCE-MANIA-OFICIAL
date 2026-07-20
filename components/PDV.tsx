@@ -115,17 +115,9 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     return pendingSales.reduce((acc, s) => acc + (s.valorTotal - s.valorPago), 0);
   }, [sales, client.id]);
 
-  const getMinPrice = (product: Product) => {
-    if (!margemMinimaAtiva) return 0;
-    const cost = product.precoCusto || 0;
-    const margin = margemMinima || 0;
-    if (margin >= 100) return cost;
-    return cost / (1 - margin / 100);
-  };
-
+  // Nova lógica: usa precoMinimo do produto diretamente
   const hasMarginViolation = useMemo(() => {
     if (!margemMinimaAtiva) return false;
-    // Não valida margem para pré-pedidos/rascunhos simples
     if (isPrePedido) return false;
     return Object.entries(cart).some(([pId, item]) => {
       const cartItem = item as { quantidade: number, precoVenda: string };
@@ -133,10 +125,10 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       const p = products.find(prod => prod.id === pId);
       if (!p) return false;
       const price = parseFloat(cartItem.precoVenda) || 0;
-      const minPrice = getMinPrice(p);
+      const minPrice = p.precoMinimo || 0;
       return price < minPrice;
     });
-  }, [cart, products, margemMinimaAtiva, margemMinima, isPrePedido]);
+  }, [cart, products, margemMinimaAtiva, isPrePedido]);
 
   const updateCart = (pId: string, delta: number, basePrice: number) => {
     setCart(prev => {
@@ -242,7 +234,6 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     return productsInCarga.filter(p => p.categoryId === activeCategoryId);
   }, [products, productIdsInCarga, activeCategoryId, isPrePedido]);
 
-  // Função para gerar o Cupom formatado de Pré-pedido/Rascunho
   const generatePrePedidoText = (width: '56MM' | '80MM') => {
     const totalWidth = width === '80MM' ? 48 : 32; 
     
@@ -435,7 +426,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         {filteredProducts.map(p => { 
           const item = cart[p.id];
           const cargaOriginal = isPrePedido ? (p.estoquePrincipal || 0) : (minhaCarga.find(c => c.produtoId === p.id)?.quantidade || 0);
-          const minPrice = getMinPrice(p);
+          const minPrice = p.precoMinimo || 0;
           const itemPrice = item ? parseFloat(item.precoVenda) || 0 : p.precoVenda;
           const isBelowMin = margemMinimaAtiva && item && item.quantidade > 0 && itemPrice < minPrice && !isPrePedido;
           const hasBeenSold = soldProductIds.has(p.id);
@@ -500,7 +491,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         {hasMarginViolation && (
           <div className="bg-rose-600 text-white p-3 rounded-xl text-center font-black text-[9px] uppercase tracking-widest animate-pulse flex items-center justify-center gap-2">
             <i className="fa-solid fa-circle-exclamation text-sm"></i>
-            Venda Bloqueada: Margem Mínima!
+            Venda Bloqueada: Preço abaixo do mínimo!
           </div>
         )}
 

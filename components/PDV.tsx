@@ -26,6 +26,9 @@ interface PDVProps {
 
 type PDVView = 'CART' | 'RECEIPT_PREVIEW' | 'PAYMENT' | 'PRE_PEDIDO_PREVIEW';
 
+// Tipo do item do carrinho
+type CartItem = { quantidade: number; precoVenda: string };
+
 const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onCancel, onFinish, processSale, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, sales, onNavigateToCredit, categories, subcategories }) => {
   const [view, setView] = useState<PDVView>('CART');
   const [isPrePedido, setIsPrePedido] = useState(false);
@@ -42,7 +45,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     return categories.length > 0 ? [categories[0].id] : [];
   });
   
-  const [cart, setCart] = useState<{ [key: string]: { quantidade: number, precoVenda: string } }>(() => 
+  const [cart, setCart] = useState<Record<string, CartItem>>(() => 
     loadLocalState(cartKey, {})
   );
 
@@ -115,35 +118,37 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     return pendingSales.reduce((acc, s) => acc + (s.valorTotal - s.valorPago), 0);
   }, [sales, client.id]);
 
-  // REGRA: preço de venda >= preço mínimo (se cadastrado)
-  // Log para debug
-  const hasMarginViolation = useMemo(() => {
-    if (!margemMinimaAtiva) {
-      // console.log('[hasMarginViolation] margemMinimaAtiva = false');
-      return false;
-    }
-    if (isPrePedido) {
-      // console.log('[hasMarginViolation] isPrePedido = true');
-      return false;
-    }
+  // ============================================================
+  // FUNÇÃO DE VALIDAÇÃO DIRETA - CHAMA EM QUALQUER LUGAR
+  // ============================================================
+  const checkPrecoMinimoViolation = (): { hasViolation: boolean; violatingProducts: Array<{ nome: string; preco: number; minimo: number }> } => {
+    if (!margemMinimaAtiva || isPrePedido) return { hasViolation: false, violatingProducts: [] };
     
-    const violation = Object.entries(cart).some(([pId, item]) => {
-      const cartItem = item as { quantidade: number, precoVenda: string };
-      if (cartItem.quantidade <= 0) return false;
+    const violating: Array<{ nome: string; preco: number; minimo: number }> = [];
+    
+    (Object.entries(cart) as [string, CartItem][]).forEach(([pId, item]) => {
+      if (item.quantidade <= 0) return;
       const p = products.find(prod => prod.id === pId);
-      if (!p) return false;
-      const price = parseFloat(cartItem.precoVenda) || 0;
+      if (!p) return;
+      
+      const price = parseFloat(item.precoVenda) || 0;
       const minPrice = p.precoMinimo || 0;
       
-      // console.log(`[hasMarginViolation] Produto: ${p.nome}, price: ${price}, minPrice: ${minPrice}, minPrice>0: ${minPrice > 0}, price<minPrice: ${price < minPrice}`);
-      
-      // Só valida se tem preço mínimo cadastrado (> 0)
-      return minPrice > 0 && price < minPrice;
+      // Só valida se tem preço mínimo CADASTRADO (> 0)
+      if (minPrice > 0 && price < minPrice) {
+        violating.push({ 
+          nome: p.nome, 
+          preco: price, 
+          minimo: minPrice 
+        });
+      }
     });
     
-    // if (violation) console.log('[hasMarginViolation] VIOLAÇÃO DETECTADA!');
-    return violation;
-  }, [cart, products, margemMinimaAtiva, isPrePedido]);
+    return { hasViolation: violating.length > 0, violatingProducts: violating };
+  };
+
+  // Para compatibilidade com código existente
+  const hasMarginViolation = checkPrecoMinimoViolation().hasViolation;
 
   const updateCart = (pId: string, delta: number, basePrice: number) => {
     setCart(prev => {
@@ -171,7 +176,6 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     if (sanitized && minPrice > 0) {
       const numValue = parseFloat(sanitized);
       if (!isNaN(numValue) && numValue < minPrice) {
-        // console.log(`[handlePriceBlur] Corrigindo ${p.nome} de ${numValue} para ${minPrice}`);
         setCart(prev => {
           if (!prev[pId]) return prev;
           return { ...prev, [pId]: { ...prev[pId], precoVenda: minPrice.toFixed(2) } };
@@ -191,7 +195,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
 
   const subtotal = useMemo(() => {
     return Object.entries(cart).reduce((acc, [_, item]) => {
-      const cartItem = item as { quantidade: number, precoVenda: string };
+      const cartItem = item as CartItem;
       const price = parseFloat(cartItem.precoVenda) || 0;
       return acc + ((cartItem.quantidade ?? 0) * price); 
     }, 0);
@@ -213,28 +217,32 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     setPrazoData(d.toISOString().split('T')[0]);
   };
 
+  // ============================================================
+  // BLOQUEIO INQUEBRÁVEL - CHAMADO ANTES DE QUALQUER FINALIZAÇÃO
+  // ============================================================
+  const validateAndBlockIfNeeded = (): boolean => {
+    const { hasViolation, violatingProducts } = checkPrecoMinimoViolation();
+    
+    if (hasViolation) {
+      const detalhes = violatingProducts
+        .map(v => `• ${v.nome}: digitou R$ ${v.preco.toFixed(2)}, mínimo é R$ ${v.minimo.toFixed(2)}`)
+        .join('\n');
+      
+      alert(
+        `❌ VENDA BLOQUEADA - PREÇO ABAIXO DO MÍNIMO\n\n` +
+        `${detalhes}\n\n` +
+        `Corrija os preços antes de continuar.`
+      );
+      return false; // BLOQUEIA
+    }
+    return true; // LIBERA
+  };
+
   const handleConfirmFinalize = async () => {
     if (total <= 0 && getOrderedItems().length === 0) return;
     
-    // VALIDAÇÃO DUPLA: Verifica novamente antes de finalizar
-    if (margemMinimaAtiva && !isPrePedido) {
-      const violation = Object.entries(cart).some(([pId, item]) => {
-        const cartItem = item as { quantidade: number, precoVenda: string };
-        if (cartItem.quantidade <= 0) return false;
-        const p = products.find(prod => prod.id === pId);
-        if (!p) return false;
-        const price = parseFloat(cartItem.precoVenda) || 0;
-        const minPrice = p.precoMinimo || 0;
-        return minPrice > 0 && price < minPrice;
-      });
-      
-      if (violation) {
-        alert('VENDA BLOQUEADA: Existe produto com preço abaixo do mínimo cadastrado!');
-        return;
-      }
-    }
-    
-    if (hasMarginViolation) return;
+    // TRAVA ABSOLUTA - não passa daqui se houver violação
+    if (!validateAndBlockIfNeeded()) return;
 
     const itens = getOrderedItems();
     const vt = parseFloat(valorTroca) || 0;
@@ -551,11 +559,11 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           </div>
         )}
         
-        {/* Banner de bloqueio quando há violação */}
+        {/* Banner visual de violação */}
         {hasMarginViolation && (
           <div className="bg-rose-600 text-white p-3 rounded-xl text-center font-black text-[9px] uppercase tracking-widest animate-pulse flex items-center justify-center gap-2">
             <i className="fa-solid fa-circle-exclamation text-sm"></i>
-            Venda Bloqueada: Preço de venda abaixo do mínimo cadastrado!
+            Venda Bloqueada: Preço abaixo do mínimo!
           </div>
         )}
 

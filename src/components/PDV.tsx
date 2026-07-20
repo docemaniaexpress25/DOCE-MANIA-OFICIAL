@@ -382,7 +382,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               </button>
               <button onClick={handleCopyPrePedido} className="bg-emerald-600 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 active:scale-95 text-[10px] uppercase shadow-lg">
                 <i className="fa-solid fa-copy"></i> Copiar
-              </button>
+              }
             </div>
 
             <button 
@@ -465,7 +465,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                     {p.nome}
                   </h3> 
                   <div className="flex items-center gap-2 mt-1">
-                     <div className={`flex items-center gap-1.5 bg-white border px-2 py-0.5 rounded-lg ${isBelowMin ? 'border-rose-500 bg-rose-50' : (isBelowPrecoMinimo ? 'border-red-500 bg-red-50' : 'border-gray-100')}`}>
+                     <div className={`flex items-center gap-1.5 bg-white border px-2 py-0.5 rounded-lg ${isBelowMin ? 'border-rose-500 bg-rose-50' : (isBelowPreco' : (isBelowPrecoMinimo ? 'border-red-500 bg-red-50' : 'border-gray-100')}`}>
                         <span className={`text-[9px] font-black ${isBelowMin ? 'text-rose-500' : (isBelowPrecoMinimo ? 'text-red-500' : 'text-gray-300')}`}>R$</span>
                         <input 
                           type="text" 
@@ -501,8 +501,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                 </p>
               )}
             </div>
-          );
-        })}
+          );}
+        )}
         {filteredProducts.length === 0 && (
           <div className="py-20 text-center opacity-30 flex flex-col items-center gap-4">
             <i className="fa-solid fa-box-open text-5xl"></i>

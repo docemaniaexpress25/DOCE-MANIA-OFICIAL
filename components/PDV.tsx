@@ -115,9 +115,10 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     return pendingSales.reduce((acc, s) => acc + (s.valorTotal - s.valorPago), 0);
   }, [sales, client.id]);
 
+  // REGRA: preço de venda >= preço mínimo (se cadastrado)
   const hasMarginViolation = useMemo(() => {
     if (!margemMinimaAtiva) return false;
-    if (isPrePedido) return false;
+    if (isPrePedido) return false; // Pré-pedido não valida
     return Object.entries(cart).some(([pId, item]) => {
       const cartItem = item as { quantidade: number, precoVenda: string };
       if (cartItem.quantidade <= 0) return false;
@@ -125,7 +126,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       if (!p) return false;
       const price = parseFloat(cartItem.precoVenda) || 0;
       const minPrice = p.precoMinimo || 0;
-      return price < minPrice;
+      // Só valida se tem preço mínimo cadastrado (> 0)
+      return minPrice > 0 && price < minPrice;
     });
   }, [cart, products, margemMinimaAtiva, isPrePedido]);
 
@@ -144,7 +146,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     });
   };
 
-  // Validação no blur (ao sair do campo) - permite digitar livremente
+  // Validação no blur - corrige automaticamente se abaixo do mínimo
   const handlePriceBlur = (pId: string, value: string) => {
     if (!margemMinimaAtiva || isPrePedido) return;
     
@@ -155,7 +157,6 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     if (sanitized && minPrice > 0) {
       const numValue = parseFloat(sanitized);
       if (!isNaN(numValue) && numValue < minPrice) {
-        // Corrige automaticamente para o preço mínimo
         setCart(prev => {
           if (!prev[pId]) return prev;
           return { ...prev, [pId]: { ...prev[pId], precoVenda: minPrice.toFixed(2) } };
@@ -164,7 +165,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     }
   };
 
-  // Mudança no input - apenas atualiza, não bloqueia
+  // Mudança no input - apenas atualiza, não bloqueia digitação
   const handlePriceChange = (pId: string, value: string) => {
     const sanitized = value.replace(',', '.');
     setCart(prev => {
@@ -199,7 +200,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
 
   const handleConfirmFinalize = async () => {
     if (total <= 0 && getOrderedItems().length === 0) return;
-    if (hasMarginViolation) return;
+    if (hasMarginViolation) return; // BLOQUEIA finalização se preço < mínimo
 
     const itens = getOrderedItems();
     const vt = parseFloat(valorTroca) || 0;
@@ -448,7 +449,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           const cargaOriginal = isPrePedido ? (p.estoquePrincipal || 0) : (minhaCarga.find(c => c.produtoId === p.id)?.quantidade || 0);
           const minPrice = p.precoMinimo || 0;
           const itemPrice = item ? parseFloat(item.precoVenda) || 0 : p.precoVenda;
-          const isBelowMin = margemMinimaAtiva && item && item.quantidade > 0 && itemPrice < minPrice && !isPrePedido;
+          // Só considera violação se tem preço mínimo cadastrado (> 0)
+          const isBelowMin = margemMinimaAtiva && item && item.quantidade > 0 && minPrice > 0 && itemPrice < minPrice && !isPrePedido;
           const hasBeenSold = soldProductIds.has(p.id);
 
           return (
@@ -474,6 +476,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                           onBlur={(e) => handlePriceBlur(p.id, e.target.value)}
                           className={`w-14 bg-transparent border-none p-0 text-[11px] font-black outline-none ${isBelowMin ? 'text-rose-600' : 'text-emerald-600'}`} 
                         />
+                        {/* SÓ mostra preço mínimo se cadastrado (> 0) - NUNCA mostra 0 */}
                         {p.precoMinimo && p.precoMinimo > 0 && (
                           <span className="text-[8px] font-bold text-rose-600 ml-1">
                             {p.precoMinimo.toFixed(2)}
@@ -514,10 +517,11 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           </div>
         )}
         
+        {/* Banner de bloqueio quando há violação */}
         {hasMarginViolation && (
           <div className="bg-rose-600 text-white p-3 rounded-xl text-center font-black text-[9px] uppercase tracking-widest animate-pulse flex items-center justify-center gap-2">
             <i className="fa-solid fa-circle-exclamation text-sm"></i>
-            Venda Bloqueada: Preço abaixo do mínimo!
+            Venda Bloqueada: Preço de venda abaixo do mínimo cadastrado!
           </div>
         )}
 
@@ -638,7 +642,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                    <p className="text-[9px] font-black text-gray-400 uppercase text-center">Selecione o Banco para Receber</p>
                    <div className="grid grid-cols-2 gap-2">
                      <button onClick={() => setSelectedPixSlot(1)} className={`p-3 rounded-xl border text-[10px] font-black uppercase transition-all ${selectedPixSlot === 1 ? 'border-blue-600 bg-blue-50 text-blue-600' : 'border-gray-100 text-gray-400'}`}>{pix1Name}</button>
-                     <button onClick={() => setSelectedPixSlot(2)} className={`p-3 rounded-xl border text-[10px] font-bold uppercase transition-all ${selectedPixSlot === 2 ? 'border-blue-600 bg-blue-50 text-blue-600' : 'border-gray-100 text-gray-400'}`}>{pix2Name}</button>
+                     <button onClick={() => setSelectedPixSlot(2)} className={`p-3 rounded-xl border text-[10px] font-black uppercase transition-all ${selectedPixSlot === 2 ? 'border-blue-600 bg-blue-50 text-blue-600' : 'border-gray-100 text-gray-400'}`}>{pix2Name}</button>
                    </div>
                    
                    <div className="bg-gray-50 p-4 rounded-2xl flex flex-col items-center border border-gray-100">

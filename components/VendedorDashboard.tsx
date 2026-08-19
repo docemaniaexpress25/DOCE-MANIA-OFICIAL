@@ -87,6 +87,25 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     setTimeout(() => setToast(null), 3000);
   };
 
+  // Memo para última venda de cada cliente
+  const lastSaleByClient = useMemo(() => {
+    const map = new Map<string, Date>();
+    sales.forEach(s => {
+      const existing = map.get(s.clientId);
+      const saleDate = new Date(s.data);
+      if (!existing || saleDate > existing) {
+        map.set(s.clientId, saleDate);
+      }
+    });
+    return map;
+  }, [sales]);
+
+  const formatLastSaleDate = (clientId: string) => {
+    const date = lastSaleByClient.get(clientId);
+    if (!date) return '';
+    return `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}`;
+  };
+
   const atRiskClients = useMemo(() => {
     const today = new Date();
     return clients.filter(c => {
@@ -111,25 +130,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       return { ...c, diasSemCompra: diffDays, dataUltimaVenda: lastSale };
     }).sort((a, b) => b.diasSemCompra - a.diasSemCompra);
   }, [clients, sales, dismissedClientRiskIds]);
-
-  // Memo para última venda de cada cliente
-  const lastSaleByClient = useMemo(() => {
-    const map = new Map<string, Date>();
-    sales.forEach(s => {
-      const existing = map.get(s.clientId);
-      const saleDate = new Date(s.data);
-      if (!existing || saleDate > existing) {
-        map.set(s.clientId, saleDate);
-      }
-    });
-    return map;
-  }, [sales]);
-
-  const formatLastSaleDate = (clientId: string) => {
-    const date = lastSaleByClient.get(clientId);
-    if (!date) return '';
-    return `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}`;
-  };
 
   const handleDismissRisk = (clientId: string) => {
     setDismissedClientRiskIds(prev => [...prev, clientId]);
@@ -559,6 +559,11 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                   <div className="flex items-center gap-2 mt-1">
                     <span className="text-[9px] font-black text-rose-600 uppercase bg-rose-50 px-2 py-0.5 rounded-lg">{c.diasSemCompra} dias</span>
                     <span className="text-[9px] text-gray-400 font-bold uppercase truncate">Ult: {new Date(c.dataUltimaVenda).toLocaleDateString()}</span>
+                    {formatLastSaleDate(c.id) && (
+                      <span className="text-[9px] text-gray-300 font-medium uppercase tracking-wider bg-gray-100 px-2 py-0.5 rounded">
+                        Últ: {formatLastSaleDate(c.id)}
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div className="flex gap-2">

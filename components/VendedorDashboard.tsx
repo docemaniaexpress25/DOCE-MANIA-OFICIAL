@@ -105,7 +105,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       const cSales = sales.filter(s => s.clientId === c.id);
       const lastSale = cSales.reduce((latest, s) => {
         const d = new Date(s.data);
-        return d > latest ? d : latest.
+        return d > latest ? d : latest;
       }, new Date(0));
       const diffDays = Math.ceil(Math.abs(today.getTime() - lastSale.getTime()) / (1000 * 60 * 60 * 24));
       return { ...c, diasSemCompra: diffDays, dataUltimaVenda: lastSale };
@@ -696,7 +696,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
       {activeTab === 'HISTORY' && (
         <div className="space-y-4">
-          <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner">{(['DIA', 'SEMANA', 'MES', 'GERAL'] as const).map(f => (<button key={f} onClick={() => setHistoryFilter(f)} className={`flex-1 py-2 rounded-xl text-[9px] font-black uppercase ${historyFilter === f ? 'bg-white text-[#1E3A5F] shadow-sm' : 'text-gray-400'}`}>{f}</button>))}</div>
+          <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow_inner">{(['DIA', 'SEMANA', 'MES', 'GERAL'] as const).map(f => (<button key={f} onClick={() => setHistoryFilter(f)} className={`flex-1 py-2 rounded-xl text-[9px] font-black uppercase ${historyFilter === f ? 'bg-white text-[#1E3A5F] shadow-sm' : 'text-gray-400'}`}>{f}</button>))}</div>
           <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-md flex flex-col gap-4">
              <div className="flex justify-between items-center border-b border-gray-100 pb-3"><span className="text-xs font-black text-gray-400 uppercase">Total Geral</span><span className="text-2xl font-black text-gray-900">R$ {historySummary.total.toFixed(2)}</span></div>
              <div className="grid grid-cols-3 gap-3">

@@ -525,9 +525,18 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                           </span>
                         )}
                      </div>
-                     <span className={`text-[9px] font-bold uppercase ${isPrePedido ? 'text-indigo-600' : 'text-blue-500'}`}>
-                       {isPrePedido ? `Estoque Central: ${cargaOriginal - (item?.quantidade ?? 0)}` : `${cargaOriginal - (item?.quantidade ?? 0)} UN`}
-                     </span>
+                     {/* ICONE DE ESTOQUE CENTRAL NO PRÉ-PEDIDO - MAIS CLEAN */}
+                     {isPrePedido && (
+                       <div className="flex items-center gap-1.5 bg-indigo-50 px-2 py-0.5 rounded-lg border border-indigo-100 shadow-inner whitespace-nowrap" title="Estoque Central">
+                         <i className="fa-solid fa-warehouse text-indigo-400 text-[10px]"></i>
+                         <span className="text-[10px] font-black text-indigo-600">{cargaOriginal - (item?.quantidade ?? 0)}</span>
+                       </div>
+                     )}
+                     {!isPrePedido && (
+                       <span className={`text-[9px] font-bold uppercase ${isPrePedido ? 'text-indigo-600' : 'text-blue-500'}`}>
+                         {cargaOriginal - (item?.quantidade ?? 0)} UN
+                       </span>
+                     )}
                   </div>
                 </div>
                 <div className="flex items-center bg-white rounded-xl p-0.5 border border-gray-100 shadow-sm">

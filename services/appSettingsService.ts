@@ -43,13 +43,22 @@ export const appSettingsService = {
       .maybeSingle();
 
     if (error) {
-      console.error('Erro ao buscar configurações:', error);
+      console.error('[appSettingsService] Erro ao buscar configurações:', error);
       return DEFAULT_SETTINGS;
     }
 
     if (!data) {
+      console.log('[appSettingsService] Nenhuma configuração encontrada, usando defaults');
       return DEFAULT_SETTINGS;
     }
+
+    // Debug log para ver o que vem do banco
+    console.log('[appSettingsService] Dados do banco:', {
+      product_order: data.product_order,
+      client_order: data.client_order,
+      company_name: data.company_name,
+      company_cnpj: data.company_cnpj
+    });
 
     return {
       logo: data.logo ?? DEFAULT_SETTINGS.logo,
@@ -61,8 +70,8 @@ export const appSettingsService = {
       pix1Code: data.pix1_code ?? DEFAULT_SETTINGS.pix1Code,
       pix2Name: data.pix2_name ?? DEFAULT_SETTINGS.pix2Name,
       pix2Code: data.pix2_code ?? DEFAULT_SETTINGS.pix2Code,
-      productOrder: data.product_order || DEFAULT_SETTINGS.productOrder,
-      clientOrder: data.client_order || DEFAULT_SETTINGS.clientOrder,
+      productOrder: Array.isArray(data.product_order) ? data.product_order : DEFAULT_SETTINGS.productOrder,
+      clientOrder: Array.isArray(data.client_order) ? data.client_order : DEFAULT_SETTINGS.clientOrder,
       companyName: data.company_name ?? DEFAULT_SETTINGS.companyName,
       companyCnpj: data.company_cnpj ?? DEFAULT_SETTINGS.companyCnpj,
     };
@@ -90,14 +99,18 @@ export const appSettingsService = {
         ...payload
     };
 
+    console.log('[appSettingsService] Salvando no Supabase:', upsertPayload);
+
     const { error } = await supabase
       .from('app_settings')
       .upsert(upsertPayload, { onConflict: 'id' });
 
     if (error) {
-      console.error('Erro ao persistir configurações globais:', error);
+      console.error('[appSettingsService] Erro ao persistir configurações:', error);
       return false;
     }
+    
+    console.log('[appSettingsService] Salvo com sucesso!');
     return true;
   },
 };

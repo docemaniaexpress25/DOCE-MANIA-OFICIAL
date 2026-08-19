@@ -39,12 +39,14 @@ interface VendedorDashboardProps {
   updateDailyRoute: (clientIds: string[], skippedClientIds: string[]) => void;
   companyName: string;
   companyCnpj: string;
+  clientOrder: string[];
+  setClientOrder: (ids: string[]) => void;
 }
 
 type TabType = 'HOME' | 'ROTEIRO' | 'CARGA' | 'HISTORY' | 'FINANCE' | 'CREDIT' | 'CLIENTES' | 'WEEKLY' | 'STOCK_VIEW' | 'AVISOS';
 
 const VendedorDashboard: React.FC<VendedorDashboardProps> = ({ 
-  user, products = [], clients = [], cargas = [], cargasPendentes = [], sales = [], commissions = [], payoutLogs = [], expenses = [], messages = [], categories = [], subcategories = [], markMessageAsRead, processSale, addClient, updateClient, deleteClient, receivePayment, deleteSale, aceitarCarga, addExpense, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, updateDailyRoute, companyName, companyCnpj
+  user, products = [], clients = [], cargas = [], cargasPendentes = [], sales = [], commissions = [], payoutLogs = [], expenses = [], messages = [], categories = [], subcategories = [], markMessageAsRead, processSale, addClient, updateClient, deleteClient, receivePayment, deleteSale, aceitarCarga, addExpense, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, updateDailyRoute, companyName, companyCnpj, clientOrder, setClientOrder
 }) => {
   const [activeTab, setActiveTab] = useState<TabType>(() => loadLocalState('v_activeTab', 'HOME'));
   const [selectedClient, setSelectedClient] = useState<Client | null>(() => loadLocalState('v_selectedClient', null));
@@ -103,7 +105,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       const cSales = sales.filter(s => s.clientId === c.id);
       const lastSale = cSales.reduce((latest, s) => {
         const d = new Date(s.data);
-        return d > latest ? d : latest;
+        return d > latest ? d : latest.
       }, new Date(0));
       const diffDays = Math.ceil(Math.abs(today.getTime() - lastSale.getTime()) / (1000 * 60 * 60 * 24));
       return { ...c, diasSemCompra: diffDays, dataUltimaVenda: lastSale };
@@ -160,8 +162,13 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     const clientsInRoute = clientIds
       .map(id => clientMap.get(id))
       .filter((c): c is Client => !!c && (c.ativo ?? false));
-    return clientsInRoute.sort((a, b) => (a.ordem || 0) - (b.ordem || 0)) || []; 
-  }, [clients, dailyRouteState]); 
+    return clientsInRoute.sort((a, b) => {
+      const orderMap = new Map(clientOrder.map((id, idx) => [id, idx]));
+      const idxA = orderMap.get(a.id) ?? (a.ordem || 0);
+      const idxB = orderMap.get(b.id) ?? (b.ordem || 0);
+      return idxA - idxB;
+    }) || []; 
+  }, [clients, dailyRouteState, clientOrder]); 
 
   const handleSkipClient = () => { 
     if (!confirmSkipId) return;
@@ -292,6 +299,24 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     }
   };
 
+  // NOVO: Mover cliente na ordem global
+  const moveClient = (id: string, dir: 'UP' | 'DOWN') => {
+    const currentOrder = clientOrder.length > 0 ? clientOrder : clients.map(c => c.id);
+    const idx = currentOrder.indexOf(id);
+    if (idx === -1) return;
+    const newOrder = [...currentOrder];
+    if (dir === 'UP' && idx > 0) [newOrder[idx], newOrder[idx-1]] = [newOrder[idx-1], newOrder[idx]];
+    else if (dir === 'DOWN' && idx < newOrder.length - 1) [newOrder[idx], newOrder[idx+1]] = [newOrder[idx+1], newOrder[idx]];
+    setClientOrder(newOrder);
+    showToast("Ordem do cliente atualizada!");
+  };
+
+  // NOVO: Mover cliente para outro dia
+  const moveClientToDay = (clientId: string, newDay: number) => {
+    updateClient(clientId, { diaRoteiro: newDay });
+    showToast(`Cliente movido para ${DIAS_SEMANA[newDay]}`);
+  };
+
   const MenuCard = ({ icon, title, tab, color, badge }: any) => (
     <button onClick={() => setActiveTab(tab)} className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col items-center gap-3 active:scale-95 transition-all text-center relative">
       {badge && <div className="absolute top-4 right-4 bg-red-600 text-white text-[8px] font-black w-5 h-5 rounded-full flex items-center justify-center border-2 border-white animate-bounce">{badge === true ? '' : badge}</div>}
@@ -350,7 +375,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       });
     }
 
-    // Filtro adicional por nome do cliente
     if (creditSearch) {
       filtered = filtered.filter(s => {
         const client = clients.find(c => c.id === s.clientId);
@@ -534,9 +558,23 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       {activeTab === 'CLIENTES' && (
         <div className="space-y-4">
           <header className="px-1 flex justify-between items-center"><h2 className="text-xs font-black text-gray-400 uppercase tracking-wider">Meus Clientes</h2><button onClick={() => handleOpenEditClient('NEW')} className="bg-green-600 text-white px-4 py-2 rounded-xl font-black text-xs uppercase shadow-md active:scale-95"><i className="fa-solid fa-user-plus mr-2"></i>Novo</button></header>
-          <div className="grid gap-3">
-            {(clients || []).sort((a,b) => (a.nomeFantasia || '').localeCompare(b.nomeFantasia || '')).map(c => (
-              <div key={c.id} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex justify-between items-center transition-all active:scale-95 group">
+          
+          {/* Clientes ordenados pela clientOrder global */}
+          <div className="grid gap-3 px-1">
+            {clients
+              .filter(c => c.rota === (user.rota || 'ROTA_01'))
+              .sort((a, b) => {
+                const orderMap = new Map(clientOrder.map((id, idx) => [id, idx]));
+                const idxA = orderMap.get(a.id) ?? (a.ordem || 0);
+                const idxB = orderMap.get(b.id) ?? (b.ordem || 0);
+                return idxA - idxB;
+              })
+              .map(c => (
+              <div key={c.id} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex items-center justify-between transition-all active:scale-95 group">
+                <div className="flex flex-col gap-1 mr-3">
+                  <button onClick={(e)=>{e.stopPropagation(); moveClient(c.id, 'UP');}} className="w-8 h-8 bg-gray-50 text-gray-400 rounded-lg flex items-center justify-center active:scale-90 border border-gray-100"><i className="fa-solid fa-chevron-up text-[10px]"></i></button>
+                  <button onClick={(e)=>{e.stopPropagation(); moveClient(c.id, 'DOWN');}} className="w-8 h-8 bg-gray-50 text-gray-400 rounded-lg flex items-center justify-center active:scale-90 border border-gray-100"><i className="fa-solid fa-chevron-down text-[10px]"></i></button>
+                </div>
                 <div className="flex-1 cursor-pointer" onClick={() => setViewingClientHistory(c)}>
                   <div className="flex items-center gap-2">
                     <h4 className="font-bold text-gray-800 text-sm leading-tight uppercase">{c.nomeFantasia ?? 'Cliente'}</h4>
@@ -553,7 +591,14 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                   </div>
                   <p className="text-[10px] text-gray-400 font-semibold uppercase mt-1">{c.telefone} • {DIAS_SEMANA[c.diaRoteiro]}</p>
                 </div>
-                <button onClick={() => handleOpenEditClient(c)} className="w-10 h-10 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center active:scale-95"><i className="fa-solid fa-pencil-alt text-xs"></i></button>
+                <div className="flex flex-col gap-1">
+                  <button onClick={(e) => { e.stopPropagation(); handleOpenEditClient(c); }} className="w-10 h-10 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center active:scale-95"><i className="fa-solid fa-pencil-alt text-xs"></i></button>
+                  <div className="flex gap-1">
+                    {[1,2,3,4,5,6].map(d => (
+                      <button key={d} onClick={(e)=>{e.stopPropagation(); moveClientToDay(c.id, d);}} className={`w-7 h-7 rounded-lg text-[8px] font-black uppercase transition-all ${c.diaRoteiro === d ? 'bg-indigo-600 text-white shadow-sm' : 'bg-gray-100 text-gray-400'}`}>{DIAS_SEMANA[d].charAt(0)}</button>
+                    ))}
+                  </div>
+                </div>
               </div>
             ))}
           </div>
@@ -568,8 +613,13 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
             {[1, 2, 3, 4, 5, 6].map(dia => {
               const isOpen = expandedDay === dia;
               const clientsInDay = (clients || [])
-                .filter(c => c.diaRoteiro === dia && c.ativo && (weeklySearch === '' || (c.nomeFantasia || '').toLowerCase().includes(weeklySearch.toLowerCase())))
-                .sort((a, b) => (a.ordem || 0) - (b.ordem || 0)); 
+                .filter(c => c.diaRoteiro === dia && c.ativo && c.rota === (user.rota || 'ROTA_01') && (weeklySearch === '' || (c.nomeFantasia || '').toLowerCase().includes(weeklySearch.toLowerCase())))
+                .sort((a, b) => {
+                  const orderMap = new Map(clientOrder.map((id, idx) => [id, idx]));
+                  const idxA = orderMap.get(a.id) ?? (a.ordem || 0);
+                  const idxB = orderMap.get(b.id) ?? (b.ordem || 0);
+                  return idxA - idxB;
+                }); 
               return (
                 <div key={dia} className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
                   <button onClick={() => setExpandedDay(isOpen ? null : dia)} className={`w-full flex items-center justify-between p-5 text-left ${isOpen ? 'bg-indigo-50 text-indigo-700' : 'bg-white text-gray-700'}`}>
@@ -579,9 +629,19 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                   {isOpen && (
                     <div className="p-4 bg-white space-y-2 border-t border-indigo-50">
                       {clientsInDay.map(c => (
-                        <div key={c.id} className="p-3 bg-gray-50 rounded-2xl flex justify-between items-center group">
+                        <div key={c.id} className="p-3 bg-gray-50 rounded-2xl flex items-center justify-between group">
+                          <div className="flex flex-col gap-1 mr-3">
+                            <button onClick={(e)=>{e.stopPropagation(); moveClient(c.id, 'UP');}} className="w-7 h-7 bg-white border text-gray-400 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-chevron-up text-[10px]"></i></button>
+                            <button onClick={(e)=>{e.stopPropagation(); moveClient(c.id, 'DOWN');}} className="w-7 h-7 bg-white border text-gray-400 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-chevron-down text-[10px]"></i></button>
+                          </div>
                           <div className="flex-1 cursor-pointer" onClick={() => setViewingClientHistory(c)}><p className="font-bold text-gray-800 text-xs uppercase">{c.nomeFantasia}</p><p className="text-[9px] text-gray-400 font-bold mt-0.5">{c.bairro || 'Sem Bairro'}</p></div>
-                          <button onClick={() => handleAddToTodayRoute(c.id)} className="w-8 h-8 bg-indigo-100 text-indigo-600 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-plus text-xs"></i></button>
+                          <div className="flex items-center gap-2">
+                            <button onClick={() => handleAddToTodayRoute(c.id)} className="w-8 h-8 bg-indigo-100 text-indigo-600 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-plus text-xs"></i></button>
+                            <button onClick={(e)=>{e.stopPropagation(); handleOpenEditClient(c);}} className="w-8 h-8 bg-blue-50 text-blue-600 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-pencil-alt text-xs"></i></button>
+                            {[1,2,3,4,5,6].map(d => (
+                              <button key={d} onClick={(e)=>{e.stopPropagation(); moveClientToDay(c.id, d);}} className={`w-7 h-7 rounded-lg text-[8px] font-black uppercase transition-all ${c.diaRoteiro === d ? 'bg-indigo-600 text-white shadow-sm' : 'bg-gray-100 text-gray-400'}`}>{DIAS_SEMANA[d].charAt(0)}</button>
+                            ))}
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -807,7 +867,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
               >
                 {t === 'COMUM' ? 'Comum' : t}
               </button>
-            ))}
+            )}
           </div>
 
           <div className="px-1">

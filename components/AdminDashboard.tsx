@@ -69,6 +69,8 @@ interface AdminDashboardProps {
   companyCnpj: string;
   setCompanyCnpj: (val: string) => void;
   activateAllProducts?: () => void;
+  clientOrder: string[];
+  setClientOrder: (ids: string[]) => void;
 }
 
 type TabType = 'HOME' | 'CATALOGO' | 'CATEGORIAS' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'SETTINGS';
@@ -334,6 +336,26 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     showToast("Ordem atualizada!");
   };
 
+  // NOVO: Função para mover cliente na ordem global
+  const moveClient = (id: string, dir: 'UP' | 'DOWN') => {
+    const currentOrder = props.clientOrder.length > 0 ? props.clientOrder : props.clients.map(c => c.id);
+    const idx = currentOrder.indexOf(id);
+    if (idx === -1) return;
+    const newOrder = [...currentOrder];
+    if (dir === 'UP' && idx > 0) [newOrder[idx], newOrder[idx-1]] = [newOrder[idx-1], newOrder[idx]];
+    else if (dir === 'DOWN' && idx < newOrder.length - 1) [newOrder[idx], newOrder[idx+1]] = [newOrder[idx+1], newOrder[idx]];
+    props.setClientOrder(newOrder);
+    showToast("Ordem do cliente atualizada!");
+  };
+
+  // NOVO: Mover cliente para outro dia
+  const moveClientToDay = (clientId: string, newDay: number) => {
+    const client = props.clients.find(c => c.id === clientId);
+    if (!client) return;
+    props.updateClient(clientId, { diaRoteiro: newDay });
+    showToast(`Cliente movido para ${DIAS_SEMANA[newDay]}`);
+  };
+
   const updatePriceFromMargin = (custo: number, margemPercent: number) => {
     const c = Number(custo) || 0;
     const m = Number(margemPercent) || 0;
@@ -594,12 +616,26 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   }, { total: 0, dinheiro: 0, pix: 0, prazo: 0 }), [filteredHistory]);
 
   const filteredClients = useMemo(() => {
-    return props.clients.filter(c => {
+    let clients = props.clients.filter(c => {
       const matchesSearch = c.nomeFantasia.toLowerCase().includes(search.toLowerCase());
       const matchesRoute = routeFilter === 'TODOS' || c.rota === routeFilter;
       return matchesSearch && matchesRoute;
     });
-  }, [props.clients, search, routeFilter]);
+    
+    // Aplicar ordenação customizada
+    if (props.clientOrder.length > 0) {
+      const orderMap = new Map(props.clientOrder.map((id, idx) => [id, idx]));
+      clients.sort((a, b) => {
+        const idxA = orderMap.get(a.id) ?? 999999;
+        const idxB = orderMap.get(b.id) ?? 999999;
+        return idxA - idxB;
+      });
+    } else {
+      clients.sort((a, b) => (a.ordem || 0) - (b.ordem || 0));
+    }
+    
+    return clients;
+  }, [props.clients, search, routeFilter, props.clientOrder]);
 
   const handleActivateAll = () => {
     if (window.confirm("Deseja marcar TODOS os produtos inativos como ATIVOS agora?")) props.activateAllProducts?.();
@@ -910,7 +946,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Gestão de Clientes</h2></div>
           <div className="flex flex-wrap bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner gap-1"><button onClick={() => setRouteFilter('TODOS')} className={`flex-1 min-w-[70px] py-2 rounded-xl text-[9px] font-black uppercase transition-all ${routeFilter === 'TODOS' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>Todos</button>{availableRoutes.map(r => (<button key={r} onClick={() => setRouteFilter(r)} className={`flex-1 min-w-[70px] py-2 rounded-xl text-[9px] font-black uppercase transition-all ${routeFilter === r ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>{formatRouteName(r)}</button>))}</div>
           <div className="flex gap-2"><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar cliente..." className="flex-1 px-4 py-3 bg-white border border-gray-200 rounded-xl text-sm" /><button onClick={() => handleOpenClient('NEW')} className="bg-blue-600 text-white w-12 h-12 rounded-xl flex items-center justify-center shadow-lg active:scale-90 transition-transform"><i className="fa-solid fa-user-plus"></i></button></div>
-          <div className="grid gap-2 px-1">{filteredClients.sort((a,b) => (a.nomeFantasia||'').toLowerCase().localeCompare((b.nomeFantasia||'').toLowerCase())).map(c => (<div key={c.id} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex items-center justify-between transition-all hover:border-blue-200"><div className="flex-1 min-w-0 pr-2 cursor-pointer" onClick={() => setViewingClientHistory(c)}><div className="flex items-center gap-2"><h3 className="font-bold text-gray-800 text-[13px] leading-tight uppercase truncate">{c.nomeFantasia}</h3>{c.telefone && <a href={`https://wa.me/55${c.telefone.replace(/\D/g, '')}`} target="_blank" className="text-emerald-500" onClick={(e) => e.stopPropagation()}><i className="fa-brands fa-whatsapp text-lg"></i></a>}</div><div className="flex items-center gap-3 mt-1.5"><p className="text-[10px] text-gray-400 font-black uppercase truncate">{DIAS_SEMANA[c.diaRoteiro]}</p><span className="text-[8px] font-black px-1.5 py-0.5 rounded uppercase bg-blue-100 text-blue-600">{formatRouteName(c.rota)}</span><div className="flex items-center gap-1.5 bg-blue-50 px-2 py-0.5 rounded border border-blue-100 shadow-inner whitespace-nowrap"><i className="fa-solid fa-chart-line text-blue-400 text-[10px]"></i><span className="text-[11px] font-black text-blue-600">R$ {getClientAvgRevenue(c.id)}</span></div></div></div><div className="flex gap-2"><button onClick={(e) => { e.stopPropagation(); handleOpenClient(c); }} className="bg-blue-50 text-blue-600 w-9 h-9 rounded-lg border border-blue-100 flex items-center justify-center active:scale-90 shadow-sm"><i className="fa-solid fa-pencil-alt text-sm"></i></button><button onClick={(e) => { e.stopPropagation(); setConfirmDelete({ id: c.id, type: 'CLIENT', name: c.nomeFantasia }); }} className="bg-rose-50 text-rose-600 w-9 h-9 rounded-lg border border-rose-100 flex items-center justify-center active:scale-90 shadow-sm"><i className="fa-solid fa-trash-can text-sm"></i></button></div></div>))}</div>
+          <div className="grid gap-2 px-1">{filteredClients.map(c => (<div key={c.id} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex items-center justify-between transition-all hover:border-blue-200"><div className="flex flex-col gap-1 mr-4"><button onClick={() => moveClient(c.id, 'UP')} className="w-8 h-8 bg-gray-50 text-gray-400 rounded-lg flex items-center justify-center active:scale-90 border border-gray-100"><i className="fa-solid fa-chevron-up text-[10px]"></i></button><button onClick={() => moveClient(c.id, 'DOWN')} className="w-8 h-8 bg-gray-50 text-gray-400 rounded-lg flex items-center justify-center active:scale-90 border border-gray-100"><i className="fa-solid fa-chevron-down text-[10px]"></i></button></div><div className="flex-1 min-w-0 pr-2 cursor-pointer" onClick={() => setViewingClientHistory(c)}><div className="flex items-center gap-2"><h3 className="font-bold text-gray-800 text-[13px] leading-tight uppercase truncate">{c.nomeFantasia}</h3>{c.telefone && <a href={`https://wa.me/55${c.telefone.replace(/\D/g, '')}`} target="_blank" className="text-emerald-500" onClick={(e) => e.stopPropagation()}><i className="fa-brands fa-whatsapp text-lg"></i></a>}</div><div className="flex items-center gap-3 mt-1.5"><p className="text-[10px] text-gray-400 font-black uppercase truncate">{DIAS_SEMANA[c.diaRoteiro]}</p><span className="text-[8px] font-black px-1.5 py-0.5 rounded uppercase bg-blue-100 text-blue-600">{formatRouteName(c.rota)}</span><div className="flex items-center gap-1.5 bg-blue-50 px-2 py-0.5 rounded border border-blue-100 shadow-inner whitespace-nowrap"><i className="fa-solid fa-chart-line text-blue-400 text-[10px]"></i><span className="text-[11px] font-black text-blue-600">R$ {getClientAvgRevenue(c.id)}</span></div></div></div><div className="flex flex-col gap-1"><div className="flex gap-2"><button onClick={(e) => { e.stopPropagation(); handleOpenClient(c); }} className="bg-blue-50 text-blue-600 w-9 h-9 rounded-lg border border-blue-100 flex items-center justify-center active:scale-90 shadow-sm"><i className="fa-solid fa-pencil-alt text-sm"></i></button><button onClick={(e) => { e.stopPropagation(); setConfirmDelete({ id: c.id, type: 'CLIENT', name: c.nomeFantasia }); }} className="bg-rose-50 text-rose-600 w-9 h-9 rounded-lg border border-rose-100 flex items-center justify-center active:scale-90 shadow-sm"><i className="fa-solid fa-trash-can text-sm"></i></button></div><div className="flex gap-1">{[1,2,3,4,5,6].map(d => (<button key={d} onClick={(e)=>{e.stopPropagation(); moveClientToDay(c.id, d);}} className={`w-7 h-7 rounded-lg text-[8px] font-black uppercase transition-all ${c.diaRoteiro === d ? 'bg-indigo-600 text-white shadow-sm' : 'bg-gray-100 text-gray-400'}`}>{DIAS_SEMANA[d].charAt(0)}</button>))}</div></div></div>))}</div>
         </div>
       )}
 
@@ -925,7 +961,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         <div className="space-y-6 py-4">
           <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Roteiro Semanal</h2></div>
           <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner overflow-x-auto"><button onClick={() => setRouteFilter('TODOS')} className={`flex-shrink-0 px-6 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all ${routeFilter === 'TODOS' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>Todos</button>{availableRoutes.map(r => (<button key={r} onClick={() => setRouteFilter(r)} className={`flex-shrink-0 px-6 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all ${routeFilter === r ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>{formatRouteName(r)}</button>))}</div>
-          <div className="space-y-3 px-1">{[1, 2, 3, 4, 5, 6].map(dia => { const isOpen = expandedDay === dia; const clientsInDay = props.clients.filter(c => c.diaRoteiro === dia && c.ativo && (routeFilter === 'TODOS' || c.rota === routeFilter)).sort((a, b) => (a.ordem || 0) - (b.ordem || 0)); return (<div key={dia} className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden"><button onClick={() => setExpandedDay(isOpen ? null : dia)} className={`w-full flex items-center justify-between p-5 text-left ${isOpen ? 'bg-indigo-50 text-indigo-700' : 'bg-white text-gray-700'}`}><div className="flex items-center gap-3"><div className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-[10px] ${isOpen ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-400'}`}>{dia}</div><span className="font-black uppercase text-xs tracking-tight">{DIAS_SEMANA[dia] ?? 'N/D'}</span></div><div className="flex items-center gap-2"><span className="text-[9px] font-black uppercase opacity-40">{clientsInDay.length} clientes</span><i className={`fa-solid ${isOpen ? 'fa-chevron-up' : 'fa-chevron-down'} text-[10px]`}></i></div></button>{isOpen && (<div className="p-4 bg-white space-y-2 border-t border-indigo-50 animate-in slide-in-from-top duration-300">{clientsInDay.map(c => (<div key={c.id} className="p-3 bg-gray-50 rounded-2xl flex justify-between items-center group"><div className="flex-1 cursor-pointer" onClick={() => setViewingClientHistory(c)}><p className="font-bold text-gray-800 text-xs uppercase">{c.nomeFantasia}</p><p className="text-[9px] text-gray-400 font-bold mt-0.5">{c.bairro || 'Sem Bairro'}</p></div><span className="text-[8px] font-black px-1.5 py-0.5 rounded uppercase bg-blue-100 text-blue-600">{formatRouteName(c.rota)}</span></div>))}</div>)}</div>); })}</div>
+          <div className="space-y-3 px-1">{[1, 2, 3, 4, 5, 6].map(dia => { const isOpen = expandedDay === dia; const clientsInDay = props.clients.filter(c => c.diaRoteiro === dia && c.ativo && (routeFilter === 'TODOS' || c.rota === routeFilter)).sort((a, b) => { const orderMap = new Map(props.clientOrder.map((id, idx) => [id, idx])); const idxA = orderMap.get(a.id) ?? (a.ordem || 0); const idxB = orderMap.get(b.id) ?? (b.ordem || 0); return idxA - idxB; }); return (<div key={dia} className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden"><button onClick={() => setExpandedDay(isOpen ? null : dia)} className={`w-full flex items-center justify-between p-5 text-left ${isOpen ? 'bg-indigo-50 text-indigo-700' : 'bg-white text-gray-700'}`}><div className="flex items-center gap-3"><div className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-[10px] ${isOpen ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-400'}`}>{dia}</div><span className="font-black uppercase text-xs tracking-tight">{DIAS_SEMANA[dia] ?? 'N/D'}</span></div><div className="flex items-center gap-2"><span className="text-[9px] font-black uppercase opacity-40">{clientsInDay.length} clientes</span><i className={`fa-solid ${isOpen ? 'fa-chevron-up' : 'fa-chevron-down'} text-[10px]`}></i></div></button>{isOpen && (<div className="p-4 bg-white space-y-2 border-t border-indigo-50 animate-in slide-in-from-top duration-300">{clientsInDay.map((c, index) => (<div key={c.id} className="p-3 bg-gray-50 rounded-2xl flex items-center justify-between group"><div className="flex flex-col gap-1 mr-3"><button onClick={(e)=>{e.stopPropagation(); moveClient(c.id, 'UP');}} className="w-7 h-7 bg-white border text-gray-400 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-chevron-up text-[10px]"></i></button><button onClick={(e)=>{e.stopPropagation(); moveClient(c.id, 'DOWN');}} className="w-7 h-7 bg-white border text-gray-400 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-chevron-down text-[10px]"></i></button></div><div className="flex-1 cursor-pointer" onClick={() => setViewingClientHistory(c)}><p className="font-bold text-gray-800 text-xs uppercase">{c.nomeFantasia}</p><p className="text-[9px] text-gray-400 font-bold mt-0.5">{c.bairro || 'Sem Bairro'}</p></div><div className="flex items-center gap-2"><span className="text-[8px] font-black px-1.5 py-0.5 rounded uppercase bg-blue-100 text-blue-600">{formatRouteName(c.rota)}</span><button onClick={(e)=>{e.stopPropagation(); handleOpenClient(c);}} className="w-8 h-8 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center active:scale-90 shadow-sm"><i className="fa-solid fa-pencil-alt text-xs"></i></button></div></div>))}</div>)}</div>); })}</div>
         </div>
       )}
 

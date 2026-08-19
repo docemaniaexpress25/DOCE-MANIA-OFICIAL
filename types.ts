@@ -138,3 +138,19 @@ export interface DailyRouteState {
   clientIds: string[]; 
   skippedClientIds: string[]; 
 }
+
+export interface AppSettings {
+  logo: string | null;
+  margemGlobalAtiva: boolean;
+  margemGlobalValor: number;
+  margemMinimaAtiva: boolean;
+  margemMinima: number;
+  pix1Name: string | null;
+  pix1Code: string | null;
+  pix2Name: string | null;
+  pix2Code: string | null;
+  productOrder: string[];
+  clientOrder: string[]; // NOVO: ordem dos clientes
+  companyName: string | null;
+  companyCnpj: string | null;
+}

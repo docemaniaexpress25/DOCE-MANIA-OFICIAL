@@ -11,6 +11,7 @@ export interface AppSettings {
   pix2Name: string | null;
   pix2Code: string | null;
   productOrder: string[];
+  clientOrder: string[];
   companyName: string | null;
   companyCnpj: string | null;
 }
@@ -26,6 +27,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   pix2Name: "Pix Banco B",
   pix2Code: null,
   productOrder: [],
+  clientOrder: [],
   companyName: "DOCE MANIA DISTRIBUIDORA",
   companyCnpj: "00.000.000/0001-00"
 };
@@ -38,7 +40,7 @@ export const appSettingsService = {
       .from('app_settings')
       .select('*')
       .eq('id', 'global_settings')
-      .maybeSingle(); // Usando maybeSingle para evitar erros de 'nenhuma linha encontrada'
+      .maybeSingle();
 
     if (error) {
       console.error('Erro ao buscar configurações:', error);
@@ -46,8 +48,6 @@ export const appSettingsService = {
     }
 
     if (!data) {
-      // Retorna os padrões APENAS para exibição se a linha não existir, 
-      // mas NÃO salva no banco automaticamente para não apagar dados por erro de rede.
       return DEFAULT_SETTINGS;
     }
 
@@ -62,6 +62,7 @@ export const appSettingsService = {
       pix2Name: data.pix2_name ?? DEFAULT_SETTINGS.pix2Name,
       pix2Code: data.pix2_code ?? DEFAULT_SETTINGS.pix2Code,
       productOrder: data.product_order || DEFAULT_SETTINGS.productOrder,
+      clientOrder: data.client_order || DEFAULT_SETTINGS.clientOrder,
       companyName: data.company_name ?? DEFAULT_SETTINGS.companyName,
       companyCnpj: data.company_cnpj ?? DEFAULT_SETTINGS.companyCnpj,
     };
@@ -80,6 +81,7 @@ export const appSettingsService = {
     if (settings.pix2Name !== undefined) payload.pix2_name = settings.pix2Name;
     if (settings.pix2Code !== undefined) payload.pix2_code = settings.pix2Code;
     if (settings.productOrder !== undefined) payload.product_order = settings.productOrder;
+    if (settings.clientOrder !== undefined) payload.client_order = settings.clientOrder;
     if (settings.companyName !== undefined) payload.company_name = settings.companyName;
     if (settings.companyCnpj !== undefined) payload.company_cnpj = settings.companyCnpj;
 

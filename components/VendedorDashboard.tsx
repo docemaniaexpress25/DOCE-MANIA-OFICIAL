@@ -56,6 +56,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const [filterOverdueOnly, setFilterOverdueOnly] = useState(false);
   const [creditTypeFilter, setCreditTypeFilter] = useState<'TODOS' | 'COMUM' | 'CHEQUE' | 'BOLETO'>('TODOS');
   const [creditSearch, setCreditSearch] = useState('');
+  const [clientSearch, setClientSearch] = useState(''); // NOVO: busca na aba clientes
   
   const [dismissedClientRiskIds, setDismissedClientRiskIds] = useState<string[]>(() => 
     loadLocalState(`v_dismissed_risk_${user.id}`, [])
@@ -188,6 +189,28 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       return idxA - idxB;
     }) || []; 
   }, [clients, dailyRouteState, clientOrder]); 
+
+  // NOVO: Clientes filtrados pela busca
+  const filteredClients = useMemo(() => {
+    let result = clients
+      .filter(c => c.rota === (user.rota || 'ROTA_01'))
+      .sort((a, b) => {
+        const orderMap = new Map(clientOrder.map((id, idx) => [id, idx]));
+        const idxA = orderMap.get(a.id) ?? (a.ordem || 0);
+        const idxB = orderMap.get(b.id) ?? (b.ordem || 0);
+        return idxA - idxB;
+      });
+    
+    if (clientSearch.trim()) {
+      const search = clientSearch.toLowerCase();
+      result = result.filter(c => 
+        c.nomeFantasia.toLowerCase().includes(search) ||
+        c.telefone?.includes(search) ||
+        c.bairro?.toLowerCase().includes(search)
+      );
+    }
+    return result;
+  }, [clients, user.rota, clientOrder, clientSearch]);
 
   const handleSkipClient = () => { 
     if (!confirmSkipId) return;
@@ -639,18 +662,42 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
       {activeTab === 'CLIENTES' && (
         <div className="space-y-4">
-          <header className="px-1 flex justify-between items-center"><h2 className="text-xs font-black text-gray-400 uppercase tracking-wider">Meus Clientes</h2><button onClick={() => handleOpenEditClient('NEW')} className="bg-green-600 text-white px-4 py-2 rounded-xl font-black text-xs uppercase shadow-md active:scale-95"><i className="fa-solid fa-user-plus mr-2"></i>Novo</button></header>
+          <header className="px-1 flex justify-between items-center">
+            <h2 className="text-xs font-black text-gray-400 uppercase tracking-wider">Meus Clientes</h2>
+            <button onClick={() => handleOpenEditClient('NEW')} className="bg-green-600 text-white px-4 py-2 rounded-xl font-black text-xs uppercase shadow-md active:scale-95">
+              <i className="fa-solid fa-user-plus mr-2"></i>Novo
+            </button>
+          </header>
           
+          {/* NOVO: Campo de busca com lupa */}
+          <div className="px-1 relative">
+            <div className="relative">
+              <i className="fa-solid fa-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-lg"></i>
+              <input
+                type="text"
+                value={clientSearch}
+                onChange={e => setClientSearch(e.target.value)}
+                placeholder="Buscar por nome, telefone ou bairro..."
+                className="w-full pl-12 pr-4 py-3 bg-white border border-gray-200 rounded-2xl shadow-sm text-sm outline-none focus:ring-2 focus:ring-green-100"
+              />
+              {clientSearch && (
+                <button
+                  onClick={() => setClientSearch('')}
+                  className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 active:text-gray-600"
+                >
+                  <i className="fa-solid fa-xmark text-lg"></i>
+                </button>
+              )}
+            </div>
+            {clientSearch && (
+              <p className="text-[10px] text-green-600 font-black uppercase mt-2 ml-1">
+                {filteredClients.length} cliente(s) encontrado(s)
+              </p>
+            )}
+          </div>
+
           <div className="grid gap-3 px-1">
-            {clients
-              .filter(c => c.rota === (user.rota || 'ROTA_01'))
-              .sort((a, b) => {
-                const orderMap = new Map(clientOrder.map((id, idx) => [id, idx]));
-                const idxA = orderMap.get(a.id) ?? (a.ordem || 0);
-                const idxB = orderMap.get(b.id) ?? (b.ordem || 0);
-                return idxA - idxB;
-              })
-              .map(c => (
+            {filteredClients.map(c => (
               <div key={c.id} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex items-center justify-between transition-all active:scale-95 group">
                 {/* SEM SETAS DE ORDENAÇÃO - REMOVIDAS CONFORME SOLICITADO */}
                 <div className="flex-1 cursor-pointer" onClick={() => setViewingClientHistory(c)}>
@@ -674,6 +721,13 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 </div>
               </div>
             ))}
+            {filteredClients.length === 0 && clientSearch && (
+              <div className="text-center py-12 opacity-30 flex flex-col items-center gap-4">
+                <i className="fa-solid fa-magnifying-glass text-4xl text-gray-300"></i>
+                <p className="font-black uppercase tracking-widest text-[10px]">Nenhum cliente encontrado</p>
+                <p className="text-[9px] text-gray-400">Tente outra busca</p>
+              </div>
+            )}
           </div>
         </div>
       )}

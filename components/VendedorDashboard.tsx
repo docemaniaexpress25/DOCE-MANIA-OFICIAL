@@ -348,7 +348,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     if (idx === -1) return;
 
     // Reordena apenas dentro do dia
-    const newDayOrder = [...dayClientIds];
+    newDayOrder = [...dayClientIds];
     if (dir === 'UP' && idx > 0) [newDayOrder[idx], newDayOrder[idx-1]] = [newDayOrder[idx-1], newDayOrder[idx]];
     else if (dir === 'DOWN' && idx < newDayOrder.length - 1) [newDayOrder[idx], newDayOrder[idx+1]] = [newDayOrder[idx+1], newDayOrder[idx]];
 
@@ -376,6 +376,8 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     setClientOrder(newGlobalOrder);
     showToast("Ordem do dia atualizada!");
   };
+  
+  let newDayOrder: string[] = [];
 
   // NOVO: Mover cliente para outro dia
   const moveClientToDay = (clientId: string, newDay: number) => {
@@ -552,16 +554,18 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
             <p className="text-[10px] font-black uppercase text-gray-400">Clientes ausentes há mais de 25 dias</p>
           </header>
           <div className="grid gap-2">
-            {atRiskClients.map(c => (
+            {atRiskClients.map(c => {
+              const lastDate = formatLastSaleDate(c.id);
+              return (
               <div key={c.id} className="bg-white p-4 rounded-3xl border border-rose-50 shadow-sm flex items-center justify-between transition-all group">
                 <div className="flex-1 min-w-0 pr-3">
                   <h4 className="font-black text-gray-800 text-xs uppercase truncate">{c.nomeFantasia}</h4>
-                  <div className="flex items-center gap-2 mt-1">
+                  <div className="flex items-center gap-2 mt-1 flex-wrap">
                     <span className="text-[9px] font-black text-rose-600 uppercase bg-rose-50 px-2 py-0.5 rounded-lg">{c.diasSemCompra} dias</span>
                     <span className="text-[9px] text-gray-400 font-bold uppercase truncate">Ult: {new Date(c.dataUltimaVenda).toLocaleDateString()}</span>
-                    {formatLastSaleDate(c.id) && (
-                      <span className="text-[9px] text-gray-300 font-medium uppercase tracking-wider bg-gray-100 px-2 py-0.5 rounded">
-                        Últ: {formatLastSaleDate(c.id)}
+                    {lastDate && (
+                      <span className="text-[9px] text-indigo-600 font-black uppercase bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100">
+                        <i className="fa-solid fa-clock mr-1 text-[7px]"></i>Últ: {lastDate}
                       </span>
                     )}
                   </div>
@@ -694,7 +698,9 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                   </button>
                   {isOpen && (
                     <div className="p-4 bg-white space-y-2 border-t border-indigo-50">
-                      {clientsInDay.map(c => (
+                      {clientsInDay.map(c => {
+                        const lastDate = formatLastSaleDate(c.id);
+                        return (
                         <div key={c.id} className="p-3 bg-gray-50 rounded-2xl flex items-center justify-between group">
                           <div className="flex flex-col gap-1 mr-3">
                             {/* USA moveClientInDay PARA REORDENAR DENTRO DO DIA */}
@@ -703,11 +709,12 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                           </div>
                           <div className="flex-1 cursor-pointer min-w-0" onClick={() => setViewingClientHistory(c)}>
                             <p className="font-bold text-gray-800 text-xs uppercase truncate">{c.nomeFantasia}</p>
-                            <div className="flex items-center gap-2 mt-0.5">
-                              <p className="text-[9px] text-gray-400 font-bold">{c.bairro || 'Sem Bairro'}</p>
-                              {formatLastSaleDate(c.id) && (
-                                <span className="text-[9px] text-gray-300 font-medium uppercase tracking-wider bg-gray-100 px-2 py-0.5 rounded">
-                                  Últ: {formatLastSaleDate(c.id)}
+                            <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                              <p className="text-[9px] text-gray-400 font-bold whitespace-nowrap">{c.bairro || 'Sem Bairro'}</p>
+                              {lastDate && (
+                                <span className="text-[9px] text-indigo-600 font-black bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100 whitespace-nowrap flex items-center gap-1">
+                                  <i className="fa-solid fa-clock text-[7px]"></i>
+                                  <span>Últ: {lastDate}</span>
                                 </span>
                               )}
                             </div>
@@ -717,7 +724,8 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                             <button onClick={(e)=>{e.stopPropagation(); handleOpenEditClient(c);}} className="w-8 h-8 bg-blue-50 text-blue-600 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-pencil-alt text-xs"></i></button>
                           </div>
                         </div>
-                      ))}
+                      );
+                      })}
                     </div>
                   )}
                 </div>

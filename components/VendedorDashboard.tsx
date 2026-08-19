@@ -332,7 +332,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
   // NOVO: Mover cliente DENTRO DO DIA (para aba ROTEIRO SEMANAL)
   const moveClientInDay = (clientId: string, dir: 'UP' | 'DOWN', day: number) => {
-    // Pega todos os clientes do vendedor ordenados pela ordem global atual
     const allClientsSorted = [...clients].sort((a, b) => {
       const orderMap = new Map(clientOrder.map((id, idx) => [id, idx]));
       const idxA = orderMap.get(a.id) ?? (a.ordem || 0);
@@ -340,32 +339,25 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       return idxA - idxB;
     });
 
-    // Filtra apenas os clientes do dia específico
     const dayClients = allClientsSorted.filter(c => c.diaRoteiro === day && c.ativo && c.rota === (user.rota || 'ROTA_01'));
     const dayClientIds = dayClients.map(c => c.id);
     
     const idx = dayClientIds.indexOf(clientId);
     if (idx === -1) return;
 
-    // Reordena apenas dentro do dia
     newDayOrder = [...dayClientIds];
     if (dir === 'UP' && idx > 0) [newDayOrder[idx], newDayOrder[idx-1]] = [newDayOrder[idx-1], newDayOrder[idx]];
     else if (dir === 'DOWN' && idx < newDayOrder.length - 1) [newDayOrder[idx], newDayOrder[idx+1]] = [newDayOrder[idx+1], newDayOrder[idx]];
 
-    // Reconstrói a ordem global mantendo clientes de outros dias nas mesmas posições relativas
-    // e inserindo os clientes do dia na nova ordem
     const otherDayClients = allClientsSorted.filter(c => c.diaRoteiro !== day);
     const otherDayIds = otherDayClients.map(c => c.id);
     
-    // Encontra a posição do primeiro cliente do dia na lista global original
     const firstDayClientGlobalIdx = allClientsSorted.findIndex(c => c.diaRoteiro === day);
     
     let newGlobalOrder: string[];
     if (firstDayClientGlobalIdx === -1) {
-      // Não havia clientes neste dia, adiciona no final
       newGlobalOrder = [...otherDayIds, ...newDayOrder];
     } else {
-      // Insere os clientes do dia na posição do primeiro cliente do dia
       newGlobalOrder = [
         ...otherDayIds.slice(0, firstDayClientGlobalIdx),
         ...newDayOrder,
@@ -643,7 +635,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         <div className="space-y-4">
           <header className="px-1 flex justify-between items-center"><h2 className="text-xs font-black text-gray-400 uppercase tracking-wider">Meus Clientes</h2><button onClick={() => handleOpenEditClient('NEW')} className="bg-green-600 text-white px-4 py-2 rounded-xl font-black text-xs uppercase shadow-md active:scale-95"><i className="fa-solid fa-user-plus mr-2"></i>Novo</button></header>
           
-          {/* Clientes ordenados pela clientOrder global */}
           <div className="grid gap-3 px-1">
             {clients
               .filter(c => c.rota === (user.rota || 'ROTA_01'))
@@ -710,7 +701,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                       {clientsInDay.map(c => (
                         <div key={c.id} className="p-3 bg-gray-50 rounded-2xl flex items-center justify-between group">
                           <div className="flex flex-col gap-1 mr-3">
-                            {/* USA moveClientInDay PARA REORDENAR DENTRO DO DIA */}
                             <button onClick={(e)=>{e.stopPropagation(); moveClientInDay(c.id, 'UP', dia);}} className="w-7 h-7 bg-white border text-gray-400 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-chevron-up text-[10px]"></i></button>
                             <button onClick={(e)=>{e.stopPropagation(); moveClientInDay(c.id, 'DOWN', dia);}} className="w-7 h-7 bg-white border text-gray-400 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-chevron-down text-[10px]"></i></button>
                           </div>

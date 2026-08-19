@@ -614,9 +614,9 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
             const isVisited = (isSold || isSkipped) && !reopenedClientIds.includes(c.id);
             return (
               <div key={c.id} className={`p-4 rounded-3xl border flex items-center justify-between transition-all ${isVisited ? 'bg-gray-100 border-gray-200 grayscale opacity-60' : 'bg-white border-gray-100 shadow-sm'}`}>
-                {/* LADO ESQUERDO: NOME + BAIRRO */}
+                {/* LADO ESQUERDO: NOME COMPLETO (SEM TRUNCATE) + BAIRRO */}
                 <div className="flex-1 min-w-0 cursor-pointer pr-4" onClick={() => setViewingClientHistory(c)}>
-                  <p className="font-bold text-gray-800 leading-tight uppercase truncate">{c.nomeFantasia ?? 'Cliente'}</p>
+                  <p className="font-bold text-gray-800 leading-tight uppercase">{c.nomeFantasia ?? 'Cliente'}</p>
                   <p className="text-[10px] text-gray-400 uppercase font-semibold mt-1">
                     <i className="fa-solid fa-location-dot mr-1"></i> {(c.bairro || 'S/B')}
                   </p>
@@ -769,7 +769,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
       {activeTab === 'HISTORY' && (
         <div className="space-y-4">
-          <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner">{(['DIA', 'SEMANA', 'MES', 'GERAL'] as const).map(f => (<button key={f} onClick={() => setHistoryFilter(f)} className={`flex-1 py-2 rounded-xl text-[9px] font-black uppercase ${historyFilter === f ? 'bg-white text-[#1E3A5F] shadow-sm' : 'text-gray-400'}`}>{f}</button>))}</div>
+          <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow_inner">{(['DIA', 'SEMANA', 'MES', 'GERAL'] as const).map(f => (<button key={f} onClick={() => setHistoryFilter(f)} className={`flex-1 py-2 rounded-xl text-[9px] font-black uppercase ${historyFilter === f ? 'bg-white text-[#1E3A5F] shadow-sm' : 'text-gray-400'}`}>{f}</button>))}</div>
           <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-md flex flex-col gap-4">
              <div className="flex justify-between items-center border-b border-gray-100 pb-3"><span className="text-xs font-black text-gray-400 uppercase">Total Geral</span><span className="text-2xl font-black text-gray-900">R$ {historySummary.total.toFixed(2)}</span></div>
              <div className="grid grid-cols-3 gap-3">

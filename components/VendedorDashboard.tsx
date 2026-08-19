@@ -609,6 +609,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
             const isSold = (sales || []).some(s => s.clientId === c.id && isSameDay(s.data));
             const isSkipped = (dailyRouteState?.skippedClientIds || []).includes(c.id);
             const isVisited = (isSold || isSkipped) && !reopenedClientIds.includes(c.id);
+            const lastDate = formatLastSaleDate(c.id);
             return (
               <div key={c.id} className={`p-4 rounded-3xl border flex flex-col transition-all ${isVisited ? 'bg-gray-100 border-gray-200 grayscale opacity-60' : 'bg-white border-gray-100 shadow-sm'}`}>
                 <div className="flex justify-between items-center">
@@ -616,7 +617,14 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                     <div className="flex items-center gap-2">
                       <p className="font-bold text-gray-800 leading-tight uppercase">{c.nomeFantasia ?? 'Cliente'}</p>
                     </div>
-                    <p className="text-[10px] text-gray-400 mt-1 uppercase font-semibold"><i className="fa-solid fa-location-dot mr-1"></i> {(c.bairro || 'S/B')}</p>
+                    <p className="text-[10px] text-gray-400 mt-1 uppercase font-semibold flex items-center gap-2 flex-wrap">
+                      <i className="fa-solid fa-location-dot mr-1"></i> {(c.bairro || 'S/B')}
+                      {lastDate && (
+                        <span className="text-[9px] text-gray-300 font-medium uppercase">
+                          Últ: {lastDate}
+                        </span>
+                      )}
+                    </p>
                   </div>
                   {!isVisited ? (
                     <div className="flex gap-2">
@@ -699,9 +707,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                   </button>
                   {isOpen && (
                     <div className="p-4 bg-white space-y-2 border-t border-indigo-50">
-                      {clientsInDay.map(c => {
-                        const lastDate = formatLastSaleDate(c.id);
-                        return (
+                      {clientsInDay.map(c => (
                         <div key={c.id} className="p-3 bg-gray-50 rounded-2xl flex items-center justify-between group">
                           <div className="flex flex-col gap-1 mr-3">
                             {/* USA moveClientInDay PARA REORDENAR DENTRO DO DIA */}
@@ -710,23 +716,14 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                           </div>
                           <div className="flex-1 cursor-pointer min-w-0" onClick={() => setViewingClientHistory(c)}>
                             <p className="font-bold text-gray-800 text-xs uppercase truncate">{c.nomeFantasia}</p>
-                            <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                              <p className="text-[9px] text-gray-400 font-bold whitespace-nowrap">{c.bairro || 'Sem Bairro'}</p>
-                              {lastDate && (
-                                <span className="text-[9px] text-indigo-600 font-black bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100 whitespace-nowrap flex items-center gap-1">
-                                  <i className="fa-solid fa-clock text-[7px]"></i>
-                                  <span>Últ: {lastDate}</span>
-                                </span>
-                              )}
-                            </div>
+                            <p className="text-[9px] text-gray-400 font-bold mt-0.5">{c.bairro || 'Sem Bairro'}</p>
                           </div>
                           <div className="flex items-center gap-2">
                             <button onClick={() => handleAddToTodayRoute(c.id)} className="w-8 h-8 bg-indigo-100 text-indigo-600 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-plus text-xs"></i></button>
                             <button onClick={(e)=>{e.stopPropagation(); handleOpenEditClient(c);}} className="w-8 h-8 bg-blue-50 text-blue-600 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-pencil-alt text-xs"></i></button>
                           </div>
                         </div>
-                      );
-                      })}
+                      ))}
                     </div>
                   )}
                 </div>

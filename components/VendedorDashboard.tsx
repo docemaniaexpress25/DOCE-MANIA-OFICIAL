@@ -607,31 +607,25 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 <div className="flex justify-between items-start">
                   <div className="flex-1 cursor-pointer min-w-0" onClick={() => setViewingClientHistory(c)}>
                     <div className="flex items-center gap-2 mb-1">
-                      <p className="font-bold text-gray-800 leading-tight uppercase truncate">{c.nomeFantasia ?? 'Cliente'}</p>
+                      {/* NOME COMPLETO - SEM TRUNCATE */}
+                      <p className="font-bold text-gray-800 leading-tight uppercase">{c.nomeFantasia ?? 'Cliente'}</p>
                     </div>
-                    <p className="text-[10px] text-gray-400 uppercase font-semibold">
-                      <i className="fa-solid fa-location-dot mr-1"></i> {(c.bairro || 'S/B')}
-                    </p>
-                  </div>
-                  {/* DATA DO ÚLTIMO PEDIDO NO LADO DIREITO - ONDE ESTÁ O RETÂNGULO PRETO */}
-                  {lastDate && !isVisited && (
-                    <div className="flex flex-col items-end gap-1 mr-3">
-                      <span className="text-[10px] font-black text-blue-600 bg-blue-50 px-2 py-1 rounded-lg border border-blue-100 whitespace-nowrap">
-                        Últ: {lastDate}
-                      </span>
-                    </div>
-                  )}
-                  {!isVisited ? (
-                    <div className="flex flex-col items-end gap-2">
+                    {/* ABAIXO DO NOME: BAIRRO + DATA ÚLTIMO PEDIDO */}
+                    <div className="flex items-center gap-2 flex-wrap text-[10px] text-gray-400 uppercase font-semibold">
+                      <i className="fa-solid fa-location-dot mr-1"></i> 
+                      <span>{c.bairro || 'S/B'}</span>
                       {lastDate && (
-                        <span className="text-[10px] font-black text-blue-600 bg-blue-50 px-2 py-1 rounded-lg border border-blue-100 whitespace-nowrap">
-                          Últ: {lastDate}
+                        <span className="text-gray-300 font-medium">
+                          • Últ: {lastDate}
                         </span>
                       )}
-                      <div className="flex gap-2">
-                        <button onClick={() => setConfirmSkipId(c.id)} className="w-10 h-10 bg-gray-50 text-gray-400 rounded-2xl flex items-center justify-center"><i className="fa-solid fa-forward"></i></button>
-                        <button onClick={() => setSelectedClient(c)} className="bg-blue-600 text-white px-4 py-2 rounded-2xl font-black text-xs uppercase shadow-lg">Atender</button>
-                      </div>
+                    </div>
+                  </div>
+                  {/* LADO DIREITO: APENAS BOTÕES - SEM DATA */}
+                  {!isVisited ? (
+                    <div className="flex gap-2">
+                      <button onClick={() => setConfirmSkipId(c.id)} className="w-10 h-10 bg-gray-50 text-gray-400 rounded-2xl flex items-center justify-center"><i className="fa-solid fa-forward"></i></button>
+                      <button onClick={() => setSelectedClient(c)} className="bg-blue-600 text-white px-4 py-2 rounded-2xl font-black text-xs uppercase shadow-lg">Atender</button>
                     </div>
                   ) : (
                     <button onClick={() => handleReopenClient(c.id)} className="bg-white text-blue-600 border border-blue-200 px-3 py-1.5 rounded-xl text-[9px] font-black uppercase">Reabrir</button>

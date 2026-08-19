@@ -557,37 +557,38 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
             {atRiskClients.map(c => {
               const lastDate = formatLastSaleDate(c.id);
               return (
-              <div key={c.id} className="bg-white p-4 rounded-3xl border border-rose-50 shadow-sm flex items-center justify-between transition-all group">
-                <div className="flex-1 min-w-0 pr-3">
-                  <h4 className="font-black text-gray-800 text-xs uppercase truncate">{c.nomeFantasia}</h4>
-                  <div className="flex items-center gap-2 mt-1 flex-wrap">
-                    <span className="text-[9px] font-black text-rose-600 uppercase bg-rose-50 px-2 py-0.5 rounded-lg">{c.diasSemCompra} dias</span>
-                    <span className="text-[9px] text-gray-400 font-bold uppercase truncate">Ult: {new Date(c.dataUltimaVenda).toLocaleDateString()}</span>
-                    {lastDate && (
-                      <span className="text-[9px] text-indigo-600 font-black uppercase bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100">
-                        <i className="fa-solid fa-clock mr-1 text-[7px]"></i>Últ: {lastDate}
-                      </span>
-                    )}
+                <div key={c.id} className="bg-white p-4 rounded-3xl border border-rose-50 shadow-sm flex items-center justify-between transition-all group">
+                  <div className="flex-1 min-w-0 pr-3">
+                    <h4 className="font-black text-gray-800 text-xs uppercase truncate">{c.nomeFantasia}</h4>
+                    <div className="flex items-center gap-2 mt-1 flex-wrap">
+                      <span className="text-[9px] font-black text-rose-600 uppercase bg-rose-50 px-2 py-0.5 rounded-lg">{c.diasSemCompra} dias</span>
+                      <span className="text-[9px] text-gray-400 font-bold uppercase truncate">Ult: {new Date(c.dataUltimaVenda).toLocaleDateString()}</span>
+                      {lastDate && (
+                        <span className="text-[9px] text-indigo-600 font-black uppercase bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100">
+                          <i className="fa-solid fa-clock mr-1 text-[7px]"></i>Últ: {lastDate}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={() => handleDismissRisk(c.id)}
+                      className="bg-emerald-50 text-emerald-600 w-10 h-10 rounded-2xl flex items-center justify-center border border-emerald-100 active:scale-90 transition-all"
+                      title="Marcar como visto"
+                    >
+                      <i className="fa-solid fa-check"></i>
+                    </button>
+                    <button 
+                      onClick={() => handleAddToTodayRoute(c.id)}
+                      className="bg-blue-600 text-white w-10 h-10 rounded-2xl flex items-center justify-center shadow-lg active:scale-90 transition-all"
+                      title="Puxar p/ hoje"
+                    >
+                      <i className="fa-solid fa-plus"></i>
+                    </button>
                   </div>
                 </div>
-                <div className="flex gap-2">
-                  <button 
-                    onClick={() => handleDismissRisk(c.id)}
-                    className="bg-emerald-50 text-emerald-600 w-10 h-10 rounded-2xl flex items-center justify-center border border-emerald-100 active:scale-90 transition-all"
-                    title="Marcar como visto"
-                  >
-                    <i className="fa-solid fa-check"></i>
-                  </button>
-                  <button 
-                    onClick={() => handleAddToTodayRoute(c.id)}
-                    className="bg-blue-600 text-white w-10 h-10 rounded-2xl flex items-center justify-center shadow-lg active:scale-90 transition-all"
-                    title="Puxar p/ hoje"
-                  >
-                    <i className="fa-solid fa-plus"></i>
-                  </button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
             {atRiskClients.length === 0 && (
               <div className="text-center py-20 opacity-30 flex flex-col items-center gap-4">
                 <i className="fa-solid fa-circle-check text-5xl"></i>

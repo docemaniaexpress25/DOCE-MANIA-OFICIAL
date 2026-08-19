@@ -299,7 +299,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     }
   };
 
-  // NOVO: Mover cliente na ordem global
+  // Mover cliente na ordem GLOBAL (para aba CLIENTES)
   const moveClient = (id: string, dir: 'UP' | 'DOWN') => {
     const currentOrder = clientOrder.length > 0 ? clientOrder : clients.map(c => c.id);
     const idx = currentOrder.indexOf(id);
@@ -309,6 +309,53 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     else if (dir === 'DOWN' && idx < newOrder.length - 1) [newOrder[idx], newOrder[idx+1]] = [newOrder[idx+1], newOrder[idx]];
     setClientOrder(newOrder);
     showToast("Ordem do cliente atualizada!");
+  };
+
+  // NOVO: Mover cliente DENTRO DO DIA (para aba ROTEIRO SEMANAL)
+  const moveClientInDay = (clientId: string, dir: 'UP' | 'DOWN', day: number) => {
+    // Pega todos os clientes do vendedor ordenados pela ordem global atual
+    const allClientsSorted = [...clients].sort((a, b) => {
+      const orderMap = new Map(clientOrder.map((id, idx) => [id, idx]));
+      const idxA = orderMap.get(a.id) ?? (a.ordem || 0);
+      const idxB = orderMap.get(b.id) ?? (b.ordem || 0);
+      return idxA - idxB;
+    });
+
+    // Filtra apenas os clientes do dia específico
+    const dayClients = allClientsSorted.filter(c => c.diaRoteiro === day && c.ativo && c.rota === (user.rota || 'ROTA_01'));
+    const dayClientIds = dayClients.map(c => c.id);
+    
+    const idx = dayClientIds.indexOf(clientId);
+    if (idx === -1) return;
+
+    // Reordena apenas dentro do dia
+    const newDayOrder = [...dayClientIds];
+    if (dir === 'UP' && idx > 0) [newDayOrder[idx], newDayOrder[idx-1]] = [newDayOrder[idx-1], newDayOrder[idx]];
+    else if (dir === 'DOWN' && idx < newDayOrder.length - 1) [newDayOrder[idx], newDayOrder[idx+1]] = [newDayOrder[idx+1], newDayOrder[idx]];
+
+    // Reconstrói a ordem global mantendo clientes de outros dias nas mesmas posições relativas
+    // e inserindo os clientes do dia na nova ordem
+    const otherDayClients = allClientsSorted.filter(c => c.diaRoteiro !== day);
+    const otherDayIds = otherDayClients.map(c => c.id);
+    
+    // Encontra a posição do primeiro cliente do dia na lista global original
+    const firstDayClientGlobalIdx = allClientsSorted.findIndex(c => c.diaRoteiro === day);
+    
+    let newGlobalOrder: string[];
+    if (firstDayClientGlobalIdx === -1) {
+      // Não havia clientes neste dia, adiciona no final
+      newGlobalOrder = [...otherDayIds, ...newDayOrder];
+    } else {
+      // Insere os clientes do dia na posição do primeiro cliente do dia
+      newGlobalOrder = [
+        ...otherDayIds.slice(0, firstDayClientGlobalIdx),
+        ...newDayOrder,
+        ...otherDayIds.slice(firstDayClientGlobalIdx)
+      ];
+    }
+
+    setClientOrder(newGlobalOrder);
+    showToast("Ordem do dia atualizada!");
   };
 
   // NOVO: Mover cliente para outro dia
@@ -631,8 +678,9 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                       {clientsInDay.map(c => (
                         <div key={c.id} className="p-3 bg-gray-50 rounded-2xl flex items-center justify-between group">
                           <div className="flex flex-col gap-1 mr-3">
-                            <button onClick={(e)=>{e.stopPropagation(); moveClient(c.id, 'UP');}} className="w-7 h-7 bg-white border text-gray-400 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-chevron-up text-[10px]"></i></button>
-                            <button onClick={(e)=>{e.stopPropagation(); moveClient(c.id, 'DOWN');}} className="w-7 h-7 bg-white border text-gray-400 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-chevron-down text-[10px]"></i></button>
+                            {/* USA moveClientInDay PARA REORDENAR DENTRO DO DIA */}
+                            <button onClick={(e)=>{e.stopPropagation(); moveClientInDay(c.id, 'UP', dia);}} className="w-7 h-7 bg-white border text-gray-400 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-chevron-up text-[10px]"></i></button>
+                            <button onClick={(e)=>{e.stopPropagation(); moveClientInDay(c.id, 'DOWN', dia);}} className="w-7 h-7 bg-white border text-gray-400 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-chevron-down text-[10px]"></i></button>
                           </div>
                           <div className="flex-1 cursor-pointer" onClick={() => setViewingClientHistory(c)}><p className="font-bold text-gray-800 text-xs uppercase">{c.nomeFantasia}</p><p className="text-[9px] text-gray-400 font-bold mt-0.5">{c.bairro || 'Sem Bairro'}</p></div>
                           <div className="flex items-center gap-2">

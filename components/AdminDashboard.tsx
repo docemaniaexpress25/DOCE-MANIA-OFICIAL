@@ -75,6 +75,8 @@ interface AdminDashboardProps {
 
 type TabType = 'HOME' | 'CATALOGO' | 'CATEGORIAS' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'SETTINGS';
 
+type ReportType = 'RESUMO' | 'TOP_CLIENTES' | 'TOP_PRODUTOS' | 'CLIENTES_RISCO' | 'VENDAS_CATEGORIAS' | null;
+
 const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [activeTab, setActiveTab] = useState<TabType>(() => loadLocalState('admin_activeTab', 'HOME'));
   const [selectedSale, setSelectedSale] = useState<Sale | null>(() => loadLocalState('admin_selectedSale', null));
@@ -82,6 +84,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [filterOverdueOnly, setFilterOverdueOnly] = useState(false);
   const [routeFilter, setRouteFilter] = useState<string>('TODOS');
   const [creditTypeFilter, setCreditTypeFilter] = useState<'TODOS' | 'COMUM' | 'CHEQUE' | 'BOLETO'>('TODOS');
+
+  // NOVO: Estado para relatórios individuais
+  const [activeReport, setActiveReport] = useState<ReportType>(null);
 
   useEffect(() => { saveLocalState('admin_activeTab', activeTab); }, [activeTab]);
   useEffect(() => { saveLocalState('admin_selectedSale', selectedSale); }, [selectedSale]);
@@ -130,7 +135,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
   const [pForm, setPForm] = useState({ nome: '', custo: '', venda: '', comissao: '', margem: '', ativo: true, estoquePrincipal: '', categoryId: '', subcategoryId: '', precoMinimo: '' });
   const [clientForm, setClientForm] = useState<Partial<Client>>({ nomeFantasia: '', telefone: '', endereco: '', bairro: '', diaRoteiro: 1, ativo: true, ativarCnpj: false, cnpj: '', pinLocalizacao: '', ordem: 0, rota: 'ROTA_01' });
-  const [userForm, setUserForm] = useState<Partial<User>>({ nome: '', foto: '', telefone: '', pin: '', placaVeiculo: '', rota: 'ROTA_01' });
+  const [userForm, setUserForm] = useState<Partial<User>>({ nome: '', telefone: '', foto: '', pin: '', placaVeiculo: '', rota: 'ROTA_01' });
   const [selectedVendedorId, setSelectedVendedorId] = useState('');
   const [stagingCarga, setStagingCarga] = useState<{ [pId: string]: number }>({});
 
@@ -229,6 +234,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     return { vendasHoje: Number(vendasHoje.toFixed(2)), comissaoGerada: Number(comissaoGerada.toFixed(2)), comissaoDisponivel: Number(disponivel.toFixed(2)), comissaoAReceber: Number(aReceber.toFixed(2)) };
   };
 
+  // ============================================================
+  // RELATÓRIOS MEMOIZADOS
+  // ============================================================
   const reportStats = useMemo(() => {
     const salesInPeriod = props.sales.filter(s => filterByPeriod(s.data, periodoRelatorio));
     const totalVendas = salesInPeriod.reduce((acc, curr) => acc + (curr.valorTotal ?? 0), 0);
@@ -271,6 +279,56 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
     return { totalVendas: Number(totalVendas.toFixed(2)), totalComissaoPaga: Number(paidCommissions.toFixed(2)), topClients, topProducts, atRisk };
   }, [props.sales, props.payoutLogs, props.clients, props.products, props.users, periodoRelatorio]);
+
+  // NOVO: Relatório de Vendas por Categorias/Subcategorias
+  const vendasPorCategoria = useMemo(() => {
+    const salesInPeriod = props.sales.filter(s => filterByPeriod(s.data, periodoRelatorio));
+    
+    // Mapa para acumular vendas por categoria
+    const catMap: { [catId: string]: { 
+      categoria: string; 
+      total: number; 
+      qtd: number; 
+      subcategorias: { [subId: string]: { subcategoria: string; total: number; qtd: number } } 
+    } } = {};
+
+    salesInPeriod.forEach(sale => {
+      sale.itens.forEach(item => {
+        const product = props.products.find(p => p.id === item.produtoId);
+        if (!product) return;
+
+        const catId = product.categoryId || 'SEM_CATEGORIA';
+        const catName = catId === 'SEM_CATEGORIA' ? 'Sem Categoria' : (props.categories.find(c => c.id === catId)?.name || 'Desconhecida');
+        
+        const subId = product.subcategoryId || 'SEM_SUBCATEGORIA';
+        const subName = subId === 'SEM_SUBCATEGORIA' ? 'Sem Subcategoria' : (props.subcategories.find(s => s.id === subId)?.name || 'Desconhecida');
+
+        const itemTotal = (item.quantidade || 0) * (item.precoVenda || 0);
+        const itemQty = item.quantidade || 0;
+
+        if (!catMap[catId]) {
+          catMap[catId] = { categoria: catName, total: 0, qtd: 0, subcategorias: {} };
+        }
+        catMap[catId].total += itemTotal;
+        catMap[catId].qtd += itemQty;
+
+        if (!catMap[catId].subcategorias[subId]) {
+          catMap[catId].subcategorias[subId] = { subcategoria: subName, total: 0, qtd: 0 };
+        }
+        catMap[catId].subcategorias[subId].total += itemTotal;
+        catMap[catId].subcategorias[subId].qtd += itemQty;
+      });
+    });
+
+    // Converter para array ordenado por total decrescente
+    return Object.values(catMap)
+      .map(cat => ({
+        ...cat,
+        subcategorias: Object.values(cat.subcategorias)
+          .sort((a, b) => b.total - a.total)
+      }))
+      .sort((a, b) => b.total - a.total);
+  }, [props.sales, props.products, props.categories, props.subcategories, periodoRelatorio]);
 
   const handleOpenPayout = (v: User) => {
     setPayoutVendedor(v);
@@ -336,7 +394,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     showToast("Ordem atualizada!");
   };
 
-  // NOVO: Função para mover cliente na ordem global
   const moveClient = (id: string, dir: 'UP' | 'DOWN') => {
     const currentOrder = props.clientOrder.length > 0 ? props.clientOrder : props.clients.map(c => c.id);
     const idx = currentOrder.indexOf(id);
@@ -348,7 +405,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     showToast("Ordem do cliente atualizada!");
   };
 
-  // NOVO: Mover cliente para outro dia
   const moveClientToDay = (clientId: string, newDay: number) => {
     const client = props.clients.find(c => c.id === clientId);
     if (!client) return;
@@ -622,7 +678,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       return matchesSearch && matchesRoute;
     });
     
-    // Aplicar ordenação customizada
     if (props.clientOrder.length > 0) {
       const orderMap = new Map(props.clientOrder.map((id, idx) => [id, idx]));
       clients.sort((a, b) => {
@@ -641,6 +696,179 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     if (window.confirm("Deseja marcar TODOS os produtos inativos como ATIVOS agora?")) props.activateAllProducts?.();
   };
 
+  // Helper para renderizar cards de relatório
+  const ReportCard = ({ icon, title, color, reportType, description }: { icon: string; title: string; color: string; reportType: ReportType; description: string }) => {
+    const isActive = activeReport === reportType;
+    return (
+      <button 
+        onClick={() => setActiveReport(isActive ? null : reportType)}
+        className={`w-full p-5 rounded-2xl border-2 transition-all text-left ${
+          isActive 
+            ? `border-${color}-500 bg-${color}-50 shadow-lg` 
+            : 'border-gray-100 hover:border-gray-200 hover:bg-gray-50'
+        }`}
+      >
+        <div className="flex items-start gap-4">
+          <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${isActive ? `bg-${color}-600 text-white` : `bg-${color}-100 text-${color}-600`}`}>
+            <i className={`fa-solid ${icon} ${isActive ? 'text-xl' : 'text-lg'}`}></i>
+          </div>
+          <div className="flex-1">
+            <h4 className={`font-black text-gray-800 ${isActive ? 'text-lg' : 'text-base'}`}>{title}</h4>
+            <p className={`text-gray-500 text-sm mt-1 ${isActive ? 'font-medium' : ''}`}>{description}</p>
+          </div>
+          <div className={`w-8 h-8 rounded-full flex items-center justify-center transition-transform ${isActive ? `bg-${color}-600 text-white rotate-180` : 'bg-gray-100 text-gray-400'}`}>
+            <i className="fa-solid fa-chevron-down text-xs"></i>
+          </div>
+        </div>
+      </button>
+    );
+  };
+
+  // Render do conteúdo do relatório ativo
+  const renderActiveReport = () => {
+    switch (activeReport) {
+      case 'RESUMO':
+        return (
+          <div className="space-y-6 animate-in fade-in duration-300">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col items-center text-center">
+                <p className="text-[9px] font-black uppercase text-gray-400 mb-1">Faturamento no Período</p>
+                <h2 className="text-2xl font-black text-blue-600">R$ {reportStats.totalVendas.toFixed(2)}</h2>
+                <p className="text-[10px] text-gray-400 mt-1">Período: {periodoRelatorio}</p>
+              </div>
+              <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col items-center text-center">
+                <p className="text-[9px] font-black uppercase text-gray-400 mb-1">Comissões Pagas</p>
+                <h2 className="text-2xl font-black text-emerald-600">R$ {reportStats.totalComissaoPaga.toFixed(2)}</h2>
+                <p className="text-[10px] text-gray-400 mt-1">Período: {periodoRelatorio}</p>
+              </div>
+            </div>
+            
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
+              <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider mb-4 flex items-center gap-2">
+                <i className="fa-solid fa-boxes-stacked text-blue-600"></i> Produtos Mais Vendidos
+              </h3>
+              <div className="divide-y divide-gray-50">
+                {reportStats.topProducts.map((p, i) => (
+                  <div key={p.id} className="py-3 flex justify-between items-center">
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs font-black text-gray-300">#{i+1}</span>
+                      <span className="text-xs font-bold text-gray-700 uppercase truncate max-w-[150px]">{p.nome}</span>
+                    </div>
+                    <span className="text-xs font-black text-blue-600 bg-blue-50 px-2 py-1 rounded-lg">{p.qtd} un</span>
+                  </div>
+                ))}
+                {reportStats.topProducts.length === 0 && <p className="text-center py-4 text-gray-400 text-sm">Nenhum produto vendido no período</p>}
+              </div>
+            </div>
+          </div>
+        );
+
+      case 'TOP_CLIENTES':
+        return (
+          <div className="space-y-4 animate-in fade-in duration-300">
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
+              <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider mb-4 flex items-center gap-2">
+                <i className="fa-solid fa-star text-yellow-500"></i> Top 10 Clientes (Volume R$)
+              </h3>
+              <div className="divide-y divide-gray-50">
+                {reportStats.topClients.map((c, i) => (
+                  <div key={c.id} className="py-3 flex justify-between items-center">
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs font-black text-gray-300">#{i+1}</span>
+                      <span className="text-xs font-bold text-gray-700 uppercase truncate max-w-[150px]">{c.nome}</span>
+                    </div>
+                    <span className="text-xs font-black text-gray-900">R$ {c.total.toFixed(2)}</span>
+                  </div>
+                ))}
+                {reportStats.topClients.length === 0 && <p className="text-center py-4 text-gray-400 text-sm">Nenhum cliente no período</p>}
+              </div>
+            </div>
+          </div>
+        );
+
+      case 'CLIENTES_RISCO':
+        return (
+          <div className="space-y-4 animate-in fade-in duration-300">
+            <div className="bg-rose-600 p-6 rounded-[2.5rem] shadow-xl text-white">
+              <h3 className="font-black uppercase text-xs tracking-widest mb-4 flex items-center gap-2">
+                <i className="fa-solid fa-triangle-exclamation text-yellow-400"></i> Clientes em Risco (Ausentes 25d+)
+              </h3>
+              <div className="space-y-3">
+                {reportStats.atRisk.map((c, i) => (
+                  <div key={c.id} className="flex justify-between items-center bg-white/10 p-4 rounded-2xl border border-white/10 backdrop-blur-sm">
+                    <div className="flex-1 pr-3">
+                      <p className="text-[11px] font-black uppercase leading-tight">{c.nome}</p>
+                      <p className="text-[9px] font-bold opacity-60 mt-1 uppercase">Vendedor: {c.seller}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-sm font-black text-yellow-400">{c.dias} dias</p>
+                      <p className="text-[8px] font-bold opacity-40 uppercase">Sem compra</p>
+                    </div>
+                  </div>
+                ))}
+                {reportStats.atRisk.length === 0 && (
+                  <p className="text-center py-4 text-[10px] font-black opacity-40 uppercase">Nenhum cliente em alerta no momento.</p>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+
+      case 'VENDAS_CATEGORIAS':
+        return (
+          <div className="space-y-4 animate-in fade-in duration-300">
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
+              <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider mb-4 flex items-center gap-2">
+                <i className="fa-solid fa-layer-group text-indigo-600"></i> Vendas por Categorias e Subcategorias
+              </h3>
+              <p className="text-[10px] text-gray-400 mb-4">Período: {periodoRelatorio}</p>
+              
+              {vendasPorCategoria.length === 0 ? (
+                <p className="text-center py-8 text-gray-400 text-sm">Nenhuma venda no período selecionado</p>
+              ) : (
+                <div className="space-y-4">
+                  {vendasPorCategoria.map((cat, catIndex) => (
+                    <div key={cat.categoria} className="border border-gray-100 rounded-2xl overflow-hidden">
+                      {/* Header da Categoria */}
+                      <div className="bg-indigo-50 px-4 py-3 flex justify-between items-center border-b border-gray-100">
+                        <div className="flex items-center gap-3">
+                          <span className="w-6 h-6 bg-indigo-600 text-white rounded-full flex items-center justify-center text-xs font-black">{catIndex + 1}</span>
+                          <span className="font-black text-indigo-700 uppercase text-sm">{cat.categoria}</span>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-sm font-black text-indigo-700">R$ {cat.total.toFixed(2)}</p>
+                          <p className="text-[9px] font-bold text-indigo-400 uppercase">{cat.qtd} un</p>
+                        </div>
+                      </div>
+                      
+                      {/* Subcategorias */}
+                      <div className="p-2 space-y-2">
+                        {Object.entries(cat.subcategorias).map(([subId, sub]) => (
+                          <div key={subId} className="bg-white p-3 rounded-xl border border-gray-50 flex justify-between items-center">
+                            <div className="flex items-center gap-2">
+                              <i className="fa-solid fa-circle text-[6px] text-gray-300"></i>
+                              <span className="text-xs font-semibold text-gray-600 uppercase">{sub.subcategoria}</span>
+                            </div>
+                            <div className="text-right">
+                              <p className="text-xs font-black text-gray-800">R$ {sub.total.toFixed(2)}</p>
+                              <p className="text-[8px] font-bold text-gray-400 uppercase">{sub.qtd} un</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+
+      default:
+        return null;
+    }
+  };
+
   return (
     <div className="space-y-6 pb-10">
       {toast && (
@@ -651,7 +879,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         </div>
       )}
 
-      {activeTab !== 'HOME' && <button onClick={() => { setActiveTab('HOME'); setSearch(''); }} className="w-10 h-10 bg-white text-blue-600 rounded-xl flex items-center justify-center shadow-sm border border-gray-100 mb-2 active:scale-90 transition-transform"><i className="fa-solid fa-arrow-left"></i></button>}
+      {activeTab !== 'HOME' && <button onClick={() => { setActiveTab('HOME'); setSearch(''); setActiveReport(null); }} className="w-10 h-10 bg-white text-blue-600 rounded-xl flex items-center justify-center shadow-sm border border-gray-100 mb-2 active:scale-90 transition-transform"><i className="fa-solid fa-arrow-left"></i></button>}
 
       {activeTab === 'HOME' && (
         <div className="space-y-6 py-4">
@@ -809,74 +1037,61 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
       {activeTab === 'REPORTS' && (
         <div className="space-y-6 py-4">
-          <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Relatórios</h2></div>
-          <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner">{(['HOJE', 'SEMANA', 'MES', 'GERAL'] as const).map(p => (<button key={p} onClick={() => setPeriodoRelatorio(p)} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${periodoRelatorio === p ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>{p}</button>))}</div>
-          
-          <div className="grid grid-cols-2 gap-4 px-1">
-            <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col items-center text-center">
-              <p className="text-[9px] font-black uppercase text-gray-400 mb-1">Faturamento</p>
-              <h2 className="text-xl font-black text-blue-600">R$ {reportStats.totalVendas.toFixed(2)}</h2>
-            </div>
-            <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col items-center text-center">
-              <p className="text-[9px] font-black uppercase text-gray-400 mb-1">Comissões Pagas</p>
-              <h2 className="text-xl font-black text-emerald-600">R$ {reportStats.totalComissaoPaga.toFixed(2)}</h2>
-            </div>
-          </div>
-
-          <div className="bg-rose-600 p-6 rounded-[2.5rem] shadow-xl text-white mx-1">
-            <h3 className="font-black uppercase text-xs tracking-widest mb-4 flex items-center gap-2"><i className="fa-solid fa-triangle-exclamation text-yellow-400"></i> Clientes em Risco (Ausentes 25d+)</h3>
-            <div className="space-y-3">
-              {reportStats.atRisk.map((c, i) => (
-                <div key={c.id} className="flex justify-between items-center bg-white/10 p-4 rounded-2xl border border-white/10 backdrop-blur-sm">
-                  <div className="flex-1 pr-3">
-                    <p className="text-[11px] font-black uppercase leading-tight">{c.nome}</p>
-                    <p className="text-[9px] font-bold opacity-60 mt-1 uppercase">Vendedor: {c.seller}</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-sm font-black text-yellow-400">{c.dias} dias</p>
-                    <p className="text-[8px] font-bold opacity-40 uppercase">Sem compra</p>
-                  </div>
-                </div>
-              ))}
-              {reportStats.atRisk.length === 0 && (
-                <p className="text-center py-4 text-[10px] font-black opacity-40 uppercase">Nenhum cliente em alerta no momento.</p>
-              )}
-            </div>
-          </div>
-
-          <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 space-y-4 mx-1">
-            <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider flex items-center gap-2">
-              <i className="fa-solid fa-boxes-stacked text-blue-600"></i> Produtos Mais Vendidos
-            </h3>
-            <div className="divide-y divide-gray-50">
-              {reportStats.topProducts.map((p, i) => (
-                <div key={p.id} className="py-3 flex justify-between items-center">
-                  <div className="flex items-center gap-3">
-                    <span className="text-xs font-black text-gray-300">#{i+1}</span>
-                    <span className="text-xs font-bold text-gray-700 uppercase truncate max-w-[150px]">{p.nome}</span>
-                  </div>
-                  <span className="text-xs font-black text-blue-600 bg-blue-50 px-2 py-1 rounded-lg">{p.qtd} un</span>
-                </div>
+          <div className="px-2 flex justify-between items-center">
+            <h2 className="text-2xl font-black text-gray-800 tracking-tight">Relatórios</h2>
+            <div className="flex bg-gray-100 p-1 rounded-2xl shadow-inner">
+              {(['HOJE', 'SEMANA', 'MES', 'GERAL'] as const).map(p => (
+                <button key={p} onClick={() => { setPeriodoRelatorio(p); setActiveReport(null); }} className={`flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all ${periodoRelatorio === p ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>{p}</button>
               ))}
             </div>
           </div>
 
-          <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 space-y-4 mx-1">
-            <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider flex items-center gap-2">
-              <i className="fa-solid fa-star text-yellow-500"></i> Top 10 Clientes (Volume R$)
-            </h3>
-            <div className="divide-y divide-gray-50">
-              {reportStats.topClients.map((c, i) => (
-                <div key={c.id} className="py-3 flex justify-between items-center">
-                  <div className="flex items-center gap-3">
-                    <span className="text-xs font-black text-gray-300">#{i+1}</span>
-                    <span className="text-xs font-bold text-gray-700 uppercase truncate max-w-[150px]">{c.nome}</span>
-                  </div>
-                  <span className="text-xs font-black text-gray-900">R$ {c.total.toFixed(2)}</span>
-                </div>
-              ))}
-            </div>
+          {/* Grid de botões de relatórios */}
+          <div className="grid gap-3 px-1">
+            <ReportCard 
+              icon="fa-chart-pie" 
+              title="Resumo Geral" 
+              color="blue" 
+              reportType="RESUMO" 
+              description="Faturamento total, comissões pagas e produtos mais vendidos no período"
+            />
+            <ReportCard 
+              icon="fa-star" 
+              title="Top Clientes" 
+              color="yellow" 
+              reportType="TOP_CLIENTES" 
+              description="Ranking dos 10 clientes que mais compraram em valor no período"
+            />
+            <ReportCard 
+              icon="fa-triangle-exclamation" 
+              title="Clientes em Risco" 
+              color="rose" 
+              reportType="CLIENTES_RISCO" 
+              description="Clientes sem compra há 25+ dias, ordenados por maior tempo de ausência"
+            />
+            <ReportCard 
+              icon="fa-layer-group" 
+              title="Vendas por Categorias" 
+              color="indigo" 
+              reportType="VENDAS_CATEGORIAS" 
+              description="Detalhamento de vendas agrupado por Categoria → Subcategoria com valores e quantidades"
+            />
           </div>
+
+          {/* Conteúdo do relatório ativo */}
+          {activeReport && (
+            <div className="px-1">
+              {renderActiveReport()}
+            </div>
+          )}
+
+          {activeReport === null && (
+            <div className="text-center py-16 px-4 bg-gray-50 rounded-[2rem] border border-dashed border-gray-200">
+              <i className="fa-solid fa-chart-bar text-6xl text-gray-200 mb-4"></i>
+              <h3 className="font-black text-gray-600 text-lg mb-2">Selecione um relatório acima</h3>
+              <p className="text-gray-400 text-sm">Clique em um dos cards para visualizar o relatório detalhado</p>
+            </div>
+          )}
         </div>
       )}
 
@@ -892,7 +1107,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           </div>
 
           <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 space-y-6"><h3 className="font-black text-gray-800 uppercase text-xs tracking-widest mb-4">Contas Pix</h3>
-            {/* Pix Slot 1 */}
             <div className="p-4 bg-gray-50 rounded-3xl border border-gray-100 space-y-4">
               <div className="space-y-1">
                 <label className="text-[9px] font-black text-gray-400 uppercase">Nome Banco 1</label>
@@ -907,7 +1121,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
               <input type="file" ref={pix1InputRef} className="hidden" accept="image/*" onChange={e => handlePixUpload(e, 1)} />
             </div>
 
-            {/* Pix Slot 2 */}
             <div className="p-4 bg-gray-50 rounded-3xl border border-gray-100 space-y-4">
               <div className="space-y-1">
                 <label className="text-[9px] font-black text-gray-400 uppercase">Nome Banco 2</label>

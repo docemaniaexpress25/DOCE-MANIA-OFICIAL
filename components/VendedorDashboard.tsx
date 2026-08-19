@@ -87,7 +87,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     setTimeout(() => setToast(null), 3000);
   };
 
-  // Memo para última venda de cada cliente
+  // Memo para última venda de cada cliente (mantido para uso em outras abas)
   const lastSaleByClient = useMemo(() => {
     const map = new Map<string, Date>();
     sales.forEach(s => {
@@ -612,7 +612,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
             const isSold = (sales || []).some(s => s.clientId === c.id && isSameDay(s.data));
             const isSkipped = (dailyRouteState?.skippedClientIds || []).includes(c.id);
             const isVisited = (isSold || isSkipped) && !reopenedClientIds.includes(c.id);
-            const lastDate = formatLastSaleDate(c.id);
             return (
               <div key={c.id} className={`p-4 rounded-3xl border flex transition-all ${isVisited ? 'bg-gray-100 border-gray-200 grayscale opacity-60' : 'bg-white border-gray-100 shadow-sm'}`}>
                 <div className="flex justify-between items-start">
@@ -624,16 +623,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                     </p>
                   </div>
                   
-                  {/* LADO DIREITO: DATA ABAIXO DO NOME (ONDE ESTÁ O RETÂNGULO PRETO) */}
-                  {lastDate && (
-                    <div className="text-right mt-0.5">
-                      <span className="text-[8px] text-gray-300 font-medium uppercase tracking-tight">
-                        Últ: {lastDate}
-                      </span>
-                    </div>
-                  )}
-                  
-                  {/* BOTÕES DE AÇÃO */}
+                  {/* BOTÕES DE AÇÃO - VOLTANDO AO LAYOUT ORIGINAL SEM DATA */}
                   {!isVisited ? (
                     <div className="flex gap-2 ml-3 flex-shrink-0">
                       <button onClick={() => setConfirmSkipId(c.id)} className="w-10 h-10 bg-gray-50 text-gray-400 rounded-2xl flex items-center justify-center"><i className="fa-solid fa-forward"></i></button>

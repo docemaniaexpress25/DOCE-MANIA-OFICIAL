@@ -613,26 +613,24 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
             const isSkipped = (dailyRouteState?.skippedClientIds || []).includes(c.id);
             const isVisited = (isSold || isSkipped) && !reopenedClientIds.includes(c.id);
             return (
-              <div key={c.id} className={`p-4 rounded-3xl border flex transition-all ${isVisited ? 'bg-gray-100 border-gray-200 grayscale opacity-60' : 'bg-white border-gray-100 shadow-sm'}`}>
-                <div className="flex justify-between items-start">
-                  {/* LADO ESQUERDO: NOME COMPLETO + BAIRRO ABAIXO */}
-                  <div className="flex-1 cursor-pointer min-w-0 pr-4" onClick={() => setViewingClientHistory(c)}>
-                    <p className="font-bold text-gray-800 leading-tight uppercase">{c.nomeFantasia ?? 'Cliente'}</p>
-                    <p className="text-[10px] text-gray-400 uppercase font-semibold mt-1">
-                      <i className="fa-solid fa-location-dot mr-1"></i> {(c.bairro || 'S/B')}
-                    </p>
-                  </div>
-                  
-                  {/* BOTÕES DE AÇÃO - VOLTANDO AO LAYOUT ORIGINAL SEM DATA */}
-                  {!isVisited ? (
-                    <div className="flex gap-2 ml-3 flex-shrink-0">
-                      <button onClick={() => setConfirmSkipId(c.id)} className="w-10 h-10 bg-gray-50 text-gray-400 rounded-2xl flex items-center justify-center"><i className="fa-solid fa-forward"></i></button>
-                      <button onClick={() => setSelectedClient(c)} className="bg-blue-600 text-white px-4 py-2 rounded-2xl font-black text-xs uppercase shadow-lg">Atender</button>
-                    </div>
-                  ) : (
-                    <button onClick={() => handleReopenClient(c.id)} className="bg-white text-blue-600 border border-blue-200 px-3 py-1.5 rounded-xl text-[9px] font-black uppercase ml-3 flex-shrink-0">Reabrir</button>
-                  )}
+              <div key={c.id} className={`p-4 rounded-3xl border flex items-center justify-between transition-all ${isVisited ? 'bg-gray-100 border-gray-200 grayscale opacity-60' : 'bg-white border-gray-100 shadow-sm'}`}>
+                {/* LADO ESQUERDO: NOME + BAIRRO */}
+                <div className="flex-1 min-w-0 cursor-pointer pr-4" onClick={() => setViewingClientHistory(c)}>
+                  <p className="font-bold text-gray-800 leading-tight uppercase truncate">{c.nomeFantasia ?? 'Cliente'}</p>
+                  <p className="text-[10px] text-gray-400 uppercase font-semibold mt-1">
+                    <i className="fa-solid fa-location-dot mr-1"></i> {(c.bairro || 'S/B')}
+                  </p>
                 </div>
+                
+                {/* LADO DIREITO: BOTÕES ALINHADOS À DIREITA */}
+                {!isVisited ? (
+                  <div className="flex items-center gap-2 ml-4 flex-shrink-0">
+                    <button onClick={() => setConfirmSkipId(c.id)} className="w-10 h-10 bg-gray-50 text-gray-400 rounded-2xl flex items-center justify-center flex-shrink-0"><i className="fa-solid fa-forward"></i></button>
+                    <button onClick={() => setSelectedClient(c)} className="bg-blue-600 text-white px-4 py-2 rounded-2xl font-black text-xs uppercase shadow-lg flex-shrink-0 whitespace-nowrap">Atender</button>
+                  </div>
+                ) : (
+                  <button onClick={() => handleReopenClient(c.id)} className="bg-white text-blue-600 border border-blue-200 px-4 py-2 rounded-xl text-[9px] font-black uppercase ml-4 flex-shrink-0 whitespace-nowrap">Reabrir</button>
+                )}
               </div>
             );
           })}

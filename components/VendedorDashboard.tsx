@@ -112,6 +112,25 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     }).sort((a, b) => b.diasSemCompra - a.diasSemCompra);
   }, [clients, sales, dismissedClientRiskIds]);
 
+  // Memo para última venda de cada cliente
+  const lastSaleByClient = useMemo(() => {
+    const map = new Map<string, Date>();
+    sales.forEach(s => {
+      const existing = map.get(s.clientId);
+      const saleDate = new Date(s.data);
+      if (!existing || saleDate > existing) {
+        map.set(s.clientId, saleDate);
+      }
+    });
+    return map;
+  }, [sales]);
+
+  const formatLastSaleDate = (clientId: string) => {
+    const date = lastSaleByClient.get(clientId);
+    if (!date) return '';
+    return `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}`;
+  };
+
   const handleDismissRisk = (clientId: string) => {
     setDismissedClientRiskIds(prev => [...prev, clientId]);
     showToast("Aviso arquivado.");
@@ -677,7 +696,17 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                             <button onClick={(e)=>{e.stopPropagation(); moveClientInDay(c.id, 'UP', dia);}} className="w-7 h-7 bg-white border text-gray-400 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-chevron-up text-[10px]"></i></button>
                             <button onClick={(e)=>{e.stopPropagation(); moveClientInDay(c.id, 'DOWN', dia);}} className="w-7 h-7 bg-white border text-gray-400 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-chevron-down text-[10px]"></i></button>
                           </div>
-                          <div className="flex-1 cursor-pointer" onClick={() => setViewingClientHistory(c)}><p className="font-bold text-gray-800 text-xs uppercase">{c.nomeFantasia}</p><p className="text-[9px] text-gray-400 font-bold mt-0.5">{c.bairro || 'Sem Bairro'}</p></div>
+                          <div className="flex-1 cursor-pointer min-w-0" onClick={() => setViewingClientHistory(c)}>
+                            <p className="font-bold text-gray-800 text-xs uppercase truncate">{c.nomeFantasia}</p>
+                            <div className="flex items-center gap-2 mt-0.5">
+                              <p className="text-[9px] text-gray-400 font-bold">{c.bairro || 'Sem Bairro'}</p>
+                              {formatLastSaleDate(c.id) && (
+                                <span className="text-[9px] text-gray-300 font-medium uppercase tracking-wider bg-gray-100 px-2 py-0.5 rounded">
+                                  Últ: {formatLastSaleDate(c.id)}
+                                </span>
+                              )}
+                            </div>
+                          </div>
                           <div className="flex items-center gap-2">
                             <button onClick={() => handleAddToTodayRoute(c.id)} className="w-8 h-8 bg-indigo-100 text-indigo-600 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-plus text-xs"></i></button>
                             <button onClick={(e)=>{e.stopPropagation(); handleOpenEditClient(c);}} className="w-8 h-8 bg-blue-50 text-blue-600 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-pencil-alt text-xs"></i></button>
@@ -786,7 +815,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
       {activeTab === 'FINANCE' && (
         <div className="space-y-6">
-           <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner">{(['DIA', 'SEMANA', 'MES', 'GERAL'] as const).map(f => (<button key={f} onClick={() => setFinanceFilter(f)} className={`flex-1 py-2 rounded-xl text-[9px] font-black uppercase ${financeFilter === f ? 'bg-white text-emerald-600 shadow-sm' : 'text-gray-400'}`}>{f}</button>))}</div>
+           <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow_inner">{(['DIA', 'SEMANA', 'MES', 'GERAL'] as const).map(f => (<button key={f} onClick={() => setFinanceFilter(f)} className={`flex-1 py-2 rounded-xl text-[9px] font-black uppercase ${financeFilter === f ? 'bg-white text-emerald-600 shadow-sm' : 'text-gray-400'}`}>{f}</button>))}</div>
            
            <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col text-center">
               <p className="text-[9px] font-black uppercase text-gray-400 mb-1">Comissões Geradas no Período</p>

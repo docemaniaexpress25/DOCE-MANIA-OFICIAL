@@ -330,34 +330,46 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     showToast("Ordem do cliente atualizada!");
   };
 
-  // NOVO: Mover cliente DENTRO DO DIA (para aba ROTEIRO SEMANAL)
+  // NOVO: Mover cliente DENTRO DO DIA (para aba ROTEIRO SEMANAL) - PERSISTE NO SUPABASE
   const moveClientInDay = (clientId: string, dir: 'UP' | 'DOWN', day: number) => {
-    const allClientsSorted = [...clients].sort((a, b) => {
-      const orderMap = new Map(clientOrder.map((id, idx) => [id, idx]));
-      const idxA = orderMap.get(a.id) ?? (a.ordem || 0);
-      const idxB = orderMap.get(b.id) ?? (b.ordem || 0);
-      return idxA - idxB;
-    });
+    // 1. Pega todos os clientes ativos da rota do vendedor, ordenados pela ordem global atual (clientOrder)
+    const allClientsSorted = [...clients]
+      .filter(c => c.ativo && c.rota === (user.rota || 'ROTA_01'))
+      .sort((a, b) => {
+        const orderMap = new Map(clientOrder.map((id, idx) => [id, idx]));
+        const idxA = orderMap.get(a.id) ?? (a.ordem || 0);
+        const idxB = orderMap.get(b.id) ?? (b.ordem || 0);
+        return idxA - idxB;
+      });
 
-    const dayClients = allClientsSorted.filter(c => c.diaRoteiro === day && c.ativo && c.rota === (user.rota || 'ROTA_01'));
-    const dayClientIds = dayClients.map(c => c.id);
+    // 2. Separa os clientes do dia alvo e dos outros dias
+    const dayClients = allClientsSorted.filter(c => c.diaRoteiro === day);
+    const otherDayClients = allClientsSorted.filter(c => c.diaRoteiro !== day);
     
+    const dayClientIds = dayClients.map(c => c.id);
     const idx = dayClientIds.indexOf(clientId);
     if (idx === -1) return;
 
-    newDayOrder = [...dayClientIds];
-    if (dir === 'UP' && idx > 0) [newDayOrder[idx], newDayOrder[idx-1]] = [newDayOrder[idx-1], newDayOrder[idx]];
-    else if (dir === 'DOWN' && idx < newDayOrder.length - 1) [newDayOrder[idx], newDayOrder[idx+1]] = [newDayOrder[idx+1], newDayOrder[idx]];
+    // 3. Reordena apenas dentro do dia
+    const newDayOrder = [...dayClientIds];
+    if (dir === 'UP' && idx > 0) {
+      [newDayOrder[idx], newDayOrder[idx-1]] = [newDayOrder[idx-1], newDayOrder[idx]];
+    } else if (dir === 'DOWN' && idx < newDayOrder.length - 1) {
+      [newDayOrder[idx], newDayOrder[idx+1]] = [newDayOrder[idx+1], newDayOrder[idx]];
+    }
 
-    const otherDayClients = allClientsSorted.filter(c => c.diaRoteiro !== day);
+    // 4. Reconstrói a ordem global mantendo a ordem relativa dos outros dias
     const otherDayIds = otherDayClients.map(c => c.id);
     
+    // Encontra onde o primeiro cliente desse dia estava na ordem global original
     const firstDayClientGlobalIdx = allClientsSorted.findIndex(c => c.diaRoteiro === day);
     
     let newGlobalOrder: string[];
     if (firstDayClientGlobalIdx === -1) {
+      // Se não tinha clientes nesse dia, adiciona no final
       newGlobalOrder = [...otherDayIds, ...newDayOrder];
     } else {
+      // Insere o dia reordenado na posição correta
       newGlobalOrder = [
         ...otherDayIds.slice(0, firstDayClientGlobalIdx),
         ...newDayOrder,
@@ -365,11 +377,10 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       ];
     }
 
+    // 5. Salva no Supabase via App.tsx -> appSettingsService
     setClientOrder(newGlobalOrder);
-    showToast("Ordem do dia atualizada!");
+    showToast("Ordem do dia atualizada e salva!");
   };
-  
-  let newDayOrder: string[] = [];
 
   // NOVO: Mover cliente para outro dia
   const moveClientToDay = (clientId: string, newDay: number) => {

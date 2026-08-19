@@ -640,11 +640,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 </div>
                 <div className="flex flex-col gap-1">
                   <button onClick={(e) => { e.stopPropagation(); handleOpenEditClient(c); }} className="w-10 h-10 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center active:scale-95"><i className="fa-solid fa-pencil-alt text-xs"></i></button>
-                  <div className="flex gap-1">
-                    {[1,2,3,4,5,6].map(d => (
-                      <button key={d} onClick={(e)=>{e.stopPropagation(); moveClientToDay(c.id, d);}} className={`w-7 h-7 rounded-lg text-[8px] font-black uppercase transition-all ${c.diaRoteiro === d ? 'bg-indigo-600 text-white shadow-sm' : 'bg-gray-100 text-gray-400'}`}>{DIAS_SEMANA[d].charAt(0)}</button>
-                    ))}
-                  </div>
                 </div>
               </div>
             ))}
@@ -686,9 +681,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                           <div className="flex items-center gap-2">
                             <button onClick={() => handleAddToTodayRoute(c.id)} className="w-8 h-8 bg-indigo-100 text-indigo-600 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-plus text-xs"></i></button>
                             <button onClick={(e)=>{e.stopPropagation(); handleOpenEditClient(c);}} className="w-8 h-8 bg-blue-50 text-blue-600 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-pencil-alt text-xs"></i></button>
-                            {[1,2,3,4,5,6].map(d => (
-                              <button key={d} onClick={(e)=>{e.stopPropagation(); moveClientToDay(c.id, d);}} className={`w-7 h-7 rounded-lg text-[8px] font-black uppercase transition-all ${c.diaRoteiro === d ? 'bg-indigo-600 text-white shadow-sm' : 'bg-gray-100 text-gray-400'}`}>{DIAS_SEMANA[d].charAt(0)}</button>
-                            ))}
                           </div>
                         </div>
                       ))}

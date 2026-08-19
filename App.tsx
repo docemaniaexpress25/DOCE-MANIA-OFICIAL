@@ -35,7 +35,7 @@ const App: React.FC = () => {
   const [pix2Name, setPix2Name] = useState("Pix Banco B");
   const [pix2Code, setPix2Code] = useState<string | null>(null);
   const [productOrder, setProductOrder] = useState<string[]>([]);
-  const [clientOrder, setClientOrder] = useState<string[]>([]); // NOVO
+  const [clientOrder, setClientOrder] = useState<string[]>([]);
   const [companyName, setCompanyName] = useState("DOCE MANIA DISTRIBUIDORA");
   const [companyCnpj, setCompanyCnpj] = useState("00.000.000/0001-00");
 
@@ -103,7 +103,7 @@ const App: React.FC = () => {
       setPix2Name(settings.pix2Name ?? "Pix Banco B");
       setPix2Code(settings.pix2Code);
       setProductOrder(settings.productOrder || []);
-      setClientOrder(settings.clientOrder || []); // NOVO
+      setClientOrder(settings.clientOrder || []);
       setCompanyName(settings.companyName ?? "DOCE MANIA DISTRIBUIDORA");
       setCompanyCnpj(settings.companyCnpj ?? "00.000.000/0001-00");
 
@@ -229,7 +229,7 @@ const App: React.FC = () => {
         });
       });
     }
-    else if (key === 'clientOrder') { // NOVO
+    else if (key === 'clientOrder') {
       setClientOrder(value);
     }
 
@@ -467,6 +467,11 @@ const App: React.FC = () => {
     }
   };
 
+  // Wrapper para setClientOrder que persiste no Supabase
+  const setClientOrderWithPersistence = useCallback((ids: string[]) => {
+    updateSetting('clientOrder', ids);
+  }, [updateSetting]);
+
   if (!currentUser) return <Login users={users} onLogin={setCurrentUser} logo={logo} />;
 
   const sellerClients = currentUser.role === 'VENDEDOR' 
@@ -496,14 +501,14 @@ const App: React.FC = () => {
             setCompanyName={(v)=>updateSetting('companyName', v)} setCompanyCnpj={(v)=>updateSetting('companyCnpj', v)}
             activateAllProducts={activateAllProducts} addCategory={addCategory} updateCategory={updateCategory} deleteCategory={deleteCategory}
             addSubcategory={addSubcategory} updateSubcategory={updateSubcategory} deleteSubcategory={deleteSubcategory}
-            setClientOrder={setClientOrder} // NOVO
+            setClientOrder={setClientOrderWithPersistence}
           />
         ) : (
           <VendedorDashboard 
             {...{ products, users, cargas, cargasPendentes, sales, commissions, payoutLogs, expenses, messages, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, companyName, companyCnpj, user: currentUser, clients: sellerClients, categories, subcategories, clientOrder }}
             markMessageAsRead={markMessageAsRead} processSale={processSale} addClient={addClient} updateClient={updateClient} deleteClient={deleteClient}
             receivePayment={receiveAccount} deleteSale={deleteSale} aceitarCarga={aceitarCarga} addExpense={addExpense} updateDailyRoute={updateDailyRoute}
-            setClientOrder={setClientOrder} // NOVO
+            setClientOrder={setClientOrderWithPersistence}
           />
         )}
       </main>

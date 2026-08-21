@@ -536,7 +536,15 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   if (viewingSale) {
     const cupomClient = clients.find(c => c.id === viewingSale.clientId);
     if (!cupomClient) { setViewingSale(null); return null; }
-    return ( <Cupom sale={viewingSale} client={cupomClient} products={products} onClose={() => setViewingSale(null)} onDeleteSale={deleteSale} allowDelete={true} showToast={showToast} /> );
+    const canDeleteSale = (() => {
+      const saleDate = new Date(viewingSale.data);
+      const now = new Date();
+      const sameDay = saleDate.getFullYear() === now.getFullYear()
+        && saleDate.getMonth() === now.getMonth()
+        && saleDate.getDate() === now.getDate();
+      return sameDay;
+    })();
+    return ( <Cupom sale={viewingSale} client={cupomClient} products={products} onClose={() => setViewingSale(null)} onDeleteSale={deleteSale} allowDelete={canDeleteSale} showToast={showToast} /> );
   }
 
   if (showFiscalization) {

@@ -3,7 +3,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Product, Client, Carga, Sale, SaleItem, PaymentMethod, Category, Subcategory } from '@/lib/types';
 import Cupom from '@/components/doce/Cupom';
 import { loadLocalState, saveLocalState } from '@/utils/persistence';
-import { printerService } from '@/services/printerService';
+import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
 
 interface PDVProps {
   client: Client;
@@ -362,8 +362,16 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
 
   const handlePrintPrePedido = async () => {
     const rawText = generatePrePedidoText(printWidth);
+    const confirmed = window.confirm(
+      `Deseja imprimir este pre-pedido?\n\nModelo: ${printWidth === '80MM' ? '80mm (Largo)' : '56mm (Estreito)'}\n\nToque em OK para continuar.`
+    );
+    if (!confirmed) return;
     try {
-      await printerService.printNative(rawText);
+      if (!bluetoothPrinter.isAvailable()) {
+        window.alert('Bluetooth nao disponivel. Use o Chrome no Android.');
+        return;
+      }
+      await bluetoothPrinter.print(rawText, printWidth);
     } catch (error) {
       console.error(error);
     }

@@ -1,9 +1,10 @@
 "use client";
-"use client";
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Sale, Client, Product } from '@/lib/types';
-import { printerService } from '@/services/printerService';
+import { bluetoothPrinter, PrintJob } from '@/services/bluetoothPrinterService';
+
+type PrinterWidth = '56MM' | '80MM';
 
 interface CupomProps {
   sale: Sale;
@@ -18,9 +19,24 @@ interface CupomProps {
 }
 
 const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, onDeleteSale, allowDelete, showToast, closeLabel }) => {
-  const [printWidth, setPrintWidth] = useState<'56MM' | '80MM'>('56MM');
+  const [printWidth, setPrintWidth] = useState<PrinterWidth>('56MM');
+  const [printJob, setPrintJob] = useState<PrintJob>({ status: 'idle' });
+  const [isBluetoothAvailable] = useState(() => bluetoothPrinter.isAvailable());
 
-  const generateText = (width: '56MM' | '80MM') => {
+  // Subscribe to print job status
+  useEffect(() => {
+    bluetoothPrinter.onStatus(setPrintJob);
+    return () => bluetoothPrinter.onStatus(null);
+  }, []);
+
+  // Check connection on mount
+  useEffect(() => {
+    if (isBluetoothAvailable) {
+      bluetoothPrinter.reconnect();
+    }
+  }, [isBluetoothAvailable]);
+
+  const generateText = (width: PrinterWidth): string => {
     const totalWidth = width === '80MM' ? 48 : 32; 
     
     const padR = (str: string, len: number) => str.substring(0, len).padEnd(len);
@@ -89,18 +105,58 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
     return t;
   };
 
-  const handlePrint = async () => {
+  const handlePrint = useCallback(async () => {
     if (!showToast) return;
+
+    // --- NATIVE CONFIRMATION ---
+    const widthLabel = printWidth === '80MM' ? '80mm (Largo)' : '56mm (Estreito)';
+    const confirmed = window.confirm(
+      `Deseja imprimir este cupom?\n\nModelo: ${widthLabel}\nItens: ${(sale.itens || []).length}\nTotal: R$ ${(sale.valorTotal || 0).toFixed(2)}\n\nToque em OK para continuar.`
+    );
+    if (!confirmed) return;
+
     const rawText = generateText(printWidth);
-    showToast(`Imprimindo...`);
 
     try {
-      const success = await printerService.printNative(rawText);
-      if (success) showToast("Impresso!", 'success');
-    } catch (error) {
-      showToast("Erro de impressão.", 'error');
+      if (!isBluetoothAvailable) {
+        window.alert(
+          'Bluetooth nao disponivel neste navegador.\n\n' +
+          'Para usar a impressao Bluetooth:\n' +
+          '1. Use o Chrome no Android\n' +
+          '2. Ative o Bluetooth do dispositivo\n' +
+          '3. Pareie a impressora nas Configuracoes do Android'
+        );
+        return;
+      }
+
+      showToast('Conectando impressora...');
+      const success = await bluetoothPrinter.print(rawText, printWidth);
+
+      if (success) {
+        window.alert('Cupom impresso com sucesso!');
+        showToast('Impresso com sucesso!', 'success');
+      }
+    } catch (error: any) {
+      const msg = error?.message || 'Erro desconhecido';
+      
+      if (msg === 'BLUETOOTH_NAO_SUPORTADO') {
+        window.alert(
+          'Bluetooth nao suportado.\n\n' +
+          'Para impressao nativa via Bluetooth, abra o app no Chrome do Android.'
+        );
+      } else if (msg.includes('SERVICO_NAO_ENCONTRADO') || msg.includes('CARACTERISTICA')) {
+        window.alert(
+          'Impressora conectada, mas o servico de impressao nao foi encontrado.\n\n' +
+          'Certifique-se de que a impressora esta ligada e pareada.\n' +
+          'Tente desconectar e reconectar.'
+        );
+        bluetoothPrinter.forgetPrinter();
+      } else {
+        window.alert(`Falha na impressao: ${msg}`);
+      }
+      showToast('Erro na impressao.', 'error');
     }
-  };
+  }, [printWidth, sale, showToast, isBluetoothAvailable, generateText]);
 
   const handleCopy = () => {
     const rawText = generateText(printWidth);
@@ -109,11 +165,43 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
   };
 
   const handleDelete = () => {
-    if (onDeleteSale && window.confirm("ATENÇÃO: Deseja EXCLUIR esta venda permanentemente? O estoque será devolvido ao vendedor.")) {
+    // NATIVE confirmation dialog
+    if (onDeleteSale && window.confirm(
+      "ATENCAO: Deseja EXCLUIR esta venda permanentemente?\n\nO estoque sera devolvido ao vendedor. Esta acao nao pode ser desfeita."
+    )) {
       onDeleteSale(sale.id);
       onClose();
     }
   };
+
+  const isConnected = bluetoothPrinter.isConnected();
+  const printerName = bluetoothPrinter.getConnectedPrinterName();
+
+  // Status badge color & text
+  const getStatusBadge = () => {
+    switch (printJob.status) {
+      case 'scanning':
+        return { color: 'bg-amber-100 text-amber-700', icon: 'fa-magnifying-glass', text: 'Buscando impressora...' };
+      case 'connecting':
+        return { color: 'bg-amber-100 text-amber-700', icon: 'fa-link', text: `Conectando a ${printJob.printerName || 'impressora'}...` };
+      case 'connected':
+        return { color: 'bg-emerald-100 text-emerald-700', icon: 'fa-link', text: `${printJob.printerName || 'Impressora'} conectada` };
+      case 'printing':
+        return { color: 'bg-blue-100 text-blue-700', icon: 'fa-print', text: `Imprimindo... ${printJob.progress || 0}%` };
+      case 'done':
+        return { color: 'bg-emerald-100 text-emerald-700', icon: 'fa-check', text: 'Impresso!' };
+      case 'error':
+        return { color: 'bg-red-100 text-red-700', icon: 'fa-triangle-exclamation', text: printJob.error || 'Erro' };
+      default:
+        if (isConnected) {
+          return { color: 'bg-emerald-100 text-emerald-700', icon: 'fa-bluetooth-b', text: printerName || 'Conectado' };
+        }
+        return { color: 'bg-gray-100 text-gray-500', icon: 'fa-bluetooth-b', text: isBluetoothAvailable ? 'Nenhuma impressora conectada' : 'Bluetooth indisponivel' };
+    }
+  };
+
+  const badge = getStatusBadge();
+  const isPrinting = printJob.status === 'printing' || printJob.status === 'scanning' || printJob.status === 'connecting';
 
   return (
     <div className="fixed inset-0 bg-black/90 z-[150] flex flex-col items-center justify-center p-4 overflow-y-auto backdrop-blur-sm">
@@ -126,21 +214,67 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
           <i className="fa-solid fa-arrow-left"></i>
         </button>
 
-        <div className="p-6 bg-white overflow-hidden mt-4">
+        {/* Bluetooth Status Bar */}
+        <div className={`mx-4 mt-4 px-3 py-2 rounded-xl flex items-center gap-2 text-[10px] font-bold ${badge.color}`}>
+          <i className={`fa-solid ${badge.icon}`}></i>
+          <span className="flex-1 truncate">{badge.text}</span>
+          {isConnected && printJob.status === 'idle' && (
+            <button 
+              onClick={() => {
+                window.confirm(`Desconectar a impressora "${printerName}"?`) && bluetoothPrinter.forgetPrinter();
+              }}
+              className="text-[9px] opacity-70 underline"
+            >
+              Desconectar
+            </button>
+          )}
+        </div>
+
+        {/* Print progress bar */}
+        {printJob.status === 'printing' && (
+          <div className="mx-4 mt-2 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+            <div 
+              className="h-full bg-blue-600 rounded-full transition-all duration-300"
+              style={{ width: `${printJob.progress || 0}%` }}
+            />
+          </div>
+        )}
+
+        <div className="p-6 bg-white overflow-hidden">
           <div className="font-mono text-[11px] leading-tight text-black bg-white whitespace-pre select-none border-l-2 border-gray-100 pl-4">
             {generateText(printWidth)}
           </div>
         </div>
 
         <div className="bg-gray-100 p-5 flex flex-col gap-3 border-t border-gray-200">
+          {/* Paper width selector */}
           <div className="flex bg-gray-200 p-1 rounded-2xl mb-1">
-            <button onClick={() => setPrintWidth('56MM')} className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${printWidth === '56MM' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500'}`}>56mm</button>
-            <button onClick={() => setPrintWidth('80MM')} className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${printWidth === '80MM' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-400'}`}>80mm</button>
+            <button 
+              onClick={() => setPrintWidth('56MM')} 
+              className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${printWidth === '56MM' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500'}`}
+            >
+              <i className="fa-solid fa-receipt mr-1"></i>56mm
+            </button>
+            <button 
+              onClick={() => setPrintWidth('80MM')} 
+              className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${printWidth === '80MM' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-400'}`}
+            >
+              <i className="fa-solid fa-receipt mr-1"></i>80mm
+            </button>
           </div>
           
           <div className="grid grid-cols-2 gap-2">
-            <button onClick={handlePrint} className="bg-blue-600 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 active:scale-95 text-[10px] uppercase shadow-lg">
-              <i className="fa-solid fa-print"></i> Imprimir
+            <button 
+              onClick={handlePrint} 
+              disabled={isPrinting}
+              className={`font-black py-4 rounded-2xl flex items-center justify-center gap-2 active:scale-95 text-[10px] uppercase shadow-lg transition-all ${
+                isPrinting 
+                  ? 'bg-gray-300 text-gray-500 cursor-not-allowed' 
+                  : 'bg-blue-600 text-white'
+              }`}
+            >
+              <i className={`fa-solid ${isPrinting ? 'fa-spinner fa-spin' : 'fa-print'}`}></i> 
+              {isPrinting ? 'Imprimindo...' : 'Imprimir'}
             </button>
             <button onClick={handleCopy} className="bg-emerald-600 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 active:scale-95 text-[10px] uppercase shadow-lg">
               <i className="fa-solid fa-copy"></i> Copiar

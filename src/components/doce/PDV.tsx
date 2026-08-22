@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Product, Client, Carga, Sale, SaleItem, PaymentMethod, Category, Subcategory } from '@/lib/types';
 import Cupom from '@/components/doce/Cupom';
 import { loadLocalState, saveLocalState } from '@/utils/persistence';
@@ -64,86 +64,83 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const [clientWhatsapp, setClientWhatsapp] = useState('');
   const [gpsStatus, setGpsStatus] = useState<'idle' | 'fetching' | 'saved' | 'error'>('idle');
   const [whatsappStatus, setWhatsappStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  // Rastreia o que foi salvo com sucesso nesta sessão
+  const [gpsSaved, setGpsSaved] = useState(false);
+  const [whatsappSaved, setWhatsappSaved] = useState(false);
+  // Timer de debounce para salvar WhatsApp automaticamente
+  const whatsappTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // ============================================================
-  // Verifica se cliente precisa de GPS E WhatsApp ao abrir PDV
-  // Só mostra uma vez por sessão (usando localStorage como flag)
+  // Mostra modal se falta GPS OU WhatsApp no cadastro
+  // Fecha automaticamente quando ambos forem salvos
   // ============================================================
   useEffect(() => {
-    const alreadyPrompted = localStorage.getItem(`pdv_prompted_${client.id}`);
-    if (alreadyPrompted) return;
-
     const hasGps = client.localizacao && 
       typeof client.localizacao === 'object' && 
       ((client.localizacao as any).lat !== 0 && (client.localizacao as any).lng !== 0);
     const hasWhatsapp = client.telefone && client.telefone.replace(/\D/g, '').length >= 10;
-    if (!hasGps && !hasWhatsapp) {
-      setClientWhatsapp(client.telefone || '');
+    if (hasGps) setGpsSaved(true);
+    if (hasWhatsapp) setWhatsappSaved(true);
+    if (!hasGps || !hasWhatsapp) {
+      setClientWhatsapp(hasWhatsapp ? client.telefone : '');
       setShowClientInfoModal(true);
-      localStorage.setItem(`pdv_prompted_${client.id}`, '1');
     }
   }, [client.id]);
 
-  const handleDetectGPS = async () => {
-    if (!navigator.geolocation) {
-      setGpsStatus('error');
-      return;
+  // Fecha modal quando ambos salvos
+  useEffect(() => {
+    if (gpsSaved && whatsappSaved) {
+      const t = setTimeout(() => setShowClientInfoModal(false), 600);
+      return () => clearTimeout(t);
     }
+  }, [gpsSaved, whatsappSaved]);
+
+  const handleDetectGPS = async () => {
+    if (!navigator.geolocation) { setGpsStatus('error'); return; }
     setGpsStatus('fetching');
     navigator.geolocation.getCurrentPosition(
       async (position) => {
         const lat = position.coords.latitude;
         const lng = position.coords.longitude;
-        const loc = { lat, lng };
-
-        // Geocodificação reversa: busca rua e bairro a partir das coordenadas
         let endereco = '';
         let bairro = '';
         try {
           const res = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&addressdetails=1&accept-language=pt-BR`);
           const data = await res.json();
           const addr = data?.address || {};
-          // Tenta montar o endereço com os campos disponíveis
           const parts: string[] = [];
           if (addr.road) parts.push(addr.road);
           if (addr.house_number) parts.push(addr.house_number);
           endereco = parts.join(', ');
-          // Bairro: prioriza suburb, depois neighbourhood, depois city_district
           bairro = addr.suburb || addr.neighbourhood || addr.city_district || '';
-        } catch (e) {
-          // Se falhar a geocodificação, salva pelo menos as coordenadas
-          console.warn('Falha na geocodificação reversa:', e);
-        }
+        } catch (e) { console.warn('Falha na geocodificação reversa:', e); }
 
-        // Monta payload com tudo que conseguiu
-        const updates: any = { localizacao: loc };
+        const updates: any = { localizacao: { lat, lng } };
         if (endereco) updates.endereco = endereco;
         if (bairro) updates.bairro = bairro;
 
         const updated = await clientService.updateClient(client.id, updates);
-        if (updated) {
-          setGpsStatus('saved');
-        } else {
-          setGpsStatus('error');
-        }
+        if (updated) { setGpsStatus('saved'); setGpsSaved(true); }
+        else { setGpsStatus('error'); }
       },
       () => { setGpsStatus('error'); },
       { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
     );
   };
 
-  const handleSaveWhatsapp = async () => {
-    const cleaned = clientWhatsapp.replace(/\D/g, '');
-    if (cleaned.length < 10) {
-      setWhatsappStatus('error');
-      return;
-    }
-    setWhatsappStatus('saving');
-    const updated = await clientService.updateClient(client.id, { telefone: clientWhatsapp });
-    if (updated) {
-      setWhatsappStatus('saved');
-    } else {
-      setWhatsappStatus('error');
+  // Salva WhatsApp automaticamente (debounce 1.5s após parar de digitar)
+  const handleWhatsappChange = (value: string) => {
+    setClientWhatsapp(value);
+    setWhatsappStatus('idle');
+    if (whatsappTimerRef.current) clearTimeout(whatsappTimerRef.current);
+    const cleaned = value.replace(/\D/g, '');
+    if (cleaned.length >= 10) {
+      whatsappTimerRef.current = setTimeout(async () => {
+        setWhatsappStatus('saving');
+        const updated = await clientService.updateClient(client.id, { telefone: value });
+        if (updated) { setWhatsappStatus('saved'); setWhatsappSaved(true); }
+        else { setWhatsappStatus('error'); }
+      }, 1500);
     }
   };
 
@@ -984,38 +981,51 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                 <i className="fa-brands fa-whatsapp text-emerald-500 text-sm"></i>
                 <span className="text-[10px] font-black text-emerald-700 uppercase">WhatsApp / Telefone</span>
               </div>
-              {whatsappStatus === 'idle' || whatsappStatus === 'error' ? (
+              {(whatsappStatus === 'idle' || whatsappStatus === 'saving') ? (
                 <>
                   <input
                     type="tel"
                     value={clientWhatsapp}
-                    onChange={e => { setClientWhatsapp(e.target.value); setWhatsappStatus('idle'); }}
+                    onChange={e => handleWhatsappChange(e.target.value)}
                     placeholder="(00) 00000-0000"
-                    className="w-full p-3 bg-white border border-emerald-200 rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-emerald-300 mb-2"
+                    className="w-full p-3 bg-white border border-emerald-200 rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-emerald-300"
                   />
-                  {whatsappStatus === 'error' && (
-                    <p className="text-[9px] text-rose-500 font-bold mb-2">
-                      <i className="fa-solid fa-circle-exclamation mr-1"></i>Digite um número válido (mínimo 10 dígitos)
+                  {whatsappStatus === 'saving' && (
+                    <div className="flex items-center gap-2 mt-2">
+                      <i className="fa-solid fa-spinner fa-spin text-emerald-500 text-[10px]"></i>
+                      <span className="text-[9px] font-bold text-emerald-600">Salvando automaticamente...</span>
+                    </div>
+                  )}
+                  {whatsappStatus === 'idle' && clientWhatsapp.replace(/\D/g, '').length >= 10 && (
+                    <p className="text-[9px] text-emerald-500 font-bold mt-1.5">
+                      <i className="fa-solid fa-circle-check mr-1"></i>Será salvo automaticamente
                     </p>
                   )}
-                  <button
-                    onClick={handleSaveWhatsapp}
-                    className="w-full bg-emerald-600 text-white font-black py-3 rounded-xl active:scale-95 transition-all text-[10px] uppercase tracking-widest shadow-sm"
-                  >
-                    <i className="fa-brands fa-whatsapp mr-2"></i>Salvar WhatsApp
-                  </button>
+                  {whatsappStatus === 'idle' && clientWhatsapp.replace(/\D/g, '').length > 0 && clientWhatsapp.replace(/\D/g, '').length < 10 && (
+                    <p className="text-[9px] text-gray-400 font-bold mt-1.5">
+                      <i className="fa-solid fa-keyboard mr-1"></i>Digite pelo menos 10 dígitos
+                    </p>
+                  )}
                 </>
-              ) : whatsappStatus === 'saving' ? (
-                <div className="flex items-center justify-center gap-2 py-2">
-                  <i className="fa-solid fa-spinner fa-spin text-emerald-500"></i>
-                  <span className="text-[10px] font-bold text-emerald-600">Salvando...</span>
-                </div>
+              ) : whatsappStatus === 'error' ? (
+                <>
+                  <input
+                    type="tel"
+                    value={clientWhatsapp}
+                    onChange={e => handleWhatsappChange(e.target.value)}
+                    placeholder="(00) 00000-0000"
+                    className="w-full p-3 bg-white border border-rose-200 rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-emerald-300"
+                  />
+                  <p className="text-[9px] text-rose-500 font-bold mt-1.5">
+                    <i className="fa-solid fa-circle-exclamation mr-1"></i>Erro ao salvar. Tente novamente.
+                  </p>
+                </>
               ) : (
-                <div className="flex items-center gap-2 py-2">
+                <div className="flex items-center gap-2 py-1">
                   <div className="w-6 h-6 bg-emerald-500 rounded-full flex items-center justify-center">
                     <i className="fa-solid fa-check text-white text-[10px]"></i>
                   </div>
-                  <span className="text-[10px] font-bold text-emerald-600">WhatsApp salvo com sucesso!</span>
+                  <span className="text-[10px] font-bold text-emerald-600">WhatsApp salvo!</span>
                 </div>
               )}
             </div>

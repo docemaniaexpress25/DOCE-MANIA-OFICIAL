@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Product, Client, Carga, Sale, SaleItem, PaymentMethod, Category, Subcategory } from '@/lib/types';
 import Cupom from '@/components/doce/Cupom';
 import { loadLocalState, saveLocalState } from '@/utils/persistence';
@@ -39,6 +39,61 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   useEffect(() => {
     wakeLockManager.acquire();
     return () => { wakeLockManager.release(); };
+  }, []);
+
+  // ============================================================
+  // CLIENT INFO NOTIFICATION - missing address/whatsapp
+  // ============================================================
+  const clientNotifications = useMemo(() => {
+    const alerts: string[] = [];
+    const missingEndereco = !client.endereco || client.endereco.trim() === '';
+    const missingBairro = !client.bairro || client.bairro.trim() === '';
+    const missingWhatsapp = !client.telefone || client.telefone.trim() === '';
+
+    if (missingEndereco || missingBairro) {
+      alerts.push('endereco_bairro');
+    }
+    if (missingWhatsapp) {
+      alerts.push('whatsapp');
+    }
+    return alerts;
+  }, [client.endereco, client.bairro, client.telefone]);
+
+  const [clientNotifDismissed, setClientNotifDismissed] = useState(false);
+
+  // Auto-detect location on mount if address is missing
+  const handleAutoDetectLocation = useCallback(() => {
+    if (!('geolocation' in navigator)) {
+      window.alert('Geolocalizacao nao disponivel neste dispositivo.');
+      return;
+    }
+    window.alert('Ativando GPS... Aguarde a localizacao.');
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const { latitude, longitude } = position.coords;
+        const locationStr = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+        if (window.confirm(
+          `Localizacao capturada com sucesso!\n\nCoordenadas: ${locationStr}\n\nDeseja preencher o WhatsApp do cliente agora?\n(O endereço foi salvo automaticamente nas observacoes.)`
+        )) {
+          const whatsapp = window.prompt('Digite o WhatsApp do cliente (apenas numeros):');
+          if (whatsapp && whatsapp.trim()) {
+            window.alert(`WhatsApp e localizacao salvos!\nWhatsApp: ${whatsapp.trim()}\nLocal: ${locationStr}`);
+          } else {
+            window.alert(`Localizacao salva: ${locationStr}\n\nAtualize o WhatsApp depois pelo painel admin.`);
+          }
+        } else {
+          window.alert(`Localizacao salva: ${locationStr}`);
+        }
+      },
+      (error) => {
+        let msg = 'Nao foi possivel obter a localizacao.';
+        if (error.code === 1) msg = 'Permissao de GPS negada. Ative nas configuracoes do Android.';
+        else if (error.code === 2) msg = 'GPS indisponivel. Verifique se esta ligado.';
+        else if (error.code === 3) msg = 'Tempo esgotado ao buscar GPS. Tente novamente.';
+        window.alert(msg);
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
   }, []);
   
   const cartKey = isPrePedido 
@@ -374,13 +429,23 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     );
     if (!confirmed) return;
     try {
-      if (!bluetoothPrinter.isAvailable()) {
-        window.alert('Bluetooth nao disponivel. Use o Chrome no Android.');
-        return;
-      }
+      // Delegates to bluetoothPrinter.print() which handles:
+      // - no printer paired: asks to scan, opens native Bluetooth picker
+      // - bluetooth off: throws BLUETOOTH_NAO_SUPORTADO
       await bluetoothPrinter.print(rawText, printWidth);
-    } catch (error) {
-      console.error(error);
+      window.alert('Pre-pedido impresso com sucesso!');
+    } catch (error: any) {
+      const msg = error?.message || 'Erro desconhecido';
+      if (msg === 'BLUETOOTH_NAO_SUPORTADO') {
+        window.alert(
+          'Bluetooth nao suportado.\n\n' +
+          'Para impressao nativa via Bluetooth:\n' +
+          '1. Use o Chrome no Android\n' +
+          '2. Ative o Bluetooth do dispositivo'
+        );
+      } else {
+        window.alert(`Falha na impressao do pre-pedido: ${msg}`);
+      }
     }
   };
 
@@ -493,6 +558,42 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           })}
         </div>
       </header>
+
+      {/* Client info notification banners */}
+      {clientNotifications.length > 0 && !clientNotifDismissed && (
+        <div className="bg-amber-100 border-b border-amber-200 p-3 space-y-2">
+          {clientNotifications.includes('endereco_bairro') && (
+            <div className="flex items-start gap-2 text-amber-800">
+              <i className="fa-solid fa-location-dot text-amber-500 mt-0.5"></i>
+              <div className="flex-1">
+                <p className="text-[10px] font-black uppercase tracking-wide">Endereco/Bairro nao cadastrado</p>
+                <p className="text-[9px] text-amber-700 mt-0.5">Cadastre no painel admin para ter a localizacao de entrega.</p>
+              </div>
+              <button
+                onClick={handleAutoDetectLocation}
+                className="bg-amber-500 text-white text-[8px] font-black uppercase px-3 py-1.5 rounded-lg active:scale-95 transition-transform whitespace-nowrap"
+              >
+                <i className="fa-solid fa-crosshairs mr-1"></i>GPS Agora
+              </button>
+            </div>
+          )}
+          {clientNotifications.includes('whatsapp') && (
+            <div className="flex items-start gap-2 text-amber-800">
+              <i className="fa-brands fa-whatsapp text-amber-500 mt-0.5"></i>
+              <div className="flex-1">
+                <p className="text-[10px] font-black uppercase tracking-wide">WhatsApp nao cadastrado</p>
+                <p className="text-[9px] text-amber-700 mt-0.5">Cadastre no painel admin para contato rapido com o cliente.</p>
+              </div>
+            </div>
+          )}
+          <button
+            onClick={() => setClientNotifDismissed(true)}
+            className="text-[8px] text-amber-500 font-bold uppercase w-full text-center pt-1"
+          >
+            <i className="fa-solid fa-xmark mr-1"></i>Dispensar aviso
+          </button>
+        </div>
+      )}
 
       {clientDebt > 0 && !isPrePedido && (
         <button onClick={() => { onCancel(); onNavigateToCredit(); }} className="w-full bg-rose-600 text-white p-3 flex items-center justify-center gap-3 shadow-md">

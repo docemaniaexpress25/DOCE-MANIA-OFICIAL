@@ -118,18 +118,11 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
     const rawText = generateText(printWidth);
 
     try {
-      if (!isBluetoothAvailable) {
-        window.alert(
-          'Bluetooth nao disponivel neste navegador.\n\n' +
-          'Para usar a impressao Bluetooth:\n' +
-          '1. Use o Chrome no Android\n' +
-          '2. Ative o Bluetooth do dispositivo\n' +
-          '3. Pareie a impressora nas Configuracoes do Android'
-        );
-        return;
-      }
-
-      showToast('Conectando impressora...');
+      // bluetoothPrinter.print() handles the full flow:
+      // 1. Checks Bluetooth availability
+      // 2. If no printer connected, asks to scan (native picker)
+      // 3. Connects, confirms, and prints
+      showToast('Preparando impressao...');
       const success = await bluetoothPrinter.print(rawText, printWidth);
 
       if (success) {
@@ -142,7 +135,8 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
       if (msg === 'BLUETOOTH_NAO_SUPORTADO') {
         window.alert(
           'Bluetooth nao suportado.\n\n' +
-          'Para impressao nativa via Bluetooth, abra o app no Chrome do Android.'
+          'Para impressao nativa via Bluetooth, abra o app no Chrome do Android.\n' +
+          'Certifique-se de que o Bluetooth esta ativado nas configuracoes.'
         );
       } else if (msg.includes('SERVICO_NAO_ENCONTRADO') || msg.includes('CARACTERISTICA')) {
         window.alert(
@@ -156,7 +150,7 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
       }
       showToast('Erro na impressao.', 'error');
     }
-  }, [printWidth, sale, showToast, isBluetoothAvailable, generateText]);
+  }, [printWidth, sale, showToast, generateText]);
 
   const handleCopy = () => {
     const rawText = generateText(printWidth);

@@ -85,6 +85,67 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const [expenseDesc, setExpenseDesc] = useState('');
   const [expenseVal, setExpenseVal] = useState('');
 
+  // ============================================================
+  // MODAL: Cliente incompleto (GPS + WhatsApp)
+  // ============================================================
+  const [clientInfoModal, setClientInfoModal] = useState<Client | null>(null);
+  const [gpsStatus, setGpsStatus] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
+  const [gpsCoords, setGpsCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [modalWhatsapp, setModalWhatsapp] = useState('');
+
+  const isEmptyField = (val: any): boolean => {
+    if (val === null || val === undefined) return true;
+    const s = String(val).trim();
+    if (s === '') return true;
+    const placeholders = ['-', '.', '..', '0', 'n/a', 'nao informado', 'nao tem', 'sem endereco', 'sem telefone', 'informar', 's/n', 'n/i'];
+    if (placeholders.includes(s.toLowerCase())) return true;
+    if (s.replace(/[^a-zA-Z0-9]/g, '').length < 3) return true;
+    return false;
+  };
+
+  const clientNeedsInfo = (c: Client) => {
+    const needsGPS = !c.localizacao || (c.localizacao.lat === 0 && c.localizacao.lng === 0);
+    const needsWhatsapp = isEmptyField(c.telefone);
+    return needsGPS || needsWhatsapp;
+  };
+
+  const handleAtenderClient = (client: Client) => {
+    if (clientNeedsInfo(client)) {
+      setModalWhatsapp(client.telefone || '');
+      setGpsCoords(client.localizacao || null);
+      setGpsStatus(client.localizacao && client.localizacao.lat !== 0 ? 'done' : 'idle');
+      setClientInfoModal(client);
+    } else {
+      setSelectedClient(client);
+    }
+  };
+
+  const handleGetGPS = () => {
+    if (!('geolocation' in navigator)) return;
+    setGpsStatus('loading');
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        setGpsCoords(coords);
+        setGpsStatus('done');
+      },
+      () => setGpsStatus('error'),
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+  };
+
+  const handleSaveClientInfo = async () => {
+    if (!clientInfoModal) return;
+    const updates: Partial<Client> = {};
+    if (gpsCoords) updates.localizacao = gpsCoords;
+    if (modalWhatsapp && modalWhatsapp.trim().length >= 10) updates.telefone = modalWhatsapp.trim();
+    if (Object.keys(updates).length > 0) {
+      updateClient(clientInfoModal.id, updates);
+    }
+    setClientInfoModal(null);
+    setSelectedClient(clientInfoModal);
+  };
+
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
@@ -659,7 +720,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 {!isVisited ? (
                   <div className="flex items-center gap-2 ml-4 flex-shrink-0">
                     <button onClick={() => setConfirmSkipId(c.id)} className="w-10 h-10 bg-gray-50 text-gray-400 rounded-2xl flex items-center justify-center flex-shrink-0"><i className="fa-solid fa-forward"></i></button>
-                    <button onClick={() => setSelectedClient(c)} className="bg-blue-600 text-white px-4 py-2 rounded-2xl font-black text-xs uppercase shadow-lg flex-shrink-0 whitespace-nowrap">Atender</button>
+                    <button onClick={() => handleAtenderClient(c)} className="bg-blue-600 text-white px-4 py-2 rounded-2xl font-black text-xs uppercase shadow-lg flex-shrink-0 whitespace-nowrap">Atender</button>
                   </div>
                 ) : (
                   <button onClick={() => handleReopenClient(c.id)} className="bg-white text-blue-600 border border-blue-200 px-4 py-2 rounded-xl text-[9px] font-black uppercase ml-4 flex-shrink-0 whitespace-nowrap">Reabrir</button>
@@ -1069,6 +1130,68 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 <div className="text-right"><p className="text-sm font-black text-emerald-600">R$ {p.precoVenda.toFixed(2)}</p></div> 
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {clientInfoModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[320] flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
+            <div className="bg-gradient-to-br from-amber-400 to-orange-500 p-6 text-center">
+              <div className="w-14 h-14 bg-white/20 rounded-2xl flex items-center justify-center mx-auto mb-3">
+                <i className="fa-solid fa-circle-exclamation text-white text-2xl"></i>
+              </div>
+              <h3 className="font-black text-white text-base uppercase tracking-tight">Cadastro Incompleto</h3>
+              <p className="text-white/80 text-[10px] font-bold uppercase mt-1">{clientInfoModal.nomeFantasia}</p>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className={`p-4 rounded-2xl border-2 border-dashed flex items-center gap-3 transition-all ${gpsStatus === 'done' ? 'bg-emerald-50 border-emerald-300' : gpsStatus === 'loading' ? 'bg-blue-50 border-blue-300 animate-pulse' : 'bg-amber-50 border-amber-200'}`}>
+                <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${gpsStatus === 'done' ? 'bg-emerald-100' : 'bg-amber-100'}`}>
+                  <i className={`fa-solid ${gpsStatus === 'done' ? 'fa-check text-emerald-600' : gpsStatus === 'loading' ? 'fa-spinner fa-spin text-blue-600' : 'fa-location-crosshairs text-amber-500'}`}></i>
+                </div>
+                <div className="flex-1">
+                  <p className="text-[10px] font-black text-gray-800 uppercase">Localizacao GPS</p>
+                  <p className="text-[9px] text-gray-400 mt-0.5">
+                    {gpsStatus === 'done' && gpsCoords ? `${gpsCoords.lat.toFixed(6)}, ${gpsCoords.lng.toFixed(6)}` : gpsStatus === 'loading' ? 'Obtendo localizacao...' : 'Nao capturada'}
+                  </p>
+                </div>
+                {gpsStatus !== 'done' && (
+                  <button onClick={handleGetGPS} disabled={gpsStatus === 'loading'} className="bg-amber-500 text-white text-[8px] font-black uppercase px-3 py-2 rounded-xl active:scale-95 transition-transform whitespace-nowrap disabled:opacity-50">
+                    <i className="fa-solid fa-crosshairs mr-1"></i>Capturar
+                  </button>
+                )}
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[10px] font-black text-gray-400 uppercase ml-1">WhatsApp do Cliente</label>
+                <div className="relative">
+                  <i className="fa-brands fa-whatsapp absolute left-4 top-1/2 -translate-y-1/2 text-emerald-500 text-lg"></i>
+                  <input
+                    type="tel"
+                    value={modalWhatsapp}
+                    onChange={e => setModalWhatsapp(e.target.value)}
+                    placeholder="Ex: 11999999999"
+                    className="w-full pl-12 pr-4 py-4 bg-gray-50 rounded-2xl font-black text-sm outline-none focus:ring-2 focus:ring-emerald-100 border-2 border-transparent focus:border-emerald-200 transition-all"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="p-5 pt-0 flex flex-col gap-2">
+              <button
+                onClick={handleSaveClientInfo}
+                className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest flex items-center justify-center gap-2"
+              >
+                <i className="fa-solid fa-floppy-disk"></i> Salvar e Atender
+              </button>
+              <button
+                onClick={() => { setClientInfoModal(null); setSelectedClient(clientInfoModal); }}
+                className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest text-center"
+              >
+                Atender sem preencher
+              </button>
+            </div>
           </div>
         </div>
       )}

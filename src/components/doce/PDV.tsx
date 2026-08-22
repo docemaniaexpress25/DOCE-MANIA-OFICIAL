@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Product, Client, Carga, Sale, SaleItem, PaymentMethod, Category, Subcategory } from '@/lib/types';
 import Cupom from '@/components/doce/Cupom';
 import { loadLocalState, saveLocalState } from '@/utils/persistence';
@@ -42,74 +42,10 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   }, []);
 
   // ============================================================
-  // CLIENT INFO NOTIFICATION - missing address/whatsapp
+  // MODAL: Venda finalizada com comissao
   // ============================================================
-  const isEmptyField = (val: any): boolean => {
-    if (val === null || val === undefined) return true;
-    const s = String(val).trim();
-    if (s === '') return true;
-    // Valores placeholder comuns no banco que nao sao dados reais
-    const placeholders = ['-', '.', '..', '0', 'n/a', 'nao informado', 'nao tem', 'sem endereco', 'sem telefone', 'informar', 's/n', 'n/i'];
-    if (placeholders.includes(s.toLowerCase())) return true;
-    // Telefone: precisa ter pelo menos 10 digitos numericos
-    if (s.length < 10) return true;
-    // Se tem menos de 3 caracteres alfanumericos (nao e um dado valido)
-    const alphaNum = s.replace(/[^a-zA-Z0-9]/g, '');
-    if (alphaNum.length < 3) return true;
-    return false;
-  };
+  const [saleResultModal, setSaleResultModal] = useState<{ total: number; comissao: number; troca: number; isPrazo: boolean; clientName: string; sale: Sale } | null>(null);
 
-  const clientNotifications = useMemo(() => {
-    const alerts: string[] = [];
-    const missingEndereco = isEmptyField(client.endereco);
-    const missingBairro = isEmptyField(client.bairro);
-    const missingWhatsapp = isEmptyField(client.telefone);
-
-    if (missingEndereco || missingBairro) {
-      alerts.push('endereco_bairro');
-    }
-    if (missingWhatsapp) {
-      alerts.push('whatsapp');
-    }
-    return alerts;
-  }, [client.endereco, client.bairro, client.telefone]);
-
-  const [clientNotifDismissed, setClientNotifDismissed] = useState(false);
-
-  // Auto-detect location on mount if address is missing
-  const handleAutoDetectLocation = useCallback(() => {
-    if (!('geolocation' in navigator)) {
-      window.alert('Geolocalizacao nao disponivel neste dispositivo.');
-      return;
-    }
-    window.alert('Ativando GPS... Aguarde a localizacao.');
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const { latitude, longitude } = position.coords;
-        const locationStr = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
-        if (window.confirm(
-          `Localizacao capturada com sucesso!\n\nCoordenadas: ${locationStr}\n\nDeseja preencher o WhatsApp do cliente agora?\n(O endereço foi salvo automaticamente nas observacoes.)`
-        )) {
-          const whatsapp = window.prompt('Digite o WhatsApp do cliente (apenas numeros):');
-          if (whatsapp && whatsapp.trim()) {
-            window.alert(`WhatsApp e localizacao salvos!\nWhatsApp: ${whatsapp.trim()}\nLocal: ${locationStr}`);
-          } else {
-            window.alert(`Localizacao salva: ${locationStr}\n\nAtualize o WhatsApp depois pelo painel admin.`);
-          }
-        } else {
-          window.alert(`Localizacao salva: ${locationStr}`);
-        }
-      },
-      (error) => {
-        let msg = 'Nao foi possivel obter a localizacao.';
-        if (error.code === 1) msg = 'Permissao de GPS negada. Ative nas configuracoes do Android.';
-        else if (error.code === 2) msg = 'GPS indisponivel. Verifique se esta ligado.';
-        else if (error.code === 3) msg = 'Tempo esgotado ao buscar GPS. Tente novamente.';
-        window.alert(msg);
-      },
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
-    );
-  }, []);
   
   const cartKey = isPrePedido 
     ? `pdv_pre_pedido_cart_${vendedorId}_${client.id}`
@@ -359,9 +295,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     if (newSale) { 
       localStorage.removeItem(cartKey); 
 
-      // ============================================================
-      // CALCULA COMISSAO E MOSTRA MENSAGEM INCENTIVADORA
-      // ============================================================
+      // Calcula comissao e abre modal bonito
       let comissaoTotal = 0;
       itens.forEach(item => {
         const prod = products.find(p => p.id === item.produtoId);
@@ -370,28 +304,14 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         }
       });
 
-      const trocaMsg = isTrocaActive && vt > 0 ? `\nDesconto troca: R$ ${vt.toFixed(2)}` : '';
-      const prazoMsg = metodo === 'A_PRAZO' ? '\nStatus: AGUARDANDO PAGAMENTO' : '';
-
-      if (comissaoTotal > 0) {
-        window.alert(
-          `VENDA FINALIZADA COM SUCESSO!\n\n` +
-          `Cliente: ${client.nomeFantasia}\n` +
-          `Total: R$ ${total.toFixed(2)}${trocaMsg}\n${prazoMsg}\n` +
-          `-----------------------------------\n` +
-          `COMISSAO GERADA: R$ ${comissaoTotal.toFixed(2)}\n` +
-          `-----------------------------------\n\n` +
-          `Continue assim, voce esta indo muito bem!`
-        );
-      } else {
-        window.alert(
-          `VENDA FINALIZADA!\n\n` +
-          `Cliente: ${client.nomeFantasia}\n` +
-          `Total: R$ ${total.toFixed(2)}${trocaMsg}\n${prazoMsg}`
-        );
-      }
-
-      onFinish(newSale); 
+      setSaleResultModal({
+        total,
+        comissao: comissaoTotal,
+        troca: isTrocaActive ? vt : 0,
+        isPrazo: metodo === 'A_PRAZO',
+        clientName: client.nomeFantasia,
+        sale: newSale,
+      });
     }
   };
 
@@ -575,6 +495,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   }
 
   return (
+    <>
     <div className="fixed inset-0 bg-gray-50 z-[60] flex flex-col">
       <header className="bg-white border-b border-gray-100 p-3 flex flex-col shadow-sm">
         <div className="flex justify-between items-center mb-3">
@@ -606,42 +527,6 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           })}
         </div>
       </header>
-
-      {/* Client info notification banners */}
-      {clientNotifications.length > 0 && !clientNotifDismissed && (
-        <div className="bg-amber-100 border-b border-amber-200 p-3 space-y-2">
-          {clientNotifications.includes('endereco_bairro') && (
-            <div className="flex items-start gap-2 text-amber-800">
-              <i className="fa-solid fa-location-dot text-amber-500 mt-0.5"></i>
-              <div className="flex-1">
-                <p className="text-[10px] font-black uppercase tracking-wide">Endereco/Bairro nao cadastrado</p>
-                <p className="text-[9px] text-amber-700 mt-0.5">Cadastre no painel admin para ter a localizacao de entrega.</p>
-              </div>
-              <button
-                onClick={handleAutoDetectLocation}
-                className="bg-amber-500 text-white text-[8px] font-black uppercase px-3 py-1.5 rounded-lg active:scale-95 transition-transform whitespace-nowrap"
-              >
-                <i className="fa-solid fa-crosshairs mr-1"></i>GPS Agora
-              </button>
-            </div>
-          )}
-          {clientNotifications.includes('whatsapp') && (
-            <div className="flex items-start gap-2 text-amber-800">
-              <i className="fa-brands fa-whatsapp text-amber-500 mt-0.5"></i>
-              <div className="flex-1">
-                <p className="text-[10px] font-black uppercase tracking-wide">WhatsApp nao cadastrado</p>
-                <p className="text-[9px] text-amber-700 mt-0.5">Cadastre no painel admin para contato rapido com o cliente.</p>
-              </div>
-            </div>
-          )}
-          <button
-            onClick={() => setClientNotifDismissed(true)}
-            className="text-[8px] text-amber-500 font-bold uppercase w-full text-center pt-1"
-          >
-            <i className="fa-solid fa-xmark mr-1"></i>Dispensar aviso
-          </button>
-        </div>
-      )}
 
       {clientDebt > 0 && !isPrePedido && (
         <button onClick={() => { onCancel(); onNavigateToCredit(); }} className="w-full bg-rose-600 text-white p-3 flex items-center justify-center gap-3 shadow-md">
@@ -886,6 +771,59 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         </div>
       )}
     </div>
+
+    {/* MODAL: Venda finalizada com comissao */}
+    {saleResultModal && (
+      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
+        <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
+          <div className="bg-gradient-to-br from-emerald-500 to-teal-600 p-6 text-center">
+            <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-3">
+              <i className="fa-solid fa-circle-check text-white text-3xl"></i>
+            </div>
+            <h3 className="font-black text-white text-lg uppercase tracking-tight">Venda Finalizada</h3>
+            <p className="text-white/80 text-[10px] font-bold uppercase mt-1">{saleResultModal.clientName}</p>
+          </div>
+
+          <div className="p-6 space-y-3">
+            <div className="bg-gray-50 p-4 rounded-2xl flex items-center justify-between">
+              <span className="text-[10px] font-black text-gray-400 uppercase">Total da Venda</span>
+              <span className="text-lg font-black text-gray-800">R$ {saleResultModal.total.toFixed(2)}</span>
+            </div>
+
+            {saleResultModal.troca > 0 && (
+              <div className="bg-orange-50 p-3 rounded-2xl flex items-center justify-between border border-orange-100">
+                <span className="text-[10px] font-black text-orange-400 uppercase">Desconto Troca</span>
+                <span className="text-sm font-black text-orange-600">- R$ {saleResultModal.troca.toFixed(2)}</span>
+              </div>
+            )}
+
+            {saleResultModal.isPrazo && (
+              <div className="bg-amber-50 p-3 rounded-2xl flex items-center gap-3 border border-amber-100">
+                <i className="fa-solid fa-clock text-amber-500"></i>
+                <span className="text-[10px] font-black text-amber-700 uppercase">Aguardando Pagamento</span>
+              </div>
+            )}
+
+            {saleResultModal.comissao > 0 && (
+              <div className="bg-emerald-50 p-4 rounded-2xl border-2 border-emerald-200 text-center">
+                <p className="text-[10px] font-black text-emerald-600 uppercase mb-1">Comissao Gerada</p>
+                <p className="text-2xl font-black text-emerald-700">R$ {saleResultModal.comissao.toFixed(2)}</p>
+              </div>
+            )}
+          </div>
+
+          <div className="p-5 pt-0">
+            <button
+              onClick={() => { const s = saleResultModal.sale; setSaleResultModal(null); onFinish(s); }}
+              className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest"
+            >
+              <i className="fa-solid fa-check mr-2"></i>OK
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 };
 

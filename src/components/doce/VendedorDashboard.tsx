@@ -143,6 +143,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const [clientInfoModal, setClientInfoModal] = useState<Client | null>(null);
   const [gpsStatus, setGpsStatus] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
   const [gpsCoords, setGpsCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [gpsPinStr, setGpsPinStr] = useState<string>('');
   const [modalWhatsapp, setModalWhatsapp] = useState('');
 
   const isEmptyField = (val: any): boolean => {
@@ -156,7 +157,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   };
 
   const clientNeedsInfo = (c: Client) => {
-    const needsGPS = !c.localizacao || (c.localizacao.lat === 0 && c.localizacao.lng === 0);
+    const needsGPS = !c.pinLocalizacao || c.pinLocalizacao.length < 5;
     const needsWhatsapp = isEmptyField(c.telefone);
     return needsGPS || needsWhatsapp;
   };
@@ -164,8 +165,9 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const handleAtenderClient = (client: Client) => {
     if (clientNeedsInfo(client)) {
       setModalWhatsapp(client.telefone || '');
-      setGpsCoords(client.localizacao || null);
-      setGpsStatus(client.localizacao && client.localizacao.lat !== 0 ? 'done' : 'idle');
+      setGpsCoords(null);
+      setGpsPinStr(client.pinLocalizacao || '');
+      setGpsStatus(client.pinLocalizacao && client.pinLocalizacao.length >= 5 ? 'done' : 'idle');
       setClientInfoModal(client);
     } else {
       setSelectedClient(client);
@@ -176,9 +178,13 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     if (!('geolocation' in navigator)) return;
     setGpsStatus('loading');
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      async (pos) => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        const coords = { lat, lng };
+        const pinStr = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
         setGpsCoords(coords);
+        setGpsPinStr(pinStr);
         setGpsStatus('done');
       },
       () => setGpsStatus('error'),
@@ -188,8 +194,8 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
   const handleSaveClientInfo = async () => {
     if (!clientInfoModal) return;
-    const updates: Partial<Client> = {};
-    if (gpsCoords) updates.localizacao = gpsCoords;
+    const updates: any = {};
+    if (gpsPinStr && gpsPinStr.length >= 5) updates.pinLocalizacao = gpsPinStr;
     if (modalWhatsapp && modalWhatsapp.trim().length >= 10) updates.telefone = modalWhatsapp.trim();
     if (Object.keys(updates).length > 0) {
       updateClient(clientInfoModal.id, updates);
@@ -1221,7 +1227,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 <div className="flex-1">
                   <p className="text-[10px] font-black text-gray-800 uppercase">Localizacao GPS</p>
                   <p className="text-[9px] text-gray-400 mt-0.5">
-                    {gpsStatus === 'done' && gpsCoords ? `${gpsCoords.lat.toFixed(6)}, ${gpsCoords.lng.toFixed(6)}` : gpsStatus === 'loading' ? 'Obtendo localizacao...' : 'Nao capturada'}
+                    {gpsStatus === 'done' && gpsPinStr ? gpsPinStr : gpsStatus === 'loading' ? 'Obtendo localizacao...' : 'Nao capturada'}
                   </p>
                 </div>
                 {gpsStatus !== 'done' && (

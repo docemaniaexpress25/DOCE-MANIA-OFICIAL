@@ -1143,80 +1143,81 @@
   1143→          </div>
   1144→        </div>
   1145→      </div>
-  1146→    {/* ============================================================ */}
-  1147→    {/* MODAL: Comprovante de venda a prazo (foto) */}
-  1148→    {/* ============================================================ */}
-  1149→    {showComprovanteModal && (
-  1150→      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[350] flex items-center justify-center p-4">
-  1151→        <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
-  1152→          <div className="bg-gradient-to-br from-amber-400 to-orange-500 p-5 text-center">
-  1153→            <div className="w-14 h-14 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-2">
-  1154→              <i className="fa-solid fa-file-circle-check text-white text-2xl"></i>
-  1155→            </div>
-  1156→            <h3 className="font-black text-white text-sm uppercase tracking-tight">Comprovante de Venda</h3>
-  1157→            <p className="text-white/70 text-[9px] font-bold mt-1">Tire foto do cupom assinado</p>
-  1158→          </div>
-  1159→
-  1160→          <div className="p-5">
-  1161→            {comprovanteFoto ? (
-  1162→              <div className="space-y-3">
-  1163→                <img src={comprovanteFoto} className="w-full rounded-2xl border border-gray-100 shadow-inner" alt="Comprovante" />
-  1164→                <div className="grid grid-cols-2 gap-2">
-  1165→                  <button
-  1166→                    onClick={() => comprovanteInputRef.current?.click()}
-  1167→                    className="bg-gray-100 text-gray-600 font-black py-3 rounded-xl active:scale-95 text-[10px] uppercase"
-  1168→                  >
-  1169→                    <i className="fa-solid fa-camera-rotate mr-1"></i>Refazer
-  1170→                  </button>
-  1171→                  <button
-  1172→                    onClick={handleSaveComprovante}
-  1173→                    disabled={comprovanteUploading}
-  1174→                    className="bg-emerald-600 text-white font-black py-3 rounded-xl active:scale-95 text-[10px] uppercase shadow-sm"
-  1175→                  >
-  1176→                    {comprovanteUploading ? 'Salvando...' : '<i className="fa-solid fa-check mr-1"></i>Salvar'}
-  1177→                  </button>
-  1178→                </div>
-  1179→              </div>
-  1180→            ) : (
-  1181→              <button
-  1182→                onClick={() => comprovanteInputRef.current?.click()}
-  1183→                disabled={comprovanteUploading}
-  1184→                className="w-full bg-amber-100 border-2 border-dashed border-amber-300 rounded-2xl p-8 flex flex-col items-center gap-3 active:scale-95 transition-all"
-  1185→              >
-  1186→                {comprovanteUploading ? (
-  1187→                  <i className="fa-solid fa-spinner fa-spin text-amber-500 text-2xl"></i>
-  1188→                ) : (
-  1189→                  <i className="fa-solid fa-camera text-amber-500 text-2xl"></i>
-  1190→                )}
-  1191→                <span className="text-[10px] font-black text-amber-700 uppercase">
-  1192→                  {comprovanteUploading ? 'Processando...' : 'Tirar Foto'}
-  1193→                </span>
-  1194→              </button>
-  1195→            )}
-  1196→          </div>
-  1197→
-  1198→          <div className="p-5 pt-0">
-  1199→            <button
-  1200→              onClick={() => setShowComprovanteModal(false)}
-  1201→              className="w-full bg-gray-100 text-gray-500 font-black py-3 rounded-2xl active:scale-95 uppercase text-[10px]"
-  1202→            >
-  1203→              Fechar
-  1204→            </button>
-  1205→          </div>
-  1206→
-  1207→          <input
-  1208→            ref={comprovanteInputRef}
-  1209→            type="file"
-  1210→            accept="image/*"
-  1211→            capture="environment"
-  1212→            className="hidden"
-  1213→            onChange={e => { const f = e.target.files?.[0]; if (f) handleCaptureComprovante(f); e.target.value = ''; }}
-  1214→          />
-  1215→        </div>
-  1216→      </div>
-  1217→    )}
-  1218→    </>
-  1219→  );
-  1220→};
-  1221→
-  1222→export default PDV;
+  1146→    )}
+  1147→    {/* ============================================================ */}
+  1148→    {/* MODAL: Comprovante de venda a prazo (foto) */}
+  1149→    {/* ============================================================ */}
+  1150→    {showComprovanteModal && (
+  1151→      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[350] flex items-center justify-center p-4">
+  1152→        <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
+  1153→          <div className="bg-gradient-to-br from-amber-400 to-orange-500 p-5 text-center">
+  1154→            <div className="w-14 h-14 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-2">
+  1155→              <i className="fa-solid fa-file-circle-check text-white text-2xl"></i>
+  1156→            </div>
+  1157→            <h3 className="font-black text-white text-sm uppercase tracking-tight">Comprovante de Venda</h3>
+  1158→            <p className="text-white/70 text-[9px] font-bold mt-1">Tire foto do cupom assinado</p>
+  1159→          </div>
+  1160→
+  1161→          <div className="p-5">
+  1162→            {comprovanteFoto ? (
+  1163→              <div className="space-y-3">
+  1164→                <img src={comprovanteFoto} className="w-full rounded-2xl border border-gray-100 shadow-inner" alt="Comprovante" />
+  1165→                <div className="grid grid-cols-2 gap-2">
+  1166→                  <button
+  1167→                    onClick={() => comprovanteInputRef.current?.click()}
+  1168→                    className="bg-gray-100 text-gray-600 font-black py-3 rounded-xl active:scale-95 text-[10px] uppercase"
+  1169→                  >
+  1170→                    <i className="fa-solid fa-camera-rotate mr-1"></i>Refazer
+  1171→                  </button>
+  1172→                  <button
+  1173→                    onClick={handleSaveComprovante}
+  1174→                    disabled={comprovanteUploading}
+  1175→                    className="bg-emerald-600 text-white font-black py-3 rounded-xl active:scale-95 text-[10px] uppercase shadow-sm"
+  1176→                  >
+  1177→                    {comprovanteUploading ? 'Salvando...' : 'Salvar'}
+  1178→                  </button>
+  1179→                </div>
+  1180→              </div>
+  1181→            ) : (
+  1182→              <button
+  1183→                onClick={() => comprovanteInputRef.current?.click()}
+  1184→                disabled={comprovanteUploading}
+  1185→                className="w-full bg-amber-100 border-2 border-dashed border-amber-300 rounded-2xl p-8 flex flex-col items-center gap-3 active:scale-95 transition-all"
+  1186→              >
+  1187→                {comprovanteUploading ? (
+  1188→                  <i className="fa-solid fa-spinner fa-spin text-amber-500 text-2xl"></i>
+  1189→                ) : (
+  1190→                  <i className="fa-solid fa-camera text-amber-500 text-2xl"></i>
+  1191→                )}
+  1192→                <span className="text-[10px] font-black text-amber-700 uppercase">
+  1193→                  {comprovanteUploading ? 'Processando...' : 'Tirar Foto'}
+  1194→                </span>
+  1195→              </button>
+  1196→            )}
+  1197→          </div>
+  1198→
+  1199→          <div className="p-5 pt-0">
+  1200→            <button
+  1201→              onClick={() => setShowComprovanteModal(false)}
+  1202→              className="w-full bg-gray-100 text-gray-500 font-black py-3 rounded-2xl active:scale-95 uppercase text-[10px]"
+  1203→            >
+  1204→              Fechar
+  1205→            </button>
+  1206→          </div>
+  1207→
+  1208→          <input
+  1209→            ref={comprovanteInputRef}
+  1210→            type="file"
+  1211→            accept="image/*"
+  1212→            capture="environment"
+  1213→            className="hidden"
+  1214→            onChange={e => { const f = e.target.files?.[0]; if (f) handleCaptureComprovante(f); e.target.value = ''; }}
+  1215→          />
+  1216→        </div>
+  1217→      </div>
+  1218→    )}
+  1219→    </>
+  1220→  );
+  1221→};
+  1222→
+  1223→export default PDV;

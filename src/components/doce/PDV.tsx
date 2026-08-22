@@ -5,6 +5,7 @@ import Cupom from '@/components/doce/Cupom';
 import { loadLocalState, saveLocalState } from '@/utils/persistence';
 import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
 import { wakeLockManager } from '@/utils/wakeLock';
+import { clientService } from '@/services/clientService';
 
 interface PDVProps {
   client: Client;
@@ -46,7 +47,74 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   // ============================================================
   const [saleResultModal, setSaleResultModal] = useState<{ total: number; comissao: number; troca: number; isPrazo: boolean; clientName: string; sale: Sale } | null>(null);
 
-  
+  // ============================================================
+  // MODAL: App-like genérico (substitui window.alert)
+  // ============================================================
+  const [appModal, setAppModal] = useState<{ title: string; message: string; icon?: string; iconColor?: string; type?: 'info' | 'error' | 'success' } | null>(null);
+
+  // ============================================================
+  // MODAL: Confirmação genérica (substitui window.confirm)
+  // ============================================================
+  const [confirmModal, setConfirmModal] = useState<{ title: string; message: string; onConfirm: () => void; icon?: string; iconColor?: string } | null>(null);
+
+  // ============================================================
+  // MODAL: Cliente incompleto (GPS + WhatsApp)
+  // ============================================================
+  const [showClientInfoModal, setShowClientInfoModal] = useState(false);
+  const [clientWhatsapp, setClientWhatsapp] = useState('');
+  const [gpsStatus, setGpsStatus] = useState<'idle' | 'fetching' | 'saved' | 'error'>('idle');
+  const [whatsappStatus, setWhatsappStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+
+  // ============================================================
+  // Verifica se cliente precisa de GPS E WhatsApp ao abrir PDV
+  // ============================================================
+  useEffect(() => {
+    const hasGps = client.localizacao && 
+      typeof client.localizacao === 'object' && 
+      ((client.localizacao as any).lat !== 0 && (client.localizacao as any).lng !== 0);
+    const hasWhatsapp = client.telefone && client.telefone.replace(/\D/g, '').length >= 10;
+    if (!hasGps && !hasWhatsapp) {
+      setClientWhatsapp(client.telefone || '');
+      setShowClientInfoModal(true);
+    }
+  }, [client.id]);
+
+  const handleDetectGPS = async () => {
+    if (!navigator.geolocation) {
+      setGpsStatus('error');
+      return;
+    }
+    setGpsStatus('fetching');
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const loc = { lat: position.coords.latitude, lng: position.coords.longitude };
+        const updated = await clientService.updateClient(client.id, { localizacao: loc });
+        if (updated) {
+          setGpsStatus('saved');
+        } else {
+          setGpsStatus('error');
+        }
+      },
+      () => { setGpsStatus('error'); },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+  };
+
+  const handleSaveWhatsapp = async () => {
+    const cleaned = clientWhatsapp.replace(/\D/g, '');
+    if (cleaned.length < 10) {
+      setWhatsappStatus('error');
+      return;
+    }
+    setWhatsappStatus('saving');
+    const updated = await clientService.updateClient(client.id, { telefone: clientWhatsapp });
+    if (updated) {
+      setWhatsappStatus('saved');
+    } else {
+      setWhatsappStatus('error');
+    }
+  };
+
   const cartKey = isPrePedido 
     ? `pdv_pre_pedido_cart_${vendedorId}_${client.id}`
     : `pdv_cart_${vendedorId}_${client.id}`;
@@ -242,11 +310,13 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         .map(v => `• ${v.nome}: digitou R$ ${v.preco.toFixed(2)}, mínimo é R$ ${v.minimo.toFixed(2)}`)
         .join('\n');
       
-      alert(
-        `❌ VENDA BLOQUEADA - PREÇO ABAIXO DO MÍNIMO\n\n` +
-        `${detalhes}\n\n` +
-        `Corrija os preços antes de continuar.`
-      );
+      setAppModal({
+        title: 'Venda Bloqueada',
+        message: `Preço abaixo do mínimo!\n\n${detalhes}\n\nCorrija os preços antes de continuar.`,
+        icon: 'fa-solid fa-circle-exclamation',
+        iconColor: 'text-rose-500',
+        type: 'error',
+      });
       return false; // BLOQUEIA
     }
     return true; // LIBERA
@@ -392,35 +462,32 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
 
   const handlePrintPrePedido = async () => {
     const rawText = generatePrePedidoText(printWidth);
-    const confirmed = window.confirm(
-      `Deseja imprimir este pre-pedido?\n\nModelo: ${printWidth === '80MM' ? '80mm (Largo)' : '56mm (Estreito)'}\n\nToque em OK para continuar.`
-    );
-    if (!confirmed) return;
-    try {
-      // Delegates to bluetoothPrinter.print() which handles:
-      // - no printer paired: asks to scan, opens native Bluetooth picker
-      // - bluetooth off: throws BLUETOOTH_NAO_SUPORTADO
-      await bluetoothPrinter.print(rawText, printWidth);
-      window.alert('Pre-pedido impresso com sucesso!');
-    } catch (error: any) {
-      const msg = error?.message || 'Erro desconhecido';
-      if (msg === 'BLUETOOTH_NAO_SUPORTADO') {
-        window.alert(
-          'Bluetooth nao suportado.\n\n' +
-          'Para impressao nativa via Bluetooth:\n' +
-          '1. Use o Chrome no Android\n' +
-          '2. Ative o Bluetooth do dispositivo'
-        );
-      } else {
-        window.alert(`Falha na impressao do pre-pedido: ${msg}`);
-      }
-    }
+    setConfirmModal({
+      title: 'Imprimir Pré-Pedido',
+      message: `Deseja imprimir este pré-pedido?\nModelo: ${printWidth === '80MM' ? '80mm (Largo)' : '56mm (Estreito)'}`,
+      icon: 'fa-solid fa-print',
+      iconColor: 'text-blue-600',
+      onConfirm: async () => {
+        setConfirmModal(null);
+        try {
+          await bluetoothPrinter.print(rawText, printWidth);
+          setAppModal({ title: 'Sucesso', message: 'Pré-pedido impresso com sucesso!', icon: 'fa-solid fa-check', iconColor: 'text-emerald-500', type: 'success' });
+        } catch (error: any) {
+          const msg = error?.message || 'Erro desconhecido';
+          if (msg === 'BLUETOOTH_NAO_SUPORTADO') {
+            setAppModal({ title: 'Bluetooth Indisponível', message: 'Para impressão via Bluetooth:\n1. Use o Chrome no Android\n2. Ative o Bluetooth do dispositivo', icon: 'fa-brands fa-bluetooth-b', iconColor: 'text-gray-400', type: 'error' });
+          } else {
+            setAppModal({ title: 'Erro na Impressão', message: `Falha ao imprimir pré-pedido: ${msg}`, icon: 'fa-solid fa-triangle-exclamation', iconColor: 'text-rose-500', type: 'error' });
+          }
+        }
+      },
+    });
   };
 
   const handleCopyPrePedido = () => {
     const rawText = generatePrePedidoText(printWidth);
     navigator.clipboard.writeText(rawText);
-    alert("Copiado com sucesso!");
+    setAppModal({ title: 'Copiado!', message: 'Texto do pré-pedido copiado para a área de transferência.', icon: 'fa-solid fa-clipboard-check', iconColor: 'text-emerald-500', type: 'success' });
   };
 
   if (view === 'RECEIPT_PREVIEW') {
@@ -506,7 +573,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
             </p>
             <h2 className="font-black text-xs text-gray-800 uppercase truncate">{client.nomeFantasia}</h2> 
           </div>
-          <button onClick={() => { if (window.confirm('Deseja realmente zerar todas as quantidades?')) setCart({}); }} className="w-9 h-9 bg-rose-50 text-rose-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-trash-can text-sm"></i></button>
+          <button onClick={() => setConfirmModal({ title: 'Zerar Quantidades', message: 'Deseja realmente zerar todas as quantidades do carrinho?', icon: 'fa-solid fa-trash-can', iconColor: 'text-rose-500', onConfirm: () => { setConfirmModal(null); setCart({}); } })} className="w-9 h-9 bg-rose-50 text-rose-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-trash-can text-sm"></i></button>
         </div>
 
         <div className="grid grid-cols-4 gap-1 px-0.5">
@@ -818,6 +885,176 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest"
             >
               <i className="fa-solid fa-check mr-2"></i>OK
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* ============================================================ */}
+    {/* MODAL: Cliente incompleto - GPS + WhatsApp */}
+    {/* ============================================================ */}
+    {showClientInfoModal && (
+      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[300] flex items-center justify-center p-4">
+        <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
+          <div className="bg-gradient-to-br from-amber-400 to-orange-500 p-6 text-center">
+            <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-3">
+              <i className="fa-solid fa-user-pen text-white text-2xl"></i>
+            </div>
+            <h3 className="font-black text-white text-base uppercase tracking-tight">Dados do Cliente</h3>
+            <p className="text-white/80 text-[10px] font-bold uppercase mt-1">{client.nomeFantasia}</p>
+          </div>
+
+          <div className="p-6 space-y-4">
+            <p className="text-center text-[11px] text-gray-500 font-semibold leading-relaxed">
+              Este cliente não possui coordenadas GPS e WhatsApp cadastrados. Atualize para melhorar o atendimento.
+            </p>
+
+            {/* GPS Section */}
+            <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100">
+              <div className="flex items-center gap-2 mb-2">
+                <i className="fa-solid fa-location-dot text-blue-500 text-sm"></i>
+                <span className="text-[10px] font-black text-blue-700 uppercase">Localização GPS</span>
+              </div>
+              {gpsStatus === 'idle' && (
+                <button
+                  onClick={handleDetectGPS}
+                  className="w-full bg-blue-600 text-white font-black py-3 rounded-xl active:scale-95 transition-all text-[10px] uppercase tracking-widest shadow-sm"
+                >
+                  <i className="fa-solid fa-satellite-dish mr-2"></i>Obter Localização
+                </button>
+              )}
+              {gpsStatus === 'fetching' && (
+                <div className="flex items-center justify-center gap-2 py-2">
+                  <i className="fa-solid fa-spinner fa-spin text-blue-500"></i>
+                  <span className="text-[10px] font-bold text-blue-600">Obtendo localização...</span>
+                </div>
+              )}
+              {gpsStatus === 'saved' && (
+                <div className="flex items-center gap-2 py-2">
+                  <div className="w-6 h-6 bg-emerald-500 rounded-full flex items-center justify-center">
+                    <i className="fa-solid fa-check text-white text-[10px]"></i>
+                  </div>
+                  <span className="text-[10px] font-bold text-emerald-600">GPS salvo com sucesso!</span>
+                </div>
+              )}
+              {gpsStatus === 'error' && (
+                <div className="flex items-center gap-2 py-2">
+                  <i className="fa-solid fa-triangle-exclamation text-rose-500 text-sm"></i>
+                  <span className="text-[10px] font-bold text-rose-600">Não foi possível obter o GPS.</span>
+                </div>
+              )}
+            </div>
+
+            {/* WhatsApp Section */}
+            <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100">
+              <div className="flex items-center gap-2 mb-2">
+                <i className="fa-brands fa-whatsapp text-emerald-500 text-sm"></i>
+                <span className="text-[10px] font-black text-emerald-700 uppercase">WhatsApp / Telefone</span>
+              </div>
+              {whatsappStatus === 'idle' || whatsappStatus === 'error' ? (
+                <>
+                  <input
+                    type="tel"
+                    value={clientWhatsapp}
+                    onChange={e => { setClientWhatsapp(e.target.value); setWhatsappStatus('idle'); }}
+                    placeholder="(00) 00000-0000"
+                    className="w-full p-3 bg-white border border-emerald-200 rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-emerald-300 mb-2"
+                  />
+                  {whatsappStatus === 'error' && (
+                    <p className="text-[9px] text-rose-500 font-bold mb-2">
+                      <i className="fa-solid fa-circle-exclamation mr-1"></i>Digite um número válido (mínimo 10 dígitos)
+                    </p>
+                  )}
+                  <button
+                    onClick={handleSaveWhatsapp}
+                    className="w-full bg-emerald-600 text-white font-black py-3 rounded-xl active:scale-95 transition-all text-[10px] uppercase tracking-widest shadow-sm"
+                  >
+                    <i className="fa-brands fa-whatsapp mr-2"></i>Salvar WhatsApp
+                  </button>
+                </>
+              ) : whatsappStatus === 'saving' ? (
+                <div className="flex items-center justify-center gap-2 py-2">
+                  <i className="fa-solid fa-spinner fa-spin text-emerald-500"></i>
+                  <span className="text-[10px] font-bold text-emerald-600">Salvando...</span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 py-2">
+                  <div className="w-6 h-6 bg-emerald-500 rounded-full flex items-center justify-center">
+                    <i className="fa-solid fa-check text-white text-[10px]"></i>
+                  </div>
+                  <span className="text-[10px] font-bold text-emerald-600">WhatsApp salvo com sucesso!</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="p-5 pt-0">
+            <button
+              onClick={() => setShowClientInfoModal(false)}
+              className="w-full bg-gray-100 text-gray-600 font-black py-4 rounded-2xl active:scale-95 uppercase text-xs tracking-widest"
+            >
+              Fechar
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* ============================================================ */}
+    {/* MODAL: App-like genérico (substitui window.alert) */}
+    {/* ============================================================ */}
+    {appModal && (
+      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[400] flex items-center justify-center p-4">
+        <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
+          <div className={`p-6 text-center ${appModal.type === 'error' ? 'bg-gradient-to-br from-rose-500 to-red-600' : appModal.type === 'success' ? 'bg-gradient-to-br from-emerald-500 to-teal-600' : 'bg-gradient-to-br from-blue-500 to-indigo-600'}`}>
+            <div className="w-14 h-14 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-3">
+              <i className={`${appModal.icon || 'fa-solid fa-info'} text-white text-2xl`}></i>
+            </div>
+            <h3 className="font-black text-white text-sm uppercase tracking-tight">{appModal.title}</h3>
+          </div>
+          <div className="p-6">
+            <p className="text-center text-[12px] text-gray-600 font-semibold leading-relaxed whitespace-pre-line">{appModal.message}</p>
+          </div>
+          <div className="p-5 pt-0">
+            <button
+              onClick={() => setAppModal(null)}
+              className={`w-full font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest text-white ${appModal.type === 'error' ? 'bg-rose-600' : appModal.type === 'success' ? 'bg-emerald-600' : 'bg-blue-600'}`}
+            >
+              OK
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* ============================================================ */}
+    {/* MODAL: Confirmação genérica (substitui window.confirm) */}
+    {/* ============================================================ */}
+    {confirmModal && (
+      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[400] flex items-center justify-center p-4">
+        <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
+          <div className="bg-gradient-to-br from-gray-600 to-gray-800 p-6 text-center">
+            <div className="w-14 h-14 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-3">
+              <i className={`${confirmModal.icon || 'fa-solid fa-question'} ${confirmModal.iconColor || 'text-white'} text-2xl`}></i>
+            </div>
+            <h3 className="font-black text-white text-sm uppercase tracking-tight">{confirmModal.title}</h3>
+          </div>
+          <div className="p-6">
+            <p className="text-center text-[12px] text-gray-600 font-semibold leading-relaxed whitespace-pre-line">{confirmModal.message}</p>
+          </div>
+          <div className="p-5 pt-0 grid grid-cols-2 gap-2">
+            <button
+              onClick={() => setConfirmModal(null)}
+              className="w-full bg-gray-100 text-gray-600 font-black py-4 rounded-2xl active:scale-95 uppercase text-[10px] tracking-widest"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={confirmModal.onConfirm}
+              className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-[10px] tracking-widest"
+            >
+              Confirmar
             </button>
           </div>
         </div>

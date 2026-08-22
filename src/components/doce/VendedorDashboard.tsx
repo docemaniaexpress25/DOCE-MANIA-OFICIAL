@@ -144,6 +144,8 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const [gpsStatus, setGpsStatus] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
   const [gpsCoords, setGpsCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [gpsPinStr, setGpsPinStr] = useState<string>('');
+  const [gpsEndereco, setGpsEndereco] = useState<string>('');
+  const [gpsBairro, setGpsBairro] = useState<string>('');
   const [modalWhatsapp, setModalWhatsapp] = useState('');
 
   const isEmptyField = (val: any): boolean => {
@@ -181,10 +183,24 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       async (pos) => {
         const lat = pos.coords.latitude;
         const lng = pos.coords.longitude;
-        const coords = { lat, lng };
         const pinStr = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
-        setGpsCoords(coords);
+        setGpsCoords({ lat, lng });
         setGpsPinStr(pinStr);
+        // Reverse geocoding para endereco e bairro
+        try {
+          const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}`, {
+            headers: { 'Accept-Language': 'pt-BR' }
+          });
+          const data = await response.json();
+          if (data?.address) {
+            const addr = data.address;
+            const rua = addr.road || addr.pedestrian || addr.street || '';
+            const numero = addr.house_number || '';
+            const bairro = addr.suburb || addr.neighbourhood || addr.city_district || addr.village || '';
+            setGpsEndereco(`${rua}${numero ? ', ' + numero : ''}`);
+            setGpsBairro(bairro);
+          }
+        } catch (e) { /* falha silenciosa - salva pelo menos coordenadas */ }
         setGpsStatus('done');
       },
       () => setGpsStatus('error'),
@@ -196,6 +212,8 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     if (!clientInfoModal) return;
     const updates: any = {};
     if (gpsPinStr && gpsPinStr.length >= 5) updates.pinLocalizacao = gpsPinStr;
+    if (gpsEndereco) updates.endereco = gpsEndereco;
+    if (gpsBairro) updates.bairro = gpsBairro;
     if (modalWhatsapp && modalWhatsapp.trim().length >= 10) updates.telefone = modalWhatsapp.trim();
     if (Object.keys(updates).length > 0) {
       updateClient(clientInfoModal.id, updates);
@@ -1227,6 +1245,11 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                   <p className="text-[9px] text-gray-400 mt-0.5">
                     {gpsStatus === 'done' && gpsPinStr ? gpsPinStr : gpsStatus === 'loading' ? 'Obtendo localizacao...' : 'Nao capturada'}
                   </p>
+                  {gpsStatus === 'done' && (gpsEndereco || gpsBairro) && (
+                    <p className="text-[8px] text-emerald-600 font-bold mt-0.5">
+                      {gpsEndereco}{gpsEndereco && gpsBairro ? ' - ' : ''}{gpsBairro}
+                    </p>
+                  )}
                 </div>
                 {gpsStatus !== 'done' && (
                   <button onClick={handleGetGPS} disabled={gpsStatus === 'loading'} className="bg-amber-500 text-white text-[8px] font-black uppercase px-3 py-2 rounded-xl active:scale-95 transition-transform whitespace-nowrap disabled:opacity-50">

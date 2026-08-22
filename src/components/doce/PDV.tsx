@@ -50,6 +50,10 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   // ============================================================
   // MODAL: Comprovante foto (venda a prazo)
   // ============================================================
+  // Guarda contra clique duplo na finalização
+  const isFinalizingRef = useRef(false);
+  const lastFinishedSaleRef = useRef<Sale | null>(null);
+
   const [showComprovanteModal, setShowComprovanteModal] = useState(false);
   const [comprovanteSaleId, setComprovanteSaleId] = useState<string | null>(null);
   const [comprovanteFoto, setComprovanteFoto] = useState<string | null>(null);
@@ -86,14 +90,18 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     const ok = await saleService.updateSale(comprovanteSaleId, { comprovanteFoto } as any);
     setComprovanteUploading(false);
     if (ok) {
-      setAppModal({ title: 'Salvo!', message: 'Comprovante salvo com sucesso.', icon: 'fa-solid fa-check', iconColor: 'text-emerald-500', type: 'success' });
       setShowComprovanteModal(false);
+      // Após salvar comprovante, fecha o PDV com a venda já finalizada
+      if (lastFinishedSaleRef.current) {
+        onFinish(lastFinishedSaleRef.current);
+      }
     } else {
       setAppModal({ title: 'Erro', message: 'Falha ao salvar comprovante.', icon: 'fa-solid fa-triangle-exclamation', iconColor: 'text-rose-500', type: 'error' });
     }
   };
 
   const openComprovanteFlow = (sale: Sale) => {
+    lastFinishedSaleRef.current = sale;
     setComprovanteSaleId(sale.id);
     setComprovanteFoto(sale.comprovanteFoto || null);
     setShowComprovanteModal(true);
@@ -320,10 +328,13 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   };
 
   const handleConfirmFinalize = async () => {
+    if (isFinalizingRef.current) return; // BLOQUEIO: evita venda duplicada
     if (total <= 0 && getOrderedItems().length === 0) return;
     
     // TRAVA ABSOLUTA - não passa daqui se houver violação
     if (!validateAndBlockIfNeeded()) return;
+
+    isFinalizingRef.current = true;
 
     const itens = getOrderedItems();
     const vt = parseFloat(valorTroca) || 0;
@@ -361,6 +372,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     const newSale = await processSale(salePayload);
     if (newSale) { 
       localStorage.removeItem(cartKey); 
+      setCart({}); // Esvazia o carrinho imediatamente para evitar re-venda
+      lastFinishedSaleRef.current = newSale;
 
       // Calcula comissao e abre modal bonito
       let comissaoTotal = 0;
@@ -379,6 +392,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         clientName: client.nomeFantasia,
         sale: newSale,
       });
+    } else {
+      isFinalizingRef.current = false; // Libera se falhou
     }
   };
 
@@ -1009,10 +1024,10 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
 
           <div className="p-5 pt-0">
             <button
-              onClick={() => setShowComprovanteModal(false)}
+              onClick={() => { setShowComprovanteModal(false); if (lastFinishedSaleRef.current) onFinish(lastFinishedSaleRef.current); }}
               className="w-full bg-gray-100 text-gray-500 font-black py-3 rounded-2xl active:scale-95 uppercase text-[10px]"
             >
-              Fechar
+              {comprovanteFoto ? 'Fechar' : 'Pular'}
             </button>
           </div>
 

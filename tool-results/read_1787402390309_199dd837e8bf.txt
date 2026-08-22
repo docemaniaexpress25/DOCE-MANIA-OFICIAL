@@ -1,0 +1,1049 @@
+     1→"use client";
+     2→import React, { useState, useEffect, useMemo, useRef } from 'react';
+     3→import { Product, Client, Carga, Sale, SaleItem, PaymentMethod, Category, Subcategory } from '@/lib/types';
+     4→import Cupom from '@/components/doce/Cupom';
+     5→import { loadLocalState, saveLocalState } from '@/utils/persistence';
+     6→import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
+     7→import { wakeLockManager } from '@/utils/wakeLock';
+     8→import { saleService } from '@/services/saleService';
+     9→
+    10→interface PDVProps {
+    11→  client: Client;
+    12→  products: Product[];
+    13→  minhaCarga: Carga[];
+    14→  vendedorId: string;
+    15→  onCancel: () => void;
+    16→  onFinish: (sale: Sale) => void;
+    17→  processSale: (data: any) => Promise<Sale | null>;
+    18→  margemMinima: number;
+    19→  margemMinimaAtiva: boolean;
+    20→  pix1Name: string;
+    21→  pix1Code: string | null;
+    22→  pix2Name: string;
+    23→  pix2Code: string | null;
+    24→  sales: Sale[];
+    25→  onNavigateToCredit: () => void;
+    26→  categories: Category[];
+    27→  subcategories: Subcategory[];
+    28→}
+    29→
+    30→type PDVView = 'CART' | 'RECEIPT_PREVIEW' | 'PAYMENT' | 'PRE_PEDIDO_PREVIEW';
+    31→
+    32→// Tipo do item do carrinho
+    33→type CartItem = { quantidade: number; precoVenda: string };
+    34→
+    35→const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onCancel, onFinish, processSale, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, sales, onNavigateToCredit, categories, subcategories }) => {
+    36→  const [view, setView] = useState<PDVView>('CART');
+    37→  const [isPrePedido, setIsPrePedido] = useState(false);
+    38→
+    39→  // Wake Lock: mantem tela acordada durante o PDV
+    40→  useEffect(() => {
+    41→    wakeLockManager.acquire();
+    42→    return () => { wakeLockManager.release(); };
+    43→  }, []);
+    44→
+    45→  // ============================================================
+    46→  // MODAL: Venda finalizada com comissao
+    47→  // ============================================================
+    48→  const [saleResultModal, setSaleResultModal] = useState<{ total: number; comissao: number; troca: number; isPrazo: boolean; clientName: string; sale: Sale } | null>(null);
+    49→
+    50→  // ============================================================
+    51→  // MODAL: Comprovante foto (venda a prazo)
+    52→  // ============================================================
+    53→  // Guarda contra clique duplo na finalização
+    54→  const isFinalizingRef = useRef(false);
+    55→  const lastFinishedSaleRef = useRef<Sale | null>(null);
+    56→
+    57→  const [showComprovanteModal, setShowComprovanteModal] = useState(false);
+    58→  const [comprovanteSaleId, setComprovanteSaleId] = useState<string | null>(null);
+    59→  const [comprovanteFoto, setComprovanteFoto] = useState<string | null>(null);
+    60→  const [comprovanteUploading, setComprovanteUploading] = useState(false);
+    61→  const comprovanteInputRef = useRef<HTMLInputElement | null>(null);
+    62→
+    63→  const handleCaptureComprovante = (file: File) => {
+    64→    setComprovanteUploading(true);
+    65→    const reader = new FileReader();
+    66→    reader.onload = (e) => {
+    67→      const img = new Image();
+    68→      img.onload = () => {
+    69→        const canvas = document.createElement('canvas');
+    70→        const MAX = 1200;
+    71→        let w = img.width, h = img.height;
+    72→        if (w > MAX || h > MAX) {
+    73→          if (w > h) { h = (h / w) * MAX; w = MAX; }
+    74→          else { w = (w / h) * MAX; h = MAX; }
+    75→        }
+    76→        canvas.width = w; canvas.height = h;
+    77→        canvas.getContext('2d')!.drawImage(img, 0, 0, w, h);
+    78→        const base64 = canvas.toDataURL('image/jpeg', 0.6);
+    79→        setComprovanteFoto(base64);
+    80→        setComprovanteUploading(false);
+    81→      };
+    82→      img.src = e.target?.result as string;
+    83→    };
+    84→    reader.readAsDataURL(file);
+    85→  };
+    86→
+    87→  const handleSaveComprovante = async () => {
+    88→    if (!comprovanteSaleId || !comprovanteFoto) return;
+    89→    setComprovanteUploading(true);
+    90→    const ok = await saleService.updateSale(comprovanteSaleId, { comprovanteFoto } as any);
+    91→    setComprovanteUploading(false);
+    92→    if (ok) {
+    93→      setShowComprovanteModal(false);
+    94→      // Após salvar comprovante, fecha o PDV com a venda já finalizada
+    95→      if (lastFinishedSaleRef.current) {
+    96→        onFinish(lastFinishedSaleRef.current);
+    97→      }
+    98→    } else {
+    99→      setAppModal({ title: 'Erro', message: 'Falha ao salvar comprovante.', icon: 'fa-solid fa-triangle-exclamation', iconColor: 'text-rose-500', type: 'error' });
+   100→    }
+   101→  };
+   102→
+   103→  const openComprovanteFlow = (sale: Sale) => {
+   104→    lastFinishedSaleRef.current = sale;
+   105→    setComprovanteSaleId(sale.id);
+   106→    setComprovanteFoto(sale.comprovanteFoto || null);
+   107→    setShowComprovanteModal(true);
+   108→  };
+   109→
+   110→  // ============================================================
+   111→  // MODAL: App-like genérico (substitui window.alert)
+   112→  // ============================================================
+   113→  const [appModal, setAppModal] = useState<{ title: string; message: string; icon?: string; iconColor?: string; type?: 'info' | 'error' | 'success' } | null>(null);
+   114→
+   115→  // ============================================================
+   116→  // MODAL: Confirmação genérica (substitui window.confirm)
+   117→  // ============================================================
+   118→  const [confirmModal, setConfirmModal] = useState<{ title: string; message: string; onConfirm: () => void; icon?: string; iconColor?: string } | null>(null);
+   119→
+   120→  // OBS: O modal de GPS/WhatsApp para clientes incompletos fica no VendedorDashboard (handleAtenderClient),
+   121→  // não aqui no PDV, para evitar duplicação de modais.
+   122→
+   123→  const cartKey = isPrePedido 
+   124→    ? `pdv_pre_pedido_cart_${vendedorId}_${client.id}`
+   125→    : `pdv_cart_${vendedorId}_${client.id}`;
+   126→  
+   127→  const [activeCategoryId, setActiveCategoryId] = useState<string>(() => {
+   128→    return categories.length > 0 ? categories[0].id : '';
+   129→  });
+   130→
+   131→  const [visitedCategoryIds, setVisitedCategoryIds] = useState<string[]>(() => {
+   132→    return categories.length > 0 ? [categories[0].id] : [];
+   133→  });
+   134→  
+   135→  const [cart, setCart] = useState<Record<string, CartItem>>(() => 
+   136→    loadLocalState(cartKey, {})
+   137→  );
+   138→
+   139→  const [metodo, setMetodo] = useState<PaymentMethod>('DINHEIRO');
+   140→  const [detalheMetodo, setDetalheMetodo] = useState<string>('Dinheiro');
+   141→  const [tipoPrazo, setTipoPrazo] = useState<'PRAZO_COMUM' | 'CHEQUE' | 'BOLETO'>('PRAZO_COMUM');
+   142→  const [prazoData, setPrazoData] = useState<string>(() => {
+   143→    const d = new Date();
+   144→    d.setDate(d.getDate() + 7);
+   145→    return d.toISOString().split('T')[0];
+   146→  });
+   147→  const [valorRecebido, setValorRecebido] = useState<string>('');
+   148→  const [selectedPixSlot, setSelectedPixSlot] = useState<1 | 2>(1);
+   149→  const [isTrocaActive, setIsTrocaActive] = useState(false);
+   150→  const [valorTroca, setValorTroca] = useState('');
+   151→  const [printWidth, setPrintWidth] = useState<'56MM' | '80MM'>('56MM');
+   152→
+   153→  useEffect(() => {
+   154→    if (activeCategoryId && !visitedCategoryIds.includes(activeCategoryId)) {
+   155→      setVisitedCategoryIds(prev => [...prev, activeCategoryId]);
+   156→    }
+   157→  }, [activeCategoryId, visitedCategoryIds]);
+   158→
+   159→  useEffect(() => {
+   160→    if (activeCategoryId === '' && categories.length > 0) {
+   161→      setActiveCategoryId(categories[0].id);
+   162→    }
+   163→  }, [categories, activeCategoryId]);
+   164→
+   165→  useEffect(() => {
+   166→    saveLocalState(cartKey, cart);
+   167→  }, [cart, cartKey]);
+   168→
+   169→  const allCategoriesVisited = visitedCategoryIds.length >= categories.length;
+   170→
+   171→  const soldProductIds = useMemo(() => {
+   172→    const clientSales = sales.filter(s => s.clientId === client.id);
+   173→    const ids = new Set<string>();
+   174→    clientSales.forEach(s => {
+   175→      s.itens?.forEach(item => {
+   176→        if (item.produtoId) {
+   177→          ids.add(item.produtoId);
+   178→        }
+   179→      });
+   180→    });
+   181→    return ids;
+   182→  }, [sales, client.id]);
+   183→
+   184→  const formatCategoryName = (name: string) => {
+   185→    const n = name.toUpperCase();
+   186→    if (n.includes('ELMA')) return 'ELMA';
+   187→    if (n.includes('SALTY')) return 'SALTY';
+   188→    if (n.includes('DOCE')) return 'DOCES';
+   189→    if (n.includes('BEBIDA')) return 'BEBIDAS';
+   190→    return n.substring(0, 5);
+   191→  };
+   192→
+   193→  const getOrderedItems = (): SaleItem[] => {
+   194→    return products
+   195→      .filter(p => cart[p.id] && cart[p.id].quantidade > 0)
+   196→      .map(p => ({
+   197→        produtoId: p.id,
+   198→        quantidade: cart[p.id].quantidade,
+   199→        precoVenda: parseFloat(cart[p.id].precoVenda) || 0
+   200→      }));
+   201→  };
+   202→
+   203→  const clientDebt = useMemo(() => {
+   204→    const pendingSales = sales.filter(s => s.clientId === client.id && s.statusPagamento === 'PENDENTE');
+   205→    return pendingSales.reduce((acc, s) => acc + (s.valorTotal - s.valorPago), 0);
+   206→  }, [sales, client.id]);
+   207→
+   208→  // ============================================================
+   209→  // FUNÇÃO DE VALIDAÇÃO DIRETA - CHAMA EM QUALQUER LUGAR
+   210→  // ============================================================
+   211→  const checkPrecoMinimoViolation = (): { hasViolation: boolean; violatingProducts: Array<{ nome: string; preco: number; minimo: number }> } => {
+   212→    if (!margemMinimaAtiva || isPrePedido) return { hasViolation: false, violatingProducts: [] };
+   213→    
+   214→    const violating: Array<{ nome: string; preco: number; minimo: number }> = [];
+   215→    
+   216→    (Object.entries(cart) as [string, CartItem][]).forEach(([pId, item]) => {
+   217→      if (item.quantidade <= 0) return;
+   218→      const p = products.find(prod => prod.id === pId);
+   219→      if (!p) return;
+   220→      
+   221→      const price = parseFloat(item.precoVenda) || 0;
+   222→      const minPrice = p.precoMinimo || 0;
+   223→      
+   224→      // Só valida se tem preço mínimo CADASTRADO (> 0)
+   225→      if (minPrice > 0 && price < minPrice) {
+   226→        violating.push({ 
+   227→          nome: p.nome, 
+   228→          preco: price, 
+   229→          minimo: minPrice 
+   230→        });
+   231→      }
+   232→    });
+   233→    
+   234→    return { hasViolation: violating.length > 0, violatingProducts: violating };
+   235→  };
+   236→
+   237→  // Para compatibilidade com código existente
+   238→  const hasMarginViolation = checkPrecoMinimoViolation().hasViolation;
+   239→
+   240→  const updateCart = (pId: string, delta: number, basePrice: number) => {
+   241→    setCart(prev => {
+   242→      const current = prev[pId] || { quantidade: 0, precoVenda: basePrice.toString() };
+   243→      const maxLimit = isPrePedido 
+   244→        ? (products.find(p => p.id === pId)?.estoquePrincipal || 0)
+   245→        : (minhaCarga.find(c => c.produtoId === pId)?.quantidade || 0);
+   246→      const novaQtd = Math.max(0, Math.min(maxLimit, (current.quantidade ?? 0) + delta)); 
+   247→      if (novaQtd === 0 && delta < 0) {
+   248→        const { [pId]: _, ...rest } = prev;
+   249→        return rest;
+   250→      }
+   251→      return { ...prev, [pId]: { ...current, quantidade: novaQtd } };
+   252→    });
+   253→  };
+   254→
+   255→  // Validação no blur - corrige automaticamente se abaixo do mínimo
+   256→  const handlePriceBlur = (pId: string, value: string) => {
+   257→    if (!margemMinimaAtiva || isPrePedido) return;
+   258→    
+   259→    const sanitized = value.replace(',', '.');
+   260→    const p = products.find(prod => prod.id === pId);
+   261→    const minPrice = p?.precoMinimo || 0;
+   262→    
+   263→    if (sanitized && minPrice > 0) {
+   264→      const numValue = parseFloat(sanitized);
+   265→      if (!isNaN(numValue) && numValue < minPrice) {
+   266→        setCart(prev => {
+   267→          if (!prev[pId]) return prev;
+   268→          return { ...prev, [pId]: { ...prev[pId], precoVenda: minPrice.toFixed(2) } };
+   269→        });
+   270→      }
+   271→    }
+   272→  };
+   273→
+   274→  // Mudança no input - apenas atualiza, não bloqueia digitação
+   275→  const handlePriceChange = (pId: string, value: string) => {
+   276→    const sanitized = value.replace(',', '.');
+   277→    setCart(prev => {
+   278→      if (!prev[pId]) return prev;
+   279→      return { ...prev, [pId]: { ...prev[pId], precoVenda: sanitized } };
+   280→    });
+   281→  };
+   282→
+   283→  const subtotal = useMemo(() => {
+   284→    return Object.entries(cart).reduce((acc, [_, item]) => {
+   285→      const cartItem = item as CartItem;
+   286→      const price = parseFloat(cartItem.precoVenda) || 0;
+   287→      return acc + ((cartItem.quantidade ?? 0) * price); 
+   288→    }, 0);
+   289→  }, [cart]);
+   290→
+   291→  const total = useMemo(() => {
+   292→    const vt = parseFloat(valorTroca) || 0;
+   293→    return Math.max(0, subtotal - (isTrocaActive ? vt : 0));
+   294→  }, [subtotal, isTrocaActive, valorTroca]);
+   295→
+   296→  const troco = useMemo(() => {
+   297→    const rec = parseFloat(valorRecebido) || 0;
+   298→    return Math.max(0, rec - total);
+   299→  }, [valorRecebido, total]);
+   300→
+   301→  const setPrazoDays = (days: number) => {
+   302→    const d = new Date();
+   303→    d.setDate(d.getDate() + days);
+   304→    setPrazoData(d.toISOString().split('T')[0]);
+   305→  };
+   306→
+   307→  // ============================================================
+   308→  // BLOQUEIO INQUEBRÁVEL - CHAMADO ANTES DE QUALQUER FINALIZAÇÃO
+   309→  // ============================================================
+   310→  const validateAndBlockIfNeeded = (): boolean => {
+   311→    const { hasViolation, violatingProducts } = checkPrecoMinimoViolation();
+   312→    
+   313→    if (hasViolation) {
+   314→      const detalhes = violatingProducts
+   315→        .map(v => `• ${v.nome}: digitou R$ ${v.preco.toFixed(2)}, mínimo é R$ ${v.minimo.toFixed(2)}`)
+   316→        .join('\n');
+   317→      
+   318→      setAppModal({
+   319→        title: 'Venda Bloqueada',
+   320→        message: `Preço abaixo do mínimo!\n\n${detalhes}\n\nCorrija os preços antes de continuar.`,
+   321→        icon: 'fa-solid fa-circle-exclamation',
+   322→        iconColor: 'text-rose-500',
+   323→        type: 'error',
+   324→      });
+   325→      return false; // BLOQUEIA
+   326→    }
+   327→    return true; // LIBERA
+   328→  };
+   329→
+   330→  const handleConfirmFinalize = async () => {
+   331→    if (isFinalizingRef.current) return; // BLOQUEIO: evita venda duplicada
+   332→    if (total <= 0 && getOrderedItems().length === 0) return;
+   333→    
+   334→    // TRAVA ABSOLUTA - não passa daqui se houver violação
+   335→    if (!validateAndBlockIfNeeded()) return;
+   336→
+   337→    isFinalizingRef.current = true;
+   338→
+   339→    const itens = getOrderedItems();
+   340→    const vt = parseFloat(valorTroca) || 0;
+   341→    const descontoInfo = isTrocaActive && vt > 0 ? ` (Troca: R$ ${vt.toFixed(2)})` : '';
+   342→    
+   343→    let finalDetalhe = '';
+   344→    if (metodo === 'PIX') {
+   345→      finalDetalhe = selectedPixSlot === 1 ? pix1Name : pix2Name;
+   346→    } else if (metodo === 'A_PRAZO') {
+   347→      const tipoLabel = tipoPrazo === 'PRAZO_COMUM' ? 'Prazo Comum' : tipoPrazo === 'CHEQUE' ? 'Cheque' : 'Boleto';
+   348→      finalDetalhe = tipoLabel;
+   349→    } else {
+   350→      finalDetalhe = detalheMetodo;
+   351→    }
+   352→    finalDetalhe += descontoInfo;
+   353→    
+   354→    const salePayload: any = { 
+   355→      vendedorId, 
+   356→      clientId: client.id, 
+   357→      valorTotal: total, 
+   358→      valorPago: metodo === 'A_PRAZO' ? 0 : total,
+   359→      metodoPagamento: metodo, 
+   360→      detalhePagamento: finalDetalhe, 
+   361→      itens,
+   362→      data: new Date() 
+   363→    };
+   364→
+   365→    if (metodo === 'A_PRAZO') { 
+   366→      salePayload.statusPagamento = 'PENDENTE'; 
+   367→      salePayload.dataVencimento = new Date(prazoData); 
+   368→    } else { 
+   369→      salePayload.statusPagamento = 'PAGO'; 
+   370→    }
+   371→    
+   372→    const newSale = await processSale(salePayload);
+   373→    if (newSale) { 
+   374→      localStorage.removeItem(cartKey); 
+   375→      setCart({}); // Esvazia o carrinho imediatamente para evitar re-venda
+   376→      lastFinishedSaleRef.current = newSale;
+   377→
+   378→      // Calcula comissao e abre modal bonito
+   379→      let comissaoTotal = 0;
+   380→      itens.forEach(item => {
+   381→        const prod = products.find(p => p.id === item.produtoId);
+   382→        if (prod) {
+   383→          comissaoTotal += (item.quantidade * item.precoVenda) * ((prod.comissaoPercentual || 0) / 100);
+   384→        }
+   385→      });
+   386→
+   387→      setSaleResultModal({
+   388→        total,
+   389→        comissao: comissaoTotal,
+   390→        troca: isTrocaActive ? vt : 0,
+   391→        isPrazo: metodo === 'A_PRAZO',
+   392→        clientName: client.nomeFantasia,
+   393→        sale: newSale,
+   394→      });
+   395→    } else {
+   396→      isFinalizingRef.current = false; // Libera se falhou
+   397→    }
+   398→  };
+   399→
+   400→  const productIdsInCarga = useMemo(() => new Set(minhaCarga.map(c => c.produtoId)), [minhaCarga]);
+   401→  
+   402→  const filteredProducts = useMemo(() => {
+   403→    if (isPrePedido) {
+   404→      const activeProds = products.filter(p => p.ativo);
+   405→      if (!activeCategoryId) return activeProds;
+   406→      return activeProds.filter(p => p.categoryId === activeCategoryId);
+   407→    }
+   408→    const productsInCarga = products.filter(p => productIdsInCarga.has(p.id));
+   409→    if (!activeCategoryId) return productsInCarga;
+   410→    return productsInCarga.filter(p => p.categoryId === activeCategoryId);
+   411→  }, [products, productIdsInCarga, activeCategoryId, isPrePedido]);
+   412→
+   413→  const generatePrePedidoText = (width: '56MM' | '80MM') => {
+   414→    const totalWidth = width === '80MM' ? 48 : 32; 
+   415→    
+   416→    const padR = (str: string, len: number) => str.substring(0, len).padEnd(len);
+   417→    const padL = (str: string, len: number) => str.substring(0, len).padStart(len);
+   418→    const center = (str: string, len: number) => {
+   419→      const s = str.substring(0, len);
+   420→      const spaces = Math.max(0, Math.floor((len - s.length) / 2));
+   421→      return ' '.repeat(spaces) + s;
+   422→    };
+   423→
+   424→    let t = '';
+   425→    
+   426→    t += '*'.repeat(totalWidth) + '\n';
+   427→    t += center('PRÉ-PEDIDO (RASCUNHO)', totalWidth) + '\n';
+   428→    t += '*'.repeat(totalWidth) + '\n';
+   429→    
+   430→    const clientName = client.nomeFantasia || 'Consumidor';
+   431→    t += `Cliente: ${clientName}\n`;
+   432→    t += `Data: ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}\n`;
+   433→    t += '-'.repeat(totalWidth) + '\n';
+   434→
+   435→    const qtyW = 4;
+   436→    const valW = width === '80MM' ? 13 : 8;
+   437→    const descW = totalWidth - qtyW - valW;
+   438→
+   439→    t += padR('DESCRICAO', descW) + padL('QTD', qtyW) + padL('VALOR', valW) + '\n';
+   440→    t += '-'.repeat(totalWidth) + '\n';
+   441→
+   442→    const items = getOrderedItems();
+   443→    items.forEach(item => {
+   444→      const p = products.find(prod => prod.id === item.produtoId);
+   445→      const productName = (p?.nome ?? 'Produto');
+   446→      
+   447→      const qtyStr = `${item.quantidade}x`;
+   448→      const valStr = `${(item.quantidade * item.precoVenda).toFixed(2)}`;
+   449→
+   450→      t += padR(productName.substring(0, descW), descW) + padL(qtyStr, qtyW) + padL(valStr, valW) + '\n';
+   451→
+   452→      let remaining = productName.substring(descW);
+   453→      while (remaining.length > 0) {
+   454→        t += padR(remaining.substring(0, totalWidth), totalWidth) + '\n';
+   455→        remaining = remaining.substring(totalWidth);
+   456→      }
+   457→    });
+   458→
+   459→    t += '-'.repeat(totalWidth) + '\n';
+   460→    
+   461→    const totalLabel = 'TOTAL ESTIMADO:';
+   462→    const totalVal = `R$ ${total.toFixed(2)}`;
+   463→    t += padR(totalLabel, totalWidth - totalVal.length) + totalVal + '\n';
+   464→
+   465→    t += '-'.repeat(totalWidth) + '\n';
+   466→    t += center('ATENÇÃO: ESTE DOCUMENTO', totalWidth) + '\n';
+   467→    t += center('NÃO É UMA VENDA REAL.', totalWidth) + '\n';
+   468→    t += center('APENAS RESERVA/PLANEJAMENTO', totalWidth) + '\n';
+   469→    t += '*'.repeat(totalWidth) + '\n';
+   470→    t += '\n\n\n\n\n';
+   471→
+   472→    return t;
+   473→  };
+   474→
+   475→  const handlePrintPrePedido = async () => {
+   476→    const rawText = generatePrePedidoText(printWidth);
+   477→    setConfirmModal({
+   478→      title: 'Imprimir Pré-Pedido',
+   479→      message: `Deseja imprimir este pré-pedido?\nModelo: ${printWidth === '80MM' ? '80mm (Largo)' : '56mm (Estreito)'}`,
+   480→      icon: 'fa-solid fa-print',
+   481→      iconColor: 'text-blue-600',
+   482→      onConfirm: async () => {
+   483→        setConfirmModal(null);
+   484→        try {
+   485→          await bluetoothPrinter.print(rawText, printWidth);
+   486→          setAppModal({ title: 'Sucesso', message: 'Pré-pedido impresso com sucesso!', icon: 'fa-solid fa-check', iconColor: 'text-emerald-500', type: 'success' });
+   487→        } catch (error: any) {
+   488→          const msg = error?.message || 'Erro desconhecido';
+   489→          if (msg === 'BLUETOOTH_NAO_SUPORTADO') {
+   490→            setAppModal({ title: 'Bluetooth Indisponível', message: 'Para impressão via Bluetooth:\n1. Use o Chrome no Android\n2. Ative o Bluetooth do dispositivo', icon: 'fa-brands fa-bluetooth-b', iconColor: 'text-gray-400', type: 'error' });
+   491→          } else {
+   492→            setAppModal({ title: 'Erro na Impressão', message: `Falha ao imprimir pré-pedido: ${msg}`, icon: 'fa-solid fa-triangle-exclamation', iconColor: 'text-rose-500', type: 'error' });
+   493→          }
+   494→        }
+   495→      },
+   496→    });
+   497→  };
+   498→
+   499→  const handleCopyPrePedido = () => {
+   500→    const rawText = generatePrePedidoText(printWidth);
+   501→    navigator.clipboard.writeText(rawText);
+   502→    setAppModal({ title: 'Copiado!', message: 'Texto do pré-pedido copiado para a área de transferência.', icon: 'fa-solid fa-clipboard-check', iconColor: 'text-emerald-500', type: 'success' });
+   503→  };
+   504→
+   505→  if (view === 'RECEIPT_PREVIEW') {
+   506→    return (
+   507→      <div className="fixed inset-0 bg-gray-900 z-[100] flex flex-col">
+   508→        <div className="flex-1 overflow-y-auto">
+   509→          <Cupom 
+   510→            sale={{ 
+   511→              id: 'preview', 
+   512→              vendedorId, 
+   513→              clientId: client.id, 
+   514→              data: new Date(), 
+   515→              valorTotal: total, 
+   516→              valorPago: 0, 
+   517→              metodoPagamento: metodo, 
+   518→              statusPagamento: metodo === 'A_PRAZO' ? 'PENDENTE' : 'PAGO', 
+   519→              itens: getOrderedItems() 
+   520→            }} 
+   521→            client={client} 
+   522→            products={products} 
+   523→            onBack={() => setView('CART')} 
+   524→            onClose={() => setView('PAYMENT')} 
+   525→            allowDelete={false}
+   526→            closeLabel="IR PARA PAGAMENTO"
+   527→          />
+   528→        </div>
+   529→      </div>
+   530→    );
+   531→  }
+   532→
+   533→  if (view === 'PRE_PEDIDO_PREVIEW') {
+   534→    return (
+   535→      <div className="fixed inset-0 bg-black/90 z-[150] flex flex-col items-center justify-center p-4 overflow-y-auto backdrop-blur-sm">
+   536→        <div className="bg-white w-full max-w-[340px] shadow-2xl flex flex-col animate-in zoom-in-95 duration-300 relative rounded-t-3xl overflow-hidden">
+   537→          
+   538→          <div className="p-6 bg-white overflow-hidden mt-4">
+   539→            <h3 className="text-center font-black text-xs text-indigo-600 uppercase mb-4 tracking-widest"><i className="fa-solid fa-file-invoice mr-2"></i> Pré-Pedido Rascunho</h3>
+   540→            <div className="font-mono text-[11px] leading-tight text-black bg-white whitespace-pre select-none border-l-2 border-indigo-100 pl-4">
+   541→              {generatePrePedidoText(printWidth)}
+   542→            </div>
+   543→          </div>
+   544→
+   545→          <div className="bg-gray-100 p-5 flex flex-col gap-3 border-t border-gray-200">
+   546→            <div className="flex bg-gray-200 p-1 rounded-2xl mb-1">
+   547→              <button onClick={() => setPrintWidth('56MM')} className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${printWidth === '56MM' ? 'bg-white shadow-sm text-indigo-600' : 'text-gray-500'}`}>56mm</button>
+   548→              <button onClick={() => setPrintWidth('80MM')} className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${printWidth === '80MM' ? 'bg-white shadow-sm text-indigo-600' : 'text-gray-400'}`}>80mm</button>
+   549→            </div>
+   550→            
+   551→            <div className="grid grid-cols-2 gap-2">
+   552→              <button onClick={handlePrintPrePedido} className="bg-indigo-600 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 active:scale-95 text-[10px] uppercase shadow-lg">
+   553→                <i className="fa-solid fa-print"></i> Imprimir
+   554→              </button>
+   555→              <button onClick={handleCopyPrePedido} className="bg-emerald-600 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 active:scale-95 text-[10px] uppercase shadow-lg">
+   556→                <i className="fa-solid fa-copy"></i> Copiar
+   557→              </button>
+   558→            </div>
+   559→
+   560→            <button 
+   561→              onClick={() => {
+   562→                setCart({});
+   563→                setView('CART');
+   564→                setIsPrePedido(false);
+   565→              }} 
+   566→              className="w-full bg-slate-900 text-white font-black py-4 rounded-2xl active:scale-95 text-[10px] uppercase tracking-widest shadow-xl"
+   567→            >
+   568→              VOLTAR AO ATENDIMENTO
+   569→            </button>
+   570→          </div>
+   571→        </div>
+   572→      </div>
+   573→    );
+   574→  }
+   575→
+   576→  return (
+   577→    <>
+   578→    <div className="fixed inset-0 bg-gray-50 z-[60] flex flex-col">
+   579→      <header className="bg-white border-b border-gray-100 p-3 flex flex-col shadow-sm">
+   580→        <div className="flex justify-between items-center mb-3">
+   581→          <button onClick={onCancel} className="w-9 h-9 bg-gray-50 text-gray-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-arrow-left"></i></button>
+   582→          <div className="text-center px-4 truncate">
+   583→            <p className="text-[9px] text-gray-400 uppercase font-black tracking-tighter">
+   584→              {isPrePedido ? 'Pré-Pedido Rascunho' : 'Atendimento'}
+   585→            </p>
+   586→            <h2 className="font-black text-xs text-gray-800 uppercase truncate">{client.nomeFantasia}</h2> 
+   587→          </div>
+   588→          <button onClick={() => setConfirmModal({ title: 'Zerar Quantidades', message: 'Deseja realmente zerar todas as quantidades do carrinho?', icon: 'fa-solid fa-trash-can', iconColor: 'text-rose-500', onConfirm: () => { setConfirmModal(null); setCart({}); } })} className="w-9 h-9 bg-rose-50 text-rose-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-trash-can text-sm"></i></button>
+   589→        </div>
+   590→
+   591→        <div className="grid grid-cols-4 gap-1 px-0.5">
+   592→          {categories.map(cat => {
+   593→            const isVisited = visitedCategoryIds.includes(cat.id);
+   594→            return (
+   595→              <button 
+   596→                key={cat.id}
+   597→                onClick={() => setActiveCategoryId(cat.id)}
+   598→                className={`py-1.5 px-1 rounded-lg text-[8px] font-black uppercase transition-all truncate border relative ${activeCategoryId === cat.id ? 'bg-blue-600 text-white border-blue-600 shadow-sm' : 'bg-gray-50 text-gray-400 border-gray-100'}`}
+   599→              >
+   600→                {formatCategoryName(cat.name)}
+   601→                {isVisited && activeCategoryId !== cat.id && (
+   602→                  <div className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-emerald-500 rounded-full border-2 border-white shadow-sm"></div>
+   603→                )}
+   604→              </button>
+   605→            );
+   606→          })}
+   607→        </div>
+   608→      </header>
+   609→
+   610→      {clientDebt > 0 && !isPrePedido && (
+   611→        <button onClick={() => { onCancel(); onNavigateToCredit(); }} className="w-full bg-rose-600 text-white p-3 flex items-center justify-center gap-3 shadow-md">
+   612→          <i className="fa-solid fa-triangle-exclamation text-sm"></i>
+   613→          <span className="text-[10px] font-black uppercase tracking-widest">DÍVIDA PENDENTE: R$ {clientDebt.toFixed(2)}</span>
+   614→        </button>
+   615→      )}
+   616→
+   617→      <div className="flex-1 overflow-y-auto p-2 space-y-1.5 pb-44">
+   618→        {filteredProducts.map(p => { 
+   619→          const item = cart[p.id];
+   620→          const cargaOriginal = isPrePedido ? (p.estoquePrincipal || 0) : (minhaCarga.find(c => c.produtoId === p.id)?.quantidade || 0);
+   621→          const minPrice = p.precoMinimo || 0;
+   622→          const itemPrice = item ? parseFloat(item.precoVenda) || 0 : p.precoVenda;
+   623→          // Só considera violação se tem preço mínimo cadastrado (> 0)
+   624→          const isBelowMin = margemMinimaAtiva && item && item.quantidade > 0 && minPrice > 0 && itemPrice < minPrice && !isPrePedido;
+   625→          const hasBeenSold = soldProductIds.has(p.id);
+   626→
+   627→          return (
+   628→            <div key={p.id} className={`bg-white p-2.5 rounded-2xl border flex flex-col gap-1 ${item?.quantidade ? 'border-blue-200 bg-blue-50/30' : 'border-gray-100'}`}>
+   629→              <div className="flex items-center gap-3 w-full">
+   630→                <div className="flex-1 min-w-0">
+   631→                  <h3 className="font-bold text-gray-800 text-[11px] leading-tight uppercase truncate flex items-center gap-1.5">
+   632→                    {hasBeenSold && (
+   633→                      <i 
+   634→                        className="fa-solid fa-check text-[11px] text-emerald-500 flex-shrink-0" 
+   635→                        title="Este produto já foi vendido para este cliente"
+   636→                      />
+   637→                    )}
+   638→                    {p.nome}
+   639→                  </h3> 
+   640→                  <div className="flex items-center gap-2 mt-1">
+   641→                     <div className={`flex items-center gap-1.5 bg-white border px-2 py-0.5 rounded-lg ${isBelowMin ? 'border-rose-500 bg-rose-50' : 'border-gray-100'}`}>
+   642→                        <span className={`text-[9px] font-black ${isBelowMin ? 'text-rose-500' : 'text-gray-300'}`}>R$</span>
+   643→                        <input 
+   644→                          type="text" 
+   645→                          value={item?.precoVenda ?? (p.precoVenda ?? 0).toFixed(2)} 
+   646→                          onChange={(e) => handlePriceChange(p.id, e.target.value)} 
+   647→                          onBlur={(e) => handlePriceBlur(p.id, e.target.value)}
+   648→                          className={`w-14 bg-transparent border-none p-0 text-[11px] font-black outline-none ${isBelowMin ? 'text-rose-600' : 'text-emerald-600'}`} 
+   649→                        />
+   650→                        {/* SÓ mostra preço mínimo se cadastrado (> 0) - NUNCA mostra 0 */}
+   651→                        {p.precoMinimo && p.precoMinimo > 0 && (
+   652→                          <span className="text-[8px] font-bold text-rose-600 ml-1">
+   653→                            {p.precoMinimo.toFixed(2)}
+   654→                          </span>
+   655→                        )}
+   656→                     </div>
+   657→                     {/* ICONE DE ESTOQUE CENTRAL NO PRÉ-PEDIDO - MAIS CLEAN */}
+   658→                     {isPrePedido && (
+   659→                       <div className="flex items-center gap-1.5 bg-indigo-50 px-2 py-0.5 rounded-lg border border-indigo-100 shadow-inner whitespace-nowrap" title="Estoque Central">
+   660→                         <i className="fa-solid fa-warehouse text-indigo-400 text-[10px]"></i>
+   661→                         <span className="text-[10px] font-black text-indigo-600">{cargaOriginal - (item?.quantidade ?? 0)}</span>
+   662→                       </div>
+   663→                     )}
+   664→                     {!isPrePedido && (
+   665→                       <span className={`text-[9px] font-bold uppercase ${isPrePedido ? 'text-indigo-600' : 'text-blue-500'}`}>
+   666→                         {cargaOriginal - (item?.quantidade ?? 0)} UN
+   667→                       </span>
+   668→                     )}
+   669→                  </div>
+   670→                </div>
+   671→                <div className="flex items-center bg-white rounded-xl p-0.5 border border-gray-100 shadow-sm">
+   672→                  <button onClick={() => updateCart(p.id, -1, p.precoVenda)} className="w-8 h-8 text-gray-400 active:scale-90 flex items-center justify-center"><i className="fa-solid fa-minus text-[10px]"></i></button> 
+   673→                  <span className="font-black text-xs min-w-[22px] text-center">{item?.quantidade ?? 0}</span> 
+   674→                  <button onClick={() => updateCart(p.id, 1, p.precoVenda)} className="w-8 h-8 text-blue-600 active:scale-90 flex items-center justify-center"><i className="fa-solid fa-plus text-[10px]"></i></button> 
+   675→                </div>
+   676→              </div>
+   677→              {isBelowMin && (
+   678→                <p className="text-[8px] text-rose-600 font-black uppercase mt-1 animate-pulse">
+   679→                  <i className="fa-solid fa-circle-exclamation mr-1"></i> Mínimo: R$ {minPrice.toFixed(2)}
+   680→                </p>
+   681→              )}
+   682→            </div>
+   683→          );
+   684→        })}
+   685→        {filteredProducts.length === 0 && (
+   686→          <div className="py-20 text-center opacity-30 flex flex-col items-center gap-4">
+   687→            <i className="fa-solid fa-box-open text-5xl"></i>
+   688→            <p className="font-black uppercase tracking-widest text-[10px]">Nenhum produto desta categoria.</p>
+   689→          </div>
+   690→        )}
+   691→      </div>
+   692→
+   693→      <footer className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 p-4 pb-8 space-y-3 shadow-[0_-10px_20px_rgba(0,0,0,0.05)] max-w-lg mx-auto z-[70]">
+   694→        {!allCategoriesVisited && !isPrePedido && (
+   695→          <div className="bg-amber-100 text-amber-700 p-2 rounded-xl text-center font-black text-[8px] uppercase tracking-widest animate-in fade-in duration-300">
+   696→            <i className="fa-solid fa-eye mr-1"></i> Visualize todas as abas para liberar o cupom ({visitedCategoryIds.length}/{categories.length})
+   697→          </div>
+   698→        )}
+   699→        
+   700→        {/* Banner visual de violação */}
+   701→        {hasMarginViolation && (
+   702→          <div className="bg-rose-600 text-white p-3 rounded-xl text-center font-black text-[9px] uppercase tracking-widest animate-pulse flex items-center justify-center gap-2">
+   703→            <i className="fa-solid fa-circle-exclamation text-sm"></i>
+   704→            Venda Bloqueada: Preço abaixo do mínimo!
+   705→          </div>
+   706→        )}
+   707→
+   708→        <div className="flex items-center justify-between gap-4 px-1 mb-1 bg-gray-50/50 p-2 rounded-xl">
+   709→          <div className="flex items-center gap-2">
+   710→            <button onClick={() => setIsTrocaActive(!isTrocaActive)} className={`w-10 h-6 rounded-full relative transition-colors ${isTrocaActive ? 'bg-orange-500' : 'bg-gray-300'}`}>
+   711→              <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${isTrocaActive ? 'left-5' : 'left-1'}`}></div>
+   712→            </button>
+   713→            <span className="text-[9px] font-black text-gray-400 uppercase">Troca/Desc.</span>
+   714→          </div>
+   715→
+   716→          <div className="flex items-center gap-2">
+   717→            <button 
+   718→              onClick={() => {
+   719→                setIsPrePedido(!isPrePedido);
+   720→                setCart({});
+   721→              }} 
+   722→              className={`w-10 h-6 rounded-full relative transition-colors ${isPrePedido ? 'bg-indigo-600' : 'bg-gray-300'}`}
+   723→            >
+   724→              <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${isPrePedido ? 'left-5' : 'left-1'}`}></div>
+   725→            </button>
+   726→            <span className="text-[9px] font-black text-gray-400 uppercase">Pré-Pedido</span>
+   727→          </div>
+   728→
+   729→          {isTrocaActive && <input type="number" value={valorTroca} onChange={e => setValorTroca(e.target.value)} placeholder="R$ 0.00" className="w-24 bg-white border border-orange-100 rounded-lg text-[11px] font-black text-orange-600 p-2 text-right outline-none" />}
+   730→        </div>
+   731→
+   732→        <div className="flex justify-between items-end px-1">
+   733→          <div>
+   734→            <p className="text-[9px] font-black text-gray-400 uppercase mb-0.5">
+   735→              {isPrePedido ? 'Total Rascunho' : 'Total Líquido'}
+   736→            </p>
+   737→            <p className="text-xl font-black text-gray-800">R$ {total.toFixed(2)}</p>
+   738→          </div>
+   739→          <button 
+   740→            onClick={() => {
+   741→              if (isPrePedido) {
+   742→                setView('PRE_PEDIDO_PREVIEW');
+   743→              } else {
+   744→                setView('RECEIPT_PREVIEW');
+   745→              }
+   746→            }} 
+   747→            disabled={(total <= 0 && getOrderedItems().length === 0) || hasMarginViolation || (!allCategoriesVisited && !isPrePedido)} 
+   748→            className={`px-6 py-4 rounded-2xl font-black uppercase text-xs ${(total > 0 || getOrderedItems().length > 0) && !hasMarginViolation && (allCategoriesVisited || isPrePedido) ? (isPrePedido ? 'bg-indigo-600 text-white shadow-lg' : 'bg-blue-600 text-white shadow-lg') : 'bg-gray-200 text-gray-400'}`}
+   749→          >
+   750→            {isPrePedido ? 'Gerar Rascunho' : 'Gerar Cupom'}
+   751→          </button>
+   752→        </div>
+   753→      </footer>
+   754→
+   755→      {view === 'PAYMENT' && (
+   756→        <div className="fixed inset-0 bg-black/60 z-[110] flex items-end justify-center p-4">
+   757→           <div className="bg-white w-full max-sm rounded-[2.5rem] p-8 animate-in slide-in-from-bottom max-h-[95vh] overflow-y-auto">
+   758→              <h3 className="font-black text-gray-800 text-lg mb-4 text-center uppercase tracking-tight">Finalizar Pagamento</h3>
+   759→              
+   760→              <div className="bg-gray-50 p-4 rounded-2xl mb-6 text-center border border-gray-100">
+   761→                <p className="text-[10px] font-black text-gray-400 uppercase mb-1">Valor Total Devido</p>
+   762→                <p className="text-3xl font-black text-blue-600">R$ {total.toFixed(2)}</p>
+   763→              </div>
+   764→
+   765→              <div className="flex gap-1.5 mb-6 justify-center">
+   766→                {(['DINHEIRO', 'PIX', 'A_PRAZO'] as const).map(m => (
+   767→                  <button key={m} onClick={() => setMetodo(m)} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${metodo === m ? 'bg-blue-600 text-white shadow-md' : 'bg-gray-50 text-gray-400'}`}>{m === 'A_PRAZO' ? 'PRAZO' : m}</button>
+   768→                ))}
+   769→              </div>
+   770→
+   771→              {metodo === 'DINHEIRO' && (
+   772→                <div className="mb-6 space-y-4 animate-in fade-in duration-300">
+   773→                   <div className="space-y-1">
+   774→                      <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Valor Recebido R$</label>
+   775→                      <input 
+   776→                        type="number" 
+   777→                        value={valorRecebido} 
+   778→                        onChange={e => setValorRecebido(e.target.value)} 
+   779→                        placeholder="0.00" 
+   780→                        className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-2xl font-black text-center outline-none" 
+   781→                        autoFocus
+   782→                      />
+   783→                   </div>
+   784→                   {parseFloat(valorRecebido) > total && (
+   785→                     <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100 text-center animate-in zoom-in-95">
+   786→                        <p className="text-[10px] font-black text-emerald-600 uppercase mb-1">Troco a Devolver</p>
+   787→                        <p className="text-2xl font-black text-emerald-700">R$ {troco.toFixed(2)}</p>
+   788→                     </div>
+   789→                   )}
+   790→                </div>
+   791→              )}
+   792→
+   793→              {metodo === 'A_PRAZO' && (
+   794→                <div className="mb-6 space-y-4 animate-in fade-in duration-300">
+   795→                   <p className="text-[9px] font-black text-gray-400 uppercase text-center mb-1">Tipo de Prazo</p>
+   796→                   <div className="flex gap-1.5 mb-4 justify-center">
+   797→                     {(['PRAZO_COMUM', 'CHEQUE', 'BOLETO'] as const).map(t => (
+   798→                       <button 
+   799→                         key={t} 
+   800→                         onClick={() => setTipoPrazo(t)} 
+   801→                         className={`flex-1 py-2 rounded-lg text-[8px] font-black uppercase transition-all ${tipoPrazo === t ? 'bg-indigo-600 text-white shadow-sm' : 'bg-gray-100 text-gray-400'}`}
+   802→                       >
+   803→                         {t === 'PRAZO_COMUM' ? 'Prazo Comum' : t === 'CHEQUE' ? 'Cheque' : 'Boleto'}
+   804→                       </button>
+   805→                     ))}
+   806→                   </div>
+   807→
+   808→                   <div className="grid grid-cols-4 gap-2">
+   809→                     {[7, 14, 21, 30].map(days => (
+   810→                       <button key={days} onClick={() => setPrazoDays(days)} className="py-3 bg-gray-50 border border-gray-100 rounded-xl text-[10px] font-black text-gray-600 hover:bg-blue-50 hover:text-blue-600 transition-colors">{days}D</button>
+   811→                     ))}
+   812→                   </div>
+   813→                   <div className="space-y-1">
+   814→                      <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Data de Vencimento</label>
+   815→                      <input type="date" value={prazoData} onChange={e => setPrazoData(e.target.value)} className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-bold outline-none focus:ring-2 focus:ring-blue-100" />
+   816→                   </div>
+   817→                </div>
+   818→              )}
+   819→
+   820→              {metodo === 'PIX' && (
+   821→                <div className="mb-6 space-y-4 animate-in fade-in duration-300">
+   822→                   <p className="text-[9px] font-black text-gray-400 uppercase text-center">Selecione o Banco para Receber</p>
+   823→                   <div className="grid grid-cols-2 gap-2">
+   824→                     <button onClick={() => setSelectedPixSlot(1)} className={`p-3 rounded-xl border text-[10px] font-black uppercase transition-all ${selectedPixSlot === 1 ? 'border-blue-600 bg-blue-50 text-blue-600' : 'border-gray-100 text-gray-400'}`}>{pix1Name}</button>
+   825→                     <button onClick={() => setSelectedPixSlot(2)} className={`p-3 rounded-xl border text-[10px] font-black uppercase transition-all ${selectedPixSlot === 2 ? 'border-blue-600 bg-blue-50 text-blue-600' : 'border-gray-100 text-gray-400'}`}>{pix2Name}</button>
+   826→                   </div>
+   827→                   
+   828→                   <div className="bg-gray-50 p-4 rounded-2xl flex flex-col items-center border border-gray-100">
+   829→                     <p className="text-[8px] font-black text-gray-400 uppercase mb-3">QR CODE PARA PAGAMENTO</p>
+   830→                     <div className="w-32 h-32 bg-white rounded-xl flex items-center justify-center border border-gray-200 overflow-hidden shadow-inner">
+   831→                        {selectedPixSlot === 1 ? (
+   832→                          pix1Code ? <img src={pix1Code} className="w-full h-full object-contain" /> : <i className="fa-solid fa-qrcode text-gray-200 text-3xl"></i>
+   833→                        ) : (
+   834→                          pix2Code ? <img src={pix2Code} className="w-full h-full object-contain" /> : <i className="fa-solid fa-qrcode text-gray-200 text-3xl"></i>
+   835→                        )}
+   836→                     </div>
+   837→                   </div>
+   838→                </div>
+   839→              )}
+   840→
+   841→              <button 
+   842→                onClick={handleConfirmFinalize} 
+   843→                disabled={hasMarginViolation}
+   844→                className={`w-full bg-emerald-600 text-white py-5 rounded-2xl font-black uppercase text-xs shadow-xl active:scale-95 transition-all mb-2 tracking-widest ${hasMarginViolation ? 'opacity-50 cursor-not-allowed' : ''}`}
+   845→              >
+   846→                Concluir Venda
+   847→              </button>
+   848→              <button onClick={() => setView('RECEIPT_PREVIEW')} className="w-full py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Voltar ao Cupom</button>
+   849→           </div>
+   850→        </div>
+   851→      )}
+   852→    </div>
+   853→
+   854→    {/* MODAL: Venda finalizada com comissao */}
+   855→    {saleResultModal && (
+   856→      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
+   857→        <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
+   858→          <div className="bg-gradient-to-br from-emerald-500 to-teal-600 p-6 text-center">
+   859→            <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-3">
+   860→              <i className="fa-solid fa-circle-check text-white text-3xl"></i>
+   861→            </div>
+   862→            <h3 className="font-black text-white text-lg uppercase tracking-tight">Venda Finalizada</h3>
+   863→            <p className="text-white/80 text-[10px] font-bold uppercase mt-1">{saleResultModal.clientName}</p>
+   864→          </div>
+   865→
+   866→          <div className="p-6 space-y-3">
+   867→            <div className="bg-gray-50 p-4 rounded-2xl flex items-center justify-between">
+   868→              <span className="text-[10px] font-black text-gray-400 uppercase">Total da Venda</span>
+   869→              <span className="text-lg font-black text-gray-800">R$ {saleResultModal.total.toFixed(2)}</span>
+   870→            </div>
+   871→
+   872→            {saleResultModal.troca > 0 && (
+   873→              <div className="bg-orange-50 p-3 rounded-2xl flex items-center justify-between border border-orange-100">
+   874→                <span className="text-[10px] font-black text-orange-400 uppercase">Desconto Troca</span>
+   875→                <span className="text-sm font-black text-orange-600">- R$ {saleResultModal.troca.toFixed(2)}</span>
+   876→              </div>
+   877→            )}
+   878→
+   879→            {saleResultModal.isPrazo && (
+   880→              <div className="bg-amber-50 p-3 rounded-2xl flex items-center gap-3 border border-amber-100">
+   881→                <i className="fa-solid fa-clock text-amber-500"></i>
+   882→                <span className="text-[10px] font-black text-amber-700 uppercase">Aguardando Pagamento</span>
+   883→              </div>
+   884→            )}
+   885→
+   886→            {saleResultModal.comissao > 0 && (
+   887→              <div className="bg-emerald-50 p-4 rounded-2xl border-2 border-emerald-200 text-center">
+   888→                <p className="text-[10px] font-black text-emerald-600 uppercase mb-1">Comissao Gerada</p>
+   889→                <p className="text-2xl font-black text-emerald-700">R$ {saleResultModal.comissao.toFixed(2)}</p>
+   890→              </div>
+   891→            )}
+   892→          </div>
+   893→
+   894→          <div className="p-5 pt-0 space-y-2">
+   895→            {saleResultModal.isPrazo && !saleResultModal.sale.comprovanteFoto && (
+   896→              <button
+   897→                onClick={() => { const s = saleResultModal!.sale; setSaleResultModal(null); openComprovanteFlow(s); }}
+   898→                className="w-full bg-amber-500 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest"
+   899→              >
+   900→                <i className="fa-solid fa-camera mr-2"></i>Foto do Comprovante
+   901→              </button>
+   902→            )}
+   903→            <button
+   904→              onClick={() => { const s = saleResultModal.sale; setSaleResultModal(null); onFinish(s); }}
+   905→              className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest"
+   906→            >
+   907→              <i className="fa-solid fa-check mr-2"></i>{saleResultModal.isPrazo && !saleResultModal.sale.comprovanteFoto ? 'Depois' : 'OK'}
+   908→            </button>
+   909→          </div>
+   910→        </div>
+   911→      </div>
+   912→    )}
+   913→
+   914→    {/* ============================================================ */}
+   915→    {/* MODAL: App-like genérico (substitui window.alert) */}
+   916→    {/* ============================================================ */}
+   917→    {appModal && (
+   918→      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[400] flex items-center justify-center p-4">
+   919→        <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
+   920→          <div className={`p-6 text-center ${appModal.type === 'error' ? 'bg-gradient-to-br from-rose-500 to-red-600' : appModal.type === 'success' ? 'bg-gradient-to-br from-emerald-500 to-teal-600' : 'bg-gradient-to-br from-blue-500 to-indigo-600'}`}>
+   921→            <div className="w-14 h-14 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-3">
+   922→              <i className={`${appModal.icon || 'fa-solid fa-info'} text-white text-2xl`}></i>
+   923→            </div>
+   924→            <h3 className="font-black text-white text-sm uppercase tracking-tight">{appModal.title}</h3>
+   925→          </div>
+   926→          <div className="p-6">
+   927→            <p className="text-center text-[12px] text-gray-600 font-semibold leading-relaxed whitespace-pre-line">{appModal.message}</p>
+   928→          </div>
+   929→          <div className="p-5 pt-0">
+   930→            <button
+   931→              onClick={() => setAppModal(null)}
+   932→              className={`w-full font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest text-white ${appModal.type === 'error' ? 'bg-rose-600' : appModal.type === 'success' ? 'bg-emerald-600' : 'bg-blue-600'}`}
+   933→            >
+   934→              OK
+   935→            </button>
+   936→          </div>
+   937→        </div>
+   938→      </div>
+   939→    )}
+   940→
+   941→    {/* ============================================================ */}
+   942→    {/* MODAL: Confirmação genérica (substitui window.confirm) */}
+   943→    {/* ============================================================ */}
+   944→    {confirmModal && (
+   945→      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[400] flex items-center justify-center p-4">
+   946→        <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
+   947→          <div className="bg-gradient-to-br from-gray-600 to-gray-800 p-6 text-center">
+   948→            <div className="w-14 h-14 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-3">
+   949→              <i className={`${confirmModal.icon || 'fa-solid fa-question'} ${confirmModal.iconColor || 'text-white'} text-2xl`}></i>
+   950→            </div>
+   951→            <h3 className="font-black text-white text-sm uppercase tracking-tight">{confirmModal.title}</h3>
+   952→          </div>
+   953→          <div className="p-6">
+   954→            <p className="text-center text-[12px] text-gray-600 font-semibold leading-relaxed whitespace-pre-line">{confirmModal.message}</p>
+   955→          </div>
+   956→          <div className="p-5 pt-0 grid grid-cols-2 gap-2">
+   957→            <button
+   958→              onClick={() => setConfirmModal(null)}
+   959→              className="w-full bg-gray-100 text-gray-600 font-black py-4 rounded-2xl active:scale-95 uppercase text-[10px] tracking-widest"
+   960→            >
+   961→              Cancelar
+   962→            </button>
+   963→            <button
+   964→              onClick={confirmModal.onConfirm}
+   965→              className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-[10px] tracking-widest"
+   966→            >
+   967→              Confirmar
+   968→            </button>
+   969→          </div>
+   970→        </div>
+   971→      </div>
+   972→    )}
+   973→    {/* ============================================================ */}
+   974→    {/* MODAL: Comprovante de venda a prazo (foto) */}
+   975→    {/* ============================================================ */}
+   976→    {showComprovanteModal && (
+   977→      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[350] flex items-center justify-center p-4">
+   978→        <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
+   979→          <div className="bg-gradient-to-br from-amber-400 to-orange-500 p-5 text-center">
+   980→            <div className="w-14 h-14 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-2">
+   981→              <i className="fa-solid fa-file-circle-check text-white text-2xl"></i>
+   982→            </div>
+   983→            <h3 className="font-black text-white text-sm uppercase tracking-tight">Comprovante de Venda</h3>
+   984→            <p className="text-white/70 text-[9px] font-bold mt-1">Tire foto do cupom assinado</p>
+   985→          </div>
+   986→
+   987→          <div className="p-5">
+   988→            {comprovanteFoto ? (
+   989→              <div className="space-y-3">
+   990→                <img src={comprovanteFoto} className="w-full rounded-2xl border border-gray-100 shadow-inner" alt="Comprovante" />
+   991→                <div className="grid grid-cols-2 gap-2">
+   992→                  <button
+   993→                    onClick={() => comprovanteInputRef.current?.click()}
+   994→                    className="bg-gray-100 text-gray-600 font-black py-3 rounded-xl active:scale-95 text-[10px] uppercase"
+   995→                  >
+   996→                    <i className="fa-solid fa-camera-rotate mr-1"></i>Refazer
+   997→                  </button>
+   998→                  <button
+   999→                    onClick={handleSaveComprovante}
+  1000→                    disabled={comprovanteUploading}
+  1001→                    className="bg-emerald-600 text-white font-black py-3 rounded-xl active:scale-95 text-[10px] uppercase shadow-sm"
+  1002→                  >
+  1003→                    {comprovanteUploading ? 'Salvando...' : 'Salvar'}
+  1004→                  </button>
+  1005→                </div>
+  1006→              </div>
+  1007→            ) : (
+  1008→              <button
+  1009→                onClick={() => comprovanteInputRef.current?.click()}
+  1010→                disabled={comprovanteUploading}
+  1011→                className="w-full bg-amber-100 border-2 border-dashed border-amber-300 rounded-2xl p-8 flex flex-col items-center gap-3 active:scale-95 transition-all"
+  1012→              >
+  1013→                {comprovanteUploading ? (
+  1014→                  <i className="fa-solid fa-spinner fa-spin text-amber-500 text-2xl"></i>
+  1015→                ) : (
+  1016→                  <i className="fa-solid fa-camera text-amber-500 text-2xl"></i>
+  1017→                )}
+  1018→                <span className="text-[10px] font-black text-amber-700 uppercase">
+  1019→                  {comprovanteUploading ? 'Processando...' : 'Tirar Foto'}
+  1020→                </span>
+  1021→              </button>
+  1022→            )}
+  1023→          </div>
+  1024→
+  1025→          <div className="p-5 pt-0">
+  1026→            <button
+  1027→              onClick={() => setShowComprovanteModal(false)}
+  1028→              className="w-full bg-gray-100 text-gray-500 font-black py-3 rounded-2xl active:scale-95 uppercase text-[10px]"
+  1029→            >
+  1030→              Fechar
+  1031→            </button>
+  1032→          </div>
+  1033→
+  1034→          <input
+  1035→            ref={comprovanteInputRef}
+  1036→            type="file"
+  1037→            accept="image/*"
+  1038→            capture="environment"
+  1039→            className="hidden"
+  1040→            onChange={e => { const f = e.target.files?.[0]; if (f) handleCaptureComprovante(f); e.target.value = ''; }}
+  1041→          />
+  1042→        </div>
+  1043→      </div>
+  1044→    )}
+  1045→    </>
+  1046→  );
+  1047→};
+  1048→
+  1049→export default PDV;

@@ -1,0 +1,1329 @@
+     1→"use client";
+     2→// @ts-nocheck
+     3→import React, { useState, useMemo, useEffect, useRef } from 'react';
+     4→import { User, Product, Client, Carga, Sale, Commission, PaymentMethod, CargaPendente, CommissionPaymentLog, SystemMessage, Expense, Category, Subcategory } from '@/lib/types';
+     5→import { saleService } from '@/services/saleService';
+     6→import { DIAS_SEMANA } from '@/lib/constants';
+     7→import PDV from '@/components/doce/PDV';
+     8→import Cupom from '@/components/doce/Cupom';
+     9→import RelatorioFiscal from '@/components/doce/RelatorioFiscal';
+    10→import ClientHistory from '@/components/doce/ClientHistory';
+    11→import { DailyRouteState, loadLocalState, saveLocalState } from '@/utils/persistence';
+    12→
+    13→interface VendedorDashboardProps {
+    14→  user: User;
+    15→  products: Product[];
+    16→  clients: Client[];
+    17→  cargas: Carga[];
+    18→  cargasPendentes: CargaPendente[];
+    19→  sales: Sale[];
+    20→  commissions: Commission[];
+    21→  payoutLogs: CommissionPaymentLog[];
+    22→  expenses: Expense[];
+    23→  messages: SystemMessage[];
+    24→  categories: Category[];
+    25→  subcategories: Subcategory[];
+    26→  markMessageAsRead: (id: string) => void;
+    27→  processSale: (data: any) => Promise<Sale | null>;
+    28→  addClient: (data: Omit<Client, 'id'>) => Promise<void>; 
+    29→  updateClient: (id: string, data: Partial<Client>) => void;
+    30→  deleteClient: (id: string) => void; 
+    31→  receivePayment: (id: string, method: PaymentMethod, amount?: number) => void;
+    32→  deleteSale: (id: string) => void;
+    33→  aceitarCarga: (id: string) => void;
+    34→  addExpense: (sellerId: string, descricao: string, valor: number) => Promise<boolean>;
+    35→  margemMinima: number;
+    36→  margemMinimaAtiva: boolean;
+    37→  pix1Name: string;
+    38→  pix1Code: string | null;
+    39→  pix2Name: string;
+    40→  pix2Code: string | null;
+    41→  dailyRouteState: DailyRouteState;
+    42→  updateDailyRoute: (clientIds: string[], skippedClientIds: string[]) => void;
+    43→  companyName: string;
+    44→  companyCnpj: string;
+    45→  clientOrder: string[];
+    46→  setClientOrder: (ids: string[]) => void;
+    47→}
+    48→
+    49→type TabType = 'HOME' | 'ROTEIRO' | 'CARGA' | 'HISTORY' | 'FINANCE' | 'CREDIT' | 'CLIENTES' | 'WEEKLY' | 'STOCK_VIEW' | 'AVISOS';
+    50→
+    51→// Helpers para comprovante
+    52→const compressImage = (file: File): Promise<string> => new Promise((resolve) => {
+    53→  const reader = new FileReader();
+    54→  reader.onload = (e) => {
+    55→    const img = new Image();
+    56→    img.onload = () => {
+    57→      const canvas = document.createElement('canvas');
+    58→      const MAX = 1200;
+    59→      let w = img.width, h = img.height;
+    60→      if (w > MAX || h > MAX) { if (w > h) { h = (h / w) * MAX; w = MAX; } else { w = (w / h) * MAX; h = MAX; } }
+    61→      canvas.width = w; canvas.height = h;
+    62→      canvas.getContext('2d')!.drawImage(img, 0, 0, w, h);
+    63→      resolve(canvas.toDataURL('image/jpeg', 0.6));
+    64→    };
+    65→    img.src = e.target?.result as string;
+    66→  };
+    67→  reader.readAsDataURL(file);
+    68→});
+    69→
+    70→const shareImage = async (base64: string, fileName: string) => {
+    71→  const res = await fetch(base64);
+    72→  const blob = await res.blob();
+    73→  const file = new File([blob], fileName, { type: 'image/jpeg' });
+    74→  if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+    75→    await navigator.share({ files: [file], title: 'Comprovante de Venda' });
+    76→  } else {
+    77→    const url = URL.createObjectURL(blob);
+    78→    const a = document.createElement('a');
+    79→    a.href = url; a.download = fileName; a.click();
+    80→    URL.revokeObjectURL(url);
+    81→  }
+    82→};
+    83→
+    84→const VendedorDashboard: React.FC<VendedorDashboardProps> = ({ 
+    85→  user, products = [], clients = [], cargas = [], cargasPendentes = [], sales = [], commissions = [], payoutLogs = [], expenses = [], messages = [], categories = [], subcategories = [], markMessageAsRead, processSale, addClient, updateClient, deleteClient, receivePayment, deleteSale, aceitarCarga, addExpense, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, updateDailyRoute, companyName, companyCnpj, clientOrder, setClientOrder
+    86→}) => {
+    87→  const [activeTab, setActiveTab] = useState<TabType>(() => loadLocalState('v_activeTab', 'HOME'));
+    88→  const [selectedClient, setSelectedClient] = useState<Client | null>(() => loadLocalState('v_selectedClient', null));
+    89→  const [viewingSale, setViewingSale] = useState<Sale | null>(() => loadLocalState('v_viewingSale', null));
+    90→  const [showFiscalization, setShowFiscalization] = useState(() => loadLocalState('v_showFiscalization', false));
+    91→  const [viewingClientHistory, setViewingClientHistory] = useState<Client | null>(null);
+    92→  const [filterOverdueOnly, setFilterOverdueOnly] = useState(false);
+    93→  const [creditTypeFilter, setCreditTypeFilter] = useState<'TODOS' | 'COMUM' | 'CHEQUE' | 'BOLETO'>('TODOS');
+    94→  const [creditSearch, setCreditSearch] = useState('');
+    95→  const [clientSearch, setClientSearch] = useState(''); // NOVO: busca na aba clientes
+    96→
+    97→  // Comprovante: estado para modal de foto em contas a receber
+    98→  const [comprovanteModalSale, setComprovanteModalSale] = useState<Sale | null>(null);
+    99→  const [comprovantePreview, setComprovantePreview] = useState<string | null>(null);
+   100→  const comprovanteFileInputRef = useRef<HTMLInputElement | null>(null);
+   101→  const [comprovanteUploading, setComprovanteUploading] = useState(false);
+   102→
+   103→  const handleComprovanteCapture = async (saleId: string, file: File) => {
+   104→    setComprovanteUploading(true);
+   105→    const base64 = await compressImage(file);
+   106→    const ok = await saleService.updateSale(saleId, { comprovanteFoto: base64 } as any);
+   107→    setComprovanteUploading(false);
+   108→    if (ok) setComprovantePreview(base64);
+   109→  };
+   110→
+   111→  const handleComprovanteShare = (sale: Sale) => {
+   112→    if (sale.comprovanteFoto) shareImage(sale.comprovanteFoto, `comprovante_${sale.id}.jpg`);
+   113→  };
+   114→  
+   115→  const [dismissedClientRiskIds, setDismissedClientRiskIds] = useState<string[]>(() => 
+   116→    loadLocalState(`v_dismissed_risk_${user.id}`, [])
+   117→  );
+   118→
+   119→  useEffect(() => { saveLocalState('v_activeTab', activeTab); }, [activeTab]);
+   120→  useEffect(() => { saveLocalState('v_selectedClient', selectedClient); }, [selectedClient]);
+   121→  useEffect(() => { saveLocalState('v_viewingSale', viewingSale); }, [viewingSale]);
+   122→  useEffect(() => { saveLocalState('v_showFiscalization', showFiscalization); }, [showFiscalization]);
+   123→  useEffect(() => { saveLocalState(`v_dismissed_risk_${user.id}`, dismissedClientRiskIds); }, [dismissedClientRiskIds, user.id]);
+   124→
+   125→  const [reopenedClientIds, setReopenedClientIds] = useState<string[]>([]);
+   126→  const [showReceiveModal, setShowReceiveModal] = useState<Sale | null>(null);
+   127→  const [valorRecebidoParcial, setValorRecebidoParcial] = useState<string>('');
+   128→  const [editingClient, setEditingClient] = useState<Client | 'NEW' | null>(null); 
+   129→  const [expandedDay, setExpandedDay] = useState<number | null>(null);
+   130→  const [historyFilter, setHistoryFilter] = useState<'DIA' | 'SEMANA' | 'MES' | 'GERAL'>('DIA');
+   131→  const [financeFilter, setFinanceFilter] = useState<'DIA' | 'SEMANA' | 'MES' | 'GERAL'>('DIA');
+   132→  const [weeklySearch, setWeeklySearch] = useState('');
+   133→  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+   134→  const [cForm, setCForm] = useState<Partial<Client>>({});
+   135→  const [confirmSkipId, setConfirmSkipId] = useState<string | null>(null);
+   136→  const [showExpenseForm, setShowExpenseForm] = useState(false);
+   137→  const [expenseDesc, setExpenseDesc] = useState('');
+   138→  const [expenseVal, setExpenseVal] = useState('');
+   139→
+   140→  // ============================================================
+   141→  // MODAL: Cliente incompleto (GPS + WhatsApp)
+   142→  // ============================================================
+   143→  const [clientInfoModal, setClientInfoModal] = useState<Client | null>(null);
+   144→  const [gpsStatus, setGpsStatus] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
+   145→  const [gpsCoords, setGpsCoords] = useState<{ lat: number; lng: number } | null>(null);
+   146→  const [modalWhatsapp, setModalWhatsapp] = useState('');
+   147→
+   148→  const isEmptyField = (val: any): boolean => {
+   149→    if (val === null || val === undefined) return true;
+   150→    const s = String(val).trim();
+   151→    if (s === '') return true;
+   152→    const placeholders = ['-', '.', '..', '0', 'n/a', 'nao informado', 'nao tem', 'sem endereco', 'sem telefone', 'informar', 's/n', 'n/i'];
+   153→    if (placeholders.includes(s.toLowerCase())) return true;
+   154→    if (s.replace(/[^a-zA-Z0-9]/g, '').length < 3) return true;
+   155→    return false;
+   156→  };
+   157→
+   158→  const clientNeedsInfo = (c: Client) => {
+   159→    const needsGPS = !c.localizacao || (c.localizacao.lat === 0 && c.localizacao.lng === 0);
+   160→    const needsWhatsapp = isEmptyField(c.telefone);
+   161→    return needsGPS || needsWhatsapp;
+   162→  };
+   163→
+   164→  const handleAtenderClient = (client: Client) => {
+   165→    if (clientNeedsInfo(client)) {
+   166→      setModalWhatsapp(client.telefone || '');
+   167→      setGpsCoords(client.localizacao || null);
+   168→      setGpsStatus(client.localizacao && client.localizacao.lat !== 0 ? 'done' : 'idle');
+   169→      setClientInfoModal(client);
+   170→    } else {
+   171→      setSelectedClient(client);
+   172→    }
+   173→  };
+   174→
+   175→  const handleGetGPS = () => {
+   176→    if (!('geolocation' in navigator)) return;
+   177→    setGpsStatus('loading');
+   178→    navigator.geolocation.getCurrentPosition(
+   179→      (pos) => {
+   180→        const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+   181→        setGpsCoords(coords);
+   182→        setGpsStatus('done');
+   183→      },
+   184→      () => setGpsStatus('error'),
+   185→      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+   186→    );
+   187→  };
+   188→
+   189→  const handleSaveClientInfo = async () => {
+   190→    if (!clientInfoModal) return;
+   191→    const updates: Partial<Client> = {};
+   192→    if (gpsCoords) updates.localizacao = gpsCoords;
+   193→    if (modalWhatsapp && modalWhatsapp.trim().length >= 10) updates.telefone = modalWhatsapp.trim();
+   194→    if (Object.keys(updates).length > 0) {
+   195→      updateClient(clientInfoModal.id, updates);
+   196→    }
+   197→    setClientInfoModal(null);
+   198→    setSelectedClient(clientInfoModal);
+   199→  };
+   200→
+   201→  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+   202→    setToast({ message, type });
+   203→    setTimeout(() => setToast(null), 3000);
+   204→  };
+   205→
+   206→  // Memo para última venda de cada cliente (mantido para uso em outras abas)
+   207→  const lastSaleByClient = useMemo(() => {
+   208→    const map = new Map<string, Date>();
+   209→    sales.forEach(s => {
+   210→      const existing = map.get(s.clientId);
+   211→      const saleDate = new Date(s.data);
+   212→      if (!existing || saleDate > existing) {
+   213→        map.set(s.clientId, saleDate);
+   214→      }
+   215→    });
+   216→    return map;
+   217→  }, [sales]);
+   218→
+   219→  const formatLastSaleDate = (clientId: string) => {
+   220→    const date = lastSaleByClient.get(clientId);
+   221→    if (!date) return '';
+   222→    return `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}`;
+   223→  };
+   224→
+   225→  const atRiskClients = useMemo(() => {
+   226→    const today = new Date();
+   227→    return clients.filter(c => {
+   228→      if (!c.ativo) return false;
+   229→      if (dismissedClientRiskIds.includes(c.id)) return false;
+   230→
+   231→      const cSales = sales.filter(s => s.clientId === c.id);
+   232→      if (cSales.length === 0) return false;
+   233→      const lastSale = cSales.reduce((latest, s) => {
+   234→        const d = new Date(s.data);
+   235→        return d > latest ? d : latest;
+   236→      }, new Date(0));
+   237→      const diffDays = Math.ceil(Math.abs(today.getTime() - lastSale.getTime()) / (1000 * 60 * 60 * 24));
+   238→      return diffDays >= 25; 
+   239→    }).map(c => {
+   240→      const cSales = sales.filter(s => s.clientId === c.id);
+   241→      const lastSale = cSales.reduce((latest, s) => {
+   242→        const d = new Date(s.data);
+   243→        return d > latest ? d : latest;
+   244→      }, new Date(0));
+   245→      const diffDays = Math.ceil(Math.abs(today.getTime() - lastSale.getTime()) / (1000 * 60 * 60 * 24));
+   246→      return { ...c, diasSemCompra: diffDays, dataUltimaVenda: lastSale };
+   247→    }).sort((a, b) => b.diasSemCompra - a.diasSemCompra);
+   248→  }, [clients, sales, dismissedClientRiskIds]);
+   249→
+   250→  const handleDismissRisk = (clientId: string) => {
+   251→    setDismissedClientRiskIds(prev => [...prev, clientId]);
+   252→    showToast("Aviso arquivado.");
+   253→  };
+   254→
+   255→  const handleMarkMessageAsRead = (msgId: string) => {
+   256→    markMessageAsRead(msgId);
+   257→    showToast("Mensagem marcada como lida.");
+   258→  };
+   259→
+   260→  const filterByPeriod = (date: any, period: string) => {
+   261→    if (!date) return false;
+   262→    const d = new Date(date);
+   263→    const today = new Date();
+   264→    if (period === 'DIA') return d.toDateString() === today.toDateString();
+   265→    if (period === 'SEMANA') {
+   266→      const weekAgo = new Date();
+   267→      weekAgo.setDate(today.getDate() - 7);
+   268→      return d >= weekAgo;
+   269→    }
+   270→    if (period === 'MES') return d.getMonth() === today.getMonth() && d.getFullYear() === today.getFullYear();
+   271→    return true;
+   272→  };
+   273→
+   274→  const isSameDay = (date: Date | undefined) => {
+   275→    if (!date) return false;
+   276→    const d = new Date(date);
+   277→    const today = new Date();
+   278→    return d.toDateString() === today.toDateString();
+   279→  };
+   280→
+   281→  const diaAtual = new Date().getDay();
+   282→  const minhaCarga = useMemo(() => (cargas || []).filter(c => c.vendedorId === user.id), [cargas, user.id]);
+   283→  
+   284→  const orderedCargaProducts = useMemo(() => {
+   285→    const cargaMap = new Map(minhaCarga.map(c => [c.produtoId, c]));
+   286→    return (products || [])
+   287→      .filter(p => cargaMap.has(p.id))
+   288→      .map(p => ({
+   289→        product: p,
+   290→        carga: cargaMap.get(p.id)!
+   291→      }));
+   292→  }, [products, minhaCarga]);
+   293→
+   294→  const rotaDeHoje = useMemo(() => {
+   295→    const clientMap = new Map((clients || []).map(c => [c.id, c]));
+   296→    const clientIds = dailyRouteState?.clientIds || [];
+   297→    const clientsInRoute = clientIds
+   298→      .map(id => clientMap.get(id))
+   299→      .filter((c): c is Client => !!c && (c.ativo ?? false));
+   300→    return clientsInRoute.sort((a, b) => {
+   301→      const orderMap = new Map(clientOrder.map((id, idx) => [id, idx]));
+   302→      const idxA = orderMap.get(a.id) ?? (a.ordem || 0);
+   303→      const idxB = orderMap.get(b.id) ?? (b.ordem || 0);
+   304→      return idxA - idxB;
+   305→    }) || []; 
+   306→  }, [clients, dailyRouteState, clientOrder]); 
+   307→
+   308→  // NOVO: Clientes filtrados pela busca
+   309→  const filteredClients = useMemo(() => {
+   310→    let result = clients
+   311→      .filter(c => c.rota === (user.rota || 'ROTA_01'))
+   312→      .sort((a, b) => {
+   313→        const orderMap = new Map(clientOrder.map((id, idx) => [id, idx]));
+   314→        const idxA = orderMap.get(a.id) ?? (a.ordem || 0);
+   315→        const idxB = orderMap.get(b.id) ?? (b.ordem || 0);
+   316→        return idxA - idxB;
+   317→      });
+   318→    
+   319→    if (clientSearch.trim()) {
+   320→      const search = clientSearch.toLowerCase();
+   321→      result = result.filter(c => 
+   322→        c.nomeFantasia.toLowerCase().includes(search) ||
+   323→        c.telefone?.includes(search) ||
+   324→        c.bairro?.toLowerCase().includes(search)
+   325→      );
+   326→    }
+   327→    return result;
+   328→  }, [clients, user.rota, clientOrder, clientSearch]);
+   329→
+   330→  const handleSkipClient = () => { 
+   331→    if (!confirmSkipId) return;
+   332→    const newSkipped = [...(dailyRouteState?.skippedClientIds || []), confirmSkipId];
+   333→    updateDailyRoute(dailyRouteState.clientIds, newSkipped);
+   334→    setConfirmSkipId(null);
+   335→    showToast("Visita pulada.");
+   336→  };
+   337→
+   338→  const handleReopenClient = (clientId: string) => {
+   339→    const newSkipped = (dailyRouteState?.skippedClientIds || []).filter(id => id !== clientId);
+   340→    updateDailyRoute(dailyRouteState.clientIds, newSkipped);
+   341→    setReopenedClientIds(prev => [...prev, clientId]);
+   342→  };
+   343→
+   344→  const handleAddToTodayRoute = (clientId: string) => { 
+   345→    if (!(dailyRouteState?.clientIds || []).includes(clientId)) { 
+   346→      const newRoute = [...(dailyRouteState?.clientIds || []), clientId];
+   347→      updateDailyRoute(newRoute, dailyRouteState?.skippedClientIds || []);
+   348→      setDismissedClientRiskIds(prev => [...prev, clientId]);
+   349→      showToast("Adicionado à rota e aviso removido!"); 
+   350→    } 
+   351→  };
+   352→
+   353→  const handleOpenEditClient = (c: Client | 'NEW') => {
+   354→    if (c === 'NEW') setCForm({ nomeFantasia: '', telefone: '', endereco: '', bairro: '', diaRoteiro: diaAtual, ativo: true, ativarCnpj: false, cnpj: '', pinLocalizacao: '', ordem: 0, rota: user.rota });
+   355→    else setCForm({ ...c });
+   356→    setEditingClient(c);
+   357→  };
+   358→
+   359→  const handlePinLocation = async () => {
+   360→    if (navigator.geolocation) {
+   361→      showToast("Aguardando GPS...");
+   362→      navigator.geolocation.getCurrentPosition(
+   363→        async (p) => {
+   364→          const lat = p.coords.latitude;
+   365→          const lng = p.coords.longitude;
+   366→          setCForm(prev => ({ ...prev, pinLocalizacao: `${lat.toFixed(6)}, ${lng.toFixed(6)}` }));
+   367→          
+   368→          try {
+   369→            const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}`, {
+   370→              headers: { 'Accept-Language': 'pt-BR' }
+   371→            });
+   372→            const data = await response.json();
+   373→            if (data && data.address) {
+   374→              const addr = data.address;
+   375→              const rua = addr.road || addr.pedestrian || addr.street || '';
+   376→              const numero = addr.house_number || '';
+   377→              const bairro = addr.suburb || addr.neighbourhood || addr.city_district || addr.village || '';
+   378→              const fullAddr = `${rua}${numero ? ', ' + numero : ''}`;
+   379→              
+   380→              setCForm(prev => ({ 
+   381→                ...prev, 
+   382→                endereco: fullAddr || prev.endereco,
+   383→                bairro: bairro || prev.bairro
+   384→              }));
+   385→              showToast("Endereço capturado!");
+   386→            } else {
+   387→              showToast("Coordenadas capturadas!");
+   388→            }
+   389→          } catch (error) {
+   390→            showToast("Coordenadas capturadas, erro ao obter endereço.", "error");
+   391→          }
+   392→        }, 
+   393→        (error) => {
+   394→          let msg = "Erro ao acessar GPS.";
+   395→          if (error.code === 1) msg = "Permissão de localização negada.";
+   396→          if (error.code === 2) msg = "Sinal de GPS indisponível.";
+   397→          if (error.code === 3) msg = "Tempo esgotado ao buscar GPS.";
+   398→          showToast(msg, "error");
+   399→        },
+   400→        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+   401→      );
+   402→    } else {
+   403→      showToast("GPS não suportado neste navegador.", "error");
+   404→    }
+   405→  };
+   406→
+   407→  const handleSaveClientBasic = () => {
+   408→    if (!cForm.nomeFantasia || !cForm.telefone) { showToast("Preencha ao menos Nome e Telefone.", 'error'); return; }
+   409→    
+   410→    const clientData: Omit<Client, 'id'> = { 
+   411→      nomeFantasia: cForm.nomeFantasia!, 
+   412→      telefone: cForm.telefone!, 
+   413→      endereco: cForm.endereco || '', 
+   414→      bairro: cForm.bairro || '', 
+   415→      diaRoteiro: cForm.diaRoteiro ?? diaAtual, 
+   416→      ordem: cForm.ordem ?? 0, 
+   417→      ativo: cForm.ativo ?? true, 
+   418→      ativarCnpj: cForm.ativarCnpj ?? false, 
+   419→      cnpj: cForm.cnpj, 
+   420→      pinLocalizacao: cForm.pinLocalizacao, 
+   421→      nome: cForm.nome, 
+   422→      observacoes: cForm.observacoes,
+   423→      rota: user.rota 
+   424→    };
+   425→
+   426→    if (editingClient === 'NEW') addClient(clientData);
+   427→    else if (typeof editingClient === 'object') updateClient(editingClient.id, clientData); 
+   428→    setEditingClient(null);
+   429→  };
+   430→
+   431→  const handleConfirmReceive = (method: PaymentMethod) => {
+   432→    if (!showReceiveModal) return;
+   433→    const valor = parseFloat(valorRecebidoParcial);
+   434→    const saldoEmAberto = Number(((showReceiveModal.valorTotal ?? 0) - (showReceiveModal.valorPago ?? 0)).toFixed(2)); 
+   435→    if (isNaN(valor) || valor <= 0 || valor > saldoEmAberto) {
+   436→      showToast("Valor inválido.", "error");
+   437→      return;
+   438→    }
+   439→    receivePayment(showReceiveModal.id, method, valor);
+   440→    setShowReceiveModal(null);
+   441→    setValorRecebidoParcial('');
+   442→  };
+   443→
+   444→  const handleLaunchExpense = async () => {
+   445→    const val = parseFloat(expenseVal);
+   446→    if (!expenseDesc || isNaN(val) || val <= 0) {
+   447→      showToast("Preencha descrição e valor.", "error");
+   448→      return;
+   449→    }
+   450→    const success = await addExpense(user.id, expenseDesc, val);
+   451→    if (success) {
+   452→      showToast("Despesa lançada!");
+   453→      setExpenseDesc('');
+   454→      setExpenseVal('');
+   455→      setShowExpenseForm(false);
+   456→    }
+   457→  };
+   458→
+   459→  // Mover cliente na ordem GLOBAL (para aba CLIENTES) - função mantida para compatibilidade mas não usada na UI
+   460→  const moveClient = (id: string, dir: 'UP' | 'DOWN') => {
+   461→    const currentOrder = clientOrder.length > 0 ? clientOrder : clients.map(c => c.id);
+   462→    const idx = currentOrder.indexOf(id);
+   463→    if (idx === -1) return;
+   464→    const newOrder = [...currentOrder];
+   465→    if (dir === 'UP' && idx > 0) [newOrder[idx], newOrder[idx-1]] = [newOrder[idx-1], newOrder[idx]];
+   466→    else if (dir === 'DOWN' && idx < newOrder.length - 1) [newOrder[idx], newOrder[idx+1]] = [newOrder[idx+1], newOrder[idx]];
+   467→    setClientOrder(newOrder);
+   468→    showToast("Ordem do cliente atualizada!");
+   469→  };
+   470→
+   471→  // NOVO: Mover cliente DENTRO DO DIA (para aba ROTEIRO SEMANAL) - PERSISTE NO SUPABASE
+   472→  const moveClientInDay = (clientId: string, dir: 'UP' | 'DOWN', day: number) => {
+   473→    // 1. Pega todos os clientes ativos da rota do vendedor, ordenados pela ordem global atual (clientOrder)
+   474→    const allClientsSorted = [...clients]
+   475→      .filter(c => c.ativo && c.rota === (user.rota || 'ROTA_01'))
+   476→      .sort((a, b) => {
+   477→        const orderMap = new Map(clientOrder.map((id, idx) => [id, idx]));
+   478→        const idxA = orderMap.get(a.id) ?? (a.ordem || 0);
+   479→        const idxB = orderMap.get(b.id) ?? (b.ordem || 0);
+   480→        return idxA - idxB;
+   481→      });
+   482→
+   483→    // 2. Separa os clientes do dia alvo e dos outros dias
+   484→    const dayClients = allClientsSorted.filter(c => c.diaRoteiro === day);
+   485→    const otherDayClients = allClientsSorted.filter(c => c.diaRoteiro !== day);
+   486→    
+   487→    const dayClientIds = dayClients.map(c => c.id);
+   488→    const idx = dayClientIds.indexOf(clientId);
+   489→    if (idx === -1) return;
+   490→
+   491→    // 3. Reordena apenas dentro do dia
+   492→    const newDayOrder = [...dayClientIds];
+   493→    if (dir === 'UP' && idx > 0) {
+   494→      [newDayOrder[idx], newDayOrder[idx-1]] = [newDayOrder[idx-1], newDayOrder[idx]];
+   495→    } else if (dir === 'DOWN' && idx < newDayOrder.length - 1) {
+   496→      [newDayOrder[idx], newDayOrder[idx+1]] = [newDayOrder[idx+1], newDayOrder[idx]];
+   497→    }
+   498→
+   499→    // 4. Reconstrói a ordem global mantendo a ordem relativa dos outros dias
+   500→    const otherDayIds = otherDayClients.map(c => c.id);
+   501→    
+   502→    // Encontra onde o primeiro cliente desse dia estava na ordem global original
+   503→    const firstDayClientGlobalIdx = allClientsSorted.findIndex(c => c.diaRoteiro === day);
+   504→    
+   505→    let newGlobalOrder: string[];
+   506→    if (firstDayClientGlobalIdx === -1) {
+   507→      // Se não tinha clientes nesse dia, adiciona no final
+   508→      newGlobalOrder = [...otherDayIds, ...newDayOrder];
+   509→    } else {
+   510→      // Insere o dia reordenado na posição correta
+   511→      newGlobalOrder = [
+   512→        ...otherDayIds.slice(0, firstDayClientGlobalIdx),
+   513→        ...newDayOrder,
+   514→        ...otherDayIds.slice(firstDayClientGlobalIdx)
+   515→      ];
+   516→    }
+   517→
+   518→    // 5. Salva no Supabase via App.tsx -> appSettingsService
+   519→    setClientOrder(newGlobalOrder);
+   520→    showToast("Ordem do dia atualizada e salva!");
+   521→  };
+   522→
+   523→  // NOVO: Mover cliente para outro dia
+   524→  const moveClientToDay = (clientId: string, newDay: number) => {
+   525→    updateClient(clientId, { diaRoteiro: newDay });
+   526→    showToast(`Cliente movido para ${DIAS_SEMANA[newDay]}`);
+   527→  };
+   528→
+   529→  const MenuCard = ({ icon, title, tab, color, badge }: any) => (
+   530→    <button onClick={() => setActiveTab(tab)} className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col items-center gap-3 active:scale-95 transition-all text-center relative">
+   531→      {badge && <div className="absolute top-4 right-4 bg-red-600 text-white text-[8px] font-black w-5 h-5 rounded-full flex items-center justify-center border-2 border-white animate-bounce">{badge === true ? '' : badge}</div>}
+   532→      <div className={`w-14 h-14 ${color} rounded-2xl flex items-center justify-center text-xl shadow-inner`}><i className={`fa-solid ${icon}`}></i></div>
+   533→      <span className="text-[11px] font-black uppercase text-gray-700">{title}</span>
+   534→    </button>
+   535→  );
+   536→
+   537→  const filteredHistory = useMemo(() => (sales || []).filter(s => s.vendedorId === user.id && filterByPeriod(s.data, historyFilter)).sort((a, b) => (new Date(b.data).getTime() ?? 0) - (new Date(a.data).getTime() ?? 0)), [sales, user.id, historyFilter]); 
+   538→  
+   539→  const financeStats = useMemo(() => {
+   540→    const vCommsAll = (commissions || []).filter(c => c.vendedorId === user.id);
+   541→    const vCommsFiltered = vCommsAll.filter(c => filterByPeriod(c.dataGeracao, financeFilter));
+   542→
+   543→    const totalGerado = vCommsFiltered.reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
+   544→    const aReceber = vCommsAll.filter(c => c.status === 'A_RECEBER').reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
+   545→    const liberadas = vCommsAll.filter(c => c.status === 'DISPONIVEL').reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
+   546→    const pagas = vCommsAll.filter(c => c.status === 'PAGO').reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
+   547→    
+   548→    return { 
+   549→      totalGerado: Number(totalGerado.toFixed(2)),
+   550→      aReceber: Number(aReceber.toFixed(2)),
+   551→      liberadas: Number(liberadas.toFixed(2)), 
+   552→      pagas: Number(pagas.toFixed(2)) 
+   553→    };
+   554→  }, [commissions, user.id, financeFilter]);
+   555→
+   556→  const historySummary = useMemo(() => filteredHistory.reduce((acc, sale) => {
+   557→    acc.total += (sale.valorTotal ?? 0); 
+   558→    if (sale.metodoPagamento === 'DINHEIRO') acc.dinheiro += (sale.valorTotal ?? 0);
+   559→    if (sale.metodoPagamento === 'PIX') acc.pix += (sale.valorTotal ?? 0);
+   560→    if (sale.metodoPagamento === 'A_PRAZO') acc.prazo += (sale.valorTotal ?? 0);
+   561→    return acc;
+   562→  }, { total: 0, dinheiro: 0, pix: 0, prazo: 0 }), [filteredHistory]);
+   563→
+   564→  const contasAReceber = useMemo(() => {
+   565→    let filtered = (sales || []).filter(s => s.vendedorId === user.id && s.metodoPagamento === 'A_PRAZO' && s.statusPagamento === 'PENDENTE');
+   566→    if (filterOverdueOnly) {
+   567→      const today = new Date();
+   568→      today.setHours(0,0,0,0);
+   569→      filtered = filtered.filter(s => {
+   570→        if (!s.dataVencimento) return false;
+   571→        const dueDate = new Date(s.dataVencimento);
+   572→        dueDate.setHours(0,0,0,0);
+   573→        return dueDate <= today;
+   574→      });
+   575→    }
+   576→
+   577→    if (creditTypeFilter !== 'TODOS') {
+   578→      filtered = filtered.filter(s => {
+   579→        const desc = s.detalhePagamento?.toUpperCase() || '';
+   580→        if (creditTypeFilter === 'CHEQUE') return desc.includes('CHEQUE');
+   581→        if (creditTypeFilter === 'BOLETO') return desc.includes('BOLETO');
+   582→        if (creditTypeFilter === 'COMUM') return desc.includes('COMUM') || (!desc.includes('CHEQUE') && !desc.includes('BOLETO'));
+   583→        return true;
+   584→      });
+   585→    }
+   586→
+   587→    if (creditSearch) {
+   588→      filtered = filtered.filter(s => {
+   589→        const client = clients.find(c => c.id === s.clientId);
+   590→        return client?.nomeFantasia.toLowerCase().includes(creditSearch.toLowerCase());
+   591→      });
+   592→    }
+   593→
+   594→    return filtered;
+   595→  }, [sales, user.id, filterOverdueOnly, creditTypeFilter, creditSearch, clients]);
+   596→
+   597→  const valorTotalCarga = useMemo(() => minhaCarga.reduce((acc, curr) => {
+   598→    const p = products.find(prod => prod.id === curr.produtoId);
+   599→    return acc + ((curr.quantidade ?? 0) * (p?.precoVenda ?? 0)); 
+   600→  }, 0), [minhaCarga, products]);
+   601→
+   602→  const totalUnidadesCarga = useMemo(() => minhaCarga.reduce((acc, curr) => acc + (curr.quantidade ?? 0), 0), [minhaCarga]);
+   603→
+   604→  const unifiedHistory = useMemo(() => {
+   605→    const combined = [
+   606→      ...(payoutLogs || []).map(p => ({ 
+   607→        id: p.id, 
+   608→        data: new Date(p.dataPagamento), 
+   609→        desc: p.tipo === 'TOTAL' ? 'Pagamento Integral' : 'Repasse Parcial', 
+   610→        valor: p.valorPago, 
+   611→        tipo: 'REPASSE' as const 
+   612→      })),
+   613→      ...(expenses || []).map(e => ({ 
+   614→        id: e.id, 
+   615→        data: new Date(e.createdAt), 
+   616→        desc: e.descricao, 
+   617→        valor: e.valor, 
+   618→        tipo: 'DESPESA' as const 
+   619→      }))
+   620→    ];
+   621→    return combined.sort((a, b) => b.data.getTime() - a.data.getTime());
+   622→  }, [payoutLogs, expenses]);
+   623→
+   624→  const handleNavigateToCredit = () => {
+   625→    setSelectedClient(null);
+   626→    setActiveTab('CREDIT');
+   627→  };
+   628→
+   629→  if (selectedClient) {
+   630→    const pdvClient = clients.find(c => c.id === selectedClient.id);
+   631→    if (!pdvClient) { setSelectedClient(null); return null; }
+   632→    return (
+   633→      <PDV
+   634→        client={pdvClient} products={products} minhaCarga={minhaCarga} vendedorId={user.id} onCancel={() => setSelectedClient(null)}
+   635→        onFinish={() => { 
+   636→          setSelectedClient(null); 
+   637→          setActiveTab('ROTEIRO'); 
+   638→          showToast("Venda realizada com sucesso!", 'success'); 
+   639→        }}
+   640→        processSale={processSale} margemMinima={margemMinima} margemMinimaAtiva={margemMinimaAtiva} pix1Name={pix1Name} pix1Code={pix1Code} pix2Name={pix2Name} pix2Code={pix2Code}
+   641→        sales={sales} 
+   642→        onNavigateToCredit={handleNavigateToCredit}
+   643→        categories={categories}
+   644→        subcategories={subcategories}
+   645→      />
+   646→    );
+   647→  }
+   648→
+   649→  if (viewingSale) {
+   650→    const cupomClient = clients.find(c => c.id === viewingSale.clientId);
+   651→    if (!cupomClient) { setViewingSale(null); return null; }
+   652→    const canDeleteSale = (() => {
+   653→      const saleDate = new Date(viewingSale.data);
+   654→      const now = new Date();
+   655→      const sameDay = saleDate.getFullYear() === now.getFullYear()
+   656→        && saleDate.getMonth() === now.getMonth()
+   657→        && saleDate.getDate() === now.getDate();
+   658→      return sameDay;
+   659→    })();
+   660→    return ( <Cupom sale={viewingSale} client={cupomClient} products={products} onClose={() => setViewingSale(null)} onDeleteSale={deleteSale} allowDelete={canDeleteSale} showToast={showToast} /> );
+   661→  }
+   662→
+   663→  if (showFiscalization) {
+   664→    return (
+   665→      <RelatorioFiscal 
+   666→        user={user} carga={minhaCarga} products={products} 
+   667→        companyName={companyName} companyCnpj={companyCnpj} 
+   668→        onClose={() => setShowFiscalization(false)} 
+   669→      />
+   670→    );
+   671→  }
+   672→
+   673→  return (
+   674→    <div className="space-y-4 pb-20">
+   675→      {toast && (
+   676→        <div className="fixed top-20 left-4 right-4 z-[300] flex justify-center pointer-events-none">
+   677→          <div className={`${toast.type === 'success' ? 'bg-emerald-600' : 'bg-rose-600'} text-white px-6 py-3 rounded-2xl shadow-2xl font-black text-xs uppercase flex items-center gap-3 animate-in slide-in-from-top`}>
+   678→            <i className={`fa-solid ${toast.type === 'success' ? 'fa-circle-check' : 'fa-circle-exclamation'}`}></i>{toast.message}
+   679→          </div>
+   680→        </div>
+   681→      )}
+   682→
+   683→      {activeTab !== 'HOME' && <button onClick={() => { setActiveTab('HOME'); setCreditSearch(''); }} className="w-10 h-10 bg-white text-blue-600 rounded-xl flex items-center justify-center shadow-sm border border-gray-100 mb-2 active:scale-90 transition-transform"><i className="fa-solid fa-arrow-left"></i></button>}
+   684→
+   685→      {activeTab === 'HOME' && (
+   686→        <div className="py-4 grid grid-cols-2 gap-4">
+   687→          <MenuCard icon="fa-route" title="Rota do Dia" tab="ROTEIRO" color="bg-blue-50 text-blue-600" />
+   688→          <MenuCard icon="fa-bell" title="Avisos" tab="AVISOS" color="bg-rose-50 text-rose-600" badge={atRiskClients.length > 0 ? atRiskClients.length : false} />
+   689→          <MenuCard icon="fa-truck-fast" title="Minha Carga" tab="CARGA" color="bg-purple-50 text-purple-600" badge={(cargasPendentes || []).length > 0} />
+   690→          <MenuCard icon="fa-receipt" title="Vendas" tab="HISTORY" color="bg-blue-50 text-[#1E3A5F]" />
+   691→          <MenuCard icon="fa-wallet" title="Financeiro" tab="FINANCE" color="bg-emerald-50 text-[#1F7A4D]" badge={(messages || []).some(m => !m.lida && m.type === 'COMMISSION_CONFIRMATION')} />
+   692→          <MenuCard icon="fa-file-invoice-dollar" title="Contas a Receber" tab="CREDIT" color="bg-rose-50 text-rose-600" />
+   693→          <MenuCard icon="fa-users" title="Clientes" tab="CLIENTES" color="bg-green-50 text-green-600" />
+   694→          <MenuCard icon="fa-calendar-days" title="Roteiro Semanal" tab="WEEKLY" color="bg-indigo-50 text-indigo-600" />
+   695→          <MenuCard icon="fa-boxes-stacked" title="Estoque" tab="STOCK_VIEW" color="bg-yellow-50 text-yellow-600" />
+   696→        </div>
+   697→      )}
+   698→
+   699→      {activeTab === 'AVISOS' && (
+   700→        <div className="space-y-4">
+   701→          <header className="px-1 flex flex-col gap-1">
+   702→            <h2 className="text-xl font-black text-gray-800 tracking-tight leading-none">Avisos</h2>
+   703→            <p className="text-[10px] font-black uppercase text-gray-400">Clientes ausentes há mais de 25 dias</p>
+   704→          </header>
+   705→          <div className="grid gap-2">
+   706→            {atRiskClients.map(c => {
+   707→              const lastDate = formatLastSaleDate(c.id);
+   708→              return (
+   709→                <div key={c.id} className="bg-white p-4 rounded-3xl border border-rose-50 shadow-sm flex items-center justify-between transition-all group">
+   710→                  <div className="flex-1 min-w-0 pr-3">
+   711→                    <h4 className="font-black text-gray-800 text-xs uppercase truncate">{c.nomeFantasia}</h4>
+   712→                    <div className="flex items-center gap-2 mt-1 flex-wrap">
+   713→                      <span className="text-[9px] font-black text-rose-600 uppercase bg-rose-50 px-2 py-0.5 rounded-lg">{c.diasSemCompra} dias</span>
+   714→                      <span className="text-[9px] text-gray-400 font-bold uppercase truncate">Ult: {new Date(c.dataUltimaVenda).toLocaleDateString()}</span>
+   715→                      {lastDate && (
+   716→                        <span className="text-[9px] text-indigo-600 font-black uppercase bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100">
+   717→                          <i className="fa-solid fa-clock mr-1 text-[7px]"></i>Últ: {lastDate}
+   718→                        </span>
+   719→                      )}
+   720→                    </div>
+   721→                  </div>
+   722→                  <div className="flex gap-2">
+   723→                    <button 
+   724→                      onClick={() => handleDismissRisk(c.id)}
+   725→                      className="bg-emerald-50 text-emerald-600 w-10 h-10 rounded-2xl flex items-center justify-center border border-emerald-100 active:scale-90 transition-all"
+   726→                      title="Marcar como visto"
+   727→                    >
+   728→                      <i className="fa-solid fa-check"></i>
+   729→                    </button>
+   730→                    <button 
+   731→                      onClick={() => handleAddToTodayRoute(c.id)}
+   732→                      className="bg-blue-600 text-white w-10 h-10 rounded-2xl flex items-center justify-center shadow-lg active:scale-90 transition-all"
+   733→                      title="Puxar p/ hoje"
+   734→                    >
+   735→                      <i className="fa-solid fa-plus"></i>
+   736→                    </button>
+   737→                  </div>
+   738→                </div>
+   739→              );
+   740→            })}
+   741→            {atRiskClients.length === 0 && (
+   742→              <div className="text-center py-20 opacity-30 flex flex-col items-center gap-4">
+   743→                <i className="fa-solid fa-circle-check text-5xl"></i>
+   744→                <p className="font-black uppercase tracking-widest text-[10px]">Tudo em dia!</p>
+   745→              </div>
+   746→            )}
+   747→          </div>
+   748→        </div>
+   749→      )}
+   750→
+   751→      {activeTab === 'ROTEIRO' && (
+   752→        <div className="space-y-4">
+   753→          <header className="flex justify-between items-center px-1">
+   754→            <div className="flex flex-col items-start"><h2 className="text-xl font-black text-gray-800 tracking-tight leading-none">{DIAS_SEMANA[diaAtual] ?? 'N/D'}</h2><span className="text-[10px] font-black uppercase text-gray-400 mt-1">{new Date().toLocaleDateString()}</span></div>
+   755→            <span className="bg-blue-100 text-blue-600 text-[10px] px-2 py-1 rounded-lg font-black uppercase">{rotaDeHoje.length} VISITAS</span>
+   756→          </header>
+   757→          {rotaDeHoje.map(c => {
+   758→            const isSold = (sales || []).some(s => s.clientId === c.id && isSameDay(s.data));
+   759→            const isSkipped = (dailyRouteState?.skippedClientIds || []).includes(c.id);
+   760→            const isVisited = (isSold || isSkipped) && !reopenedClientIds.includes(c.id);
+   761→            return (
+   762→              <div key={c.id} className={`p-4 rounded-3xl border flex items-center justify-between transition-all ${isVisited ? 'bg-gray-100 border-gray-200 grayscale opacity-60' : 'bg-white border-gray-100 shadow-sm'}`}>
+   763→                {/* LADO ESQUERDO: NOME COMPLETO (SEM TRUNCATE) + BAIRRO */}
+   764→                <div className="flex-1 min-w-0 cursor-pointer pr-4" onClick={() => setViewingClientHistory(c)}>
+   765→                  <p className="font-bold text-gray-800 leading-tight uppercase">{c.nomeFantasia ?? 'Cliente'}</p>
+   766→                  <p className="text-[10px] text-gray-400 uppercase font-semibold mt-1">
+   767→                    <i className="fa-solid fa-location-dot mr-1"></i> {(c.bairro || 'S/B')}
+   768→                  </p>
+   769→                </div>
+   770→                
+   771→                {/* LADO DIREITO: BOTÕES ALINHADOS À DIREITA */}
+   772→                {!isVisited ? (
+   773→                  <div className="flex items-center gap-2 ml-4 flex-shrink-0">
+   774→                    <button onClick={() => setConfirmSkipId(c.id)} className="w-10 h-10 bg-gray-50 text-gray-400 rounded-2xl flex items-center justify-center flex-shrink-0"><i className="fa-solid fa-forward"></i></button>
+   775→                    <button onClick={() => handleAtenderClient(c)} className="bg-blue-600 text-white px-4 py-2 rounded-2xl font-black text-xs uppercase shadow-lg flex-shrink-0 whitespace-nowrap">Atender</button>
+   776→                  </div>
+   777→                ) : (
+   778→                  <button onClick={() => handleReopenClient(c.id)} className="bg-white text-blue-600 border border-blue-200 px-4 py-2 rounded-xl text-[9px] font-black uppercase ml-4 flex-shrink-0 whitespace-nowrap">Reabrir</button>
+   779→                )}
+   780→              </div>
+   781→            );
+   782→          })}
+   783→        </div>
+   784→      )}
+   785→
+   786→      {activeTab === 'CLIENTES' && (
+   787→        <div className="space-y-4">
+   788→          <header className="px-1 flex justify-between items-center">
+   789→            <h2 className="text-xs font-black text-gray-400 uppercase tracking-wider">Meus Clientes</h2>
+   790→            <button onClick={() => handleOpenEditClient('NEW')} className="bg-green-600 text-white px-4 py-2 rounded-xl font-black text-xs uppercase shadow-md active:scale-95">
+   791→              <i className="fa-solid fa-user-plus mr-2"></i>Novo
+   792→            </button>
+   793→          </header>
+   794→          
+   795→          {/* NOVO: Campo de busca com lupa */}
+   796→          <div className="px-1 relative">
+   797→            <div className="relative">
+   798→              <i className="fa-solid fa-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-lg"></i>
+   799→              <input
+   800→                type="text"
+   801→                value={clientSearch}
+   802→                onChange={e => setClientSearch(e.target.value)}
+   803→                placeholder="Buscar por nome, telefone ou bairro..."
+   804→                className="w-full pl-12 pr-4 py-3 bg-white border border-gray-200 rounded-2xl shadow-sm text-sm outline-none focus:ring-2 focus:ring-green-100"
+   805→              />
+   806→              {clientSearch && (
+   807→                <button
+   808→                  onClick={() => setClientSearch('')}
+   809→                  className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 active:text-gray-600"
+   810→                >
+   811→                  <i className="fa-solid fa-xmark text-lg"></i>
+   812→                </button>
+   813→              )}
+   814→            </div>
+   815→            {clientSearch && (
+   816→              <p className="text-[10px] text-green-600 font-black uppercase mt-2 ml-1">
+   817→                {filteredClients.length} cliente(s) encontrado(s)
+   818→              </p>
+   819→            )}
+   820→          </div>
+   821→
+   822→          <div className="grid gap-3 px-1">
+   823→            {filteredClients.map(c => (
+   824→              <div key={c.id} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex items-center justify-between transition-all active:scale-95 group">
+   825→                {/* SEM SETAS DE ORDENAÇÃO - REMOVIDAS CONFORME SOLICITADO */}
+   826→                <div className="flex-1 cursor-pointer" onClick={() => setViewingClientHistory(c)}>
+   827→                  <div className="flex items-center gap-2">
+   828→                    <h4 className="font-bold text-gray-800 text-sm leading-tight uppercase">{c.nomeFantasia ?? 'Cliente'}</h4>
+   829→                    {c.telefone && (
+   830→                      <a 
+   831→                        href={`https://wa.me/55${c.telefone.replace(/\D/g, '')}`} 
+   832→                        target="_blank" 
+   833→                        className="text-emerald-500" 
+   834→                        onClick={(e) => e.stopPropagation()}
+   835→                      >
+   836→                        <i className="fa-brands fa-whatsapp text-lg"></i>
+   837→                      </a>
+   838→                    )}
+   839→                  </div>
+   840→                  <p className="text-[10px] text-gray-400 font-semibold uppercase mt-1">{c.telefone} • {DIAS_SEMANA[c.diaRoteiro]}</p>
+   841→                </div>
+   842→                <div className="flex flex-col gap-1">
+   843→                  <button onClick={(e) => { e.stopPropagation(); handleOpenEditClient(c); }} className="w-10 h-10 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center active:scale-95"><i className="fa-solid fa-pencil-alt text-xs"></i></button>
+   844→                </div>
+   845→              </div>
+   846→            ))}
+   847→            {filteredClients.length === 0 && clientSearch && (
+   848→              <div className="text-center py-12 opacity-30 flex flex-col items-center gap-4">
+   849→                <i className="fa-solid fa-magnifying-glass text-4xl text-gray-300"></i>
+   850→                <p className="font-black uppercase tracking-widest text-[10px]">Nenhum cliente encontrado</p>
+   851→                <p className="text-[9px] text-gray-400">Tente outra busca</p>
+   852→              </div>
+   853→            )}
+   854→          </div>
+   855→        </div>
+   856→      )}
+   857→
+   858→      {activeTab === 'WEEKLY' && (
+   859→        <div className="space-y-6 py-4">
+   860→          <div className="px-1 flex justify-between items-center"><h2 className="text-xl font-black text-gray-800 tracking-tight">Roteiro Semanal</h2></div>
+   861→          <div className="px-1"><input value={weeklySearch} onChange={e => setWeeklySearch(e.target.value)} placeholder="Filtrar por nome..." className="w-full p-4 bg-white border border-gray-100 rounded-2xl shadow-sm text-sm outline-none focus:ring-2 focus:ring-indigo-100" /></div>
+   862→          <div className="space-y-3 px-1">
+   863→            {[1, 2, 3, 4, 5, 6].map(dia => {
+   864→              const isOpen = expandedDay === dia;
+   865→              const clientsInDay = (clients || [])
+   866→                .filter(c => c.diaRoteiro === dia && c.ativo && c.rota === (user.rota || 'ROTA_01') && (weeklySearch === '' || (c.nomeFantasia || '').toLowerCase().includes(weeklySearch.toLowerCase())))
+   867→                .sort((a, b) => {
+   868→                  const orderMap = new Map(clientOrder.map((id, idx) => [id, idx]));
+   869→                  const idxA = orderMap.get(a.id) ?? (a.ordem || 0);
+   870→                  const idxB = orderMap.get(b.id) ?? (b.ordem || 0);
+   871→                  return idxA - idxB;
+   872→                }); 
+   873→              return (
+   874→                <div key={dia} className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
+   875→                  <button onClick={() => setExpandedDay(isOpen ? null : dia)} className={`w-full flex items-center justify-between p-5 text-left ${isOpen ? 'bg-indigo-50 text-indigo-700' : 'bg-white text-gray-700'}`}>
+   876→                    <div className="flex items-center gap-3"><div className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-[10px] ${isOpen ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-400'}`}>{dia}</div><span className="font-black uppercase text-xs tracking-tight">{DIAS_SEMANA[dia]}</span></div>
+   877→                    <div className="flex items-center gap-2"><span className="text-[9px] font-black uppercase opacity-40">{clientsInDay.length} clients</span><i className={`fa-solid ${isOpen ? 'fa-chevron-up' : 'fa-chevron-down'} text-[10px]`}></i></div>
+   878→                  </button>
+   879→                  {isOpen && (
+   880→                    <div className="p-4 bg-white space-y-2 border-t border-indigo-50">
+   881→                      {clientsInDay.map(c => (
+   882→                        <div key={c.id} className="p-3 bg-gray-50 rounded-2xl flex items-center justify-between group">
+   883→                          <div className="flex flex-col gap-1 mr-3">
+   884→                            <button onClick={(e)=>{e.stopPropagation(); moveClientInDay(c.id, 'UP', dia);}} className="w-7 h-7 bg-white border text-gray-400 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-chevron-up text-[10px]"></i></button>
+   885→                            <button onClick={(e)=>{e.stopPropagation(); moveClientInDay(c.id, 'DOWN', dia);}} className="w-7 h-7 bg-white border text-gray-400 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-chevron-down text-[10px]"></i></button>
+   886→                          </div>
+   887→                          <div className="flex-1 cursor-pointer min-w-0" onClick={() => setViewingClientHistory(c)}>
+   888→                            <p className="font-bold text-gray-800 text-xs uppercase truncate">{c.nomeFantasia}</p>
+   889→                            <p className="text-[9px] text-gray-400 font-bold mt-0.5">{c.bairro || 'Sem Bairro'}</p>
+   890→                          </div>
+   891→                          <div className="flex items-center gap-2">
+   892→                            <button onClick={() => handleAddToTodayRoute(c.id)} className="w-8 h-8 bg-indigo-100 text-indigo-600 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-plus text-xs"></i></button>
+   893→                            <button onClick={(e)=>{e.stopPropagation(); handleOpenEditClient(c);}} className="w-8 h-8 bg-blue-50 text-blue-600 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-pencil-alt text-xs"></i></button>
+   894→                          </div>
+   895→                        </div>
+   896→                      ))}
+   897→                    </div>
+   898→                  )}
+   899→                </div>
+   900→              );
+   901→            })}
+   902→          </div>
+   903→        </div>
+   904→      )}
+   905→
+   906→      {activeTab === 'CARGA' && (
+   907→        <div className="space-y-4">
+   908→          {(cargasPendentes || []).length > 0 ? (
+   909→            <div className="bg-orange-50 p-6 rounded-3xl shadow-xl flex flex-col gap-4 items-center text-center">
+   910→              <i className="fa-solid fa-truck-loading text-orange-600 text-4xl mb-2"></i>
+   911→              <h3 className="text-xl font-black text-orange-800 uppercase">Nova Carga Disponível!</h3>
+   912→              <button onClick={() => aceitarCarga(cargasPendentes[0].id)} className="w-full bg-orange-600 text-white font-black py-5 rounded-2xl shadow-lg active:scale-95 text-sm uppercase">ACEITAR CARGA</button>
+   913→            </div>
+   914→          ) : (
+   915→            <>
+   916→              <div className="bg-purple-600 text-white p-6 rounded-3xl shadow-xl flex justify-between items-center">
+   917→                 <div><p className="text-[10px] font-black uppercase opacity-60">Valor Total Carga</p><h3 className="text-2xl font-black">R$ {valorTotalCarga.toFixed(2)}</h3></div>
+   918→                 <div className="text-right"><p className="text-[10px] font-black uppercase opacity-60">Volume Total</p><h3 className="text-2xl font-black">{totalUnidadesCarga}</h3></div>
+   919→              </div>
+   920→
+   921→              <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
+   922→                <table className="w-full text-left">
+   923→                  <thead className="bg-gray-50"><tr><th className="p-4 text-[10px] font-black text-gray-400 uppercase">Item</th><th className="p-4 text-center text-[10px] font-black text-gray-400 uppercase">Preço</th><th className="p-4 text-right text-[10px] font-black text-gray-400 uppercase">Qtd</th></tr></thead>
+   924→                  <tbody className="divide-y divide-gray-50">
+   925→                    {orderedCargaProducts.map(({ product: p, carga: c }) => (
+   926→                      <tr key={c.produtoId}>
+   927→                        <td className="p-4 text-xs font-semibold uppercase">{p.nome ?? 'Desc.'}</td>
+   928→                        <td className="p-4 text-center text-xs text-gray-400">R$ {(p.precoVenda ?? 0).toFixed(2)}</td>
+   929→                        <td className="p-4 text-right font-black text-lg text-blue-600">{c.quantidade}</td>
+   930→                      </tr>
+   931→                    ))}
+   932→                  </tbody> 
+   933→                </table>
+   934→              </div>
+   935→
+   936→              <button 
+   937→                onClick={() => setShowFiscalization(true)}
+   938→                className="w-full bg-slate-800 text-white font-black py-5 rounded-[2rem] shadow-xl active:scale-95 transition-all uppercase text-[11px] tracking-[0.2em] flex items-center justify-center gap-3"
+   939→              >
+   940→                <i className="fa-solid fa-shield-halved text-lg"></i> Modo Fiscalização
+   941→              </button>
+   942→            </>
+   943→          )}
+   944→        </div>
+   945→      )}
+   946→
+   947→      {activeTab === 'HISTORY' && (
+   948→        <div className="space-y-4">
+   949→          <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow_inner">{(['DIA', 'SEMANA', 'MES', 'GERAL'] as const).map(f => (<button key={f} onClick={() => setHistoryFilter(f)} className={`flex-1 py-2 rounded-xl text-[9px] font-black uppercase ${historyFilter === f ? 'bg-white text-[#1E3A5F] shadow-sm' : 'text-gray-400'}`}>{f}</button>))}</div>
+   950→          <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-md flex flex-col gap-4">
+   951→             <div className="flex justify-between items-center border-b border-gray-100 pb-3"><span className="text-xs font-black text-gray-400 uppercase">Total Geral</span><span className="text-2xl font-black text-gray-900">R$ {historySummary.total.toFixed(2)}</span></div>
+   952→             <div className="grid grid-cols-3 gap-3">
+   953→                <div className="text-center bg-emerald-50 p-3 rounded-xl"><p className="text-[9px] font-black text-emerald-600 uppercase mb-1">Dinheiro</p><p className="text-sm font-black text-emerald-700">R$ {historySummary.dinheiro.toFixed(2)}</p></div>
+   954→                <div className="text-center bg-blue-50 p-3 rounded-xl"><p className="text-[9px] font-black text-blue-600 uppercase mb-1">Pix</p><p className="text-sm font-black text-blue-700">R$ {historySummary.pix.toFixed(2)}</p></div>
+   955→                <div className="text-center bg-orange-50 p-3 rounded-xl"><p className="text-[9px] font-black text-orange-600 uppercase mb-1">A Prazo</p><p className="text-sm font-black text-orange-700">R$ {historySummary.prazo.toFixed(2)}</p></div>
+   956→             </div>
+   957→          </div>
+   958→          <div className="grid gap-3 px-1">
+   959→            {filteredHistory.map(s => {
+   960→              const client = clients.find(c => c.id === s.clientId);
+   961→              const isCheque = s.metodoPagamento === 'A_PRAZO' && s.detalhePagamento?.toUpperCase().includes('CHEQUE');
+   962→              
+   963→              return (
+   964→                <div key={s.id} className="bg-white p-5 rounded-[2rem] border border-gray-100 shadow-sm flex items-center justify-between transition-all active:scale-[0.98] hover:border-blue-200 group">
+   965→                  <div className="flex-1 min-w-0 pr-4">
+   966→                    <div className="flex items-center gap-2 mb-1">
+   967→                      <span className={`text-[8px] font-black px-2 py-0.5 rounded-full uppercase tracking-widest ${
+   968→                        s.metodoPagamento === 'DINHEIRO' ? 'bg-emerald-50 text-emerald-600' : 
+   969→                        s.metodoPagamento === 'PIX' ? 'bg-blue-50 text-blue-600' : 
+   970→                        isCheque ? 'bg-purple-50 text-purple-600' :
+   971→                        'bg-orange-50 text-orange-600'
+   972→                      }`}>
+   973→                        {isCheque ? 'CHEQUE' : s.metodoPagamento === 'A_PRAZO' ? 'PRAZO' : s.metodoPagamento}
+   974→                      </span>
+   975→                      <span className="text-[9px] text-gray-300 font-bold">{new Date(s.data).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
+   976→                    </div>
+   977→                    <h4 className="font-black text-gray-800 text-[13px] leading-tight uppercase truncate cursor-pointer hover:text-blue-600" onClick={() => setViewingClientHistory(client!)}>
+   978→                      {client?.nomeFantasia ?? 'Cliente'}
+   979→                    </h4>
+   980→                  </div>
+   981→                  <div className="text-right flex items-center gap-4">
+   982→                    <div>
+   983→                      <p className="text-sm font-black text-gray-800 leading-none">R$ {s.valorTotal.toFixed(2)}</p>
+   984→                      <p className="text-[9px] text-gray-400 font-bold uppercase mt-1">Total</p>
+   985→                    </div>
+   986→                    <button onClick={() => setViewingSale(s)} className="w-10 h-10 bg-gray-50 text-gray-400 group-hover:bg-blue-600 group-hover:text-white rounded-2xl flex items-center justify-center transition-all">
+   987→                      <i className="fa-solid fa-file-invoice text-sm"></i>
+   988→                    </button>
+   989→                  </div>
+   990→                </div>
+   991→              );
+   992→            })}
+   993→          </div>
+   994→        </div>
+   995→      )}
+   996→
+   997→      {activeTab === 'FINANCE' && (
+   998→        <div className="space-y-6">
+   999→           <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow_inner">{(['DIA', 'SEMANA', 'MES', 'GERAL'] as const).map(f => (<button key={f} onClick={() => setFinanceFilter(f)} className={`flex-1 py-2 rounded-xl text-[9px] font-black uppercase ${financeFilter === f ? 'bg-white text-emerald-600 shadow-sm' : 'text-gray-400'}`}>{f}</button>))}</div>
+  1000→           
+  1001→           <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col text-center">
+  1002→              <p className="text-[9px] font-black uppercase text-gray-400 mb-1">Comissões Geradas no Período</p>
+  1003→              <h2 className="text-2xl font-black text-blue-600">R$ {financeStats.totalGerado.toFixed(2)}</h2>
+  1004→           </div>
+  1005→
+  1006→           <div className="grid grid-cols-2 gap-4">
+  1007→              <div className="bg-orange-50 p-5 rounded-3xl shadow-sm border border-orange-100">
+  1008→                <p className={`text-[9px] font-black text-orange-600 uppercase mb-1`}>A receber</p>
+  1009→                <p className="text-xl font-black text-orange-700">R$ {financeStats.aReceber.toFixed(2)}</p>
+  1010→                <p className={`text-[8px] font-bold text-orange-400 uppercase mt-1`}>Vendas a prazo</p>
+  1011→              </div>
+  1012→              <div className={`${financeStats.liberadas < 0 ? 'bg-rose-50 border-rose-100' : 'bg-emerald-50 border-emerald-100'} p-5 rounded-3xl shadow-md border`}>
+  1013→                <p className={`text-[9px] font-black ${financeStats.liberadas < 0 ? 'text-rose-600' : 'text-emerald-600'} uppercase mb-1`}>Liberadas</p>
+  1014→                <p className={`text-xl font-black ${financeStats.liberadas < 0 ? 'text-rose-700' : 'text-emerald-700'}`}>R$ {financeStats.liberadas.toFixed(2)}</p>
+  1015→                <p className={`text-[8px] font-bold ${financeStats.liberadas < 0 ? 'text-rose-400' : 'text-emerald-400'} uppercase mt-1`}>Disponível para saque</p>
+  1016→              </div>
+  1017→           </div>
+  1018→
+  1019→           <div className="bg-gray-900 text-white p-6 rounded-[2.5rem] shadow-xl flex justify-between items-center">
+  1020→              <div>
+  1021→                 <p className="text-[10px] font-black uppercase opacity-60 mb-1">Total Já Pago pelo Admin</p>
+  1022→                 <h3 className="text-2xl font-black text-emerald-400">R$ {financeStats.pagas.toFixed(2)}</h3>
+  1023→              </div>
+  1024→              <i className="fa-solid fa-circle-check text-emerald-400 text-3xl opacity-30"></i>
+  1025→           </div>
+  1026→
+  1027→           <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm">
+  1028→              <div className="flex justify-between items-center mb-4">
+  1029→                <h3 className="text-xs font-black text-gray-800 uppercase tracking-widest">Lançar Despesa</h3>
+  1030→                <button 
+  1031→                  onClick={() => setShowExpenseForm(!showExpenseForm)} 
+  1032→                  className={`w-10 h-10 rounded-2xl flex items-center justify-center transition-all ${showExpenseForm ? 'bg-rose-100 text-rose-600' : 'bg-blue-100 text-blue-600'}`}
+  1033→                >
+  1034→                  <i className={`fa-solid ${showExpenseForm ? 'fa-xmark' : 'fa-plus'}`}></i>
+  1035→                </button>
+  1036→              </div>
+  1037→              
+  1038→              {showExpenseForm && (
+  1039→                <div className="space-y-4 animate-in fade-in slide-in-from-top-2 duration-300">
+  1040→                  <div className="space-y-1">
+  1041→                    <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Descrição do Gasto</label>
+  1042→                    <input 
+  1043→                      value={expenseDesc} 
+  1044→                      onChange={e => setExpenseDesc(e.target.value)} 
+  1045→                      placeholder="Ex: Combustível, Almoço..." 
+  1046→                      className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-semibold outline-none"
+  1047→                    />
+  1048→                  </div>
+  1049→                  <div className="space-y-1">
+  1050→                    <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Valor R$</label>
+  1051→                    <input 
+  1052→                      type="number" 
+  1053→                      value={expenseVal} 
+  1054→                      onChange={e => setExpenseVal(e.target.value)} 
+  1055→                      placeholder="0.00" 
+  1056→                      className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-lg font-black outline-none"
+  1057→                    />
+  1058→                  </div>
+  1059→                  <button 
+  1060→                    onClick={handleLaunchExpense}
+  1061→                    className="w-full bg-rose-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 transition-all uppercase text-xs tracking-widest"
+  1062→                  >
+  1063→                    Confirmar Despesa
+  1064→                  </button>
+  1065→                </div>
+  1066→              )}
+  1067→           </div>
+  1068→
+  1069→           <div className="space-y-2 pt-4">
+  1070→             <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">Notificações</h3>
+  1071→             <div className="bg-white rounded-3xl border border-gray-100 shadow-sm divide-y divide-gray-50 overflow-hidden">
+  1072→                {messages.filter(m => m.vendedorId === user.id).sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime()).map(m => (
+  1073→                    <div key={m.id} className={`p-4 flex justify-between items-center transition-colors ${!m.lida ? 'bg-blue-50/50' : 'bg-white'}`}>
+  1074→                        <div className="flex-1 pr-3">
+  1075→                            <p className={`text-[11px] font-black uppercase leading-none mb-1 ${!m.lida ? 'text-blue-700' : 'text-gray-700'}`}>{m.titulo}</p>
+  1076→                            <p className="text-[10px] font-semibold text-gray-500 mt-1">{m.mensagem}</p>
+  1077→                            <p className="text-[8px] text-gray-400 mt-1">{new Date(m.data).toLocaleDateString()} {new Date(m.data).toLocaleTimeString()}</p>
+  1078→                        </div>
+  1079→                        {!m.lida && m.type === 'COMMISSION_CONFIRMATION' && (
+  1080→                            <button 
+  1081→                                onClick={() => handleMarkMessageAsRead(m.id)} 
+  1082→                                className="bg-emerald-600 text-white px-3 py-2 rounded-xl text-[9px] font-black uppercase active:scale-95 shadow-md"
+  1083→                            >
+  1084→                                Confirmar
+  1085→                            </button>
+  1086→                        )}
+  1087→                        {m.lida && <i className="fa-solid fa-check-circle text-emerald-500 text-lg"></i>}
+  1088→                    </div>
+  1089→                ))}
+  1090→                {messages.filter(m => m.vendedorId === user.id).length === 0 && (
+  1091→                    <div className="text-center py-8 opacity-30 italic text-[9px] uppercase font-bold tracking-widest">Nenhuma notificação.</div>
+  1092→                )}
+  1093→             </div>
+  1094→           </div>
+  1095→        </div>
+  1096→      )}
+  1097→
+  1098→      {activeTab === 'CREDIT' && (
+  1099→        <div className="space-y-4">
+  1100→          <header className="px-1 flex justify-between items-center">
+  1101→            <h2 className="text-xs font-black text-gray-400 uppercase tracking-wider">Contas a Receber</h2>
+  1102→            <button 
+  1103→              onClick={() => setFilterOverdueOnly(!filterOverdueOnly)}
+  1104→              className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all flex items-center gap-2 shadow-sm ${filterOverdueOnly ? 'bg-rose-600 text-white' : 'bg-white text-gray-400 border border-gray-100'}`}
+  1105→            >
+  1106→              <i className={`fa-solid ${filterOverdueOnly ? 'fa-calendar-exclamation' : 'fa-calendar-days'}`}></i>
+  1107→              {filterOverdueOnly ? 'Vencidas/Hoje' : 'Todas'}
+  1108→            </button>
+  1109→          </header>
+  1110→
+  1111→          <div className="flex bg-gray-100 p-1 rounded-2xl mx-1 shadow-inner overflow-x-auto gap-1">
+  1112→            {(['TODOS', 'COMUM', 'CHEQUE', 'BOLETO'] as const).map(t => (
+  1113→              <button 
+  1114→                key={t} 
+  1115→                onClick={() => setCreditTypeFilter(t)} 
+  1116→                className={`flex-1 min-w-[70px] py-2 rounded-xl text-[9px] font-black uppercase transition-all ${creditTypeFilter === t ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}
+  1117→              >
+  1118→                {t === 'COMUM' ? 'Comum' : t}
+  1119→              </button>
+  1120→            ))}
+  1121→          </div>
+  1122→
+  1123→          <div className="px-1">
+  1124→            <input value={creditSearch} onChange={e => setCreditSearch(e.target.value)} placeholder="Buscar cliente..." className="w-full p-4 bg-white border border-gray-100 rounded-2xl shadow-sm text-sm outline-none focus:ring-2 focus:ring-blue-100" />
+  1125→          </div>
+  1126→
+  1127→          <div className="grid gap-3">
+  1128→            {contasAReceber.map(s => {
+  1129→              const saldo = Number(((s.valorTotal ?? 0) - (s.valorPago ?? 0)).toFixed(2)); 
+  1130→              const today = new Date();
+  1131→              today.setHours(0,0,0,0);
+  1132→              const dueDate = s.dataVencimento ? new Date(s.dataVencimento) : null;
+  1133→              if (dueDate) dueDate.setHours(0,0,0,0);
+  1134→              const isOverdue = dueDate ? dueDate <= today : false;
+  1135→
+  1136→              return (
+  1137→              <div key={s.id} className={`p-5 rounded-3xl border shadow-sm flex flex-col transition-all ${isOverdue ? 'bg-rose-50 border-rose-200' : 'bg-white border-gray-100'}`}>
+  1138→                <div className="flex justify-between items-start mb-2">
+  1139→                   <div className="flex-1 pr-4">
+  1140→                      <h4 className={`font-bold text-sm leading-tight uppercase cursor-pointer ${isOverdue ? 'text-rose-900' : 'text-gray-800'}`} onClick={() => setViewingClientHistory(clients.find(c => c.id === s.clientId)!)}>{clients.find(c => c.id === s.clientId)?.nomeFantasia || 'Cliente'}</h4>
+  1141→                      <div className="flex flex-col mt-2">
+  1142→                        <span className={`text-[9px] font-black uppercase ${isOverdue ? 'text-rose-600' : 'text-gray-400'}`}>Vencimento</span>
+  1143→                        <span className={`text-xs font-black ${isOverdue ? 'text-rose-700' : 'text-gray-800'}`}>{s.dataVencimento ? new Date(s.dataVencimento).toLocaleDateString() : 'N/D'}</span>
+  1144→                        <span className="text-[8px] font-black uppercase text-blue-600 mt-1">{s.detalhePagamento || 'COMUM'}</span>
+  1145→                      </div>
+  1146→                      
+  1147→                      {s.detalhePagamento && (
+  1148→                        <div className="mt-3 space-y-1">
+  1149→                          <p className="text-[8px] font-black text-gray-400 uppercase">Histórico de Recebimentos:</p>
+  1150→                          <div className="bg-gray-50/50 p-2 rounded-xl border border-gray-100 max-h-24 overflow-y-auto">
+  1151→                            {s.detalhePagamento.split('|').map((log, i) => (
+  1152→                              <p key={i} className="text-[8px] font-bold text-gray-500 border-b border-gray-100 last:border-0 pb-1 mb-1">{log.trim()}</p>
+  1153→                            ))}
+  1154→                          </div>
+  1155→                        </div>
+  1156→                      )}
+  1157→                   </div>
+  1158→                   <div className="text-right">
+  1159→                      <span className={`text-[8px] font-black px-2 py-0.5 rounded uppercase ${isOverdue ? 'bg-rose-600 text-white animate-pulse' : 'bg-orange-100 text-orange-600'}`}>
+  1160→                        {isOverdue ? 'VENCIDO / HOJE' : 'PENDENTE'}
+  1161→                      </span>
+  1162→                      <p className="text-lg font-black mt-2 text-rose-600">Saldo: R$ {saldo.toFixed(2)}</p>
+  1163→                   </div>
+  1164→                </div>
+  1165→                <button onClick={(e) => { e.stopPropagation(); setShowReceiveModal(s); setValorRecebidoParcial(saldo.toString()); }} className={`w-full py-3 rounded-2xl text-[10px] font-black uppercase mt-3 shadow-lg active:scale-95 ${isOverdue ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white'}`}>Receber Agora</button>
+  1166→              </div>
+  1167→            )})}
+  1168→            {contasAReceber.length === 0 && (
+  1169→               <div className="text-center py-20 opacity-20 italic font-black uppercase tracking-widest text-[10px]">Nenhuma conta pendente</div>
+  1170→            )}
+  1171→          </div>
+  1172→        </div>
+  1173→      )}
+  1174→
+  1175→      {activeTab === 'STOCK_VIEW' && (
+  1176→        <div className="space-y-4">
+  1177→          <header className="px-1"><h2 className="text-xs font-black text-gray-400 uppercase tracking-wider">Estoque Central</h2></header>
+  1178→          <div className="grid gap-3">
+  1179→            {products.map(p => ( 
+  1180→              <div key={p.id} className="bg-white px-4 py-3 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between">
+  1181→                <div className="flex-1"><h3 className="font-bold text-gray-800 text-sm leading-tight uppercase">{p.nome}</h3><div className="flex items-center gap-2 mt-1"><span className="text-[10px] font-black bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded tracking-tighter"><i className="fa-solid fa-house mr-1 text-[8px]"></i>{p.estoquePrincipal} un</span></div></div>
+  1182→                <div className="text-right"><p className="text-sm font-black text-emerald-600">R$ {p.precoVenda.toFixed(2)}</p></div> 
+  1183→              </div>
+  1184→            ))}
+  1185→          </div>
+  1186→        </div>
+  1187→      )}
+  1188→
+  1189→      {clientInfoModal && (
+  1190→        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[320] flex items-center justify-center p-4">
+  1191→          <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
+  1192→            <div className="bg-gradient-to-br from-amber-400 to-orange-500 p-6 text-center">
+  1193→              <div className="w-14 h-14 bg-white/20 rounded-2xl flex items-center justify-center mx-auto mb-3">
+  1194→                <i className="fa-solid fa-circle-exclamation text-white text-2xl"></i>
+  1195→              </div>
+  1196→              <h3 className="font-black text-white text-base uppercase tracking-tight">Cadastro Incompleto</h3>
+  1197→              <p className="text-white/80 text-[10px] font-bold uppercase mt-1">{clientInfoModal.nomeFantasia}</p>
+  1198→            </div>
+  1199→
+  1200→            <div className="p-6 space-y-4">
+  1201→              <div className={`p-4 rounded-2xl border-2 border-dashed flex items-center gap-3 transition-all ${gpsStatus === 'done' ? 'bg-emerald-50 border-emerald-300' : gpsStatus === 'loading' ? 'bg-blue-50 border-blue-300 animate-pulse' : 'bg-amber-50 border-amber-200'}`}>
+  1202→                <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${gpsStatus === 'done' ? 'bg-emerald-100' : 'bg-amber-100'}`}>
+  1203→                  <i className={`fa-solid ${gpsStatus === 'done' ? 'fa-check text-emerald-600' : gpsStatus === 'loading' ? 'fa-spinner fa-spin text-blue-600' : 'fa-location-crosshairs text-amber-500'}`}></i>
+  1204→                </div>
+  1205→                <div className="flex-1">
+  1206→                  <p className="text-[10px] font-black text-gray-800 uppercase">Localizacao GPS</p>
+  1207→                  <p className="text-[9px] text-gray-400 mt-0.5">
+  1208→                    {gpsStatus === 'done' && gpsCoords ? `${gpsCoords.lat.toFixed(6)}, ${gpsCoords.lng.toFixed(6)}` : gpsStatus === 'loading' ? 'Obtendo localizacao...' : 'Nao capturada'}
+  1209→                  </p>
+  1210→                </div>
+  1211→                {gpsStatus !== 'done' && (
+  1212→                  <button onClick={handleGetGPS} disabled={gpsStatus === 'loading'} className="bg-amber-500 text-white text-[8px] font-black uppercase px-3 py-2 rounded-xl active:scale-95 transition-transform whitespace-nowrap disabled:opacity-50">
+  1213→                    <i className="fa-solid fa-crosshairs mr-1"></i>Capturar
+  1214→                  </button>
+  1215→                )}
+  1216→              </div>
+  1217→
+  1218→              <div className="space-y-1">
+  1219→                <label className="text-[10px] font-black text-gray-400 uppercase ml-1">WhatsApp do Cliente</label>
+  1220→                <div className="relative">
+  1221→                  <i className="fa-brands fa-whatsapp absolute left-4 top-1/2 -translate-y-1/2 text-emerald-500 text-lg"></i>
+  1222→                  <input
+  1223→                    type="tel"
+  1224→                    value={modalWhatsapp}
+  1225→                    onChange={e => setModalWhatsapp(e.target.value)}
+  1226→                    placeholder="Ex: 11999999999"
+  1227→                    className="w-full pl-12 pr-4 py-4 bg-gray-50 rounded-2xl font-black text-sm outline-none focus:ring-2 focus:ring-emerald-100 border-2 border-transparent focus:border-emerald-200 transition-all"
+  1228→                  />
+  1229→                </div>
+  1230→              </div>
+  1231→            </div>
+  1232→
+  1233→            <div className="p-5 pt-0 flex flex-col gap-2">
+  1234→              <button
+  1235→                onClick={handleSaveClientInfo}
+  1236→                className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest flex items-center justify-center gap-2"
+  1237→              >
+  1238→                <i className="fa-solid fa-floppy-disk"></i> Salvar e Atender
+  1239→              </button>
+  1240→              <button
+  1241→                onClick={() => { setClientInfoModal(null); setSelectedClient(clientInfoModal); }}
+  1242→                className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest text-center"
+  1243→              >
+  1244→                Atender sem preencher
+  1245→              </button>
+  1246→            </div>
+  1247→          </div>
+  1248→        </div>
+  1249→      )}
+  1250→
+  1251→      {confirmSkipId && (
+  1252→        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[300] flex items-center justify-center p-6">
+  1253→          <div className="bg-white w-full max-w-xs rounded-3xl p-8 text-center shadow-2xl animate-in zoom-in-95 duration-200">
+  1254→            <h3 className="font-black text-gray-800 text-lg mb-4">Pular Cliente?</h3>
+  1255→            <p className="text-sm text-gray-500 mb-6 font-medium uppercase">Deseja realmente pular o atendimento deste cliente hoje?</p>
+  1256→            <div className="flex flex-col gap-2">
+  1257→              <button onClick={handleSkipClient} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest">Sim, Pular</button>
+  1258→              <button onClick={() => setConfirmSkipId(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Voltar</button>
+  1259→            </div>
+  1260→          </div>
+  1261→        </div>
+  1262→      )}
+  1263→
+  1264→      {showReceiveModal && (
+  1265→        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[250] flex items-center justify-center p-6">
+  1266→           <div className="bg-white w-full max-xs rounded-3xl p-8 shadow-2xl animate-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto">
+  1267→              <h3 className="font-black text-gray-800 text-sm uppercase mb-4 text-center tracking-tight">Confirmar Recebimento</h3>
+  1268→              <div className="bg-gray-50 p-4 rounded-2xl mb-4"><p className="text-[10px] font-black text-gray-400 uppercase mb-1">Saldo Devedor</p><p className="text-xl font-black text-rose-600">R$ {((showReceiveModal.valorTotal ?? 0) - (showReceiveModal.valorPago ?? 0)).toFixed(2)}</p></div>
+  1269→              
+  1270→              {showReceiveModal.detalhePagamento && (
+  1271→                <div className="mb-6 text-left">
+  1272→                  <p className="text-[9px] font-black text-gray-400 uppercase mb-2 ml-1">Histórico de Recebimentos</p>
+  1273→                  <div className="bg-gray-50 p-3 rounded-xl space-y-1 max-h-32 overflow-y-auto border border-gray-100">
+  1274→                    {showReceiveModal.detalhePagamento.split('|').map((log, i) => (
+  1275→                      <p key={i} className="text-[10px] font-bold text-gray-600 border-b border-gray-200 pb-1 last:border-0">{log.trim()}</p>
+  1276→                    ))}
+  1277→                  </div>
+  1278→                </div>
+  1279→              )}
+  1280→
+  1281→              <div className="space-y-4 mb-6"><p className="text-[10px] font-black text-gray-400 uppercase text-left ml-1">Valor a Receber</p><input type="number" value={valorRecebidoParcial} onChange={e => setValorRecebidoParcial(e.target.value)} className="w-full p-4 bg-white border border-gray-200 rounded-2xl font-black text-xl text-center outline-none" /></div>
+  1282→              <div className="grid grid-cols-2 gap-3 mb-3">
+  1283→                 <button onClick={() => handleConfirmReceive('DINHEIRO')} className="w-full bg-gray-900 text-white py-4 rounded-2xl shadow-lg active:scale-95 font-black uppercase text-xs tracking-widest">DINHEIRO</button>
+  1284→                 <button onClick={() => handleConfirmReceive('PIX')} className="w-full bg-blue-600 text-white py-4 rounded-2xl shadow-lg active:scale-95 font-black uppercase text-xs tracking-widest">PIX</button>
+  1285→              </div>
+  1286→              <button onClick={() => setShowReceiveModal(null)} className="w-full py-3 text-gray-400 font-semibold uppercase text-[9px] tracking-widest text-center">Cancelar</button>
+  1287→           </div>
+  1288→        </div>
+  1289→      )}
+  1290→
+  1291→      {editingClient && (
+  1292→        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[310] flex items-end sm:items-center justify-center p-4">
+  1293→          <div className="bg-white w-full max-md rounded-t-[2rem] sm:rounded-[2rem] shadow-2xl p-8 animate-in slide-in-from-bottom duration-300 max-h-[90vh] overflow-y-auto">
+  1294→             <div className="flex justify-between items-center mb-6"><h3 className="font-black text-gray-800 uppercase text-sm tracking-tight">{editingClient === 'NEW' ? 'Novo Cliente' : 'Editar Cliente'}</h3></div>
+  1295→             <div className="space-y-4 pb-6">
+  1296→                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Nome Fantasia</label><input value={cForm.nomeFantasia || ''} onChange={e => setCForm({...cForm, nomeFantasia: e.target.value})} placeholder="Nome Fantasia" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100 uppercase" /></div>
+  1297→                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Telefone / WhatsApp</label><input value={cForm.telefone || ''} onChange={e => setCForm({...cForm, telefone: e.target.value})} placeholder="Telefone" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100" /></div>
+  1298→                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Endereço</label><input value={cForm.endereco || ''} onChange={e => setCForm({...cForm, endereco: e.target.value})} placeholder="Endereço" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100 uppercase" /></div>
+  1299→                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Bairro</label><input value={cForm.bairro || ''} onChange={e => setCForm({...cForm, bairro: e.target.value})} placeholder="Bairro" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100 uppercase" /></div>
+  1300→                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Dia de Atendimento</label><select value={cForm.diaRoteiro ?? 1} onChange={e => setCForm({...cForm, diaRoteiro: parseInt(e.target.value)})} className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100">{[1, 2, 3, 4, 5, 6].map(d => (<option key={d} value={d}>{DIAS_SEMANA[d] ?? 'N/D'}</option>))}</select></div> 
+  1301→                
+  1302→                <div className="space-y-1">
+  1303→                  <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Rota de Atendimento</label>
+  1304→                  <div className="w-full p-4 bg-gray-100 rounded-2xl font-black text-blue-600 text-xs uppercase shadow-inner border border-blue-50 flex justify-between items-center">
+  1305→                    <span>{user.rota ? `Rota ${user.rota.replace('ROTA_', '')}` : 'Sem Rota'}</span>
+  1306→                    <i className="fa-solid fa-lock text-[10px] opacity-30"></i>
+  1307→                  </div>
+  1308→                </div>
+  1309→
+  1310→                <button onClick={handlePinLocation} className="w-full bg-indigo-50 text-indigo-600 font-black py-3 rounded-2xl uppercase text-[10px] tracking-widest flex items-center justify-center gap-2 mb-2"><i className="fa-solid fa-location-dot"></i> Capturar Localização Atual</button>
+  1311→                <div className="flex flex-col gap-2 mt-4"><button onClick={handleSaveClientBasic} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-lg uppercase text-xs">Salvar Alterações</button><button onClick={() => setEditingClient(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px]">Cancelar</button></div>
+  1312→             </div>
+  1313→          </div>
+  1314→        </div>
+  1315→      )}
+  1316→
+  1317→      {viewingClientHistory && (
+  1318→        <ClientHistory 
+  1319→          client={viewingClientHistory} 
+  1320→          sales={sales} 
+  1321→          products={products} 
+  1322→          onClose={() => setViewingClientHistory(null)} 
+  1323→        />
+  1324→      )}
+  1325→    </div>
+  1326→  );
+  1327→};
+  1328→
+  1329→export default VendedorDashboard;

@@ -6,6 +6,7 @@ import { loadLocalState, saveLocalState } from '@/utils/persistence';
 import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
 import { wakeLockManager } from '@/utils/wakeLock';
 import { clientService } from '@/services/clientService';
+import { saleService } from '@/services/saleService';
 
 interface PDVProps {
   client: Client;
@@ -48,6 +49,58 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const [saleResultModal, setSaleResultModal] = useState<{ total: number; comissao: number; troca: number; isPrazo: boolean; clientName: string; sale: Sale } | null>(null);
 
   // ============================================================
+  // MODAL: Comprovante foto (venda a prazo)
+  // ============================================================
+  const [showComprovanteModal, setShowComprovanteModal] = useState(false);
+  const [comprovanteSaleId, setComprovanteSaleId] = useState<string | null>(null);
+  const [comprovanteFoto, setComprovanteFoto] = useState<string | null>(null);
+  const [comprovanteUploading, setComprovanteUploading] = useState(false);
+  const comprovanteInputRef = useRef<HTMLInputElement | null>(null);
+
+  const handleCaptureComprovante = (file: File) => {
+    setComprovanteUploading(true);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const MAX = 1200;
+        let w = img.width, h = img.height;
+        if (w > MAX || h > MAX) {
+          if (w > h) { h = (h / w) * MAX; w = MAX; }
+          else { w = (w / h) * MAX; h = MAX; }
+        }
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d')!.drawImage(img, 0, 0, w, h);
+        const base64 = canvas.toDataURL('image/jpeg', 0.6);
+        setComprovanteFoto(base64);
+        setComprovanteUploading(false);
+      };
+      img.src = e.target?.result as string;
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSaveComprovante = async () => {
+    if (!comprovanteSaleId || !comprovanteFoto) return;
+    setComprovanteUploading(true);
+    const ok = await saleService.updateSale(comprovanteSaleId, { comprovanteFoto } as any);
+    setComprovanteUploading(false);
+    if (ok) {
+      setAppModal({ title: 'Salvo!', message: 'Comprovante salvo com sucesso.', icon: 'fa-solid fa-check', iconColor: 'text-emerald-500', type: 'success' });
+      setShowComprovanteModal(false);
+    } else {
+      setAppModal({ title: 'Erro', message: 'Falha ao salvar comprovante.', icon: 'fa-solid fa-triangle-exclamation', iconColor: 'text-rose-500', type: 'error' });
+    }
+  };
+
+  const openComprovanteFlow = (sale: Sale) => {
+    setComprovanteSaleId(sale.id);
+    setComprovanteFoto(sale.comprovanteFoto || null);
+    setShowComprovanteModal(true);
+  };
+
+  // ============================================================
   // MODAL: App-like genérico (substitui window.alert)
   // ============================================================
   const [appModal, setAppModal] = useState<{ title: string; message: string; icon?: string; iconColor?: string; type?: 'info' | 'error' | 'success' } | null>(null);
@@ -58,88 +111,69 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const [confirmModal, setConfirmModal] = useState<{ title: string; message: string; onConfirm: () => void; icon?: string; iconColor?: string } | null>(null);
 
   // ============================================================
-  // MODAL: Cliente incompleto (GPS + WhatsApp)
+  // MODAL: Cliente incompleto (GPS + WhatsApp) — APENAS 1 MODAL
   // ============================================================
   const [showClientInfoModal, setShowClientInfoModal] = useState(false);
   const [clientWhatsapp, setClientWhatsapp] = useState('');
   const [gpsStatus, setGpsStatus] = useState<'idle' | 'fetching' | 'saved' | 'error'>('idle');
   const [whatsappStatus, setWhatsappStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
-  // Rastreia o que foi salvo com sucesso nesta sessão
-  const [gpsSaved, setGpsSaved] = useState(false);
-  const [whatsappSaved, setWhatsappSaved] = useState(false);
-  // Timer de debounce para salvar WhatsApp automaticamente
   const whatsappTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const modalInitializedRef = useRef(false);
 
-  // ============================================================
-  // Mostra modal se falta GPS OU WhatsApp no cadastro
-  // Fecha automaticamente quando ambos forem salvos
-  // ============================================================
+  // Mostra 1 vez: se falta GPS OU WhatsApp. Usa ref para nunca repetir.
   useEffect(() => {
-    const hasGps = client.localizacao && 
-      typeof client.localizacao === 'object' && 
-      ((client.localizacao as any).lat !== 0 && (client.localizacao as any).lng !== 0);
-    const hasWhatsapp = client.telefone && client.telefone.replace(/\D/g, '').length >= 10;
-    if (hasGps) setGpsSaved(true);
-    if (hasWhatsapp) setWhatsappSaved(true);
+    if (modalInitializedRef.current) return;
+    modalInitializedRef.current = true;
+
+    const hasGps = !!(client.pinLocalizacao && client.pinLocalizacao.length > 5);
+    const hasWhatsapp = !!(client.telefone && client.telefone.replace(/\D/g, '').length >= 10);
     if (!hasGps || !hasWhatsapp) {
-      setClientWhatsapp(hasWhatsapp ? client.telefone : '');
+      setClientWhatsapp(client.telefone || '');
+      if (!hasWhatsapp) setWhatsappStatus('idle');
+      else setWhatsappStatus('saved');
+      if (!hasGps) setGpsStatus('idle');
+      else setGpsStatus('saved');
       setShowClientInfoModal(true);
     }
   }, [client.id]);
 
-  // Fecha modal quando ambos salvos
-  useEffect(() => {
-    if (gpsSaved && whatsappSaved) {
-      const t = setTimeout(() => setShowClientInfoModal(false), 600);
-      return () => clearTimeout(t);
-    }
-  }, [gpsSaved, whatsappSaved]);
-
-  const handleDetectGPS = async () => {
+  // GPS: salva em pin_localizacao (mesmo formato do admin: "lat, lng") + endereco/bairro
+  const handleDetectGPS = () => {
     if (!navigator.geolocation) { setGpsStatus('error'); return; }
     setGpsStatus('fetching');
     navigator.geolocation.getCurrentPosition(
-      async (position) => {
-        const lat = position.coords.latitude;
-        const lng = position.coords.longitude;
-        let endereco = '';
-        let bairro = '';
+      async (p) => {
+        const lat = p.coords.latitude;
+        const lng = p.coords.longitude;
+        const pinStr = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+        const updates: any = { pinLocalizacao: pinStr };
         try {
-          const res = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&addressdetails=1&accept-language=pt-BR`);
-          const data = await res.json();
-          const addr = data?.address || {};
-          const parts: string[] = [];
-          if (addr.road) parts.push(addr.road);
-          if (addr.house_number) parts.push(addr.house_number);
-          endereco = parts.join(', ');
-          bairro = addr.suburb || addr.neighbourhood || addr.city_district || '';
-        } catch (e) { console.warn('Falha na geocodificação reversa:', e); }
-
-        const updates: any = { localizacao: { lat, lng } };
-        if (endereco) updates.endereco = endereco;
-        if (bairro) updates.bairro = bairro;
-
+          const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}`, { headers: { 'Accept-Language': 'pt-BR' } });
+          const data = await response.json();
+          if (data?.address) {
+            const addr = data.address;
+            updates.endereco = `${addr.road || ''}${addr.house_number ? ', ' + addr.house_number : ''}` || undefined;
+            updates.bairro = addr.suburb || addr.neighbourhood || undefined;
+          }
+        } catch (e) { /* salva pelo menos as coordenadas */ }
         const updated = await clientService.updateClient(client.id, updates);
-        if (updated) { setGpsStatus('saved'); setGpsSaved(true); }
-        else { setGpsStatus('error'); }
+        setGpsStatus(updated ? 'saved' : 'error');
       },
       () => { setGpsStatus('error'); },
       { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
     );
   };
 
-  // Salva WhatsApp automaticamente (debounce 1.5s após parar de digitar)
+  // WhatsApp: salva automaticamente 1.5s após parar de digitar (min 10 dígitos)
   const handleWhatsappChange = (value: string) => {
     setClientWhatsapp(value);
     setWhatsappStatus('idle');
     if (whatsappTimerRef.current) clearTimeout(whatsappTimerRef.current);
-    const cleaned = value.replace(/\D/g, '');
-    if (cleaned.length >= 10) {
+    if (value.replace(/\D/g, '').length >= 10) {
       whatsappTimerRef.current = setTimeout(async () => {
         setWhatsappStatus('saving');
-        const updated = await clientService.updateClient(client.id, { telefone: value });
-        if (updated) { setWhatsappStatus('saved'); setWhatsappSaved(true); }
-        else { setWhatsappStatus('error'); }
+        const ok = await clientService.updateClient(client.id, { telefone: value });
+        setWhatsappStatus(ok ? 'saved' : 'error');
       }, 1500);
     }
   };
@@ -908,12 +942,20 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
             )}
           </div>
 
-          <div className="p-5 pt-0">
+          <div className="p-5 pt-0 space-y-2">
+            {saleResultModal.isPrazo && !saleResultModal.sale.comprovanteFoto && (
+              <button
+                onClick={() => { const s = saleResultModal!.sale; setSaleResultModal(null); openComprovanteFlow(s); }}
+                className="w-full bg-amber-500 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest"
+              >
+                <i className="fa-solid fa-camera mr-2"></i>Foto do Comprovante
+              </button>
+            )}
             <button
               onClick={() => { const s = saleResultModal.sale; setSaleResultModal(null); onFinish(s); }}
               className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest"
             >
-              <i className="fa-solid fa-check mr-2"></i>OK
+              <i className="fa-solid fa-check mr-2"></i>{saleResultModal.isPrazo && !saleResultModal.sale.comprovanteFoto ? 'Depois' : 'OK'}
             </button>
           </div>
         </div>
@@ -1099,6 +1141,78 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               Confirmar
             </button>
           </div>
+        </div>
+      </div>
+    )}
+    {/* ============================================================ */}
+    {/* MODAL: Comprovante de venda a prazo (foto) */}
+    {/* ============================================================ */}
+    {showComprovanteModal && (
+      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[350] flex items-center justify-center p-4">
+        <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
+          <div className="bg-gradient-to-br from-amber-400 to-orange-500 p-5 text-center">
+            <div className="w-14 h-14 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-2">
+              <i className="fa-solid fa-file-circle-check text-white text-2xl"></i>
+            </div>
+            <h3 className="font-black text-white text-sm uppercase tracking-tight">Comprovante de Venda</h3>
+            <p className="text-white/70 text-[9px] font-bold mt-1">Tire foto do cupom assinado</p>
+          </div>
+
+          <div className="p-5">
+            {comprovanteFoto ? (
+              <div className="space-y-3">
+                <img src={comprovanteFoto} className="w-full rounded-2xl border border-gray-100 shadow-inner" alt="Comprovante" />
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => comprovanteInputRef.current?.click()}
+                    className="bg-gray-100 text-gray-600 font-black py-3 rounded-xl active:scale-95 text-[10px] uppercase"
+                  >
+                    <i className="fa-solid fa-camera-rotate mr-1"></i>Refazer
+                  </button>
+                  <button
+                    onClick={handleSaveComprovante}
+                    disabled={comprovanteUploading}
+                    className="bg-emerald-600 text-white font-black py-3 rounded-xl active:scale-95 text-[10px] uppercase shadow-sm"
+                  >
+                    {comprovanteUploading ? 'Salvando...' : 'Salvar'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={() => comprovanteInputRef.current?.click()}
+                disabled={comprovanteUploading}
+                className="w-full bg-amber-100 border-2 border-dashed border-amber-300 rounded-2xl p-8 flex flex-col items-center gap-3 active:scale-95 transition-all"
+              >
+                {comprovanteUploading ? (
+                  <i className="fa-solid fa-spinner fa-spin text-amber-500 text-2xl"></i>
+                ) : (
+                  <i className="fa-solid fa-camera text-amber-500 text-2xl"></i>
+                )}
+                <span className="text-[10px] font-black text-amber-700 uppercase">
+                  {comprovanteUploading ? 'Processando...' : 'Tirar Foto'}
+                </span>
+              </button>
+            )}
+          </div>
+
+          <div className="p-5 pt-0">
+            <button
+              onClick={() => setShowComprovanteModal(false)}
+              className="w-full bg-gray-100 text-gray-500 font-black py-3 rounded-2xl active:scale-95 uppercase text-[10px]"
+            >
+              Fechar
+            </button>
+          </div>
+
+          <input
+            ref={comprovanteInputRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={e => { const f = e.target.files?.[0]; if (f) handleCaptureComprovante(f); e.target.value = ''; }}
+          />
         </div>
       </div>
     )}

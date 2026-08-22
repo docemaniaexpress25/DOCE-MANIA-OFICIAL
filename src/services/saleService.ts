@@ -17,6 +17,7 @@ export const saleService = {
       detalhePagamento: s.detalhe_pagamento,
       statusPagamento: s.status_pagamento,
       dataVencimento: s.data_vencimento ? new Date(s.data_vencimento) : undefined,
+      comprovanteFoto: s.comprovante_foto || undefined,
       data: new Date(s.data_venda),
       itens: (s.sale_items || []).map((i: any) => ({
         produtoId: i.produto_id,
@@ -63,6 +64,7 @@ export const saleService = {
     if (updates.statusPagamento !== undefined) payload.status_pagamento = updates.statusPagamento;
     if (updates.metodoPagamento !== undefined) payload.metodo_pagamento = updates.metodoPagamento;
     if (updates.detalhePagamento !== undefined) payload.detalhe_pagamento = updates.detalhePagamento;
+    if ((updates as any).comprovanteFoto !== undefined) payload.comprovante_foto = (updates as any).comprovanteFoto;
     const { error } = await supabase.from('sales').update(payload).eq('id', id);
     return !error;
   },

@@ -1,0 +1,1222 @@
+     1→"use client";
+     2→import React, { useState, useEffect, useMemo, useRef } from 'react';
+     3→import { Product, Client, Carga, Sale, SaleItem, PaymentMethod, Category, Subcategory } from '@/lib/types';
+     4→import Cupom from '@/components/doce/Cupom';
+     5→import { loadLocalState, saveLocalState } from '@/utils/persistence';
+     6→import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
+     7→import { wakeLockManager } from '@/utils/wakeLock';
+     8→import { clientService } from '@/services/clientService';
+     9→import { saleService } from '@/services/saleService';
+    10→
+    11→interface PDVProps {
+    12→  client: Client;
+    13→  products: Product[];
+    14→  minhaCarga: Carga[];
+    15→  vendedorId: string;
+    16→  onCancel: () => void;
+    17→  onFinish: (sale: Sale) => void;
+    18→  processSale: (data: any) => Promise<Sale | null>;
+    19→  margemMinima: number;
+    20→  margemMinimaAtiva: boolean;
+    21→  pix1Name: string;
+    22→  pix1Code: string | null;
+    23→  pix2Name: string;
+    24→  pix2Code: string | null;
+    25→  sales: Sale[];
+    26→  onNavigateToCredit: () => void;
+    27→  categories: Category[];
+    28→  subcategories: Subcategory[];
+    29→}
+    30→
+    31→type PDVView = 'CART' | 'RECEIPT_PREVIEW' | 'PAYMENT' | 'PRE_PEDIDO_PREVIEW';
+    32→
+    33→// Tipo do item do carrinho
+    34→type CartItem = { quantidade: number; precoVenda: string };
+    35→
+    36→const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onCancel, onFinish, processSale, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, sales, onNavigateToCredit, categories, subcategories }) => {
+    37→  const [view, setView] = useState<PDVView>('CART');
+    38→  const [isPrePedido, setIsPrePedido] = useState(false);
+    39→
+    40→  // Wake Lock: mantem tela acordada durante o PDV
+    41→  useEffect(() => {
+    42→    wakeLockManager.acquire();
+    43→    return () => { wakeLockManager.release(); };
+    44→  }, []);
+    45→
+    46→  // ============================================================
+    47→  // MODAL: Venda finalizada com comissao
+    48→  // ============================================================
+    49→  const [saleResultModal, setSaleResultModal] = useState<{ total: number; comissao: number; troca: number; isPrazo: boolean; clientName: string; sale: Sale } | null>(null);
+    50→
+    51→  // ============================================================
+    52→  // MODAL: Comprovante foto (venda a prazo)
+    53→  // ============================================================
+    54→  const [showComprovanteModal, setShowComprovanteModal] = useState(false);
+    55→  const [comprovanteSaleId, setComprovanteSaleId] = useState<string | null>(null);
+    56→  const [comprovanteFoto, setComprovanteFoto] = useState<string | null>(null);
+    57→  const [comprovanteUploading, setComprovanteUploading] = useState(false);
+    58→  const comprovanteInputRef = useRef<HTMLInputElement | null>(null);
+    59→
+    60→  const handleCaptureComprovante = (file: File) => {
+    61→    setComprovanteUploading(true);
+    62→    const reader = new FileReader();
+    63→    reader.onload = (e) => {
+    64→      const img = new Image();
+    65→      img.onload = () => {
+    66→        const canvas = document.createElement('canvas');
+    67→        const MAX = 1200;
+    68→        let w = img.width, h = img.height;
+    69→        if (w > MAX || h > MAX) {
+    70→          if (w > h) { h = (h / w) * MAX; w = MAX; }
+    71→          else { w = (w / h) * MAX; h = MAX; }
+    72→        }
+    73→        canvas.width = w; canvas.height = h;
+    74→        canvas.getContext('2d')!.drawImage(img, 0, 0, w, h);
+    75→        const base64 = canvas.toDataURL('image/jpeg', 0.6);
+    76→        setComprovanteFoto(base64);
+    77→        setComprovanteUploading(false);
+    78→      };
+    79→      img.src = e.target?.result as string;
+    80→    };
+    81→    reader.readAsDataURL(file);
+    82→  };
+    83→
+    84→  const handleSaveComprovante = async () => {
+    85→    if (!comprovanteSaleId || !comprovanteFoto) return;
+    86→    setComprovanteUploading(true);
+    87→    const ok = await saleService.updateSale(comprovanteSaleId, { comprovanteFoto } as any);
+    88→    setComprovanteUploading(false);
+    89→    if (ok) {
+    90→      setAppModal({ title: 'Salvo!', message: 'Comprovante salvo com sucesso.', icon: 'fa-solid fa-check', iconColor: 'text-emerald-500', type: 'success' });
+    91→      setShowComprovanteModal(false);
+    92→    } else {
+    93→      setAppModal({ title: 'Erro', message: 'Falha ao salvar comprovante.', icon: 'fa-solid fa-triangle-exclamation', iconColor: 'text-rose-500', type: 'error' });
+    94→    }
+    95→  };
+    96→
+    97→  const openComprovanteFlow = (sale: Sale) => {
+    98→    setComprovanteSaleId(sale.id);
+    99→    setComprovanteFoto(sale.comprovanteFoto || null);
+   100→    setShowComprovanteModal(true);
+   101→  };
+   102→
+   103→  // ============================================================
+   104→  // MODAL: App-like genérico (substitui window.alert)
+   105→  // ============================================================
+   106→  const [appModal, setAppModal] = useState<{ title: string; message: string; icon?: string; iconColor?: string; type?: 'info' | 'error' | 'success' } | null>(null);
+   107→
+   108→  // ============================================================
+   109→  // MODAL: Confirmação genérica (substitui window.confirm)
+   110→  // ============================================================
+   111→  const [confirmModal, setConfirmModal] = useState<{ title: string; message: string; onConfirm: () => void; icon?: string; iconColor?: string } | null>(null);
+   112→
+   113→  // ============================================================
+   114→  // MODAL: Cliente incompleto (GPS + WhatsApp) — APENAS 1 MODAL
+   115→  // ============================================================
+   116→  const [showClientInfoModal, setShowClientInfoModal] = useState(false);
+   117→  const [clientWhatsapp, setClientWhatsapp] = useState('');
+   118→  const [gpsStatus, setGpsStatus] = useState<'idle' | 'fetching' | 'saved' | 'error'>('idle');
+   119→  const [whatsappStatus, setWhatsappStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+   120→  const whatsappTimerRef = useRef<NodeJS.Timeout | null>(null);
+   121→  const modalInitializedRef = useRef(false);
+   122→
+   123→  // Mostra 1 vez: se falta GPS OU WhatsApp. Usa ref para nunca repetir.
+   124→  useEffect(() => {
+   125→    if (modalInitializedRef.current) return;
+   126→    modalInitializedRef.current = true;
+   127→
+   128→    const hasGps = !!(client.pinLocalizacao && client.pinLocalizacao.length > 5);
+   129→    const hasWhatsapp = !!(client.telefone && client.telefone.replace(/\D/g, '').length >= 10);
+   130→    if (!hasGps || !hasWhatsapp) {
+   131→      setClientWhatsapp(client.telefone || '');
+   132→      if (!hasWhatsapp) setWhatsappStatus('idle');
+   133→      else setWhatsappStatus('saved');
+   134→      if (!hasGps) setGpsStatus('idle');
+   135→      else setGpsStatus('saved');
+   136→      setShowClientInfoModal(true);
+   137→    }
+   138→  }, [client.id]);
+   139→
+   140→  // GPS: salva em pin_localizacao (mesmo formato do admin: "lat, lng") + endereco/bairro
+   141→  const handleDetectGPS = () => {
+   142→    if (!navigator.geolocation) { setGpsStatus('error'); return; }
+   143→    setGpsStatus('fetching');
+   144→    navigator.geolocation.getCurrentPosition(
+   145→      async (p) => {
+   146→        const lat = p.coords.latitude;
+   147→        const lng = p.coords.longitude;
+   148→        const pinStr = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+   149→        const updates: any = { pinLocalizacao: pinStr };
+   150→        try {
+   151→          const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}`, { headers: { 'Accept-Language': 'pt-BR' } });
+   152→          const data = await response.json();
+   153→          if (data?.address) {
+   154→            const addr = data.address;
+   155→            updates.endereco = `${addr.road || ''}${addr.house_number ? ', ' + addr.house_number : ''}` || undefined;
+   156→            updates.bairro = addr.suburb || addr.neighbourhood || undefined;
+   157→          }
+   158→        } catch (e) { /* salva pelo menos as coordenadas */ }
+   159→        const updated = await clientService.updateClient(client.id, updates);
+   160→        setGpsStatus(updated ? 'saved' : 'error');
+   161→      },
+   162→      () => { setGpsStatus('error'); },
+   163→      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+   164→    );
+   165→  };
+   166→
+   167→  // WhatsApp: salva automaticamente 1.5s após parar de digitar (min 10 dígitos)
+   168→  const handleWhatsappChange = (value: string) => {
+   169→    setClientWhatsapp(value);
+   170→    setWhatsappStatus('idle');
+   171→    if (whatsappTimerRef.current) clearTimeout(whatsappTimerRef.current);
+   172→    if (value.replace(/\D/g, '').length >= 10) {
+   173→      whatsappTimerRef.current = setTimeout(async () => {
+   174→        setWhatsappStatus('saving');
+   175→        const ok = await clientService.updateClient(client.id, { telefone: value });
+   176→        setWhatsappStatus(ok ? 'saved' : 'error');
+   177→      }, 1500);
+   178→    }
+   179→  };
+   180→
+   181→  const cartKey = isPrePedido 
+   182→    ? `pdv_pre_pedido_cart_${vendedorId}_${client.id}`
+   183→    : `pdv_cart_${vendedorId}_${client.id}`;
+   184→  
+   185→  const [activeCategoryId, setActiveCategoryId] = useState<string>(() => {
+   186→    return categories.length > 0 ? categories[0].id : '';
+   187→  });
+   188→
+   189→  const [visitedCategoryIds, setVisitedCategoryIds] = useState<string[]>(() => {
+   190→    return categories.length > 0 ? [categories[0].id] : [];
+   191→  });
+   192→  
+   193→  const [cart, setCart] = useState<Record<string, CartItem>>(() => 
+   194→    loadLocalState(cartKey, {})
+   195→  );
+   196→
+   197→  const [metodo, setMetodo] = useState<PaymentMethod>('DINHEIRO');
+   198→  const [detalheMetodo, setDetalheMetodo] = useState<string>('Dinheiro');
+   199→  const [tipoPrazo, setTipoPrazo] = useState<'PRAZO_COMUM' | 'CHEQUE' | 'BOLETO'>('PRAZO_COMUM');
+   200→  const [prazoData, setPrazoData] = useState<string>(() => {
+   201→    const d = new Date();
+   202→    d.setDate(d.getDate() + 7);
+   203→    return d.toISOString().split('T')[0];
+   204→  });
+   205→  const [valorRecebido, setValorRecebido] = useState<string>('');
+   206→  const [selectedPixSlot, setSelectedPixSlot] = useState<1 | 2>(1);
+   207→  const [isTrocaActive, setIsTrocaActive] = useState(false);
+   208→  const [valorTroca, setValorTroca] = useState('');
+   209→  const [printWidth, setPrintWidth] = useState<'56MM' | '80MM'>('56MM');
+   210→
+   211→  useEffect(() => {
+   212→    if (activeCategoryId && !visitedCategoryIds.includes(activeCategoryId)) {
+   213→      setVisitedCategoryIds(prev => [...prev, activeCategoryId]);
+   214→    }
+   215→  }, [activeCategoryId, visitedCategoryIds]);
+   216→
+   217→  useEffect(() => {
+   218→    if (activeCategoryId === '' && categories.length > 0) {
+   219→      setActiveCategoryId(categories[0].id);
+   220→    }
+   221→  }, [categories, activeCategoryId]);
+   222→
+   223→  useEffect(() => {
+   224→    saveLocalState(cartKey, cart);
+   225→  }, [cart, cartKey]);
+   226→
+   227→  const allCategoriesVisited = visitedCategoryIds.length >= categories.length;
+   228→
+   229→  const soldProductIds = useMemo(() => {
+   230→    const clientSales = sales.filter(s => s.clientId === client.id);
+   231→    const ids = new Set<string>();
+   232→    clientSales.forEach(s => {
+   233→      s.itens?.forEach(item => {
+   234→        if (item.produtoId) {
+   235→          ids.add(item.produtoId);
+   236→        }
+   237→      });
+   238→    });
+   239→    return ids;
+   240→  }, [sales, client.id]);
+   241→
+   242→  const formatCategoryName = (name: string) => {
+   243→    const n = name.toUpperCase();
+   244→    if (n.includes('ELMA')) return 'ELMA';
+   245→    if (n.includes('SALTY')) return 'SALTY';
+   246→    if (n.includes('DOCE')) return 'DOCES';
+   247→    if (n.includes('BEBIDA')) return 'BEBIDAS';
+   248→    return n.substring(0, 5);
+   249→  };
+   250→
+   251→  const getOrderedItems = (): SaleItem[] => {
+   252→    return products
+   253→      .filter(p => cart[p.id] && cart[p.id].quantidade > 0)
+   254→      .map(p => ({
+   255→        produtoId: p.id,
+   256→        quantidade: cart[p.id].quantidade,
+   257→        precoVenda: parseFloat(cart[p.id].precoVenda) || 0
+   258→      }));
+   259→  };
+   260→
+   261→  const clientDebt = useMemo(() => {
+   262→    const pendingSales = sales.filter(s => s.clientId === client.id && s.statusPagamento === 'PENDENTE');
+   263→    return pendingSales.reduce((acc, s) => acc + (s.valorTotal - s.valorPago), 0);
+   264→  }, [sales, client.id]);
+   265→
+   266→  // ============================================================
+   267→  // FUNÇÃO DE VALIDAÇÃO DIRETA - CHAMA EM QUALQUER LUGAR
+   268→  // ============================================================
+   269→  const checkPrecoMinimoViolation = (): { hasViolation: boolean; violatingProducts: Array<{ nome: string; preco: number; minimo: number }> } => {
+   270→    if (!margemMinimaAtiva || isPrePedido) return { hasViolation: false, violatingProducts: [] };
+   271→    
+   272→    const violating: Array<{ nome: string; preco: number; minimo: number }> = [];
+   273→    
+   274→    (Object.entries(cart) as [string, CartItem][]).forEach(([pId, item]) => {
+   275→      if (item.quantidade <= 0) return;
+   276→      const p = products.find(prod => prod.id === pId);
+   277→      if (!p) return;
+   278→      
+   279→      const price = parseFloat(item.precoVenda) || 0;
+   280→      const minPrice = p.precoMinimo || 0;
+   281→      
+   282→      // Só valida se tem preço mínimo CADASTRADO (> 0)
+   283→      if (minPrice > 0 && price < minPrice) {
+   284→        violating.push({ 
+   285→          nome: p.nome, 
+   286→          preco: price, 
+   287→          minimo: minPrice 
+   288→        });
+   289→      }
+   290→    });
+   291→    
+   292→    return { hasViolation: violating.length > 0, violatingProducts: violating };
+   293→  };
+   294→
+   295→  // Para compatibilidade com código existente
+   296→  const hasMarginViolation = checkPrecoMinimoViolation().hasViolation;
+   297→
+   298→  const updateCart = (pId: string, delta: number, basePrice: number) => {
+   299→    setCart(prev => {
+   300→      const current = prev[pId] || { quantidade: 0, precoVenda: basePrice.toString() };
+   301→      const maxLimit = isPrePedido 
+   302→        ? (products.find(p => p.id === pId)?.estoquePrincipal || 0)
+   303→        : (minhaCarga.find(c => c.produtoId === pId)?.quantidade || 0);
+   304→      const novaQtd = Math.max(0, Math.min(maxLimit, (current.quantidade ?? 0) + delta)); 
+   305→      if (novaQtd === 0 && delta < 0) {
+   306→        const { [pId]: _, ...rest } = prev;
+   307→        return rest;
+   308→      }
+   309→      return { ...prev, [pId]: { ...current, quantidade: novaQtd } };
+   310→    });
+   311→  };
+   312→
+   313→  // Validação no blur - corrige automaticamente se abaixo do mínimo
+   314→  const handlePriceBlur = (pId: string, value: string) => {
+   315→    if (!margemMinimaAtiva || isPrePedido) return;
+   316→    
+   317→    const sanitized = value.replace(',', '.');
+   318→    const p = products.find(prod => prod.id === pId);
+   319→    const minPrice = p?.precoMinimo || 0;
+   320→    
+   321→    if (sanitized && minPrice > 0) {
+   322→      const numValue = parseFloat(sanitized);
+   323→      if (!isNaN(numValue) && numValue < minPrice) {
+   324→        setCart(prev => {
+   325→          if (!prev[pId]) return prev;
+   326→          return { ...prev, [pId]: { ...prev[pId], precoVenda: minPrice.toFixed(2) } };
+   327→        });
+   328→      }
+   329→    }
+   330→  };
+   331→
+   332→  // Mudança no input - apenas atualiza, não bloqueia digitação
+   333→  const handlePriceChange = (pId: string, value: string) => {
+   334→    const sanitized = value.replace(',', '.');
+   335→    setCart(prev => {
+   336→      if (!prev[pId]) return prev;
+   337→      return { ...prev, [pId]: { ...prev[pId], precoVenda: sanitized } };
+   338→    });
+   339→  };
+   340→
+   341→  const subtotal = useMemo(() => {
+   342→    return Object.entries(cart).reduce((acc, [_, item]) => {
+   343→      const cartItem = item as CartItem;
+   344→      const price = parseFloat(cartItem.precoVenda) || 0;
+   345→      return acc + ((cartItem.quantidade ?? 0) * price); 
+   346→    }, 0);
+   347→  }, [cart]);
+   348→
+   349→  const total = useMemo(() => {
+   350→    const vt = parseFloat(valorTroca) || 0;
+   351→    return Math.max(0, subtotal - (isTrocaActive ? vt : 0));
+   352→  }, [subtotal, isTrocaActive, valorTroca]);
+   353→
+   354→  const troco = useMemo(() => {
+   355→    const rec = parseFloat(valorRecebido) || 0;
+   356→    return Math.max(0, rec - total);
+   357→  }, [valorRecebido, total]);
+   358→
+   359→  const setPrazoDays = (days: number) => {
+   360→    const d = new Date();
+   361→    d.setDate(d.getDate() + days);
+   362→    setPrazoData(d.toISOString().split('T')[0]);
+   363→  };
+   364→
+   365→  // ============================================================
+   366→  // BLOQUEIO INQUEBRÁVEL - CHAMADO ANTES DE QUALQUER FINALIZAÇÃO
+   367→  // ============================================================
+   368→  const validateAndBlockIfNeeded = (): boolean => {
+   369→    const { hasViolation, violatingProducts } = checkPrecoMinimoViolation();
+   370→    
+   371→    if (hasViolation) {
+   372→      const detalhes = violatingProducts
+   373→        .map(v => `• ${v.nome}: digitou R$ ${v.preco.toFixed(2)}, mínimo é R$ ${v.minimo.toFixed(2)}`)
+   374→        .join('\n');
+   375→      
+   376→      setAppModal({
+   377→        title: 'Venda Bloqueada',
+   378→        message: `Preço abaixo do mínimo!\n\n${detalhes}\n\nCorrija os preços antes de continuar.`,
+   379→        icon: 'fa-solid fa-circle-exclamation',
+   380→        iconColor: 'text-rose-500',
+   381→        type: 'error',
+   382→      });
+   383→      return false; // BLOQUEIA
+   384→    }
+   385→    return true; // LIBERA
+   386→  };
+   387→
+   388→  const handleConfirmFinalize = async () => {
+   389→    if (total <= 0 && getOrderedItems().length === 0) return;
+   390→    
+   391→    // TRAVA ABSOLUTA - não passa daqui se houver violação
+   392→    if (!validateAndBlockIfNeeded()) return;
+   393→
+   394→    const itens = getOrderedItems();
+   395→    const vt = parseFloat(valorTroca) || 0;
+   396→    const descontoInfo = isTrocaActive && vt > 0 ? ` (Troca: R$ ${vt.toFixed(2)})` : '';
+   397→    
+   398→    let finalDetalhe = '';
+   399→    if (metodo === 'PIX') {
+   400→      finalDetalhe = selectedPixSlot === 1 ? pix1Name : pix2Name;
+   401→    } else if (metodo === 'A_PRAZO') {
+   402→      const tipoLabel = tipoPrazo === 'PRAZO_COMUM' ? 'Prazo Comum' : tipoPrazo === 'CHEQUE' ? 'Cheque' : 'Boleto';
+   403→      finalDetalhe = tipoLabel;
+   404→    } else {
+   405→      finalDetalhe = detalheMetodo;
+   406→    }
+   407→    finalDetalhe += descontoInfo;
+   408→    
+   409→    const salePayload: any = { 
+   410→      vendedorId, 
+   411→      clientId: client.id, 
+   412→      valorTotal: total, 
+   413→      valorPago: metodo === 'A_PRAZO' ? 0 : total,
+   414→      metodoPagamento: metodo, 
+   415→      detalhePagamento: finalDetalhe, 
+   416→      itens,
+   417→      data: new Date() 
+   418→    };
+   419→
+   420→    if (metodo === 'A_PRAZO') { 
+   421→      salePayload.statusPagamento = 'PENDENTE'; 
+   422→      salePayload.dataVencimento = new Date(prazoData); 
+   423→    } else { 
+   424→      salePayload.statusPagamento = 'PAGO'; 
+   425→    }
+   426→    
+   427→    const newSale = await processSale(salePayload);
+   428→    if (newSale) { 
+   429→      localStorage.removeItem(cartKey); 
+   430→
+   431→      // Calcula comissao e abre modal bonito
+   432→      let comissaoTotal = 0;
+   433→      itens.forEach(item => {
+   434→        const prod = products.find(p => p.id === item.produtoId);
+   435→        if (prod) {
+   436→          comissaoTotal += (item.quantidade * item.precoVenda) * ((prod.comissaoPercentual || 0) / 100);
+   437→        }
+   438→      });
+   439→
+   440→      setSaleResultModal({
+   441→        total,
+   442→        comissao: comissaoTotal,
+   443→        troca: isTrocaActive ? vt : 0,
+   444→        isPrazo: metodo === 'A_PRAZO',
+   445→        clientName: client.nomeFantasia,
+   446→        sale: newSale,
+   447→      });
+   448→    }
+   449→  };
+   450→
+   451→  const productIdsInCarga = useMemo(() => new Set(minhaCarga.map(c => c.produtoId)), [minhaCarga]);
+   452→  
+   453→  const filteredProducts = useMemo(() => {
+   454→    if (isPrePedido) {
+   455→      const activeProds = products.filter(p => p.ativo);
+   456→      if (!activeCategoryId) return activeProds;
+   457→      return activeProds.filter(p => p.categoryId === activeCategoryId);
+   458→    }
+   459→    const productsInCarga = products.filter(p => productIdsInCarga.has(p.id));
+   460→    if (!activeCategoryId) return productsInCarga;
+   461→    return productsInCarga.filter(p => p.categoryId === activeCategoryId);
+   462→  }, [products, productIdsInCarga, activeCategoryId, isPrePedido]);
+   463→
+   464→  const generatePrePedidoText = (width: '56MM' | '80MM') => {
+   465→    const totalWidth = width === '80MM' ? 48 : 32; 
+   466→    
+   467→    const padR = (str: string, len: number) => str.substring(0, len).padEnd(len);
+   468→    const padL = (str: string, len: number) => str.substring(0, len).padStart(len);
+   469→    const center = (str: string, len: number) => {
+   470→      const s = str.substring(0, len);
+   471→      const spaces = Math.max(0, Math.floor((len - s.length) / 2));
+   472→      return ' '.repeat(spaces) + s;
+   473→    };
+   474→
+   475→    let t = '';
+   476→    
+   477→    t += '*'.repeat(totalWidth) + '\n';
+   478→    t += center('PRÉ-PEDIDO (RASCUNHO)', totalWidth) + '\n';
+   479→    t += '*'.repeat(totalWidth) + '\n';
+   480→    
+   481→    const clientName = client.nomeFantasia || 'Consumidor';
+   482→    t += `Cliente: ${clientName}\n`;
+   483→    t += `Data: ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}\n`;
+   484→    t += '-'.repeat(totalWidth) + '\n';
+   485→
+   486→    const qtyW = 4;
+   487→    const valW = width === '80MM' ? 13 : 8;
+   488→    const descW = totalWidth - qtyW - valW;
+   489→
+   490→    t += padR('DESCRICAO', descW) + padL('QTD', qtyW) + padL('VALOR', valW) + '\n';
+   491→    t += '-'.repeat(totalWidth) + '\n';
+   492→
+   493→    const items = getOrderedItems();
+   494→    items.forEach(item => {
+   495→      const p = products.find(prod => prod.id === item.produtoId);
+   496→      const productName = (p?.nome ?? 'Produto');
+   497→      
+   498→      const qtyStr = `${item.quantidade}x`;
+   499→      const valStr = `${(item.quantidade * item.precoVenda).toFixed(2)}`;
+   500→
+   501→      t += padR(productName.substring(0, descW), descW) + padL(qtyStr, qtyW) + padL(valStr, valW) + '\n';
+   502→
+   503→      let remaining = productName.substring(descW);
+   504→      while (remaining.length > 0) {
+   505→        t += padR(remaining.substring(0, totalWidth), totalWidth) + '\n';
+   506→        remaining = remaining.substring(totalWidth);
+   507→      }
+   508→    });
+   509→
+   510→    t += '-'.repeat(totalWidth) + '\n';
+   511→    
+   512→    const totalLabel = 'TOTAL ESTIMADO:';
+   513→    const totalVal = `R$ ${total.toFixed(2)}`;
+   514→    t += padR(totalLabel, totalWidth - totalVal.length) + totalVal + '\n';
+   515→
+   516→    t += '-'.repeat(totalWidth) + '\n';
+   517→    t += center('ATENÇÃO: ESTE DOCUMENTO', totalWidth) + '\n';
+   518→    t += center('NÃO É UMA VENDA REAL.', totalWidth) + '\n';
+   519→    t += center('APENAS RESERVA/PLANEJAMENTO', totalWidth) + '\n';
+   520→    t += '*'.repeat(totalWidth) + '\n';
+   521→    t += '\n\n\n\n\n';
+   522→
+   523→    return t;
+   524→  };
+   525→
+   526→  const handlePrintPrePedido = async () => {
+   527→    const rawText = generatePrePedidoText(printWidth);
+   528→    setConfirmModal({
+   529→      title: 'Imprimir Pré-Pedido',
+   530→      message: `Deseja imprimir este pré-pedido?\nModelo: ${printWidth === '80MM' ? '80mm (Largo)' : '56mm (Estreito)'}`,
+   531→      icon: 'fa-solid fa-print',
+   532→      iconColor: 'text-blue-600',
+   533→      onConfirm: async () => {
+   534→        setConfirmModal(null);
+   535→        try {
+   536→          await bluetoothPrinter.print(rawText, printWidth);
+   537→          setAppModal({ title: 'Sucesso', message: 'Pré-pedido impresso com sucesso!', icon: 'fa-solid fa-check', iconColor: 'text-emerald-500', type: 'success' });
+   538→        } catch (error: any) {
+   539→          const msg = error?.message || 'Erro desconhecido';
+   540→          if (msg === 'BLUETOOTH_NAO_SUPORTADO') {
+   541→            setAppModal({ title: 'Bluetooth Indisponível', message: 'Para impressão via Bluetooth:\n1. Use o Chrome no Android\n2. Ative o Bluetooth do dispositivo', icon: 'fa-brands fa-bluetooth-b', iconColor: 'text-gray-400', type: 'error' });
+   542→          } else {
+   543→            setAppModal({ title: 'Erro na Impressão', message: `Falha ao imprimir pré-pedido: ${msg}`, icon: 'fa-solid fa-triangle-exclamation', iconColor: 'text-rose-500', type: 'error' });
+   544→          }
+   545→        }
+   546→      },
+   547→    });
+   548→  };
+   549→
+   550→  const handleCopyPrePedido = () => {
+   551→    const rawText = generatePrePedidoText(printWidth);
+   552→    navigator.clipboard.writeText(rawText);
+   553→    setAppModal({ title: 'Copiado!', message: 'Texto do pré-pedido copiado para a área de transferência.', icon: 'fa-solid fa-clipboard-check', iconColor: 'text-emerald-500', type: 'success' });
+   554→  };
+   555→
+   556→  if (view === 'RECEIPT_PREVIEW') {
+   557→    return (
+   558→      <div className="fixed inset-0 bg-gray-900 z-[100] flex flex-col">
+   559→        <div className="flex-1 overflow-y-auto">
+   560→          <Cupom 
+   561→            sale={{ 
+   562→              id: 'preview', 
+   563→              vendedorId, 
+   564→              clientId: client.id, 
+   565→              data: new Date(), 
+   566→              valorTotal: total, 
+   567→              valorPago: 0, 
+   568→              metodoPagamento: metodo, 
+   569→              statusPagamento: metodo === 'A_PRAZO' ? 'PENDENTE' : 'PAGO', 
+   570→              itens: getOrderedItems() 
+   571→            }} 
+   572→            client={client} 
+   573→            products={products} 
+   574→            onBack={() => setView('CART')} 
+   575→            onClose={() => setView('PAYMENT')} 
+   576→            allowDelete={false}
+   577→            closeLabel="IR PARA PAGAMENTO"
+   578→          />
+   579→        </div>
+   580→      </div>
+   581→    );
+   582→  }
+   583→
+   584→  if (view === 'PRE_PEDIDO_PREVIEW') {
+   585→    return (
+   586→      <div className="fixed inset-0 bg-black/90 z-[150] flex flex-col items-center justify-center p-4 overflow-y-auto backdrop-blur-sm">
+   587→        <div className="bg-white w-full max-w-[340px] shadow-2xl flex flex-col animate-in zoom-in-95 duration-300 relative rounded-t-3xl overflow-hidden">
+   588→          
+   589→          <div className="p-6 bg-white overflow-hidden mt-4">
+   590→            <h3 className="text-center font-black text-xs text-indigo-600 uppercase mb-4 tracking-widest"><i className="fa-solid fa-file-invoice mr-2"></i> Pré-Pedido Rascunho</h3>
+   591→            <div className="font-mono text-[11px] leading-tight text-black bg-white whitespace-pre select-none border-l-2 border-indigo-100 pl-4">
+   592→              {generatePrePedidoText(printWidth)}
+   593→            </div>
+   594→          </div>
+   595→
+   596→          <div className="bg-gray-100 p-5 flex flex-col gap-3 border-t border-gray-200">
+   597→            <div className="flex bg-gray-200 p-1 rounded-2xl mb-1">
+   598→              <button onClick={() => setPrintWidth('56MM')} className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${printWidth === '56MM' ? 'bg-white shadow-sm text-indigo-600' : 'text-gray-500'}`}>56mm</button>
+   599→              <button onClick={() => setPrintWidth('80MM')} className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${printWidth === '80MM' ? 'bg-white shadow-sm text-indigo-600' : 'text-gray-400'}`}>80mm</button>
+   600→            </div>
+   601→            
+   602→            <div className="grid grid-cols-2 gap-2">
+   603→              <button onClick={handlePrintPrePedido} className="bg-indigo-600 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 active:scale-95 text-[10px] uppercase shadow-lg">
+   604→                <i className="fa-solid fa-print"></i> Imprimir
+   605→              </button>
+   606→              <button onClick={handleCopyPrePedido} className="bg-emerald-600 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 active:scale-95 text-[10px] uppercase shadow-lg">
+   607→                <i className="fa-solid fa-copy"></i> Copiar
+   608→              </button>
+   609→            </div>
+   610→
+   611→            <button 
+   612→              onClick={() => {
+   613→                setCart({});
+   614→                setView('CART');
+   615→                setIsPrePedido(false);
+   616→              }} 
+   617→              className="w-full bg-slate-900 text-white font-black py-4 rounded-2xl active:scale-95 text-[10px] uppercase tracking-widest shadow-xl"
+   618→            >
+   619→              VOLTAR AO ATENDIMENTO
+   620→            </button>
+   621→          </div>
+   622→        </div>
+   623→      </div>
+   624→    );
+   625→  }
+   626→
+   627→  return (
+   628→    <>
+   629→    <div className="fixed inset-0 bg-gray-50 z-[60] flex flex-col">
+   630→      <header className="bg-white border-b border-gray-100 p-3 flex flex-col shadow-sm">
+   631→        <div className="flex justify-between items-center mb-3">
+   632→          <button onClick={onCancel} className="w-9 h-9 bg-gray-50 text-gray-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-arrow-left"></i></button>
+   633→          <div className="text-center px-4 truncate">
+   634→            <p className="text-[9px] text-gray-400 uppercase font-black tracking-tighter">
+   635→              {isPrePedido ? 'Pré-Pedido Rascunho' : 'Atendimento'}
+   636→            </p>
+   637→            <h2 className="font-black text-xs text-gray-800 uppercase truncate">{client.nomeFantasia}</h2> 
+   638→          </div>
+   639→          <button onClick={() => setConfirmModal({ title: 'Zerar Quantidades', message: 'Deseja realmente zerar todas as quantidades do carrinho?', icon: 'fa-solid fa-trash-can', iconColor: 'text-rose-500', onConfirm: () => { setConfirmModal(null); setCart({}); } })} className="w-9 h-9 bg-rose-50 text-rose-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-trash-can text-sm"></i></button>
+   640→        </div>
+   641→
+   642→        <div className="grid grid-cols-4 gap-1 px-0.5">
+   643→          {categories.map(cat => {
+   644→            const isVisited = visitedCategoryIds.includes(cat.id);
+   645→            return (
+   646→              <button 
+   647→                key={cat.id}
+   648→                onClick={() => setActiveCategoryId(cat.id)}
+   649→                className={`py-1.5 px-1 rounded-lg text-[8px] font-black uppercase transition-all truncate border relative ${activeCategoryId === cat.id ? 'bg-blue-600 text-white border-blue-600 shadow-sm' : 'bg-gray-50 text-gray-400 border-gray-100'}`}
+   650→              >
+   651→                {formatCategoryName(cat.name)}
+   652→                {isVisited && activeCategoryId !== cat.id && (
+   653→                  <div className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-emerald-500 rounded-full border-2 border-white shadow-sm"></div>
+   654→                )}
+   655→              </button>
+   656→            );
+   657→          })}
+   658→        </div>
+   659→      </header>
+   660→
+   661→      {clientDebt > 0 && !isPrePedido && (
+   662→        <button onClick={() => { onCancel(); onNavigateToCredit(); }} className="w-full bg-rose-600 text-white p-3 flex items-center justify-center gap-3 shadow-md">
+   663→          <i className="fa-solid fa-triangle-exclamation text-sm"></i>
+   664→          <span className="text-[10px] font-black uppercase tracking-widest">DÍVIDA PENDENTE: R$ {clientDebt.toFixed(2)}</span>
+   665→        </button>
+   666→      )}
+   667→
+   668→      <div className="flex-1 overflow-y-auto p-2 space-y-1.5 pb-44">
+   669→        {filteredProducts.map(p => { 
+   670→          const item = cart[p.id];
+   671→          const cargaOriginal = isPrePedido ? (p.estoquePrincipal || 0) : (minhaCarga.find(c => c.produtoId === p.id)?.quantidade || 0);
+   672→          const minPrice = p.precoMinimo || 0;
+   673→          const itemPrice = item ? parseFloat(item.precoVenda) || 0 : p.precoVenda;
+   674→          // Só considera violação se tem preço mínimo cadastrado (> 0)
+   675→          const isBelowMin = margemMinimaAtiva && item && item.quantidade > 0 && minPrice > 0 && itemPrice < minPrice && !isPrePedido;
+   676→          const hasBeenSold = soldProductIds.has(p.id);
+   677→
+   678→          return (
+   679→            <div key={p.id} className={`bg-white p-2.5 rounded-2xl border flex flex-col gap-1 ${item?.quantidade ? 'border-blue-200 bg-blue-50/30' : 'border-gray-100'}`}>
+   680→              <div className="flex items-center gap-3 w-full">
+   681→                <div className="flex-1 min-w-0">
+   682→                  <h3 className="font-bold text-gray-800 text-[11px] leading-tight uppercase truncate flex items-center gap-1.5">
+   683→                    {hasBeenSold && (
+   684→                      <i 
+   685→                        className="fa-solid fa-check text-[11px] text-emerald-500 flex-shrink-0" 
+   686→                        title="Este produto já foi vendido para este cliente"
+   687→                      />
+   688→                    )}
+   689→                    {p.nome}
+   690→                  </h3> 
+   691→                  <div className="flex items-center gap-2 mt-1">
+   692→                     <div className={`flex items-center gap-1.5 bg-white border px-2 py-0.5 rounded-lg ${isBelowMin ? 'border-rose-500 bg-rose-50' : 'border-gray-100'}`}>
+   693→                        <span className={`text-[9px] font-black ${isBelowMin ? 'text-rose-500' : 'text-gray-300'}`}>R$</span>
+   694→                        <input 
+   695→                          type="text" 
+   696→                          value={item?.precoVenda ?? (p.precoVenda ?? 0).toFixed(2)} 
+   697→                          onChange={(e) => handlePriceChange(p.id, e.target.value)} 
+   698→                          onBlur={(e) => handlePriceBlur(p.id, e.target.value)}
+   699→                          className={`w-14 bg-transparent border-none p-0 text-[11px] font-black outline-none ${isBelowMin ? 'text-rose-600' : 'text-emerald-600'}`} 
+   700→                        />
+   701→                        {/* SÓ mostra preço mínimo se cadastrado (> 0) - NUNCA mostra 0 */}
+   702→                        {p.precoMinimo && p.precoMinimo > 0 && (
+   703→                          <span className="text-[8px] font-bold text-rose-600 ml-1">
+   704→                            {p.precoMinimo.toFixed(2)}
+   705→                          </span>
+   706→                        )}
+   707→                     </div>
+   708→                     {/* ICONE DE ESTOQUE CENTRAL NO PRÉ-PEDIDO - MAIS CLEAN */}
+   709→                     {isPrePedido && (
+   710→                       <div className="flex items-center gap-1.5 bg-indigo-50 px-2 py-0.5 rounded-lg border border-indigo-100 shadow-inner whitespace-nowrap" title="Estoque Central">
+   711→                         <i className="fa-solid fa-warehouse text-indigo-400 text-[10px]"></i>
+   712→                         <span className="text-[10px] font-black text-indigo-600">{cargaOriginal - (item?.quantidade ?? 0)}</span>
+   713→                       </div>
+   714→                     )}
+   715→                     {!isPrePedido && (
+   716→                       <span className={`text-[9px] font-bold uppercase ${isPrePedido ? 'text-indigo-600' : 'text-blue-500'}`}>
+   717→                         {cargaOriginal - (item?.quantidade ?? 0)} UN
+   718→                       </span>
+   719→                     )}
+   720→                  </div>
+   721→                </div>
+   722→                <div className="flex items-center bg-white rounded-xl p-0.5 border border-gray-100 shadow-sm">
+   723→                  <button onClick={() => updateCart(p.id, -1, p.precoVenda)} className="w-8 h-8 text-gray-400 active:scale-90 flex items-center justify-center"><i className="fa-solid fa-minus text-[10px]"></i></button> 
+   724→                  <span className="font-black text-xs min-w-[22px] text-center">{item?.quantidade ?? 0}</span> 
+   725→                  <button onClick={() => updateCart(p.id, 1, p.precoVenda)} className="w-8 h-8 text-blue-600 active:scale-90 flex items-center justify-center"><i className="fa-solid fa-plus text-[10px]"></i></button> 
+   726→                </div>
+   727→              </div>
+   728→              {isBelowMin && (
+   729→                <p className="text-[8px] text-rose-600 font-black uppercase mt-1 animate-pulse">
+   730→                  <i className="fa-solid fa-circle-exclamation mr-1"></i> Mínimo: R$ {minPrice.toFixed(2)}
+   731→                </p>
+   732→              )}
+   733→            </div>
+   734→          );
+   735→        })}
+   736→        {filteredProducts.length === 0 && (
+   737→          <div className="py-20 text-center opacity-30 flex flex-col items-center gap-4">
+   738→            <i className="fa-solid fa-box-open text-5xl"></i>
+   739→            <p className="font-black uppercase tracking-widest text-[10px]">Nenhum produto desta categoria.</p>
+   740→          </div>
+   741→        )}
+   742→      </div>
+   743→
+   744→      <footer className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 p-4 pb-8 space-y-3 shadow-[0_-10px_20px_rgba(0,0,0,0.05)] max-w-lg mx-auto z-[70]">
+   745→        {!allCategoriesVisited && !isPrePedido && (
+   746→          <div className="bg-amber-100 text-amber-700 p-2 rounded-xl text-center font-black text-[8px] uppercase tracking-widest animate-in fade-in duration-300">
+   747→            <i className="fa-solid fa-eye mr-1"></i> Visualize todas as abas para liberar o cupom ({visitedCategoryIds.length}/{categories.length})
+   748→          </div>
+   749→        )}
+   750→        
+   751→        {/* Banner visual de violação */}
+   752→        {hasMarginViolation && (
+   753→          <div className="bg-rose-600 text-white p-3 rounded-xl text-center font-black text-[9px] uppercase tracking-widest animate-pulse flex items-center justify-center gap-2">
+   754→            <i className="fa-solid fa-circle-exclamation text-sm"></i>
+   755→            Venda Bloqueada: Preço abaixo do mínimo!
+   756→          </div>
+   757→        )}
+   758→
+   759→        <div className="flex items-center justify-between gap-4 px-1 mb-1 bg-gray-50/50 p-2 rounded-xl">
+   760→          <div className="flex items-center gap-2">
+   761→            <button onClick={() => setIsTrocaActive(!isTrocaActive)} className={`w-10 h-6 rounded-full relative transition-colors ${isTrocaActive ? 'bg-orange-500' : 'bg-gray-300'}`}>
+   762→              <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${isTrocaActive ? 'left-5' : 'left-1'}`}></div>
+   763→            </button>
+   764→            <span className="text-[9px] font-black text-gray-400 uppercase">Troca/Desc.</span>
+   765→          </div>
+   766→
+   767→          <div className="flex items-center gap-2">
+   768→            <button 
+   769→              onClick={() => {
+   770→                setIsPrePedido(!isPrePedido);
+   771→                setCart({});
+   772→              }} 
+   773→              className={`w-10 h-6 rounded-full relative transition-colors ${isPrePedido ? 'bg-indigo-600' : 'bg-gray-300'}`}
+   774→            >
+   775→              <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${isPrePedido ? 'left-5' : 'left-1'}`}></div>
+   776→            </button>
+   777→            <span className="text-[9px] font-black text-gray-400 uppercase">Pré-Pedido</span>
+   778→          </div>
+   779→
+   780→          {isTrocaActive && <input type="number" value={valorTroca} onChange={e => setValorTroca(e.target.value)} placeholder="R$ 0.00" className="w-24 bg-white border border-orange-100 rounded-lg text-[11px] font-black text-orange-600 p-2 text-right outline-none" />}
+   781→        </div>
+   782→
+   783→        <div className="flex justify-between items-end px-1">
+   784→          <div>
+   785→            <p className="text-[9px] font-black text-gray-400 uppercase mb-0.5">
+   786→              {isPrePedido ? 'Total Rascunho' : 'Total Líquido'}
+   787→            </p>
+   788→            <p className="text-xl font-black text-gray-800">R$ {total.toFixed(2)}</p>
+   789→          </div>
+   790→          <button 
+   791→            onClick={() => {
+   792→              if (isPrePedido) {
+   793→                setView('PRE_PEDIDO_PREVIEW');
+   794→              } else {
+   795→                setView('RECEIPT_PREVIEW');
+   796→              }
+   797→            }} 
+   798→            disabled={(total <= 0 && getOrderedItems().length === 0) || hasMarginViolation || (!allCategoriesVisited && !isPrePedido)} 
+   799→            className={`px-6 py-4 rounded-2xl font-black uppercase text-xs ${(total > 0 || getOrderedItems().length > 0) && !hasMarginViolation && (allCategoriesVisited || isPrePedido) ? (isPrePedido ? 'bg-indigo-600 text-white shadow-lg' : 'bg-blue-600 text-white shadow-lg') : 'bg-gray-200 text-gray-400'}`}
+   800→          >
+   801→            {isPrePedido ? 'Gerar Rascunho' : 'Gerar Cupom'}
+   802→          </button>
+   803→        </div>
+   804→      </footer>
+   805→
+   806→      {view === 'PAYMENT' && (
+   807→        <div className="fixed inset-0 bg-black/60 z-[110] flex items-end justify-center p-4">
+   808→           <div className="bg-white w-full max-sm rounded-[2.5rem] p-8 animate-in slide-in-from-bottom max-h-[95vh] overflow-y-auto">
+   809→              <h3 className="font-black text-gray-800 text-lg mb-4 text-center uppercase tracking-tight">Finalizar Pagamento</h3>
+   810→              
+   811→              <div className="bg-gray-50 p-4 rounded-2xl mb-6 text-center border border-gray-100">
+   812→                <p className="text-[10px] font-black text-gray-400 uppercase mb-1">Valor Total Devido</p>
+   813→                <p className="text-3xl font-black text-blue-600">R$ {total.toFixed(2)}</p>
+   814→              </div>
+   815→
+   816→              <div className="flex gap-1.5 mb-6 justify-center">
+   817→                {(['DINHEIRO', 'PIX', 'A_PRAZO'] as const).map(m => (
+   818→                  <button key={m} onClick={() => setMetodo(m)} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${metodo === m ? 'bg-blue-600 text-white shadow-md' : 'bg-gray-50 text-gray-400'}`}>{m === 'A_PRAZO' ? 'PRAZO' : m}</button>
+   819→                ))}
+   820→              </div>
+   821→
+   822→              {metodo === 'DINHEIRO' && (
+   823→                <div className="mb-6 space-y-4 animate-in fade-in duration-300">
+   824→                   <div className="space-y-1">
+   825→                      <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Valor Recebido R$</label>
+   826→                      <input 
+   827→                        type="number" 
+   828→                        value={valorRecebido} 
+   829→                        onChange={e => setValorRecebido(e.target.value)} 
+   830→                        placeholder="0.00" 
+   831→                        className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-2xl font-black text-center outline-none" 
+   832→                        autoFocus
+   833→                      />
+   834→                   </div>
+   835→                   {parseFloat(valorRecebido) > total && (
+   836→                     <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100 text-center animate-in zoom-in-95">
+   837→                        <p className="text-[10px] font-black text-emerald-600 uppercase mb-1">Troco a Devolver</p>
+   838→                        <p className="text-2xl font-black text-emerald-700">R$ {troco.toFixed(2)}</p>
+   839→                     </div>
+   840→                   )}
+   841→                </div>
+   842→              )}
+   843→
+   844→              {metodo === 'A_PRAZO' && (
+   845→                <div className="mb-6 space-y-4 animate-in fade-in duration-300">
+   846→                   <p className="text-[9px] font-black text-gray-400 uppercase text-center mb-1">Tipo de Prazo</p>
+   847→                   <div className="flex gap-1.5 mb-4 justify-center">
+   848→                     {(['PRAZO_COMUM', 'CHEQUE', 'BOLETO'] as const).map(t => (
+   849→                       <button 
+   850→                         key={t} 
+   851→                         onClick={() => setTipoPrazo(t)} 
+   852→                         className={`flex-1 py-2 rounded-lg text-[8px] font-black uppercase transition-all ${tipoPrazo === t ? 'bg-indigo-600 text-white shadow-sm' : 'bg-gray-100 text-gray-400'}`}
+   853→                       >
+   854→                         {t === 'PRAZO_COMUM' ? 'Prazo Comum' : t === 'CHEQUE' ? 'Cheque' : 'Boleto'}
+   855→                       </button>
+   856→                     ))}
+   857→                   </div>
+   858→
+   859→                   <div className="grid grid-cols-4 gap-2">
+   860→                     {[7, 14, 21, 30].map(days => (
+   861→                       <button key={days} onClick={() => setPrazoDays(days)} className="py-3 bg-gray-50 border border-gray-100 rounded-xl text-[10px] font-black text-gray-600 hover:bg-blue-50 hover:text-blue-600 transition-colors">{days}D</button>
+   862→                     ))}
+   863→                   </div>
+   864→                   <div className="space-y-1">
+   865→                      <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Data de Vencimento</label>
+   866→                      <input type="date" value={prazoData} onChange={e => setPrazoData(e.target.value)} className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-bold outline-none focus:ring-2 focus:ring-blue-100" />
+   867→                   </div>
+   868→                </div>
+   869→              )}
+   870→
+   871→              {metodo === 'PIX' && (
+   872→                <div className="mb-6 space-y-4 animate-in fade-in duration-300">
+   873→                   <p className="text-[9px] font-black text-gray-400 uppercase text-center">Selecione o Banco para Receber</p>
+   874→                   <div className="grid grid-cols-2 gap-2">
+   875→                     <button onClick={() => setSelectedPixSlot(1)} className={`p-3 rounded-xl border text-[10px] font-black uppercase transition-all ${selectedPixSlot === 1 ? 'border-blue-600 bg-blue-50 text-blue-600' : 'border-gray-100 text-gray-400'}`}>{pix1Name}</button>
+   876→                     <button onClick={() => setSelectedPixSlot(2)} className={`p-3 rounded-xl border text-[10px] font-black uppercase transition-all ${selectedPixSlot === 2 ? 'border-blue-600 bg-blue-50 text-blue-600' : 'border-gray-100 text-gray-400'}`}>{pix2Name}</button>
+   877→                   </div>
+   878→                   
+   879→                   <div className="bg-gray-50 p-4 rounded-2xl flex flex-col items-center border border-gray-100">
+   880→                     <p className="text-[8px] font-black text-gray-400 uppercase mb-3">QR CODE PARA PAGAMENTO</p>
+   881→                     <div className="w-32 h-32 bg-white rounded-xl flex items-center justify-center border border-gray-200 overflow-hidden shadow-inner">
+   882→                        {selectedPixSlot === 1 ? (
+   883→                          pix1Code ? <img src={pix1Code} className="w-full h-full object-contain" /> : <i className="fa-solid fa-qrcode text-gray-200 text-3xl"></i>
+   884→                        ) : (
+   885→                          pix2Code ? <img src={pix2Code} className="w-full h-full object-contain" /> : <i className="fa-solid fa-qrcode text-gray-200 text-3xl"></i>
+   886→                        )}
+   887→                     </div>
+   888→                   </div>
+   889→                </div>
+   890→              )}
+   891→
+   892→              <button 
+   893→                onClick={handleConfirmFinalize} 
+   894→                disabled={hasMarginViolation}
+   895→                className={`w-full bg-emerald-600 text-white py-5 rounded-2xl font-black uppercase text-xs shadow-xl active:scale-95 transition-all mb-2 tracking-widest ${hasMarginViolation ? 'opacity-50 cursor-not-allowed' : ''}`}
+   896→              >
+   897→                Concluir Venda
+   898→              </button>
+   899→              <button onClick={() => setView('RECEIPT_PREVIEW')} className="w-full py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Voltar ao Cupom</button>
+   900→           </div>
+   901→        </div>
+   902→      )}
+   903→    </div>
+   904→
+   905→    {/* MODAL: Venda finalizada com comissao */}
+   906→    {saleResultModal && (
+   907→      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
+   908→        <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
+   909→          <div className="bg-gradient-to-br from-emerald-500 to-teal-600 p-6 text-center">
+   910→            <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-3">
+   911→              <i className="fa-solid fa-circle-check text-white text-3xl"></i>
+   912→            </div>
+   913→            <h3 className="font-black text-white text-lg uppercase tracking-tight">Venda Finalizada</h3>
+   914→            <p className="text-white/80 text-[10px] font-bold uppercase mt-1">{saleResultModal.clientName}</p>
+   915→          </div>
+   916→
+   917→          <div className="p-6 space-y-3">
+   918→            <div className="bg-gray-50 p-4 rounded-2xl flex items-center justify-between">
+   919→              <span className="text-[10px] font-black text-gray-400 uppercase">Total da Venda</span>
+   920→              <span className="text-lg font-black text-gray-800">R$ {saleResultModal.total.toFixed(2)}</span>
+   921→            </div>
+   922→
+   923→            {saleResultModal.troca > 0 && (
+   924→              <div className="bg-orange-50 p-3 rounded-2xl flex items-center justify-between border border-orange-100">
+   925→                <span className="text-[10px] font-black text-orange-400 uppercase">Desconto Troca</span>
+   926→                <span className="text-sm font-black text-orange-600">- R$ {saleResultModal.troca.toFixed(2)}</span>
+   927→              </div>
+   928→            )}
+   929→
+   930→            {saleResultModal.isPrazo && (
+   931→              <div className="bg-amber-50 p-3 rounded-2xl flex items-center gap-3 border border-amber-100">
+   932→                <i className="fa-solid fa-clock text-amber-500"></i>
+   933→                <span className="text-[10px] font-black text-amber-700 uppercase">Aguardando Pagamento</span>
+   934→              </div>
+   935→            )}
+   936→
+   937→            {saleResultModal.comissao > 0 && (
+   938→              <div className="bg-emerald-50 p-4 rounded-2xl border-2 border-emerald-200 text-center">
+   939→                <p className="text-[10px] font-black text-emerald-600 uppercase mb-1">Comissao Gerada</p>
+   940→                <p className="text-2xl font-black text-emerald-700">R$ {saleResultModal.comissao.toFixed(2)}</p>
+   941→              </div>
+   942→            )}
+   943→          </div>
+   944→
+   945→          <div className="p-5 pt-0 space-y-2">
+   946→            {saleResultModal.isPrazo && !saleResultModal.sale.comprovanteFoto && (
+   947→              <button
+   948→                onClick={() => { const s = saleResultModal!.sale; setSaleResultModal(null); openComprovanteFlow(s); }}
+   949→                className="w-full bg-amber-500 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest"
+   950→              >
+   951→                <i className="fa-solid fa-camera mr-2"></i>Foto do Comprovante
+   952→              </button>
+   953→            )}
+   954→            <button
+   955→              onClick={() => { const s = saleResultModal.sale; setSaleResultModal(null); onFinish(s); }}
+   956→              className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest"
+   957→            >
+   958→              <i className="fa-solid fa-check mr-2"></i>{saleResultModal.isPrazo && !saleResultModal.sale.comprovanteFoto ? 'Depois' : 'OK'}
+   959→            </button>
+   960→          </div>
+   961→        </div>
+   962→      </div>
+   963→    )}
+   964→
+   965→    {/* ============================================================ */}
+   966→    {/* MODAL: Cliente incompleto - GPS + WhatsApp */}
+   967→    {/* ============================================================ */}
+   968→    {showClientInfoModal && (
+   969→      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[300] flex items-center justify-center p-4">
+   970→        <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
+   971→          <div className="bg-gradient-to-br from-amber-400 to-orange-500 p-6 text-center">
+   972→            <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-3">
+   973→              <i className="fa-solid fa-user-pen text-white text-2xl"></i>
+   974→            </div>
+   975→            <h3 className="font-black text-white text-base uppercase tracking-tight">Dados do Cliente</h3>
+   976→            <p className="text-white/80 text-[10px] font-bold uppercase mt-1">{client.nomeFantasia}</p>
+   977→          </div>
+   978→
+   979→          <div className="p-6 space-y-4">
+   980→            <p className="text-center text-[11px] text-gray-500 font-semibold leading-relaxed">
+   981→              Este cliente não possui coordenadas GPS e WhatsApp cadastrados. Atualize para melhorar o atendimento.
+   982→            </p>
+   983→
+   984→            {/* GPS Section */}
+   985→            <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100">
+   986→              <div className="flex items-center gap-2 mb-2">
+   987→                <i className="fa-solid fa-location-dot text-blue-500 text-sm"></i>
+   988→                <span className="text-[10px] font-black text-blue-700 uppercase">Localização GPS</span>
+   989→              </div>
+   990→              {gpsStatus === 'idle' && (
+   991→                <button
+   992→                  onClick={handleDetectGPS}
+   993→                  className="w-full bg-blue-600 text-white font-black py-3 rounded-xl active:scale-95 transition-all text-[10px] uppercase tracking-widest shadow-sm"
+   994→                >
+   995→                  <i className="fa-solid fa-satellite-dish mr-2"></i>Obter Localização
+   996→                </button>
+   997→              )}
+   998→              {gpsStatus === 'fetching' && (
+   999→                <div className="flex items-center justify-center gap-2 py-2">
+  1000→                  <i className="fa-solid fa-spinner fa-spin text-blue-500"></i>
+  1001→                  <span className="text-[10px] font-bold text-blue-600">Obtendo localização...</span>
+  1002→                </div>
+  1003→              )}
+  1004→              {gpsStatus === 'saved' && (
+  1005→                <div className="flex items-center gap-2 py-2">
+  1006→                  <div className="w-6 h-6 bg-emerald-500 rounded-full flex items-center justify-center">
+  1007→                    <i className="fa-solid fa-check text-white text-[10px]"></i>
+  1008→                  </div>
+  1009→                  <span className="text-[10px] font-bold text-emerald-600">GPS salvo com sucesso!</span>
+  1010→                </div>
+  1011→              )}
+  1012→              {gpsStatus === 'error' && (
+  1013→                <div className="flex items-center gap-2 py-2">
+  1014→                  <i className="fa-solid fa-triangle-exclamation text-rose-500 text-sm"></i>
+  1015→                  <span className="text-[10px] font-bold text-rose-600">Não foi possível obter o GPS.</span>
+  1016→                </div>
+  1017→              )}
+  1018→            </div>
+  1019→
+  1020→            {/* WhatsApp Section */}
+  1021→            <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100">
+  1022→              <div className="flex items-center gap-2 mb-2">
+  1023→                <i className="fa-brands fa-whatsapp text-emerald-500 text-sm"></i>
+  1024→                <span className="text-[10px] font-black text-emerald-700 uppercase">WhatsApp / Telefone</span>
+  1025→              </div>
+  1026→              {(whatsappStatus === 'idle' || whatsappStatus === 'saving') ? (
+  1027→                <>
+  1028→                  <input
+  1029→                    type="tel"
+  1030→                    value={clientWhatsapp}
+  1031→                    onChange={e => handleWhatsappChange(e.target.value)}
+  1032→                    placeholder="(00) 00000-0000"
+  1033→                    className="w-full p-3 bg-white border border-emerald-200 rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-emerald-300"
+  1034→                  />
+  1035→                  {whatsappStatus === 'saving' && (
+  1036→                    <div className="flex items-center gap-2 mt-2">
+  1037→                      <i className="fa-solid fa-spinner fa-spin text-emerald-500 text-[10px]"></i>
+  1038→                      <span className="text-[9px] font-bold text-emerald-600">Salvando automaticamente...</span>
+  1039→                    </div>
+  1040→                  )}
+  1041→                  {whatsappStatus === 'idle' && clientWhatsapp.replace(/\D/g, '').length >= 10 && (
+  1042→                    <p className="text-[9px] text-emerald-500 font-bold mt-1.5">
+  1043→                      <i className="fa-solid fa-circle-check mr-1"></i>Será salvo automaticamente
+  1044→                    </p>
+  1045→                  )}
+  1046→                  {whatsappStatus === 'idle' && clientWhatsapp.replace(/\D/g, '').length > 0 && clientWhatsapp.replace(/\D/g, '').length < 10 && (
+  1047→                    <p className="text-[9px] text-gray-400 font-bold mt-1.5">
+  1048→                      <i className="fa-solid fa-keyboard mr-1"></i>Digite pelo menos 10 dígitos
+  1049→                    </p>
+  1050→                  )}
+  1051→                </>
+  1052→              ) : whatsappStatus === 'error' ? (
+  1053→                <>
+  1054→                  <input
+  1055→                    type="tel"
+  1056→                    value={clientWhatsapp}
+  1057→                    onChange={e => handleWhatsappChange(e.target.value)}
+  1058→                    placeholder="(00) 00000-0000"
+  1059→                    className="w-full p-3 bg-white border border-rose-200 rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-emerald-300"
+  1060→                  />
+  1061→                  <p className="text-[9px] text-rose-500 font-bold mt-1.5">
+  1062→                    <i className="fa-solid fa-circle-exclamation mr-1"></i>Erro ao salvar. Tente novamente.
+  1063→                  </p>
+  1064→                </>
+  1065→              ) : (
+  1066→                <div className="flex items-center gap-2 py-1">
+  1067→                  <div className="w-6 h-6 bg-emerald-500 rounded-full flex items-center justify-center">
+  1068→                    <i className="fa-solid fa-check text-white text-[10px]"></i>
+  1069→                  </div>
+  1070→                  <span className="text-[10px] font-bold text-emerald-600">WhatsApp salvo!</span>
+  1071→                </div>
+  1072→              )}
+  1073→            </div>
+  1074→          </div>
+  1075→
+  1076→          <div className="p-5 pt-0">
+  1077→            <button
+  1078→              onClick={() => setShowClientInfoModal(false)}
+  1079→              className="w-full bg-gray-100 text-gray-600 font-black py-4 rounded-2xl active:scale-95 uppercase text-xs tracking-widest"
+  1080→            >
+  1081→              Fechar
+  1082→            </button>
+  1083→          </div>
+  1084→        </div>
+  1085→      </div>
+  1086→    )}
+  1087→
+  1088→    {/* ============================================================ */}
+  1089→    {/* MODAL: App-like genérico (substitui window.alert) */}
+  1090→    {/* ============================================================ */}
+  1091→    {appModal && (
+  1092→      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[400] flex items-center justify-center p-4">
+  1093→        <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
+  1094→          <div className={`p-6 text-center ${appModal.type === 'error' ? 'bg-gradient-to-br from-rose-500 to-red-600' : appModal.type === 'success' ? 'bg-gradient-to-br from-emerald-500 to-teal-600' : 'bg-gradient-to-br from-blue-500 to-indigo-600'}`}>
+  1095→            <div className="w-14 h-14 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-3">
+  1096→              <i className={`${appModal.icon || 'fa-solid fa-info'} text-white text-2xl`}></i>
+  1097→            </div>
+  1098→            <h3 className="font-black text-white text-sm uppercase tracking-tight">{appModal.title}</h3>
+  1099→          </div>
+  1100→          <div className="p-6">
+  1101→            <p className="text-center text-[12px] text-gray-600 font-semibold leading-relaxed whitespace-pre-line">{appModal.message}</p>
+  1102→          </div>
+  1103→          <div className="p-5 pt-0">
+  1104→            <button
+  1105→              onClick={() => setAppModal(null)}
+  1106→              className={`w-full font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest text-white ${appModal.type === 'error' ? 'bg-rose-600' : appModal.type === 'success' ? 'bg-emerald-600' : 'bg-blue-600'}`}
+  1107→            >
+  1108→              OK
+  1109→            </button>
+  1110→          </div>
+  1111→        </div>
+  1112→      </div>
+  1113→    )}
+  1114→
+  1115→    {/* ============================================================ */}
+  1116→    {/* MODAL: Confirmação genérica (substitui window.confirm) */}
+  1117→    {/* ============================================================ */}
+  1118→    {confirmModal && (
+  1119→      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[400] flex items-center justify-center p-4">
+  1120→        <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
+  1121→          <div className="bg-gradient-to-br from-gray-600 to-gray-800 p-6 text-center">
+  1122→            <div className="w-14 h-14 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-3">
+  1123→              <i className={`${confirmModal.icon || 'fa-solid fa-question'} ${confirmModal.iconColor || 'text-white'} text-2xl`}></i>
+  1124→            </div>
+  1125→            <h3 className="font-black text-white text-sm uppercase tracking-tight">{confirmModal.title}</h3>
+  1126→          </div>
+  1127→          <div className="p-6">
+  1128→            <p className="text-center text-[12px] text-gray-600 font-semibold leading-relaxed whitespace-pre-line">{confirmModal.message}</p>
+  1129→          </div>
+  1130→          <div className="p-5 pt-0 grid grid-cols-2 gap-2">
+  1131→            <button
+  1132→              onClick={() => setConfirmModal(null)}
+  1133→              className="w-full bg-gray-100 text-gray-600 font-black py-4 rounded-2xl active:scale-95 uppercase text-[10px] tracking-widest"
+  1134→            >
+  1135→              Cancelar
+  1136→            </button>
+  1137→            <button
+  1138→              onClick={confirmModal.onConfirm}
+  1139→              className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-[10px] tracking-widest"
+  1140→            >
+  1141→              Confirmar
+  1142→            </button>
+  1143→          </div>
+  1144→        </div>
+  1145→      </div>
+  1146→    {/* ============================================================ */}
+  1147→    {/* MODAL: Comprovante de venda a prazo (foto) */}
+  1148→    {/* ============================================================ */}
+  1149→    {showComprovanteModal && (
+  1150→      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[350] flex items-center justify-center p-4">
+  1151→        <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
+  1152→          <div className="bg-gradient-to-br from-amber-400 to-orange-500 p-5 text-center">
+  1153→            <div className="w-14 h-14 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-2">
+  1154→              <i className="fa-solid fa-file-circle-check text-white text-2xl"></i>
+  1155→            </div>
+  1156→            <h3 className="font-black text-white text-sm uppercase tracking-tight">Comprovante de Venda</h3>
+  1157→            <p className="text-white/70 text-[9px] font-bold mt-1">Tire foto do cupom assinado</p>
+  1158→          </div>
+  1159→
+  1160→          <div className="p-5">
+  1161→            {comprovanteFoto ? (
+  1162→              <div className="space-y-3">
+  1163→                <img src={comprovanteFoto} className="w-full rounded-2xl border border-gray-100 shadow-inner" alt="Comprovante" />
+  1164→                <div className="grid grid-cols-2 gap-2">
+  1165→                  <button
+  1166→                    onClick={() => comprovanteInputRef.current?.click()}
+  1167→                    className="bg-gray-100 text-gray-600 font-black py-3 rounded-xl active:scale-95 text-[10px] uppercase"
+  1168→                  >
+  1169→                    <i className="fa-solid fa-camera-rotate mr-1"></i>Refazer
+  1170→                  </button>
+  1171→                  <button
+  1172→                    onClick={handleSaveComprovante}
+  1173→                    disabled={comprovanteUploading}
+  1174→                    className="bg-emerald-600 text-white font-black py-3 rounded-xl active:scale-95 text-[10px] uppercase shadow-sm"
+  1175→                  >
+  1176→                    {comprovanteUploading ? 'Salvando...' : '<i className="fa-solid fa-check mr-1"></i>Salvar'}
+  1177→                  </button>
+  1178→                </div>
+  1179→              </div>
+  1180→            ) : (
+  1181→              <button
+  1182→                onClick={() => comprovanteInputRef.current?.click()}
+  1183→                disabled={comprovanteUploading}
+  1184→                className="w-full bg-amber-100 border-2 border-dashed border-amber-300 rounded-2xl p-8 flex flex-col items-center gap-3 active:scale-95 transition-all"
+  1185→              >
+  1186→                {comprovanteUploading ? (
+  1187→                  <i className="fa-solid fa-spinner fa-spin text-amber-500 text-2xl"></i>
+  1188→                ) : (
+  1189→                  <i className="fa-solid fa-camera text-amber-500 text-2xl"></i>
+  1190→                )}
+  1191→                <span className="text-[10px] font-black text-amber-700 uppercase">
+  1192→                  {comprovanteUploading ? 'Processando...' : 'Tirar Foto'}
+  1193→                </span>
+  1194→              </button>
+  1195→            )}
+  1196→          </div>
+  1197→
+  1198→          <div className="p-5 pt-0">
+  1199→            <button
+  1200→              onClick={() => setShowComprovanteModal(false)}
+  1201→              className="w-full bg-gray-100 text-gray-500 font-black py-3 rounded-2xl active:scale-95 uppercase text-[10px]"
+  1202→            >
+  1203→              Fechar
+  1204→            </button>
+  1205→          </div>
+  1206→
+  1207→          <input
+  1208→            ref={comprovanteInputRef}
+  1209→            type="file"
+  1210→            accept="image/*"
+  1211→            capture="environment"
+  1212→            className="hidden"
+  1213→            onChange={e => { const f = e.target.files?.[0]; if (f) handleCaptureComprovante(f); e.target.value = ''; }}
+  1214→          />
+  1215→        </div>
+  1216→      </div>
+  1217→    )}
+  1218→    </>
+  1219→  );
+  1220→};
+  1221→
+  1222→export default PDV;

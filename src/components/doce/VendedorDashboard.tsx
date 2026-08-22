@@ -1,7 +1,8 @@
 "use client";
 // @ts-nocheck
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { User, Product, Client, Carga, Sale, Commission, PaymentMethod, CargaPendente, CommissionPaymentLog, SystemMessage, Expense, Category, Subcategory } from '@/lib/types';
+import { saleService } from '@/services/saleService';
 import { DIAS_SEMANA } from '@/lib/constants';
 import PDV from '@/components/doce/PDV';
 import Cupom from '@/components/doce/Cupom';
@@ -47,6 +48,39 @@ interface VendedorDashboardProps {
 
 type TabType = 'HOME' | 'ROTEIRO' | 'CARGA' | 'HISTORY' | 'FINANCE' | 'CREDIT' | 'CLIENTES' | 'WEEKLY' | 'STOCK_VIEW' | 'AVISOS';
 
+// Helpers para comprovante
+const compressImage = (file: File): Promise<string> => new Promise((resolve) => {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      const MAX = 1200;
+      let w = img.width, h = img.height;
+      if (w > MAX || h > MAX) { if (w > h) { h = (h / w) * MAX; w = MAX; } else { w = (w / h) * MAX; h = MAX; } }
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d')!.drawImage(img, 0, 0, w, h);
+      resolve(canvas.toDataURL('image/jpeg', 0.6));
+    };
+    img.src = e.target?.result as string;
+  };
+  reader.readAsDataURL(file);
+});
+
+const shareImage = async (base64: string, fileName: string) => {
+  const res = await fetch(base64);
+  const blob = await res.blob();
+  const file = new File([blob], fileName, { type: 'image/jpeg' });
+  if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+    await navigator.share({ files: [file], title: 'Comprovante de Venda' });
+  } else {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = fileName; a.click();
+    URL.revokeObjectURL(url);
+  }
+};
+
 const VendedorDashboard: React.FC<VendedorDashboardProps> = ({ 
   user, products = [], clients = [], cargas = [], cargasPendentes = [], sales = [], commissions = [], payoutLogs = [], expenses = [], messages = [], categories = [], subcategories = [], markMessageAsRead, processSale, addClient, updateClient, deleteClient, receivePayment, deleteSale, aceitarCarga, addExpense, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, updateDailyRoute, companyName, companyCnpj, clientOrder, setClientOrder
 }) => {
@@ -59,6 +93,24 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const [creditTypeFilter, setCreditTypeFilter] = useState<'TODOS' | 'COMUM' | 'CHEQUE' | 'BOLETO'>('TODOS');
   const [creditSearch, setCreditSearch] = useState('');
   const [clientSearch, setClientSearch] = useState(''); // NOVO: busca na aba clientes
+
+  // Comprovante: estado para modal de foto em contas a receber
+  const [comprovanteModalSale, setComprovanteModalSale] = useState<Sale | null>(null);
+  const [comprovantePreview, setComprovantePreview] = useState<string | null>(null);
+  const comprovanteFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [comprovanteUploading, setComprovanteUploading] = useState(false);
+
+  const handleComprovanteCapture = async (saleId: string, file: File) => {
+    setComprovanteUploading(true);
+    const base64 = await compressImage(file);
+    const ok = await saleService.updateSale(saleId, { comprovanteFoto: base64 } as any);
+    setComprovanteUploading(false);
+    if (ok) setComprovantePreview(base64);
+  };
+
+  const handleComprovanteShare = (sale: Sale) => {
+    if (sale.comprovanteFoto) shareImage(sale.comprovanteFoto, `comprovante_${sale.id}.jpg`);
+  };
   
   const [dismissedClientRiskIds, setDismissedClientRiskIds] = useState<string[]>(() => 
     loadLocalState(`v_dismissed_risk_${user.id}`, [])
@@ -1111,6 +1163,22 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                    </div>
                 </div>
                 <button onClick={(e) => { e.stopPropagation(); setShowReceiveModal(s); setValorRecebidoParcial(saldo.toString()); }} className={`w-full py-3 rounded-2xl text-[10px] font-black uppercase mt-3 shadow-lg active:scale-95 ${isOverdue ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white'}`}>Receber Agora</button>
+                <div className="flex gap-2 mt-2">
+                  {s.comprovanteFoto ? (
+                    <>
+                      <button onClick={(e) => { e.stopPropagation(); setComprovanteModalSale(s); setComprovantePreview(s.comprovanteFoto || null); }} className="flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase bg-blue-50 text-blue-600 active:scale-95 flex items-center justify-center gap-1.5 border border-blue-100">
+                        <i className="fa-solid fa-image"></i>Ver Foto
+                      </button>
+                      <button onClick={(e) => { e.stopPropagation(); handleComprovanteShare(s); }} className="flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase bg-emerald-50 text-emerald-600 active:scale-95 flex items-center justify-center gap-1.5 border border-emerald-100">
+                        <i className="fa-brands fa-whatsapp"></i>Compartilhar
+                      </button>
+                    </>
+                  ) : (
+                    <button onClick={(e) => { e.stopPropagation(); setComprovanteModalSale(s); setComprovantePreview(null); setTimeout(() => comprovanteFileInputRef.current?.click(), 100); }} className="w-full py-2.5 rounded-xl text-[9px] font-black uppercase bg-amber-50 text-amber-600 active:scale-95 flex items-center justify-center gap-1.5 border border-amber-100">
+                      <i className="fa-solid fa-camera"></i>Tirar Foto do Comprovante
+                    </button>
+                  )}
+                </div>
               </div>
             )})}
             {contasAReceber.length === 0 && (
@@ -1269,6 +1337,60 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
           products={products} 
           onClose={() => setViewingClientHistory(null)} 
         />
+      )}
+
+      {/* MODAL: Visualizar comprovante */}
+      {comprovanteModalSale && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
+            <div className="bg-gradient-to-br from-blue-500 to-indigo-600 p-5 text-center">
+              <div className="w-12 h-12 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-2">
+                <i className="fa-solid fa-file-circle-check text-white text-xl"></i>
+              </div>
+              <h3 className="font-black text-white text-sm uppercase">Comprovante</h3>
+              <p className="text-white/70 text-[9px] font-bold mt-1">{clients.find(c => c.id === comprovanteModalSale.clientId)?.nomeFantasia || 'Cliente'}</p>
+            </div>
+            <div className="p-5">
+              {comprovantePreview ? (
+                <img src={comprovantePreview} className="w-full rounded-2xl border border-gray-100" alt="Comprovante" />
+              ) : (
+                <button
+                  onClick={() => comprovanteFileInputRef.current?.click()}
+                  disabled={comprovanteUploading}
+                  className="w-full bg-amber-50 border-2 border-dashed border-amber-300 rounded-2xl p-10 flex flex-col items-center gap-3 active:scale-95"
+                >
+                  {comprovanteUploading ? <i className="fa-solid fa-spinner fa-spin text-amber-500 text-2xl"></i> : <i className="fa-solid fa-camera text-amber-500 text-2xl"></i>}
+                  <span className="text-[10px] font-black text-amber-700 uppercase">{comprovanteUploading ? 'Processando...' : 'Tirar Foto'}</span>
+                </button>
+              )}
+              {comprovantePreview && (
+                <div className="grid grid-cols-2 gap-2 mt-3">
+                  <button onClick={() => handleComprovanteShare(comprovanteModalSale)} className="py-3 rounded-xl text-[9px] font-black uppercase bg-emerald-50 text-emerald-600 active:scale-95 flex items-center justify-center gap-1.5 border border-emerald-100">
+                    <i className="fa-brands fa-whatsapp"></i>Compartilhar
+                  </button>
+                  <button onClick={() => { setComprovantePreview(null); setTimeout(() => comprovanteFileInputRef.current?.click(), 100); }} className="py-3 rounded-xl text-[9px] font-black uppercase bg-gray-100 text-gray-600 active:scale-95 flex items-center justify-center gap-1.5">
+                    <i className="fa-solid fa-camera-rotate"></i>Refazer
+                  </button>
+                </div>
+              )}
+            </div>
+            <div className="p-5 pt-0">
+              <button onClick={() => setComprovanteModalSale(null)} className="w-full bg-gray-100 text-gray-500 font-black py-3 rounded-2xl active:scale-95 uppercase text-[10px]">Fechar</button>
+            </div>
+          </div>
+          <input
+            ref={comprovanteFileInputRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={e => {
+              const f = e.target.files?.[0];
+              if (f && comprovanteModalSale) handleComprovanteCapture(comprovanteModalSale.id, f);
+              e.target.value = '';
+            }}
+          />
+        </div>
       )}
     </div>
   );

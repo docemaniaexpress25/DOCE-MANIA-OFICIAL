@@ -91,6 +91,7 @@ export interface Sale {
   statusPagamento: 'PAGO' | 'PENDENTE';
   itens: SaleItem[];
   dataVencimento?: Date;
+  comprovanteFoto?: string;
 }
 
 export interface Commission {

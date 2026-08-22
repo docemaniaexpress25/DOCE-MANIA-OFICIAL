@@ -121,6 +121,7 @@
     font-family: 'Inter', sans-serif;
     -webkit-tap-highlight-color: transparent;
     background-color: #f3f4f6 !important;
+    transition: background-color 0.2s ease, color 0.2s ease;
   }
 
   ::-webkit-scrollbar {
@@ -134,3 +135,105 @@
     -ms-overflow-style: none;
   }
 }
+
+/* ============================================================
+   DARK MODE - Mapeamento de cores hardcoded do app Doce Mania
+   Sobrescreve classes Tailwind comuns sem alterar componentes.
+   ============================================================ */
+
+.dark body {
+  background-color: #030712 !important;
+  color-scheme: dark;
+}
+
+/* Fundos */
+.dark .bg-white { background-color: #111827 !important; }
+.dark .bg-gray-50 { background-color: #030712 !important; }
+.dark .bg-gray-100 { background-color: #1f2937 !important; }
+.dark .bg-gray-200 { background-color: #374151 !important; }
+.dark .bg-gray-300 { background-color: #4b5563 !important; }
+
+/* Textos */
+.dark .text-gray-800 { color: #f3f4f6 !important; }
+.dark .text-gray-700 { color: #e5e7eb !important; }
+.dark .text-gray-600 { color: #d1d5db !important; }
+.dark .text-gray-500 { color: #9ca3af !important; }
+.dark .text-gray-400 { color: #6b7280 !important; }
+.dark .text-gray-900 { color: #f9fafb !important; }
+.dark .text-black { color: #f3f4f6 !important; }
+
+/* Borders */
+.dark .border-gray-100 { border-color: #1f2937 !important; }
+.dark .border-gray-200 { border-color: #374151 !important; }
+.dark .border-gray-300 { border-color: #4b5563 !important; }
+
+/* Placeholders */
+.dark .placeholder-gray-400::placeholder { color: #6b7280 !important; }
+
+/* Dividers */
+.dark .divide-gray-100 > :not([hidden]) ~ :not([hidden]) { border-color: #1f2937 !important; }
+.dark .divide-gray-200 > :not([hidden]) ~ :not([hidden]) { border-color: #374151 !important; }
+
+/* Inputs */
+.dark input, .dark textarea, .dark select {
+  background-color: #1f2937 !important;
+  color: #f3f4f6 !important;
+  border-color: #374151 !important;
+}
+.dark input::placeholder, .dark textarea::placeholder {
+  color: #6b7280 !important;
+}
+
+/* Modais/Overlays com fundo branco */
+.dark .bg-white.shadow-2xl,
+.dark .bg-white.rounded-\[2rem\],
+.dark .bg-white.rounded-3xl,
+.dark .bg-white.rounded-2xl {
+  background-color: #111827 !important;
+}
+
+/* Cupom - fundo branco */
+.dark .bg-white .font-mono {
+  color: #f3f4f6 !important;
+}
+
+/* Badge de status variados */
+.dark .bg-emerald-100 { background-color: #064e3b !important; }
+.dark .bg-emerald-100.text-emerald-700 { color: #6ee7b7 !important; }
+.dark .bg-amber-100 { background-color: #78350f !important; }
+.dark .bg-amber-100.text-amber-700 { color: #fcd34d !important; }
+.dark .bg-red-100 { background-color: #7f1d1d !important; }
+.dark .bg-red-100.text-red-700 { color: #fca5a5 !important; }
+.dark .bg-blue-100 { background-color: #1e3a5f !important; }
+.dark .bg-blue-100.text-blue-700 { color: #93c5fd !important; }
+.dark .bg-indigo-100 { background-color: #312e81 !important; }
+.dark .bg-indigo-100.text-indigo-700 { color: #a5b4fc !important; }
+.dark .bg-rose-100 { background-color: #4c0519 !important; }
+.dark .bg-rose-50 { background-color: #1c0a10 !important; }
+
+/* Hover states */
+.dark .hover\:bg-gray-50:hover { background-color: #1f2937 !important; }
+.dark .hover\:bg-gray-100:hover { background-color: #374151 !important; }
+.dark .hover\:bg-rose-50:hover { background-color: #1c0a10 !important; }
+
+/* Ring e focus */
+.dark .ring-gray-200 { --tw-ring-color: #374151 !important; }
+.dark .ring-gray-300 { --tw-ring-color: #4b5563 !important; }
+
+/* Shadow ajuste para dark */
+.dark .shadow-sm { box-shadow: 0 1px 2px 0 rgba(0,0,0,0.5) !important; }
+.dark .shadow { box-shadow: 0 1px 3px 0 rgba(0,0,0,0.5) !important; }
+.dark .shadow-lg { box-shadow: 0 10px 15px -3px rgba(0,0,0,0.5) !important; }
+.dark .shadow-xl { box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5) !important; }
+.dark .shadow-2xl { box-shadow: 0 25px 50px -12px rgba(0,0,0,0.7) !important; }
+
+/* Overlay/Backdrop */
+.dark .bg-black\/90 { background-color: rgba(0, 0, 0, 0.85) !important; }
+.dark .bg-black\/60 { background-color: rgba(0, 0, 0, 0.7) !important; }
+.dark .bg-black\/50 { background-color: rgba(0, 0, 0, 0.6) !important; }
+
+/* Tab ativa com fundo branco */
+.dark .bg-white.shadow-sm { background-color: #1f2937 !important; }
+
+/* Borda inferior em headers */
+.dark .border-b { border-color: #1f2937 !important; }

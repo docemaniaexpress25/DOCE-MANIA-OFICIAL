@@ -4,6 +4,7 @@ import { Product, Client, Carga, Sale, SaleItem, PaymentMethod, Category, Subcat
 import Cupom from '@/components/doce/Cupom';
 import { loadLocalState, saveLocalState } from '@/utils/persistence';
 import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
+import { wakeLockManager } from '@/utils/wakeLock';
 
 interface PDVProps {
   client: Client;
@@ -33,6 +34,12 @@ type CartItem = { quantidade: number; precoVenda: string };
 const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onCancel, onFinish, processSale, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, sales, onNavigateToCredit, categories, subcategories }) => {
   const [view, setView] = useState<PDVView>('CART');
   const [isPrePedido, setIsPrePedido] = useState(false);
+
+  // Wake Lock: mantem tela acordada durante o PDV
+  useEffect(() => {
+    wakeLockManager.acquire();
+    return () => { wakeLockManager.release(); };
+  }, []);
   
   const cartKey = isPrePedido 
     ? `pdv_pre_pedido_cart_${vendedorId}_${client.id}`

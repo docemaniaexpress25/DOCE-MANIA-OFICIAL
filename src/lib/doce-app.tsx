@@ -4,6 +4,8 @@ import { User, Product, Carga, Sale, Commission, Client, PaymentMethod, CargaPen
 import AdminDashboard from '@/components/doce/AdminDashboard';
 import VendedorDashboard from '@/components/doce/VendedorDashboard';
 import Login from '@/components/doce/Login';
+import { haptics } from '@/utils/haptics';
+import { offlineSync } from '@/utils/offlineSync';
 import { userService } from '@/services/userService';
 import { productService } from '@/services/productService';
 import { clientService } from '@/services/clientService';
@@ -41,6 +43,13 @@ const App: React.FC = () => {
   const [companyCnpj, setCompanyCnpj] = useState("00.000.000/0001-00");
 
   const [adminNotification, setAdminNotification] = useState<string | null>(null);
+  const [isOnline, setIsOnline] = useState(true);
+  const [isDark, setIsDark] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    const saved = localStorage.getItem('dm_dark_mode');
+    if (saved !== null) return saved === 'true';
+    return window.matchMedia('(prefers-color-scheme: dark)').matches;
+  });
   
   const [users, setUsers] = useState<User[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -64,6 +73,39 @@ const App: React.FC = () => {
     }
     return saved;
   });
+
+  // Dark mode: aplica classe no html e persiste
+  useEffect(() => {
+    const html = document.documentElement;
+    if (isDark) { html.classList.add('dark'); } else { html.classList.remove('dark'); }
+    localStorage.setItem('dm_dark_mode', String(isDark));
+  }, [isDark]);
+
+  // Haptics: vibracao em todos os botoes
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.closest('button, a, [role="button"], select, input[type="checkbox"], input[type="radio"], .haptic')) {
+        haptics.tap();
+      }
+    };
+    document.addEventListener('click', handler);
+    return () => document.removeEventListener('click', handler);
+  }, []);
+
+  // Offline sync: detecta conexao
+  useEffect(() => {
+    setIsOnline(offlineSync.isOnline());
+    const cleanup = offlineSync.onConnectionChange((online) => {
+      setIsOnline(online);
+      if (online) {
+        haptics.notification();
+      } else {
+        haptics.error();
+      }
+    });
+    return cleanup;
+  }, []);
 
   useEffect(() => { saveLocalState('currentUser', currentUser); }, [currentUser]);
   useEffect(() => { saveLocalState('dailyRouteState', dailyRouteState); }, [dailyRouteState]);
@@ -382,10 +424,17 @@ const App: React.FC = () => {
   const processSale = async (saleData: any) => {
     try {
       const res = await saleService.insertSale(saleData);
-      if (res) fetchTransactionalData();
+      if (res) {
+        fetchTransactionalData();
+        // Som de caixa registradora + haptics ao vender
+        const { sounds } = await import('@/utils/sound');
+        sounds.kaChing();
+        haptics.success();
+      }
       return res;
     } catch (e) {
       console.error(e);
+      haptics.error();
       return null;
     }
   };
@@ -480,12 +529,30 @@ const App: React.FC = () => {
     : clients;
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
-      <header className="bg-white h-20 px-6 shadow-sm flex justify-between items-center sticky top-0 z-50 border-b">
-        {logo ? <img src={logo} alt="Logo" className="h-14 w-auto object-contain" /> : <span className="font-black text-gray-300">LOGO</span>}
-        <div className="flex items-center gap-3">
-          <div className="text-right"><p className="text-[10px] font-black uppercase text-gray-400">{currentUser.role}</p><p className="text-sm font-bold text-gray-800">{currentUser.nome}</p></div>
-          <button onClick={() => setCurrentUser(null)} className="text-gray-400 p-2"><i className="fa-solid fa-right-from-bracket"></i></button>
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex flex-col transition-colors duration-200">
+      {/* Offline Banner */}
+      {!isOnline && (
+        <div className="bg-amber-500 text-white text-[10px] font-black text-center py-1.5 px-4 uppercase tracking-widest z-[60] flex items-center justify-center gap-2">
+          <i className="fa-solid fa-wifi-slash"></i>
+          Modo Offline - Dados serao sincronizados
+          {offlineSync.getPendingCount() > 0 && <span className="bg-white/20 px-1.5 py-0.5 rounded-full ml-1">{offlineSync.getPendingCount()}</span>}
+        </div>
+      )}
+      <header className="bg-white dark:bg-gray-900 h-20 px-6 shadow-sm flex justify-between items-center sticky top-0 z-50 border-b border-gray-100 dark:border-gray-800 transition-colors duration-200">
+        {logo ? <img src={logo} alt="Logo" className="h-14 w-auto object-contain" /> : <span className="font-black text-gray-300 dark:text-gray-600">LOGO</span>}
+        <div className="flex items-center gap-2">
+          {/* Dark Mode Toggle */}
+          <button
+            onClick={() => setIsDark(!isDark)}
+            className="w-9 h-9 rounded-full flex items-center justify-center text-gray-500 dark:text-gray-400 active:scale-90 transition-all"
+          >
+            <i className={`fa-solid ${isDark ? 'fa-sun text-amber-400' : 'fa-moon'}`}></i>
+          </button>
+          <div className="text-right">
+            <p className="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500">{currentUser.role}</p>
+            <p className="text-sm font-bold text-gray-800 dark:text-gray-100">{currentUser.nome}</p>
+          </div>
+          <button onClick={() => setCurrentUser(null)} className="text-gray-400 dark:text-gray-500 p-2"><i className="fa-solid fa-right-from-bracket"></i></button>
         </div>
       </header>
       

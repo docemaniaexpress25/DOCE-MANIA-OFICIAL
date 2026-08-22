@@ -44,11 +44,26 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   // ============================================================
   // CLIENT INFO NOTIFICATION - missing address/whatsapp
   // ============================================================
+  const isEmptyField = (val: any): boolean => {
+    if (val === null || val === undefined) return true;
+    const s = String(val).trim();
+    if (s === '') return true;
+    // Valores placeholder comuns no banco que nao sao dados reais
+    const placeholders = ['-', '.', '..', '0', 'n/a', 'nao informado', 'nao tem', 'sem endereco', 'sem telefone', 'informar', 's/n', 'n/i'];
+    if (placeholders.includes(s.toLowerCase())) return true;
+    // Telefone: precisa ter pelo menos 10 digitos numericos
+    if (s.length < 10) return true;
+    // Se tem menos de 3 caracteres alfanumericos (nao e um dado valido)
+    const alphaNum = s.replace(/[^a-zA-Z0-9]/g, '');
+    if (alphaNum.length < 3) return true;
+    return false;
+  };
+
   const clientNotifications = useMemo(() => {
     const alerts: string[] = [];
-    const missingEndereco = !client.endereco || client.endereco.trim() === '';
-    const missingBairro = !client.bairro || client.bairro.trim() === '';
-    const missingWhatsapp = !client.telefone || client.telefone.trim() === '';
+    const missingEndereco = isEmptyField(client.endereco);
+    const missingBairro = isEmptyField(client.bairro);
+    const missingWhatsapp = isEmptyField(client.telefone);
 
     if (missingEndereco || missingBairro) {
       alerts.push('endereco_bairro');
@@ -343,6 +358,39 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     const newSale = await processSale(salePayload);
     if (newSale) { 
       localStorage.removeItem(cartKey); 
+
+      // ============================================================
+      // CALCULA COMISSAO E MOSTRA MENSAGEM INCENTIVADORA
+      // ============================================================
+      let comissaoTotal = 0;
+      itens.forEach(item => {
+        const prod = products.find(p => p.id === item.produtoId);
+        if (prod) {
+          comissaoTotal += (item.quantidade * item.precoVenda) * ((prod.comissaoPercentual || 0) / 100);
+        }
+      });
+
+      const trocaMsg = isTrocaActive && vt > 0 ? `\nDesconto troca: R$ ${vt.toFixed(2)}` : '';
+      const prazoMsg = metodo === 'A_PRAZO' ? '\nStatus: AGUARDANDO PAGAMENTO' : '';
+
+      if (comissaoTotal > 0) {
+        window.alert(
+          `VENDA FINALIZADA COM SUCESSO!\n\n` +
+          `Cliente: ${client.nomeFantasia}\n` +
+          `Total: R$ ${total.toFixed(2)}${trocaMsg}\n${prazoMsg}\n` +
+          `-----------------------------------\n` +
+          `COMISSAO GERADA: R$ ${comissaoTotal.toFixed(2)}\n` +
+          `-----------------------------------\n\n` +
+          `Continue assim, voce esta indo muito bem!`
+        );
+      } else {
+        window.alert(
+          `VENDA FINALIZADA!\n\n` +
+          `Cliente: ${client.nomeFantasia}\n` +
+          `Total: R$ ${total.toFixed(2)}${trocaMsg}\n${prazoMsg}`
+        );
+      }
+
       onFinish(newSale); 
     }
   };

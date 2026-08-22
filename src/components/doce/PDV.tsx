@@ -67,8 +67,12 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
 
   // ============================================================
   // Verifica se cliente precisa de GPS E WhatsApp ao abrir PDV
+  // Só mostra uma vez por sessão (usando localStorage como flag)
   // ============================================================
   useEffect(() => {
+    const alreadyPrompted = localStorage.getItem(`pdv_prompted_${client.id}`);
+    if (alreadyPrompted) return;
+
     const hasGps = client.localizacao && 
       typeof client.localizacao === 'object' && 
       ((client.localizacao as any).lat !== 0 && (client.localizacao as any).lng !== 0);
@@ -76,6 +80,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     if (!hasGps && !hasWhatsapp) {
       setClientWhatsapp(client.telefone || '');
       setShowClientInfoModal(true);
+      localStorage.setItem(`pdv_prompted_${client.id}`, '1');
     }
   }, [client.id]);
 
@@ -87,8 +92,35 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     setGpsStatus('fetching');
     navigator.geolocation.getCurrentPosition(
       async (position) => {
-        const loc = { lat: position.coords.latitude, lng: position.coords.longitude };
-        const updated = await clientService.updateClient(client.id, { localizacao: loc });
+        const lat = position.coords.latitude;
+        const lng = position.coords.longitude;
+        const loc = { lat, lng };
+
+        // Geocodificação reversa: busca rua e bairro a partir das coordenadas
+        let endereco = '';
+        let bairro = '';
+        try {
+          const res = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&addressdetails=1&accept-language=pt-BR`);
+          const data = await res.json();
+          const addr = data?.address || {};
+          // Tenta montar o endereço com os campos disponíveis
+          const parts: string[] = [];
+          if (addr.road) parts.push(addr.road);
+          if (addr.house_number) parts.push(addr.house_number);
+          endereco = parts.join(', ');
+          // Bairro: prioriza suburb, depois neighbourhood, depois city_district
+          bairro = addr.suburb || addr.neighbourhood || addr.city_district || '';
+        } catch (e) {
+          // Se falhar a geocodificação, salva pelo menos as coordenadas
+          console.warn('Falha na geocodificação reversa:', e);
+        }
+
+        // Monta payload com tudo que conseguiu
+        const updates: any = { localizacao: loc };
+        if (endereco) updates.endereco = endereco;
+        if (bairro) updates.bairro = bairro;
+
+        const updated = await clientService.updateClient(client.id, updates);
         if (updated) {
           setGpsStatus('saved');
         } else {

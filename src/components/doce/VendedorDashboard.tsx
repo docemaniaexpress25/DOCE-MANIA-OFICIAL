@@ -3,6 +3,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { User, Product, Client, Carga, Sale, Commission, PaymentMethod, CargaPendente, CommissionPaymentLog, SystemMessage, Expense, Category, Subcategory } from '@/lib/types';
 import { saleService } from '@/services/saleService';
+import { locationService } from '@/services/locationService';
 import { DIAS_SEMANA } from '@/lib/constants';
 import PDV from '@/components/doce/PDV';
 import Cupom from '@/components/doce/Cupom';
@@ -121,6 +122,21 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   useEffect(() => { saveLocalState('v_viewingSale', viewingSale); }, [viewingSale]);
   useEffect(() => { saveLocalState('v_showFiscalization', showFiscalization); }, [showFiscalization]);
   useEffect(() => { saveLocalState(`v_dismissed_risk_${user.id}`, dismissedClientRiskIds); }, [dismissedClientRiskIds, user.id]);
+
+  // GPS periódico: envia localização a cada 3 minutos para o admin poder consultar
+  useEffect(() => {
+    if (!('geolocation' in navigator)) return;
+    const sendLocation = () => {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => locationService.saveLocation(user.id, pos.coords.latitude, pos.coords.longitude),
+        () => {},
+        { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 }
+      );
+    };
+    sendLocation(); // envia imediatamente
+    const interval = setInterval(sendLocation, 3 * 60 * 1000); // a cada 3 min
+    return () => clearInterval(interval);
+  }, [user.id]);
 
   const [reopenedClientIds, setReopenedClientIds] = useState<string[]>([]);
   const [showReceiveModal, setShowReceiveModal] = useState<Sale | null>(null);

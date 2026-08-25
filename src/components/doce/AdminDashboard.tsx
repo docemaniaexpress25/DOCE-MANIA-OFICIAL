@@ -6,6 +6,7 @@ import { DIAS_SEMANA } from '@/lib/constants';
 import Cupom from '@/components/doce/Cupom';
 import ClientHistory from '@/components/doce/ClientHistory';
 import { loadLocalState, saveLocalState } from '@/utils/persistence';
+import { locationService, notificationService, NOTIFICATION_TYPES, AppNotification, NotificationType } from '@/services/locationService';
 
 interface AdminDashboardProps {
   products: Product[];
@@ -145,6 +146,79 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const pix1InputRef = useRef<HTMLInputElement>(null);
   const pix2InputRef = useRef<HTMLInputElement>(null);
   const userPhotoInputRef = useRef<HTMLInputElement>(null);
+
+  // ============================================================
+  // NOTIFICAÇÕES REALTIME
+  // ============================================================
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [showNotifPanel, setShowNotifPanel] = useState(false);
+  const [showNotifPrefs, setShowNotifPrefs] = useState(false);
+  const [notifPrefs, setNotifPrefs] = useState<NotificationType[]>(() => notificationService.getPreferences());
+  const unreadCount = useMemo(() => notifications.filter(n => !n.read).length, [notifications]);
+
+  // Som de notificação
+  const playNotifSound = () => {
+    try {
+      const ctx = new AudioContext();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.frequency.value = 880; osc.type = 'sine';
+      gain.gain.value = 0.3;
+      osc.start(); osc.stop(ctx.currentTime + 0.15);
+      setTimeout(() => {
+        const osc2 = ctx.createOscillator();
+        const gain2 = ctx.createGain();
+        osc2.connect(gain2); gain2.connect(ctx.destination);
+        osc2.frequency.value = 1100; osc2.type = 'sine';
+        gain2.gain.value = 0.2;
+        osc2.start(); osc2.stop(ctx.currentTime + 0.1);
+      }, 150);
+    } catch (e) {}
+  };
+
+  useEffect(() => {
+    const cleanup = notificationService.subscribeToRealtime((notif) => {
+      playNotifSound();
+      setNotifications(prev => [notif, ...prev].slice(0, 50));
+      // Vibração se disponível
+      if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+    }, notifPrefs);
+    return cleanup;
+  }, [notifPrefs]);
+
+  const toggleNotifPref = (type: NotificationType) => {
+    setNotifPrefs(prev => {
+      const next = prev.includes(type) ? prev.filter(t => t !== type) : [...prev, type];
+      notificationService.savePreferences(next);
+      return next;
+    });
+  };
+
+  const markAllRead = () => {
+    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+  };
+
+  // ============================================================
+  // LOCALIZAÇÃO DE VENDEDORES
+  // ============================================================
+  const [locationMap, setLocationMap] = useState<Record<string, { lat: number; lng: number; updated_at: string } | null>>({});
+  const [showLocationModal, setShowLocationModal] = useState<{ userId: string; userName: string } | null>(null);
+  const [locationLoading, setLocationLoading] = useState<string | null>(null);
+
+  const handleViewLocation = async (userId: string, userName: string) => {
+    setLocationLoading(userId);
+    const loc = await locationService.getLocation(userId);
+    setLocationMap(prev => ({ ...prev, [userId]: loc }));
+    setLocationLoading(null);
+    if (loc) {
+      setShowLocationModal({ userId, userName });
+      // Abre Google Maps com a localização
+      window.open(`https://www.google.com/maps?q=${loc.latitude},${loc.longitude}`, '_blank');
+    } else {
+      showToast('Localização indisponível. O vendedor pode estar offline.', 'error');
+    }
+  };
 
   const formatRouteName = (rota: string | undefined) => {
     if (!rota) return "Sem Rota";
@@ -883,7 +957,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
       {activeTab === 'HOME' && (
         <div className="space-y-6 py-4">
-          <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Painel Administrativo</h2><p className="text-xs text-gray-400 font-semibold uppercase tracking-wider">Gestão e Controle Total</p></div>
+          <div className="px-2 flex items-center justify-between"><div><h2 className="text-2xl font-black text-gray-800 tracking-tight">Painel Administrativo</h2><p className="text-xs text-gray-400 font-semibold uppercase tracking-wider">Gestão e Controle Total</p></div><div className="flex items-center gap-2"><button onClick={() => setShowNotifPrefs(true)} className="w-10 h-10 bg-white text-gray-400 rounded-xl flex items-center justify-center shadow-sm border border-gray-100 active:scale-90"><i className="fa-solid fa-sliders text-xs"></i></button><button onClick={() => { setShowNotifPanel(!showNotifPanel); if (showNotifPanel) markAllRead(); }} className="w-10 h-10 bg-white text-blue-600 rounded-xl flex items-center justify-center shadow-sm border border-gray-100 active:scale-90 relative"><i className="fa-solid fa-bell text-sm"></i>{unreadCount > 0 && (<span className="absolute -top-1 -right-1 w-5 h-5 bg-rose-500 text-white text-[8px] font-black rounded-full flex items-center justify-center animate-pulse">{unreadCount > 9 ? '9+' : unreadCount}</span>)}</button></div></div>
           <div className="grid grid-cols-2 gap-4">
             <MenuCard icon="fa-boxes-stacked" title="Estoque" tab="CATALOGO" color="bg-blue-50 text-blue-600" />
             <MenuCard icon="fa-tags" title="Categorias" tab="CATEGORIAS" color="bg-indigo-50 text-indigo-600" />
@@ -1005,7 +1079,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             {props.users.filter(u => u.role === 'VENDEDOR').sort((a, b) => (a.rota || '').localeCompare(b.rota || '')).map(u => (
               <div key={u.id} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex items-center justify-between">
                 <div className="flex items-center gap-3"><div className="w-12 h-12 bg-gray-100 rounded-2xl overflow-hidden flex items-center justify-center">{u.foto ? <img src={u.foto} className="w-full h-full object-cover" /> : <i className="fa-solid fa-user text-gray-400 text-xl"></i>}</div><div><h4 className="font-bold text-gray-800 text-sm uppercase">{u.nome}</h4><p className="text-[10px] text-gray-400 font-semibold uppercase mt-0.5">{u.telefone || 'Sem Telefone'}</p><span className="text-[8px] font-black px-1.5 py-0.5 rounded uppercase bg-blue-100 text-blue-600">{formatRouteName(u.rota)}</span></div></div>
-                <div className="flex gap-2"><button onClick={() => handleOpenUserModal(u)} className="w-10 h-10 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center active:scale-95"><i className="fa-solid fa-pencil-alt text-xs"></i></button><button onClick={() => setConfirmDelete({ id: u.id, type: 'USER', name: u.nome })} className="bg-rose-50 text-rose-600 w-10 h-10 rounded-2xl border border-rose-100 flex items-center justify-center active:scale-90 transition-all shadow-sm"><i className="fa-solid fa-trash-can text-sm"></i></button></div>
+                <div className="flex gap-2"><button onClick={() => handleViewLocation(u.id, u.nome)} disabled={locationLoading === u.id} className="w-10 h-10 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center active:scale-95"><i className={`fa-solid ${locationLoading === u.id ? 'fa-spinner fa-spin' : 'fa-location-dot'} text-xs`}></i></button><button onClick={() => handleOpenUserModal(u)} className="w-10 h-10 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center active:scale-95"><i className="fa-solid fa-pencil-alt text-xs"></i></button><button onClick={() => setConfirmDelete({ id: u.id, type: 'USER', name: u.nome })} className="bg-rose-50 text-rose-600 w-10 h-10 rounded-2xl border border-rose-100 flex items-center justify-center active:scale-90 transition-all shadow-sm"><i className="fa-solid fa-trash-can text-sm"></i></button></div>
               </div>
             ))}
           </div>
@@ -1244,6 +1318,71 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       )}
 
       {viewingClientHistory && <ClientHistory client={viewingClientHistory} sales={props.sales} products={props.products} onClose={() => setViewingClientHistory(null)} />}
+
+      {/* ============================================================ */}
+      {/* PAINEL DE NOTIFICAÇÕES (WhatsApp-style) */}
+      {/* ============================================================ */}
+      {showNotifPanel && (
+        <div className="fixed inset-0 z-[500]" onClick={() => { setShowNotifPanel(false); markAllRead(); }}>
+          <div className="absolute top-2 right-2 w-80 max-h-[80vh] bg-white rounded-3xl shadow-2xl border border-gray-100 overflow-hidden animate-in slide-in-from-top-right duration-300" onClick={e => e.stopPropagation()}>
+            <div className="bg-gradient-to-br from-blue-600 to-indigo-700 p-4 flex items-center justify-between">
+              <h3 className="font-black text-white text-sm uppercase">Notificacoes</h3>
+              <div className="flex gap-2">
+                {unreadCount > 0 && <button onClick={markAllRead} className="text-white/70 text-[9px] font-bold uppercase active:scale-95">Marcar lidas</button>}
+                <button onClick={() => setShowNotifPanel(false)} className="text-white/70 active:scale-95"><i className="fa-solid fa-xmark"></i></button>
+              </div>
+            </div>
+            <div className="overflow-y-auto max-h-[60vh]">
+              {notifications.length === 0 && (
+                <div className="p-8 text-center"><i className="fa-solid fa-bell-slash text-3xl text-gray-200 mb-3"></i><p className="text-[10px] text-gray-400 font-bold uppercase">Nenhuma notificacao</p></div>
+              )}
+              {notifications.map((n, i) => {
+                const typeInfo = NOTIFICATION_TYPES.find(t => t.type === n.type);
+                return (
+                  <div key={n.id + i} className={`px-4 py-3 flex items-start gap-3 border-b border-gray-50 transition-all ${!n.read ? 'bg-blue-50/50' : ''}`}>
+                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${n.type === 'NOVA_VENDA' ? 'bg-emerald-100' : n.type === 'RECEBIMENTO' ? 'bg-blue-100' : 'bg-gray-100'}`}>
+                      <i className={`${typeInfo?.icon || 'fa-solid fa-bell'} ${typeInfo?.color || 'text-gray-400'} text-sm`}></i>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[10px] font-black text-gray-800 uppercase leading-tight">{n.title}</p>
+                      <p className="text-[9px] text-gray-500 font-semibold mt-0.5">{n.body}</p>
+                      <p className="text-[8px] text-gray-300 mt-1">{new Date(n.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                    </div>
+                    {!n.read && <div className="w-2 h-2 bg-blue-500 rounded-full flex-shrink-0 mt-1.5"></div>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================ */}
+      {/* MODAL DE PREFERÊNCIAS DE NOTIFICAÇÃO */}
+      {/* ============================================================ */}
+      {showNotifPrefs && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[500] flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
+            <div className="bg-gradient-to-br from-blue-600 to-indigo-700 p-6 text-center">
+              <div className="w-14 h-14 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-3"><i className="fa-solid fa-sliders text-white text-2xl"></i></div>
+              <h3 className="font-black text-white text-sm uppercase tracking-tight">Preferencias de Notificacao</h3>
+              <p className="text-white/70 text-[9px] font-bold mt-1">Selecione quais notificacoes deseja receber</p>
+            </div>
+            <div className="p-6 space-y-3">
+              {NOTIFICATION_TYPES.map(nt => (
+                <div key={nt.type} className="flex items-center justify-between p-3 bg-gray-50 rounded-2xl">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-xl bg-white flex items-center justify-center shadow-sm"><i className={`${nt.icon} ${nt.color} text-sm`}></i></div>
+                    <span className="text-[11px] font-black text-gray-700 uppercase">{nt.label}</span>
+                  </div>
+                  <button onClick={() => toggleNotifPref(nt.type)} className={`w-12 h-7 rounded-full relative transition-colors ${notifPrefs.includes(nt.type) ? 'bg-blue-600' : 'bg-gray-300'}`}><div className={`absolute top-0.5 w-6 h-6 bg-white rounded-full transition-all shadow-sm ${notifPrefs.includes(nt.type) ? 'left-5.5' : 'left-0.5'}`}></div></button>
+                </div>
+              ))}
+            </div>
+            <div className="p-5 pt-0"><button onClick={() => setShowNotifPrefs(false)} className="w-full bg-gray-100 text-gray-600 font-black py-4 rounded-2xl active:scale-95 uppercase text-xs tracking-widest">Fechar</button></div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

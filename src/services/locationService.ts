@@ -73,13 +73,17 @@ export const notificationService = {
           const s = payload.new;
           if (!s) return;
           if (enabledTypes.includes('NOVA_VENDA')) {
+            console.log('[NOTIF] Nova venda detectada via realtime:', s.id);
+            const valor = Number(s.valor_total || 0).toFixed(2);
+            const metodo = s.metodo_pagamento === 'A_PRAZO' ? 'A Prazo' : (s.metodo_pagamento || '');
+            const vendedor = s.vendedor_id ? s.vendedor_id.substring(0, 8) : '?';
             callback({
               id: s.id,
               type: 'NOVA_VENDA',
               title: 'Nova Venda!',
-              body: `R$ ${Number(s.valor_total || 0).toFixed(2)} — ${s.metodo_pagamento === 'A_PRAZO' ? 'A Prazo' : s.metodo_pagamento}`,
+              body: `R$ ${valor} — ${metodo}`,
               data: { saleId: s.id, vendedorId: s.vendedor_id, clientId: s.client_id },
-              createdAt: s.data || s.created_at || new Date().toISOString(),
+              createdAt: s.data_venda || new Date().toISOString(),
               read: false,
             });
           }
@@ -95,6 +99,7 @@ export const notificationService = {
           const oldPaid = Number(old.valor_pago || 0);
           const newPaid = Number(s.valor_pago || 0);
           if (newPaid > oldPaid && enabledTypes.includes('RECEBIMENTO')) {
+            console.log('[NOTIF] Recebimento detectado via realtime:', s.id, 'R$', newPaid - oldPaid);
             const received = newPaid - oldPaid;
             const total = Number(s.valor_total || 0);
             const isFull = newPaid >= total;

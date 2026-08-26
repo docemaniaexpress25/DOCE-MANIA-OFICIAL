@@ -178,13 +178,18 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   };
 
   useEffect(() => {
+    console.log('[NOTIF] Inscrito no realtime. Tipos ativos:', notifPrefs);
     const cleanup = notificationService.subscribeToRealtime((notif) => {
+      console.log('[NOTIF] Notificação recebida:', notif.title, notif.body);
       playNotifSound();
       setNotifications(prev => [notif, ...prev].slice(0, 50));
       // Vibração se disponível
       if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
     }, notifPrefs);
-    return cleanup;
+    return () => {
+      console.log('[NOTIF] Cleanup da inscrição realtime');
+      cleanup();
+    };
   }, [notifPrefs]);
 
   const toggleNotifPref = (type: NotificationType) => {

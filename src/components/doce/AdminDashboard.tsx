@@ -209,15 +209,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const handleViewLocation = async (userId: string, userName: string) => {
     setLocationLoading(userId);
     const loc = await locationService.getLocation(userId);
-    setLocationMap(prev => ({ ...prev, [userId]: loc }));
-    setLocationLoading(null);
     if (loc) {
+      setLocationMap(prev => ({ ...prev, [userId]: { lat: loc.latitude, lng: loc.longitude, updated_at: loc.updated_at } }));
       setShowLocationModal({ userId, userName });
-      // Abre Google Maps com a localização
-      window.open(`https://www.google.com/maps?q=${loc.latitude},${loc.longitude}`, '_blank');
     } else {
+      setLocationMap(prev => ({ ...prev, [userId]: null }));
       showToast('Localização indisponível. O vendedor pode estar offline.', 'error');
     }
+    setLocationLoading(null);
   };
 
   const formatRouteName = (rota: string | undefined) => {
@@ -1356,6 +1355,47 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           </div>
         </div>
       )}
+
+      {/* ============================================================ */}
+      {/* MODAL DE LOCALIZAÇÃO DO VENDEDOR */}
+      {/* ============================================================ */}
+      {showLocationModal && (() => {
+        const loc = locationMap[showLocationModal.userId];
+        if (!loc) return null;
+        const timeAgo = Math.floor((Date.now() - new Date(loc.updated_at).getTime()) / 60000);
+        const timeStr = timeAgo < 1 ? 'Agora mesmo' : timeAgo < 60 ? `${timeAgo} min atrás` : `${Math.floor(timeAgo / 60)}h ${timeAgo % 60}min atrás`;
+        const isStale = timeAgo > 10;
+        return (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[500] flex items-end sm:items-center justify-center" onClick={() => setShowLocationModal(null)}>
+            <div className="bg-white w-full sm:max-w-sm rounded-t-[2rem] sm:rounded-[2rem] overflow-hidden shadow-2xl animate-in slide-in-from-bottom duration-300" onClick={e => e.stopPropagation()}>
+              <div className="bg-gradient-to-br from-emerald-600 to-teal-700 p-5 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center"><i className="fa-solid fa-location-dot text-white text-lg"></i></div>
+                  <div><h3 className="font-black text-white text-sm uppercase">Localizacao</h3><p className="text-white/70 text-[9px] font-bold uppercase">{showLocationModal.userName}</p></div>
+                </div>
+                <button onClick={() => setShowLocationModal(null)} className="text-white/70 active:scale-90"><i className="fa-solid fa-xmark text-lg"></i></button>
+              </div>
+              <div className="relative">
+                <iframe width="100%" height="220" style={{ border: 0 }} loading="lazy" src={`https://www.google.com/maps/embed/v1/place?key=AIzaSyBFw0Qbyq9zTFTd-tUY6dZWTgaQzuU17R8&q=${loc.lat},${loc.lng}&zoom=16`} className="w-full" />
+                {isStale && <div className="absolute top-2 right-2 bg-orange-500 text-white text-[8px] font-black px-2 py-1 rounded-lg uppercase shadow">Desatualizada</div>}
+              </div>
+              <div className="p-5 space-y-3">
+                <div className="flex items-center gap-3 bg-gray-50 p-3 rounded-2xl">
+                  <div className="w-8 h-8 bg-blue-100 rounded-xl flex items-center justify-center"><i className="fa-solid fa-crosshairs text-blue-600 text-xs"></i></div>
+                  <div><p className="text-[9px] font-black text-gray-400 uppercase">Coordenadas</p><p className="text-[11px] font-bold text-gray-700">{loc.lat.toFixed(6)}, {loc.lng.toFixed(6)}</p></div>
+                </div>
+                <div className="flex items-center gap-3 bg-gray-50 p-3 rounded-2xl">
+                  <div className={`w-8 h-8 ${isStale ? 'bg-orange-100' : 'bg-emerald-100'} rounded-xl flex items-center justify-center`}><i className={`fa-solid fa-clock ${isStale ? 'text-orange-600' : 'text-emerald-600'} text-xs`}></i></div>
+                  <div><p className="text-[9px] font-black text-gray-400 uppercase">Ultima atualizacao</p><p className={`text-[11px] font-bold ${isStale ? 'text-orange-600' : 'text-emerald-600'}`}>{timeStr}</p></div>
+                </div>
+                <a href={`https://www.google.com/maps/dir/?api=1&destination=${loc.lat},${loc.lng}`} target="_blank" rel="noopener noreferrer" className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest flex items-center justify-center gap-2">
+                  <i className="fa-solid fa-diamond-turn-right"></i> Abrir no Google Maps
+                </a>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ============================================================ */}
       {/* MODAL DE PREFERÊNCIAS DE NOTIFICAÇÃO */}

@@ -1,8 +1,3 @@
-  1095→             <div className="grid grid-cols-3 gap-3">
-  1096→                <div className="text-center bg-emerald-50 p-3 rounded-xl"><p className="text-[9px] font-black text-emerald-600 uppercase mb-1">Dinheiro</p><p className="text-sm font-black text-emerald-700">R$ {historySummary.dinheiro.toFixed(2)}</p></div>
-  1097→                <div className="text-center bg-blue-50 p-3 rounded-xl"><p className="text-[9px] font-black text-blue-600 uppercase mb-1">Pix</p><p className="text-sm font-black text-[#1E3A5F]">R$ {historySummary.pix.toFixed(2)}</p></div>
-  1098→                <div className="text-center bg-orange-50 p-3 rounded-xl"><p className="text-[9px] font-black text-orange-600 uppercase mb-1">A Prazo</p><p className="text-sm font-black text-orange-700">R$ {historySummary.prazo.toFixed(2)}</p></div>
-  1099→             </div>
   1100→          </div>
   1101→          <div className="grid gap-3 px-1">
   1102→            {filteredHistory.map(s => (
@@ -224,8 +219,73 @@
   1318→      )}
   1319→
   1320→      {viewingClientHistory && <ClientHistory client={viewingClientHistory} sales={props.sales} products={props.products} onClose={() => setViewingClientHistory(null)} />}
-  1321→    </div>
-  1322→  );
-  1323→};
-  1324→
-  1325→export default AdminDashboard;
+  1321→
+  1322→      {/* ============================================================ */}
+  1323→      {/* PAINEL DE NOTIFICAÇÕES (WhatsApp-style) */}
+  1324→      {/* ============================================================ */}
+  1325→      {showNotifPanel && (
+  1326→        <div className="fixed inset-0 z-[500]" onClick={() => { setShowNotifPanel(false); markAllRead(); }}>
+  1327→          <div className="absolute top-2 right-2 w-80 max-h-[80vh] bg-white rounded-3xl shadow-2xl border border-gray-100 overflow-hidden animate-in slide-in-from-top-right duration-300" onClick={e => e.stopPropagation()}>
+  1328→            <div className="bg-gradient-to-br from-blue-600 to-indigo-700 p-4 flex items-center justify-between">
+  1329→              <h3 className="font-black text-white text-sm uppercase">Notificacoes</h3>
+  1330→              <div className="flex gap-2">
+  1331→                {unreadCount > 0 && <button onClick={markAllRead} className="text-white/70 text-[9px] font-bold uppercase active:scale-95">Marcar lidas</button>}
+  1332→                <button onClick={() => setShowNotifPanel(false)} className="text-white/70 active:scale-95"><i className="fa-solid fa-xmark"></i></button>
+  1333→              </div>
+  1334→            </div>
+  1335→            <div className="overflow-y-auto max-h-[60vh]">
+  1336→              {notifications.length === 0 && (
+  1337→                <div className="p-8 text-center"><i className="fa-solid fa-bell-slash text-3xl text-gray-200 mb-3"></i><p className="text-[10px] text-gray-400 font-bold uppercase">Nenhuma notificacao</p></div>
+  1338→              )}
+  1339→              {notifications.map((n, i) => {
+  1340→                const typeInfo = NOTIFICATION_TYPES.find(t => t.type === n.type);
+  1341→                return (
+  1342→                  <div key={n.id + i} className={`px-4 py-3 flex items-start gap-3 border-b border-gray-50 transition-all ${!n.read ? 'bg-blue-50/50' : ''}`}>
+  1343→                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${n.type === 'NOVA_VENDA' ? 'bg-emerald-100' : n.type === 'RECEBIMENTO' ? 'bg-blue-100' : 'bg-gray-100'}`}>
+  1344→                      <i className={`${typeInfo?.icon || 'fa-solid fa-bell'} ${typeInfo?.color || 'text-gray-400'} text-sm`}></i>
+  1345→                    </div>
+  1346→                    <div className="flex-1 min-w-0">
+  1347→                      <p className="text-[10px] font-black text-gray-800 uppercase leading-tight">{n.title}</p>
+  1348→                      <p className="text-[9px] text-gray-500 font-semibold mt-0.5">{n.body}</p>
+  1349→                      <p className="text-[8px] text-gray-300 mt-1">{new Date(n.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+  1350→                    </div>
+  1351→                    {!n.read && <div className="w-2 h-2 bg-blue-500 rounded-full flex-shrink-0 mt-1.5"></div>}
+  1352→                  </div>
+  1353→                );
+  1354→              })}
+  1355→            </div>
+  1356→          </div>
+  1357→        </div>
+  1358→      )}
+  1359→
+  1360→      {/* ============================================================ */}
+  1361→      {/* MODAL DE PREFERÊNCIAS DE NOTIFICAÇÃO */}
+  1362→      {/* ============================================================ */}
+  1363→      {showNotifPrefs && (
+  1364→        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[500] flex items-center justify-center p-4">
+  1365→          <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
+  1366→            <div className="bg-gradient-to-br from-blue-600 to-indigo-700 p-6 text-center">
+  1367→              <div className="w-14 h-14 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-3"><i className="fa-solid fa-sliders text-white text-2xl"></i></div>
+  1368→              <h3 className="font-black text-white text-sm uppercase tracking-tight">Preferencias de Notificacao</h3>
+  1369→              <p className="text-white/70 text-[9px] font-bold mt-1">Selecione quais notificacoes deseja receber</p>
+  1370→            </div>
+  1371→            <div className="p-6 space-y-3">
+  1372→              {NOTIFICATION_TYPES.map(nt => (
+  1373→                <div key={nt.type} className="flex items-center justify-between p-3 bg-gray-50 rounded-2xl">
+  1374→                  <div className="flex items-center gap-3">
+  1375→                    <div className="w-9 h-9 rounded-xl bg-white flex items-center justify-center shadow-sm"><i className={`${nt.icon} ${nt.color} text-sm`}></i></div>
+  1376→                    <span className="text-[11px] font-black text-gray-700 uppercase">{nt.label}</span>
+  1377→                  </div>
+  1378→                  <button onClick={() => toggleNotifPref(nt.type)} className={`w-12 h-7 rounded-full relative transition-colors ${notifPrefs.includes(nt.type) ? 'bg-blue-600' : 'bg-gray-300'}`}><div className={`absolute top-0.5 w-6 h-6 bg-white rounded-full transition-all shadow-sm ${notifPrefs.includes(nt.type) ? 'left-5.5' : 'left-0.5'}`}></div></button>
+  1379→                </div>
+  1380→              ))}
+  1381→            </div>
+  1382→            <div className="p-5 pt-0"><button onClick={() => setShowNotifPrefs(false)} className="w-full bg-gray-100 text-gray-600 font-black py-4 rounded-2xl active:scale-95 uppercase text-xs tracking-widest">Fechar</button></div>
+  1383→          </div>
+  1384→        </div>
+  1385→      )}
+  1386→    </div>
+  1387→  );
+  1388→};
+  1389→
+  1390→export default AdminDashboard;

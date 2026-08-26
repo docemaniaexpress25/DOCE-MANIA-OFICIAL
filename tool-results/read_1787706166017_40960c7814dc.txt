@@ -1,0 +1,291 @@
+     1→  1100→          </div>
+     2→  1101→          <div className="grid gap-3 px-1">
+     3→  1102→            {filteredHistory.map(s => (
+     4→  1103→              <button key={s.id} onClick={() => setSelectedSale(s)} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex flex-col text-left transition-all hover:border-blue-200">
+     5→  1104→                <div className="flex justify-between items-start mb-2"><span className="text-[9px] font-black text-gray-400 uppercase">{s.data.toLocaleDateString()} {s.data.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span><span className={`text-[9px] font-black px-2 py-0.5 rounded uppercase ${s.statusPagamento === 'PAGO' ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>{s.statusPagamento === 'PAGO' ? 'RECEBIDA' : 'EM ABERTO'}</span></div>
+     6→  1105→                <div className="flex justify-between items-end"><div><h4 className="font-bold text-gray-800 text-sm leading-tight">{props.clients.find(c => c.id === s.clientId)?.nomeFantasia || 'Cliente'}</h4><p className="text-[10px] text-gray-400 font-bold uppercase mt-1">Vend: {props.users.find(u => u.id === s.vendedorId)?.nome ?? 'Desc.'}</p></div><p className="text-sm font-black text-gray-800">R$ {s.valorTotal.toFixed(2)}</p></div>
+     7→  1106→              </button>
+     8→  1107→            ))}
+     9→  1108→          </div>
+    10→  1109→        </div>
+    11→  1110→      )}
+    12→  1111→
+    13→  1112→      {activeTab === 'REPORTS' && (
+    14→  1113→        <div className="space-y-6 py-4">
+    15→  1114→          <div className="px-2 flex justify-between items-center">
+    16→  1115→            <h2 className="text-2xl font-black text-gray-800 tracking-tight">Relatórios</h2>
+    17→  1116→            <div className="flex bg-gray-100 p-1 rounded-2xl shadow-inner">
+    18→  1117→              {(['HOJE', 'SEMANA', 'MES', 'GERAL'] as const).map(p => (
+    19→  1118→                <button key={p} onClick={() => { setPeriodoRelatorio(p); setActiveReport(null); }} className={`flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all ${periodoRelatorio === p ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>{p}</button>
+    20→  1119→              ))}
+    21→  1120→            </div>
+    22→  1121→          </div>
+    23→  1122→
+    24→  1123→          {/* Grid de botões de relatórios */}
+    25→  1124→          <div className="grid gap-3 px-1">
+    26→  1125→            <ReportCard 
+    27→  1126→              icon="fa-chart-pie" 
+    28→  1127→              title="Resumo Geral" 
+    29→  1128→              color="blue" 
+    30→  1129→              reportType="RESUMO" 
+    31→  1130→              description="Faturamento total, comissões pagas e produtos mais vendidos no período"
+    32→  1131→            />
+    33→  1132→            <ReportCard 
+    34→  1133→              icon="fa-star" 
+    35→  1134→              title="Top Clientes" 
+    36→  1135→              color="yellow" 
+    37→  1136→              reportType="TOP_CLIENTES" 
+    38→  1137→              description="Ranking dos 10 clientes que mais compraram em valor no período"
+    39→  1138→            />
+    40→  1139→            <ReportCard 
+    41→  1140→              icon="fa-triangle-exclamation" 
+    42→  1141→              title="Clientes em Risco" 
+    43→  1142→              color="rose" 
+    44→  1143→              reportType="CLIENTES_RISCO" 
+    45→  1144→              description="Clientes sem compra há 25+ dias, ordenados por maior tempo de ausência"
+    46→  1145→            />
+    47→  1146→            <ReportCard 
+    48→  1147→              icon="fa-layer-group" 
+    49→  1148→              title="Vendas por Categorias" 
+    50→  1149→              color="indigo" 
+    51→  1150→              reportType="VENDAS_CATEGORIAS" 
+    52→  1151→              description="Detalhamento de vendas agrupado por Categoria → Subcategoria com valores e quantidades"
+    53→  1152→            />
+    54→  1153→          </div>
+    55→  1154→
+    56→  1155→          {/* Conteúdo do relatório ativo */}
+    57→  1156→          {activeReport && (
+    58→  1157→            <div className="px-1">
+    59→  1158→              {renderActiveReport()}
+    60→  1159→            </div>
+    61→  1160→          )}
+    62→  1161→
+    63→  1162→          {activeReport === null && (
+    64→  1163→            <div className="text-center py-16 px-4 bg-gray-50 rounded-[2rem] border border-dashed border-gray-200">
+    65→  1164→              <i className="fa-solid fa-chart-bar text-6xl text-gray-200 mb-4"></i>
+    66→  1165→              <h3 className="font-black text-gray-600 text-lg mb-2">Selecione um relatório acima</h3>
+    67→  1166→              <p className="text-gray-400 text-sm">Clique em um dos cards para visualizar o relatório detalhado</p>
+    68→  1167→            </div>
+    69→  1168→          )}
+    70→  1169→        </div>
+    71→  1170→      )}
+    72→  1171→
+    73→  1172→      {activeTab === 'SETTINGS' && (
+    74→  1173→        <div className="space-y-8 py-4">
+    75→  1174→          <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Configurações</h2></div>
+    76→  1175→          
+    77→  1176→          <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 flex flex-col items-center gap-6"><h3 className="font-black text-gray-800 uppercase text-xs tracking-widest">Logo da Empresa</h3><div onClick={() => logoInputRef.current?.click()} className="w-full aspect-[2/1] bg-gray-50 border-4 border-dashed border-gray-200 rounded-3xl flex items-center justify-center cursor-pointer overflow-hidden group transition-all hover:bg-gray-100">{props.logo ? <img src={props.logo} className="w-full h-full object-contain" /> : <div className="text-center"><i className="fa-solid fa-cloud-arrow-up text-3xl text-gray-300 mb-2"></i><p className="text-[10px] font-black text-gray-400 uppercase">Fazer Upload</p></div>}</div><input type="file" ref={logoInputRef} className="hidden" accept="image/*" onChange={handleLogoUpload} /></div>
+    78→  1177→          
+    79→  1178→          <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 space-y-6"><h3 className="font-black text-gray-800 uppercase text-xs tracking-widest mb-4">Regras de Margem</h3>
+    80→  1179→            <div className="bg-blue-50 p-4 rounded-2xl"><div className="flex items-center justify-between mb-4"><span className="text-xs font-black text-blue-700 uppercase">Margem Global Ativa</span><button onClick={() => props.setMargemGlobalAtiva(!props.margemGlobalAtiva)} className={`w-14 h-8 rounded-full relative transition-colors ${props.margemGlobalAtiva ? 'bg-blue-600' : 'bg-gray-300'}`}><div className={`absolute top-1 w-6 h-6 bg-white rounded-full transition-all ${props.margemGlobalAtiva ? 'left-7' : 'left-1'}`}></div></button></div>{props.margemGlobalAtiva && (<div className="space-y-2"><label className="text-[9px] font-black text-blue-400 uppercase">Valor Margem Global (%)</label><input type="number" value={props.margemGlobalValor} onChange={e => props.setMargemGlobalValor(parseFloat(e.target.value))} className="w-full p-4 bg-white border border-blue-200 rounded-xl font-black text-blue-600 outline-none" /></div>)}</div>
+    81→  1180→            <div className="bg-rose-50 p-4 rounded-2xl"><div className="flex items-center justify-between mb-4"><span className="text-xs font-black text-rose-700 uppercase">Trava Margem Mínima</span><button onClick={() => props.setMargemMinimaAtiva(!props.margemMinimaAtiva)} className={`w-14 h-8 rounded-full relative transition-colors ${props.margemMinimaAtiva ? 'bg-rose-600' : 'bg-gray-300'}`}><div className={`absolute top-1 w-6 h-6 bg-white rounded-full transition-all ${props.margemMinimaAtiva ? 'left-7' : 'left-1'}`}></div></button></div>{props.margemMinimaAtiva && (<div className="space-y-2"><label className="text-[9px] font-black text-rose-400 uppercase">Valor Margem Mínima (%)</label><input type="number" value={props.margemMinima} onChange={e => props.setMargemMinima(parseFloat(e.target.value))} className="w-full p-4 bg-white border border-rose-200 rounded-xl font-black text-rose-600 outline-none" /></div>)}</div>
+    82→  1181→          </div>
+    83→  1182→
+    84→  1183→          <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 space-y-6"><h3 className="font-black text-gray-800 uppercase text-xs tracking-widest mb-4">Contas Pix</h3>
+    85→  1184→            <div className="p-4 bg-gray-50 rounded-3xl border border-gray-100 space-y-4">
+    86→  1185→              <div className="space-y-1">
+    87→  1186→                <label className="text-[9px] font-black text-gray-400 uppercase">Nome Banco 1</label>
+    88→  1187→                <input value={props.pix1Name} onChange={e => props.setPix1Name(e.target.value)} className="w-full p-3 bg-white border rounded-xl font-bold" />
+    89→  1188→              </div>
+    90→  1189→              <div className="flex items-center gap-4">
+    91→  1190→                <div onClick={() => pix1InputRef.current?.click()} className="w-16 h-16 bg-white border rounded-2xl flex items-center justify-center cursor-pointer overflow-hidden">
+    92→  1191→                  {props.pix1Code ? <img src={props.pix1Code} className="w-full h-full object-cover" /> : <i className="fa-solid fa-qrcode text-gray-200"></i>}
+    93→  1192→                </div>
+    94→  1193→                <button onClick={() => pix1InputRef.current?.click()} className="flex-1 bg-white border border-gray-200 p-3 rounded-2xl text-[9px] font-black uppercase text-gray-400">Alterar QR Code</button>
+    95→  1194→              </div>
+    96→  1195→              <input type="file" ref={pix1InputRef} className="hidden" accept="image/*" onChange={e => handlePixUpload(e, 1)} />
+    97→  1196→            </div>
+    98→  1197→
+    99→  1198→            <div className="p-4 bg-gray-50 rounded-3xl border border-gray-100 space-y-4">
+   100→  1199→              <div className="space-y-1">
+   101→  1200→                <label className="text-[9px] font-black text-gray-400 uppercase">Nome Banco 2</label>
+   102→  1201→                <input value={props.pix2Name} onChange={e => props.setPix2Name(e.target.value)} className="w-full p-3 bg-white border rounded-xl font-bold" />
+   103→  1202→              </div>
+   104→  1203→              <div className="flex items-center gap-4">
+   105→  1204→                <div onClick={() => pix2InputRef.current?.click()} className="w-16 h-16 bg-white border rounded-2xl flex items-center justify-center cursor-pointer overflow-hidden">
+   106→  1205→                  {props.pix2Code ? <img src={props.pix2Code} className="w-full h-full object-cover" /> : <i className="fa-solid fa-qrcode text-gray-200"></i>}
+   107→  1206→                </div>
+   108→  1207→                <button onClick={() => pix2InputRef.current?.click()} className="flex-1 bg-white border border-gray-200 p-3 rounded-2xl text-[9px] font-black uppercase text-gray-400">Alterar QR Code</button>
+   109→  1208→              </div>
+   110→  1209→              <input type="file" ref={pix2InputRef} className="hidden" accept="image/*" onChange={e => handlePixUpload(e, 2)} />
+   111→  1210→            </div>
+   112→  1211→          </div>
+   113→  1212→
+   114→  1213→          <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 space-y-4"><h3 className="font-black text-gray-800 uppercase text-xs tracking-widest mb-4">Alterar Senhas (PIN)</h3><select value={pwUser} onChange={e => setPwUser(e.target.value)} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase"><option value="">Selecionar Usuário</option>{props.users.map(u => (<option key={u.id} value={u.id}>{u.nome} ({u.role})</option>))}</select><input type="password" value={pwNew} onChange={e => setPwNew(e.target.value)} placeholder="Novo PIN (6 dígitos)" maxLength={6} className="w-full p-4 bg-gray-50 border rounded-2xl font-black text-center text-xl tracking-[0.5em]" /><button onClick={handleUpdatePassword} className="w-full bg-slate-900 text-white py-5 rounded-2xl font-black uppercase text-xs shadow-xl active:scale-95 transition-all">Atualizar PIN</button></div>
+   115→  1214→          
+   116→  1215→          <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 space-y-4"><h3 className="font-black text-gray-800 uppercase text-xs tracking-widest mb-4">Dados da Empresa</h3>
+   117→  1216→            <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Razão Social / Nome</label><input value={props.companyName} onChange={e => props.setCompanyName(e.target.value)} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div>
+   118→  1217→            <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">CNPJ</label><input value={props.companyCnpj} onChange={e => props.setCompanyCnpj(e.target.value)} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div>
+   119→  1218→          </div>
+   120→  1219→        </div>
+   121→  1220→      )}
+   122→  1221→
+   123→  1222→      {activeTab === 'CARGAS' && (
+   124→  1223→        <div className="space-y-4">
+   125→  1224→          <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Gestão de Cargas</h2></div>
+   126→  1225→          <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100"><div className="flex justify-between items-center mb-4"><h3 className="font-black text-gray-800 uppercase text-[10px]">Vendedor Responsável</h3>{selectedVendedorId && <button onClick={handleZeroCarga} className="text-[9px] font-black text-rose-500 uppercase flex items-center gap-1"><i className="fa-solid fa-rotate-left"></i> Zerar Carga</button>}</div><select value={selectedVendedorId} onChange={e => setSelectedVendedorId(e.target.value)} className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl outline-none font-semibold text-sm"><option value="">Selecione um vendedor...</option>{props.users.filter(u => u.role === 'VENDEDOR' && u.ativo).map(u => <option key={u.id} value={u.id}>{u.nome} ({formatRouteName(u.rota)})</option>)}</select></div>
+   127→  1226→          {selectedVendedorId && (<div className="pb-40"><div className="grid gap-1.5 px-1">{props.products.map(p => { const noV = props.cargas.find(c => c.vendedorId === selectedVendedorId && c.produtoId === p.id)?.quantidade ?? 0; return (<div key={p.id} className="bg-white px-3 py-2 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between"><div className="flex-1 min-w-0 pr-3"><h4 className="font-bold text-gray-800 text-[11px] leading-tight uppercase truncate">{p.nome}</h4><p className="text-[9px] text-gray-400 font-semibold mt-0.5">C: {(p.estoquePrincipal ?? 0)} | V: {noV}</p></div><div className="flex items-center bg-gray-50 rounded-xl p-1 gap-1"><button onClick={() => updateStaging(p.id, -1)} className="w-8 h-8 bg-white border border-gray-200 text-gray-400 rounded-lg active:scale-90 flex items-center justify-center"><i className="fa-solid fa-plus text-[10px]"></i></button><input type="number" inputMode="numeric" value={stagingCarga[p.id] === undefined ? '' : stagingCarga[p.id]} onChange={(e) => handleStagingInputChange(p.id, e.target.value)} onFocus={(e) => e.target.select()} className="w-10 bg-transparent text-center font-black text-xs outline-none border-none" /><button onClick={() => updateStaging(p.id, 1)} className="w-8 h-8 bg-blue-600 text-white rounded-lg active:scale-90 shadow-sm flex items-center justify-center"><i className="fa-solid fa-plus text-[10px]"></i></button></div></div>); })}</div></div>)}
+   128→  1227→          {selectedVendedorId && (<div className="fixed bottom-0 left-0 right-0 p-4 bg-white/95 backdrop-blur-md border-t border-gray-100 shadow-[0_-10px_30px_rgba(0,0,0,0.1)] z-50 max-w-lg mx-auto safe-bottom"><div className="flex flex-row gap-2"><button onClick={() => setShowConfirmApply(true)} disabled={!hasCargaChanges} className={`flex-1 font-black py-4 rounded-2xl shadow-xl flex flex-col items-center justify-center gap-1 transition-all text-[9px] uppercase tracking-tighter ${hasCargaChanges ? 'bg-emerald-600 text-white active:scale-95' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}><i className="fa-solid fa-check-circle text-sm"></i> Aplicar Agora</button><button onClick={() => setShowConfirmSync(true)} disabled={!hasCargaChanges} className={`flex-1 font-black py-4 rounded-2xl shadow-xl flex flex-col items-center justify-center gap-1 transition-all text-[9px] uppercase tracking-tighter ${hasCargaChanges ? 'bg-gray-900 text-white active:scale-95' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}><i className="fa-solid fa-truck-loading text-sm"></i> Enviar Pendente</button></div></div>)}
+   129→  1228→        </div>
+   130→  1229→      )}
+   131→  1230→
+   132→  1231→      {activeTab === 'CLIENTES' && (
+   133→  1232→        <div className="space-y-4">
+   134→  1233→          <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Gestão de Clientes</h2></div>
+   135→  1234→          <div className="flex flex-wrap bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner gap-1"><button onClick={() => setRouteFilter('TODOS')} className={`flex-1 min-w-[70px] py-2 rounded-xl text-[9px] font-black uppercase transition-all ${routeFilter === 'TODOS' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>Todos</button>{availableRoutes.map(r => (<button key={r} onClick={() => setRouteFilter(r)} className={`flex-1 min-w-[70px] py-2 rounded-xl text-[9px] font-black uppercase transition-all ${routeFilter === r ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>{formatRouteName(r)}</button>))}</div>
+   136→  1235→          <div className="flex gap-2"><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar cliente..." className="flex-1 px-4 py-3 bg-white border border-gray-200 rounded-xl text-sm" /><button onClick={() => handleOpenClient('NEW')} className="bg-blue-600 text-white w-12 h-12 rounded-xl flex items-center justify-center shadow-lg active:scale-90 transition-transform"><i className="fa-solid fa-user-plus"></i></button></div>
+   137→  1236→          <div className="grid gap-2 px-1">{filteredClients.map(c => (<div key={c.id} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex items-center justify-between transition-all hover:border-blue-200"><div className="flex-1 min-w-0 pr-2 cursor-pointer" onClick={() => setViewingClientHistory(c)}><div className="flex items-center gap-2"><h3 className="font-bold text-gray-800 text-[13px] leading-tight uppercase truncate">{c.nomeFantasia}</h3>{c.telefone && <a href={`https://wa.me/55${c.telefone.replace(/\D/g, '')}`} target="_blank" className="text-emerald-500" onClick={(e) => e.stopPropagation()}><i className="fa-brands fa-whatsapp text-lg"></i></a>}</div><div className="flex items-center gap-3 mt-1.5"><p className="text-[10px] text-gray-400 font-black uppercase truncate">{DIAS_SEMANA[c.diaRoteiro]}</p><span className="text-[8px] font-black px-1.5 py-0.5 rounded uppercase bg-blue-100 text-blue-600">{formatRouteName(c.rota)}</span><div className="flex items-center gap-1.5 bg-blue-50 px-2 py-0.5 rounded border border-blue-100 shadow-inner whitespace-nowrap"><i className="fa-solid fa-chart-line text-blue-400 text-[10px]"></i><span className="text-[11px] font-black text-blue-600">R$ {getClientAvgRevenue(c.id)}</span></div></div></div><div className="flex flex-col gap-1"><div className="flex gap-2"><button onClick={(e) => { e.stopPropagation(); handleOpenClient(c); }} className="bg-blue-50 text-blue-600 w-9 h-9 rounded-lg border border-blue-100 flex items-center justify-center active:scale-90 shadow-sm"><i className="fa-solid fa-pencil-alt text-sm"></i></button><button onClick={(e) => { e.stopPropagation(); setConfirmDelete({ id: c.id, type: 'CLIENT', name: c.nomeFantasia }); }} className="bg-rose-50 text-rose-600 w-9 h-9 rounded-lg border border-rose-100 flex items-center justify-center active:scale-90 shadow-sm"><i className="fa-solid fa-trash-can text-sm"></i></button></div></div></div>))}</div>
+   138→  1237→        </div>
+   139→  1238→      )}
+   140→  1239→
+   141→  1240→      {activeTab === 'CAIXA' && (
+   142→  1241→        <div className="space-y-6 py-4">
+   143→  1242→          <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Caixa</h2></div>
+   144→  1243→          <div className="grid gap-4 px-1">{props.users.filter(u => u.role === 'VENDEDOR' && u.ativo).map(v => { const stats = getVendedorStats(v.id); return (<div key={v.id} className="bg-white rounded-[2.5rem] shadow-xl border-t-4 border-blue-500 p-8 flex flex-col gap-6"><div className="flex items-center gap-4"><div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-3xl flex items-center justify-center font-black overflow-hidden border-4 border-white shadow-md">{v.foto ? <img src={v.foto} className="w-full h-full object-cover" /> : <i className="fa-solid fa-user text-2xl"></i>}</div><div><h3 className="font-black text-gray-800 text-lg leading-none mb-1 uppercase truncate max-w-[150px]">{v.nome}</h3><p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">{formatRouteName(v.rota)}</p></div></div><div className="space-y-4"><div className="grid grid-cols-2 gap-4"><div className="bg-gray-50 p-5 rounded-[2rem] border border-gray-100 flex flex-col items-center"><p className="text-[9px] text-gray-400 font-black uppercase mb-2 text-center leading-none">Vendas Hoje</p><p className="text-lg font-black text-gray-800">R$ {stats.vendasHoje.toFixed(2)}</p></div><div className={`${stats.comissaoDisponivel < 0 ? 'bg-rose-50 border-rose-100' : 'bg-emerald-50 border-emerald-100'} p-5 rounded-[2rem] border flex flex-col items-center`}><p className={`text-[9px] ${stats.comissaoDisponivel < 0 ? 'text-rose-600' : 'text-emerald-600'} font-black uppercase mb-2 text-center leading-none`}>Disponível</p><p className={`text-lg font-black ${stats.comissaoDisponivel < 0 ? 'text-rose-700' : 'text-gray-800'}`}>R$ {stats.comissaoDisponivel.toFixed(2)}</p></div></div><div className="bg-orange-50 p-4 rounded-2xl border border-orange-100 flex justify-between items-center"><span className="text-[9px] font-black text-orange-600 uppercase">Comissão a Receber</span><span className="text-sm font-black text-orange-700">R$ {stats.comissaoAReceber.toFixed(2)}</span></div></div><button onClick={() => handleOpenPayout(v)} className="w-full bg-emerald-600 text-white py-5 rounded-3xl font-black text-xs uppercase shadow-xl active:scale-95 transition-all tracking-widest">Pagar Comissão</button></div>); })}</div>
+   145→  1244→        </div>
+   146→  1245→      )}
+   147→  1246→
+   148→  1247→      {activeTab === 'ROTEIRO' && (
+   149→  1248→        <div className="space-y-6 py-4">
+   150→  1249→          <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Roteiro Semanal</h2></div>
+   151→  1250→          <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner overflow-x-auto"><button onClick={() => setRouteFilter('TODOS')} className={`flex-shrink-0 px-6 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all ${routeFilter === 'TODOS' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>Todos</button>{availableRoutes.map(r => (<button key={r} onClick={() => setRouteFilter(r)} className={`flex-shrink-0 px-6 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all ${routeFilter === r ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>{formatRouteName(r)}</button>))}</div>
+   152→  1251→          <div className="space-y-3 px-1">{[1, 2, 3, 4, 5, 6].map(dia => { const isOpen = expandedDay === dia; const clientsInDay = props.clients.filter(c => c.diaRoteiro === dia && c.ativo && (routeFilter === 'TODOS' || c.rota === routeFilter)).sort((a, b) => { const orderMap = new Map(props.clientOrder.map((id, idx) => [id, idx])); const idxA = orderMap.get(a.id) ?? (a.ordem || 0); const idxB = orderMap.get(b.id) ?? (b.ordem || 0); return idxA - idxB; }); return (<div key={dia} className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden"><button onClick={() => setExpandedDay(isOpen ? null : dia)} className={`w-full flex items-center justify-between p-5 text-left ${isOpen ? 'bg-indigo-50 text-indigo-700' : 'bg-white text-gray-700'}`}><div className="flex items-center gap-3"><div className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-[10px] ${isOpen ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-400'}`}>{dia}</div><span className="font-black uppercase text-xs tracking-tight">{DIAS_SEMANA[dia] ?? 'N/D'}</span></div><div className="flex items-center gap-2"><span className="text-[9px] font-black uppercase opacity-40">{clientsInDay.length} clientes</span><i className={`fa-solid ${isOpen ? 'fa-chevron-up' : 'fa-chevron-down'} text-[10px]`}></i></div></button>{isOpen && (<div className="p-4 bg-white space-y-2 border-t border-indigo-50 animate-in slide-in-from-top duration-300">{clientsInDay.map((c, index) => (<div key={c.id} className="p-3 bg-gray-50 rounded-2xl flex items-center justify-between group"><div className="flex flex-col gap-1 mr-3"><button onClick={(e)=>{e.stopPropagation(); moveClient(c.id, 'UP');}} className="w-7 h-7 bg-white border text-gray-400 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-chevron-up text-[10px]"></i></button><button onClick={(e)=>{e.stopPropagation(); moveClient(c.id, 'DOWN');}} className="w-7 h-7 bg-white border text-gray-400 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-chevron-down text-[10px]"></i></button></div><div className="flex-1 cursor-pointer" onClick={() => setViewingClientHistory(c)}><p className="font-bold text-gray-800 text-xs uppercase">{c.nomeFantasia}</p><p className="text-[9px] text-gray-400 font-bold mt-0.5">{c.bairro || 'Sem Bairro'}</p></div><div className="flex items-center gap-2"><span className="text-[8px] font-black px-1.5 py-0.5 rounded uppercase bg-blue-100 text-blue-600">{formatRouteName(c.rota)}</span><button onClick={(e)=>{e.stopPropagation(); handleOpenClient(c);}} className="w-8 h-8 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center active:scale-90 shadow-sm"><i className="fa-solid fa-pencil-alt text-xs"></i></button></div></div>))}</div>)}</div>); })}</div>
+   153→  1252→        </div>
+   154→  1253→      )}
+   155→  1254→
+   156→  1255→      {activeTab === 'CONTAS_RECEBER' && (
+   157→  1256→        <div className="space-y-4">
+   158→  1257→          <header className="px-1 flex justify-between items-center"><h2 className="text-xs font-black text-gray-400 uppercase tracking-wider">Contas a Receber</h2><button onClick={() => setFilterOverdueOnly(!filterOverdueOnly)} className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all flex items-center gap-2 shadow-sm ${filterOverdueOnly ? 'bg-rose-600 text-white' : 'bg-white text-gray-400 border border-gray-100'}`}><i className={`fa-solid ${filterOverdueOnly ? 'fa-calendar-exclamation' : 'fa-calendar-days'}`}></i>{filterOverdueOnly ? 'Vencidas/Hoje' : 'Todas'}</button></header>
+   159→  1258→          
+   160→  1259→          <div className="flex bg-gray-100 p-1 rounded-2xl mx-1 shadow-inner overflow-x-auto gap-1">
+   161→  1260→            {(['TODOS', 'COMUM', 'CHEQUE', 'BOLETO'] as const).map(t => (
+   162→  1261→              <button 
+   163→  1262→                key={t} 
+   164→  1263→                onClick={() => setCreditTypeFilter(t)} 
+   165→  1264→                className={`flex-1 py-2 rounded-xl text-[9px] font-black uppercase transition-all ${creditTypeFilter === t ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}
+   166→  1265→              >
+   167→  1266→                {t === 'COMUM' ? 'Comum' : t}
+   168→  1267→              </button>
+   169→  1268→            ))}
+   170→  1269→          </div>
+   171→  1270→
+   172→  1271→          <div className="px-1">
+   173→  1272→            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar cliente..." className="w-full p-4 bg-white border border-gray-100 rounded-2xl shadow-sm text-sm outline-none focus:ring-2 focus:ring-blue-100" />
+   174→  1273→          </div>
+   175→  1274→
+   176→  1275→          <div className="grid gap-3 px-1">{contasAReceber.map(s => { const saldo = Number(((s.valorTotal ?? 0) - (s.valorPago ?? 0)).toFixed(2)); const today = new Date(); today.setHours(0,0,0,0); const dueDate = s.dataVencimento ? new Date(s.dataVencimento) : null; if (dueDate) dueDate.setHours(0,0,0,0); const isOverdue = dueDate ? dueDate <= today : false; return (<div key={s.id} className={`p-5 rounded-3xl border shadow-sm flex flex-col transition-all ${isOverdue ? 'bg-rose-50 border-rose-200' : 'bg-white border-gray-100'}`}><div className="flex justify-between items-start mb-2"><div className="flex-1 pr-4"><h4 className={`font-bold text-sm leading-tight uppercase cursor-pointer ${isOverdue ? 'text-rose-900' : 'text-gray-800'}`} onClick={() => setViewingClientHistory(props.clients.find(c => c.id === s.clientId)!)}>{props.clients.find(c => c.id === s.clientId)?.nomeFantasia || 'Cliente'}</h4><div className="flex flex-col mt-2"><span className="text-[9px] font-black uppercase text-gray-400">Vencimento</span><span className="text-xs font-black text-gray-800">{s.dataVencimento ? new Date(s.dataVencimento).toLocaleDateString() : 'N/D'}</span><span className="text-[8px] font-black uppercase text-blue-600 mt-1">{s.detalhePagamento || 'COMUM'}</span></div></div><div className="text-right flex items-center gap-4"><div><p className="text-sm font-black text-gray-800 leading-none">R$ {saldo.toFixed(2)}</p><p className="text-[9px] text-gray-400 font-bold uppercase mt-1">Saldo</p></div></div></div><button onClick={() => { setShowReceiveModal(s); setValorRecebidoParcial(saldo.toString()); }} className={`w-full py-3 rounded-2xl text-[10px] font-black uppercase mt-3 shadow-lg active:scale-95 ${isOverdue ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white'}`}>RECEBER</button></div>)})}</div>
+   177→  1276→        </div>
+   178→  1277→      )}
+   179→  1278→
+   180→  1279→      {showUserModal && (
+   181→  1280→        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-sm rounded-[2rem] p-8 shadow-2xl overflow-y-auto max-h-[90vh]"><h3 className="font-black text-gray-800 uppercase text-sm mb-6 text-center">{showUserModal === 'NEW' ? 'Novo Vendedor' : 'Editar Vendedor'}</h3><div className="flex flex-col items-center mb-6"><div onClick={() => userPhotoInputRef.current?.click()} className="w-24 h-24 bg-purple-100 text-purple-600 rounded-[2rem] flex items-center justify-center font-black overflow-hidden border-4 border-white shadow-xl cursor-pointer relative group transition-all hover:scale-105">{userForm.foto ? <img src={userForm.foto} className="w-full h-full object-cover" /> : <i className="fa-solid fa-camera text-2xl"></i>}</div><input type="file" ref={userPhotoInputRef} className="hidden" accept="image/*" onChange={handleUserPhotoUpload} /></div><div className="space-y-4"><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome do Vendedor</label><input value={userForm.nome ?? ''} onChange={e => setUserForm({...userForm, nome: e.target.value})} placeholder="Nome Completo" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Telefone / WhatsApp</label><input value={userForm.telefone ?? ''} onChange={e => setUserForm({...userForm, telefone: e.target.value})} placeholder="Telefone" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Placa do Veículo</label><input value={userForm.placaVeiculo ?? ''} onChange={e => setUserForm({...userForm, placaVeiculo: e.target.value})} placeholder="Ex: ABC-1234" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div>{showUserModal !== 'NEW' && (<div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Rota Responsável</label><select value={userForm.rota || 'ROTA_01'} onChange={e => setUserForm({...userForm, rota: e.target.value})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold">{Array.from({ length: 50 }).map((_, i) => { const r = `ROTA_${String(i + 1).padStart(2, '0')}`; return <option key={r} value={r}>Rota {String(i + 1).padStart(2, '0')}</option>; })}</select></div>)}<div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">PIN de Acesso (6 dígitos)</label><input type="password" value={userForm.pin ?? ''} onChange={e => setUserForm({...userForm, pin: e.target.value})} placeholder="123456" maxLength={6} className="w-full p-4 bg-gray-50 border rounded-2xl font-black text-center text-xl tracking-[0.5em]" /></div><button onClick={handleSaveUser} className="w-full bg-purple-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 uppercase text-xs mt-4 tracking-widest">Salvar Vendedor</button><button onClick={() => setShowUserModal(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button></div></div></div>
+   182→  1281→      )}
+   183→  1282→
+   184→  1283→      {showClientModal && (
+   185→  1284→        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-md rounded-[2rem] p-8 shadow-2xl overflow-y-auto max-h-[90vh]"><h3 className="font-black text-gray-800 uppercase text-sm mb-6 text-center">{showClientModal === 'NEW' ? 'Novo Cliente' : 'Editar Cliente'}</h3><div className="space-y-4"><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome Fantasia</label><input value={clientForm.nomeFantasia || ''} onChange={e => setClientForm({...clientForm, nomeFantasia: e.target.value})} placeholder="Nome Fantasia" className="w-full p-4 bg-gray-50 rounded-2xl font-bold uppercase" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Telefone</label><input value={clientForm.telefone || ''} onChange={e => setClientForm({...clientForm, telefone: e.target.value})} placeholder="Telefone" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Endereço</label><input value={clientForm.endereco || ''} onChange={e => setClientForm({...clientForm, endereco: e.target.value})} placeholder="Endereço" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Bairro</label><input value={clientForm.bairro || ''} onChange={e => setClientForm({...clientForm, bairro: e.target.value})} placeholder="Bairro" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Dia de Atendimento</label><select value={clientForm.diaRoteiro ?? 1} onChange={e => setClientForm({...clientForm, diaRoteiro: parseInt(e.target.value)})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold">{[1, 2, 3, 4, 5, 6].map(d => (<option key={d} value={d}>{DIAS_SEMANA[d]}</option>))}</select></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Rota</label><select value={clientForm.rota || availableRoutes[0] || 'ROTA_01'} onChange={e => setClientForm({...clientForm, rota: e.target.value})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold">{availableRoutes.length > 0 ? availableRoutes.map(r => (<option key={r} value={r}>{formatRouteName(r)}</option>)) : <option value="ROTA_01">Sem rotas disponíveis</option>}</select></div><button onClick={handlePinLocation} className="w-full bg-indigo-50 text-indigo-600 font-black py-3 rounded-2xl uppercase text-[10px] tracking-widest flex items-center justify-center gap-2 mb-2"><i className="fa-solid fa-location-dot"></i> Localização Atual</button><button onClick={handleSaveClient} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 uppercase text-xs mt-4 tracking-widest">Salvar Cliente</button><button onClick={() => setShowClientModal(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button></div></div></div>
+   186→  1285→      )}
+   187→  1286→
+   188→  1287→      {showProductModal && (
+   189→  1288→        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-md rounded-[2rem] p-8 shadow-2xl overflow-y-auto max-h-[90vh]"><h3 className="font-black text-gray-800 uppercase text-sm mb-6 text-center">{showProductModal === 'NEW' ? 'Novo Produto' : 'Editar Produto'}</h3><div className="space-y-4"><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome do Produto</label><input value={pForm.nome} onChange={e => setPForm({...pForm, nome: e.target.value})} placeholder="Nome do Produto" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div>
+   190→  1289→        <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Categoria</label><select value={pForm.categoryId} onChange={e => setPForm({...pForm, categoryId: e.target.value, subcategoryId: ''})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase">{props.categories.map(cat => (<option key={cat.id} value={cat.id}>{cat.name}</option>))}</select></div>
+   191→  1290→        {pForm.categoryId && props.subcategories.filter(s => s.categoryId === pForm.categoryId).length > 0 && (
+   192→  1291→          <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Subcategoria</label><select value={pForm.subcategoryId} onChange={e => setPForm({...pForm, subcategoryId: e.target.value})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase"><option value="">Nenhuma</option>{props.subcategories.filter(s => s.categoryId === pForm.categoryId).map(sub => (<option key={sub.id} value={sub.id}>{sub.name}</option>))}</select></div>
+   193→  1292→        )}
+   194→  1293→        <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Custo R$</label><input type="number" value={pForm.custo} onChange={e => { const val = parseFloat(e.target.value) || 0; const venda = props.margemGlobalAtiva ? updatePriceFromMargin(val, props.margemGlobalValor) : parseFloat(pForm.venda) || 0; const margem = props.margemGlobalAtiva ? props.margemGlobalValor : updateMarginFromPrice(val, venda); setPForm({...pForm, custo: e.target.value, venda: venda.toFixed(2), margem: margem.toFixed(2)}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Venda R$</label><input type="number" value={pForm.venda} onChange={e => { const val = parseFloat(e.target.value) || 0; const margem = updateMarginFromPrice(parseFloat(pForm.custo) || 0, val); setPForm({...pForm, margem: margem.toFixed(2), venda: e.target.value}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Margem %</label><input type="number" value={pForm.margem} onChange={e => { const val = parseFloat(e.target.value) || 0; const venda = updatePriceFromMargin(parseFloat(pForm.custo) || 0, val); setPForm({...pForm, margem: e.target.value, venda: venda.toFixed(2)}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Preço Mínimo R$</label><input type="number" value={pForm.precoMinimo} onChange={e => setPForm({...pForm, precoMinimo: e.target.value})} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Comissão %</label><input type="number" value={pForm.comissao} onChange={e => setPForm({...pForm, comissao: e.target.value})} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Estoque Central</label><input type="number" value={pForm.estoquePrincipal} onChange={e => setPForm({...pForm, estoquePrincipal: e.target.value})} placeholder="0" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="flex items-center gap-2 py-2"><input type="checkbox" id="prod_ativo" checked={pForm.ativo} onChange={e => setPForm({...pForm, ativo: e.target.checked})} className="w-5 h-5" /><label htmlFor="prod_ativo" className="text-xs font-bold text-gray-700 uppercase">Produto Ativo</label></div><button onClick={handleSaveProduct} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 uppercase text-xs mt-4 tracking-widest">Salvar Produto</button><button onClick={() => setShowProductModal(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button></div></div></div>
+   195→  1294→      )}
+   196→  1295→
+   197→  1296→      {showEntryModal && (
+   198→  1297→        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-w-xs rounded-3xl p-8 shadow-2xl text-center"><h3 className="font-black text-gray-800 uppercase text-sm mb-4">Entrada de Estoque</h3><p className="text-xs text-gray-400 font-bold uppercase mb-4">{showEntryModal.nome}</p><div className="space-y-4 text-left"><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Quantidade</label><input type="number" value={entryForm.qtd} onChange={e => setEntryForm({...entryForm, qtd: e.target.value})} placeholder="0" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-center" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Custo Unitário R$</label><input type="number" value={entryForm.custo} onChange={e => setEntryForm({...entryForm, custo: e.target.value})} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-center" /></div><button onClick={() => { const q = parseInt(entryForm.qtd) || 0; const c = parseFloat(entryForm.custo) || 0; if (q <= 0 || c <= 0) { showToast("Valores inválidos", "error"); return; } const estA = showEntryModal.estoquePrincipal || 0; const cusA = showEntryModal.precoCusto || 0; const nEst = estA + q; const nCus = ((estA * cusA) + (q * c)) / nEst; const nVen = props.margemGlobalAtiva ? updatePriceFromMargin(nCus, props.margemGlobalValor) : showEntryModal.precoVenda; props.updateProduct(showEntryModal.id, { estoquePrincipal: nEst, precoCusto: Number(nCus.toFixed(2)), precoVenda: Number(nVen.toFixed(2)) }); setShowEntryModal(null); setEntryForm({ qtd: '', custo: '' }); showToast("Entrada registrada!"); }} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest">Confirmar Entrada</button><button onClick={() => { setShowEntryModal(null); setEntryForm({ qtd: '', custo: '' }); }} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button></div></div></div>
+   199→  1298→      )}
+   200→  1299→
+   201→  1300→      {showConfirmSync && (
+   202→  1301→        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-w-xs rounded-3xl p-8 text-center shadow-2xl"><h3 className="font-black text-gray-800 text-lg mb-4">Enviar Pendente?</h3><p className="text-sm text-gray-500 mb-6 font-medium uppercase">Deseja enviar esta carga como pendente?</p><div className="flex flex-col gap-2"><button onClick={handleSync} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest">Sim, Enviar</button><button onClick={() => setShowConfirmSync(false)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button></div></div></div>
+   203→  1302→      )}
+   204→  1303→
+   205→  1304→      {showConfirmApply && (
+   206→  1305→        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-w-xs rounded-3xl p-8 text-center shadow-2xl"><h3 className="font-black text-gray-800 text-lg mb-4">Aplicar Carga?</h3><p className="text-sm text-gray-500 mb-6 font-medium uppercase">Isso atualizará o estoque imediatamente.</p><div className="flex flex-col gap-2"><button onClick={handleApply} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest">Sim, Aplicar</button><button onClick={() => setShowConfirmApply(false)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button></div></div></div>
+   207→  1306→      )}
+   208→  1307→
+   209→  1308→      {payoutVendedor && (
+   210→  1309→        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-w-xs rounded-3xl p-8 shadow-2xl text-center"><h3 className="font-black text-gray-800 uppercase text-sm mb-4">Pagar Comissão</h3><p className="text-xs text-gray-400 font-bold uppercase mb-4">{payoutVendedor.nome}</p><div className="space-y-4 text-left"><div className="flex gap-2 mb-4"><button onClick={() => setPayoutType('TOTAL')} className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase ${payoutType === 'TOTAL' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-400'}`}>Total</button><button onClick={() => setPayoutType('PARCIAL')} className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase ${payoutType === 'PARCIAL' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-400'}`}>Parcial</button></div>{payoutType === 'PARCIAL' && (<div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Valor R$</label><input type="number" value={partialAmount} onChange={e => setPartialAmount(e.target.value)} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-center" /></div>)}<button onClick={handleConfirmPayout} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest">Confirmar Pagamento</button><button onClick={() => setPayoutVendedor(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button></div></div></div>
+   211→  1310→      )}
+   212→  1311→
+   213→  1312→      {confirmDelete && (
+   214→  1313→        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-w-xs rounded-3xl p-8 text-center shadow-2xl"><h3 className="font-black text-gray-800 text-lg mb-4">Excluir Item?</h3><p className="text-sm text-gray-500 mb-6 font-medium uppercase">Deseja realmente excluir "{confirmDelete.name}"?</p><div className="flex flex-col gap-2"><button onClick={handleConfirmDelete} className="w-full bg-rose-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest">Sim, Excluir</button><button onClick={() => setConfirmDelete(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button></div></div></div>
+   215→  1314→      )}
+   216→  1315→
+   217→  1316→      {selectedSale && (
+   218→  1317→        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[250] flex items-center justify-center p-4"><div className="bg-white w-full max-sm rounded-[2rem] overflow-hidden flex flex-col shadow-2xl animate-in zoom-in-95 duration-300 max-h-[90vh]"><div className="flex-1 overflow-y-auto p-2"><Cupom sale={selectedSale} client={props.clients.find(c => c.id === selectedSale.clientId) || {} as Client} products={props.products} onClose={() => setSelectedSale(null)} onDeleteSale={props.deleteSale} allowDelete={true} /></div><div className="p-6 bg-gray-50 border-t border-gray-100 flex flex-col gap-2"><button onClick={() => setSelectedSale(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Voltar</button></div></div></div>
+   219→  1318→      )}
+   220→  1319→
+   221→  1320→      {viewingClientHistory && <ClientHistory client={viewingClientHistory} sales={props.sales} products={props.products} onClose={() => setViewingClientHistory(null)} />}
+   222→  1321→
+   223→  1322→      {/* ============================================================ */}
+   224→  1323→      {/* PAINEL DE NOTIFICAÇÕES (WhatsApp-style) */}
+   225→  1324→      {/* ============================================================ */}
+   226→  1325→      {showNotifPanel && (
+   227→  1326→        <div className="fixed inset-0 z-[500]" onClick={() => { setShowNotifPanel(false); markAllRead(); }}>
+   228→  1327→          <div className="absolute top-2 right-2 w-80 max-h-[80vh] bg-white rounded-3xl shadow-2xl border border-gray-100 overflow-hidden animate-in slide-in-from-top-right duration-300" onClick={e => e.stopPropagation()}>
+   229→  1328→            <div className="bg-gradient-to-br from-blue-600 to-indigo-700 p-4 flex items-center justify-between">
+   230→  1329→              <h3 className="font-black text-white text-sm uppercase">Notificacoes</h3>
+   231→  1330→              <div className="flex gap-2">
+   232→  1331→                {unreadCount > 0 && <button onClick={markAllRead} className="text-white/70 text-[9px] font-bold uppercase active:scale-95">Marcar lidas</button>}
+   233→  1332→                <button onClick={() => setShowNotifPanel(false)} className="text-white/70 active:scale-95"><i className="fa-solid fa-xmark"></i></button>
+   234→  1333→              </div>
+   235→  1334→            </div>
+   236→  1335→            <div className="overflow-y-auto max-h-[60vh]">
+   237→  1336→              {notifications.length === 0 && (
+   238→  1337→                <div className="p-8 text-center"><i className="fa-solid fa-bell-slash text-3xl text-gray-200 mb-3"></i><p className="text-[10px] text-gray-400 font-bold uppercase">Nenhuma notificacao</p></div>
+   239→  1338→              )}
+   240→  1339→              {notifications.map((n, i) => {
+   241→  1340→                const typeInfo = NOTIFICATION_TYPES.find(t => t.type === n.type);
+   242→  1341→                return (
+   243→  1342→                  <div key={n.id + i} className={`px-4 py-3 flex items-start gap-3 border-b border-gray-50 transition-all ${!n.read ? 'bg-blue-50/50' : ''}`}>
+   244→  1343→                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${n.type === 'NOVA_VENDA' ? 'bg-emerald-100' : n.type === 'RECEBIMENTO' ? 'bg-blue-100' : 'bg-gray-100'}`}>
+   245→  1344→                      <i className={`${typeInfo?.icon || 'fa-solid fa-bell'} ${typeInfo?.color || 'text-gray-400'} text-sm`}></i>
+   246→  1345→                    </div>
+   247→  1346→                    <div className="flex-1 min-w-0">
+   248→  1347→                      <p className="text-[10px] font-black text-gray-800 uppercase leading-tight">{n.title}</p>
+   249→  1348→                      <p className="text-[9px] text-gray-500 font-semibold mt-0.5">{n.body}</p>
+   250→  1349→                      <p className="text-[8px] text-gray-300 mt-1">{new Date(n.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+   251→  1350→                    </div>
+   252→  1351→                    {!n.read && <div className="w-2 h-2 bg-blue-500 rounded-full flex-shrink-0 mt-1.5"></div>}
+   253→  1352→                  </div>
+   254→  1353→                );
+   255→  1354→              })}
+   256→  1355→            </div>
+   257→  1356→          </div>
+   258→  1357→        </div>
+   259→  1358→      )}
+   260→  1359→
+   261→  1360→      {/* ============================================================ */}
+   262→  1361→      {/* MODAL DE PREFERÊNCIAS DE NOTIFICAÇÃO */}
+   263→  1362→      {/* ============================================================ */}
+   264→  1363→      {showNotifPrefs && (
+   265→  1364→        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[500] flex items-center justify-center p-4">
+   266→  1365→          <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
+   267→  1366→            <div className="bg-gradient-to-br from-blue-600 to-indigo-700 p-6 text-center">
+   268→  1367→              <div className="w-14 h-14 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-3"><i className="fa-solid fa-sliders text-white text-2xl"></i></div>
+   269→  1368→              <h3 className="font-black text-white text-sm uppercase tracking-tight">Preferencias de Notificacao</h3>
+   270→  1369→              <p className="text-white/70 text-[9px] font-bold mt-1">Selecione quais notificacoes deseja receber</p>
+   271→  1370→            </div>
+   272→  1371→            <div className="p-6 space-y-3">
+   273→  1372→              {NOTIFICATION_TYPES.map(nt => (
+   274→  1373→                <div key={nt.type} className="flex items-center justify-between p-3 bg-gray-50 rounded-2xl">
+   275→  1374→                  <div className="flex items-center gap-3">
+   276→  1375→                    <div className="w-9 h-9 rounded-xl bg-white flex items-center justify-center shadow-sm"><i className={`${nt.icon} ${nt.color} text-sm`}></i></div>
+   277→  1376→                    <span className="text-[11px] font-black text-gray-700 uppercase">{nt.label}</span>
+   278→  1377→                  </div>
+   279→  1378→                  <button onClick={() => toggleNotifPref(nt.type)} className={`w-12 h-7 rounded-full relative transition-colors ${notifPrefs.includes(nt.type) ? 'bg-blue-600' : 'bg-gray-300'}`}><div className={`absolute top-0.5 w-6 h-6 bg-white rounded-full transition-all shadow-sm ${notifPrefs.includes(nt.type) ? 'left-5.5' : 'left-0.5'}`}></div></button>
+   280→  1379→                </div>
+   281→  1380→              ))}
+   282→  1381→            </div>
+   283→  1382→            <div className="p-5 pt-0"><button onClick={() => setShowNotifPrefs(false)} className="w-full bg-gray-100 text-gray-600 font-black py-4 rounded-2xl active:scale-95 uppercase text-xs tracking-widest">Fechar</button></div>
+   284→  1383→          </div>
+   285→  1384→        </div>
+   286→  1385→      )}
+   287→  1386→    </div>
+   288→  1387→  );
+   289→  1388→};
+   290→  1389→
+   291→  1390→export default AdminDashboard;

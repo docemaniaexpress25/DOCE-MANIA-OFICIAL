@@ -596,7 +596,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
             <p className="text-[9px] text-gray-400 uppercase font-black tracking-tighter">
               {isPrePedido ? 'Pré-Pedido Rascunho' : 'Atendimento'}
             </p>
-            <h2 className="font-black text-xs text-gray-800 uppercase truncate">{client.nomeFantasia}</h2> 
+            <h2 className="font-black text-xs text-gray-800 uppercase truncate">{client.nomeFantasia}</h2>
+            {client.nome && <p className="text-[9px] text-blue-500 font-semibold">{client.nome}</p>} 
           </div>
           <button onClick={() => setConfirmModal({ title: 'Zerar Quantidades', message: 'Deseja realmente zerar todas as quantidades do carrinho?', icon: 'fa-solid fa-trash-can', iconColor: 'text-rose-500', onConfirm: () => { setConfirmModal(null); setCart({}); } })} className="w-9 h-9 bg-rose-50 text-rose-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-trash-can text-sm"></i></button>
         </div>

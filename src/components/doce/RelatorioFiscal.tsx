@@ -1,6 +1,7 @@
 "use client";
 import React, { useState } from 'react';
 import { User, Product, Carga } from '@/lib/types';
+import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
 
 interface RelatorioFiscalProps {
   user: User;
@@ -120,15 +121,29 @@ const RelatorioFiscal: React.FC<RelatorioFiscalProps> = ({ user, carga, products
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-4 mb-10">
+        <div className="grid grid-cols-2 gap-4 mb-10">
+          <button 
+            onClick={async () => {
+              if (!window.confirm('Deseja imprimir este relatorio de fiscalizacao?')) return;
+              try {
+                const success = await bluetoothPrinter.print(generateText(), format);
+                if (success) alert('Relatorio impresso com sucesso!');
+              } catch (err: any) {
+                alert('Falha na impressao: ' + (err?.message || 'Erro desconhecido'));
+              }
+            }}
+            className="bg-blue-600 text-white font-black py-5 rounded-[2rem] shadow-xl active:scale-95 transition-all uppercase text-[10px] tracking-widest flex items-center justify-center gap-3"
+          >
+            <i className="fa-solid fa-print text-lg"></i> IMPRIMIR
+          </button>
           <button 
             onClick={() => {
               navigator.clipboard.writeText(generateText());
               alert("Relatorio copiado para a area de transferencia!");
             }}
-            className="bg-blue-600 text-white font-black py-5 rounded-[2rem] shadow-xl active:scale-95 transition-all uppercase text-[10px] tracking-widest flex items-center justify-center gap-3"
+            className="bg-slate-700 text-slate-300 font-black py-5 rounded-[2rem] shadow-xl active:scale-95 transition-all uppercase text-[10px] tracking-widest flex items-center justify-center gap-3"
           >
-            <i className="fa-solid fa-copy text-lg"></i> COPIAR TEXTO
+            <i className="fa-solid fa-copy"></i> COPIAR
           </button>
         </div>
       </div>

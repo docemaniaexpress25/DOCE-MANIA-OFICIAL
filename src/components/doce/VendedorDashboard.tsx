@@ -149,6 +149,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [cForm, setCForm] = useState<Partial<Client>>({});
   const [confirmSkipId, setConfirmSkipId] = useState<string | null>(null);
+  const [expandedRouteClientId, setExpandedRouteClientId] = useState<string | null>(null);
   const [showExpenseForm, setShowExpenseForm] = useState(false);
   const [expenseDesc, setExpenseDesc] = useState('');
   const [expenseVal, setExpenseVal] = useState('');
@@ -391,7 +392,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   };
 
   const handleOpenEditClient = (c: Client | 'NEW') => {
-    if (c === 'NEW') setCForm({ nomeFantasia: '', telefone: '', endereco: '', bairro: '', diaRoteiro: diaAtual, ativo: true, ativarCnpj: false, cnpj: '', pinLocalizacao: '', ordem: 0, rota: user.rota });
+    if (c === 'NEW') setCForm({ nomeFantasia: '', nome: '', telefone: '', endereco: '', bairro: '', diaRoteiro: diaAtual, ativo: true, ativarCnpj: false, cnpj: '', pinLocalizacao: '', ordem: 0, rota: user.rota });
     else setCForm({ ...c, endereco: (c.endereco && c.endereco !== '0') ? c.endereco : '', bairro: (c.bairro && c.bairro !== '0') ? c.bairro : '' });
     setEditingClient(c);
   };
@@ -796,30 +797,44 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
             const isSold = (sales || []).some(s => s.clientId === c.id && isSameDay(s.data));
             const isSkipped = (dailyRouteState?.skippedClientIds || []).includes(c.id);
             const isVisited = (isSold || isSkipped) && !reopenedClientIds.includes(c.id);
+            const lastSale = (sales || []).filter(s => s.clientId === c.id).sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime())[0];
+            const isExpanded = expandedRouteClientId === c.id;
             return (
-              <div key={c.id} className={`p-4 rounded-3xl border flex items-center justify-between transition-all ${isVisited ? 'bg-gray-100 border-gray-200 grayscale opacity-60' : 'bg-white border-gray-100 shadow-sm'}`}>
-                {/* LADO ESQUERDO: NOME COMPLETO (SEM TRUNCATE) + BAIRRO */}
-                <div className="flex-1 min-w-0 cursor-pointer pr-4" onClick={() => setViewingClientHistory(c)}>
-                  <p className="font-bold text-gray-800 leading-tight uppercase">{c.nomeFantasia ?? 'Cliente'}</p>
-                  <p className="text-[10px] text-gray-400 uppercase font-semibold mt-1">
-                    <i className="fa-solid fa-location-dot mr-1"></i> {(c.bairro || 'S/B')}
-                  </p>
-                </div>
-                
-                {/* LADO DIREITO: BOTÕES ALINHADOS À DIREITA */}
-                {!isVisited ? (
-                  <div className="flex items-center gap-1 ml-2 flex-shrink-0">
-                    <button onClick={() => handleAtenderClient(c)} className="bg-blue-600 text-white px-4 py-2 rounded-2xl font-black text-xs uppercase shadow-lg flex-shrink-0 whitespace-nowrap">Atender</button>
-                    <button onClick={() => setConfirmSkipId(c.id)} className="w-8 h-8 bg-gray-50 text-gray-400 rounded-xl flex items-center justify-center flex-shrink-0" title="Pular"><i className="fa-solid fa-forward text-[10px]"></i></button>
-                    <button onClick={(e) => { e.stopPropagation(); if (c.telefone) { const phone = c.telefone.replace(/\D/g, ''); window.open(`https://wa.me/55${phone}`, '_blank'); } }} className={`w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 ${c.telefone ? 'bg-green-50 text-green-500' : 'bg-gray-50 text-gray-300'}`} title="WhatsApp">
-                      <i className="fa-brands fa-whatsapp text-sm"></i>
-                    </button>
-                    <button onClick={(e) => { e.stopPropagation(); if (c.localizacao?.lat && c.localizacao?.lng) { window.open(`https://www.google.com/maps/dir/?api=1&destination=${c.localizacao.lat},${c.localizacao.lng}&travelmode=driving`, '_blank'); } else { window.open(`https://www.google.com/maps/search/${encodeURIComponent((c.endereco || '') + ', ' + (c.bairro || ''))}`, '_blank'); } }} className="w-8 h-8 bg-blue-50 text-blue-500 rounded-xl flex items-center justify-center flex-shrink-0" title="Navegar GPS">
-                      <i className="fa-solid fa-diamond-turn-right text-[10px]"></i>
-                    </button>
+              <div key={c.id} className={`rounded-3xl border transition-all overflow-hidden ${isVisited ? 'bg-gray-100 border-gray-200 grayscale opacity-60' : 'bg-white border-gray-100 shadow-sm'}`}>
+                <div className={`p-4 flex items-center justify-between`}>
+                  <div className="flex-1 min-w-0 cursor-pointer pr-3" onClick={() => setViewingClientHistory(c)}>
+                    <p className="font-bold text-gray-800 leading-tight uppercase">{c.nomeFantasia ?? 'Cliente'}</p>
+                    <p className="text-[10px] text-gray-400 uppercase font-semibold mt-1">
+                      <i className="fa-solid fa-location-dot mr-1"></i> {(c.bairro || 'S/B')}
+                    </p>
                   </div>
-                ) : (
-                  <button onClick={() => handleReopenClient(c.id)} className="bg-white text-blue-600 border border-blue-200 px-4 py-2 rounded-xl text-[9px] font-black uppercase ml-4 flex-shrink-0 whitespace-nowrap">Reabrir</button>
+                  {!isVisited ? (
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <button onClick={() => handleAtenderClient(c)} className="bg-blue-600 text-white px-4 py-2 rounded-2xl font-black text-xs uppercase shadow-lg whitespace-nowrap">Atender</button>
+                      <button onClick={() => setConfirmSkipId(c.id)} className="w-9 h-9 bg-gray-50 text-gray-400 rounded-xl flex items-center justify-center" title="Pular"><i className="fa-solid fa-forward text-[10px]"></i></button>
+                      <button onClick={(e) => { e.stopPropagation(); setExpandedRouteClientId(isExpanded ? null : c.id); }} className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${isExpanded ? 'bg-blue-100 text-blue-600 rotate-180' : 'bg-gray-50 text-gray-400'}`}><i className="fa-solid fa-chevron-down text-[10px]"></i></button>
+                    </div>
+                  ) : (
+                    <button onClick={() => handleReopenClient(c.id)} className="bg-white text-blue-600 border border-blue-200 px-4 py-2 rounded-xl text-[9px] font-black uppercase whitespace-nowrap">Reabrir</button>
+                  )}
+                </div>
+                {isExpanded && !isVisited && (
+                  <div className="px-4 pb-4 pt-0 space-y-2 animate-in slide-in-from-top-1 duration-200">
+                    <div className="flex items-center gap-2 bg-gray-50 p-3 rounded-2xl">
+                      <i className="fa-solid fa-calendar text-blue-400 text-xs"></i>
+                      <span className="text-[10px] text-gray-600 font-semibold">Ultimo pedido: {lastSale ? `${lastSale.data.toLocaleDateString()} — R$ ${lastSale.valorTotal.toFixed(2)}` : 'Nenhum registro'}</span>
+                    </div>
+                    <div className="flex gap-2">
+                      {c.telefone && (
+                        <button onClick={() => { const phone = c.telefone.replace(/\D/g, ''); window.open(`https://wa.me/55${phone}`, '_blank'); }} className="flex-1 bg-green-50 text-green-600 py-2.5 rounded-xl flex items-center justify-center gap-2 text-[10px] font-black uppercase active:scale-95">
+                          <i className="fa-brands fa-whatsapp text-sm"></i> WhatsApp
+                        </button>
+                      )}
+                      <button onClick={() => { if (c.localizacao?.lat && c.localizacao?.lng) { window.open(`https://www.google.com/maps/dir/?api=1&destination=${c.localizacao.lat},${c.localizacao.lng}&travelmode=driving`, '_blank'); } else { window.open(`https://www.google.com/maps/search/${encodeURIComponent((c.endereco || '') + ', ' + (c.bairro || ''))}`, '_blank'); } }} className="flex-1 bg-blue-50 text-blue-600 py-2.5 rounded-xl flex items-center justify-center gap-2 text-[10px] font-black uppercase active:scale-95">
+                        <i className="fa-solid fa-diamond-turn-right text-xs"></i> Navegar
+                      </button>
+                    </div>
+                  </div>
                 )}
               </div>
             );
@@ -1111,6 +1126,27 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
            </div>
 
            <div className="space-y-2 pt-4">
+             <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">Historico de Repasses</h3>
+             <div className="bg-white rounded-3xl border border-gray-100 shadow-sm divide-y divide-gray-50 overflow-hidden">
+                {(payoutLogs || []).length === 0 && (
+                  <div className="text-center py-8 opacity-30 text-[9px] uppercase font-bold tracking-widest">Nenhum repasse registrado.</div>
+                )}
+                {(payoutLogs || []).map(p => (
+                  <div key={p.id} className="p-4 flex justify-between items-center">
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 bg-emerald-50 rounded-xl flex items-center justify-center"><i className="fa-solid fa-circle-check text-emerald-500 text-sm"></i></div>
+                      <div>
+                        <p className="text-[11px] font-black uppercase text-gray-700">{p.tipo === 'TOTAL' ? 'Pagamento Integral' : 'Repasse Parcial'}</p>
+                        <p className="text-[9px] text-gray-400 font-semibold mt-0.5">{new Date(p.dataPagamento).toLocaleDateString()} {new Date(p.dataPagamento).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</p>
+                      </div>
+                    </div>
+                    <p className="text-sm font-black text-emerald-600">R$ {p.valorPago.toFixed(2)}</p>
+                  </div>
+                ))}
+             </div>
+           </div>
+
+           <div className="space-y-2 pt-4">
              <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">Notificações</h3>
              <div className="bg-white rounded-3xl border border-gray-100 shadow-sm divide-y divide-gray-50 overflow-hidden">
                 {messages.filter(m => m.vendedorId === user.id).sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime()).map(m => (
@@ -1358,7 +1394,8 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
           <div className="bg-white w-full max-md rounded-t-[2rem] sm:rounded-[2rem] shadow-2xl p-8 animate-in slide-in-from-bottom duration-300 max-h-[90vh] overflow-y-auto">
              <div className="flex justify-between items-center mb-6"><h3 className="font-black text-gray-800 uppercase text-sm tracking-tight">{editingClient === 'NEW' ? 'Novo Cliente' : 'Editar Cliente'}</h3></div>
              <div className="space-y-4 pb-6">
-                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Nome Fantasia</label><input value={cForm.nomeFantasia || ''} onChange={e => setCForm({...cForm, nomeFantasia: e.target.value})} placeholder="Nome Fantasia" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100 uppercase" /></div>
+                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Nome Fantasia (Estabelecimento)</label><input value={cForm.nomeFantasia || ''} onChange={e => setCForm({...cForm, nomeFantasia: e.target.value})} placeholder="Ex: Doce da Maria" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100 uppercase" /></div>
+               <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Nome do Cliente</label><input value={cForm.nome || ''} onChange={e => setCForm({...cForm, nome: e.target.value})} placeholder="Nome real para chamar o cliente" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100" /></div>
                 <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Telefone / WhatsApp</label><input value={cForm.telefone || ''} onChange={e => setCForm({...cForm, telefone: e.target.value})} placeholder="Telefone" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100" /></div>
                 <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Endereço</label><input value={cForm.endereco || ''} onChange={e => setCForm({...cForm, endereco: e.target.value})} placeholder="Endereço" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100 uppercase" /></div>
                 <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Bairro</label><input value={cForm.bairro || ''} onChange={e => setCForm({...cForm, bairro: e.target.value})} placeholder="Bairro" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100 uppercase" /></div>

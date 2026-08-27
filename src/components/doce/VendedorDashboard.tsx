@@ -7,7 +7,9 @@ import { locationService } from '@/services/locationService';
 import { DIAS_SEMANA } from '@/lib/constants';
 import PDV from '@/components/doce/PDV';
 import Cupom from '@/components/doce/Cupom';
-import RelatorioFiscal from '@/components/doce/RelatorioFiscal';
+import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
+
+
 import ClientHistory from '@/components/doce/ClientHistory';
 import { DailyRouteState, loadLocalState, saveLocalState } from '@/utils/persistence';
 
@@ -88,7 +90,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const [activeTab, setActiveTab] = useState<TabType>(() => loadLocalState('v_activeTab', 'HOME'));
   const [selectedClient, setSelectedClient] = useState<Client | null>(() => loadLocalState('v_selectedClient', null));
   const [viewingSale, setViewingSale] = useState<Sale | null>(() => loadLocalState('v_viewingSale', null));
-  const [showFiscalization, setShowFiscalization] = useState(() => loadLocalState('v_showFiscalization', false));
+
   const [viewingClientHistory, setViewingClientHistory] = useState<Client | null>(null);
   const [filterOverdueOnly, setFilterOverdueOnly] = useState(false);
   const [creditTypeFilter, setCreditTypeFilter] = useState<'TODOS' | 'COMUM' | 'CHEQUE' | 'BOLETO'>('TODOS');
@@ -120,7 +122,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   useEffect(() => { saveLocalState('v_activeTab', activeTab); }, [activeTab]);
   useEffect(() => { saveLocalState('v_selectedClient', selectedClient); }, [selectedClient]);
   useEffect(() => { saveLocalState('v_viewingSale', viewingSale); }, [viewingSale]);
-  useEffect(() => { saveLocalState('v_showFiscalization', showFiscalization); }, [showFiscalization]);
+
   useEffect(() => { saveLocalState(`v_dismissed_risk_${user.id}`, dismissedClientRiskIds); }, [dismissedClientRiskIds, user.id]);
 
   // GPS periódico: envia localização a cada 3 minutos para o admin poder consultar
@@ -665,10 +667,56 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     setActiveTab('CREDIT');
   };
 
+  const handlePrintCarga = async () => {
+    const confirmed = window.confirm('Deseja imprimir sua carga? Toque em OK para conectar a impressora.');
+    if (!confirmed) return;
+
+    const W = 32;
+    const pR = (s: string, n: number) => s.substring(0, n).padEnd(n);
+    const pL = (s: string, n: number) => s.substring(0, n).padStart(n);
+    const ctr = (s: string, n: number) => { const x = s.substring(0, n); const sp = Math.max(0, Math.floor((n - x.length) / 2)); return ' '.repeat(sp) + x; };
+
+    let t = '';
+    t += '*'.repeat(W) + '\n';
+    t += ctr('CARGA DO VENDEDOR', W) + '\n';
+    t += '*'.repeat(W) + '\n';
+    t += `Vendedor: ${user.nome}\n`;
+    t += `Data: ${new Date().toLocaleDateString()}\n`;
+    t += '-'.repeat(W) + '\n';
+    const dW = 18, qW = 6, vW = 8;
+    t += pR('PRODUTO', dW) + pL('QTD', qW) + pL('VALOR', vW) + '\n';
+    t += '-'.repeat(W) + '\n';
+
+    (orderedCargaProducts || []).forEach(({ product: p, carga: c }) => {
+      const nome = (p?.nome ?? '???').substring(0, dW);
+      const qty = String(c.quantidade);
+      const val = (c.quantidade * (p?.precoVenda ?? 0)).toFixed(2);
+      t += pR(nome, dW) + pL(qty, qW) + pL(val, vW) + '\n';
+    });
+
+    t += '-'.repeat(W) + '\n';
+    t += pR('TOTAL:', W - 10) + pL('R$ ' + valorTotalCarga.toFixed(2), 10) + '\n';
+    t += pR('UNIDADES:', W - 6) + pL(String(totalUnidadesCarga), 6) + '\n';
+    t += '='.repeat(W) + '\n';
+    t += '\n\n\n\n\n\n';
+
+    try {
+      await bluetoothPrinter.print(t, '56MM');
+    } catch (err: any) {
+      const msg = err?.message || 'Erro desconhecido';
+      if (msg.includes('BLUETOOTH_NAO_SUPORTADO')) {
+        alert('Impressora Bluetooth nao disponivel neste dispositivo.');
+      } else {
+        alert('Erro ao imprimir: ' + msg);
+      }
+    }
+  };
+
   if (selectedClient) {
     const pdvClient = clients.find(c => c.id === selectedClient.id);
     if (!pdvClient) { setSelectedClient(null); return null; }
-    return (
+
+  return (
       <PDV
         client={pdvClient} products={products} minhaCarga={minhaCarga} vendedorId={user.id} onCancel={() => setSelectedClient(null)}
         onFinish={() => { 
@@ -699,15 +747,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     return ( <Cupom sale={viewingSale} client={cupomClient} products={products} onClose={() => setViewingSale(null)} onDeleteSale={deleteSale} allowDelete={canDeleteSale} showToast={showToast} /> );
   }
 
-  if (showFiscalization) {
-    return (
-      <RelatorioFiscal 
-        user={user} carga={minhaCarga} products={products} 
-        companyName={companyName} companyCnpj={companyCnpj} 
-        onClose={() => setShowFiscalization(false)} 
-      />
-    );
-  }
 
   return (
     <div className="space-y-4 pb-20">
@@ -804,9 +843,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 <div className={`p-4 flex items-center justify-between`}>
                   <div className="flex-1 min-w-0 cursor-pointer pr-3" onClick={() => setViewingClientHistory(c)}>
                     <p className="font-bold text-gray-800 leading-tight uppercase">{c.nomeFantasia ?? 'Cliente'}</p>
-                    <p className="text-[10px] text-gray-400 uppercase font-semibold mt-1">
-                      <i className="fa-solid fa-location-dot mr-1"></i> {(c.bairro || 'S/B')}
-                    </p>
+
                   </div>
                   {!isVisited ? (
                     <div className="flex items-center gap-2 flex-shrink-0">
@@ -992,11 +1029,11 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 </table>
               </div>
 
-              <button 
-                onClick={() => setShowFiscalization(true)}
+                            <button 
+                onClick={handlePrintCarga}
                 className="w-full bg-slate-800 text-white font-black py-5 rounded-[2rem] shadow-xl active:scale-95 transition-all uppercase text-[11px] tracking-[0.2em] flex items-center justify-center gap-3"
               >
-                <i className="fa-solid fa-shield-halved text-lg"></i> Modo Fiscalização
+                <i className="fa-solid fa-print text-lg"></i> Imprimir Carga
               </button>
             </>
           )}

@@ -152,10 +152,28 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
     }
   }, [printWidth, sale, showToast, generateText]);
 
-  const handleCopy = () => {
+  const handleCopy = async () => {
     const rawText = generateText(printWidth);
-    navigator.clipboard.writeText(rawText);
-    if (showToast) showToast("Copiado!", 'success');
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(rawText);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = rawText; ta.style.position = 'fixed'; ta.style.left = '-9999px'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.focus(); ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      if (showToast) showToast('Copiado!', 'success');
+    } catch (e) {
+      if (showToast) showToast('Falha ao copiar.', 'error');
+    }
+  };
+
+  const handleWhatsApp = () => {
+    const rawText = generateText(printWidth);
+    const phone = (client.telefone || '').replace(/\D/g, '');
+    window.open(`https://wa.me/55${phone}?text=${encodeURIComponent('*CUPOM DOCE MANIA*\n' + rawText)}`, '_blank');
   };
 
   const handleDelete = () => {
@@ -274,6 +292,10 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
               <i className="fa-solid fa-copy"></i> Copiar
             </button>
           </div>
+
+          <button onClick={handleWhatsApp} className="w-full bg-green-500 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 active:scale-95 text-[10px] uppercase shadow-lg">
+            <i className="fa-brands fa-whatsapp text-lg"></i> Enviar pelo WhatsApp
+          </button>
 
           {allowDelete && onDeleteSale && (
             <button onClick={handleDelete} className="w-full bg-white text-rose-600 border border-rose-100 font-black py-4 rounded-2xl active:scale-95 text-[10px] uppercase flex items-center justify-center gap-2 hover:bg-rose-50 transition-colors">

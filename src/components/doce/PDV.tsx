@@ -575,7 +575,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
 
   return (
     <>
-    <div className="fixed inset-0 bg-gray-50 z-[60] flex flex-col">
+    <div className="fixed inset-0 bg-gray-50 z-[60] flex flex-col overflow-hidden">
       <header className="bg-white border-b border-gray-100 p-3 flex flex-col shadow-sm">
         <div className="flex justify-between items-center mb-3">
           <button onClick={onCancel} className="w-9 h-9 bg-gray-50 text-gray-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-arrow-left"></i></button>
@@ -588,14 +588,14 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           <button onClick={() => setConfirmModal({ title: 'Zerar Quantidades', message: 'Deseja realmente zerar todas as quantidades do carrinho?', icon: 'fa-solid fa-trash-can', iconColor: 'text-rose-500', onConfirm: () => { setConfirmModal(null); setCart({}); } })} className="w-9 h-9 bg-rose-50 text-rose-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-trash-can text-sm"></i></button>
         </div>
 
-        <div className="grid grid-cols-4 gap-1 px-0.5">
+        <div className="overflow-x-auto flex gap-1 px-0.5 -mx-1" style={{ scrollbarWidth: 'none' }}>
           {categories.map(cat => {
             const isVisited = visitedCategoryIds.includes(cat.id);
             return (
               <button 
                 key={cat.id}
                 onClick={() => setActiveCategoryId(cat.id)}
-                className={`py-1.5 px-1 rounded-lg text-[8px] font-black uppercase transition-all truncate border relative ${activeCategoryId === cat.id ? 'bg-blue-600 text-white border-blue-600 shadow-sm' : 'bg-gray-50 text-gray-400 border-gray-100'}`}
+                className={`py-1.5 px-2 rounded-lg text-[8px] font-black uppercase transition-all whitespace-nowrap border relative flex-shrink-0 ${activeCategoryId === cat.id ? 'bg-blue-600 text-white border-blue-600 shadow-sm' : 'bg-gray-50 text-gray-400 border-gray-100'}`}
               >
                 {formatCategoryName(cat.name)}
                 {isVisited && activeCategoryId !== cat.id && (
@@ -614,7 +614,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         </button>
       )}
 
-      <div className="flex-1 overflow-y-auto p-2 space-y-1.5 pb-44">
+      <div className="flex-1 overflow-y-auto p-2 space-y-1.5" style={{ paddingBottom: '280px' }}>
         {filteredProducts.map(p => { 
           const item = cart[p.id];
           const cargaOriginal = isPrePedido ? (p.estoquePrincipal || 0) : (minhaCarga.find(c => c.produtoId === p.id)?.quantidade || 0);

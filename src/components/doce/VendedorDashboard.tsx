@@ -808,8 +808,16 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 
                 {/* LADO DIREITO: BOTÕES ALINHADOS À DIREITA */}
                 {!isVisited ? (
-                  <div className="flex items-center gap-2 ml-4 flex-shrink-0">
-                    <button onClick={() => setConfirmSkipId(c.id)} className="w-10 h-10 bg-gray-50 text-gray-400 rounded-2xl flex items-center justify-center flex-shrink-0"><i className="fa-solid fa-forward"></i></button>
+                  <div className="flex items-center gap-1.5 ml-2 flex-shrink-0">
+                    {c.telefone && (
+                      <button onClick={(e) => { e.stopPropagation(); const phone = c.telefone.replace(/\D/g, ''); window.open(`https://wa.me/55${phone}`, '_blank'); }} className="w-10 h-10 bg-green-50 text-green-600 rounded-2xl flex items-center justify-center flex-shrink-0" title="WhatsApp">
+                        <i className="fa-brands fa-whatsapp text-lg"></i>
+                      </button>
+                    )}
+                    <button onClick={(e) => { e.stopPropagation(); if (c.localizacao?.lat && c.localizacao?.lng) { window.open(`https://www.google.com/maps/dir/?api=1&destination=${c.localizacao.lat},${c.localizacao.lng}&travelmode=driving`, '_blank'); } else { window.open(`https://www.google.com/maps/search/${encodeURIComponent((c.endereco || '') + ', ' + (c.bairro || ''))}`, '_blank'); } }} className="w-10 h-10 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center flex-shrink-0" title="Navegar GPS">
+                      <i className="fa-solid fa-diamond-turn-right"></i>
+                    </button>
+                    <button onClick={() => setConfirmSkipId(c.id)} className="w-10 h-10 bg-gray-50 text-gray-400 rounded-2xl flex items-center justify-center flex-shrink-0" title="Pular"><i className="fa-solid fa-forward"></i></button>
                     <button onClick={() => handleAtenderClient(c)} className="bg-blue-600 text-white px-4 py-2 rounded-2xl font-black text-xs uppercase shadow-lg flex-shrink-0 whitespace-nowrap">Atender</button>
                   </div>
                 ) : (

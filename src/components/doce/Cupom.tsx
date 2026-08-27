@@ -106,7 +106,7 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
   };
 
   const handlePrint = useCallback(async () => {
-    if (!showToast) return;
+    // showToast é opcional - não bloquear impressão se não fornecido
 
     // --- NATIVE CONFIRMATION ---
     const widthLabel = printWidth === '80MM' ? '80mm (Largo)' : '56mm (Estreito)';
@@ -122,12 +122,12 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
       // 1. Checks Bluetooth availability
       // 2. If no printer connected, asks to scan (native picker)
       // 3. Connects, confirms, and prints
-      showToast('Preparando impressao...');
+      if (showToast) showToast('Preparando impressao...');
       const success = await bluetoothPrinter.print(rawText, printWidth);
 
       if (success) {
         window.alert('Cupom impresso com sucesso!');
-        showToast('Impresso com sucesso!', 'success');
+        if (showToast) showToast('Impresso com sucesso!', 'success');
       }
     } catch (error: any) {
       const msg = error?.message || 'Erro desconhecido';
@@ -148,7 +148,7 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
       } else {
         window.alert(`Falha na impressao: ${msg}`);
       }
-      showToast('Erro na impressao.', 'error');
+      if (showToast) showToast('Erro na impressao.', 'error');
     }
   }, [printWidth, sale, showToast, generateText]);
 
@@ -293,8 +293,8 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
             </button>
           </div>
 
-          <button onClick={handleWhatsApp} className="w-full bg-green-500 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 active:scale-95 text-[10px] uppercase shadow-lg">
-            <i className="fa-brands fa-whatsapp text-lg"></i> Enviar pelo WhatsApp
+          <button onClick={() => { if (window.confirm('Deseja enviar este cupom pelo WhatsApp para o cliente?')) { handleWhatsApp(); } }} className="w-full bg-green-50 text-green-600 border border-green-100 font-black py-2.5 rounded-2xl flex items-center justify-center gap-2 active:scale-95 text-[9px] uppercase transition-colors hover:bg-green-100">
+            <i className="fa-brands fa-whatsapp text-sm"></i> Enviar pelo WhatsApp
           </button>
 
           {allowDelete && onDeleteSale && (

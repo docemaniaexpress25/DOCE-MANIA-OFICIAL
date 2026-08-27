@@ -334,6 +334,19 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     // TRAVA ABSOLUTA - não passa daqui se houver violação
     if (!validateAndBlockIfNeeded()) return;
 
+    // VALIDAÇÃO: DINHEIRO exige valor recebido
+    if (metodo === 'DINHEIRO') {
+      const rec = parseFloat(valorRecebido) || 0;
+      if (rec <= 0) {
+        setAppModal({ title: 'Valor Obrigatorio', message: 'Digite o valor recebido pelo cliente antes de concluir a venda.', icon: 'fa-solid fa-money-bill-wave', iconColor: 'text-amber-500', type: 'error' });
+        return;
+      }
+      if (rec < total) {
+        setAppModal({ title: 'Valor Insuficiente', message: `O valor recebido (R$ ${rec.toFixed(2)}) e menor que o total da venda (R$ ${total.toFixed(2)}).`, icon: 'fa-solid fa-triangle-exclamation', iconColor: 'text-rose-500', type: 'error' });
+        return;
+      }
+    }
+
     isFinalizingRef.current = true;
 
     const itens = getOrderedItems();
@@ -595,7 +608,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               <button 
                 key={cat.id}
                 onClick={() => setActiveCategoryId(cat.id)}
-                className={`py-1.5 px-2 rounded-lg text-[8px] font-black uppercase transition-all whitespace-nowrap border relative flex-shrink-0 ${activeCategoryId === cat.id ? 'bg-blue-600 text-white border-blue-600 shadow-sm' : 'bg-gray-50 text-gray-400 border-gray-100'}`}
+                className={`py-2.5 px-3 rounded-xl text-[10px] font-black uppercase transition-all whitespace-nowrap border relative flex-shrink-0 ${activeCategoryId === cat.id ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-gray-50 text-gray-500 border-gray-200'}`}
               >
                 {formatCategoryName(cat.name)}
                 {isVisited && activeCategoryId !== cat.id && (

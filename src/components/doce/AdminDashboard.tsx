@@ -1366,10 +1366,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       {/* ============================================================ */}
       {showLocationModal && (() => {
         const loc = locationMap[showLocationModal.userId];
-        if (!loc) return null;
-        const timeAgo = Math.floor((Date.now() - new Date(loc.updated_at).getTime()) / 60000);
-        const timeStr = timeAgo < 1 ? 'Agora mesmo' : timeAgo < 60 ? `${timeAgo} min atrás` : `${Math.floor(timeAgo / 60)}h ${timeAgo % 60}min atrás`;
-        const isStale = timeAgo > 10;
+        // loc pode ser null - tratado no JSX abaixo
+        const timeAgo = loc ? Math.floor((Date.now() - new Date(loc.updated_at).getTime()) / 60000) : null;
+        const timeStr = timeAgo === null ? 'N/A' : timeAgo < 1 ? 'Agora mesmo' : timeAgo < 60 ? `${timeAgo} min atrás` : `${Math.floor(timeAgo / 60)}h ${timeAgo % 60}min atrás`;
+        const isStale = timeAgo !== null && timeAgo > 10;
         return (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[500] flex items-end sm:items-center justify-center" onClick={() => setShowLocationModal(null)}>
             <div className="bg-white w-full sm:max-w-sm rounded-t-[2rem] sm:rounded-[2rem] overflow-hidden shadow-2xl animate-in slide-in-from-bottom duration-300" onClick={e => e.stopPropagation()}>
@@ -1380,6 +1380,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                 </div>
                 <button onClick={() => setShowLocationModal(null)} className="text-white/70 active:scale-90"><i className="fa-solid fa-xmark text-lg"></i></button>
               </div>
+              {loc ? (<>
               <div className="relative">
                 <iframe width="100%" height="220" style={{ border: 0 }} loading="lazy" src={`https://www.google.com/maps/embed/v1/place?key=AIzaSyBFw0Qbyq9zTFTd-tUY6dZWTgaQzuU17R8&q=${loc.lat},${loc.lng}&zoom=16`} className="w-full" />
                 {isStale && <div className="absolute top-2 right-2 bg-orange-500 text-white text-[8px] font-black px-2 py-1 rounded-lg uppercase shadow">Desatualizada</div>}
@@ -1397,6 +1398,21 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                   <i className="fa-solid fa-diamond-turn-right"></i> Abrir no Google Maps
                 </a>
               </div>
+              </>) : (
+                <div className="p-8 text-center space-y-4">
+                  <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto">
+                    <i className="fa-solid fa-location-crosshairs text-gray-300 text-2xl"></i>
+                  </div>
+                  <div>
+                    <p className="font-black text-gray-800 text-sm uppercase">Sem Localizacao</p>
+                    <p className="text-[10px] text-gray-400 font-semibold mt-2">O vendedor ainda nao enviou sua localizacao. Verifique se o app esta aberto e o GPS esta ativo.</p>
+                  </div>
+                  <button onClick={() => handleViewLocation(showLocationModal.userId, showLocationModal.userName)} disabled={locationLoading === showLocationModal.userId} className="bg-blue-50 text-blue-600 font-black py-3 px-6 rounded-2xl uppercase text-[10px] tracking-widest inline-flex items-center gap-2 active:scale-95">
+                    <i className={`fa-solid ${locationLoading === showLocationModal.userId ? "fa-spinner fa-spin" : "fa-rotate"}`}></i>
+                    {locationLoading === showLocationModal.userId ? "Buscando..." : "Tentar Novamente"}
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         );

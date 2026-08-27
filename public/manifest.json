@@ -1,11 +1,12 @@
 {
   "name": "DOCE MANIA",
   "short_name": "DoceMania",
-  "description": "Sistema de gestão de vendas externas e pronta-entrega.",
+  "description": "Sistema de gestao de vendas externas e pronta-entrega.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#1e3a8a",
   "theme_color": "#1e3a8a",
+  "orientation": "portrait",
   "icons": [
     {
       "src": "/icons/icon-192x192.png",

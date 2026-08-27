@@ -446,31 +446,30 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   }
 
   return (
-    <div className="fixed inset-0 bg-gray-50 z-[60] flex flex-col">
-      <header className="bg-white border-b border-gray-100 p-3 flex flex-col shadow-sm">
-        <div className="flex justify-between items-center mb-3">
-          <button onClick={onCancel} className="w-9 h-9 bg-gray-50 text-gray-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-arrow-left"></i></button>
-          <div className="text-center px-4 truncate">
-            <p className="text-[9px] text-gray-400 uppercase font-black tracking-tighter">
-              {isPrePedido ? 'Pré-Pedido Rascunho' : 'Atendimento'}
+    <div className="fixed inset-0 bg-gray-50 z-[60] flex flex-col overflow-hidden">
+      <header className="bg-white border-b border-gray-100 px-3 pt-2 pb-2 flex flex-col shadow-sm flex-shrink-0" style={{ paddingTop: 'max(8px, env(safe-area-inset-top))' }}>
+        <div className="flex justify-between items-center mb-2">
+          <button onClick={onCancel} className="w-9 h-9 bg-gray-50 text-gray-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform flex-shrink-0"><i className="fa-solid fa-arrow-left"></i></button>
+          <div className="text-center px-2 truncate min-w-0">
+            <p className="text-[8px] text-gray-400 uppercase font-black tracking-tighter leading-tight">
+              {isPrePedido ? 'Pre-Pedido Rascunho' : 'Atendimento'}
             </p>
-            <h2 className="font-black text-xs text-gray-800 uppercase truncate">{client.nomeFantasia}</h2> 
+            <h2 className="font-black text-[11px] text-gray-800 uppercase truncate leading-tight mt-0.5">{client.nomeFantasia}</h2> 
           </div>
-          <button onClick={() => setCart({})} className="w-9 h-9 bg-rose-50 text-rose-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-trash-can text-sm"></i></button>
+          <button onClick={() => setCart({})} className="w-9 h-9 bg-rose-50 text-rose-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform flex-shrink-0"><i className="fa-solid fa-trash-can text-sm"></i></button>
         </div>
-
-        <div className="grid grid-cols-4 gap-1 px-0.5">
+        <div className="overflow-x-auto flex gap-1 px-0.5 -mx-1" style={{ scrollbarWidth: 'none' }}>
           {categories.map(cat => {
             const isVisited = visitedCategoryIds.includes(cat.id);
             return (
               <button 
                 key={cat.id}
                 onClick={() => setActiveCategoryId(cat.id)}
-                className={`py-1.5 px-1 rounded-lg text-[8px] font-black uppercase transition-all truncate border relative ${activeCategoryId === cat.id ? 'bg-blue-600 text-white border-blue-600 shadow-sm' : 'bg-gray-50 text-gray-400 border-gray-100'}`}
+                className={`py-1.5 px-2 rounded-lg text-[8px] font-black uppercase transition-all whitespace-nowrap border relative flex-shrink-0 ${activeCategoryId === cat.id ? 'bg-blue-600 text-white border-blue-600 shadow-sm' : 'bg-gray-50 text-gray-400 border-gray-100'}`}
               >
                 {formatCategoryName(cat.name)}
                 {isVisited && activeCategoryId !== cat.id && (
-                  <div className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-emerald-500 rounded-full border-2 border-white shadow-sm"></div>
+                  <div className="absolute -top-1 -right-1 w-2 h-2 bg-emerald-500 rounded-full border border-white shadow-sm"></div>
                 )}
               </button>
             );
@@ -485,7 +484,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         </button>
       )}
 
-      <div className="flex-1 overflow-y-auto p-2 space-y-1.5 pb-44">
+      <div className="flex-1 overflow-y-auto p-2 space-y-1.5" style={{ paddingBottom: '280px' }}>
         {filteredProducts.map(p => { 
           const item = cart[p.id];
           const cargaOriginal = isPrePedido ? (p.estoquePrincipal || 0) : (minhaCarga.find(c => c.produtoId === p.id)?.quantidade || 0);
@@ -561,7 +560,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         )}
       </div>
 
-      <footer className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 p-4 pb-8 space-y-3 shadow-[0_-10px_20px_rgba(0,0,0,0.05)] max-w-lg mx-auto z-[70]">
+      <footer className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 p-3 pb-4 space-y-2 shadow-[0_-10px_20px_rgba(0,0,0,0.05)] max-w-lg mx-auto z-[70]" style={{ paddingBottom: 'max(16px, env(safe-area-inset-bottom))' }}>
         {!allCategoriesVisited && !isPrePedido && (
           <div className="bg-amber-100 text-amber-700 p-2 rounded-xl text-center font-black text-[8px] uppercase tracking-widest animate-in fade-in duration-300">
             <i className="fa-solid fa-eye mr-1"></i> Visualize todas as abas para liberar o cupom ({visitedCategoryIds.length}/{categories.length})

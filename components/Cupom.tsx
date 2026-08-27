@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { Sale, Client, Product } from '../types';
 import { printerService } from '../services/printerService';
+import { nativeBridge } from '../utils/nativeBridge';
 
 interface CupomProps {
   sale: Sale;
@@ -91,20 +92,24 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
   const handlePrint = async () => {
     if (!showToast) return;
     const rawText = generateText(printWidth);
-    showToast(`Imprimindo...`);
-
+    showToast('Buscando impressora...');
     try {
       const success = await printerService.printNative(rawText);
-      if (success) showToast("Impresso!", 'success');
-    } catch (error) {
-      showToast("Erro de impressão.", 'error');
-    }
+      if (success) { showToast('Impresso com sucesso!', 'success'); nativeBridge.hapticImpact('medium'); }
+      else showToast('Impressora nao encontrada. Conecte via Bluetooth.', 'error');
+    } catch (error) { showToast('Erro de impressao. Tente novamente.', 'error'); }
   };
 
-  const handleCopy = () => {
+  const handleCopy = async () => {
     const rawText = generateText(printWidth);
-    navigator.clipboard.writeText(rawText);
-    if (showToast) showToast("Copiado!", 'success');
+    const ok = await nativeBridge.copyToClipboard(rawText);
+    if (showToast) { if (ok) { showToast('Copiado!', 'success'); nativeBridge.hapticImpact('light'); } else showToast('Falha ao copiar.', 'error'); }
+  };
+
+  const handleWhatsApp = () => {
+    const rawText = generateText(printWidth);
+    nativeBridge.openWhatsApp(client.telefone || '', `*CUPOM DOCE MANIA*\n${rawText}`);
+    nativeBridge.hapticImpact('light');
   };
 
   const handleDelete = () => {
@@ -145,6 +150,10 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
               <i className="fa-solid fa-copy"></i> Copiar
             </button>
           </div>
+
+          <button onClick={handleWhatsApp} className="w-full bg-green-500 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 active:scale-95 text-[10px] uppercase shadow-lg">
+            <i className="fa-brands fa-whatsapp text-lg"></i> Enviar pelo WhatsApp
+          </button>
 
           {allowDelete && onDeleteSale && (
             <button onClick={handleDelete} className="w-full bg-white text-rose-600 border border-rose-100 font-black py-4 rounded-2xl active:scale-95 text-[10px] uppercase flex items-center justify-center gap-2 hover:bg-rose-50 transition-colors">

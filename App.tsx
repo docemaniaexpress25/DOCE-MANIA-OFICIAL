@@ -16,6 +16,7 @@ import { expenseService } from './services/expenseService';
 import { categoryService } from './services/categoryService';
 import { supabase } from './supabaseClient';
 import { loadLocalState, saveLocalState, DailyRouteState } from './utils/persistence';
+import { nativeBridge } from './utils/nativeBridge';
 
 const getTodayDateString = () => {
   const now = new Date();
@@ -40,6 +41,7 @@ const App: React.FC = () => {
   const [companyCnpj, setCompanyCnpj] = useState("00.000.000/0001-00");
 
   const [adminNotification, setAdminNotification] = useState<string | null>(null);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
   
   const [users, setUsers] = useState<User[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -179,6 +181,16 @@ const App: React.FC = () => {
       window.removeEventListener('focus', checkDate);
     };
   }, [dailyRouteState.date, fetchCoreData]);
+
+  // Status bar e conectividade
+  useEffect(() => {
+    nativeBridge.setStatusBarColor('#1e3a8a');
+    const goOff = () => { setIsOnline(false); nativeBridge.vibrate([200, 100, 200]); };
+    const goOn = () => { setIsOnline(true); nativeBridge.hapticImpact('light'); fetchCoreData(); };
+    window.addEventListener('online', goOn);
+    window.addEventListener('offline', goOff);
+    return () => { window.removeEventListener('online', goOn); window.removeEventListener('offline', goOff); };
+  }, []);
 
   useEffect(() => {
     let timeoutId: any;
@@ -489,6 +501,12 @@ const App: React.FC = () => {
       </header>
       
       <main className="container mx-auto p-4 max-w-lg">
+        {!isOnline && (
+          <div className="fixed top-20 left-0 right-0 z-[100] bg-rose-500 text-white p-2 text-center font-black text-[10px] uppercase tracking-widest shadow-lg">
+            <i className="fa-solid fa-wifi mr-1"></i> Sem conexao com a internet
+          </div>
+        )}
+
         {currentUser.role === 'ADMIN' ? (
           <AdminDashboard 
             {...{ products, users, cargas, clients, sales, commissions, payoutLogs, expenses, logo, margemGlobalAtiva, margemGlobalValor, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, adminNotification, companyName, companyCnpj, orderedProductIds: productOrder, categories, subcategories, clientOrder }}

@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Product, Client, Carga, Sale, SaleItem, PaymentMethod, Category, Subcategory } from '@/lib/types';
 import Cupom from '@/components/doce/Cupom';
+import ConfirmModal from '@/components/doce/ConfirmModal';
 import { loadLocalState, saveLocalState } from '@/utils/persistence';
 import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
 import { wakeLockManager } from '@/utils/wakeLock';
@@ -144,6 +145,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     d.setDate(d.getDate() + 7);
     return d.toISOString().split('T')[0];
   });
+  const [prazoDays, setPrazoDays] = useState<number>(7);
   const [valorRecebido, setValorRecebido] = useState<string>('');
   const [selectedPixSlot, setSelectedPixSlot] = useState<1 | 2>(1);
   const [isTrocaActive, setIsTrocaActive] = useState(false);
@@ -298,7 +300,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     return Math.max(0, rec - total);
   }, [valorRecebido, total]);
 
-  const setPrazoDays = (days: number) => {
+  const handlePrazoDays = (days: number) => {
+    setPrazoDays(days);
     const d = new Date();
     d.setDate(d.getDate() + days);
     setPrazoData(d.toISOString().split('T')[0]);
@@ -821,7 +824,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
 
                    <div className="grid grid-cols-4 gap-2">
                      {[7, 14, 21, 30].map(days => (
-                       <button key={days} onClick={() => setPrazoDays(days)} className="py-3 bg-gray-50 border border-gray-100 rounded-xl text-[10px] font-black text-gray-600 hover:bg-blue-50 hover:text-blue-600 transition-colors">{days}D</button>
+                       <button key={days} onClick={() => handlePrazoDays(days)} className={`py-3 rounded-xl text-[10px] font-black transition-all shadow-sm ${prazoDays === days ? 'bg-blue-600 text-white border-blue-600' : 'bg-gray-50 border border-gray-100 text-gray-600'}`}>{days}D</button>
                      ))}
                    </div>
                    <div className="space-y-1">
@@ -911,15 +914,12 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                 onClick={() => { const s = saleResultModal!.sale; setSaleResultModal(null); openComprovanteFlow(s); }}
                 className="w-full bg-amber-500 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest"
               >
-                <i className="fa-solid fa-camera mr-2"></i>Foto do Comprovante
+                <i className="fa-solid fa-camera mr-2"></i>Tirar Foto do Comprovante
               </button>
             )}
-            <button
-              onClick={() => { const s = saleResultModal.sale; setSaleResultModal(null); onFinish(s); }}
-              className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest"
-            >
-              <i className="fa-solid fa-check mr-2"></i>{saleResultModal.isPrazo && !saleResultModal.sale.comprovanteFoto ? 'Depois' : 'OK'}
-            </button>
+            {!(saleResultModal.isPrazo && !saleResultModal.sale.comprovanteFoto) && (
+              <button onClick={() => { const s = saleResultModal.sale; setSaleResultModal(null); onFinish(s); }} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest"><i className="fa-solid fa-check mr-2"></i>OK</button>
+            )}
           </div>
         </div>
       </div>

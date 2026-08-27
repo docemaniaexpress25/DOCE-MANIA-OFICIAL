@@ -2,6 +2,7 @@
 // @ts-nocheck
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Product, User, Carga, Sale, Commission, Client, PaymentMethod, CommissionPaymentLog, Expense, Category, Subcategory } from '@/lib/types';
+import ConfirmModal from '@/components/doce/ConfirmModal';
 import { DIAS_SEMANA } from '@/lib/constants';
 import Cupom from '@/components/doce/Cupom';
 import ClientHistory from '@/components/doce/ClientHistory';
@@ -125,6 +126,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [partialAmount, setPartialAmount] = useState<string>('');
   const [periodoRelatorio, setPeriodoRelatorio] = useState<'HOJE' | 'SEMANA' | 'MES' | 'GERAL'>('MES');
 
+  const [confirmAction, setConfirmAction] = useState<{title:string;message:string;icon:string;iconColor?:string;onConfirm:()=>void;type?:string}|null>(null);
   const [confirmDelete, setConfirmDelete] = useState<{ id: string, type: 'PRODUCT' | 'CLIENT' | 'USER' | 'CATEGORY' | 'SUBCATEGORY', name: string } | null>(null);
 
   const [pwUser, setPwUser] = useState<string>('');
@@ -440,11 +442,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
   const handleZeroCarga = () => {
     if (!selectedVendedorId) return;
-    if (window.confirm("Deseja realmente ZERAR toda a carga deste vendedor?")) {
+    setConfirmAction({title: 'Zerar Carga', message: 'Deseja realmente ZERAR toda a carga deste vendedor?', icon: 'fa-solid fa-triangle-exclamation', iconColor: 'text-amber-400', type: 'danger', onConfirm: () => { setConfirmAction(null);
       const zeroed = props.products.reduce((acc, p) => ({ ...acc, [p.id]: 0 }), {});
       setStagingCarga(zeroed);
       showToast("Carga zerada no rascunho. Clique em 'Aplicar Agora' para confirmar.");
-    }
+    }});
   };
 
   const moveProduct = (id: string, dir: 'UP' | 'DOWN') => {
@@ -771,7 +773,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   }, [props.clients, search, routeFilter, props.clientOrder]);
 
   const handleActivateAll = () => {
-    if (window.confirm("Deseja marcar TODOS os produtos inativos como ATIVOS agora?")) props.activateAllProducts?.();
+    setConfirmAction({title: 'Ativar Produtos', message: 'Deseja marcar TODOS os produtos inativos como ATIVOS agora?', icon: 'fa-solid fa-check-double', onConfirm: () => { setConfirmAction(null); props.activateAllProducts?.(); }});
   };
 
   // Helper para renderizar cards de relatório
@@ -1313,6 +1315,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-w-xs rounded-3xl p-8 shadow-2xl text-center"><h3 className="font-black text-gray-800 uppercase text-sm mb-4">Pagar Comissão</h3><p className="text-xs text-gray-400 font-bold uppercase mb-4">{payoutVendedor.nome}</p><div className="space-y-4 text-left"><div className="flex gap-2 mb-4"><button onClick={() => setPayoutType('TOTAL')} className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase ${payoutType === 'TOTAL' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-400'}`}>Total</button><button onClick={() => setPayoutType('PARCIAL')} className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase ${payoutType === 'PARCIAL' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-400'}`}>Parcial</button></div>{payoutType === 'PARCIAL' && (<div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Valor R$</label><input type="number" value={partialAmount} onChange={e => setPartialAmount(e.target.value)} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-center" /></div>)}<button onClick={handleConfirmPayout} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest">Confirmar Pagamento</button><button onClick={() => setPayoutVendedor(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button></div></div></div>
       )}
 
+            {confirmAction && (
+        <ConfirmModal title={confirmAction.title} message={confirmAction.message} icon={confirmAction.icon} iconColor={confirmAction.iconColor} type={(confirmAction.type as any) || 'confirm'} onConfirm={confirmAction.onConfirm} onCancel={() => setConfirmAction(null)} />
+      )}
       {confirmDelete && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-w-xs rounded-3xl p-8 text-center shadow-2xl"><h3 className="font-black text-gray-800 text-lg mb-4">Excluir Item?</h3><p className="text-sm text-gray-500 mb-6 font-medium uppercase">Deseja realmente excluir "{confirmDelete.name}"?</p><div className="flex flex-col gap-2"><button onClick={handleConfirmDelete} className="w-full bg-rose-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest">Sim, Excluir</button><button onClick={() => setConfirmDelete(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button></div></div></div>
       )}

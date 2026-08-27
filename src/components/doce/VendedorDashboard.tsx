@@ -8,6 +8,7 @@ import { DIAS_SEMANA } from '@/lib/constants';
 import PDV from '@/components/doce/PDV';
 import Cupom from '@/components/doce/Cupom';
 import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
+import ConfirmModal from '@/components/doce/ConfirmModal';
 
 
 import ClientHistory from '@/components/doce/ClientHistory';
@@ -149,6 +150,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const [financeFilter, setFinanceFilter] = useState<'DIA' | 'SEMANA' | 'MES' | 'GERAL'>('DIA');
   const [weeklySearch, setWeeklySearch] = useState('');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [confirmAction, setConfirmAction] = useState<{title:string;message:string;icon:string;onConfirm:()=>void;type?:string}|null>(null);
   const [cForm, setCForm] = useState<Partial<Client>>({});
   const [confirmSkipId, setConfirmSkipId] = useState<string | null>(null);
   const [expandedRouteClientId, setExpandedRouteClientId] = useState<string | null>(null);
@@ -668,49 +670,47 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   };
 
   const handlePrintCarga = async () => {
-    const confirmed = window.confirm('Deseja imprimir sua carga? Toque em OK para conectar a impressora.');
-    if (!confirmed) return;
-
-    const W = 32;
-    const pR = (s: string, n: number) => s.substring(0, n).padEnd(n);
-    const pL = (s: string, n: number) => s.substring(0, n).padStart(n);
-    const ctr = (s: string, n: number) => { const x = s.substring(0, n); const sp = Math.max(0, Math.floor((n - x.length) / 2)); return ' '.repeat(sp) + x; };
-
-    let t = '';
-    t += '*'.repeat(W) + '\n';
-    t += ctr('CARGA DO VENDEDOR', W) + '\n';
-    t += '*'.repeat(W) + '\n';
-    t += `Vendedor: ${user.nome}\n`;
-    t += `Data: ${new Date().toLocaleDateString()}\n`;
-    t += '-'.repeat(W) + '\n';
-    const dW = 18, qW = 6, vW = 8;
-    t += pR('PRODUTO', dW) + pL('QTD', qW) + pL('VALOR', vW) + '\n';
-    t += '-'.repeat(W) + '\n';
-
-    (orderedCargaProducts || []).forEach(({ product: p, carga: c }) => {
-      const nome = (p?.nome ?? '???').substring(0, dW);
-      const qty = String(c.quantidade);
-      const val = (c.quantidade * (p?.precoVenda ?? 0)).toFixed(2);
-      t += pR(nome, dW) + pL(qty, qW) + pL(val, vW) + '\n';
-    });
-
-    t += '-'.repeat(W) + '\n';
-    t += pR('TOTAL:', W - 10) + pL('R$ ' + valorTotalCarga.toFixed(2), 10) + '\n';
-    t += pR('UNIDADES:', W - 6) + pL(String(totalUnidadesCarga), 6) + '\n';
-    t += '='.repeat(W) + '\n';
-    t += '\n\n\n\n\n\n';
-
-    try {
-      await bluetoothPrinter.print(t, '56MM');
-    } catch (err: any) {
-      const msg = err?.message || 'Erro desconhecido';
-      if (msg.includes('BLUETOOTH_NAO_SUPORTADO')) {
-        alert('Impressora Bluetooth nao disponivel neste dispositivo.');
-      } else {
-        alert('Erro ao imprimir: ' + msg);
+    setConfirmAction({
+      title: 'Imprimir Carga',
+      message: 'Deseja imprimir sua carga? Conecte a impressora Bluetooth e confirme.',
+      icon: 'fa-solid fa-print',
+      onConfirm: async () => {
+        setConfirmAction(null);
+        const W = 32;
+        const pR = (s: string, n: number) => s.substring(0, n).padEnd(n);
+        const pL = (s: string, n: number) => s.substring(0, n).padStart(n);
+        const ctr = (s: string, n: number) => { const x = s.substring(0, n); const sp = Math.max(0, Math.floor((n - x.length) / 2)); return ' '.repeat(sp) + x; };
+        let t = '';
+        t += '*'.repeat(W) + '\n';
+        t += ctr('CARGA DO VENDEDOR', W) + '\n';
+        t += '*'.repeat(W) + '\n';
+        t += `Vendedor: ${user.nome}\n`;
+        t += `Data: ${new Date().toLocaleDateString()}\n`;
+        t += '-'.repeat(W) + '\n';
+        const dW = 18, qW = 6, vW = 8;
+        t += pR('PRODUTO', dW) + pL('QTD', qW) + pL('VALOR', vW) + '\n';
+        t += '-'.repeat(W) + '\n';
+        (orderedCargaProducts || []).forEach(({ product: p, carga: c }) => {
+          const nome = (p?.nome ?? '???').substring(0, dW);
+          const qty = String(c.quantidade);
+          const val = (c.quantidade * (p?.precoVenda ?? 0)).toFixed(2);
+          t += pR(nome, dW) + pL(qty, qW) + pL(val, vW) + '\n';
+        });
+        t += '-'.repeat(W) + '\n';
+        t += pR('TOTAL:', W - 10) + pL('R$ ' + valorTotalCarga.toFixed(2), 10) + '\n';
+        t += pR('UNIDADES:', W - 6) + pL(String(totalUnidadesCarga), 6) + '\n';
+        t += '='.repeat(W) + '\n';
+        t += '\n\n\n\n\n\n\n\n';
+        try {
+          await bluetoothPrinter.print(t, '56MM');
+        } catch (err: any) {
+          const msg = err?.message || 'Erro desconhecido';
+          setConfirmAction({ title: 'Erro na Impressao', message: msg.includes('BLUETOOTH_NAO_SUPORTADO') ? 'Bluetooth nao disponivel neste dispositivo.' : 'Falha: ' + msg, icon: 'fa-solid fa-triangle-exclamation', type: 'alert', onConfirm: () => setConfirmAction(null) });
+        }
       }
-    }
+    });
   };
+
 
   if (selectedClient) {
     const pdvClient = clients.find(c => c.id === selectedClient.id);
@@ -1515,7 +1515,27 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
           />
         </div>
       )}
-    </div>
+          {confirmAction && (
+        <ConfirmModal
+          title={confirmAction.title}
+          message={confirmAction.message}
+          icon={confirmAction.icon}
+          type={(confirmAction.type as any) || 'confirm'}
+          onConfirm={confirmAction.onConfirm}
+          onCancel={() => setConfirmAction(null)}
+        />
+      )}
+      {confirmAction && (
+        <ConfirmModal
+          title={confirmAction.title}
+          message={confirmAction.message}
+          icon={confirmAction.icon}
+          type={(confirmAction.type as any) || 'confirm'}
+          onConfirm={confirmAction.onConfirm}
+          onCancel={() => setConfirmAction(null)}
+        />
+      )}
+</div>
   );
 };
 

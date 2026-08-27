@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Sale, Client, Product } from '@/lib/types';
 import { bluetoothPrinter, PrintJob } from '@/services/bluetoothPrinterService';
+import ConfirmModal from '@/components/doce/ConfirmModal';
 
 type PrinterWidth = '56MM' | '80MM';
 
@@ -21,6 +22,7 @@ interface CupomProps {
 const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, onDeleteSale, allowDelete, showToast, closeLabel }) => {
   const [printWidth, setPrintWidth] = useState<PrinterWidth>('56MM');
   const [printJob, setPrintJob] = useState<PrintJob>({ status: 'idle' });
+  const [modal, setModal] = useState<{title:string;message:string;icon:string;iconColor?:string;onConfirm:()=>void;type?:string}|null>(null);
   const [isBluetoothAvailable] = useState(() => bluetoothPrinter.isAvailable());
 
   // Subscribe to print job status
@@ -106,50 +108,39 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
   };
 
   const handlePrint = useCallback(async () => {
-    // showToast é opcional - não bloquear impressão se não fornecido
+    const doPrint = async () => {
+          const rawText = generateText(printWidth);
 
-    // --- NATIVE CONFIRMATION ---
-    const widthLabel = printWidth === '80MM' ? '80mm (Largo)' : '56mm (Estreito)';
-    const confirmed = window.confirm(
-      `Deseja imprimir este cupom?\n\nModelo: ${widthLabel}\nItens: ${(sale.itens || []).length}\nTotal: R$ ${(sale.valorTotal || 0).toFixed(2)}\n\nToque em OK para continuar.`
-    );
-    if (!confirmed) return;
+          try {
+            // bluetoothPrinter.print() handles the full flow:
+            // 1. Checks Bluetooth availability
+            // 2. If no printer connected, asks to scan (native picker)
+            // 3. Connects, confirms, and prints
+            if (showToast) showToast('Preparando impressao...');
+            const success = await bluetoothPrinter.print(rawText, printWidth);
 
-    const rawText = generateText(printWidth);
-
-    try {
-      // bluetoothPrinter.print() handles the full flow:
-      // 1. Checks Bluetooth availability
-      // 2. If no printer connected, asks to scan (native picker)
-      // 3. Connects, confirms, and prints
-      if (showToast) showToast('Preparando impressao...');
-      const success = await bluetoothPrinter.print(rawText, printWidth);
-
-      if (success) {
-        window.alert('Cupom impresso com sucesso!');
-        if (showToast) showToast('Impresso com sucesso!', 'success');
-      }
-    } catch (error: any) {
-      const msg = error?.message || 'Erro desconhecido';
+            if (success) {
+              setModal({title:'Impresso!', message:'Cupom impresso com sucesso!', icon:'fa-solid fa-circle-check', type:'success', onConfirm:()=>setModal(null)});
+              if (showToast) showToast('Impresso com sucesso!', 'success');
+            }
+          } catch (error: any) {
+            const msg = error?.message || 'Erro desconhecido';
       
-      if (msg === 'BLUETOOTH_NAO_SUPORTADO') {
-        window.alert(
-          'Bluetooth nao suportado.\n\n' +
-          'Para impressao nativa via Bluetooth, abra o app no Chrome do Android.\n' +
-          'Certifique-se de que o Bluetooth esta ativado nas configuracoes.'
-        );
-      } else if (msg.includes('SERVICO_NAO_ENCONTRADO') || msg.includes('CARACTERISTICA')) {
-        window.alert(
-          'Impressora conectada, mas o servico de impressao nao foi encontrado.\n\n' +
-          'Certifique-se de que a impressora esta ligada e pareada.\n' +
-          'Tente desconectar e reconectar.'
-        );
-        bluetoothPrinter.forgetPrinter();
-      } else {
-        window.alert(`Falha na impressao: ${msg}`);
-      }
-      if (showToast) showToast('Erro na impressao.', 'error');
-    }
+            if (msg === 'BLUETOOTH_NAO_SUPORTADO') {
+              setModal({title:'Bluetooth Indisponivel', message:'Para impressao via Bluetooth, use o Chrome do Android com Bluetooth ativado.', icon:'fa-solid fa-bluetooth-b', type:'alert', onConfirm:()=>setModal(null)});
+            } else if (msg.includes('SERVICO_NAO_ENCONTRADO') || msg.includes('CARACTERISTICA')) {
+              setModal({title:'Erro de Impressora', message:'Servico de impressao nao encontrado. Verifique se a impressora esta ligada e pareada.', icon:'fa-solid fa-triangle-exclamation', type:'alert', onConfirm:()=>setModal(null)});
+              bluetoothPrinter.forgetPrinter();
+            } else {
+              setModal({title:'Falha na Impressao', message:'Falha: ' + msg, icon:'fa-solid fa-triangle-exclamation', type:'alert', onConfirm:()=>setModal(null)});
+            }
+            if (showToast) showToast('Erro na impressao.', 'error');
+          }
+    };
+    const widthLabel = printWidth === '80MM' ? '80mm (Largo)' : '56mm (Estreito)';
+    setModal({title:'Confirmar Impressao', message: `Modelo: ${widthLabel}
+Itens: ${(sale.itens || []).length}
+Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onConfirm: doPrint});
   }, [printWidth, sale, showToast, generateText]);
 
   const handleCopy = async () => {
@@ -177,12 +168,8 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
   };
 
   const handleDelete = () => {
-    // NATIVE confirmation dialog
-    if (onDeleteSale && window.confirm(
-      "ATENCAO: Deseja EXCLUIR esta venda permanentemente?\n\nO estoque sera devolvido ao vendedor. Esta acao nao pode ser desfeita."
-    )) {
-      onDeleteSale(sale.id);
-      onClose();
+    if (onDeleteSale) {
+      setModal({title:'Excluir Venda', message:'Deseja EXCLUIR esta venda permanentemente? O estoque sera devolvido ao vendedor. Esta acao nao pode ser desfeita.', icon:'fa-solid fa-trash-can', type:'danger', onConfirm:()=>{setModal(null); onDeleteSale(sale.id); onClose();}});
     }
   };
 
@@ -232,9 +219,7 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
           <span className="flex-1 truncate">{badge.text}</span>
           {isConnected && printJob.status === 'idle' && (
             <button 
-              onClick={() => {
-                window.confirm(`Desconectar a impressora "${printerName}"?`) && bluetoothPrinter.forgetPrinter();
-              }}
+              onClick={() => setModal({title:'Desconectar', message:'Desconectar a impressora?', icon:'fa-solid fa-bluetooth-b', type:'danger', onConfirm:()=>{setModal(null); bluetoothPrinter.forgetPrinter();}})}
               className="text-[9px] opacity-70 underline"
             >
               Desconectar
@@ -293,7 +278,7 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
             </button>
           </div>
 
-          <button onClick={() => { if (window.confirm('Deseja enviar este cupom pelo WhatsApp para o cliente?')) { handleWhatsApp(); } }} className="w-full bg-green-50 text-green-600 border border-green-100 font-black py-2.5 rounded-2xl flex items-center justify-center gap-2 active:scale-95 text-[9px] uppercase transition-colors hover:bg-green-100">
+          <button onClick={() => { setModal({title:'Enviar WhatsApp', message:'Deseja enviar este cupom pelo WhatsApp para o cliente?', icon:'fa-brands fa-whatsapp', iconColor:'text-white', onConfirm:()=>{setModal(null); handleWhatsApp();}}) }} className="w-full bg-green-50 text-green-600 border border-green-100 font-black py-2.5 rounded-2xl flex items-center justify-center gap-2 active:scale-95 text-[9px] uppercase transition-colors hover:bg-green-100">
             <i className="fa-brands fa-whatsapp text-sm"></i> Enviar pelo WhatsApp
           </button>
 
@@ -308,7 +293,10 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
           </button>
         </div>
       </div>
-    </div>
+          {modal && (
+        <ConfirmModal title={modal.title} message={modal.message} icon={modal.icon} iconColor={modal.iconColor} type={(modal.type as any) || 'confirm'} onConfirm={modal.onConfirm} onCancel={() => setModal(null)} />
+      )}
+</div>
   );
 };
 

@@ -406,7 +406,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const handleSkipClient = () => { 
     if (!confirmSkipId) return;
     const newSkipped = [...(dailyRouteState?.skippedClientIds || []), confirmSkipId];
-    setOptimisticSkimmed(prev => [...new Set([...prev, confirmSkipId])]);
+    setOptimisticSkipped(prev => [...new Set([...prev, confirmSkipId])]);
     updateDailyRoute(dailyRouteState.clientIds, newSkipped);
     setConfirmSkipId(null);
     showToast("Visita pulada.");
@@ -414,7 +414,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
   const handleReopenClient = (clientId: string) => {
     const newSkipped = (dailyRouteState?.skippedClientIds || []).filter(id => id !== clientId);
-      setOptimisticSkimmed(prev => prev.filter(id => id !== clientId));
+    setOptimisticSkipped(prev => prev.filter(id => id !== clientId));
     updateDailyRoute(dailyRouteState.clientIds, newSkipped);
     setReopenedClientIds(prev => [...prev, clientId]);
   };

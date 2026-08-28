@@ -559,7 +559,7 @@ const App: React.FC = () => {
           {offlineSync.getPendingCount() > 0 && <span className="bg-white/20 px-1.5 py-0.5 rounded-full ml-1">{offlineSync.getPendingCount()}</span>}
         </div>
       )}
-      <header className="bg-white h-20 px-6 shadow-sm flex justify-between items-center sticky top-0 z-50 border-b">
+      <header className="bg-white h-20 px-6 shadow-sm flex justify-between items-center sticky top-0 z-50 border-b" style={{ paddingTop: 'max(env(safe-area-inset-top), 0px)' }}>
         {logo ? <img src={logo} alt="" className="h-14 w-auto object-contain" /> : <span className="font-black text-[11px] text-gray-300 uppercase tracking-widest">{companyName}</span>}
         <div className="flex items-center gap-3">
           <div className="text-right"><p className="text-[10px] font-black uppercase text-gray-400">{currentUser.role}</p><p className="text-sm font-bold text-gray-800">{currentUser.nome}</p></div>

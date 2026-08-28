@@ -85,6 +85,11 @@
     font-family: 'Inter', sans-serif;
     -webkit-tap-highlight-color: transparent;
     background-color: #f3f4f6 !important;
+    /* Safe area para notch/camera cutout em APK */
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
   }
 
   ::-webkit-scrollbar {

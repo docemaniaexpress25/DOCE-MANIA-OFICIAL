@@ -1276,6 +1276,56 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                 ))}
               </div></div>
             )}
+
+            <div className="px-1 pt-2"><h3 className="font-black text-gray-800 uppercase text-xs tracking-wider px-1 mb-3"><i className="fa-solid fa-coins text-amber-500 mr-2"></i>Comissoes por Vendedor</h3>
+              <div className="grid gap-3">
+                {props.users.filter(u => u.role === 'VENDEDOR').map(v => {
+                  const stats = getVendedorStats(v.id);
+                  return (
+                    <div key={v.id} className="bg-white rounded-3xl p-4 border border-gray-100 shadow-sm">
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-gray-100 rounded-xl overflow-hidden flex items-center justify-center flex-shrink-0">{v.foto ? <img src={v.foto} className="w-full h-full object-cover" /> : <i className="fa-solid fa-user text-gray-400"></i>}</div>
+                          <div><h4 className="font-bold text-gray-800 text-[11px] uppercase">{v.nome}</h4><p className="text-[9px] text-gray-400 font-bold uppercase">{formatRouteName(v.rota)}</p></div>
+                        </div>
+                        <button onClick={() => handleOpenPayout(v)} disabled={stats.comissaoDisponivel <= 0} className={`px-4 py-2 rounded-xl text-[9px] font-black uppercase active:scale-95 shadow-sm ${stats.comissaoDisponivel > 0 ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-300'}`}>
+                          <i className="fa-solid fa-money-bill-transfer mr-1"></i>Pagar
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        <div className="text-center bg-blue-50 p-2 rounded-xl"><p className="text-[7px] font-black text-blue-500 uppercase">Vendas Hoje</p><p className="text-[11px] font-black text-blue-700">R$ {stats.vendasHoje.toFixed(2)}</p></div>
+                        <div className="text-center bg-amber-50 p-2 rounded-xl"><p className="text-[7px] font-black text-amber-500 uppercase">Comissao Gerada</p><p className="text-[11px] font-black text-amber-700">R$ {stats.comissaoGerada.toFixed(2)}</p></div>
+                        <div className="text-center bg-emerald-50 p-2 rounded-xl"><p className="text-[7px] font-black text-emerald-500 uppercase">Disponivel</p><p className="text-[11px] font-black text-emerald-700">R$ {stats.comissaoDisponivel.toFixed(2)}</p></div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="px-1 pt-2">
+              <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider px-1 mb-3"><i className="fa-solid fa-receipt text-emerald-500 mr-2"></i>Historico de Repasses</h3>
+              <div className="bg-white rounded-3xl border border-gray-100 shadow-sm divide-y divide-gray-50 overflow-hidden">
+                {props.payoutLogs.length === 0 && (
+                  <div className="text-center py-8 opacity-30 text-[9px] uppercase font-bold tracking-widest">Nenhum repasse registrado.</div>
+                )}
+                {props.payoutLogs.sort((a, b) => new Date(b.dataPagamento).getTime() - new Date(a.dataPagamento).getTime()).slice(0, 20).map(p => {
+                  const vendedor = props.users.find(u => u.id === p.vendedorId);
+                  return (
+                    <div key={p.id} className="p-4 flex justify-between items-center">
+                      <div className="flex items-center gap-3">
+                        <div className="w-9 h-9 bg-emerald-50 rounded-xl flex items-center justify-center"><i className="fa-solid fa-circle-check text-emerald-500 text-sm"></i></div>
+                        <div>
+                          <p className="text-[11px] font-black uppercase text-gray-700">{vendedor?.nome || 'Vendedor'} - {p.tipo === 'TOTAL' ? 'Pagamento Integral' : 'Repasse Parcial'}</p>
+                          <p className="text-[9px] text-gray-400 font-semibold mt-0.5">{new Date(p.dataPagamento).toLocaleDateString()} {new Date(p.dataPagamento).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</p>
+                        </div>
+                      </div>
+                      <p className="text-sm font-black text-emerald-600">R$ {p.valorPago.toFixed(2)}</p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           </div>
         );
       })()}

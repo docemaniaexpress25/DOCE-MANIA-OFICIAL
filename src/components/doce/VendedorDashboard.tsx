@@ -1215,26 +1215,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
               )}
            </div>
 
-           <div className="space-y-2 pt-4">
-             <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">Historico de Repasses</h3>
-             <div className="bg-white rounded-3xl border border-gray-100 shadow-sm divide-y divide-gray-50 overflow-hidden">
-                {(payoutLogs || []).length === 0 && (
-                  <div className="text-center py-8 opacity-30 text-[9px] uppercase font-bold tracking-widest">Nenhum repasse registrado.</div>
-                )}
-                {(payoutLogs || []).map(p => (
-                  <div key={p.id} className="p-4 flex justify-between items-center">
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 bg-emerald-50 rounded-xl flex items-center justify-center"><i className="fa-solid fa-circle-check text-emerald-500 text-sm"></i></div>
-                      <div>
-                        <p className="text-[11px] font-black uppercase text-gray-700">{p.tipo === 'TOTAL' ? 'Pagamento Integral' : 'Repasse Parcial'}</p>
-                        <p className="text-[9px] text-gray-400 font-semibold mt-0.5">{new Date(p.dataPagamento).toLocaleDateString()} {new Date(p.dataPagamento).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</p>
-                      </div>
-                    </div>
-                    <p className="text-sm font-black text-emerald-600">R$ {p.valorPago.toFixed(2)}</p>
-                  </div>
-                ))}
-             </div>
-           </div>
+           {/* Historico de Repasses oculto - visivel apenas no admin (tela Caixa) */}
 
            <div className="space-y-2 pt-4">
              <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">Notificações</h3>

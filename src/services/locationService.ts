@@ -1,36 +1,54 @@
 import { supabase } from '@/lib/supabaseClient';
 
-// Salva a última localização conhecida do vendedor
+// Salva a ultima localizacao conhecida do vendedor
 export const locationService = {
-  async saveLocation(userId: string, lat: number, lng: number) {
-    const { error } = await supabase
-      .from('user_locations')
-      .upsert({
-        user_id: userId,
-        latitude: lat,
-        longitude: lng,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: 'user_id' });
-    if (error) console.error('Erro ao salvar localização:', error);
-    return !error;
+  async saveLocation(userId: string, lat: number, lng: number): Promise<boolean> {
+    try {
+      const { error } = await supabase
+        .from('user_locations')
+        .upsert({
+          user_id: userId,
+          latitude: lat,
+          longitude: lng,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'user_id' });
+      if (error) {
+        console.error('[LOCATION] Erro ao salvar:', error.message, error.code);
+        return false;
+      }
+      console.log('[LOCATION] Salva com sucesso:', lat.toFixed(5), lng.toFixed(5));
+      return true;
+    } catch (err: any) {
+      console.error('[LOCATION] Excecao ao salvar:', err?.message);
+      return false;
+    }
   },
 
   async getLocation(userId: string): Promise<{ latitude: number; longitude: number; updated_at: string } | null> {
-    const { data, error } = await supabase
-      .from('user_locations')
-      .select('latitude, longitude, updated_at')
-      .eq('user_id', userId)
-      .single();
-    if (error || !data) return null;
-    return {
-      latitude: data.latitude,
-      longitude: data.longitude,
-      updated_at: data.updated_at,
-    };
+    try {
+      const { data, error } = await supabase
+        .from('user_locations')
+        .select('latitude, longitude, updated_at')
+        .eq('user_id', userId)
+        .single();
+      if (error) {
+        console.error('[LOCATION] Erro ao buscar:', error.message, error.code);
+        return null;
+      }
+      if (!data) return null;
+      return {
+        latitude: data.latitude,
+        longitude: data.longitude,
+        updated_at: data.updated_at,
+      };
+    } catch (err: any) {
+      console.error('[LOCATION] Excecao ao buscar:', err?.message);
+      return null;
+    }
   },
 };
 
-// Tipos de notificação disponíveis
+// Tipos de notificacao disponiveis
 export type NotificationType = 'NOVA_VENDA' | 'RECEBIMENTO' | 'NOVO_CLIENTE' | 'ESTOQUE_BAIXO';
 
 export interface NotificationPref {
@@ -58,12 +76,8 @@ export interface AppNotification {
   read: boolean;
 }
 
-// Serviço de notificações realtime via Supabase
+// Servico de notificacoes realtime via Supabase
 export const notificationService = {
-  /**
-   * Inscreve o admin para receber notificações realtime de vendas e recebimentos.
-   * Retorna uma função de cleanup para desinscrever.
-   */
   subscribeToRealtime(callback: (notification: AppNotification) => void, enabledTypes: NotificationType[]) {
     const channel = supabase
       .channel('admin-notifications')
@@ -81,7 +95,7 @@ export const notificationService = {
               id: s.id,
               type: 'NOVA_VENDA',
               title: 'Nova Venda!',
-              body: `R$ ${valor} — ${metodo}`,
+              body: `R$ ${valor} - ${metodo}`,
               data: { saleId: s.id, vendedorId: s.vendedor_id, clientId: s.client_id },
               createdAt: s.data_venda || new Date().toISOString(),
               read: false,
@@ -95,7 +109,6 @@ export const notificationService = {
           const s = payload.new;
           const old = payload.old;
           if (!s || !old) return;
-          // Detecta recebimento: valor_pago aumentou
           const oldPaid = Number(old.valor_pago || 0);
           const newPaid = Number(s.valor_pago || 0);
           if (newPaid > oldPaid && enabledTypes.includes('RECEBIMENTO')) {
@@ -122,7 +135,6 @@ export const notificationService = {
     };
   },
 
-  // Salva preferências de notificação no localStorage
   getPreferences(): NotificationType[] {
     if (typeof window === 'undefined') return NOTIFICATION_TYPES.filter(n => n.enabled).map(n => n.type);
     try {

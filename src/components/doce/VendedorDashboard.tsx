@@ -126,19 +126,49 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
   useEffect(() => { saveLocalState(`v_dismissed_risk_${user.id}`, dismissedClientRiskIds); }, [dismissedClientRiskIds, user.id]);
 
-  // GPS periódico: envia localização a cada 3 minutos para o admin poder consultar
+  // GPS: envia localizacao via watchPosition + fallback interval
   useEffect(() => {
     if (!('geolocation' in navigator)) return;
-    const sendLocation = () => {
+    let watchId: number | null = null;
+    let lastSave = 0;
+    const MIN_INTERVAL = 60_000; // salva no maximo a cada 1 min
+
+    const sendLocation = (lat: number, lng: number) => {
+      const now = Date.now();
+      if (now - lastSave < MIN_INTERVAL) return;
+      lastSave = now;
+      locationService.saveLocation(user.id, lat, lng);
+    };
+
+    // Tenta watchPosition primeiro (mais eficiente)
+    if (navigator.geolocation.watchPosition) {
+      watchId = navigator.geolocation.watchPosition(
+        (pos) => sendLocation(pos.coords.latitude, pos.coords.longitude),
+        () => {},
+        { enableHighAccuracy: false, timeout: 15000, maximumAge: 60000 }
+      );
+    }
+
+    // Fallback: envia via interval tambem
+    const fallback = setInterval(() => {
       navigator.geolocation.getCurrentPosition(
-        (pos) => locationService.saveLocation(user.id, pos.coords.latitude, pos.coords.longitude),
+        (pos) => sendLocation(pos.coords.latitude, pos.coords.longitude),
         () => {},
         { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 }
       );
+    }, 3 * 60 * 1000);
+
+    // Primeiro envio imediato
+    navigator.geolocation.getCurrentPosition(
+      (pos) => sendLocation(pos.coords.latitude, pos.coords.longitude),
+      () => {},
+      { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 }
+    );
+
+    return () => {
+      if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+      clearInterval(fallback);
     };
-    sendLocation(); // envia imediatamente
-    const interval = setInterval(sendLocation, 3 * 60 * 1000); // a cada 3 min
-    return () => clearInterval(interval);
   }, [user.id]);
 
   const [reopenedClientIds, setReopenedClientIds] = useState<string[]>([]);

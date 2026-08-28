@@ -1151,6 +1151,135 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         </div>
       )}
 
+      {activeTab === 'CARGAS' && (
+        <div className="space-y-4">
+          <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Cargas</h2></div>
+          <div className="px-1 space-y-3">
+            <select value={selectedVendedorId} onChange={e => setSelectedVendedorId(e.target.value)} className="w-full p-4 bg-white border border-gray-100 rounded-2xl shadow-sm text-sm font-bold uppercase outline-none focus:ring-2 focus:ring-orange-100">
+              <option value="">Selecione um Vendedor</option>
+              {props.users.filter(u => u.role === 'VENDEDOR').map(u => (<option key={u.id} value={u.id}>{u.nome} - {formatRouteName(u.rota)}</option>))}
+            </select>
+          </div>
+          {selectedVendedorId && (
+            <>
+              <div className="flex gap-2 px-1">
+                <button onClick={() => setShowConfirmSync(true)} disabled={!hasCargaChanges} className={`flex-1 py-3 rounded-2xl text-[10px] font-black uppercase shadow-sm active:scale-95 ${hasCargaChanges ? 'bg-orange-600 text-white' : 'bg-gray-100 text-gray-300'}`}>
+                  <i className="fa-solid fa-arrows-rotate mr-1"></i> Sincronizar
+                </button>
+                <button onClick={() => setShowConfirmApply(true)} className="flex-1 py-3 rounded-2xl text-[10px] font-black uppercase bg-blue-600 text-white shadow-sm active:scale-95">
+                  <i className="fa-solid fa-bolt mr-1"></i> Aplicar Agora
+                </button>
+                <button onClick={handleZeroCarga} className="py-3 px-4 rounded-2xl text-[10px] font-black uppercase bg-rose-50 text-rose-600 shadow-sm active:scale-95 border border-rose-100">
+                  <i className="fa-solid fa-xmark"></i>
+                </button>
+              </div>
+              <div className="grid gap-2 px-1">
+                {props.products.filter(p => p.ativo).map(p => {
+                  const atual = props.cargas.find(c => c.vendedorId === selectedVendedorId && c.produtoId === p.id)?.quantidade ?? 0;
+                  const staged = stagingCarga[p.id] ?? atual;
+                  return (
+                    <div key={p.id} className="bg-white p-3 rounded-2xl border border-gray-100 shadow-sm flex items-center gap-3">
+                      <div className="flex-1 min-w-0">
+                        <h4 className="font-bold text-gray-800 text-[11px] uppercase truncate">{p.nome}</h4>
+                        <p className="text-[9px] text-gray-400 font-bold mt-0.5">Estoque: {p.estoquePrincipal} | No vendedor: {atual}</p>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button onClick={() => updateStaging(p.id, -1)} className="w-8 h-8 bg-orange-50 text-orange-600 rounded-lg flex items-center justify-center active:scale-90 border border-orange-100"><i className="fa-solid fa-minus text-[9px]"></i></button>
+                        <input type="number" value={staged} onChange={e => handleStagingInputChange(p.id, e.target.value)} className="w-14 text-center p-1.5 bg-gray-50 border border-gray-100 rounded-xl text-xs font-black outline-none" />
+                        <button onClick={() => updateStaging(p.id, 1)} className="w-8 h-8 bg-orange-50 text-orange-600 rounded-lg flex items-center justify-center active:scale-90 border border-orange-100"><i className="fa-solid fa-plus text-[9px]"></i></button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'CLIENTES' && (
+        <div className="space-y-4">
+          <div className="px-2 flex justify-between items-center">
+            <h2 className="text-2xl font-black text-gray-800 tracking-tight">Clientes</h2>
+            <button onClick={() => handleOpenClient('NEW')} className="bg-green-600 text-white px-4 py-2 rounded-xl font-black text-xs uppercase shadow-md active:scale-95"><i className="fa-solid fa-user-plus mr-2"></i>Novo</button>
+          </div>
+          <div className="px-1 space-y-2">
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar cliente..." className="w-full p-4 bg-white border border-gray-100 rounded-2xl shadow-sm text-sm outline-none focus:ring-2 focus:ring-green-100" />
+            <div className="flex bg-gray-100 p-1 rounded-2xl overflow-x-auto gap-1">
+              <button onClick={() => setRouteFilter('TODOS')} className={`flex-1 min-w-[60px] py-2 rounded-xl text-[9px] font-black uppercase transition-all ${routeFilter === 'TODOS' ? 'bg-white text-green-600 shadow-sm' : 'text-gray-400'}`}>Todos</button>
+              {availableRoutes.map(r => (
+                <button key={r} onClick={() => setRouteFilter(r)} className={`flex-1 min-w-[60px] py-2 rounded-xl text-[9px] font-black uppercase transition-all whitespace-nowrap ${routeFilter === r ? 'bg-white text-green-600 shadow-sm' : 'text-gray-400'}`}>{formatRouteName(r)}</button>
+              ))}
+            </div>
+          </div>
+          <div className="grid gap-3 px-1">
+            {filteredClients.map(c => {
+              const totalDivida = props.sales.filter(s => s.clientId === c.id && s.metodoPagamento === 'A_PRAZO' && s.statusPagamento === 'PENDENTE').reduce((a, s) => a + ((s.valorTotal ?? 0) - (s.valorPago ?? 0)), 0);
+              return (
+                <div key={c.id} className={`bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex items-center gap-3 transition-all ${!c.ativo ? 'opacity-50' : ''}`}>
+                  <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setViewingClientHistory(c)}>
+                    <h4 className="font-bold text-gray-800 text-[13px] leading-tight uppercase truncate">{c.nomeFantasia}</h4>
+                    <div className="flex items-center gap-2 mt-1">
+                      <span className="text-[10px] font-black text-green-600 bg-green-50 px-2 py-0.5 rounded-lg border border-green-100 uppercase">{DIAS_SEMANA[c.diaRoteiro ?? 1]}</span>
+                      <span className="text-[10px] font-black text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg border border-blue-100 uppercase">{formatRouteName(c.rota)}</span>
+                      {totalDivida > 0 && <span className="text-[10px] font-black text-rose-600 bg-rose-50 px-2 py-0.5 rounded-lg border border-rose-100">R$ {totalDivida.toFixed(2)}</span>}
+                    </div>
+                    {c.telefone && <p className="text-[9px] text-gray-400 font-semibold mt-1">{c.telefone}</p>}
+                  </div>
+                  <div className="flex gap-1.5 flex-shrink-0">
+                    <button onClick={() => handleOpenClient(c)} className="w-10 h-10 bg-green-50 text-green-600 rounded-xl border border-green-100 flex items-center justify-center active:scale-90 shadow-sm"><i className="fa-solid fa-pencil-alt text-xs"></i></button>
+                    <button onClick={() => setConfirmDelete({ id: c.id, type: 'CLIENT', name: c.nomeFantasia || 'Cliente' })} className="w-10 h-10 bg-rose-50 text-rose-600 rounded-xl border border-rose-100 flex items-center justify-center active:scale-90 shadow-sm"><i className="fa-solid fa-trash-can text-xs"></i></button>
+                  </div>
+                </div>
+              );
+            })}
+            {filteredClients.length === 0 && <p className="text-center py-8 text-gray-400 text-xs font-bold uppercase">Nenhum cliente encontrado</p>}
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'CAIXA' && (() => {
+        const hoje = new Date();
+        const vendasHoje = props.sales.filter(s => { const d = new Date(s.data); return d.toDateString() === hoje.toDateString(); });
+        const totalDinheiro = vendasHoje.filter(s => s.metodoPagamento === 'DINHEIRO').reduce((a, s) => a + (s.valorTotal ?? 0), 0);
+        const totalPix = vendasHoje.filter(s => s.metodoPagamento === 'PIX').reduce((a, s) => a + (s.valorTotal ?? 0), 0);
+        const totalPrazo = vendasHoje.filter(s => s.metodoPagamento === 'A_PRAZO').reduce((a, s) => a + (s.valorTotal ?? 0), 0);
+        const despesasHoje = props.expenses.filter(e => { const d = new Date(e.data); return d.toDateString() === hoje.toDateString(); }).reduce((a, e) => a + (e.valor ?? 0), 0);
+        const totalGeral = totalDinheiro + totalPix + totalPrazo;
+        const recebimentosHoje = props.payoutLogs.filter(l => { const d = new Date(l.dataPagamento); return d.toDateString() === hoje.toDateString(); });
+        const totalPagoComissoes = recebimentosHoje.reduce((a, l) => a + (l.valorPago ?? 0), 0);
+        return (
+          <div className="space-y-4">
+            <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Caixa do Dia</h2><p className="text-[10px] text-gray-400 font-bold uppercase mt-1">{hoje.toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}</p></div>
+            <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-md mx-2">
+              <div className="flex justify-between items-center border-b border-gray-100 pb-3 mb-3"><span className="text-xs font-black text-gray-400 uppercase">Faturamento Total</span><span className="text-2xl font-black text-gray-900">R$ {totalGeral.toFixed(2)}</span></div>
+              <div className="grid grid-cols-3 gap-3 mb-3">
+                <div className="text-center bg-emerald-50 p-3 rounded-xl"><p className="text-[8px] font-black text-emerald-600 uppercase mb-1">Dinheiro</p><p className="text-sm font-black text-emerald-700">R$ {totalDinheiro.toFixed(2)}</p></div>
+                <div className="text-center bg-blue-50 p-3 rounded-xl"><p className="text-[8px] font-black text-blue-600 uppercase mb-1">Pix</p><p className="text-sm font-black text-blue-700">R$ {totalPix.toFixed(2)}</p></div>
+                <div className="text-center bg-orange-50 p-3 rounded-xl"><p className="text-[8px] font-black text-orange-600 uppercase mb-1">A Prazo</p><p className="text-sm font-black text-orange-700">R$ {totalPrazo.toFixed(2)}</p></div>
+              </div>
+              <div className="flex justify-between items-center border-t border-gray-100 pt-3"><span className="text-[10px] font-black text-gray-400 uppercase">Vendas Realizadas</span><span className="text-sm font-black text-gray-700">{vendasHoje.length}</span></div>
+            </div>
+            <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm mx-2 space-y-4">
+              <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider"><i className="fa-solid fa-arrow-trend-down text-rose-500 mr-2"></i>Saidas do Dia</h3>
+              <div className="flex justify-between items-center"><span className="text-[10px] font-black text-gray-400 uppercase">Comissoes Pagas</span><span className="text-sm font-black text-rose-600">- R$ {totalPagoComissoes.toFixed(2)}</span></div>
+              <div className="flex justify-between items-center"><span className="text-[10px] font-black text-gray-400 uppercase">Despesas</span><span className="text-sm font-black text-rose-600">- R$ {despesasHoje.toFixed(2)}</span></div>
+              <div className="border-t border-gray-100 pt-3 flex justify-between items-center"><span className="text-xs font-black text-gray-600 uppercase">Saldo Liquido</span><span className={`text-lg font-black ${(totalGeral - totalPagoComissoes - despesasHoje) >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>R$ {(totalGeral - totalPagoComissoes - despesasHoje).toFixed(2)}</span></div>
+            </div>
+            {vendasHoje.length > 0 && (
+              <div className="px-1"><h3 className="font-black text-gray-800 uppercase text-xs tracking-wider px-1 mb-3">Ultimas Vendas de Hoje</h3><div className="grid gap-2">
+                {vendasHoje.slice(0, 15).sort((a, b) => (b.data?.getTime() ?? 0) - (a.data?.getTime() ?? 0)).map(s => (
+                  <div key={s.id} className="bg-white p-3 rounded-2xl border border-gray-100 shadow-sm flex justify-between items-center">
+                    <div><p className="font-bold text-gray-800 text-[11px] uppercase">{props.clients.find(c => c.id === s.clientId)?.nomeFantasia || 'Cliente'}</p><p className="text-[9px] text-gray-400 font-bold mt-0.5">{s.data?.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})} - {props.users.find(u => u.id === s.vendedorId)?.nome || 'N/D'}</p></div>
+                    <div className="text-right"><p className="text-xs font-black text-gray-800">R$ {s.valorTotal.toFixed(2)}</p><span className={`text-[8px] font-black px-1.5 py-0.5 rounded uppercase ${s.metodoPagamento === 'DINHEIRO' ? 'bg-emerald-50 text-emerald-600' : s.metodoPagamento === 'PIX' ? 'bg-blue-50 text-blue-600' : 'bg-orange-50 text-orange-600'}`}>{s.metodoPagamento}</span></div>
+                  </div>
+                ))}
+              </div></div>
+            )}
+          </div>
+        );
+      })()}
+
       {activeTab === 'VENDEDORES' && (
         <div className="space-y-4">
           <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Gestão de Vendedores</h2></div>
@@ -1185,6 +1314,65 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                 <div className="flex justify-between items-end"><div><h4 className="font-bold text-gray-800 text-sm leading-tight">{props.clients.find(c => c.id === s.clientId)?.nomeFantasia || 'Cliente'}</h4><p className="text-[10px] text-gray-400 font-bold uppercase mt-1">Vend: {props.users.find(u => u.id === s.vendedorId)?.nome ?? 'Desc.'}</p></div><p className="text-sm font-black text-gray-800">R$ {s.valorTotal.toFixed(2)}</p></div>
               </button>
             ))}
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'ROTEIRO' && (
+        <div className="space-y-4">
+          <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Roteiro Semanal</h2></div>
+          <div className="flex bg-gray-100 p-1 rounded-2xl mx-1 shadow-inner overflow-x-auto gap-1">
+            {DIAS_SEMANA.map((dia, idx) => (
+              <button key={idx} onClick={() => {}} className={`flex-1 min-w-[50px] py-2.5 rounded-xl text-[9px] font-black uppercase transition-all whitespace-nowrap ${true ? 'text-gray-400' : 'bg-white text-indigo-600 shadow-sm'}`}>{dia}</button>
+            ))}
+          </div>
+          <div className="flex bg-gray-100 p-1 rounded-2xl mx-1 overflow-x-auto gap-1">
+            <button onClick={() => setRouteFilter('TODOS')} className={`flex-1 min-w-[60px] py-2 rounded-xl text-[9px] font-black uppercase transition-all ${routeFilter === 'TODOS' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-400'}`}>Todos</button>
+            {availableRoutes.map(r => (
+              <button key={r} onClick={() => setRouteFilter(r)} className={`flex-1 min-w-[60px] py-2 rounded-xl text-[9px] font-black uppercase transition-all whitespace-nowrap ${routeFilter === r ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-400'}`}>{formatRouteName(r)}</button>
+            ))}
+          </div>
+          <div className="space-y-2 px-1">
+            {[1,2,3,4,5,6,7].map(dia => {
+              const clientsDia = props.clients.filter(c => {
+                const matchDia = (c.diaRoteiro ?? 1) === dia && c.ativo;
+                const matchRoute = routeFilter === 'TODOS' || c.rota === routeFilter;
+                return matchDia && matchRoute;
+              }).sort((a, b) => {
+                const idxA = props.clientOrder.indexOf(a.id) >= 0 ? props.clientOrder.indexOf(a.id) : (a.ordem || 999);
+                const idxB = props.clientOrder.indexOf(b.id) >= 0 ? props.clientOrder.indexOf(b.id) : (b.ordem || 999);
+                return idxA - idxB;
+              });
+              if (clientsDia.length === 0) return null;
+              return (
+                <div key={dia} className="space-y-2">
+                  <div className="flex items-center gap-2 px-1 pt-2"><div className="w-8 h-8 bg-indigo-600 text-white rounded-xl flex items-center justify-center text-[10px] font-black">{dia}</div><span className="font-black text-gray-800 text-xs uppercase">{DIAS_SEMANA[dia]} - {clientsDia.length} clientes</span></div>
+                  {clientsDia.map((c, idx) => {
+                    const totalDivida = props.sales.filter(s => s.clientId === c.id && s.metodoPagamento === 'A_PRAZO' && s.statusPagamento === 'PENDENTE').reduce((a, s) => a + ((s.valorTotal ?? 0) - (s.valorPago ?? 0)), 0);
+                    return (
+                      <div key={c.id} className="bg-white p-3 rounded-2xl border border-gray-100 shadow-sm flex items-center gap-3">
+                        <div className="flex flex-col gap-0.5 flex-shrink-0">
+                          <button onClick={() => moveClient(c.id, 'UP')} disabled={idx === 0} className="w-6 h-6 bg-gray-50 text-gray-400 rounded-md flex items-center justify-center active:scale-90 border border-gray-100 disabled:opacity-30"><i className="fa-solid fa-chevron-up text-[7px]"></i></button>
+                          <button onClick={() => moveClient(c.id, 'DOWN')} disabled={idx === clientsDia.length - 1} className="w-6 h-6 bg-gray-50 text-gray-400 rounded-md flex items-center justify-center active:scale-90 border border-gray-100 disabled:opacity-30"><i className="fa-solid fa-chevron-down text-[7px]"></i></button>
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <h4 className="font-bold text-gray-800 text-[11px] uppercase truncate">{c.nomeFantasia}</h4>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <span className="text-[8px] font-bold text-gray-400">{c.endereco || 'Sem endereco'}</span>
+                            {totalDivida > 0 && <span className="text-[8px] font-black text-rose-600 bg-rose-50 px-1.5 py-0.5 rounded">R$ {totalDivida.toFixed(2)}</span>}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1 flex-shrink-0">
+                          {c.pinLocalizacao && <a href={`https://www.google.com/maps/dir/?api=1&destination=${c.pinLocalizacao}`} target="_blank" rel="noopener noreferrer" className="w-8 h-8 bg-emerald-50 text-emerald-600 rounded-lg flex items-center justify-center active:scale-90 border border-emerald-100"><i className="fa-solid fa-diamond-turn-right text-[9px]"></i></a>}
+                          <button onClick={() => handleOpenClient(c)} className="w-8 h-8 bg-indigo-50 text-indigo-600 rounded-lg flex items-center justify-center active:scale-90 border border-indigo-100"><i className="fa-solid fa-pencil text-[8px]"></i></button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+            {props.clients.filter(c => c.ativo && (routeFilter === 'TODOS' || c.rota === routeFilter)).length === 0 && <p className="text-center py-8 text-gray-400 text-xs font-bold uppercase">Nenhum cliente ativo</p>}
           </div>
         </div>
       )}
@@ -1709,6 +1897,79 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
               e.target.value = '';
             }}
           />
+        </div>
+      )}
+
+      {activeTab === 'SETTINGS' && (
+        <div className="space-y-4">
+          <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Configuracoes</h2></div>
+
+          <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm mx-2 space-y-4">
+            <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider"><i className="fa-solid fa-building text-blue-600 mr-2"></i>Dados da Empresa</h3>
+            <div className="space-y-3">
+              <div><label className="text-[9px] font-black text-gray-400 uppercase block mb-1">Nome da Empresa</label><input value={props.companyName} onChange={e => props.setCompanyName(e.target.value)} className="w-full p-3 bg-gray-50 border border-gray-100 rounded-xl text-sm font-bold uppercase outline-none focus:ring-2 focus:ring-blue-100" /></div>
+              <div><label className="text-[9px] font-black text-gray-400 uppercase block mb-1">CNPJ</label><input value={props.companyCnpj} onChange={e => props.setCompanyCnpj(e.target.value)} placeholder="00.000.000/0000-00" className="w-full p-3 bg-gray-50 border border-gray-100 rounded-xl text-sm font-bold uppercase outline-none focus:ring-2 focus:ring-blue-100" /></div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm mx-2 space-y-4">
+            <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider"><i className="fa-solid fa-image text-purple-600 mr-2"></i>Logo e Marca</h3>
+            <div className="flex items-center gap-4">
+              <div className="w-20 h-20 bg-gray-100 rounded-2xl overflow-hidden flex items-center justify-center border-2 border-dashed border-gray-200 flex-shrink-0">{props.logo ? <img src={props.logo} className="w-full h-full object-cover" /> : <i className="fa-solid fa-image text-gray-300 text-2xl"></i>}</div>
+              <div className="flex-1 space-y-2">
+                <button onClick={() => logoInputRef.current?.click()} className="w-full py-2.5 rounded-xl text-[10px] font-black uppercase bg-blue-50 text-blue-600 active:scale-95 flex items-center justify-center gap-1.5 border border-blue-100"><i className="fa-solid fa-upload"></i>Enviar Logo</button>
+                {props.logo && <button onClick={() => { setConfirmAction({ title: 'Remover Logo', message: 'Deseja remover a logo atual?', icon: 'fa-solid fa-trash-can', iconColor: 'text-rose-400', type: 'danger', onConfirm: () => { setConfirmAction(null); props.setLogo(null); } }); }} className="w-full py-2 rounded-xl text-[9px] font-black uppercase bg-rose-50 text-rose-500 active:scale-95 border border-rose-100">Remover</button>}
+              </div>
+            </div>
+            <input ref={logoInputRef} type="file" accept="image/*" className="hidden" onChange={handleLogoUpload} />
+          </div>
+
+          <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm mx-2 space-y-4">
+            <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider"><i className="fa-solid fa-qrcode text-teal-600 mr-2"></i>Pix / QR Code</h3>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <label className="text-[9px] font-black text-gray-400 uppercase">Chave Pix 1</label>
+                <input value={props.pix1Name} onChange={e => props.setPix1Name(e.target.value)} placeholder="Nome" className="w-full p-3 bg-gray-50 border border-gray-100 rounded-xl text-[11px] font-bold uppercase outline-none" />
+                <button onClick={() => pix1InputRef.current?.click()} className="w-full py-2 rounded-xl text-[9px] font-black uppercase bg-teal-50 text-teal-600 active:scale-95 border border-teal-100 flex items-center justify-center gap-1"><i className="fa-solid fa-camera"></i>QR Code</button>
+                {props.pix1Code && <div className="w-full h-16 bg-gray-50 rounded-xl overflow-hidden border border-gray-100"><img src={props.pix1Code} className="w-full h-full object-contain" /></div>}
+              </div>
+              <div className="space-y-2">
+                <label className="text-[9px] font-black text-gray-400 uppercase">Chave Pix 2</label>
+                <input value={props.pix2Name} onChange={e => props.setPix2Name(e.target.value)} placeholder="Nome" className="w-full p-3 bg-gray-50 border border-gray-100 rounded-xl text-[11px] font-bold uppercase outline-none" />
+                <button onClick={() => pix2InputRef.current?.click()} className="w-full py-2 rounded-xl text-[9px] font-black uppercase bg-teal-50 text-teal-600 active:scale-95 border border-teal-100 flex items-center justify-center gap-1"><i className="fa-solid fa-camera"></i>QR Code</button>
+                {props.pix2Code && <div className="w-full h-16 bg-gray-50 rounded-xl overflow-hidden border border-gray-100"><img src={props.pix2Code} className="w-full h-full object-contain" /></div>}
+              </div>
+            </div>
+            <input ref={pix1InputRef} type="file" accept="image/*" className="hidden" onChange={e => handlePixUpload(e, 1)} />
+            <input ref={pix2InputRef} type="file" accept="image/*" className="hidden" onChange={e => handlePixUpload(e, 2)} />
+          </div>
+
+          <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm mx-2 space-y-4">
+            <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider"><i className="fa-solid fa-percent text-amber-600 mr-2"></i>Margem de Lucro Global</h3>
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold text-gray-600 uppercase">Ativar margem automatica</span>
+              <button onClick={() => props.setMargemGlobalAtiva(!props.margemGlobalAtiva)} className={`w-12 h-7 rounded-full relative transition-colors ${props.margemGlobalAtiva ? 'bg-blue-600' : 'bg-gray-300'}`}><div className={`absolute top-0.5 w-6 h-6 bg-white rounded-full transition-all shadow-sm ${props.margemGlobalAtiva ? 'left-5.5' : 'left-0.5'}`}></div></button>
+            </div>
+            {props.margemGlobalAtiva && (
+              <div><label className="text-[9px] font-black text-gray-400 uppercase block mb-1">Margem Padrao (%)</label><input type="number" value={props.margemGlobalValor} onChange={e => props.setMargemGlobalValor(parseFloat(e.target.value) || 0)} className="w-full p-3 bg-gray-50 border border-gray-100 rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-amber-100" /></div>
+            )}
+            <div className="border-t border-gray-100 pt-3">
+              <div className="flex items-center justify-between mb-3"><span className="text-[11px] font-bold text-gray-600 uppercase">Preco minimo obrigatorio</span><button onClick={() => props.setMargemMinimaAtiva(!props.margemMinimaAtiva)} className={`w-12 h-7 rounded-full relative transition-colors ${props.margemMinimaAtiva ? 'bg-amber-600' : 'bg-gray-300'}`}><div className={`absolute top-0.5 w-6 h-6 bg-white rounded-full transition-all shadow-sm ${props.margemMinimaAtiva ? 'left-5.5' : 'left-0.5'}`}></div></button></div>
+              {props.margemMinimaAtiva && (<div><label className="text-[9px] font-black text-gray-400 uppercase block mb-1">Margem Minima (%)</label><input type="number" value={props.margemMinima} onChange={e => props.setMargemMinima(parseFloat(e.target.value) || 0)} className="w-full p-3 bg-gray-50 border border-gray-100 rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-amber-100" /></div>)}
+            </div>
+          </div>
+
+          <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm mx-2 space-y-4">
+            <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider"><i className="fa-solid fa-lock text-rose-600 mr-2"></i>Alterar PIN de Vendedor</h3>
+            <div className="grid grid-cols-2 gap-2">
+              <select value={pwUser} onChange={e => setPwUser(e.target.value)} className="p-3 bg-gray-50 border border-gray-100 rounded-xl text-[11px] font-bold uppercase outline-none">
+                <option value="">Selecione...</option>
+                {props.users.filter(u => u.role === 'VENDEDOR').map(u => (<option key={u.id} value={u.id}>{u.nome}</option>))}
+              </select>
+              <input value={pwNew} onChange={e => setPwNew(e.target.value)} placeholder="Novo PIN" type="text" className="p-3 bg-gray-50 border border-gray-100 rounded-xl text-[11px] font-bold outline-none focus:ring-2 focus:ring-rose-100" />
+            </div>
+            <button onClick={handleUpdatePassword} disabled={!pwUser || !pwNew} className={`w-full py-3 rounded-2xl text-[10px] font-black uppercase shadow-sm active:scale-95 ${pwUser && pwNew ? 'bg-rose-600 text-white' : 'bg-gray-100 text-gray-300'}`}>Atualizar PIN</button>
+          </div>
         </div>
       )}
 

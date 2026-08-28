@@ -524,10 +524,17 @@ const App: React.FC = () => {
   };
 
   const updateDailyRoute = async (clientIds: string[], skippedClientIds: string[]) => {
-    if (currentUser) {
-      const newRoute = { date: dailyRouteState.date, clientIds, skippedClientIds };
-      setDailyRouteState(newRoute);
+    if (!currentUser) {
+      console.error('[ROTA] currentUser nulo, impossivel salvar rota.');
+      return;
+    }
+    const date = dailyRouteState?.date || (() => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}-${String(n.getDate()).padStart(2,'0')}`; })();
+    const newRoute = { date, clientIds, skippedClientIds };
+    setDailyRouteState(newRoute);
+    try {
       await dailyRouteService.updateRoute(currentUser.id, newRoute);
+    } catch (err) {
+      console.error('[ROTA] Erro ao salvar rota diaria:', err);
     }
   };
 

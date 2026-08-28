@@ -42,7 +42,7 @@ interface VendedorDashboardProps {
   pix1Code: string | null;
   pix2Name: string;
   pix2Code: string | null;
-  dailyRouteState: DailyRouteState;
+  dailyRouteState: DailyRouteState | null;
   updateDailyRoute: (clientIds: string[], skippedClientIds: string[]) => void;
   companyName: string;
   companyCnpj: string;
@@ -405,18 +405,43 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
   const handleSkipClient = () => { 
     if (!confirmSkipId) return;
-    const newSkipped = [...(dailyRouteState?.skippedClientIds || []), confirmSkipId];
-    setOptimisticSkipped(prev => [...new Set([...prev, confirmSkipId])]);
-    updateDailyRoute(dailyRouteState.clientIds, newSkipped);
-    setConfirmSkipId(null);
-    showToast("Visita pulada.");
+    try {
+      // Atualiza estado local imediatamente (independente do Supabase)
+      setOptimisticSkipped(prev => [...new Set([...prev, confirmSkipId])]);
+      setConfirmSkipId(null);
+      showToast("Visita pulada.");
+
+      // Persiste no Supabase em background (nao bloqueia a UI)
+      const currentClientIds = dailyRouteState?.clientIds || [];
+      const currentSkipped = dailyRouteState?.skippedClientIds || [];
+      const newSkipped = [...currentSkipped, confirmSkipId];
+      updateDailyRoute(currentClientIds, newSkipped).catch((err: any) => {
+        console.error('[PULAR] Erro ao salvar pular no Supabase:', err);
+      });
+    } catch (err) {
+      console.error('[PULAR] Erro inesperado:', err);
+      showToast("Erro ao pular visita.", "error");
+    }
   };
 
   const handleReopenClient = (clientId: string) => {
-    const newSkipped = (dailyRouteState?.skippedClientIds || []).filter(id => id !== clientId);
-    setOptimisticSkipped(prev => prev.filter(id => id !== clientId));
-    updateDailyRoute(dailyRouteState.clientIds, newSkipped);
-    setReopenedClientIds(prev => [...prev, clientId]);
+    try {
+      // Atualiza estado local imediatamente
+      setOptimisticSkipped(prev => prev.filter(id => id !== clientId));
+      setReopenedClientIds(prev => [...prev, clientId]);
+      showToast("Visita reaberta.");
+
+      // Persiste no Supabase em background
+      const currentClientIds = dailyRouteState?.clientIds || [];
+      const currentSkipped = dailyRouteState?.skippedClientIds || [];
+      const newSkipped = currentSkipped.filter(id => id !== clientId);
+      updateDailyRoute(currentClientIds, newSkipped).catch((err: any) => {
+        console.error('[REABRIR] Erro ao salvar reabrir no Supabase:', err);
+      });
+    } catch (err) {
+      console.error('[REABRIR] Erro inesperado:', err);
+      showToast("Erro ao reabrir visita.", "error");
+    }
   };
 
   const handleAddToTodayRoute = (clientId: string) => { 

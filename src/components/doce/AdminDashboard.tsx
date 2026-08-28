@@ -77,7 +77,7 @@ interface AdminDashboardProps {
   setClientOrder: (ids: string[]) => void;
 }
 
-type TabType = 'HOME' | 'CATALOGO' | 'CATEGORIAS' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'SETTINGS';
+type TabType = 'HOME' | 'CATALOGO' | 'CATEGORIAS' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'BACKUP' | 'SETTINGS';
 
 type ReportType = 'RESUMO' | 'TOP_CLIENTES' | 'TOP_PRODUTOS' | 'CLIENTES_RISCO' | 'VENDAS_CATEGORIAS' | null;
 
@@ -975,6 +975,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             <MenuCard icon="fa-calendar-days" title="Roteiro" tab="ROTEIRO" color="bg-indigo-50 text-indigo-600" />
             <MenuCard icon="fa-chart-line" title="Relatórios" tab="REPORTS" color="bg-emerald-50 text-emerald-600" />
             <MenuCard icon="fa-file-invoice-dollar" title="Contas a Receber" tab="CONTAS_RECEBER" color="bg-rose-50 text-rose-600" />
+            <MenuCard icon="fa-database" title="Backup" tab="BACKUP" color="bg-gray-100 text-gray-600" />
             <MenuCard icon="fa-gear" title="Configurações" tab="SETTINGS" color="bg-slate-50 text-slate-600" />
           </div>
         </div>
@@ -1116,172 +1117,177 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       )}
 
       {activeTab === 'REPORTS' && (
-        <div className="space-y-6 py-4">
-          <div className="px-2 flex justify-between items-center">
-            <h2 className="text-2xl font-black text-gray-800 tracking-tight">Relatórios</h2>
-            <div className="flex bg-gray-100 p-1 rounded-2xl shadow-inner">
-              {(['HOJE', 'SEMANA', 'MES', 'GERAL'] as const).map(p => (
-                <button key={p} onClick={() => { setPeriodoRelatorio(p); setActiveReport(null); }} className={`flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all ${periodoRelatorio === p ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>{p}</button>
-              ))}
-            </div>
-          </div>
-
-          {/* Grid de botões de relatórios */}
-          <div className="grid gap-3 px-1">
-            <ReportCard 
-              icon="fa-chart-pie" 
-              title="Resumo Geral" 
-              color="blue" 
-              reportType="RESUMO" 
-              description="Faturamento total, comissões pagas e produtos mais vendidos no período"
-            />
-            <ReportCard 
-              icon="fa-star" 
-              title="Top Clientes" 
-              color="yellow" 
-              reportType="TOP_CLIENTES" 
-              description="Ranking dos 10 clientes que mais compraram em valor no período"
-            />
-            <ReportCard 
-              icon="fa-triangle-exclamation" 
-              title="Clientes em Risco" 
-              color="rose" 
-              reportType="CLIENTES_RISCO" 
-              description="Clientes sem compra há 25+ dias, ordenados por maior tempo de ausência"
-            />
-            <ReportCard 
-              icon="fa-layer-group" 
-              title="Vendas por Categorias" 
-              color="indigo" 
-              reportType="VENDAS_CATEGORIAS" 
-              description="Detalhamento de vendas agrupado por Categoria → Subcategoria com valores e quantidades"
-            />
-          </div>
-
-          {/* Conteúdo do relatório ativo */}
-          {activeReport && (
-            <div className="px-1">
-              {renderActiveReport()}
-            </div>
-          )}
-
-          {activeReport === null && (
-            <div className="text-center py-16 px-4 bg-gray-50 rounded-[2rem] border border-dashed border-gray-200">
-              <i className="fa-solid fa-chart-bar text-6xl text-gray-200 mb-4"></i>
-              <h3 className="font-black text-gray-600 text-lg mb-2">Selecione um relatório acima</h3>
-              <p className="text-gray-400 text-sm">Clique em um dos cards para visualizar o relatório detalhado</p>
-            </div>
-          )}
-        </div>
-      )}
-
-      {activeTab === 'SETTINGS' && (
-        <div className="space-y-8 py-4">
-          <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Configurações</h2></div>
-          
-          <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 flex flex-col items-center gap-6"><h3 className="font-black text-gray-800 uppercase text-xs tracking-widest">Logo da Empresa</h3><div onClick={() => logoInputRef.current?.click()} className="w-full aspect-[2/1] bg-gray-50 border-4 border-dashed border-gray-200 rounded-3xl flex items-center justify-center cursor-pointer overflow-hidden group transition-all hover:bg-gray-100">{props.logo ? <img src={props.logo} className="w-full h-full object-contain" /> : <div className="text-center"><i className="fa-solid fa-cloud-arrow-up text-3xl text-gray-300 mb-2"></i><p className="text-[10px] font-black text-gray-400 uppercase">Fazer Upload</p></div>}</div><input type="file" ref={logoInputRef} className="hidden" accept="image/*" onChange={handleLogoUpload} /></div>
-          
-          <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 space-y-6"><h3 className="font-black text-gray-800 uppercase text-xs tracking-widest mb-4">Regras de Margem</h3>
-            <div className="bg-blue-50 p-4 rounded-2xl"><div className="flex items-center justify-between mb-4"><span className="text-xs font-black text-blue-700 uppercase">Margem Global Ativa</span><button onClick={() => props.setMargemGlobalAtiva(!props.margemGlobalAtiva)} className={`w-14 h-8 rounded-full relative transition-colors ${props.margemGlobalAtiva ? 'bg-blue-600' : 'bg-gray-300'}`}><div className={`absolute top-1 w-6 h-6 bg-white rounded-full transition-all ${props.margemGlobalAtiva ? 'left-7' : 'left-1'}`}></div></button></div>{props.margemGlobalAtiva && (<div className="space-y-2"><label className="text-[9px] font-black text-blue-400 uppercase">Valor Margem Global (%)</label><input type="number" value={props.margemGlobalValor} onChange={e => props.setMargemGlobalValor(parseFloat(e.target.value))} className="w-full p-4 bg-white border border-blue-200 rounded-xl font-black text-blue-600 outline-none" /></div>)}</div>
-            <div className="bg-rose-50 p-4 rounded-2xl"><div className="flex items-center justify-between mb-4"><span className="text-xs font-black text-rose-700 uppercase">Trava Margem Mínima</span><button onClick={() => props.setMargemMinimaAtiva(!props.margemMinimaAtiva)} className={`w-14 h-8 rounded-full relative transition-colors ${props.margemMinimaAtiva ? 'bg-rose-600' : 'bg-gray-300'}`}><div className={`absolute top-1 w-6 h-6 bg-white rounded-full transition-all ${props.margemMinimaAtiva ? 'left-7' : 'left-1'}`}></div></button></div>{props.margemMinimaAtiva && (<div className="space-y-2"><label className="text-[9px] font-black text-rose-400 uppercase">Valor Margem Mínima (%)</label><input type="number" value={props.margemMinima} onChange={e => props.setMargemMinima(parseFloat(e.target.value))} className="w-full p-4 bg-white border border-rose-200 rounded-xl font-black text-rose-600 outline-none" /></div>)}</div>
-          </div>
-
-          <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 space-y-6"><h3 className="font-black text-gray-800 uppercase text-xs tracking-widest mb-4">Contas Pix</h3>
-            <div className="p-4 bg-gray-50 rounded-3xl border border-gray-100 space-y-4">
-              <div className="space-y-1">
-                <label className="text-[9px] font-black text-gray-400 uppercase">Nome Banco 1</label>
-                <input value={props.pix1Name} onChange={e => props.setPix1Name(e.target.value)} className="w-full p-3 bg-white border rounded-xl font-bold" />
-              </div>
-              <div className="flex items-center gap-4">
-                <div onClick={() => pix1InputRef.current?.click()} className="w-16 h-16 bg-white border rounded-2xl flex items-center justify-center cursor-pointer overflow-hidden">
-                  {props.pix1Code ? <img src={props.pix1Code} className="w-full h-full object-cover" /> : <i className="fa-solid fa-qrcode text-gray-200"></i>}
-                </div>
-                <button onClick={() => pix1InputRef.current?.click()} className="flex-1 bg-white border border-gray-200 p-3 rounded-2xl text-[9px] font-black uppercase text-gray-400">Alterar QR Code</button>
-              </div>
-              <input type="file" ref={pix1InputRef} className="hidden" accept="image/*" onChange={e => handlePixUpload(e, 1)} />
-            </div>
-
-            <div className="p-4 bg-gray-50 rounded-3xl border border-gray-100 space-y-4">
-              <div className="space-y-1">
-                <label className="text-[9px] font-black text-gray-400 uppercase">Nome Banco 2</label>
-                <input value={props.pix2Name} onChange={e => props.setPix2Name(e.target.value)} className="w-full p-3 bg-white border rounded-xl font-bold" />
-              </div>
-              <div className="flex items-center gap-4">
-                <div onClick={() => pix2InputRef.current?.click()} className="w-16 h-16 bg-white border rounded-2xl flex items-center justify-center cursor-pointer overflow-hidden">
-                  {props.pix2Code ? <img src={props.pix2Code} className="w-full h-full object-cover" /> : <i className="fa-solid fa-qrcode text-gray-200"></i>}
-                </div>
-                <button onClick={() => pix2InputRef.current?.click()} className="flex-1 bg-white border border-gray-200 p-3 rounded-2xl text-[9px] font-black uppercase text-gray-400">Alterar QR Code</button>
-              </div>
-              <input type="file" ref={pix2InputRef} className="hidden" accept="image/*" onChange={e => handlePixUpload(e, 2)} />
-            </div>
-          </div>
-
-          <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 space-y-4"><h3 className="font-black text-gray-800 uppercase text-xs tracking-widest mb-4">Alterar Senhas (PIN)</h3><select value={pwUser} onChange={e => setPwUser(e.target.value)} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase"><option value="">Selecionar Usuário</option>{props.users.map(u => (<option key={u.id} value={u.id}>{u.nome} ({u.role})</option>))}</select><input type="password" value={pwNew} onChange={e => setPwNew(e.target.value)} placeholder="Novo PIN (6 dígitos)" maxLength={6} className="w-full p-4 bg-gray-50 border rounded-2xl font-black text-center text-xl tracking-[0.5em]" /><button onClick={handleUpdatePassword} className="w-full bg-slate-900 text-white py-5 rounded-2xl font-black uppercase text-xs shadow-xl active:scale-95 transition-all">Atualizar PIN</button></div>
-          
-          <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 space-y-4"><h3 className="font-black text-gray-800 uppercase text-xs tracking-widest mb-4">Dados da Empresa</h3>
-            <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Razão Social / Nome</label><input value={props.companyName} onChange={e => props.setCompanyName(e.target.value)} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div>
-            <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">CNPJ</label><input value={props.companyCnpj} onChange={e => props.setCompanyCnpj(e.target.value)} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div>
-          </div>
-        </div>
-      )}
-
-      {activeTab === 'CARGAS' && (
         <div className="space-y-4">
-          <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Gestão de Cargas</h2></div>
-          <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100"><div className="flex justify-between items-center mb-4"><h3 className="font-black text-gray-800 uppercase text-[10px]">Vendedor Responsável</h3>{selectedVendedorId && <button onClick={handleZeroCarga} className="text-[9px] font-black text-rose-500 uppercase flex items-center gap-1"><i className="fa-solid fa-rotate-left"></i> Zerar Carga</button>}</div><select value={selectedVendedorId} onChange={e => setSelectedVendedorId(e.target.value)} className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl outline-none font-semibold text-sm"><option value="">Selecione um vendedor...</option>{props.users.filter(u => u.role === 'VENDEDOR' && u.ativo).map(u => <option key={u.id} value={u.id}>{u.nome} ({formatRouteName(u.rota)})</option>)}</select></div>
-          {selectedVendedorId && (<div className="pb-40"><div className="grid gap-1.5 px-1">{props.products.map(p => { const noV = props.cargas.find(c => c.vendedorId === selectedVendedorId && c.produtoId === p.id)?.quantidade ?? 0; return (<div key={p.id} className="bg-white px-3 py-2 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between"><div className="flex-1 min-w-0 pr-3"><h4 className="font-bold text-gray-800 text-[11px] leading-tight uppercase truncate">{p.nome}</h4><p className="text-[9px] text-gray-400 font-semibold mt-0.5">C: {(p.estoquePrincipal ?? 0)} | V: {noV}</p></div><div className="flex items-center bg-gray-50 rounded-xl p-1 gap-1"><button onClick={() => updateStaging(p.id, -1)} className="w-8 h-8 bg-white border border-gray-200 text-gray-400 rounded-lg active:scale-90 flex items-center justify-center"><i className="fa-solid fa-plus text-[10px]"></i></button><input type="number" inputMode="numeric" value={stagingCarga[p.id] === undefined ? '' : stagingCarga[p.id]} onChange={(e) => handleStagingInputChange(p.id, e.target.value)} onFocus={(e) => e.target.select()} className="w-10 bg-transparent text-center font-black text-xs outline-none border-none" /><button onClick={() => updateStaging(p.id, 1)} className="w-8 h-8 bg-blue-600 text-white rounded-lg active:scale-90 shadow-sm flex items-center justify-center"><i className="fa-solid fa-plus text-[10px]"></i></button></div></div>); })}</div></div>)}
-          {selectedVendedorId && (<div className="fixed bottom-0 left-0 right-0 p-4 bg-white/95 backdrop-blur-md border-t border-gray-100 shadow-[0_-10px_30px_rgba(0,0,0,0.1)] z-50 max-w-lg mx-auto safe-bottom"><div className="flex flex-row gap-2"><button onClick={() => setShowConfirmApply(true)} disabled={!hasCargaChanges} className={`flex-1 font-black py-4 rounded-2xl shadow-xl flex flex-col items-center justify-center gap-1 transition-all text-[9px] uppercase tracking-tighter ${hasCargaChanges ? 'bg-emerald-600 text-white active:scale-95' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}><i className="fa-solid fa-check-circle text-sm"></i> Aplicar Agora</button><button onClick={() => setShowConfirmSync(true)} disabled={!hasCargaChanges} className={`flex-1 font-black py-4 rounded-2xl shadow-xl flex flex-col items-center justify-center gap-1 transition-all text-[9px] uppercase tracking-tighter ${hasCargaChanges ? 'bg-gray-900 text-white active:scale-95' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}><i className="fa-solid fa-truck-loading text-sm"></i> Enviar Pendente</button></div></div>)}
-        </div>
-      )}
-
-      {activeTab === 'CLIENTES' && (
-        <div className="space-y-4">
-          <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Gestão de Clientes</h2></div>
-          <div className="flex flex-wrap bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner gap-1"><button onClick={() => setRouteFilter('TODOS')} className={`flex-1 min-w-[70px] py-2 rounded-xl text-[9px] font-black uppercase transition-all ${routeFilter === 'TODOS' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>Todos</button>{availableRoutes.map(r => (<button key={r} onClick={() => setRouteFilter(r)} className={`flex-1 min-w-[70px] py-2 rounded-xl text-[9px] font-black uppercase transition-all ${routeFilter === r ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>{formatRouteName(r)}</button>))}</div>
-          <div className="flex gap-2"><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar cliente..." className="flex-1 px-4 py-3 bg-white border border-gray-200 rounded-xl text-sm" /><button onClick={() => handleOpenClient('NEW')} className="bg-blue-600 text-white w-12 h-12 rounded-xl flex items-center justify-center shadow-lg active:scale-90 transition-transform"><i className="fa-solid fa-user-plus"></i></button></div>
-          <div className="grid gap-2 px-1">{filteredClients.map(c => (<div key={c.id} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex items-center justify-between transition-all hover:border-blue-200"><div className="flex-1 min-w-0 pr-2 cursor-pointer" onClick={() => setViewingClientHistory(c)}><div className="flex items-center gap-2"><h3 className="font-bold text-gray-800 text-[13px] leading-tight uppercase truncate">{c.nomeFantasia}</h3>{c.telefone && <a href={`https://wa.me/55${c.telefone.replace(/\D/g, '')}`} target="_blank" className="text-emerald-500" onClick={(e) => e.stopPropagation()}><i className="fa-brands fa-whatsapp text-lg"></i></a>}</div><div className="flex items-center gap-3 mt-1.5"><p className="text-[10px] text-gray-400 font-black uppercase truncate">{DIAS_SEMANA[c.diaRoteiro]}</p><span className="text-[8px] font-black px-1.5 py-0.5 rounded uppercase bg-blue-100 text-blue-600">{formatRouteName(c.rota)}</span><div className="flex items-center gap-1.5 bg-blue-50 px-2 py-0.5 rounded border border-blue-100 shadow-inner whitespace-nowrap"><i className="fa-solid fa-chart-line text-blue-400 text-[10px]"></i><span className="text-[11px] font-black text-blue-600">R$ {getClientAvgRevenue(c.id)}</span></div></div></div><div className="flex flex-col gap-1"><div className="flex gap-2"><button onClick={(e) => { e.stopPropagation(); handleOpenClient(c); }} className="bg-blue-50 text-blue-600 w-9 h-9 rounded-lg border border-blue-100 flex items-center justify-center active:scale-90 shadow-sm"><i className="fa-solid fa-pencil-alt text-sm"></i></button><button onClick={(e) => { e.stopPropagation(); setConfirmDelete({ id: c.id, type: 'CLIENT', name: c.nomeFantasia }); }} className="bg-rose-50 text-rose-600 w-9 h-9 rounded-lg border border-rose-100 flex items-center justify-center active:scale-90 shadow-sm"><i className="fa-solid fa-trash-can text-sm"></i></button></div></div></div>))}</div>
-        </div>
-      )}
-
-      {activeTab === 'CAIXA' && (
-        <div className="space-y-6 py-4">
-          <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Caixa</h2></div>
-          <div className="grid gap-4 px-1">{props.users.filter(u => u.role === 'VENDEDOR' && u.ativo).map(v => { const stats = getVendedorStats(v.id); return (<div key={v.id} className="bg-white rounded-[2.5rem] shadow-xl border-t-4 border-blue-500 p-8 flex flex-col gap-6"><div className="flex items-center gap-4"><div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-3xl flex items-center justify-center font-black overflow-hidden border-4 border-white shadow-md">{v.foto ? <img src={v.foto} className="w-full h-full object-cover" /> : <i className="fa-solid fa-user text-2xl"></i>}</div><div><h3 className="font-black text-gray-800 text-lg leading-none mb-1 uppercase truncate max-w-[150px]">{v.nome}</h3><p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">{formatRouteName(v.rota)}</p></div></div><div className="space-y-4"><div className="grid grid-cols-2 gap-4"><div className="bg-gray-50 p-5 rounded-[2rem] border border-gray-100 flex flex-col items-center"><p className="text-[9px] text-gray-400 font-black uppercase mb-2 text-center leading-none">Vendas Hoje</p><p className="text-lg font-black text-gray-800">R$ {stats.vendasHoje.toFixed(2)}</p></div><div className={`${stats.comissaoDisponivel < 0 ? 'bg-rose-50 border-rose-100' : 'bg-emerald-50 border-emerald-100'} p-5 rounded-[2rem] border flex flex-col items-center`}><p className={`text-[9px] ${stats.comissaoDisponivel < 0 ? 'text-rose-600' : 'text-emerald-600'} font-black uppercase mb-2 text-center leading-none`}>Disponível</p><p className={`text-lg font-black ${stats.comissaoDisponivel < 0 ? 'text-rose-700' : 'text-gray-800'}`}>R$ {stats.comissaoDisponivel.toFixed(2)}</p></div></div><div className="bg-orange-50 p-4 rounded-2xl border border-orange-100 flex justify-between items-center"><span className="text-[9px] font-black text-orange-600 uppercase">Comissão a Receber</span><span className="text-sm font-black text-orange-700">R$ {stats.comissaoAReceber.toFixed(2)}</span></div></div><button onClick={() => handleOpenPayout(v)} className="w-full bg-emerald-600 text-white py-5 rounded-3xl font-black text-xs uppercase shadow-xl active:scale-95 transition-all tracking-widest">Pagar Comissão</button></div>); })}</div>
-        </div>
-      )}
-
-      {activeTab === 'ROTEIRO' && (
-        <div className="space-y-6 py-4">
-          <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Roteiro Semanal</h2></div>
-          <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner overflow-x-auto"><button onClick={() => setRouteFilter('TODOS')} className={`flex-shrink-0 px-6 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all ${routeFilter === 'TODOS' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>Todos</button>{availableRoutes.map(r => (<button key={r} onClick={() => setRouteFilter(r)} className={`flex-shrink-0 px-6 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all ${routeFilter === r ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>{formatRouteName(r)}</button>))}</div>
-          <div className="space-y-3 px-1">{[1, 2, 3, 4, 5, 6].map(dia => { const isOpen = expandedDay === dia; const clientsInDay = props.clients.filter(c => c.diaRoteiro === dia && c.ativo && (routeFilter === 'TODOS' || c.rota === routeFilter)).sort((a, b) => { const orderMap = new Map(props.clientOrder.map((id, idx) => [id, idx])); const idxA = orderMap.get(a.id) ?? (a.ordem || 0); const idxB = orderMap.get(b.id) ?? (b.ordem || 0); return idxA - idxB; }); return (<div key={dia} className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden"><button onClick={() => setExpandedDay(isOpen ? null : dia)} className={`w-full flex items-center justify-between p-5 text-left ${isOpen ? 'bg-indigo-50 text-indigo-700' : 'bg-white text-gray-700'}`}><div className="flex items-center gap-3"><div className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-[10px] ${isOpen ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-400'}`}>{dia}</div><span className="font-black uppercase text-xs tracking-tight">{DIAS_SEMANA[dia] ?? 'N/D'}</span></div><div className="flex items-center gap-2"><span className="text-[9px] font-black uppercase opacity-40">{clientsInDay.length} clientes</span><i className={`fa-solid ${isOpen ? 'fa-chevron-up' : 'fa-chevron-down'} text-[10px]`}></i></div></button>{isOpen && (<div className="p-4 bg-white space-y-2 border-t border-indigo-50 animate-in slide-in-from-top duration-300">{clientsInDay.map((c, index) => (<div key={c.id} className="p-3 bg-gray-50 rounded-2xl flex items-center justify-between group"><div className="flex flex-col gap-1 mr-3"><button onClick={(e)=>{e.stopPropagation(); moveClient(c.id, 'UP');}} className="w-7 h-7 bg-white border text-gray-400 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-chevron-up text-[10px]"></i></button><button onClick={(e)=>{e.stopPropagation(); moveClient(c.id, 'DOWN');}} className="w-7 h-7 bg-white border text-gray-400 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-chevron-down text-[10px]"></i></button></div><div className="flex-1 cursor-pointer" onClick={() => setViewingClientHistory(c)}><p className="font-bold text-gray-800 text-xs uppercase">{c.nomeFantasia}</p><p className="text-[9px] text-gray-400 font-bold mt-0.5">{c.bairro || 'Sem Bairro'}</p></div><div className="flex items-center gap-2"><span className="text-[8px] font-black px-1.5 py-0.5 rounded uppercase bg-blue-100 text-blue-600">{formatRouteName(c.rota)}</span><button onClick={(e)=>{e.stopPropagation(); handleOpenClient(c);}} className="w-8 h-8 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center active:scale-90 shadow-sm"><i className="fa-solid fa-pencil-alt text-xs"></i></button></div></div>))}</div>)}</div>); })}</div>
-        </div>
-      )}
-
-      {activeTab === 'CONTAS_RECEBER' && (
-        <div className="space-y-4">
-          <header className="px-1 flex justify-between items-center"><h2 className="text-xs font-black text-gray-400 uppercase tracking-wider">Contas a Receber</h2><button onClick={() => setFilterOverdueOnly(!filterOverdueOnly)} className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all flex items-center gap-2 shadow-sm ${filterOverdueOnly ? 'bg-rose-600 text-white' : 'bg-white text-gray-400 border border-gray-100'}`}><i className={`fa-solid ${filterOverdueOnly ? 'fa-calendar-exclamation' : 'fa-calendar-days'}`}></i>{filterOverdueOnly ? 'Vencidas/Hoje' : 'Todas'}</button></header>
+          <header className="px-1 flex justify-between items-center"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Relatorios</h2></header>
           
           <div className="flex bg-gray-100 p-1 rounded-2xl mx-1 shadow-inner overflow-x-auto gap-1">
-            {(['TODOS', 'COMUM', 'CHEQUE', 'BOLETO'] as const).map(t => (
-              <button 
-                key={t} 
-                onClick={() => setCreditTypeFilter(t)} 
-                className={`flex-1 py-2 rounded-xl text-[9px] font-black uppercase transition-all ${creditTypeFilter === t ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}
-              >
-                {t === 'COMUM' ? 'Comum' : t}
-              </button>
+            {(['RESUMO', 'TOP_PRODUTOS', 'TOP_CLIENTES', 'CATEGORIAS', 'VENDEDORES'] as const).map(r => (
+              <button key={r} onClick={() => setReportFilter(r)} className={`flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all whitespace-nowrap ${reportFilter === r ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>{r === 'TOP_PRODUTOS' ? 'Top Produtos' : r === 'TOP_CLIENTES' ? 'Top Clientes' : r === 'VENDEDORES' ? 'Vendedores' : r === 'CATEGORIAS' ? 'Categorias' : 'Resumo'}</button>
             ))}
           </div>
 
-          <div className="px-1">
-            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar cliente..." className="w-full p-4 bg-white border border-gray-100 rounded-2xl shadow-sm text-sm outline-none focus:ring-2 focus:ring-blue-100" />
-          </div>
+          {reportFilter === 'RESUMO' && (() => {
+            const today = new Date(); today.setHours(0,0,0,0);
+            const todayStr = today.toISOString().slice(0,10);
+            const weekAgo = new Date(today); weekAgo.setDate(weekAgo.getDate() - 7);
+            const monthAgo = new Date(today); monthAgo.setDate(monthAgo.getDate() - 30);
+            const vendasHoje = props.sales.filter(s => s.data && new Date(s.data) >= today);
+            const vendasSemana = props.sales.filter(s => s.data && new Date(s.data) >= weekAgo);
+            const vendasMes = props.sales.filter(s => s.data && new Date(s.data) >= monthAgo);
+            const sumV = (arr: any[]) => arr.reduce((a, s) => a + (s.valorTotal || 0), 0);
+            const sumP = (arr: any[]) => arr.reduce((a, s) => a + (s.valorPago || 0), 0);
+            const recebidoMes = props.payoutLogs.filter(p => p.dataPagamento && new Date(p.dataPagamento) >= monthAgo).reduce((a, p) => a + (p.valorPago || 0), 0);
+            const ticketMedio = vendasMes.length > 0 ? sumV(vendasMes) / vendasMes.length : 0;
+            return (
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm"><p className="text-[9px] font-black text-gray-400 uppercase">Vendas Hoje</p><p className="text-xl font-black text-gray-800 mt-1">R$ {sumV(vendasHoje).toFixed(2)}</p><p className="text-[9px] text-gray-400 font-bold">{vendasHoje.length} pedidos</p></div>
+                  <div className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm"><p className="text-[9px] font-black text-gray-400 uppercase">Vendas Semana</p><p className="text-xl font-black text-gray-800 mt-1">R$ {sumV(vendasSemana).toFixed(2)}</p><p className="text-[9px] text-gray-400 font-bold">{vendasSemana.length} pedidos</p></div>
+                  <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100 shadow-sm"><p className="text-[9px] font-black text-blue-400 uppercase">Vendas Mes</p><p className="text-xl font-black text-blue-700 mt-1">R$ {sumV(vendasMes).toFixed(2)}</p><p className="text-[9px] text-blue-400 font-bold">{vendasMes.length} pedidos</p></div>
+                  <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100 shadow-sm"><p className="text-[9px] font-black text-emerald-400 uppercase">Recebido (Comissoes)</p><p className="text-xl font-black text-emerald-700 mt-1">R$ {recebidoMes.toFixed(2)}</p></div>
+                  <div className="bg-purple-50 p-4 rounded-2xl border border-purple-100 shadow-sm"><p className="text-[9px] font-black text-purple-400 uppercase">Ticket Medio</p><p className="text-xl font-black text-purple-700 mt-1">R$ {ticketMedio.toFixed(2)}</p></div>
+                  <div className="bg-amber-50 p-4 rounded-2xl border border-amber-100 shadow-sm"><p className="text-[9px] font-black text-amber-400 uppercase">A Receber</p><p className="text-xl font-black text-amber-700 mt-1">R$ {props.sales.filter(s => s.statusPagamento === 'PENDENTE').reduce((a, s) => a + ((s.valorTotal || 0) - (s.valorPago || 0)), 0).toFixed(2)}</p></div>
+                </div>
+              </div>
+            );
+          })()}
 
-          <div className="grid gap-3 px-1">{contasAReceber.map(s => { const saldo = Number(((s.valorTotal ?? 0) - (s.valorPago ?? 0)).toFixed(2)); const today = new Date(); today.setHours(0,0,0,0); const dueDate = s.dataVencimento ? new Date(s.dataVencimento) : null; if (dueDate) dueDate.setHours(0,0,0,0); const isOverdue = dueDate ? dueDate <= today : false; return (<div key={s.id} className={`p-5 rounded-3xl border shadow-sm flex flex-col transition-all ${isOverdue ? 'bg-rose-50 border-rose-200' : 'bg-white border-gray-100'}`}><div className="flex justify-between items-start mb-2"><div className="flex-1 pr-4"><h4 className={`font-bold text-sm leading-tight uppercase cursor-pointer ${isOverdue ? 'text-rose-900' : 'text-gray-800'}`} onClick={() => setViewingClientHistory(props.clients.find(c => c.id === s.clientId)!)}>{props.clients.find(c => c.id === s.clientId)?.nomeFantasia || 'Cliente'}</h4><div className="flex flex-col mt-2"><span className="text-[9px] font-black uppercase text-gray-400">Vencimento</span><span className="text-xs font-black text-gray-800">{s.dataVencimento ? new Date(s.dataVencimento).toLocaleDateString() : 'N/D'}</span><span className="text-[8px] font-black uppercase text-blue-600 mt-1">{s.detalhePagamento || 'COMUM'}</span></div></div><div className="text-right flex items-center gap-4"><div><p className="text-sm font-black text-gray-800 leading-none">R$ {saldo.toFixed(2)}</p><p className="text-[9px] text-gray-400 font-bold uppercase mt-1">Saldo</p></div></div></div><button onClick={() => { setShowReceiveModal(s); setValorRecebidoParcial(saldo.toString()); }} className={`w-full py-3 rounded-2xl text-[10px] font-black uppercase mt-3 shadow-lg active:scale-95 ${isOverdue ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white'}`}>RECEBER</button></div>)})}</div>
+          {reportFilter === 'TOP_PRODUTOS' && (() => {
+            const prodMap = new Map<string, { nome: string; qtd: number; valor: number }>();
+            props.sales.forEach(s => { (s.itens || []).forEach((i: any) => {
+                const ex = prodMap.get(i.produtoId) || { nome: props.products.find(p => p.id === i.produtoId)?.nome || '?', qtd: 0, valor: 0 };
+                prodMap.set(i.produtoId, { nome: ex.nome, qtd: ex.qtd + (i.quantidade || 0), valor: ex.valor + (i.quantidade || 0) * (i.precoVenda || 0) });
+              }); });
+            const ranked = [...prodMap.values()].sort((a, b) => b.qtd - a.qtd).slice(0, 15);
+            const maxQtd = ranked.length > 0 ? ranked[0].qtd : 1;
+            return (
+              <div className="space-y-2">
+                {ranked.map((p, i) => (
+                  <div key={i} className="bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
+                    <div className="flex justify-between items-center mb-2"><span className="font-bold text-xs text-gray-800 uppercase">{i + 1}. {p.nome}</span><span className="text-xs font-black text-blue-600">{p.qtd} un</span></div>
+                    <div className="w-full bg-gray-100 rounded-full h-2"><div className="bg-blue-500 h-2 rounded-full transition-all" style={{ width: `${(p.qtd / maxQtd) * 100}%` }}></div></div>
+                    <p className="text-[9px] text-gray-400 font-bold mt-1">R$ {p.valor.toFixed(2)} em faturamento</p>
+                  </div>
+                ))}
+                {ranked.length === 0 && <p className="text-center text-gray-400 text-xs font-bold py-8">Nenhuma venda registrada</p>}
+              </div>
+            );
+          })()}
+
+          {reportFilter === 'TOP_CLIENTES' && (() => {
+            const cliMap = new Map<string, { nome: string; qtd: number; valor: number }>();
+            props.sales.forEach(s => {
+              const ex = cliMap.get(s.clientId) || { nome: props.clients.find(c => c.id === s.clientId)?.nomeFantasia || '?', qtd: 0, valor: 0 };
+              cliMap.set(s.clientId, { nome: ex.nome, qtd: ex.qtd + 1, valor: ex.valor + (s.valorTotal || 0) });
+            });
+            const ranked = [...cliMap.values()].sort((a, b) => b.valor - a.valor).slice(0, 15);
+            const maxVal = ranked.length > 0 ? ranked[0].valor : 1;
+            return (
+              <div className="space-y-2">
+                {ranked.map((c, i) => (
+                  <div key={i} className="bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
+                    <div className="flex justify-between items-center mb-2"><span className="font-bold text-xs text-gray-800 uppercase">{i + 1}. {c.nome}</span><span className="text-xs font-black text-emerald-600">{c.qtd} pedidos</span></div>
+                    <div className="w-full bg-gray-100 rounded-full h-2"><div className="bg-emerald-500 h-2 rounded-full transition-all" style={{ width: `${(c.valor / maxVal) * 100}%` }}></div></div>
+                    <p className="text-[9px] text-gray-400 font-bold mt-1">R$ {c.valor.toFixed(2)} em compras</p>
+                  </div>
+                ))}
+                {ranked.length === 0 && <p className="text-center text-gray-400 text-xs font-bold py-8">Nenhuma venda registrada</p>}
+              </div>
+            );
+          })()}
+
+          {reportFilter === 'CATEGORIAS' && (() => {
+            const catMap = new Map<string, { nome: string; qtd: number; valor: number }>();
+            props.sales.forEach(s => {
+              (s.itens || []).forEach((item: any) => {
+                const prod = props.products.find(p => p.id === item.produtoId);
+                const catId = prod?.categoryId || 'sem-categoria';
+                const catName = props.categories.find(c => c.id === catId)?.name || 'Sem Categoria';
+                const ex = catMap.get(catId) || { nome: catName, qtd: 0, valor: 0 };
+                catMap.set(catId, { nome: ex.nome, qtd: ex.qtd + (item.quantidade || 0), valor: ex.valor + (item.quantidade || 0) * (item.precoVenda || 0) });
+              });
+            });
+            const ranked = [...catMap.values()].sort((a, b) => b.valor - a.valor);
+            const totalValor = ranked.reduce((a, c) => a + c.valor, 0) || 1;
+            const colors = ['bg-blue-500', 'bg-emerald-500', 'bg-purple-500', 'bg-amber-500', 'bg-rose-500', 'bg-indigo-500', 'bg-cyan-500'];
+            return (
+              <div className="space-y-2">
+                {ranked.map((c, i) => (
+                  <div key={i} className="bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
+                    <div className="flex justify-between items-center mb-2"><span className="font-bold text-xs text-gray-800 uppercase">{c.nome}</span><span className="text-xs font-black text-gray-500">{((c.valor / totalValor) * 100).toFixed(1)}%</span></div>
+                    <div className="w-full bg-gray-100 rounded-full h-2"><div className={`${colors[i % colors.length]} h-2 rounded-full transition-all`} style={{ width: `${(c.valor / totalValor) * 100}%` }}></div></div>
+                    <div className="flex justify-between mt-1"><p className="text-[9px] text-gray-400 font-bold">{c.qtd} unidades</p><p className="text-[9px] font-black text-gray-700">R$ {c.valor.toFixed(2)}</p></div>
+                  </div>
+                ))}
+                {ranked.length === 0 && <p className="text-center text-gray-400 text-xs font-bold py-8">Nenhuma venda registrada</p>}
+              </div>
+            );
+          })()}
+
+          {reportFilter === 'VENDEDORES' && (() => {
+            const venMap = new Map<string, { nome: string; qtd: number; valor: number; comissao: number }>();
+            props.sales.forEach(s => {
+              const user = props.users.find(u => u.id === s.vendedorId);
+              const nome = user?.nome || '?';
+              const ex = venMap.get(s.vendedorId) || { nome, qtd: 0, valor: 0, comissao: 0 };
+              const comVal = props.commissions.filter(c => c.saleId === s.id).reduce((a, c) => a + (c.valor || 0), 0);
+              venMap.set(s.vendedorId, { nome, qtd: ex.qtd + 1, valor: ex.valor + (s.valorTotal || 0), comissao: ex.comissao + comVal });
+            });
+            const ranked = [...venMap.values()].sort((a, b) => b.valor - a.valor);
+            return (
+              <div className="space-y-2">
+                {ranked.map((v, i) => (
+                  <div key={i} className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
+                    <div className="flex justify-between items-center mb-1"><span className="font-bold text-sm text-gray-800 uppercase">{i + 1}. {v.nome}</span><span className="text-xs font-black text-blue-600">R$ {v.valor.toFixed(2)}</span></div>
+                    <div className="grid grid-cols-2 gap-2 mt-2">
+                      <div className="bg-gray-50 p-2 rounded-xl text-center"><p className="text-[8px] font-black text-gray-400 uppercase">Pedidos</p><p className="text-xs font-black text-gray-800">{v.qtd}</p></div>
+                      <div className="bg-emerald-50 p-2 rounded-xl text-center"><p className="text-[8px] font-black text-emerald-400 uppercase">Comissao</p><p className="text-xs font-black text-emerald-700">R$ {v.comissao.toFixed(2)}</p></div>
+                    </div>
+                  </div>
+                ))}
+                {ranked.length === 0 && <p className="text-center text-gray-400 text-xs font-bold py-8">Nenhuma venda registrada</p>}
+              </div>
+            );
+          })()}
         </div>
       )}
 
+      {activeTab === 'BACKUP' && (
+        <div className="space-y-4">
+          <header className="px-1"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Backup de Dados</h2><p className="text-[10px] text-gray-400 font-bold uppercase mt-1">Exporte seus dados para seguranca</p></header>
+
+          <div className="grid gap-3">
+            {[
+              { key: 'clientes', label: 'Base de Clientes', icon: 'fa-users', color: 'bg-blue-50 text-blue-600 border-blue-100', desc: `${props.clients.length} clientes cadastrados` },
+              { key: 'vendas', label: 'Historico de Vendas', icon: 'fa-receipt', color: 'bg-emerald-50 text-emerald-600 border-emerald-100', desc: `${props.sales.length} vendas registradas` },
+              { key: 'comissoes', label: 'Comissoes', icon: 'fa-percent', color: 'bg-purple-50 text-purple-600 border-purple-100', desc: `${props.commissions.length} comissoes` },
+              { key: 'produtos', label: 'Catalogo de Produtos', icon: 'fa-box', color: 'bg-amber-50 text-amber-600 border-amber-100', desc: `${props.products.length} produtos` },
+              { key: 'financeiro', label: 'Financeiro Completo', icon: 'fa-coins', color: 'bg-rose-50 text-rose-600 border-rose-100', desc: 'Vendas + recebimentos + comissoes' },
+              { key: 'tudo', label: 'Backup Completo', icon: 'fa-shield-halved', color: 'bg-gray-900 text-white border-gray-900', desc: 'Todos os dados do sistema' },
+            ].map(item => (
+              <div key={item.key} className={`p-4 rounded-2xl border shadow-sm flex items-center gap-4 ${item.color} transition-all active:scale-[0.98]`}>
+                <div className="w-12 h-12 rounded-xl bg-white/60 flex items-center justify-center flex-shrink-0"><i className={`fa-solid ${item.icon} text-lg`}></i></div>
+                <div className="flex-1 min-w-0"><h4 className="font-black text-sm uppercase">{item.label}</h4><p className="text-[9px] font-bold opacity-70 mt-0.5">{item.desc}</p></div>
+                <button onClick={() => {
+                  let data: any;
+                  let filename: string;
+                  if (item.key === 'clientes') { data = props.clients; filename = 'clientes.json'; }
+                  else if (item.key === 'vendas') { data = props.sales.map(s => ({ ...s, itens: s.itens })); filename = 'vendas.json'; }
+                  else if (item.key === 'comissoes') { data = { comissoes: props.commissions, pagamentos: props.payoutLogs }; filename = 'comissoes.json'; }
+                  else if (item.key === 'produtos') { data = props.products; filename = 'produtos.json'; }
+                  else if (item.key === 'financeiro') { data = { vendas: props.sales, recebimentos: props.payoutLogs, comissoes: props.commissions, despesas: props.expenses }; filename = 'financeiro.json'; }
+                  else { data = { clientes: props.clients, vendas: props.sales, produtos: props.products, comissoes: props.commissions, pagamentos: props.payoutLogs, usuarios: props.users, despesas: props.expenses, categorias: props.categories }; filename = 'backup-completo.json'; }
+                  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
+                  URL.revokeObjectURL(url);
+                  showToast(`${item.label} exportado!`);
+                }} className="bg-white/80 px-4 py-2.5 rounded-xl font-black text-[10px] uppercase active:scale-90 shadow-sm flex items-center gap-2"><i className="fa-solid fa-download"></i> Exportar</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       {showUserModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-sm rounded-[2rem] p-8 shadow-2xl overflow-y-auto max-h-[90vh]"><h3 className="font-black text-gray-800 uppercase text-sm mb-6 text-center">{showUserModal === 'NEW' ? 'Novo Vendedor' : 'Editar Vendedor'}</h3><div className="flex flex-col items-center mb-6"><div onClick={() => userPhotoInputRef.current?.click()} className="w-24 h-24 bg-purple-100 text-purple-600 rounded-[2rem] flex items-center justify-center font-black overflow-hidden border-4 border-white shadow-xl cursor-pointer relative group transition-all hover:scale-105">{userForm.foto ? <img src={userForm.foto} className="w-full h-full object-cover" /> : <i className="fa-solid fa-camera text-2xl"></i>}</div><input type="file" ref={userPhotoInputRef} className="hidden" accept="image/*" onChange={handleUserPhotoUpload} /></div><div className="space-y-4"><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome do Vendedor</label><input value={userForm.nome ?? ''} onChange={e => setUserForm({...userForm, nome: e.target.value})} placeholder="Nome Completo" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Telefone / WhatsApp</label><input value={userForm.telefone ?? ''} onChange={e => setUserForm({...userForm, telefone: e.target.value})} placeholder="Telefone" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Placa do Veículo</label><input value={userForm.placaVeiculo ?? ''} onChange={e => setUserForm({...userForm, placaVeiculo: e.target.value})} placeholder="Ex: ABC-1234" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div>{showUserModal !== 'NEW' && (<div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Rota Responsável</label><select value={userForm.rota || 'ROTA_01'} onChange={e => setUserForm({...userForm, rota: e.target.value})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold">{Array.from({ length: 50 }).map((_, i) => { const r = `ROTA_${String(i + 1).padStart(2, '0')}`; return <option key={r} value={r}>Rota {String(i + 1).padStart(2, '0')}</option>; })}</select></div>)}<div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">PIN de Acesso (6 dígitos)</label><input type="password" value={userForm.pin ?? ''} onChange={e => setUserForm({...userForm, pin: e.target.value})} placeholder="123456" maxLength={6} className="w-full p-4 bg-gray-50 border rounded-2xl font-black text-center text-xl tracking-[0.5em]" /></div><button onClick={handleSaveUser} className="w-full bg-purple-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 uppercase text-xs mt-4 tracking-widest">Salvar Vendedor</button><button onClick={() => setShowUserModal(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button></div></div></div>
       )}

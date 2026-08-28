@@ -1,16 +1,15 @@
-import { Sale, Carga, CargaPendente, Commission, CommissionPaymentLog, SystemMessage } from '@/types';
+// persistence.ts - Estado local e utilitários de persistência
 
 // Define a estrutura para persistir a Rota do Dia
 export interface DailyRouteState {
-  date: string; // Data no formato YYYY-MM-DD
-  clientIds: string[]; // IDs dos clientes na rota
-  skippedClientIds: string[]; // IDs dos clientes pulados
+  date: string;
+  clientIds: string[];
+  skippedClientIds: string[];
 }
 
 // Helper function to check if a string is a valid ISO date string
 const isIsoDateString = (value: any): boolean => {
   if (typeof value !== 'string') return false;
-  // Regex para verificar formatos ISO 8601 comuns
   return /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.\d{3}Z/.test(value) || /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value);
 };
 
@@ -29,12 +28,11 @@ export const loadLocalState = <T>(key: string, defaultValue: T): T => {
   const saved = localStorage.getItem(key);
   if (saved) {
     try {
-      // Use dateReviver to reconstruct Date objects
       const parsed = JSON.parse(saved, dateReviver);
       return parsed as T;
     } catch (e) {
       console.error(`Error parsing localStorage key ${key}`, e);
-      localStorage.removeItem(key); // Clear corrupted data
+      localStorage.removeItem(key);
     }
   }
   return defaultValue;
@@ -50,11 +48,3 @@ export const saveLocalState = <T>(key: string, state: T): void => {
     }
   }
 };
-
-// Define default values for local state arrays
-export const DEFAULT_CARGAS: Carga[] = [];
-export const DEFAULT_CARGAS_PENDENTES: CargaPendente[] = [];
-export const DEFAULT_SALES: Sale[] = [];
-export const DEFAULT_COMMISSIONS: Commission[] = [];
-export const DEFAULT_PAYOUT_LOGS: CommissionPaymentLog[] = [];
-export const DEFAULT_MESSAGES: SystemMessage[] = [];

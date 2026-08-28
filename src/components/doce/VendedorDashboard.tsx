@@ -772,7 +772,11 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
   if (selectedClient) {
     const pdvClient = clients.find(c => c.id === selectedClient.id);
-    if (!pdvClient) { setSelectedClient(null); return null; }
+    if (!pdvClient) {
+      // Use useEffect pattern: schedule state update for after render
+      setTimeout(() => setSelectedClient(null), 0);
+      return null;
+    }
 
   return (
       <PDV
@@ -793,7 +797,10 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
   if (viewingSale) {
     const cupomClient = clients.find(c => c.id === viewingSale.clientId);
-    if (!cupomClient) { setViewingSale(null); return null; }
+    if (!cupomClient) {
+      setTimeout(() => setViewingSale(null), 0);
+      return null;
+    }
     const canDeleteSale = (() => {
       const saleDate = new Date(viewingSale.data);
       const now = new Date();
@@ -1100,7 +1107,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
       {activeTab === 'HISTORY' && (
         <div className="space-y-4">
-          <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow_inner">{(['DIA', 'SEMANA', 'MES', 'GERAL'] as const).map(f => (<button key={f} onClick={() => setHistoryFilter(f)} className={`flex-1 py-2 rounded-xl text-[9px] font-black uppercase ${historyFilter === f ? 'bg-white text-[#1E3A5F] shadow-sm' : 'text-gray-400'}`}>{f}</button>))}</div>
+          <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner">{(['DIA', 'SEMANA', 'MES', 'GERAL'] as const).map(f => (<button key={f} onClick={() => setHistoryFilter(f)} className={`flex-1 py-2 rounded-xl text-[9px] font-black uppercase ${historyFilter === f ? 'bg-white text-[#1E3A5F] shadow-sm' : 'text-gray-400'}`}>{f}</button>))}</div>
           <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-md flex flex-col gap-4">
              <div className="flex justify-between items-center border-b border-gray-100 pb-3"><span className="text-xs font-black text-gray-400 uppercase">Total Geral</span><span className="text-2xl font-black text-gray-900">R$ {historySummary.total.toFixed(2)}</span></div>
              <div className="grid grid-cols-3 gap-3">
@@ -1150,7 +1157,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
       {activeTab === 'FINANCE' && (
         <div className="space-y-6">
-           <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow_inner">{(['DIA', 'SEMANA', 'MES', 'GERAL'] as const).map(f => (<button key={f} onClick={() => setFinanceFilter(f)} className={`flex-1 py-2 rounded-xl text-[9px] font-black uppercase ${financeFilter === f ? 'bg-white text-emerald-600 shadow-sm' : 'text-gray-400'}`}>{f}</button>))}</div>
+           <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner">{(['DIA', 'SEMANA', 'MES', 'GERAL'] as const).map(f => (<button key={f} onClick={() => setFinanceFilter(f)} className={`flex-1 py-2 rounded-xl text-[9px] font-black uppercase ${financeFilter === f ? 'bg-white text-emerald-600 shadow-sm' : 'text-gray-400'}`}>{f}</button>))}</div>
            
            <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col text-center">
               <p className="text-[9px] font-black uppercase text-gray-400 mb-1">Comissões Geradas no Período</p>
@@ -1574,16 +1581,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         </div>
       )}
           {confirmAction && (
-        <ConfirmModal
-          title={confirmAction.title}
-          message={confirmAction.message}
-          icon={confirmAction.icon}
-          type={(confirmAction.type as any) || 'confirm'}
-          onConfirm={confirmAction.onConfirm}
-          onCancel={() => setConfirmAction(null)}
-        />
-      )}
-      {confirmAction && (
         <ConfirmModal
           title={confirmAction.title}
           message={confirmAction.message}

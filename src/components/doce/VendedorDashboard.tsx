@@ -557,18 +557,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     }
   };
 
-  // Mover cliente na ordem GLOBAL (para aba CLIENTES) - função mantida para compatibilidade mas não usada na UI
-  const moveClient = (id: string, dir: 'UP' | 'DOWN') => {
-    const currentOrder = clientOrder.length > 0 ? clientOrder : clients.map(c => c.id);
-    const idx = currentOrder.indexOf(id);
-    if (idx === -1) return;
-    const newOrder = [...currentOrder];
-    if (dir === 'UP' && idx > 0) [newOrder[idx], newOrder[idx-1]] = [newOrder[idx-1], newOrder[idx]];
-    else if (dir === 'DOWN' && idx < newOrder.length - 1) [newOrder[idx], newOrder[idx+1]] = [newOrder[idx+1], newOrder[idx]];
-    setClientOrder(newOrder);
-    showToast("Ordem do cliente atualizada!");
-  };
-
   // NOVO: Mover cliente DENTRO DO DIA (para aba ROTEIRO SEMANAL) - PERSISTE NO SUPABASE
   const moveClientInDay = (clientId: string, dir: 'UP' | 'DOWN', day: number) => {
     // 1. Pega todos os clientes ativos da rota do vendedor, ordenados pela ordem global atual (clientOrder)

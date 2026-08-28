@@ -80,6 +80,7 @@ interface AdminDashboardProps {
 type TabType = 'HOME' | 'CATALOGO' | 'CATEGORIAS' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'BACKUP' | 'SETTINGS';
 
 type ReportType = 'RESUMO' | 'TOP_CLIENTES' | 'TOP_PRODUTOS' | 'CLIENTES_RISCO' | 'VENDAS_CATEGORIAS' | null;
+type ReportFilterType = 'RESUMO' | 'TOP_PRODUTOS' | 'TOP_CLIENTES' | 'CATEGORIAS' | 'VENDEDORES' | 'DIVIDAS';
 
 const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [activeTab, setActiveTab] = useState<TabType>(() => loadLocalState('admin_activeTab', 'HOME'));
@@ -125,7 +126,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [payoutType, setPayoutType] = useState<'TOTAL' | 'PARCIAL'>('TOTAL');
   const [partialAmount, setPartialAmount] = useState<string>('');
   const [periodoRelatorio, setPeriodoRelatorio] = useState<'HOJE' | 'SEMANA' | 'MES' | 'GERAL'>('MES');
+  const [reportFilter, setReportFilter] = useState<ReportFilterType>('RESUMO');
+  const [reportPeriodo, setReportPeriodo] = useState<'HOJE' | 'SEMANA' | 'MES' | 'GERAL'>('MES');
 
+  const [backupFormat, setBackupFormat] = useState<'csv' | 'json'>('csv');
   const [confirmAction, setConfirmAction] = useState<{title:string;message:string;icon:string;iconColor?:string;onConfirm:()=>void;type?:string}|null>(null);
   const [confirmDelete, setConfirmDelete] = useState<{ id: string, type: 'PRODUCT' | 'CLIENT' | 'USER' | 'CATEGORY' | 'SUBCATEGORY', name: string } | null>(null);
 
@@ -145,6 +149,59 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [stagingCarga, setStagingCarga] = useState<{ [pId: string]: number }>({});
 
   const logoInputRef = useRef<HTMLInputElement>(null);
+  const comprovanteFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [comprovanteModalSale, setComprovanteModalSale] = useState<Sale | null>(null);
+  const [comprovantePreview, setComprovantePreview] = useState<string | null>(null);
+  const [comprovanteUploading, setComprovanteUploading] = useState(false);
+  // Helpers para comprovante
+  const compressImage = (file: File): Promise<string> => new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const MAX = 1200;
+        let w = img.width, h = img.height;
+        if (w > MAX || h > MAX) { if (w > h) { h = (h / w) * MAX; w = MAX; } else { w = (w / h) * MAX; h = MAX; } }
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d')!.drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL('image/jpeg', 0.6));
+      };
+      img.src = e.target?.result as string;
+    };
+    reader.readAsDataURL(file);
+  });
+
+  const shareImage = async (base64: string, fileName: string) => {
+    const res = await fetch(base64);
+    const blob = await res.blob();
+    const file = new File([blob], fileName, { type: 'image/jpeg' });
+    if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: 'Comprovante de Venda' });
+    } else {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = fileName; a.click();
+      URL.revokeObjectURL(url);
+    }
+  };
+
+  const handleComprovanteCapture = async (saleId: string, file: File) => {
+    setComprovanteUploading(true);
+    try {
+      const base64 = await compressImage(file);
+      const { saleService } = await import('@/services/saleService');
+      const ok = await saleService.updateSale(saleId, { comprovanteFoto: base64 } as any);
+      if (ok) setComprovantePreview(base64);
+      else showToast('Erro ao salvar foto', 'error');
+    } catch (e) { showToast('Erro ao processar foto', 'error'); }
+    setComprovanteUploading(false);
+  };
+
+  const handleComprovanteShare = (sale: Sale) => {
+    if (sale.comprovanteFoto) shareImage(sale.comprovanteFoto, `comprovante_${sale.id}.jpg`);
+  };
+
   const pix1InputRef = useRef<HTMLInputElement>(null);
   const pix2InputRef = useRef<HTMLInputElement>(null);
   const userPhotoInputRef = useRef<HTMLInputElement>(null);
@@ -777,26 +834,42 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   };
 
   // Helper para renderizar cards de relatório
+  const REPORT_COLOR_MAP: Record<string, { active: string; icon: string; inactive: string; chevron: string }> = {
+    blue:    { active: 'border-blue-500 bg-blue-50 shadow-lg',   icon: 'bg-blue-600 text-white',   inactive: 'bg-blue-100 text-blue-600',   chevron: 'bg-blue-600 text-white' },
+    emerald: { active: 'border-emerald-500 bg-emerald-50 shadow-lg', icon: 'bg-emerald-600 text-white', inactive: 'bg-emerald-100 text-emerald-600', chevron: 'bg-emerald-600 text-white' },
+    purple:  { active: 'border-purple-500 bg-purple-50 shadow-lg',  icon: 'bg-purple-600 text-white',   inactive: 'bg-purple-100 text-purple-600',  chevron: 'bg-purple-600 text-white' },
+    amber:   { active: 'border-amber-500 bg-amber-50 shadow-lg',   icon: 'bg-amber-600 text-white',   inactive: 'bg-amber-100 text-amber-600',   chevron: 'bg-amber-600 text-white' },
+    rose:    { active: 'border-rose-500 bg-rose-50 shadow-lg',     icon: 'bg-rose-600 text-white',    inactive: 'bg-rose-100 text-rose-600',    chevron: 'bg-rose-600 text-white' },
+    indigo:  { active: 'border-indigo-500 bg-indigo-50 shadow-lg', icon: 'bg-indigo-600 text-white',  inactive: 'bg-indigo-100 text-indigo-600',  chevron: 'bg-indigo-600 text-white' },
+    cyan:    { active: 'border-cyan-500 bg-cyan-50 shadow-lg',     icon: 'bg-cyan-600 text-white',    inactive: 'bg-cyan-100 text-cyan-600',    chevron: 'bg-cyan-600 text-white' },
+    orange:  { active: 'border-orange-500 bg-orange-50 shadow-lg', icon: 'bg-orange-600 text-white',  inactive: 'bg-orange-100 text-orange-600', chevron: 'bg-orange-600 text-white' },
+    teal:    { active: 'border-teal-500 bg-teal-50 shadow-lg',     icon: 'bg-teal-600 text-white',    inactive: 'bg-teal-100 text-teal-600',    chevron: 'bg-teal-600 text-white' },
+    red:     { active: 'border-red-500 bg-red-50 shadow-lg',      icon: 'bg-red-600 text-white',     inactive: 'bg-red-100 text-red-600',     chevron: 'bg-red-600 text-white' },
+    green:   { active: 'border-green-500 bg-green-50 shadow-lg',   icon: 'bg-green-600 text-white',   inactive: 'bg-green-100 text-green-600',   chevron: 'bg-green-600 text-white' },
+    gray:    { active: 'border-gray-500 bg-gray-50 shadow-lg',    icon: 'bg-gray-600 text-white',    inactive: 'bg-gray-100 text-gray-600',    chevron: 'bg-gray-600 text-white' },
+  };
+
   const ReportCard = ({ icon, title, color, reportType, description }: { icon: string; title: string; color: string; reportType: ReportType; description: string }) => {
     const isActive = activeReport === reportType;
+    const colorClasses = REPORT_COLOR_MAP[color] || REPORT_COLOR_MAP.blue;
     return (
       <button 
         onClick={() => setActiveReport(isActive ? null : reportType)}
         className={`w-full p-5 rounded-2xl border-2 transition-all text-left ${
           isActive 
-            ? `border-${color}-500 bg-${color}-50 shadow-lg` 
+            ? colorClasses.active
             : 'border-gray-100 hover:border-gray-200 hover:bg-gray-50'
         }`}
       >
         <div className="flex items-start gap-4">
-          <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${isActive ? `bg-${color}-600 text-white` : `bg-${color}-100 text-${color}-600`}`}>
+          <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${isActive ? colorClasses.icon : colorClasses.inactive}`}>
             <i className={`fa-solid ${icon} ${isActive ? 'text-xl' : 'text-lg'}`}></i>
           </div>
           <div className="flex-1">
             <h4 className={`font-black text-gray-800 ${isActive ? 'text-lg' : 'text-base'}`}>{title}</h4>
             <p className={`text-gray-500 text-sm mt-1 ${isActive ? 'font-medium' : ''}`}>{description}</p>
           </div>
-          <div className={`w-8 h-8 rounded-full flex items-center justify-center transition-transform ${isActive ? `bg-${color}-600 text-white rotate-180` : 'bg-gray-100 text-gray-400'}`}>
+          <div className={`w-8 h-8 rounded-full flex items-center justify-center transition-transform ${isActive ? `${colorClasses.chevron} rotate-180` : 'bg-gray-100 text-gray-400'}`}>
             <i className="fa-solid fa-chevron-down text-xs"></i>
           </div>
         </div>
@@ -1121,140 +1194,307 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           <header className="px-1 flex justify-between items-center"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Relatorios</h2></header>
           
           <div className="flex bg-gray-100 p-1 rounded-2xl mx-1 shadow-inner overflow-x-auto gap-1">
-            {(['RESUMO', 'TOP_PRODUTOS', 'TOP_CLIENTES', 'CATEGORIAS', 'VENDEDORES'] as const).map(r => (
-              <button key={r} onClick={() => setReportFilter(r)} className={`flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all whitespace-nowrap ${reportFilter === r ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>{r === 'TOP_PRODUTOS' ? 'Top Produtos' : r === 'TOP_CLIENTES' ? 'Top Clientes' : r === 'VENDEDORES' ? 'Vendedores' : r === 'CATEGORIAS' ? 'Categorias' : 'Resumo'}</button>
+            {(['RESUMO', 'TOP_PRODUTOS', 'TOP_CLIENTES', 'CATEGORIAS', 'VENDEDORES', 'DIVIDAS'] as const).map(r => (
+              <button key={r} onClick={() => setReportFilter(r)} className={`flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all whitespace-nowrap ${reportFilter === r ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>{r === 'TOP_PRODUTOS' ? 'Top Produtos' : r === 'TOP_CLIENTES' ? 'Top Clientes' : r === 'VENDEDORES' ? 'Vendedores' : r === 'CATEGORIAS' ? 'Categorias' : r === 'DIVIDAS' ? 'Dividas' : 'Resumo'}</button>
             ))}
           </div>
 
-          {reportFilter === 'RESUMO' && (() => {
-            const today = new Date(); today.setHours(0,0,0,0);
-            const todayStr = today.toISOString().slice(0,10);
-            const weekAgo = new Date(today); weekAgo.setDate(weekAgo.getDate() - 7);
-            const monthAgo = new Date(today); monthAgo.setDate(monthAgo.getDate() - 30);
-            const vendasHoje = props.sales.filter(s => s.data && new Date(s.data) >= today);
-            const vendasSemana = props.sales.filter(s => s.data && new Date(s.data) >= weekAgo);
-            const vendasMes = props.sales.filter(s => s.data && new Date(s.data) >= monthAgo);
+          {reportFilter !== 'DIVIDAS' && (
+            <div className="flex bg-gray-100 p-1 rounded-2xl mx-1 shadow-inner">{(['HOJE', 'SEMANA', 'MES', 'GERAL'] as const).map(p => (<button key={p} onClick={() => setReportPeriodo(p)} className={`flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all ${reportPeriodo === p ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>{p}</button>))}</div>
+          )}
+
+          {(() => {
+            const salesInPeriod = reportFilter === 'DIVIDAS' ? props.sales : props.sales.filter(s => filterByPeriod(s.data, reportPeriodo));
             const sumV = (arr: any[]) => arr.reduce((a, s) => a + (s.valorTotal || 0), 0);
-            const sumP = (arr: any[]) => arr.reduce((a, s) => a + (s.valorPago || 0), 0);
-            const recebidoMes = props.payoutLogs.filter(p => p.dataPagamento && new Date(p.dataPagamento) >= monthAgo).reduce((a, p) => a + (p.valorPago || 0), 0);
-            const ticketMedio = vendasMes.length > 0 ? sumV(vendasMes) / vendasMes.length : 0;
-            return (
+            const weekAgoDate = new Date(); weekAgoDate.setDate(weekAgoDate.getDate() - 7);
+            const monthAgoDate = new Date(); monthAgoDate.setDate(monthAgoDate.getDate() - 30);
+            const vendasHoje = props.sales.filter(s => s.data && new Date(s.data) >= new Date(new Date().toDateString()));
+            const vendasSemana = props.sales.filter(s => s.data && new Date(s.data) >= weekAgoDate);
+            const vendasMes = props.sales.filter(s => s.data && new Date(s.data) >= monthAgoDate);
+            const recebidoMes = props.payoutLogs.filter(p => p.dataPagamento && new Date(p.dataPagamento) >= monthAgoDate).reduce((a, p) => a + (p.valorPago || 0), 0);
+            const ticketMedio = salesInPeriod.length > 0 ? sumV(salesInPeriod) / salesInPeriod.length : 0;
+
+            return (<>
+            {reportFilter === 'RESUMO' && (
               <div className="space-y-3">
                 <div className="grid grid-cols-2 gap-3">
-                  <div className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm"><p className="text-[9px] font-black text-gray-400 uppercase">Vendas Hoje</p><p className="text-xl font-black text-gray-800 mt-1">R$ {sumV(vendasHoje).toFixed(2)}</p><p className="text-[9px] text-gray-400 font-bold">{vendasHoje.length} pedidos</p></div>
-                  <div className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm"><p className="text-[9px] font-black text-gray-400 uppercase">Vendas Semana</p><p className="text-xl font-black text-gray-800 mt-1">R$ {sumV(vendasSemana).toFixed(2)}</p><p className="text-[9px] text-gray-400 font-bold">{vendasSemana.length} pedidos</p></div>
-                  <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100 shadow-sm"><p className="text-[9px] font-black text-blue-400 uppercase">Vendas Mes</p><p className="text-xl font-black text-blue-700 mt-1">R$ {sumV(vendasMes).toFixed(2)}</p><p className="text-[9px] text-blue-400 font-bold">{vendasMes.length} pedidos</p></div>
+                  <div className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm"><p className="text-[9px] font-black text-gray-400 uppercase">Vendas no Periodo</p><p className="text-xl font-black text-gray-800 mt-1">R$ {sumV(salesInPeriod).toFixed(2)}</p><p className="text-[9px] text-gray-400 font-bold">{salesInPeriod.length} pedidos</p></div>
+                  <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100 shadow-sm"><p className="text-[9px] font-black text-blue-400 uppercase">Ticket Medio</p><p className="text-xl font-black text-blue-700 mt-1">R$ {ticketMedio.toFixed(2)}</p></div>
                   <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100 shadow-sm"><p className="text-[9px] font-black text-emerald-400 uppercase">Recebido (Comissoes)</p><p className="text-xl font-black text-emerald-700 mt-1">R$ {recebidoMes.toFixed(2)}</p></div>
-                  <div className="bg-purple-50 p-4 rounded-2xl border border-purple-100 shadow-sm"><p className="text-[9px] font-black text-purple-400 uppercase">Ticket Medio</p><p className="text-xl font-black text-purple-700 mt-1">R$ {ticketMedio.toFixed(2)}</p></div>
-                  <div className="bg-amber-50 p-4 rounded-2xl border border-amber-100 shadow-sm"><p className="text-[9px] font-black text-amber-400 uppercase">A Receber</p><p className="text-xl font-black text-amber-700 mt-1">R$ {props.sales.filter(s => s.statusPagamento === 'PENDENTE').reduce((a, s) => a + ((s.valorTotal || 0) - (s.valorPago || 0)), 0).toFixed(2)}</p></div>
+                  <div className="bg-amber-50 p-4 rounded-2xl border border-amber-100 shadow-sm"><p className="text-[9px] font-black text-amber-400 uppercase">A Receber Total</p><p className="text-xl font-black text-amber-700 mt-1">R$ {props.sales.filter(s => s.statusPagamento === 'PENDENTE').reduce((a, s) => a + ((s.valorTotal || 0) - (s.valorPago || 0)), 0).toFixed(2)}</p></div>
+                  <div className="bg-rose-50 p-4 rounded-2xl border border-rose-100 shadow-sm"><p className="text-[9px] font-black text-rose-400 uppercase">Vencidas</p><p className="text-xl font-black text-rose-700 mt-1">R$ {props.sales.filter(s => s.statusPagamento === 'PENDENTE' && s.dataVencimento && new Date(s.dataVencimento) <= new Date()).reduce((a, s) => a + ((s.valorTotal || 0) - (s.valorPago || 0)), 0).toFixed(2)}</p></div>
+                  <div className="bg-purple-50 p-4 rounded-2xl border border-purple-100 shadow-sm"><p className="text-[9px] font-black text-purple-400 uppercase">Vendas Hoje</p><p className="text-xl font-black text-purple-700 mt-1">R$ {sumV(vendasHoje).toFixed(2)}</p><p className="text-[9px] text-purple-400 font-bold">{vendasHoje.length} pedidos</p></div>
                 </div>
               </div>
-            );
-          })()}
+            )}
 
-          {reportFilter === 'TOP_PRODUTOS' && (() => {
-            const prodMap = new Map<string, { nome: string; qtd: number; valor: number }>();
-            props.sales.forEach(s => { (s.itens || []).forEach((i: any) => {
-                const ex = prodMap.get(i.produtoId) || { nome: props.products.find(p => p.id === i.produtoId)?.nome || '?', qtd: 0, valor: 0 };
-                prodMap.set(i.produtoId, { nome: ex.nome, qtd: ex.qtd + (i.quantidade || 0), valor: ex.valor + (i.quantidade || 0) * (i.precoVenda || 0) });
-              }); });
-            const ranked = [...prodMap.values()].sort((a, b) => b.qtd - a.qtd).slice(0, 15);
-            const maxQtd = ranked.length > 0 ? ranked[0].qtd : 1;
-            return (
-              <div className="space-y-2">
-                {ranked.map((p, i) => (
-                  <div key={i} className="bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
-                    <div className="flex justify-between items-center mb-2"><span className="font-bold text-xs text-gray-800 uppercase">{i + 1}. {p.nome}</span><span className="text-xs font-black text-blue-600">{p.qtd} un</span></div>
-                    <div className="w-full bg-gray-100 rounded-full h-2"><div className="bg-blue-500 h-2 rounded-full transition-all" style={{ width: `${(p.qtd / maxQtd) * 100}%` }}></div></div>
-                    <p className="text-[9px] text-gray-400 font-bold mt-1">R$ {p.valor.toFixed(2)} em faturamento</p>
-                  </div>
-                ))}
-                {ranked.length === 0 && <p className="text-center text-gray-400 text-xs font-bold py-8">Nenhuma venda registrada</p>}
-              </div>
-            );
-          })()}
-
-          {reportFilter === 'TOP_CLIENTES' && (() => {
-            const cliMap = new Map<string, { nome: string; qtd: number; valor: number }>();
-            props.sales.forEach(s => {
-              const ex = cliMap.get(s.clientId) || { nome: props.clients.find(c => c.id === s.clientId)?.nomeFantasia || '?', qtd: 0, valor: 0 };
-              cliMap.set(s.clientId, { nome: ex.nome, qtd: ex.qtd + 1, valor: ex.valor + (s.valorTotal || 0) });
-            });
-            const ranked = [...cliMap.values()].sort((a, b) => b.valor - a.valor).slice(0, 15);
-            const maxVal = ranked.length > 0 ? ranked[0].valor : 1;
-            return (
-              <div className="space-y-2">
-                {ranked.map((c, i) => (
-                  <div key={i} className="bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
-                    <div className="flex justify-between items-center mb-2"><span className="font-bold text-xs text-gray-800 uppercase">{i + 1}. {c.nome}</span><span className="text-xs font-black text-emerald-600">{c.qtd} pedidos</span></div>
-                    <div className="w-full bg-gray-100 rounded-full h-2"><div className="bg-emerald-500 h-2 rounded-full transition-all" style={{ width: `${(c.valor / maxVal) * 100}%` }}></div></div>
-                    <p className="text-[9px] text-gray-400 font-bold mt-1">R$ {c.valor.toFixed(2)} em compras</p>
-                  </div>
-                ))}
-                {ranked.length === 0 && <p className="text-center text-gray-400 text-xs font-bold py-8">Nenhuma venda registrada</p>}
-              </div>
-            );
-          })()}
-
-          {reportFilter === 'CATEGORIAS' && (() => {
-            const catMap = new Map<string, { nome: string; qtd: number; valor: number }>();
-            props.sales.forEach(s => {
-              (s.itens || []).forEach((item: any) => {
-                const prod = props.products.find(p => p.id === item.produtoId);
-                const catId = prod?.categoryId || 'sem-categoria';
-                const catName = props.categories.find(c => c.id === catId)?.name || 'Sem Categoria';
-                const ex = catMap.get(catId) || { nome: catName, qtd: 0, valor: 0 };
-                catMap.set(catId, { nome: ex.nome, qtd: ex.qtd + (item.quantidade || 0), valor: ex.valor + (item.quantidade || 0) * (item.precoVenda || 0) });
-              });
-            });
-            const ranked = [...catMap.values()].sort((a, b) => b.valor - a.valor);
-            const totalValor = ranked.reduce((a, c) => a + c.valor, 0) || 1;
-            const colors = ['bg-blue-500', 'bg-emerald-500', 'bg-purple-500', 'bg-amber-500', 'bg-rose-500', 'bg-indigo-500', 'bg-cyan-500'];
-            return (
-              <div className="space-y-2">
-                {ranked.map((c, i) => (
-                  <div key={i} className="bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
-                    <div className="flex justify-between items-center mb-2"><span className="font-bold text-xs text-gray-800 uppercase">{c.nome}</span><span className="text-xs font-black text-gray-500">{((c.valor / totalValor) * 100).toFixed(1)}%</span></div>
-                    <div className="w-full bg-gray-100 rounded-full h-2"><div className={`${colors[i % colors.length]} h-2 rounded-full transition-all`} style={{ width: `${(c.valor / totalValor) * 100}%` }}></div></div>
-                    <div className="flex justify-between mt-1"><p className="text-[9px] text-gray-400 font-bold">{c.qtd} unidades</p><p className="text-[9px] font-black text-gray-700">R$ {c.valor.toFixed(2)}</p></div>
-                  </div>
-                ))}
-                {ranked.length === 0 && <p className="text-center text-gray-400 text-xs font-bold py-8">Nenhuma venda registrada</p>}
-              </div>
-            );
-          })()}
-
-          {reportFilter === 'VENDEDORES' && (() => {
-            const venMap = new Map<string, { nome: string; qtd: number; valor: number; comissao: number }>();
-            props.sales.forEach(s => {
-              const user = props.users.find(u => u.id === s.vendedorId);
-              const nome = user?.nome || '?';
-              const ex = venMap.get(s.vendedorId) || { nome, qtd: 0, valor: 0, comissao: 0 };
-              const comVal = props.commissions.filter(c => c.saleId === s.id).reduce((a, c) => a + (c.valor || 0), 0);
-              venMap.set(s.vendedorId, { nome, qtd: ex.qtd + 1, valor: ex.valor + (s.valorTotal || 0), comissao: ex.comissao + comVal });
-            });
-            const ranked = [...venMap.values()].sort((a, b) => b.valor - a.valor);
-            return (
-              <div className="space-y-2">
-                {ranked.map((v, i) => (
-                  <div key={i} className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
-                    <div className="flex justify-between items-center mb-1"><span className="font-bold text-sm text-gray-800 uppercase">{i + 1}. {v.nome}</span><span className="text-xs font-black text-blue-600">R$ {v.valor.toFixed(2)}</span></div>
-                    <div className="grid grid-cols-2 gap-2 mt-2">
-                      <div className="bg-gray-50 p-2 rounded-xl text-center"><p className="text-[8px] font-black text-gray-400 uppercase">Pedidos</p><p className="text-xs font-black text-gray-800">{v.qtd}</p></div>
-                      <div className="bg-emerald-50 p-2 rounded-xl text-center"><p className="text-[8px] font-black text-emerald-400 uppercase">Comissao</p><p className="text-xs font-black text-emerald-700">R$ {v.comissao.toFixed(2)}</p></div>
+            {reportFilter === 'TOP_PRODUTOS' && (() => {
+              const prodMap = new Map<string, { nome: string; qtd: number; valor: number }>();
+              salesInPeriod.forEach(s => { (s.itens || []).forEach((i: any) => {
+                  const ex = prodMap.get(i.produtoId) || { nome: props.products.find(p => p.id === i.produtoId)?.nome || '?', qtd: 0, valor: 0 };
+                  prodMap.set(i.produtoId, { nome: ex.nome, qtd: ex.qtd + (i.quantidade || 0), valor: ex.valor + (i.quantidade || 0) * (i.precoVenda || 0) });
+                }); });
+              const ranked = [...prodMap.values()].sort((a, b) => b.qtd - a.qtd).slice(0, 15);
+              const maxQtd = ranked.length > 0 ? ranked[0].qtd : 1;
+              return (
+                <div className="space-y-2">
+                  <div className="bg-blue-50 p-3 rounded-2xl border border-blue-100 flex justify-between items-center"><p className="text-[10px] font-black text-blue-600 uppercase">Total em Faturamento</p><p className="text-sm font-black text-blue-800">R$ {[...prodMap.values()].reduce((a,p) => a + p.valor, 0).toFixed(2)}</p></div>
+                  {ranked.map((p, i) => (
+                    <div key={i} className="bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
+                      <div className="flex justify-between items-center mb-2"><span className="font-bold text-xs text-gray-800 uppercase">{i + 1}. {p.nome}</span><span className="text-xs font-black text-blue-600">{p.qtd} un</span></div>
+                      <div className="w-full bg-gray-100 rounded-full h-2"><div className="bg-blue-500 h-2 rounded-full transition-all" style={{ width: `${(p.qtd / maxQtd) * 100}%` }}></div></div>
+                      <p className="text-[9px] text-gray-400 font-bold mt-1">R$ {p.valor.toFixed(2)} em faturamento</p>
                     </div>
+                  ))}
+                  {ranked.length === 0 && <p className="text-center text-gray-400 text-xs font-bold py-8">Nenhuma venda no periodo</p>}
+                </div>
+              );
+            })()}
+
+            {reportFilter === 'TOP_CLIENTES' && (() => {
+              const cliMap = new Map<string, { nome: string; qtd: number; valor: number }>();
+              salesInPeriod.forEach(s => {
+                const ex = cliMap.get(s.clientId) || { nome: props.clients.find(c => c.id === s.clientId)?.nomeFantasia || '?', qtd: 0, valor: 0 };
+                cliMap.set(s.clientId, { nome: ex.nome, qtd: ex.qtd + 1, valor: ex.valor + (s.valorTotal || 0) });
+              });
+              const ranked = [...cliMap.values()].sort((a, b) => b.valor - a.valor).slice(0, 15);
+              const maxVal = ranked.length > 0 ? ranked[0].valor : 1;
+              return (
+                <div className="space-y-2">
+                  <div className="bg-emerald-50 p-3 rounded-2xl border border-emerald-100 flex justify-between items-center"><p className="text-[10px] font-black text-emerald-600 uppercase">Clientes Ativos no Periodo</p><p className="text-sm font-black text-emerald-800">{ranked.length}</p></div>
+                  {ranked.map((c, i) => (
+                    <div key={i} className="bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
+                      <div className="flex justify-between items-center mb-2"><span className="font-bold text-xs text-gray-800 uppercase">{i + 1}. {c.nome}</span><span className="text-xs font-black text-emerald-600">{c.qtd} pedidos</span></div>
+                      <div className="w-full bg-gray-100 rounded-full h-2"><div className="bg-emerald-500 h-2 rounded-full transition-all" style={{ width: `${(c.valor / maxVal) * 100}%` }}></div></div>
+                      <p className="text-[9px] text-gray-400 font-bold mt-1">R$ {c.valor.toFixed(2)} em compras</p>
+                    </div>
+                  ))}
+                  {ranked.length === 0 && <p className="text-center text-gray-400 text-xs font-bold py-8">Nenhuma venda no periodo</p>}
+                </div>
+              );
+            })()}
+
+            {reportFilter === 'CATEGORIAS' && (() => {
+              const catMap = new Map<string, { nome: string; qtd: number; valor: number }>();
+              salesInPeriod.forEach(s => {
+                (s.itens || []).forEach((item: any) => {
+                  const prod = props.products.find(p => p.id === item.produtoId);
+                  const catId = prod?.categoryId || 'sem-categoria';
+                  const catName = props.categories.find(c => c.id === catId)?.name || 'Sem Categoria';
+                  const ex = catMap.get(catId) || { nome: catName, qtd: 0, valor: 0 };
+                  catMap.set(catId, { nome: ex.nome, qtd: ex.qtd + (item.quantidade || 0), valor: ex.valor + (item.quantidade || 0) * (item.precoVenda || 0) });
+                });
+              });
+              const ranked = [...catMap.values()].sort((a, b) => b.valor - a.valor);
+              const totalValor = ranked.reduce((a, c) => a + c.valor, 0) || 1;
+              const colors = ['bg-blue-500', 'bg-emerald-500', 'bg-purple-500', 'bg-amber-500', 'bg-rose-500', 'bg-indigo-500', 'bg-cyan-500'];
+              return (
+                <div className="space-y-2">
+                  <div className="bg-indigo-50 p-3 rounded-2xl border border-indigo-100 flex justify-between items-center"><p className="text-[10px] font-black text-indigo-600 uppercase">Total por Categorias</p><p className="text-sm font-black text-indigo-800">R$ {ranked.reduce((a,c)=>a+c.valor,0).toFixed(2)}</p></div>
+                  {ranked.map((c, i) => (
+                    <div key={i} className="bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
+                      <div className="flex justify-between items-center mb-2"><span className="font-bold text-xs text-gray-800 uppercase">{c.nome}</span><span className="text-xs font-black text-gray-500">{((c.valor / totalValor) * 100).toFixed(1)}%</span></div>
+                      <div className="w-full bg-gray-100 rounded-full h-2"><div className={`${colors[i % colors.length]} h-2 rounded-full transition-all`} style={{ width: `${(c.valor / totalValor) * 100}%` }}></div></div>
+                      <div className="flex justify-between mt-1"><p className="text-[9px] text-gray-400 font-bold">{c.qtd} unidades</p><p className="text-[9px] font-black text-gray-700">R$ {c.valor.toFixed(2)}</p></div>
+                    </div>
+                  ))}
+                  {ranked.length === 0 && <p className="text-center text-gray-400 text-xs font-bold py-8">Nenhuma venda no periodo</p>}
+                </div>
+              );
+            })()}
+
+            {reportFilter === 'VENDEDORES' && (() => {
+              const venMap = new Map<string, { nome: string; qtd: number; valor: number; comissao: number }>();
+              salesInPeriod.forEach(s => {
+                const nome = props.users.find(u => u.id === s.vendedorId)?.nome || '?';
+                const ex = venMap.get(s.vendedorId) || { nome, qtd: 0, valor: 0, comissao: 0 };
+                const comVal = props.commissions.filter(c => c.saleId === s.id).reduce((a, c) => a + (c.valor || 0), 0);
+                venMap.set(s.vendedorId, { nome, qtd: ex.qtd + 1, valor: ex.valor + (s.valorTotal || 0), comissao: ex.comissao + comVal });
+              });
+              const ranked = [...venMap.values()].sort((a, b) => b.valor - a.valor);
+              return (
+                <div className="space-y-2">
+                  <div className="bg-purple-50 p-3 rounded-2xl border border-purple-100 flex justify-between items-center"><p className="text-[10px] font-black text-purple-600 uppercase">Performance dos Vendedores</p><p className="text-sm font-black text-purple-800">{ranked.length} vendedores</p></div>
+                  {ranked.map((v, i) => (
+                    <div key={i} className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
+                      <div className="flex justify-between items-center mb-1"><span className="font-bold text-sm text-gray-800 uppercase">{i + 1}. {v.nome}</span><span className="text-xs font-black text-blue-600">R$ {v.valor.toFixed(2)}</span></div>
+                      <div className="grid grid-cols-2 gap-2 mt-2">
+                        <div className="bg-gray-50 p-2 rounded-xl text-center"><p className="text-[8px] font-black text-gray-400 uppercase">Pedidos</p><p className="text-xs font-black text-gray-800">{v.qtd}</p></div>
+                        <div className="bg-emerald-50 p-2 rounded-xl text-center"><p className="text-[8px] font-black text-emerald-400 uppercase">Comissao</p><p className="text-xs font-black text-emerald-700">R$ {v.comissao.toFixed(2)}</p></div>
+                      </div>
+                    </div>
+                  ))}
+                  {ranked.length === 0 && <p className="text-center text-gray-400 text-xs font-bold py-8">Nenhuma venda no periodo</p>}
+                </div>
+              );
+            })()}
+
+            {reportFilter === 'DIVIDAS' && (() => {
+              const dividas = props.sales.filter(s => s.metodoPagamento === 'A_PRAZO' && s.statusPagamento === 'PENDENTE');
+              const totalDivida = dividas.reduce((a, s) => a + ((s.valorTotal || 0) - (s.valorPago || 0)), 0);
+              const vencidas = dividas.filter(s => s.dataVencimento && new Date(s.dataVencimento) <= new Date());
+              const totalVencido = vencidas.reduce((a, s) => a + ((s.valorTotal || 0) - (s.valorPago || 0)), 0);
+              const porCliente = new Map<string, { nome: string; total: number; qtd: number; vencido: number }>();
+              dividas.forEach(s => {
+                const nome = props.clients.find(c => c.id === s.clientId)?.nomeFantasia || '?';
+                const saldo = (s.valorTotal || 0) - (s.valorPago || 0);
+                const isVencido = s.dataVencimento && new Date(s.dataVencimento) <= new Date();
+                const ex = porCliente.get(s.clientId) || { nome, total: 0, qtd: 0, vencido: 0 };
+                porCliente.set(s.clientId, { nome, total: ex.total + saldo, qtd: ex.qtd + 1, vencido: ex.vencido + (isVencido ? saldo : 0) });
+              });
+              const ranked = [...porCliente.values()].sort((a, b) => b.total - a.total);
+              return (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="bg-rose-50 p-4 rounded-2xl border border-rose-100 shadow-sm"><p className="text-[9px] font-black text-rose-400 uppercase">Total em Aberto</p><p className="text-xl font-black text-rose-700 mt-1">R$ {totalDivida.toFixed(2)}</p><p className="text-[9px] text-rose-400 font-bold">{dividas.length} dividas</p></div>
+                    <div className="bg-orange-50 p-4 rounded-2xl border border-orange-100 shadow-sm"><p className="text-[9px] font-black text-orange-400 uppercase">Total Vencido</p><p className="text-xl font-black text-orange-700 mt-1">R$ {totalVencido.toFixed(2)}</p><p className="text-[9px] text-orange-400 font-bold">{vencidas.length} vencidas</p></div>
                   </div>
-                ))}
-                {ranked.length === 0 && <p className="text-center text-gray-400 text-xs font-bold py-8">Nenhuma venda registrada</p>}
-              </div>
-            );
+                  <div className="space-y-2">
+                    {ranked.map((c, i) => (
+                      <div key={i} className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
+                        <div className="flex justify-between items-center mb-2"><span className="font-bold text-xs text-gray-800 uppercase">{i + 1}. {c.nome}</span><span className="text-xs font-black text-rose-600">{c.qtd} dividas</span></div>
+                        <div className="flex justify-between items-center"><span className="text-[10px] font-black text-gray-800">Saldo: R$ {c.total.toFixed(2)}</span>{c.vencido > 0 && <span className="text-[9px] font-black text-orange-600 bg-orange-50 px-2 py-0.5 rounded">R$ {c.vencido.toFixed(2)} vencido</span>}</div>
+                      </div>
+                    ))}
+                    {ranked.length === 0 && <p className="text-center text-gray-400 text-xs font-bold py-8">Nenhuma divida pendente</p>}
+                  </div>
+                </div>
+              );
+            })()}
+            </>);
           })()}
+        </div>
+      )}
+
+      {activeTab === 'CONTAS_RECEBER' && (
+        <div className="space-y-4">
+          <header className="px-1 flex justify-between items-center">
+            <div>
+              <h2 className="text-2xl font-black text-gray-800 tracking-tight">Contas a Receber</h2>
+              <p className="text-[10px] text-gray-400 font-bold uppercase mt-1">Vendas a prazo pendentes</p>
+            </div>
+            <button
+              onClick={() => setFilterOverdueOnly(!filterOverdueOnly)}
+              className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all flex items-center gap-2 shadow-sm ${filterOverdueOnly ? 'bg-rose-600 text-white' : 'bg-white text-gray-400 border border-gray-100'}`}
+            >
+              <i className={`fa-solid ${filterOverdueOnly ? 'fa-calendar-exclamation' : 'fa-calendar-days'}`}></i>
+              {filterOverdueOnly ? 'Vencidas' : 'Todas'}
+            </button>
+          </header>
+
+          <div className="flex bg-gray-100 p-1 rounded-2xl mx-1 shadow-inner overflow-x-auto gap-1">
+            {(['TODOS', 'COMUM', 'CHEQUE', 'BOLETO'] as const).map(t => (
+              <button
+                key={t}
+                onClick={() => setCreditTypeFilter(t)}
+                className={`flex-1 min-w-[70px] py-2 rounded-xl text-[9px] font-black uppercase transition-all ${creditTypeFilter === t ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
+
+          <div className="px-1">
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar cliente..." className="w-full p-4 bg-white border border-gray-100 rounded-2xl shadow-sm text-sm outline-none focus:ring-2 focus:ring-blue-100" />
+          </div>
+
+          <div className="bg-white rounded-2xl p-4 border border-gray-100 shadow-sm mx-1">
+            <div className="flex justify-between items-center border-b border-gray-100 pb-3 mb-1">
+              <span className="text-xs font-black text-gray-400 uppercase">Total Pendente</span>
+              <span className="text-xl font-black text-rose-600">R$ {contasAReceber.reduce((a, s) => a + ((s.valorTotal ?? 0) - (s.valorPago ?? 0)), 0).toFixed(2)}</span>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="text-center bg-rose-50 p-2 rounded-xl">
+                <p className="text-[8px] font-black text-rose-500 uppercase">Vencidas</p>
+                <p className="text-xs font-black text-rose-700">{contasAReceber.filter(s => { if (!s.dataVencimento) return false; const d = new Date(s.dataVencimento); d.setHours(0,0,0,0); return d <= new Date(); }).length}</p>
+              </div>
+              <div className="text-center bg-amber-50 p-2 rounded-xl">
+                <p className="text-[8px] font-black text-amber-500 uppercase">Total Dividas</p>
+                <p className="text-xs font-black text-amber-700">{contasAReceber.length}</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid gap-3">
+            {contasAReceber.map(s => {
+              const saldo = Number(((s.valorTotal ?? 0) - (s.valorPago ?? 0)).toFixed(2));
+              const today = new Date(); today.setHours(0,0,0,0);
+              const dueDate = s.dataVencimento ? new Date(s.dataVencimento) : null;
+              if (dueDate) dueDate.setHours(0,0,0,0);
+              const isOverdue = dueDate ? dueDate <= today : false;
+              const clientName = props.clients.find(c => c.id === s.clientId)?.nomeFantasia || 'Cliente';
+              const vendedorName = props.users.find(u => u.id === s.vendedorId)?.nome || 'N/D';
+
+              return (
+              <div key={s.id} className={`p-5 rounded-3xl border shadow-sm flex flex-col transition-all ${isOverdue ? 'bg-rose-50 border-rose-200' : 'bg-white border-gray-100'}`}>
+                <div className="flex justify-between items-start mb-2">
+                   <div className="flex-1 pr-4">
+                      <h4 className={`font-bold text-sm leading-tight uppercase ${isOverdue ? 'text-rose-900' : 'text-gray-800'}`}>{clientName}</h4>
+                      <p className="text-[9px] font-bold text-blue-500 mt-0.5 uppercase"><i className="fa-solid fa-user-tag mr-1"></i>{vendedorName}</p>
+                      <div className="flex flex-col mt-2">
+                        <span className={`text-[9px] font-black uppercase ${isOverdue ? 'text-rose-600' : 'text-gray-400'}`}>Vencimento</span>
+                        <span className={`text-xs font-black ${isOverdue ? 'text-rose-700' : 'text-gray-800'}`}>{s.dataVencimento ? new Date(s.dataVencimento).toLocaleDateString() : 'N/D'}</span>
+                        <span className="text-[8px] font-black uppercase text-blue-600 mt-1">{s.detalhePagamento || 'COMUM'}</span>
+                      </div>
+                      {s.detalhePagamento && (
+                        <div className="mt-3 space-y-1">
+                          <p className="text-[8px] font-black text-gray-400 uppercase">Historico de Recebimentos:</p>
+                          <div className="bg-gray-50/50 p-2 rounded-xl border border-gray-100 max-h-24 overflow-y-auto">
+                            {s.detalhePagamento.split('|').map((log, i) => (
+                              <p key={i} className="text-[8px] font-bold text-gray-500 border-b border-gray-100 last:border-0 pb-1 mb-1">{log.trim()}</p>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                   </div>
+                   <div className="text-right">
+                      <span className={`text-[8px] font-black px-2 py-0.5 rounded uppercase ${isOverdue ? 'bg-rose-600 text-white animate-pulse' : 'bg-orange-100 text-orange-600'}`}>{isOverdue ? 'VENCIDO' : 'PENDENTE'}</span>
+                      <p className="text-lg font-black mt-2 text-rose-600">Saldo: R$ {saldo.toFixed(2)}</p>
+                   </div>
+                </div>
+                <button onClick={(e) => { e.stopPropagation(); setShowReceiveModal(s); setValorRecebidoParcial(saldo.toString()); }} className={`w-full py-3 rounded-2xl text-[10px] font-black uppercase mt-3 shadow-lg active:scale-95 ${isOverdue ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white'}`}>Receber Agora</button>
+                <div className="flex gap-2 mt-2">
+                  {s.comprovanteFoto ? (
+                    <>
+                      <button onClick={(e) => { e.stopPropagation(); setComprovanteModalSale(s); setComprovantePreview(s.comprovanteFoto || null); }} className="flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase bg-blue-50 text-blue-600 active:scale-95 flex items-center justify-center gap-1.5 border border-blue-100">
+                        <i className="fa-solid fa-image"></i>Ver Foto
+                      </button>
+                      <button onClick={(e) => { e.stopPropagation(); handleComprovanteShare(s); }} className="flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase bg-emerald-50 text-emerald-600 active:scale-95 flex items-center justify-center gap-1.5 border border-emerald-100">
+                        <i className="fa-brands fa-whatsapp"></i>Compartilhar
+                      </button>
+                    </>
+                  ) : (
+                    <button onClick={(e) => { e.stopPropagation(); setComprovanteModalSale(s); setComprovantePreview(null); setTimeout(() => comprovanteFileInputRef.current?.click(), 100); }} className="w-full py-2.5 rounded-xl text-[9px] font-black uppercase bg-amber-50 text-amber-600 active:scale-95 flex items-center justify-center gap-1.5 border border-amber-100">
+                      <i className="fa-solid fa-camera"></i>Tirar Foto do Comprovante
+                    </button>
+                  )}
+                </div>
+              </div>
+            )})}
+          </div>
         </div>
       )}
 
       {activeTab === 'BACKUP' && (
         <div className="space-y-4">
-          <header className="px-1"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Backup de Dados</h2><p className="text-[10px] text-gray-400 font-bold uppercase mt-1">Exporte seus dados para seguranca</p></header>
+          <header className="px-1">
+            <h2 className="text-2xl font-black text-gray-800 tracking-tight">Backup de Dados</h2>
+            <p className="text-[10px] text-gray-400 font-bold uppercase mt-1">Exporte seus dados para seguranca</p>
+          </header>
+
+          <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100 mx-1">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 bg-blue-100 rounded-xl flex items-center justify-center"><i className="fa-solid fa-circle-info text-blue-600"></i></div>
+              <div>
+                <p className="text-[10px] font-black text-blue-800 uppercase">Formato de Exportacao</p>
+                <p className="text-[9px] text-blue-500 font-bold">CSV para planilhas, JSON para dados completos</p>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => setBackupFormat('csv')} className={`flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase transition-all ${backupFormat === 'csv' ? 'bg-blue-600 text-white shadow-sm' : 'bg-white text-gray-400 border border-gray-100'}`}>CSV</button>
+              <button onClick={() => setBackupFormat('json')} className={`flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase transition-all ${backupFormat === 'json' ? 'bg-blue-600 text-white shadow-sm' : 'bg-white text-gray-400 border border-gray-100'}`}>JSON</button>
+            </div>
+          </div>
 
           <div className="grid gap-3">
             {[
@@ -1262,32 +1502,107 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
               { key: 'vendas', label: 'Historico de Vendas', icon: 'fa-receipt', color: 'bg-emerald-50 text-emerald-600 border-emerald-100', desc: `${props.sales.length} vendas registradas` },
               { key: 'comissoes', label: 'Comissoes', icon: 'fa-percent', color: 'bg-purple-50 text-purple-600 border-purple-100', desc: `${props.commissions.length} comissoes` },
               { key: 'produtos', label: 'Catalogo de Produtos', icon: 'fa-box', color: 'bg-amber-50 text-amber-600 border-amber-100', desc: `${props.products.length} produtos` },
-              { key: 'financeiro', label: 'Financeiro Completo', icon: 'fa-coins', color: 'bg-rose-50 text-rose-600 border-rose-100', desc: 'Vendas + recebimentos + comissoes' },
+              { key: 'vendedores', label: 'Vendedores', icon: 'fa-users-gear', color: 'bg-teal-50 text-teal-600 border-teal-100', desc: `${props.users.filter(u => u.role === 'VENDEDOR').length} vendedores` },
+              { key: 'cargas', label: 'Cargas Atuais', icon: 'fa-truck-ramp-box', color: 'bg-orange-50 text-orange-600 border-orange-100', desc: `${props.cargas.length} registros de carga` },
+              { key: 'despesas', label: 'Despesas', icon: 'fa-money-bill-trend-up', color: 'bg-red-50 text-red-600 border-red-100', desc: `${props.expenses.length} despesas registradas` },
+              { key: 'financeiro', label: 'Financeiro Completo', icon: 'fa-coins', color: 'bg-rose-50 text-rose-600 border-rose-100', desc: 'Vendas + recebimentos + comissoes + despesas' },
               { key: 'tudo', label: 'Backup Completo', icon: 'fa-shield-halved', color: 'bg-gray-900 text-white border-gray-900', desc: 'Todos os dados do sistema' },
             ].map(item => (
               <div key={item.key} className={`p-4 rounded-2xl border shadow-sm flex items-center gap-4 ${item.color} transition-all active:scale-[0.98]`}>
                 <div className="w-12 h-12 rounded-xl bg-white/60 flex items-center justify-center flex-shrink-0"><i className={`fa-solid ${item.icon} text-lg`}></i></div>
                 <div className="flex-1 min-w-0"><h4 className="font-black text-sm uppercase">{item.label}</h4><p className="text-[9px] font-bold opacity-70 mt-0.5">{item.desc}</p></div>
                 <button onClick={() => {
-                  let data: any;
-                  let filename: string;
-                  if (item.key === 'clientes') { data = props.clients; filename = 'clientes.json'; }
-                  else if (item.key === 'vendas') { data = props.sales.map(s => ({ ...s, itens: s.itens })); filename = 'vendas.json'; }
-                  else if (item.key === 'comissoes') { data = { comissoes: props.commissions, pagamentos: props.payoutLogs }; filename = 'comissoes.json'; }
-                  else if (item.key === 'produtos') { data = props.products; filename = 'produtos.json'; }
-                  else if (item.key === 'financeiro') { data = { vendas: props.sales, recebimentos: props.payoutLogs, comissoes: props.commissions, despesas: props.expenses }; filename = 'financeiro.json'; }
-                  else { data = { clientes: props.clients, vendas: props.sales, produtos: props.products, comissoes: props.commissions, pagamentos: props.payoutLogs, usuarios: props.users, despesas: props.expenses, categorias: props.categories }; filename = 'backup-completo.json'; }
-                  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
-                  URL.revokeObjectURL(url);
+                  const fmt = backupFormat;
+                  if (fmt === 'json') {
+                    let data: any; let filename: string;
+                    if (item.key === 'clientes') { data = props.clients; filename = 'clientes.json'; }
+                    else if (item.key === 'vendas') { data = props.sales.map(s => ({ ...s, itens: s.itens, data: s.data?.toISOString?.() || s.data, dataVencimento: s.dataVencimento?.toISOString?.() || s.dataVencimento })); filename = 'vendas.json'; }
+                    else if (item.key === 'comissoes') { data = { comissoes: props.commissions, pagamentos: props.payoutLogs }; filename = 'comissoes.json'; }
+                    else if (item.key === 'produtos') { data = props.products; filename = 'produtos.json'; }
+                    else if (item.key === 'vendedores') { data = props.users.filter(u => u.role === 'VENDEDOR'); filename = 'vendedores.json'; }
+                    else if (item.key === 'cargas') { data = props.cargas; filename = 'cargas.json'; }
+                    else if (item.key === 'despesas') { data = props.expenses; filename = 'despesas.json'; }
+                    else if (item.key === 'financeiro') { data = { vendas: props.sales, recebimentos: props.payoutLogs, comissoes: props.commissions, despesas: props.expenses }; filename = 'financeiro.json'; }
+                    else { data = { clientes: props.clients, vendas: props.sales, produtos: props.products, comissoes: props.commissions, pagamentos: props.payoutLogs, usuarios: props.users, despesas: props.expenses, categorias: props.categories, cargas: props.cargas }; filename = 'backup-completo.json'; }
+                    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = filename; a.click(); URL.revokeObjectURL(url);
+                  } else {
+                    let csv: string = ''; let filename: string;
+                    const esc = (v: any) => String(v ?? '').replace(/"/g, '""');
+                    const csvRow = (cols: string[]) => cols.map(c => `"${esc(c)}"`).join(',') + '\n';
+                    if (item.key === 'clientes') {
+                      csv = csvRow(['Nome Fantasia', 'Nome', 'Telefone', 'Endereco', 'Bairro', 'Dia Roteiro', 'Rota', 'Ativo']);
+                      props.clients.forEach(c => { csv += csvRow([c.nomeFantasia, c.nome || '', c.telefone || '', c.endereco || '', c.bairro || '', String(c.diaRoteiro || ''), c.rota || '', String(c.ativo ?? true)]); });
+                      filename = 'clientes.csv';
+                    } else if (item.key === 'vendas') {
+                      csv = csvRow(['ID', 'Data', 'Cliente', 'Vendedor', 'Valor Total', 'Valor Pago', 'Metodo', 'Status', 'Vencimento']);
+                      props.sales.forEach(s => { csv += csvRow([s.id, s.data?.toLocaleDateString?.() || '', props.clients.find(c => c.id === s.clientId)?.nomeFantasia || '', props.users.find(u => u.id === s.vendedorId)?.nome || '', String(s.valorTotal || 0), String(s.valorPago || 0), s.metodoPagamento, s.statusPagamento, s.dataVencimento?.toLocaleDateString?.() || '']); });
+                      filename = 'vendas.csv';
+                    } else if (item.key === 'comissoes') {
+                      csv = csvRow(['Vendedor', 'Valor', 'Status', 'Data Geracao']);
+                      props.commissions.forEach(c => { csv += csvRow([props.users.find(u => u.id === c.vendedorId)?.nome || '', String(c.valor || 0), c.status, c.dataGeracao?.toLocaleDateString?.() || '']); });
+                      filename = 'comissoes.csv';
+                    } else if (item.key === 'produtos') {
+                      csv = csvRow(['Nome', 'Custo', 'Venda', 'Comissao %', 'Estoque', 'Ativo', 'Categoria']);
+                      props.products.forEach(p => { csv += csvRow([p.nome, String(p.precoCusto || 0), String(p.precoVenda || 0), String(p.comissaoPercentual || 0), String(p.estoquePrincipal || 0), String(p.ativo ?? true), props.categories.find(c => c.id === p.categoryId)?.name || '']); });
+                      filename = 'produtos.csv';
+                    } else if (item.key === 'vendedores') {
+                      csv = csvRow(['Nome', 'Telefone', 'Rota', 'Placa Veiculo']);
+                      props.users.filter(u => u.role === 'VENDEDOR').forEach(u => { csv += csvRow([u.nome, u.telefone || '', u.rota || '', u.placaVeiculo || '']); });
+                      filename = 'vendedores.csv';
+                    } else if (item.key === 'cargas') {
+                      csv = csvRow(['Vendedor', 'Produto', 'Quantidade']);
+                      props.cargas.forEach(c => { csv += csvRow([props.users.find(u => u.id === c.vendedorId)?.nome || '', props.products.find(p => p.id === c.produtoId)?.nome || '', String(c.quantidade || 0)]); });
+                      filename = 'cargas.csv';
+                    } else if (item.key === 'despesas') {
+                      csv = csvRow(['Vendedor', 'Descricao', 'Valor', 'Data']);
+                      props.expenses.forEach(e => { csv += csvRow([props.users.find(u => u.id === e.sellerId)?.nome || '', e.descricao || '', String(e.valor || 0), new Date(e.createdAt).toLocaleDateString()]); });
+                      filename = 'despesas.csv';
+                    } else if (item.key === 'financeiro') {
+                      csv = '=== VENDAS ===\n' + csvRow(['Data', 'Cliente', 'Vendedor', 'Valor Total', 'Metodo', 'Status']);
+                      props.sales.forEach(s => { csv += csvRow([s.data?.toLocaleDateString?.() || '', props.clients.find(c => c.id === s.clientId)?.nomeFantasia || '', props.users.find(u => u.id === s.vendedorId)?.nome || '', String(s.valorTotal || 0), s.metodoPagamento, s.statusPagamento]); });
+                      csv += '\n=== COMISSOES ===\n' + csvRow(['Vendedor', 'Valor', 'Status']);
+                      props.commissions.forEach(c => { csv += csvRow([props.users.find(u => u.id === c.vendedorId)?.nome || '', String(c.valor || 0), c.status]); });
+                      csv += '\n=== PAGAMENTOS ===\n' + csvRow(['Vendedor', 'Valor Pago', 'Tipo', 'Data']);
+                      props.payoutLogs.forEach(p => { csv += csvRow([props.users.find(u => u.id === p.vendedorId)?.nome || '', String(p.valorPago || 0), p.tipo, p.dataPagamento?.toLocaleDateString?.() || '']); });
+                      csv += '\n=== DESPESAS ===\n' + csvRow(['Vendedor', 'Descricao', 'Valor', 'Data']);
+                      props.expenses.forEach(e => { csv += csvRow([props.users.find(u => u.id === e.sellerId)?.nome || '', e.descricao || '', String(e.valor || 0), new Date(e.createdAt).toLocaleDateString()]); });
+                      filename = 'financeiro.csv';
+                    } else {
+                      csv = '=== CLIENTES ===\n' + csvRow(['Nome Fantasia', 'Telefone', 'Endereco', 'Rota']);
+                      props.clients.forEach(c => { csv += csvRow([c.nomeFantasia, c.telefone || '', c.endereco || '', c.rota || '']); });
+                      csv += '\n=== VENDAS ===\n' + csvRow(['Data', 'Cliente', 'Valor', 'Metodo', 'Status']);
+                      props.sales.forEach(s => { csv += csvRow([s.data?.toLocaleDateString?.() || '', props.clients.find(c => c.id === s.clientId)?.nomeFantasia || '', String(s.valorTotal || 0), s.metodoPagamento, s.statusPagamento]); });
+                      csv += '\n=== PRODUTOS ===\n' + csvRow(['Nome', 'Custo', 'Venda', 'Estoque']);
+                      props.products.forEach(p => { csv += csvRow([p.nome, String(p.precoCusto || 0), String(p.precoVenda || 0), String(p.estoquePrincipal || 0)]); });
+                      csv += '\n=== COMISSOES ===\n' + csvRow(['Vendedor', 'Valor', 'Status']);
+                      props.commissions.forEach(c => { csv += csvRow([props.users.find(u => u.id === c.vendedorId)?.nome || '', String(c.valor || 0), c.status]); });
+                      csv += '\n=== USUARIOS ===\n' + csvRow(['Nome', 'Telefone', 'Funcao']);
+                      props.users.forEach(u => { csv += csvRow([u.nome, u.telefone || '', u.role]); });
+                      filename = 'backup-completo.csv';
+                    }
+                    const BOM = '﻿';
+                    const blob = new Blob([BOM + csv], { type: 'text/csv;charset=utf-8' });
+                    const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = filename; a.click(); URL.revokeObjectURL(url);
+                  }
                   showToast(`${item.label} exportado!`);
                 }} className="bg-white/80 px-4 py-2.5 rounded-xl font-black text-[10px] uppercase active:scale-90 shadow-sm flex items-center gap-2"><i className="fa-solid fa-download"></i> Exportar</button>
               </div>
             ))}
           </div>
+
+          <div className="bg-gray-50 p-4 rounded-2xl border border-gray-100 mx-1">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-gray-200 rounded-xl flex items-center justify-center"><i className="fa-solid fa-clock-rotate-left text-gray-500"></i></div>
+              <div>
+                <p className="text-[10px] font-black text-gray-700 uppercase">Ultimo Backup</p>
+                <p className="text-[9px] text-gray-400 font-bold">{new Date().toLocaleDateString()} {new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</p>
+              </div>
+            </div>
+          </div>
         </div>
       )}
+
       {showUserModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-sm rounded-[2rem] p-8 shadow-2xl overflow-y-auto max-h-[90vh]"><h3 className="font-black text-gray-800 uppercase text-sm mb-6 text-center">{showUserModal === 'NEW' ? 'Novo Vendedor' : 'Editar Vendedor'}</h3><div className="flex flex-col items-center mb-6"><div onClick={() => userPhotoInputRef.current?.click()} className="w-24 h-24 bg-purple-100 text-purple-600 rounded-[2rem] flex items-center justify-center font-black overflow-hidden border-4 border-white shadow-xl cursor-pointer relative group transition-all hover:scale-105">{userForm.foto ? <img src={userForm.foto} className="w-full h-full object-cover" /> : <i className="fa-solid fa-camera text-2xl"></i>}</div><input type="file" ref={userPhotoInputRef} className="hidden" accept="image/*" onChange={handleUserPhotoUpload} /></div><div className="space-y-4"><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome do Vendedor</label><input value={userForm.nome ?? ''} onChange={e => setUserForm({...userForm, nome: e.target.value})} placeholder="Nome Completo" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Telefone / WhatsApp</label><input value={userForm.telefone ?? ''} onChange={e => setUserForm({...userForm, telefone: e.target.value})} placeholder="Telefone" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Placa do Veículo</label><input value={userForm.placaVeiculo ?? ''} onChange={e => setUserForm({...userForm, placaVeiculo: e.target.value})} placeholder="Ex: ABC-1234" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div>{showUserModal !== 'NEW' && (<div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Rota Responsável</label><select value={userForm.rota || 'ROTA_01'} onChange={e => setUserForm({...userForm, rota: e.target.value})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold">{Array.from({ length: 50 }).map((_, i) => { const r = `ROTA_${String(i + 1).padStart(2, '0')}`; return <option key={r} value={r}>Rota {String(i + 1).padStart(2, '0')}</option>; })}</select></div>)}<div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">PIN de Acesso (6 dígitos)</label><input type="password" value={userForm.pin ?? ''} onChange={e => setUserForm({...userForm, pin: e.target.value})} placeholder="123456" maxLength={6} className="w-full p-4 bg-gray-50 border rounded-2xl font-black text-center text-xl tracking-[0.5em]" /></div><button onClick={handleSaveUser} className="w-full bg-purple-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 uppercase text-xs mt-4 tracking-widest">Salvar Vendedor</button><button onClick={() => setShowUserModal(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button></div></div></div>
       )}
@@ -1309,6 +1624,28 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-w-xs rounded-3xl p-8 shadow-2xl text-center"><h3 className="font-black text-gray-800 uppercase text-sm mb-4">Entrada de Estoque</h3><p className="text-xs text-gray-400 font-bold uppercase mb-4">{showEntryModal.nome}</p><div className="space-y-4 text-left"><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Quantidade</label><input type="number" value={entryForm.qtd} onChange={e => setEntryForm({...entryForm, qtd: e.target.value})} placeholder="0" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-center" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Custo Unitário R$</label><input type="number" value={entryForm.custo} onChange={e => setEntryForm({...entryForm, custo: e.target.value})} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-center" /></div><button onClick={() => { const q = parseInt(entryForm.qtd) || 0; const c = parseFloat(entryForm.custo) || 0; if (q <= 0 || c <= 0) { showToast("Valores inválidos", "error"); return; } const estA = showEntryModal.estoquePrincipal || 0; const cusA = showEntryModal.precoCusto || 0; const nEst = estA + q; const nCus = ((estA * cusA) + (q * c)) / nEst; const nVen = props.margemGlobalAtiva ? updatePriceFromMargin(nCus, props.margemGlobalValor) : showEntryModal.precoVenda; props.updateProduct(showEntryModal.id, { estoquePrincipal: nEst, precoCusto: Number(nCus.toFixed(2)), precoVenda: Number(nVen.toFixed(2)) }); setShowEntryModal(null); setEntryForm({ qtd: '', custo: '' }); showToast("Entrada registrada!"); }} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest">Confirmar Entrada</button><button onClick={() => { setShowEntryModal(null); setEntryForm({ qtd: '', custo: '' }); }} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button></div></div></div>
       )}
 
+      {showReceiveModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[200] flex items-center justify-center p-6">
+          <div className="bg-white w-full max-w-xs rounded-3xl p-8 shadow-2xl text-center">
+            <h3 className="font-black text-gray-800 uppercase text-sm mb-2">Receber Pagamento</h3>
+            <p className="text-xs text-gray-400 font-bold uppercase mb-1">{props.clients.find(c => c.id === showReceiveModal.clientId)?.nomeFantasia || 'Cliente'}</p>
+            <p className="text-xl font-black text-gray-800 mb-4">R$ {showReceiveModal.valorTotal?.toFixed(2)}</p>
+            <div className="space-y-4 text-left">
+              <div className="space-y-1">
+                <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Valor a Receber R$</label>
+                <input type="number" value={valorRecebidoParcial} onChange={e => setValorRecebidoParcial(e.target.value)} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-center" />
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <button onClick={() => handleConfirmReceive('DINHEIRO')} className="bg-emerald-600 text-white py-3 rounded-xl font-black text-[9px] uppercase active:scale-95">Dinheiro</button>
+                <button onClick={() => handleConfirmReceive('PIX')} className="bg-blue-600 text-white py-3 rounded-xl font-black text-[9px] uppercase active:scale-95">Pix</button>
+                <button onClick={() => handleConfirmReceive('DEPOSITO')} className="bg-purple-600 text-white py-3 rounded-xl font-black text-[9px] uppercase active:scale-95">Deposito</button>
+              </div>
+              <button onClick={() => setShowReceiveModal(null)} className="w-full py-2 text-gray-400 font-bold uppercase text-[10px]">Cancelar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showConfirmSync && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-w-xs rounded-3xl p-8 text-center shadow-2xl"><h3 className="font-black text-gray-800 text-lg mb-4">Enviar Pendente?</h3><p className="text-sm text-gray-500 mb-6 font-medium uppercase">Deseja enviar esta carga como pendente?</p><div className="flex flex-col gap-2"><button onClick={handleSync} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest">Sim, Enviar</button><button onClick={() => setShowConfirmSync(false)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button></div></div></div>
       )}
@@ -1319,6 +1656,60 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
       {payoutVendedor && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-w-xs rounded-3xl p-8 shadow-2xl text-center"><h3 className="font-black text-gray-800 uppercase text-sm mb-4">Pagar Comissão</h3><p className="text-xs text-gray-400 font-bold uppercase mb-4">{payoutVendedor.nome}</p><div className="space-y-4 text-left"><div className="flex gap-2 mb-4"><button onClick={() => setPayoutType('TOTAL')} className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase ${payoutType === 'TOTAL' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-400'}`}>Total</button><button onClick={() => setPayoutType('PARCIAL')} className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase ${payoutType === 'PARCIAL' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-400'}`}>Parcial</button></div>{payoutType === 'PARCIAL' && (<div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Valor R$</label><input type="number" value={partialAmount} onChange={e => setPartialAmount(e.target.value)} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-center" /></div>)}<button onClick={handleConfirmPayout} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest">Confirmar Pagamento</button><button onClick={() => setPayoutVendedor(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button></div></div></div>
+      )}
+
+      {/* MODAL: Comprovante de Pagamento (Admin) */}
+      {comprovanteModalSale && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[250] flex items-end sm:items-center justify-center p-4" onClick={() => setComprovanteModalSale(null)}>
+          <div className="bg-white w-full max-sm rounded-t-[2rem] sm:rounded-[2rem] overflow-hidden flex flex-col shadow-2xl animate-in slide-in-from-bottom duration-300" onClick={e => e.stopPropagation()}>
+            <div className="bg-gradient-to-br from-amber-400 to-orange-500 p-5 flex items-center justify-between">
+              <div>
+                <h3 className="font-black text-white text-sm uppercase">Comprovante</h3>
+                <p className="text-white/70 text-[9px] font-bold mt-1">{props.clients.find(c => c.id === comprovanteModalSale.clientId)?.nomeFantasia || 'Cliente'}</p>
+              </div>
+              <button onClick={() => setComprovanteModalSale(null)} className="text-white/70 active:scale-90"><i className="fa-solid fa-xmark text-lg"></i></button>
+            </div>
+            <div className="p-5">
+              {comprovantePreview ? (
+                <img src={comprovantePreview} className="w-full rounded-2xl border border-gray-100" alt="Comprovante" />
+              ) : (
+                <button
+                  onClick={() => comprovanteFileInputRef.current?.click()}
+                  disabled={comprovanteUploading}
+                  className="w-full bg-amber-50 border-2 border-dashed border-amber-300 rounded-2xl p-10 flex flex-col items-center gap-3 active:scale-95"
+                >
+                  {comprovanteUploading ? <i className="fa-solid fa-spinner fa-spin text-amber-500 text-2xl"></i> : <i className="fa-solid fa-camera text-amber-500 text-2xl"></i>}
+                  <span className="text-[10px] font-black text-amber-700 uppercase">{comprovanteUploading ? 'Processando...' : 'Tirar Foto'}</span>
+                </button>
+              )}
+              {comprovantePreview && (
+                <div className="grid grid-cols-2 gap-2 mt-3">
+                  <button onClick={() => handleComprovanteShare(comprovanteModalSale)} className="py-3 rounded-xl text-[9px] font-black uppercase bg-emerald-50 text-emerald-600 active:scale-95 flex items-center justify-center gap-1.5 border border-emerald-100">
+                    <i className="fa-brands fa-whatsapp"></i>Compartilhar
+                  </button>
+                  <button onClick={() => { setComprovantePreview(null); setTimeout(() => comprovanteFileInputRef.current?.click(), 100); }} className="py-3 rounded-xl text-[9px] font-black uppercase bg-gray-100 text-gray-600 active:scale-95 flex items-center justify-center gap-1.5">
+                    <i className="fa-solid fa-camera-rotate"></i>Refazer
+                  </button>
+                </div>
+              )}
+            </div>
+            <div className="p-5 pt-0">
+              <button onClick={() => setComprovanteModalSale(null)} className="w-full bg-gray-100 text-gray-500 font-black py-3 rounded-2xl active:scale-95 uppercase text-[10px]">Fechar</button>
+            </div>
+          </div>
+          <input
+            ref={comprovanteFileInputRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={e => {
+              const f = e.target.files?.[0];
+              if (f && comprovanteModalSale) handleComprovanteCapture(comprovanteModalSale.id, f);
+              e.target.value = '';
+            }}
+          />
+        </div>
       )}
 
             {confirmAction && (
@@ -1458,5 +1849,4 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     </div>
   );
 };
-
 export default AdminDashboard;

@@ -52,7 +52,7 @@ const escpos = {
   underline(mode: number): Uint8Array { return new Uint8Array([ESC, 0x2D, mode]); },
 
   /** Double-height on/off */
-  doubleHeight(on: boolean): Uint8Array { return new Uint8Array([GS, 0x21, on ? 0x11 : 0x00]); },
+  doubleHeight(on: boolean): Uint8Array { return new Uint8Array([GS, 0x21, on ? 0x10 : 0x00]); },
 
   /** Double-width on/off */
   doubleWidth(on: boolean): Uint8Array { return new Uint8Array([GS, 0x21, on ? 0x20 : 0x00]); },

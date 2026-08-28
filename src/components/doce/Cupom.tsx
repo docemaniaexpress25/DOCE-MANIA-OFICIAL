@@ -117,7 +117,7 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
             // 2. If no printer connected, asks to scan (native picker)
             // 3. Connects, confirms, and prints
             if (showToast) showToast('Preparando impressao...');
-            const success = await bluetoothPrinter.print(rawText, printWidth);
+            const success = await bluetoothPrinter.print(rawText, printWidth, { skipConfirm: true });
 
             if (success) {
               setModal({title:'Impresso!', message:'Cupom impresso com sucesso!', icon:'fa-solid fa-circle-check', type:'success', onConfirm:()=>setModal(null)});

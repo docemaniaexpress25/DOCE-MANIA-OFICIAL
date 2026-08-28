@@ -498,7 +498,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       onConfirm: async () => {
         setConfirmModal(null);
         try {
-          await bluetoothPrinter.print(rawText, printWidth);
+          await bluetoothPrinter.print(rawText, printWidth, { skipConfirm: true });
           setAppModal({ title: 'Sucesso', message: 'Pré-pedido impresso com sucesso!', icon: 'fa-solid fa-check', iconColor: 'text-emerald-500', type: 'success' });
         } catch (error: any) {
           const msg = error?.message || 'Erro desconhecido';
@@ -824,7 +824,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
 
                    <div className="grid grid-cols-4 gap-2">
                      {[7, 14, 21, 30].map(days => (
-                       <button key={days} onClick={() => handlePrazoDays(days)} className={`py-3 rounded-xl text-[10px] font-black transition-all shadow-sm ${prazoDays === days ? 'bg-blue-600 text-white border-blue-600' : 'bg-gray-50 border border-gray-100 text-gray-600'}`}>{days}D</button>
+                       <button key={days} onClick={() => handlePrazoDays(days)} className={`py-3 rounded-xl text-[10px] font-black transition-all ${prazoDays === days ? 'bg-blue-600 text-white border-2 border-blue-600 ring-2 ring-blue-300 scale-105 shadow-lg' : 'bg-gray-50 border-2 border-gray-100 text-gray-500'}`}>{days}D</button>
                      ))}
                    </div>
                    <div className="space-y-1">
@@ -1030,20 +1030,15 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                   <i className="fa-solid fa-camera text-amber-500 text-2xl"></i>
                 )}
                 <span className="text-[10px] font-black text-amber-700 uppercase">
-                  {comprovanteUploading ? 'Processando...' : 'Tirar Foto'}
+                  {comprovanteUploading ? 'Processando...' : 'Tirar Foto Obrigatoria'}
                 </span>
               </button>
             )}
           </div>
 
-          <div className="p-5 pt-0">
-            <button
-              onClick={() => { setShowComprovanteModal(false); if (lastFinishedSaleRef.current) onFinish(lastFinishedSaleRef.current); }}
-              className="w-full bg-gray-100 text-gray-500 font-black py-3 rounded-2xl active:scale-95 uppercase text-[10px]"
-            >
-              {comprovanteFoto ? 'Fechar' : 'Pular'}
-            </button>
-          </div>
+          <p className="p-5 pt-0 text-center text-[8px] text-rose-500 font-black uppercase tracking-widest animate-pulse">
+            <i className="fa-solid fa-triangle-exclamation mr-1"></i>Foto obrigatoria para venda a prazo
+          </p>
 
           <input
             ref={comprovanteInputRef}

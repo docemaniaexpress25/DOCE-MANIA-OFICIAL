@@ -142,6 +142,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   }, [user.id]);
 
   const [reopenedClientIds, setReopenedClientIds] = useState<string[]>([]);
+  const [optimisticSkipped, setOptimisticSkipped] = useState<string[]>([]);
   const [showReceiveModal, setShowReceiveModal] = useState<Sale | null>(null);
   const [valorRecebidoParcial, setValorRecebidoParcial] = useState<string>('');
   const [editingClient, setEditingClient] = useState<Client | 'NEW' | null>(null); 
@@ -375,6 +376,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const handleSkipClient = () => { 
     if (!confirmSkipId) return;
     const newSkipped = [...(dailyRouteState?.skippedClientIds || []), confirmSkipId];
+    setOptimisticSkimmed(prev => [...new Set([...prev, confirmSkipId])]);
     updateDailyRoute(dailyRouteState.clientIds, newSkipped);
     setConfirmSkipId(null);
     showToast("Visita pulada.");
@@ -382,6 +384,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
   const handleReopenClient = (clientId: string) => {
     const newSkipped = (dailyRouteState?.skippedClientIds || []).filter(id => id !== clientId);
+      setOptimisticSkimmed(prev => prev.filter(id => id !== clientId));
     updateDailyRoute(dailyRouteState.clientIds, newSkipped);
     setReopenedClientIds(prev => [...prev, clientId]);
   };
@@ -702,7 +705,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         t += '='.repeat(W) + '\n';
         t += '\n\n\n\n\n\n\n\n';
         try {
-          await bluetoothPrinter.print(t, '56MM');
+          await bluetoothPrinter.print(t, '56MM', { skipConfirm: true });
         } catch (err: any) {
           const msg = err?.message || 'Erro desconhecido';
           setConfirmAction({ title: 'Erro na Impressao', message: msg.includes('BLUETOOTH_NAO_SUPORTADO') ? 'Bluetooth nao disponivel neste dispositivo.' : 'Falha: ' + msg, icon: 'fa-solid fa-triangle-exclamation', type: 'alert', onConfirm: () => setConfirmAction(null) });
@@ -834,7 +837,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
           </header>
           {rotaDeHoje.map(c => {
             const isSold = (sales || []).some(s => s.clientId === c.id && isSameDay(s.data));
-            const isSkipped = (dailyRouteState?.skippedClientIds || []).includes(c.id);
+            const isSkipped = (dailyRouteState?.skippedClientIds || []).includes(c.id) || optimisticSkipped.includes(c.id);
             const isVisited = (isSold || isSkipped) && !reopenedClientIds.includes(c.id);
             const lastSale = (sales || []).filter(s => s.clientId === c.id).sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime())[0];
             const isExpanded = expandedRouteClientId === c.id;

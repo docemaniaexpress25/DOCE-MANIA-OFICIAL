@@ -12,7 +12,7 @@ interface RelatorioFiscalProps {
   onClose: () => void;
 }
 
-// Função para remover acentos e caracteres especiais para compatibilidade com impressoras termicas
+// Funcao para remover acentos e caracteres especiais para compatibilidade com impressoras termicas
 const normalizeText = (str: string): string => {
   return str.toUpperCase()
     .normalize("NFD")
@@ -21,7 +21,8 @@ const normalizeText = (str: string): string => {
 };
 
 const RelatorioFiscal: React.FC<RelatorioFiscalProps> = ({ user, carga, products, companyName, companyCnpj, onClose }) => {
-  const [format, setFormat] = useState<'80MM' | '56MM'>('56MM'); // 56MM como padrao default
+  const [format, setFormat] = useState<'80MM' | '56MM'>('56MM');
+  const [modal, setModal] = useState<{ title: string; message: string; icon?: string; iconColor?: string; type?: 'info' | 'error' | 'success'; onConfirm?: () => void } | null>(null);
 
   const items = carga.filter(c => c.quantidade > 0).map(c => {
     const p = products.find(prod => prod.id === c.produtoId);
@@ -82,6 +83,35 @@ const RelatorioFiscal: React.FC<RelatorioFiscalProps> = ({ user, carga, products
     return t;
   };
 
+  const handlePrint = async () => {
+    setModal({
+      title: 'Imprimir Relatorio',
+      message: `Deseja imprimir este relatorio de fiscalizacao?\nModelo: ${format === '80MM' ? '80mm (Largo)' : '56mm (Estreito)'}`,
+      icon: 'fa-solid fa-print',
+      iconColor: 'text-blue-600',
+      type: 'info',
+      onConfirm: async () => {
+        setModal(null);
+        try {
+          await bluetoothPrinter.print(generateText(), format, { skipConfirm: true });
+          setModal({ title: 'Sucesso', message: 'Relatorio impresso com sucesso!', icon: 'fa-solid fa-check', iconColor: 'text-emerald-500', type: 'success', onConfirm: () => setModal(null) });
+        } catch (err: any) {
+          const msg = err?.message || 'Erro desconhecido';
+          if (msg === 'BLUETOOTH_NAO_SUPORTADO') {
+            setModal({ title: 'Bluetooth Indisponivel', message: 'Para impressao via Bluetooth:\n1. Use o Chrome no Android\n2. Ative o Bluetooth do dispositivo', icon: 'fa-brands fa-bluetooth-b', iconColor: 'text-gray-400', type: 'error', onConfirm: () => setModal(null) });
+          } else {
+            setModal({ title: 'Erro na Impressao', message: `Falha ao imprimir relatorio: ${msg}`, icon: 'fa-solid fa-triangle-exclamation', iconColor: 'text-rose-500', type: 'error', onConfirm: () => setModal(null) });
+          }
+        }
+      }
+    });
+  };
+
+  const handleCopy = async () => {
+    navigator.clipboard.writeText(generateText());
+    setModal({ title: 'Copiado!', message: 'Relatorio copiado para a area de transferencia!', icon: 'fa-solid fa-clipboard-check', iconColor: 'text-emerald-500', type: 'success', onConfirm: () => setModal(null) });
+  };
+
   return (
     <div className="fixed inset-0 bg-slate-900/95 z-[200] flex flex-col items-center overflow-y-auto p-4 animate-in fade-in duration-200">
       <div className="w-full max-w-lg">
@@ -113,7 +143,7 @@ const RelatorioFiscal: React.FC<RelatorioFiscalProps> = ({ user, carga, products
             {generateText()}
           </div>
           
-          {/* Detalhe estético de picote na imagem */}
+          {/* Detalhe estetico de picote na imagem */}
           <div className="mt-10 flex justify-between gap-1 opacity-10 select-none">
             {Array.from({ length: 40 }).map((_, i) => (
               <div key={i} className="w-2 h-2 bg-black rotate-45 transform translate-y-1"></div>
@@ -123,30 +153,61 @@ const RelatorioFiscal: React.FC<RelatorioFiscalProps> = ({ user, carga, products
 
         <div className="grid grid-cols-2 gap-4 mb-10">
           <button 
-            onClick={async () => {
-              if (!window.confirm('Deseja imprimir este relatorio de fiscalizacao?')) return;
-              try {
-                const success = await bluetoothPrinter.print(generateText(), format);
-                if (success) alert('Relatorio impresso com sucesso!');
-              } catch (err: any) {
-                alert('Falha na impressao: ' + (err?.message || 'Erro desconhecido'));
-              }
-            }}
+            onClick={handlePrint}
             className="bg-blue-600 text-white font-black py-5 rounded-[2rem] shadow-xl active:scale-95 transition-all uppercase text-[10px] tracking-widest flex items-center justify-center gap-3"
           >
             <i className="fa-solid fa-print text-lg"></i> IMPRIMIR
           </button>
           <button 
-            onClick={() => {
-              navigator.clipboard.writeText(generateText());
-              alert("Relatorio copiado para a area de transferencia!");
-            }}
+            onClick={handleCopy}
             className="bg-slate-700 text-slate-300 font-black py-5 rounded-[2rem] shadow-xl active:scale-95 transition-all uppercase text-[10px] tracking-widest flex items-center justify-center gap-3"
           >
             <i className="fa-solid fa-copy"></i> COPIAR
           </button>
         </div>
       </div>
+
+      {/* MODAL: Confirmacao / Alerta estilizado */}
+      {modal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[400] flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
+            <div className={`p-6 text-center ${modal.type === 'error' ? 'bg-gradient-to-br from-rose-500 to-red-600' : modal.type === 'success' ? 'bg-gradient-to-br from-emerald-500 to-teal-600' : 'bg-gradient-to-br from-blue-500 to-indigo-600'}`}>
+              <div className="w-14 h-14 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-3">
+                <i className={`${modal.icon || 'fa-solid fa-info'} ${modal.iconColor || 'text-white'} text-2xl`}></i>
+              </div>
+              <h3 className="font-black text-white text-sm uppercase tracking-tight">{modal.title}</h3>
+            </div>
+            <div className="p-6">
+              <p className="text-center text-[12px] text-gray-600 font-semibold leading-relaxed whitespace-pre-line">{modal.message}</p>
+            </div>
+            <div className="p-5 pt-0">
+              {modal.onConfirm ? (
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => setModal(null)}
+                    className="w-full bg-gray-100 text-gray-600 font-black py-4 rounded-2xl active:scale-95 uppercase text-[10px] tracking-widest"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    onClick={modal.onConfirm}
+                    className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-[10px] tracking-widest"
+                  >
+                    Confirmar
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setModal(null)}
+                  className={`w-full font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest text-white ${modal.type === 'error' ? 'bg-rose-600' : modal.type === 'success' ? 'bg-emerald-600' : 'bg-blue-600'}`}
+                >
+                  OK
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -463,7 +463,7 @@ class BluetoothPrinterService {
   /**
    * Main print method: connects (or reconnects), confirms, and prints.
    */
-  async print(rawText: string, width: PrinterWidth = '56MM'): Promise<boolean> {
+  async print(rawText: string, width: PrinterWidth = '56MM', options?: { skipConfirm?: boolean }): Promise<boolean> {
     if (!this.isAvailable()) {
       throw new Error('BLUETOOTH_NAO_SUPORTADO');
     }
@@ -472,13 +472,14 @@ class BluetoothPrinterService {
     if (!this.isConnected()) {
       const reconnected = await this.reconnect();
       if (!reconnected) {
-        // Show native confirmation to scan for printer
-        const wantsToScan = window.confirm(
-          'Nenhuma impressora Bluetooth conectada.\n\nDeseja buscar uma impressora agora?'
-        );
-        if (!wantsToScan) {
-          this.emitStatus({ status: 'idle' });
-          return false;
+        if (!options?.skipConfirm) {
+          const wantsToScan = window.confirm(
+            'Nenhuma impressora Bluetooth conectada.\n\nDeseja buscar uma impressora agora?'
+          );
+          if (!wantsToScan) {
+            this.emitStatus({ status: 'idle' });
+            return false;
+          }
         }
 
         const connected = await this.scanAndConnect();
@@ -489,14 +490,16 @@ class BluetoothPrinterService {
       }
     }
 
-    // Step 2: Native confirmation before printing
-    const printerName = this.printer?.name || 'Impressora';
-    const confirmed = window.confirm(
-      `Confirmar impressao?\n\nImpressora: ${printerName}\nPapel: ${width}\n\nToque em OK para imprimir.`
-    );
-    if (!confirmed) {
-      this.emitStatus({ status: 'connected', printerName });
-      return false;
+    // Step 2: Confirmation before printing (skippable)
+    if (!options?.skipConfirm) {
+      const printerName = this.printer?.name || 'Impressora';
+      const confirmed = window.confirm(
+        `Confirmar impressao?\n\nImpressora: ${printerName}\nPapel: ${width}\n\nToque em OK para imprimir.`
+      );
+      if (!confirmed) {
+        this.emitStatus({ status: 'connected', printerName });
+        return false;
+      }
     }
 
     // Step 3: Build ESC/POS buffer and send

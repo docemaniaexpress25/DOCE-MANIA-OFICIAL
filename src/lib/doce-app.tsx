@@ -19,6 +19,7 @@ import { expenseService } from '@/services/expenseService';
 import { categoryService } from '@/services/categoryService';
 import { supabase } from '@/lib/supabaseClient';
 import { loadLocalState, saveLocalState, DailyRouteState } from '@/utils/persistence';
+import { pushService } from '@/services/pushNotificationService';
 
 const getTodayDateString = () => {
   const now = new Date();
@@ -93,6 +94,18 @@ const App: React.FC = () => {
     });
     return cleanup;
   }, []);
+
+  // Push notifications: registrar Service Worker + solicitar permissao
+  useEffect(() => {
+    if (!currentUser) return;
+    // Aguardar um momento para nao conflitar com outros init
+    const timer = setTimeout(() => {
+      pushService.init().then(ok => {
+        if (ok) console.log('[APP] Push notifications ativo');
+      });
+    }, 3000);
+    return () => clearTimeout(timer);
+  }, [currentUser]);
 
   useEffect(() => { saveLocalState('currentUser', currentUser); }, [currentUser]);
   useEffect(() => { saveLocalState('dailyRouteState', dailyRouteState); }, [dailyRouteState]);
@@ -417,6 +430,20 @@ const App: React.FC = () => {
         const { sounds } = await import('@/utils/sound');
         sounds.kaChing();
         haptics.success();
+        // Enviar push notification para o admin
+        try {
+          const valor = Number(saleData.valorTotal || 0).toFixed(2);
+          const metodo = saleData.metodoPagamento === 'A_PRAZO' ? 'A Prazo' : (saleData.metodoPagamento || '');
+          fetch('/api/send-push', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              title: 'Nova Venda!',
+              body: `R$ ${valor} - ${metodo}`,
+              url: '/'
+            }),
+          }).catch(() => {});
+        } catch {} // nao bloqueia a venda se push falhar
       }
       return res;
     } catch (e) {

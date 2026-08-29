@@ -79,8 +79,8 @@ interface AdminDashboardProps {
 
 type TabType = 'HOME' | 'CATALOGO' | 'CATEGORIAS' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'BACKUP' | 'SETTINGS';
 
-type ReportType = 'RESUMO' | 'TOP_CLIENTES' | 'TOP_PRODUTOS' | 'CLIENTES_RISCO' | 'VENDAS_CATEGORIAS' | null;
-type ReportFilterType = 'RESUMO' | 'TOP_PRODUTOS' | 'TOP_CLIENTES' | 'CATEGORIAS' | 'VENDEDORES' | 'DIVIDAS';
+type ReportType = 'RESUMO' | 'TOP_CLIENTES' | 'TOP_PRODUTOS' | 'CLIENTES_RISCO' | 'VENDAS_CATEGORIAS' | 'PRODUTOS_RENTAVEIS' | null;
+type ReportFilterType = 'RESUMO' | 'TOP_PRODUTOS' | 'TOP_CLIENTES' | 'CATEGORIAS' | 'VENDEDORES' | 'DIVIDAS' | 'PRODUTOS_RENTAVEIS';
 
 const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [activeTab, setActiveTab] = useState<TabType>(() => loadLocalState('admin_activeTab', 'HOME'));
@@ -466,6 +466,56 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       }))
       .sort((a, b) => b.total - a.total);
   }, [props.sales, props.products, props.categories, props.subcategories, periodoRelatorio]);
+
+  // Relatório de Produtos mais Rentáveis (margem x volume)
+  const produtosRentaveis = useMemo(() => {
+    const salesInPeriod = props.sales.filter(s => filterByPeriod(s.data, periodoRelatorio));
+    const productMap = new Map(props.products.map(p => [p.id, p]));
+
+    // Acumula quantidade vendida por produto no período
+    const qtyMap: { [id: string]: number } = {};
+    const revenueMap: { [id: string]: number } = {};
+    salesInPeriod.forEach(s => {
+      s.itens.forEach(item => {
+        const pid = item.produtoId;
+        qtyMap[pid] = (qtyMap[pid] || 0) + (item.quantidade || 0);
+        revenueMap[pid] = (revenueMap[pid] || 0) + ((item.quantidade || 0) * (item.precoVenda || 0));
+      });
+    });
+
+    // Calcula rentabilidade por produto
+    const rentabilidade = Object.entries(qtyMap).map(([pid, qtd]) => {
+      const prod = productMap.get(pid);
+      if (!prod) return null;
+      const custoUnit = prod.precoCusto || 0;
+      const vendaUnit = prod.precoVenda || 0;
+      const margemUnit = vendaUnit - custoUnit;
+      const lucroTotal = margemUnit * qtd;
+      const custoTotal = custoUnit * qtd;
+      const faturamento = revenueMap[pid] || 0;
+      const margemPercent = vendaUnit > 0 ? ((margemUnit / vendaUnit) * 100) : 0;
+      return {
+        id: pid,
+        nome: prod.nome,
+        qtd,
+        custoUnit: Number(custoUnit.toFixed(2)),
+        vendaUnit: Number(vendaUnit.toFixed(2)),
+        margemUnit: Number(margemUnit.toFixed(2)),
+        margemPercent: Number(margemPercent.toFixed(1)),
+        faturamento: Number(faturamento.toFixed(2)),
+        custoTotal: Number(custoTotal.toFixed(2)),
+        lucroTotal: Number(lucroTotal.toFixed(2)),
+      };
+    }).filter(Boolean).sort((a, b) => (b?.lucroTotal || 0) - (a?.lucroTotal || 0));
+
+    // Totais gerais
+    const totalFaturamento = rentabilidade.reduce((acc, r) => acc + (r?.faturamento || 0), 0);
+    const totalCusto = rentabilidade.reduce((acc, r) => acc + (r?.custoTotal || 0), 0);
+    const totalLucro = rentabilidade.reduce((acc, r) => acc + (r?.lucroTotal || 0), 0);
+    const totalQtd = rentabilidade.reduce((acc, r) => acc + (r?.qtd || 0), 0);
+
+    return { produtos: rentabilidade, totalFaturamento, totalCusto, totalLucro, totalQtd };
+  }, [props.sales, props.products, reportPeriodo]);
 
   const handleOpenPayout = (v: User) => {
     setPayoutVendedor(v);
@@ -1017,6 +1067,92 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           </div>
         );
 
+      case 'PRODUTOS_RENTAVEIS':
+        return (
+          <div className="space-y-5 animate-in fade-in duration-300">
+            {/* KPIs de resumo */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-emerald-600 p-5 rounded-3xl shadow-lg text-white">
+                <p className="text-[9px] font-black uppercase opacity-60 mb-1">Lucro Total</p>
+                <h2 className="text-xl font-black">R$ {produtosRentaveis.totalLucro.toFixed(2)}</h2>
+                <p className="text-[9px] font-bold opacity-50 mt-1">Receita - Custo</p>
+              </div>
+              <div className="bg-white p-5 rounded-3xl shadow-sm border border-gray-100">
+                <p className="text-[9px] font-black uppercase text-gray-400 mb-1">Margem Geral</p>
+                <h2 className="text-xl font-black text-emerald-600">{produtosRentaveis.totalFaturamento > 0 ? ((produtosRentaveis.totalLucro / produtosRentaveis.totalFaturamento) * 100).toFixed(1) : '0.0'}%</h2>
+                <p className="text-[9px] font-bold text-gray-400 mt-1">Lucro / Faturamento</p>
+              </div>
+              <div className="bg-white p-5 rounded-3xl shadow-sm border border-gray-100">
+                <p className="text-[9px] font-black uppercase text-gray-400 mb-1">Faturamento</p>
+                <h2 className="text-xl font-black text-blue-600">R$ {produtosRentaveis.totalFaturamento.toFixed(2)}</h2>
+                <p className="text-[9px] font-bold text-gray-400 mt-1">{produtosRentaveis.totalQtd} un vendidas</p>
+              </div>
+              <div className="bg-white p-5 rounded-3xl shadow-sm border border-gray-100">
+                <p className="text-[9px] font-black uppercase text-gray-400 mb-1">Custo Total</p>
+                <h2 className="text-xl font-black text-rose-500">R$ {produtosRentaveis.totalCusto.toFixed(2)}</h2>
+                <p className="text-[9px] font-bold text-gray-400 mt-1">Investimento no período</p>
+              </div>
+            </div>
+
+            {/* Lista de produtos */}
+            <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
+              <div className="bg-emerald-50 px-5 py-4 border-b border-emerald-100">
+                <h3 className="font-black text-emerald-800 uppercase text-xs tracking-wider flex items-center gap-2">
+                  <i className="fa-solid fa-trophy text-emerald-600"></i> Ranking de Rentabilidade
+                </h3>
+                <p className="text-[10px] text-emerald-600/70 font-semibold mt-1">Ordenado por lucro total (margem unitária x unidades vendidas)</p>
+              </div>
+
+              {produtosRentaveis.produtos.length === 0 ? (
+                <p className="text-center py-10 text-gray-400 text-sm">Nenhum produto vendido no período</p>
+              ) : (
+                <div className="divide-y divide-gray-50">
+                  {produtosRentaveis.produtos.map((p, i) => {
+                    const maxLucro = produtosRentaveis.produtos[0]?.lucroTotal || 1;
+                    const barWidth = Math.max(8, ((p?.lucroTotal || 0) / maxLucro) * 100);
+                    const rankColor = i === 0 ? 'text-yellow-500' : i === 1 ? 'text-gray-400' : i === 2 ? 'text-amber-700' : 'text-gray-300';
+                    return (
+                      <div key={p?.id} className="px-5 py-4">
+                        {/* Header do produto */}
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <span className={`text-sm font-black ${rankColor} w-6 text-center`}>#{i + 1}</span>
+                            <span className="text-xs font-bold text-gray-800 uppercase truncate">{p?.nome}</span>
+                          </div>
+                          <span className="text-sm font-black text-emerald-600 whitespace-nowrap ml-3">R$ {p?.lucroTotal.toFixed(2)}</span>
+                        </div>
+                        {/* Barra de progresso visual */}
+                        <div className="w-full h-2 bg-gray-100 rounded-full mb-3 overflow-hidden">
+                          <div className="h-full bg-gradient-to-r from-emerald-400 to-emerald-600 rounded-full transition-all" style={{ width: `${barWidth}%` }}></div>
+                        </div>
+                        {/* Métricas detalhadas */}
+                        <div className="grid grid-cols-4 gap-2">
+                          <div className="bg-gray-50 rounded-xl px-2.5 py-2 text-center">
+                            <p className="text-[8px] font-black uppercase text-gray-400">Custo Un.</p>
+                            <p className="text-[11px] font-black text-gray-700">R$ {p?.custoUnit}</p>
+                          </div>
+                          <div className="bg-gray-50 rounded-xl px-2.5 py-2 text-center">
+                            <p className="text-[8px] font-black uppercase text-gray-400">Venda Un.</p>
+                            <p className="text-[11px] font-black text-blue-600">R$ {p?.vendaUnit}</p>
+                          </div>
+                          <div className="bg-gray-50 rounded-xl px-2.5 py-2 text-center">
+                            <p className="text-[8px] font-black uppercase text-gray-400">Margem</p>
+                            <p className="text-[11px] font-black text-emerald-600">{p?.margemPercent}%</p>
+                          </div>
+                          <div className="bg-gray-50 rounded-xl px-2.5 py-2 text-center">
+                            <p className="text-[8px] font-black uppercase text-gray-400">Unid.</p>
+                            <p className="text-[11px] font-black text-gray-700">{p?.qtd}</p>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+
       default:
         return null;
     }
@@ -1411,8 +1547,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           <header className="px-1 flex justify-between items-center"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Relatorios</h2></header>
           
           <div className="flex bg-gray-100 p-1 rounded-2xl mx-1 shadow-inner overflow-x-auto gap-1">
-            {(['RESUMO', 'TOP_PRODUTOS', 'TOP_CLIENTES', 'CATEGORIAS', 'VENDEDORES', 'DIVIDAS'] as const).map(r => (
-              <button key={r} onClick={() => setReportFilter(r)} className={`flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all whitespace-nowrap ${reportFilter === r ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>{r === 'TOP_PRODUTOS' ? 'Top Produtos' : r === 'TOP_CLIENTES' ? 'Top Clientes' : r === 'VENDEDORES' ? 'Vendedores' : r === 'CATEGORIAS' ? 'Categorias' : r === 'DIVIDAS' ? 'Dividas' : 'Resumo'}</button>
+            {(['RESUMO', 'TOP_PRODUTOS', 'RENTAVEIS', 'TOP_CLIENTES', 'CATEGORIAS', 'VENDEDORES', 'DIVIDAS'] as const).map(r => (
+              <button key={r} onClick={() => setReportFilter(r as any)} className={`flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all whitespace-nowrap ${reportFilter === r ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>{r === 'TOP_PRODUTOS' ? 'Top Produtos' : r === 'RENTAVEIS' ? 'Rentaveis' : r === 'TOP_CLIENTES' ? 'Top Clientes' : r === 'VENDEDORES' ? 'Vendedores' : r === 'CATEGORIAS' ? 'Categorias' : r === 'DIVIDAS' ? 'Dividas' : 'Resumo'}</button>
             ))}
           </div>
 
@@ -1575,6 +1711,46 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                     ))}
                     {ranked.length === 0 && <p className="text-center text-gray-400 text-xs font-bold py-8">Nenhuma divida pendente</p>}
                   </div>
+                </div>
+              );
+            })()}
+
+            {reportFilter === 'PRODUTOS_RENTAVEIS' && (() => {
+              const pr = produtosRentaveis;
+              const maxLucro = pr.produtos.length > 0 ? (pr.produtos[0]?.lucroTotal || 1) : 1;
+              return (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="bg-emerald-600 p-4 rounded-2xl shadow-lg text-white"><p className="text-[9px] font-black uppercase opacity-60">Lucro Total</p><p className="text-xl font-black mt-1">R$ {pr.totalLucro.toFixed(2)}</p><p className="text-[9px] font-bold opacity-50 mt-1">Receita - Custo</p></div>
+                    <div className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm"><p className="text-[9px] font-black text-gray-400 uppercase">Margem Geral</p><p className="text-xl font-black text-emerald-600 mt-1">{pr.totalFaturamento > 0 ? ((pr.totalLucro / pr.totalFaturamento) * 100).toFixed(1) : '0.0'}%</p><p className="text-[9px] font-bold text-gray-400 mt-1">Lucro / Faturamento</p></div>
+                    <div className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm"><p className="text-[9px] font-black text-gray-400 uppercase">Faturamento</p><p className="text-xl font-black text-blue-600 mt-1">R$ {pr.totalFaturamento.toFixed(2)}</p><p className="text-[9px] font-bold text-gray-400 mt-1">{pr.totalQtd} un vendidas</p></div>
+                    <div className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm"><p className="text-[9px] font-black text-gray-400 uppercase">Custo Total</p><p className="text-xl font-black text-rose-500 mt-1">R$ {pr.totalCusto.toFixed(2)}</p><p className="text-[9px] font-bold text-gray-400 mt-1">Investimento no periodo</p></div>
+                  </div>
+                  {pr.produtos.length === 0 ? (
+                    <p className="text-center text-gray-400 text-xs font-bold py-8">Nenhum produto vendido no periodo</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {pr.produtos.map((p, i) => {
+                        const barW = Math.max(8, ((p?.lucroTotal || 0) / maxLucro) * 100);
+                        const rankClr = i === 0 ? 'text-yellow-500' : i === 1 ? 'text-gray-400' : i === 2 ? 'text-amber-700' : 'text-gray-300';
+                        return (
+                          <div key={p?.id} className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
+                            <div className="flex justify-between items-center mb-2">
+                              <div className="flex items-center gap-2 min-w-0"><span className={`text-xs font-black ${rankClr} w-6 text-center`}>#{i + 1}</span><span className="font-bold text-xs text-gray-800 uppercase truncate">{p?.nome}</span></div>
+                              <span className="text-xs font-black text-emerald-600 whitespace-nowrap ml-2">R$ {p?.lucroTotal.toFixed(2)}</span>
+                            </div>
+                            <div className="w-full bg-gray-100 rounded-full h-2 mb-2 overflow-hidden"><div className="h-full bg-gradient-to-r from-emerald-400 to-emerald-600 rounded-full transition-all" style={{ width: `${barW}%` }}></div></div>
+                            <div className="grid grid-cols-4 gap-2">
+                              <div className="bg-gray-50 rounded-xl px-2 py-1.5 text-center"><p className="text-[7px] font-black text-gray-400 uppercase">Custo Un.</p><p className="text-[10px] font-black text-gray-700">R$ {p?.custoUnit}</p></div>
+                              <div className="bg-gray-50 rounded-xl px-2 py-1.5 text-center"><p className="text-[7px] font-black text-gray-400 uppercase">Venda Un.</p><p className="text-[10px] font-black text-blue-600">R$ {p?.vendaUnit}</p></div>
+                              <div className="bg-gray-50 rounded-xl px-2 py-1.5 text-center"><p className="text-[7px] font-black text-gray-400 uppercase">Margem</p><p className="text-[10px] font-black text-emerald-600">{p?.margemPercent}%</p></div>
+                              <div className="bg-gray-50 rounded-xl px-2 py-1.5 text-center"><p className="text-[7px] font-black text-gray-400 uppercase">Unid.</p><p className="text-[10px] font-black text-gray-700">{p?.qtd}</p></div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               );
             })()}

@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { User, Product, Carga, Sale, Commission, Client, PaymentMethod, CargaPendente, CommissionPaymentLog, SystemMessage, Expense, Category, Subcategory } from '@/lib/types';
 import AdminDashboard from '@/components/doce/AdminDashboard';
 import VendedorDashboard from '@/components/doce/VendedorDashboard';
@@ -68,6 +68,10 @@ const App: React.FC = () => {
     }
     return saved;
   });
+
+  // Refs para evitar race condition no pular/reabrir
+  const routeInitializedRef = useRef(false);
+  const routeUpdateLockUntilRef = useRef(0); // timestamp — bloqueia reloads ate esta hora
 
   // Haptics: vibracao em todos os botoes
   useEffect(() => {
@@ -183,6 +187,18 @@ const App: React.FC = () => {
   useEffect(() => {
     const loadRoute = async () => {
       if (currentUser && currentUser.role === 'VENDEDOR') {
+        // Se a rota ja foi inicializada hoje, nao recarregar do Supabase
+        // (evita sobrescrever skips/reopens locais)
+        if (routeInitializedRef.current && dailyRouteState.date === getTodayDateString()) {
+          return;
+        }
+
+        // Se estamos dentro do periodo de lock (pos skip/reopen), nao recarregar
+        if (Date.now() < routeUpdateLockUntilRef.current) {
+          console.log('[ROTA] Bloqueado — skip/reopen recente, ignorando reload.');
+          return;
+        }
+
         const today = getTodayDateString();
         const route = await dailyRouteService.getRoute(currentUser.id, today);
         if (route) {
@@ -198,17 +214,20 @@ const App: React.FC = () => {
           setDailyRouteState(newRoute);
           await dailyRouteService.updateRoute(currentUser.id, newRoute);
         }
+        routeInitializedRef.current = true;
       }
     };
     if (clients.length > 0) {
       loadRoute();
     }
-  }, [currentUser, clients]);
+  }, [currentUser, clients.length > 0]); // muda so quando clients aparece/volta a zero, nao a cada edicao
 
   useEffect(() => {
     const checkDate = () => {
       const today = getTodayDateString();
       if (dailyRouteState.date !== today) {
+        // Reset da inicializacao para permitir reload da rota do novo dia
+        routeInitializedRef.current = false;
         setDailyRouteState({ date: today, clientIds: [], skippedClientIds: [] });
         fetchCoreData();
       }
@@ -530,9 +549,12 @@ const App: React.FC = () => {
     }
     const date = dailyRouteState?.date || (() => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}-${String(n.getDate()).padStart(2,'0')}`; })();
     const newRoute = { date, clientIds, skippedClientIds };
+    // Bloqueia reloads do Supabase por 5 segundos para evitar race condition
+    routeUpdateLockUntilRef.current = Date.now() + 5000;
     setDailyRouteState(newRoute);
     try {
       await dailyRouteService.updateRoute(currentUser.id, newRoute);
+      console.log('[ROTA] Salvo no Supabase com sucesso.');
     } catch (err) {
       console.error('[ROTA] Erro ao salvar rota diaria:', err);
     }

@@ -405,16 +405,18 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
   const handleSkipClient = () => { 
     if (!confirmSkipId) return;
+    const clientIdToSkip = confirmSkipId; // captura ANTES de limpar
     try {
       // Atualiza estado local imediatamente (independente do Supabase)
-      setOptimisticSkipped(prev => [...new Set([...prev, confirmSkipId])]);
+      setOptimisticSkipped(prev => [...new Set([...prev, clientIdToSkip])]);
       setConfirmSkipId(null);
+      setReopenedClientIds(prev => prev.filter(id => id !== clientIdToSkip));
       showToast("Visita pulada.");
 
       // Persiste no Supabase em background (nao bloqueia a UI)
       const currentClientIds = dailyRouteState?.clientIds || [];
       const currentSkipped = dailyRouteState?.skippedClientIds || [];
-      const newSkipped = [...currentSkipped, confirmSkipId];
+      const newSkipped = [...new Set([...currentSkipped, clientIdToSkip])];
       updateDailyRoute(currentClientIds, newSkipped).catch((err: any) => {
         console.error('[PULAR] Erro ao salvar pular no Supabase:', err);
       });

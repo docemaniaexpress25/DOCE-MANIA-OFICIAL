@@ -187,9 +187,13 @@ const App: React.FC = () => {
   useEffect(() => {
     const loadRoute = async () => {
       if (currentUser && currentUser.role === 'VENDEDOR') {
-        // Se a rota ja foi inicializada hoje, nao recarregar do Supabase
-        // (evita sobrescrever skips/reopens locais)
-        if (routeInitializedRef.current && dailyRouteState.date === getTodayDateString()) {
+        const today = getTodayDateString();
+
+        // Se ja temos rota do dia no estado (veio do localStorage) com clientes,
+        // confia nela e NAO sobrescreve com Supabase (evita race condition)
+        if (dailyRouteState.date === today && dailyRouteState.clientIds.length > 0) {
+          routeInitializedRef.current = true;
+          console.log('[ROTA] Estado local valido para hoje, pulando reload do Supabase.');
           return;
         }
 
@@ -199,7 +203,6 @@ const App: React.FC = () => {
           return;
         }
 
-        const today = getTodayDateString();
         const route = await dailyRouteService.getRoute(currentUser.id, today);
         if (route) {
           setDailyRouteState(route);
@@ -210,7 +213,10 @@ const App: React.FC = () => {
             .sort((a, b) => (a.ordem || 0) - (b.ordem || 0))
             .map(c => c.id);
           
-          const newRoute = { date: today, clientIds: routeClients, skippedClientIds: [] };
+          // Preserva qualquer skippedClientIds que ja existia no estado local
+          // (caso o save no Supabase nao tenha completado antes do refresh)
+          const existingSkipped = dailyRouteState.skippedClientIds || [];
+          const newRoute = { date: today, clientIds: routeClients, skippedClientIds: existingSkipped };
           setDailyRouteState(newRoute);
           await dailyRouteService.updateRoute(currentUser.id, newRoute);
         }

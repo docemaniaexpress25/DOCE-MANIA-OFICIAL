@@ -120,11 +120,33 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     loadLocalState(`v_dismissed_risk_${user.id}`, [])
   );
 
+  // Data atual para chaves de persistência diária
+  const todayStr = (() => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}-${String(n.getDate()).padStart(2,'0')}`; })();
+
+  // Persistir skips/reopens no localStorage para sobreviver refresh
+  const [optimisticSkipped, setOptimisticSkipped] = useState<string[]>(() =>
+    loadLocalState<string[]>(`v_optSkipped_${user.id}_${todayStr}`, [])
+  );
+  const [reopenedClientIds, setReopenedClientIds] = useState<string[]>(() =>
+    loadLocalState<string[]>(`v_reopened_${user.id}_${todayStr}`, [])
+  );
+
   useEffect(() => { saveLocalState('v_activeTab', activeTab); }, [activeTab]);
   useEffect(() => { saveLocalState('v_selectedClient', selectedClient); }, [selectedClient]);
   useEffect(() => { saveLocalState('v_viewingSale', viewingSale); }, [viewingSale]);
 
   useEffect(() => { saveLocalState(`v_dismissed_risk_${user.id}`, dismissedClientRiskIds); }, [dismissedClientRiskIds, user.id]);
+
+  // Persistir optimisticSkipped e reopenedClientIds no localStorage
+  useEffect(() => { saveLocalState(`v_optSkipped_${user.id}_${todayStr}`, optimisticSkipped); }, [optimisticSkipped, user.id, todayStr]);
+  useEffect(() => { saveLocalState(`v_reopened_${user.id}_${todayStr}`, reopenedClientIds); }, [reopenedClientIds, user.id, todayStr]);
+
+  // Se o cliente selecionado nao existe mais na lista, limpa a selecao
+  useEffect(() => {
+    if (selectedClient && !clients.find(c => c.id === selectedClient.id)) {
+      setSelectedClient(null);
+    }
+  }, [selectedClient, clients]);
 
   // GPS: envia localizacao via watchPosition + fallback interval
   useEffect(() => {
@@ -171,8 +193,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     };
   }, [user.id]);
 
-  const [reopenedClientIds, setReopenedClientIds] = useState<string[]>([]);
-  const [optimisticSkipped, setOptimisticSkipped] = useState<string[]>([]);
   const [showReceiveModal, setShowReceiveModal] = useState<Sale | null>(null);
   const [valorRecebidoParcial, setValorRecebidoParcial] = useState<string>('');
   const [editingClient, setEditingClient] = useState<Client | 'NEW' | null>(null); 
@@ -414,9 +434,10 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       showToast("Visita pulada.");
 
       // Persiste no Supabase em background (nao bloqueia a UI)
+      // Inclui optimisticSkipped para evitar perder skips rapidos consecutivos
       const currentClientIds = dailyRouteState?.clientIds || [];
-      const currentSkipped = dailyRouteState?.skippedClientIds || [];
-      const newSkipped = [...new Set([...currentSkipped, clientIdToSkip])];
+      const baseSkipped = dailyRouteState?.skippedClientIds || [];
+      const newSkipped = [...new Set([...baseSkipped, ...optimisticSkipped, clientIdToSkip])];
       updateDailyRoute(currentClientIds, newSkipped).catch((err: any) => {
         console.error('[PULAR] Erro ao salvar pular no Supabase:', err);
       });
@@ -434,9 +455,10 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       showToast("Visita reaberta.");
 
       // Persiste no Supabase em background
+      // Inclui optimisticSkipped para manter consistencia
       const currentClientIds = dailyRouteState?.clientIds || [];
-      const currentSkipped = dailyRouteState?.skippedClientIds || [];
-      const newSkipped = currentSkipped.filter(id => id !== clientId);
+      const baseSkipped = dailyRouteState?.skippedClientIds || [];
+      const newSkipped = [...new Set([...baseSkipped, ...optimisticSkipped])].filter(id => id !== clientId);
       updateDailyRoute(currentClientIds, newSkipped).catch((err: any) => {
         console.error('[REABRIR] Erro ao salvar reabrir no Supabase:', err);
       });
@@ -763,8 +785,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   if (selectedClient) {
     const pdvClient = clients.find(c => c.id === selectedClient.id);
     if (!pdvClient) {
-      // Use useEffect pattern: schedule state update for after render
-      setTimeout(() => setSelectedClient(null), 0);
       return null;
     }
 

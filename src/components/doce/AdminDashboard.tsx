@@ -1042,7 +1042,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             <MenuCard icon="fa-tags" title="Categorias" tab="CATEGORIAS" color="bg-indigo-50 text-indigo-600" />
             <MenuCard icon="fa-truck-ramp-box" title="Cargas" tab="CARGAS" color="bg-orange-50 text-orange-600" />
             <MenuCard icon="fa-users" title="Clientes" tab="CLIENTES" color="bg-green-50 text-green-600" />
-            <MenuCard icon="fa-wallet" title="Caixa" tab="CAIXA" color="bg-yellow-50 text-yellow-600" />
+            <MenuCard icon="fa-coins" title="Comissoes" tab="CAIXA" color="bg-yellow-50 text-yellow-600" />
             <MenuCard icon="fa-users-gear" title="Vendedores" tab="VENDEDORES" color="bg-purple-50 text-purple-600" />
             <MenuCard icon="fa-receipt" title="Vendas Realizadas" tab="HISTORY" color="bg-red-50 text-red-600" />
             <MenuCard icon="fa-calendar-days" title="Roteiro" tab="ROTEIRO" color="bg-indigo-50 text-indigo-600" />
@@ -1239,45 +1239,23 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       )}
 
       {activeTab === 'CAIXA' && (() => {
-        const hoje = new Date();
-        const vendasHoje = props.sales.filter(s => { const d = new Date(s.data); return d.toDateString() === hoje.toDateString(); });
-        const totalDinheiro = vendasHoje.filter(s => s.metodoPagamento === 'DINHEIRO').reduce((a, s) => a + (s.valorTotal ?? 0), 0);
-        const totalPix = vendasHoje.filter(s => s.metodoPagamento === 'PIX').reduce((a, s) => a + (s.valorTotal ?? 0), 0);
-        const totalPrazo = vendasHoje.filter(s => s.metodoPagamento === 'A_PRAZO').reduce((a, s) => a + (s.valorTotal ?? 0), 0);
-        const despesasHoje = props.expenses.filter(e => { const d = new Date(e.data); return d.toDateString() === hoje.toDateString(); }).reduce((a, e) => a + (e.valor ?? 0), 0);
-        const totalGeral = totalDinheiro + totalPix + totalPrazo;
-        const recebimentosHoje = props.payoutLogs.filter(l => { const d = new Date(l.dataPagamento); return d.toDateString() === hoje.toDateString(); });
-        const totalPagoComissoes = recebimentosHoje.reduce((a, l) => a + (l.valorPago ?? 0), 0);
+        const totalComissoesGeradas = props.commissions.reduce((a, c) => a + (c.valor ?? 0), 0);
+        const totalJaPago = props.payoutLogs.reduce((a, l) => a + (l.valorPago ?? 0), 0);
+        const totalAPagar = Math.max(0, totalComissoesGeradas - totalJaPago);
+        const totalAReceber = props.commissions.filter(c => c.status === 'A_RECEBER').reduce((a, c) => a + (c.valor ?? 0), 0);
         return (
           <div className="space-y-4">
-            <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Caixa do Dia</h2><p className="text-[10px] text-gray-400 font-bold uppercase mt-1">{hoje.toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}</p></div>
+            <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Comissoes</h2><p className="text-[10px] text-gray-400 font-bold uppercase mt-1">Gestao de repasses e pagamentos</p></div>
             <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-md mx-2">
-              <div className="flex justify-between items-center border-b border-gray-100 pb-3 mb-3"><span className="text-xs font-black text-gray-400 uppercase">Faturamento Total</span><span className="text-2xl font-black text-gray-900">R$ {totalGeral.toFixed(2)}</span></div>
-              <div className="grid grid-cols-3 gap-3 mb-3">
-                <div className="text-center bg-emerald-50 p-3 rounded-xl"><p className="text-[8px] font-black text-emerald-600 uppercase mb-1">Dinheiro</p><p className="text-sm font-black text-emerald-700">R$ {totalDinheiro.toFixed(2)}</p></div>
-                <div className="text-center bg-blue-50 p-3 rounded-xl"><p className="text-[8px] font-black text-blue-600 uppercase mb-1">Pix</p><p className="text-sm font-black text-blue-700">R$ {totalPix.toFixed(2)}</p></div>
-                <div className="text-center bg-orange-50 p-3 rounded-xl"><p className="text-[8px] font-black text-orange-600 uppercase mb-1">A Prazo</p><p className="text-sm font-black text-orange-700">R$ {totalPrazo.toFixed(2)}</p></div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="text-center bg-amber-50 p-4 rounded-2xl"><p className="text-[8px] font-black text-amber-500 uppercase mb-1">Total Gerado</p><p className="text-lg font-black text-amber-700">R$ {totalComissoesGeradas.toFixed(2)}</p></div>
+                <div className="text-center bg-emerald-50 p-4 rounded-2xl"><p className="text-[8px] font-black text-emerald-500 uppercase mb-1">Ja Pago</p><p className="text-lg font-black text-emerald-700">R$ {totalJaPago.toFixed(2)}</p></div>
+                <div className="text-center bg-blue-50 p-4 rounded-2xl"><p className="text-[8px] font-black text-blue-500 uppercase mb-1">A Pagar</p><p className="text-lg font-black text-blue-700">R$ {totalAPagar.toFixed(2)}</p></div>
+                <div className="text-center bg-rose-50 p-4 rounded-2xl"><p className="text-[8px] font-black text-rose-500 uppercase mb-1">A Receber (Vend.)</p><p className="text-lg font-black text-rose-700">R$ {totalAReceber.toFixed(2)}</p></div>
               </div>
-              <div className="flex justify-between items-center border-t border-gray-100 pt-3"><span className="text-[10px] font-black text-gray-400 uppercase">Vendas Realizadas</span><span className="text-sm font-black text-gray-700">{vendasHoje.length}</span></div>
             </div>
-            <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm mx-2 space-y-4">
-              <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider"><i className="fa-solid fa-arrow-trend-down text-rose-500 mr-2"></i>Saidas do Dia</h3>
-              <div className="flex justify-between items-center"><span className="text-[10px] font-black text-gray-400 uppercase">Comissoes Pagas</span><span className="text-sm font-black text-rose-600">- R$ {totalPagoComissoes.toFixed(2)}</span></div>
-              <div className="flex justify-between items-center"><span className="text-[10px] font-black text-gray-400 uppercase">Despesas</span><span className="text-sm font-black text-rose-600">- R$ {despesasHoje.toFixed(2)}</span></div>
-              <div className="border-t border-gray-100 pt-3 flex justify-between items-center"><span className="text-xs font-black text-gray-600 uppercase">Saldo Liquido</span><span className={`text-lg font-black ${(totalGeral - totalPagoComissoes - despesasHoje) >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>R$ {(totalGeral - totalPagoComissoes - despesasHoje).toFixed(2)}</span></div>
-            </div>
-            {vendasHoje.length > 0 && (
-              <div className="px-1"><h3 className="font-black text-gray-800 uppercase text-xs tracking-wider px-1 mb-3">Ultimas Vendas de Hoje</h3><div className="grid gap-2">
-                {vendasHoje.slice(0, 15).sort((a, b) => (b.data?.getTime() ?? 0) - (a.data?.getTime() ?? 0)).map(s => (
-                  <div key={s.id} className="bg-white p-3 rounded-2xl border border-gray-100 shadow-sm flex justify-between items-center">
-                    <div><p className="font-bold text-gray-800 text-[11px] uppercase">{props.clients.find(c => c.id === s.clientId)?.nomeFantasia || 'Cliente'}</p><p className="text-[9px] text-gray-400 font-bold mt-0.5">{s.data?.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})} - {props.users.find(u => u.id === s.vendedorId)?.nome || 'N/D'}</p></div>
-                    <div className="text-right"><p className="text-xs font-black text-gray-800">R$ {s.valorTotal.toFixed(2)}</p><span className={`text-[8px] font-black px-1.5 py-0.5 rounded uppercase ${s.metodoPagamento === 'DINHEIRO' ? 'bg-emerald-50 text-emerald-600' : s.metodoPagamento === 'PIX' ? 'bg-blue-50 text-blue-600' : 'bg-orange-50 text-orange-600'}`}>{s.metodoPagamento}</span></div>
-                  </div>
-                ))}
-              </div></div>
-            )}
 
-            <div className="px-1 pt-2"><h3 className="font-black text-gray-800 uppercase text-xs tracking-wider px-1 mb-3"><i className="fa-solid fa-coins text-amber-500 mr-2"></i>Comissoes por Vendedor</h3>
+            <div className="px-1"><h3 className="font-black text-gray-800 uppercase text-xs tracking-wider px-1 mb-3"><i className="fa-solid fa-coins text-amber-500 mr-2"></i>Comissoes por Vendedor</h3>
               <div className="grid gap-3">
                 {props.users.filter(u => u.role === 'VENDEDOR').map(v => {
                   const stats = getVendedorStats(v.id);
@@ -1294,9 +1272,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                       </div>
                       <div className="grid grid-cols-3 gap-2">
                         <div className="text-center bg-blue-50 p-2 rounded-xl"><p className="text-[7px] font-black text-blue-500 uppercase">Vendas Hoje</p><p className="text-[11px] font-black text-blue-700">R$ {stats.vendasHoje.toFixed(2)}</p></div>
-                        <div className="text-center bg-amber-50 p-2 rounded-xl"><p className="text-[7px] font-black text-amber-500 uppercase">Comissao Gerada</p><p className="text-[11px] font-black text-amber-700">R$ {stats.comissaoGerada.toFixed(2)}</p></div>
+                        <div className="text-center bg-amber-50 p-2 rounded-xl"><p className="text-[7px] font-black text-amber-500 uppercase">Gerada Hoje</p><p className="text-[11px] font-black text-amber-700">R$ {stats.comissaoGerada.toFixed(2)}</p></div>
                         <div className="text-center bg-emerald-50 p-2 rounded-xl"><p className="text-[7px] font-black text-emerald-500 uppercase">Disponivel</p><p className="text-[11px] font-black text-emerald-700">R$ {stats.comissaoDisponivel.toFixed(2)}</p></div>
                       </div>
+                      {stats.comissaoAReceber > 0 && <div className="mt-2 text-center bg-rose-50 p-2 rounded-xl"><p className="text-[7px] font-black text-rose-500 uppercase">A Receber</p><p className="text-[11px] font-black text-rose-700">R$ {stats.comissaoAReceber.toFixed(2)}</p></div>}
                     </div>
                   );
                 })}
@@ -1309,7 +1288,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                 {props.payoutLogs.length === 0 && (
                   <div className="text-center py-8 opacity-30 text-[9px] uppercase font-bold tracking-widest">Nenhum repasse registrado.</div>
                 )}
-                {props.payoutLogs.sort((a, b) => new Date(b.dataPagamento).getTime() - new Date(a.dataPagamento).getTime()).slice(0, 20).map(p => {
+                {props.payoutLogs.sort((a, b) => new Date(b.dataPagamento).getTime() - new Date(a.dataPagamento).getTime()).slice(0, 30).map(p => {
                   const vendedor = props.users.find(u => u.id === p.vendedorId);
                   return (
                     <div key={p.id} className="p-4 flex justify-between items-center">

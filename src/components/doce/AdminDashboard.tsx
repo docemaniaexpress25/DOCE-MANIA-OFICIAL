@@ -469,10 +469,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
   // Relatório de Produtos mais Rentáveis (margem x volume)
   const produtosRentaveis = useMemo(() => {
-    const salesInPeriod = props.sales.filter(s => filterByPeriod(s.data, periodoRelatorio));
+    const salesInPeriod = props.sales.filter(s => filterByPeriod(s.data, reportPeriodo));
     const productMap = new Map(props.products.map(p => [p.id, p]));
-
-    // Acumula quantidade vendida por produto no período
     const qtyMap: { [id: string]: number } = {};
     const revenueMap: { [id: string]: number } = {};
     salesInPeriod.forEach(s => {

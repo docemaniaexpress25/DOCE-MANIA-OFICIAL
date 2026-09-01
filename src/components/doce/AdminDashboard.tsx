@@ -153,6 +153,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [comprovanteModalSale, setComprovanteModalSale] = useState<Sale | null>(null);
   const [comprovantePreview, setComprovantePreview] = useState<string | null>(null);
   const [comprovanteUploading, setComprovanteUploading] = useState(false);
+  const [comprovanteLocal, setComprovanteLocal] = useState<Record<string, string>>({});
   // Helpers para comprovante
   const compressImage = (file: File): Promise<string> => new Promise((resolve) => {
     const reader = new FileReader();
@@ -192,9 +193,17 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       const base64 = await compressImage(file);
       const { saleService } = await import('@/services/saleService');
       const ok = await saleService.updateSale(saleId, { comprovanteFoto: base64 } as any);
-      if (ok) setComprovantePreview(base64);
-      else showToast('Erro ao salvar foto', 'error');
-    } catch (e) { showToast('Erro ao processar foto', 'error'); }
+      if (ok) {
+        setComprovantePreview(base64);
+        setComprovanteLocal(prev => ({ ...prev, [saleId]: base64 }));
+        showToast('Foto salva com sucesso!');
+      } else {
+        showToast('Erro ao salvar foto no banco', 'error');
+      }
+    } catch (e) {
+      console.error('Erro comprovante:', e);
+      showToast('Erro ao processar foto', 'error');
+    }
     setComprovanteUploading(false);
   };
 
@@ -1545,8 +1554,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           <header className="px-1 flex justify-between items-center"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Relatorios</h2></header>
           
           <div className="flex bg-gray-100 p-1 rounded-2xl mx-1 shadow-inner overflow-x-auto gap-1">
-            {(['RESUMO', 'TOP_PRODUTOS', 'RENTAVEIS', 'TOP_CLIENTES', 'CATEGORIAS', 'VENDEDORES', 'DIVIDAS'] as const).map(r => (
-              <button key={r} onClick={() => setReportFilter(r as any)} className={`flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all whitespace-nowrap ${reportFilter === r ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>{r === 'TOP_PRODUTOS' ? 'Top Produtos' : r === 'RENTAVEIS' ? 'Rentaveis' : r === 'TOP_CLIENTES' ? 'Top Clientes' : r === 'VENDEDORES' ? 'Vendedores' : r === 'CATEGORIAS' ? 'Categorias' : r === 'DIVIDAS' ? 'Dividas' : 'Resumo'}</button>
+            {(['RESUMO', 'TOP_PRODUTOS', 'PRODUTOS_RENTAVEIS', 'TOP_CLIENTES', 'CATEGORIAS', 'VENDEDORES', 'DIVIDAS'] as const).map(r => (
+              <button key={r} onClick={() => setReportFilter(r as any)} className={`flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all whitespace-nowrap ${reportFilter === r ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>{r === 'TOP_PRODUTOS' ? 'Top Produtos' : r === 'PRODUTOS_RENTAVEIS' ? 'Rentaveis' : r === 'TOP_CLIENTES' ? 'Top Clientes' : r === 'VENDEDORES' ? 'Vendedores' : r === 'CATEGORIAS' ? 'Categorias' : r === 'DIVIDAS' ? 'Dividas' : 'Resumo'}</button>
             ))}
           </div>
 
@@ -1845,12 +1854,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                 </div>
                 <button onClick={(e) => { e.stopPropagation(); setShowReceiveModal(s); setValorRecebidoParcial(saldo.toString()); }} className={`w-full py-3 rounded-2xl text-[10px] font-black uppercase mt-3 shadow-lg active:scale-95 ${isOverdue ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white'}`}>Receber Agora</button>
                 <div className="flex gap-2 mt-2">
-                  {s.comprovanteFoto ? (
+                  {(s.comprovanteFoto || comprovanteLocal[s.id]) ? (
                     <>
-                      <button onClick={(e) => { e.stopPropagation(); setComprovanteModalSale(s); setComprovantePreview(s.comprovanteFoto || null); }} className="flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase bg-blue-50 text-blue-600 active:scale-95 flex items-center justify-center gap-1.5 border border-blue-100">
+                      <button onClick={(e) => { e.stopPropagation(); setComprovanteModalSale(s); setComprovantePreview(s.comprovanteFoto || comprovanteLocal[s.id] || null); }} className="flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase bg-blue-50 text-blue-600 active:scale-95 flex items-center justify-center gap-1.5 border border-blue-100">
                         <i className="fa-solid fa-image"></i>Ver Foto
                       </button>
-                      <button onClick={(e) => { e.stopPropagation(); handleComprovanteShare(s); }} className="flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase bg-emerald-50 text-emerald-600 active:scale-95 flex items-center justify-center gap-1.5 border border-emerald-100">
+                      <button onClick={(e) => { e.stopPropagation(); handleComprovanteShare({ ...s, comprovanteFoto: s.comprovanteFoto || comprovanteLocal[s.id] }); }} className="flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase bg-emerald-50 text-emerald-600 active:scale-95 flex items-center justify-center gap-1.5 border border-emerald-100">
                         <i className="fa-brands fa-whatsapp"></i>Compartilhar
                       </button>
                     </>

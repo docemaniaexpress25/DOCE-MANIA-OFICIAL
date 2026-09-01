@@ -476,37 +476,46 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       .sort((a, b) => b.total - a.total);
   }, [props.sales, props.products, props.categories, props.subcategories, periodoRelatorio]);
 
-  // Relatório de Produtos mais Rentáveis (margem x volume)
+  // Relatório de Produtos mais Rentáveis (margem x volume) — usa preço REAL de cada venda
   const produtosRentaveis = useMemo(() => {
     const salesInPeriod = props.sales.filter(s => filterByPeriod(s.data, reportPeriodo));
     const productMap = new Map(props.products.map(p => [p.id, p]));
+    // Acumula por produto: qtd, receita real, e custo total
     const qtyMap: { [id: string]: number } = {};
     const revenueMap: { [id: string]: number } = {};
+    const costMap: { [id: string]: number } = {};
     salesInPeriod.forEach(s => {
       s.itens.forEach(item => {
         const pid = item.produtoId;
-        qtyMap[pid] = (qtyMap[pid] || 0) + (item.quantidade || 0);
-        revenueMap[pid] = (revenueMap[pid] || 0) + ((item.quantidade || 0) * (item.precoVenda || 0));
+        const q = item.quantidade || 0;
+        const pv = item.precoVenda || 0;
+        qtyMap[pid] = (qtyMap[pid] || 0) + q;
+        revenueMap[pid] = (revenueMap[pid] || 0) + (q * pv);
+        // Custo = custo cadastrado no produto × qtd vendida
+        const prod = productMap.get(pid);
+        const custo = prod?.precoCusto || 0;
+        costMap[pid] = (costMap[pid] || 0) + (q * custo);
       });
     });
 
-    // Calcula rentabilidade por produto
+    // Calcula rentabilidade por produto usando preço real de venda
     const rentabilidade = Object.entries(qtyMap).map(([pid, qtd]) => {
       const prod = productMap.get(pid);
       if (!prod) return null;
       const custoUnit = prod.precoCusto || 0;
-      const vendaUnit = prod.precoVenda || 0;
-      const margemUnit = vendaUnit - custoUnit;
-      const lucroTotal = margemUnit * qtd;
-      const custoTotal = custoUnit * qtd;
       const faturamento = revenueMap[pid] || 0;
-      const margemPercent = vendaUnit > 0 ? ((margemUnit / vendaUnit) * 100) : 0;
+      const custoTotal = costMap[pid] || 0;
+      const lucroTotal = faturamento - custoTotal;
+      // Preço médio real de venda = faturamento real / qtd
+      const vendaMediaReal = qtd > 0 ? faturamento / qtd : 0;
+      const margemUnit = vendaMediaReal - custoUnit;
+      const margemPercent = vendaMediaReal > 0 ? ((margemUnit / vendaMediaReal) * 100) : 0;
       return {
         id: pid,
         nome: prod.nome,
         qtd,
         custoUnit: Number(custoUnit.toFixed(2)),
-        vendaUnit: Number(vendaUnit.toFixed(2)),
+        vendaMediaReal: Number(vendaMediaReal.toFixed(2)),
         margemUnit: Number(margemUnit.toFixed(2)),
         margemPercent: Number(margemPercent.toFixed(1)),
         faturamento: Number(faturamento.toFixed(2)),
@@ -1139,8 +1148,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                             <p className="text-[11px] font-black text-gray-700">R$ {p?.custoUnit}</p>
                           </div>
                           <div className="bg-gray-50 rounded-xl px-2.5 py-2 text-center">
-                            <p className="text-[8px] font-black uppercase text-gray-400">Venda Un.</p>
-                            <p className="text-[11px] font-black text-blue-600">R$ {p?.vendaUnit}</p>
+                            <p className="text-[8px] font-black uppercase text-gray-400">Venda Média</p>
+                            <p className="text-[11px] font-black text-blue-600">R$ {p?.vendaMediaReal}</p>
                           </div>
                           <div className="bg-gray-50 rounded-xl px-2.5 py-2 text-center">
                             <p className="text-[8px] font-black uppercase text-gray-400">Margem</p>
@@ -1749,7 +1758,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                             <div className="w-full bg-gray-100 rounded-full h-2 mb-2 overflow-hidden"><div className="h-full bg-gradient-to-r from-emerald-400 to-emerald-600 rounded-full transition-all" style={{ width: `${barW}%` }}></div></div>
                             <div className="grid grid-cols-4 gap-2">
                               <div className="bg-gray-50 rounded-xl px-2 py-1.5 text-center"><p className="text-[7px] font-black text-gray-400 uppercase">Custo Un.</p><p className="text-[10px] font-black text-gray-700">R$ {p?.custoUnit}</p></div>
-                              <div className="bg-gray-50 rounded-xl px-2 py-1.5 text-center"><p className="text-[7px] font-black text-gray-400 uppercase">Venda Un.</p><p className="text-[10px] font-black text-blue-600">R$ {p?.vendaUnit}</p></div>
+                              <div className="bg-gray-50 rounded-xl px-2 py-1.5 text-center"><p className="text-[7px] font-black text-gray-400 uppercase">Venda Média</p><p className="text-[10px] font-black text-blue-600">R$ {p?.vendaMediaReal}</p></div>
                               <div className="bg-gray-50 rounded-xl px-2 py-1.5 text-center"><p className="text-[7px] font-black text-gray-400 uppercase">Margem</p><p className="text-[10px] font-black text-emerald-600">{p?.margemPercent}%</p></div>
                               <div className="bg-gray-50 rounded-xl px-2 py-1.5 text-center"><p className="text-[7px] font-black text-gray-400 uppercase">Unid.</p><p className="text-[10px] font-black text-gray-700">{p?.qtd}</p></div>
                             </div>

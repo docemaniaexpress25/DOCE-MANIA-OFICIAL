@@ -109,10 +109,7 @@ export default function ClienteDashboard() {
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
-          <div className="w-10 h-10 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-sm text-gray-400 font-semibold">Carregando...</p>
-        </div>
+        <div className="w-10 h-10 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin"></div>
       </div>
     );
   }
@@ -134,132 +131,147 @@ export default function ClienteDashboard() {
   const listSales = tab === 'pendentes' ? vendasPendentes : sales;
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-8">
-      {/* Header */}
-      <div className="bg-gradient-to-br from-blue-600 to-blue-700 text-white px-5 pt-12 pb-8 rounded-b-[2rem]">
-        <div className="max-w-lg mx-auto">
-          <div className="flex items-center gap-3 mb-1">
-            <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
-              <i className="fa-solid fa-store text-sm"></i>
-            </div>
-            <div>
-              <h1 className="text-lg font-black uppercase tracking-tight">{client.nome_fantasia}</h1>
-              <p className="text-[10px] font-semibold text-blue-200">Extrato de compras</p>
-            </div>
+    <div className="min-h-screen bg-gray-100">
+      {/* Header azul */}
+      <div className="bg-gradient-to-br from-blue-600 to-indigo-700 text-white px-5 pt-14 pb-10">
+        <div className="max-w-md mx-auto">
+          <p className="text-[10px] font-bold text-blue-200 uppercase tracking-widest mb-3">Extrato do Cliente</p>
+          <h1 className="text-2xl font-black uppercase tracking-tight leading-tight">{client.nome_fantasia}</h1>
+          {client.endereco && (
+            <p className="text-[11px] text-blue-200/80 mt-2 font-medium">
+              <i className="fa-solid fa-location-dot mr-1 text-[9px]"></i>
+              {client.endereco}{client.bairro ? ` - ${client.bairro}` : ''}
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* KPIs flutuante sobre o header */}
+      <div className="max-w-md mx-auto px-4 -mt-7">
+        <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-4 grid grid-cols-3 gap-4">
+          <div className="text-center">
+            <p className="text-[8px] font-black uppercase text-gray-400 tracking-wider">Comprado</p>
+            <p className="text-base font-black text-blue-600 mt-0.5">{formatCurrency(totalComprado)}</p>
+          </div>
+          <div className="text-center border-x border-gray-100">
+            <p className="text-[8px] font-black uppercase text-gray-400 tracking-wider">Pago</p>
+            <p className="text-base font-black text-emerald-600 mt-0.5">{formatCurrency(totalPago)}</p>
+          </div>
+          <div className="text-center">
+            <p className="text-[8px] font-black uppercase text-gray-400 tracking-wider">Devedor</p>
+            <p className={`text-base font-black mt-0.5 ${saldoDevedor > 0 ? 'text-rose-500' : 'text-emerald-600'}`}>{formatCurrency(saldoDevedor)}</p>
           </div>
         </div>
       </div>
 
-      <div className="max-w-lg mx-auto px-4 -mt-5 space-y-4">
-        {/* KPIs */}
-        <div className="grid grid-cols-3 gap-3">
-          <div className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100 text-center">
-            <p className="text-[9px] font-black uppercase text-gray-400">Comprado</p>
-            <p className="text-sm font-black text-blue-600 mt-1">{formatCurrency(totalComprado)}</p>
-          </div>
-          <div className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100 text-center">
-            <p className="text-[9px] font-black uppercase text-gray-400">Pago</p>
-            <p className="text-sm font-black text-emerald-600 mt-1">{formatCurrency(totalPago)}</p>
-          </div>
-          <div className={`rounded-2xl p-4 shadow-sm border text-center ${saldoDevedor > 0 ? 'bg-rose-50 border-rose-100' : 'bg-white border-gray-100'}`}>
-            <p className="text-[9px] font-black uppercase text-gray-400">Devedor</p>
-            <p className={`text-sm font-black mt-1 ${saldoDevedor > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>{formatCurrency(saldoDevedor)}</p>
-          </div>
-        </div>
-
-        {/* Pendentes */}
+      {/* Alerta pendente */}
+      <div className="max-w-md mx-auto px-4 mt-4">
         {vendasPendentes.length > 0 && (
-          <div className="bg-amber-50 rounded-2xl p-4 border border-amber-100">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-[9px] font-black uppercase text-amber-600">Pendente</p>
-                <p className="text-lg font-black text-amber-700">{formatCurrency(saldoPendente)}</p>
-              </div>
-              <div className="text-right">
-                <p className="text-[9px] font-bold text-amber-500">{vendasPendentes.length} venda(s)</p>
-              </div>
+          <div className="bg-gradient-to-r from-amber-50 to-orange-50 rounded-2xl px-4 py-3 border border-amber-100 flex items-center gap-3">
+            <div className="w-9 h-9 bg-amber-100 rounded-xl flex items-center justify-center shrink-0">
+              <i className="fa-solid fa-clock text-amber-500 text-sm"></i>
             </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-[10px] font-bold text-amber-700 uppercase">Pendente</p>
+              <p className="text-sm font-black text-amber-800">{formatCurrency(saldoPendente)}</p>
+            </div>
+            <span className="text-[9px] font-bold text-amber-500 bg-amber-100 px-2 py-1 rounded-lg">{vendasPendentes.length}</span>
           </div>
         )}
+      </div>
 
-        {/* Tabs */}
-        <div className="flex bg-gray-100 p-1 rounded-xl">
+      {/* Tabs */}
+      <div className="max-w-md mx-auto px-4 mt-4">
+        <div className="flex bg-white p-1 rounded-xl shadow-sm border border-gray-100">
           <button
             onClick={() => setTab('todas')}
-            className={`flex-1 py-2.5 rounded-lg text-[10px] font-black uppercase transition-all ${tab === 'todas' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}
+            className={`flex-1 py-2.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${tab === 'todas' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
           >
             Todas ({sales.length})
           </button>
           <button
             onClick={() => setTab('pendentes')}
-            className={`flex-1 py-2.5 rounded-lg text-[10px] font-black uppercase transition-all ${tab === 'pendentes' ? 'bg-white text-rose-600 shadow-sm' : 'text-gray-400'}`}
+            className={`flex-1 py-2.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${tab === 'pendentes' ? 'bg-rose-500 text-white shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
           >
             Pendentes ({vendasPendentes.length})
           </button>
         </div>
-
-        {/* Lista de vendas simplificada */}
-        <div className="space-y-2">
-          {listSales.length === 0 ? (
-            <div className="bg-white rounded-2xl p-8 text-center border border-gray-100">
-              <i className="fa-solid fa-receipt text-gray-200 text-3xl mb-3 block"></i>
-              <p className="text-xs text-gray-400 font-semibold">Nenhuma compra encontrada</p>
-            </div>
-          ) : (
-            listSales.map((sale) => {
-              const isPending = sale.status_pagamento === 'PENDENTE';
-              const restante = Number(sale.valor_total || 0) - Number(sale.valor_pago || 0);
-              const itemsList = (sale.sale_items || []).map((item) => {
-                const nome = products.get(item.produto_id) || 'Produto';
-                return `${nome} (${item.quantidade}x)`;
-              });
-
-              return (
-                <div key={sale.id} className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
-                  {/* Linha 1: data + status + valor */}
-                  <div className="flex items-center justify-between mb-1">
-                    <div className="flex items-center gap-2">
-                      <span className={`text-[9px] font-black px-2 py-1 rounded-lg uppercase ${
-                        isPending ? 'bg-rose-50 text-rose-600' : 'bg-emerald-50 text-emerald-600'
-                      }`}>
-                        {isPending ? 'Nao pago' : 'Pago'}
-                      </span>
-                      <span className="text-[10px] text-gray-400 font-semibold">{formatDate(sale.data_venda)}</span>
-                    </div>
-                    <span className="text-sm font-black text-gray-800">{formatCurrency(Number(sale.valor_total))}</span>
-                  </div>
-
-                  {/* Linha 2: forma pagamento + vencimento */}
-                  <div className="flex items-center justify-between text-[9px] mb-2">
-                    <span className="text-gray-400 font-semibold">
-                      <i className="fa-solid fa-credit-card mr-1"></i>{getPaymentLabel(sale.metodo_pagamento)}
-                    </span>
-                    {isPending && restante > 0 && (
-                      <span className="text-rose-500 font-black">Falta: {formatCurrency(restante)}</span>
-                    )}
-                    {isPending && sale.data_vencimento && (
-                      <span className="text-amber-500 font-bold">Vence: {formatDate(sale.data_vencimento)}</span>
-                    )}
-                  </div>
-
-                  {/* Linha 3: itens apenas nome e qtd */}
-                  <div className="bg-gray-50 rounded-xl px-3 py-2">
-                    <p className="text-[9px] text-gray-400 font-bold uppercase mb-1">Itens</p>
-                    <div className="flex flex-wrap gap-x-3 gap-y-0.5">
-                      {itemsList.map((item, idx) => (
-                        <span key={idx} className="text-[10px] text-gray-600 font-medium">{item}</span>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              );
-            })
-          )}
-        </div>
       </div>
 
-      <div className="text-center mt-8 px-4">
-        <p className="text-[9px] text-gray-300 font-semibold">DOCE MANIA DISTRIBUIDORA</p>
+      {/* Lista de cupons */}
+      <div className="max-w-md mx-auto px-4 mt-4 pb-10 space-y-3">
+        {listSales.length === 0 ? (
+          <div className="bg-white rounded-2xl p-10 text-center border border-gray-100">
+            <i className="fa-solid fa-receipt text-gray-200 text-4xl mb-3 block"></i>
+            <p className="text-xs text-gray-400 font-semibold">Nenhuma compra encontrada</p>
+          </div>
+        ) : (
+          listSales.map((sale) => {
+            const isPending = sale.status_pagamento === 'PENDENTE';
+            const restante = Number(sale.valor_total || 0) - Number(s.valor_pago || 0);
+            const items = sale.sale_items || [];
+
+            return (
+              <div key={sale.id} className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+                {/* Topo do cupom - info da venda */}
+                <div className={`px-4 py-3 flex items-center justify-between ${isPending ? 'bg-rose-50' : 'bg-emerald-50'}`}>
+                  <div className="flex items-center gap-2">
+                    <div className={`w-2 h-2 rounded-full ${isPending ? 'bg-rose-400' : 'bg-emerald-400'}`}></div>
+                    <span className={`text-[10px] font-black uppercase ${isPending ? 'text-rose-600' : 'text-emerald-600'}`}>
+                      {isPending ? 'Nao pago' : 'Pago'}
+                    </span>
+                    <span className="text-gray-300">|</span>
+                    <span className="text-[10px] font-semibold text-gray-500">{getPaymentLabel(sale.metodo_pagamento)}</span>
+                  </div>
+                  <span className="text-[10px] font-bold text-gray-400">{formatDate(sale.data_venda)}</span>
+                </div>
+
+                {/* Corpo do cupom - estilo recibo */}
+                <div className="px-4 py-3">
+                  <div className="border-l-2 border-dashed border-gray-200 pl-3 space-y-1.5">
+                    {items.map((item, idx) => {
+                      const nome = products.get(item.produto_id) || 'Produto';
+                      return (
+                        <div key={idx} className="flex items-baseline justify-between text-[11px]">
+                          <span className="text-gray-700 font-medium capitalize">{nome}</span>
+                          <span className="text-gray-400 font-bold tabular-nums ml-3 shrink-0">
+                            {item.quantidade} un
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Rodape do cupom - total */}
+                <div className="border-t border-dashed border-gray-200 mx-4"></div>
+                <div className="px-4 py-3 flex items-center justify-between">
+                  <div>
+                    <span className="text-[9px] font-bold uppercase text-gray-400 tracking-wider">Total</span>
+                    {isPending && restante > 0 && (
+                      <p className="text-[9px] font-bold text-rose-400">Falta {formatCurrency(restante)}</p>
+                    )}
+                  </div>
+                  <span className="text-lg font-black text-gray-800">{formatCurrency(Number(sale.valor_total))}</span>
+                </div>
+
+                {/* Vencimento */}
+                {isPending && sale.data_vencimento && (
+                  <div className="bg-amber-50 px-4 py-2 border-t border-amber-100">
+                    <p className="text-[9px] font-bold text-amber-600 text-center uppercase">
+                      <i className="fa-solid fa-calendar-day mr-1"></i>Vence em {formatDate(sale.data_vencimento)}
+                    </p>
+                  </div>
+                )}
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {/* Footer */}
+      <div className="text-center pb-6">
+        <p className="text-[9px] text-gray-300 font-semibold tracking-widest uppercase">Doce Mania Distribuidora</p>
       </div>
     </div>
   );

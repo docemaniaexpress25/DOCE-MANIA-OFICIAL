@@ -83,6 +83,26 @@ type ReportType = 'RESUMO' | 'TOP_CLIENTES' | 'TOP_PRODUTOS' | 'CLIENTES_RISCO' 
 type ReportFilterType = 'RESUMO' | 'TOP_PRODUTOS' | 'TOP_CLIENTES' | 'CATEGORIAS' | 'VENDEDORES' | 'DIVIDAS' | 'PRODUTOS_RENTAVEIS';
 
 const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
+
+  // Gera codigo de acesso do portal do cliente
+  function getClientCode(clientId: string, nome: string): string {
+    const prefix = (nome || 'XXXX').replace(/[^a-zA-Z]/g, '').substring(0, 4).toUpperCase();
+    const clean = clientId.replace(/-/g, '');
+    const hex1 = parseInt(clean.substring(0, 8), 16).toString(36).toUpperCase().substring(0, 2);
+    const hex2 = parseInt(clean.substring(8, 16), 16).toString(36).toUpperCase().substring(0, 2);
+    return (prefix + hex1 + hex2).padEnd(8, 'X');
+  }
+
+  function handleShareClientLink(client: Client) {
+    const code = getClientCode(client.id, client.nomeFantasia);
+    const link = window.location.origin + '/cliente/' + code;
+    const msg = `Ola ${client.nomeFantasia?.split(' ')[0]}! 📋\n\nA *Doce Mania Distribuidora* preparou seu extrato de compras atualizado.\n\nAcesse no link abaixo para acompanhar:\n${link}\n\nNele voce encontra:\n- Historico completo de compras\n- Saldo devedor atualizado\n- Detalhes de cada pedido\n- Sugestoes de produtos baseadas no que outros clientes compram\n\nQualquer duvida, entre em contato!\nEquipe Doce Mania 🚚`;
+    const whatsappUrl = client.telefone && client.telefone !== '0'
+      ? `https://wa.me/55${client.telefone.replace(/\D/g, '')}?text=${encodeURIComponent(msg)}`
+      : `https://wa.me/?text=${encodeURIComponent(msg)}`;
+    window.open(whatsappUrl, '_blank');
+  }
+
   const [activeTab, setActiveTab] = useState<TabType>(() => loadLocalState('admin_activeTab', 'HOME'));
   const [selectedSale, setSelectedSale] = useState<Sale | null>(() => loadLocalState('admin_selectedSale', null));
   const [viewingClientHistory, setViewingClientHistory] = useState<Client | null>(null);
@@ -1379,8 +1399,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                     {c.telefone && <p className="text-[9px] text-gray-400 font-semibold mt-1">{c.telefone}</p>}
                   </div>
                   <div className="flex gap-1.5 flex-shrink-0">
-                    <button onClick={() => handleOpenClient(c)} className="w-10 h-10 bg-green-50 text-green-600 rounded-xl border border-green-100 flex items-center justify-center active:scale-90 shadow-sm"><i className="fa-solid fa-pencil-alt text-xs"></i></button>
-                    <button onClick={() => setConfirmDelete({ id: c.id, type: 'CLIENT', name: c.nomeFantasia || 'Cliente' })} className="w-10 h-10 bg-rose-50 text-rose-600 rounded-xl border border-rose-100 flex items-center justify-center active:scale-90 shadow-sm"><i className="fa-solid fa-trash-can text-xs"></i></button>
+                    <button onClick={(e) => { e.stopPropagation(); handleShareClientLink(c); }} className="w-10 h-10 bg-green-500 text-white rounded-xl border border-green-400 flex items-center justify-center active:scale-90 shadow-sm" title="Enviar link do extrato via WhatsApp"><i className="fa-brands fa-whatsapp text-sm"></i></button>
+                    <button onClick={(e) => { e.stopPropagation(); handleOpenClient(c); }} className="w-10 h-10 bg-green-50 text-green-600 rounded-xl border border-green-100 flex items-center justify-center active:scale-90 shadow-sm"><i className="fa-solid fa-pencil-alt text-xs"></i></button>
+                    <button onClick={(e) => { e.stopPropagation(); setConfirmDelete({ id: c.id, type: 'CLIENT', name: c.nomeFantasia || 'Cliente' }); }} className="w-10 h-10 bg-rose-50 text-rose-600 rounded-xl border border-rose-100 flex items-center justify-center active:scale-90 shadow-sm"><i className="fa-solid fa-trash-can text-xs"></i></button>
                   </div>
                 </div>
               );

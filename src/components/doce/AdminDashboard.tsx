@@ -1334,17 +1334,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           </div>
           {selectedVendedorId && (
             <>
-              <div className="flex gap-2 px-1">
-                <button onClick={() => setShowConfirmSync(true)} disabled={!hasCargaChanges} className={`flex-1 py-3 rounded-2xl text-[10px] font-black uppercase shadow-sm active:scale-95 ${hasCargaChanges ? 'bg-orange-600 text-white' : 'bg-gray-100 text-gray-300'}`}>
-                  <i className="fa-solid fa-arrows-rotate mr-1"></i> Sincronizar
-                </button>
-                <button onClick={() => setShowConfirmApply(true)} className="flex-1 py-3 rounded-2xl text-[10px] font-black uppercase bg-blue-600 text-white shadow-sm active:scale-95">
-                  <i className="fa-solid fa-bolt mr-1"></i> Aplicar Agora
-                </button>
-                <button onClick={handleZeroCarga} className="py-3 px-4 rounded-2xl text-[10px] font-black uppercase bg-rose-50 text-rose-600 shadow-sm active:scale-95 border border-rose-100">
-                  <i className="fa-solid fa-xmark"></i>
-                </button>
-              </div>
               <div className="grid gap-2 px-1">
                 {props.products.filter(p => p.ativo).map(p => {
                   const atual = props.cargas.find(c => c.vendedorId === selectedVendedorId && c.produtoId === p.id)?.quantidade ?? 0;
@@ -1363,6 +1352,17 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                     </div>
                   );
                 })}
+              </div>
+              <div className="flex gap-2 px-1">
+                <button onClick={() => setShowConfirmSync(true)} disabled={!hasCargaChanges} className={`flex-1 py-3 rounded-2xl text-[10px] font-black uppercase shadow-sm active:scale-95 ${hasCargaChanges ? 'bg-orange-600 text-white' : 'bg-gray-100 text-gray-300'}`}>
+                  <i className="fa-solid fa-arrows-rotate mr-1"></i> Sincronizar
+                </button>
+                <button onClick={() => setShowConfirmApply(true)} className="flex-1 py-3 rounded-2xl text-[10px] font-black uppercase bg-blue-600 text-white shadow-sm active:scale-95">
+                  <i className="fa-solid fa-bolt mr-1"></i> Aplicar Agora
+                </button>
+                <button onClick={handleZeroCarga} className="py-3 px-4 rounded-2xl text-[10px] font-black uppercase bg-rose-50 text-rose-600 shadow-sm active:scale-95 border border-rose-100">
+                  <i className="fa-solid fa-xmark"></i>
+                </button>
               </div>
             </>
           )}

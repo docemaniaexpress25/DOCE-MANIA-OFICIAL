@@ -10,6 +10,14 @@ interface ClientHistoryProps {
   onClose: () => void;
 }
 
+function getClientCode(clientId: string, nome: string): string {
+  const prefix = (nome || 'XXXX').replace(/[^a-zA-Z]/g, '').substring(0, 4).toUpperCase();
+  const clean = clientId.replace(/-/g, '');
+  const hex1 = parseInt(clean.substring(0, 8), 16).toString(36).toUpperCase().substring(0, 2);
+  const hex2 = parseInt(clean.substring(8, 16), 16).toString(36).toUpperCase().substring(0, 2);
+  return (prefix + hex1 + hex2).padEnd(8, 'X');
+}
+
 const ClientHistory: React.FC<ClientHistoryProps> = ({ client, sales, products, onClose }) => {
   const [selectedHistoricalSale, setSelectedHistoricalSale] = useState<Sale | null>(null);
 
@@ -57,7 +65,25 @@ const ClientHistory: React.FC<ClientHistoryProps> = ({ client, sales, products, 
             <h3 className="font-black text-gray-800 text-sm uppercase truncate">{client.nomeFantasia}</h3>
             <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">Histórico de Compras</p>
           </div>
-          <button onClick={onClose} className="w-10 h-10 bg-white text-gray-400 rounded-2xl flex items-center justify-center shadow-sm active:scale-90"><i className="fa-solid fa-xmark"></i></button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                const code = getClientCode(client.id, client.nomeFantasia);
+                const link = window.location.origin + '/cliente/' + code;
+                const firstName = (client.nomeFantasia || '').split(' ')[0];
+                const msg = `Ola ${firstName}! 📋\n\nA *Doce Mania Distribuidora* preparou seu extrato de compras atualizado.\n\nAcesse no link abaixo para acompanhar:\n${link}\n\nNele voce encontra:\n- Historico completo de compras\n- Saldo devedor atualizado\n- Detalhes de cada pedido\n- Sugestoes de produtos baseadas no que outros clientes compram\n\nQualquer duvida, entre em contato!\nEquipe Doce Mania 🚚`;
+                const whatsappUrl = client.telefone && client.telefone !== '0'
+                  ? `https://wa.me/55${client.telefone.replace(/\D/g, '')}?text=${encodeURIComponent(msg)}`
+                  : `https://wa.me/?text=${encodeURIComponent(msg)}`;
+                window.open(whatsappUrl, '_blank');
+              }}
+              className="w-10 h-10 bg-green-500 text-white rounded-2xl flex items-center justify-center shadow-sm active:scale-90"
+              title="Enviar extrato via WhatsApp"
+            >
+              <i className="fa-brands fa-whatsapp text-sm"></i>
+            </button>
+            <button onClick={onClose} className="w-10 h-10 bg-white text-gray-400 rounded-2xl flex items-center justify-center shadow-sm active:scale-90"><i className="fa-solid fa-xmark"></i></button>
+          </div>
         </header>
 
         <div className="flex-1 overflow-y-auto p-6 space-y-6">

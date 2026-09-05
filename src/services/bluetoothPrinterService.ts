@@ -503,6 +503,7 @@ class BluetoothPrinterService {
     }
 
     // Step 3: Build ESC/POS buffer and send
+    const printerName = this.printer?.name || 'Impressora';
     this.emitStatus({ status: 'printing', printerName, progress: 0 });
 
     try {

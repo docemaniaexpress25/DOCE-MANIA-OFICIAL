@@ -71,6 +71,8 @@ export interface Client {
   observacoes?: string;
   pinLocalizacao?: string;
   rota?: string;
+  /** Codigo aleatorio do portal do cliente (link do extrato) */
+  portalCodigo?: string;
 }
 
 export interface SaleItem {

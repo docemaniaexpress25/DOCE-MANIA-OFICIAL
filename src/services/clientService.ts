@@ -1,6 +1,26 @@
 import { supabase } from '@/lib/supabaseClient';
 import { Client } from '@/lib/types';
 
+/** Codigo aleatorio do portal (12 chars) para clientes novos */
+function generatePortalCode(): string {
+  let hex = '';
+  while (hex.length < 12) hex += Math.floor(Math.random() * 16).toString(16);
+  return hex.toUpperCase();
+}
+
+function mapClient(c: any): Client {
+  return {
+    ...c,
+    nomeFantasia: c.nome_fantasia,
+    ativarCnpj: c.ativar_cnpj,
+    diaRoteiro: c.dia_roteiro,
+    ordem: c.ordem || 0,
+    pinLocalizacao: c.pin_localizacao,
+    rota: c.rota || 'ROTA_01',
+    portalCodigo: c.portal_code,
+  } as Client;
+}
+
 export const clientService = {
   async getAllClients(): Promise<Client[]> {
     const { data, error } = await supabase.from('clients').select('*').order('ordem', { ascending: true });
@@ -8,15 +28,7 @@ export const clientService = {
       console.error('Erro ao buscar clientes:', error);
       return [];
     }
-    return data.map(c => ({
-      ...c,
-      nomeFantasia: c.nome_fantasia,
-      ativarCnpj: c.ativar_cnpj,
-      diaRoteiro: c.dia_roteiro,
-      ordem: c.ordem || 0,
-      pinLocalizacao: c.pin_localizacao,
-      rota: c.rota || 'ROTA_01',
-    })) as Client[];
+    return data.map(mapClient);
   },
 
   async insertClient(client: Omit<Client, 'id'>): Promise<Client | null> {
@@ -36,6 +48,7 @@ export const clientService = {
       observacoes,
       pin_localizacao: pinLocalizacao,
       rota: rota || 'ROTA_01',
+      portal_code: generatePortalCode(),
     };
 
     const { data, error } = await supabase.from('clients').insert(payload).select().single();
@@ -51,6 +64,7 @@ export const clientService = {
       ordem: data.ordem,
       pinLocalizacao: data.pin_localizacao,
       rota: data.rota,
+      portalCodigo: data.portal_code,
     } as Client;
   },
 
@@ -84,6 +98,7 @@ export const clientService = {
       ordem: data.ordem,
       pinLocalizacao: data.pin_localizacao,
       rota: data.rota,
+      portalCodigo: data.portal_code,
     } as Client;
   },
 

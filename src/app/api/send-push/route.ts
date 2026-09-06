@@ -1,18 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import webpush from 'web-push';
+import { getServiceClient, isServerSupabaseConfigured } from '@/lib/serverSupabase';
 
-const VAPID_PRIVATE_KEY = 'AMC5odbxYgKB0wl9XEAeYZTg_C35CM4rMq__NEUmwv0';
-const VAPID_PUBLIC_KEY = 'BK6v9AgRkhRVvHVeU8qpORoMybYJ41KHxhpluV2PIG-awhUIJxcMBOhnGNzNEhKPo_VNl6YrdQPa3DcOmvYAh60';
-
-webpush.setVapidDetails(
-  'mailto:contato@docemania.com',
-  VAPID_PUBLIC_KEY,
-  VAPID_PRIVATE_KEY
-);
+// Chaves VAPID agora vem de variaveis de ambiente da Vercel
+// (a chave privada NUNCA deve ficar no codigo).
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY;
 
 // Variavel de ambiente com a URL do Supabase (server-side)
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://eyjhqjrczzpfthsddlpg.supabase.co';
-const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 
 /**
  * POST /api/send-push
@@ -21,15 +17,21 @@ const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
  */
 export async function POST(req: NextRequest) {
   try {
+    if (!VAPID_PRIVATE_KEY || !VAPID_PUBLIC_KEY || !SUPABASE_URL || !isServerSupabaseConfigured()) {
+      return NextResponse.json({ error: 'Push nao configurado: defina VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY e SUPABASE_SERVICE_ROLE_KEY na Vercel.' }, { status: 503 });
+    }
+    webpush.setVapidDetails('mailto:contato@docemania.com', VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+
     const { title, body, url } = await req.json();
     if (!title || !body) {
       return NextResponse.json({ error: 'title e body obrigatorios' }, { status: 400 });
     }
 
-    // Buscar tokens ativos no Supabase
+    // Buscar tokens ativos no Supabase (service role, server-side)
     const res = await fetch(`${SUPABASE_URL}/rest/v1/push_tokens?select=endpoint,keys_auth,keys_p256dh&updated_at=gte.${new Date(Date.now() - 30*24*60*60*1000).toISOString()}`, {
       headers: {
-        'apikey': SUPABASE_ANON_KEY || '',
+        'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY || '',
+        'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY || ''}`,
         'Content-Type': 'application/json',
       },
     });
@@ -60,7 +62,10 @@ export async function POST(req: NextRequest) {
         if (err.statusCode === 410 || err.statusCode === 404) {
           await fetch(`${SUPABASE_URL}/rest/v1/push_tokens?endpoint=eq.${encodeURIComponent(token.endpoint)}`, {
             method: 'DELETE',
-            headers: { 'apikey': SUPABASE_ANON_KEY || '' },
+            headers: {
+              'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY || '',
+              'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY || ''}`,
+            },
           });
         }
         failed++;

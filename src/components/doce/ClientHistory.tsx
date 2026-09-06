@@ -68,7 +68,9 @@ const ClientHistory: React.FC<ClientHistoryProps> = ({ client, sales, products, 
           <div className="flex items-center gap-2">
             <button
               onClick={() => {
-                const code = getClientCode(client.id, client.nomeFantasia);
+                // Opcao A: usa o portal_code aleatorio (coluna portal_code).
+                // Fallback: derivacao antiga (so funciona ate a Fase 2).
+                const code = client.portalCodigo || getClientCode(client.id, client.nomeFantasia);
                 const link = window.location.origin + '/cliente/' + code;
                 const firstName = (client.nomeFantasia || '').split(' ')[0];
                 const msg = `Ola ${firstName}! 📋\n\nA *Doce Mania Distribuidora* preparou seu extrato de compras atualizado.\n\nAcesse no link abaixo para acompanhar:\n${link}\n\nNele voce encontra:\n- Historico completo de compras\n- Saldo devedor atualizado\n- Detalhes de cada pedido\n- Sugestoes de produtos baseadas no que outros clientes compram\n\nQualquer duvida, entre em contato!\nEquipe Doce Mania 🚚`;

@@ -63,3 +63,4 @@ prisma/*.db
 # Stale files
 package-lock.json
 bun.lock
+.env

@@ -1,92 +1,128 @@
-import { supabase } from '@/lib/supabaseClient';
 import { User, UserRole } from '@/lib/types';
+
+/**
+ * userService agora conversa com /api/users (server-side, service_role).
+ * O PIN nunca mais trafega para o browser:
+ * - PINs sao hashados no servidor (bcrypt) e guardados em pin_hash
+ * - a lista de usuarios vem SEM pin
+ * - criacao/edicao exigem token de sessao ADMIN (emitido no login)
+ */
+
+const SESSION_KEY = 'dm_session_token';
+
+export function saveSessionToken(token: string) {
+  try { localStorage.setItem(SESSION_KEY, token); } catch {}
+}
+
+export function clearSessionToken() {
+  try { localStorage.removeItem(SESSION_KEY); } catch {}
+}
+
+function authHeaders(): HeadersInit {
+  try {
+    const token = localStorage.getItem(SESSION_KEY);
+    if (token) return { Authorization: `Bearer ${token}` };
+  } catch {}
+  return {};
+}
+
+function mapUser(u: any): User {
+  return {
+    id: u.id,
+    nome: u.nome,
+    email: u.email,
+    role: u.perfil as UserRole,
+    ativo: !!u.ativo,
+    telefone: u.telefone,
+    whatsapp: u.whatsapp,
+    foto: u.foto,
+    placaVeiculo: u.placa_veiculo,
+    rota: u.rota || 'ROTA_01',
+  };
+}
 
 export const userService = {
   async getAllUsers(): Promise<User[]> {
-    const { data, error } = await supabase.from('app_users').select('*');
-    if (error) {
-      console.error('Erro ao buscar usuários na tabela app_users:', error);
+    try {
+      const res = await fetch('/api/users');
+      if (!res.ok) {
+        console.error('Erro ao buscar usuarios:', res.status);
+        return [];
+      }
+      const data = await res.json();
+      return (data.users || []).map(mapUser);
+    } catch (e) {
+      console.error('Erro ao buscar usuarios:', e);
       return [];
     }
-    
-    return data.map(u => ({
-      id: u.id,
-      nome: u.nome,
-      email: u.email,
-      role: u.perfil as UserRole,
-      ativo: !!u.ativo,
-      telefone: u.telefone,
-      whatsapp: u.whatsapp,
-      foto: u.foto,
-      pin: u.pin,
-      placaVeiculo: u.placa_veiculo,
-      rota: u.rota || 'ROTA_01',
-    })) as User[];
+  },
+
+  async getUserById(id: string): Promise<User | null> {
+    try {
+      const res = await fetch('/api/users');
+      if (!res.ok) return null;
+      const data = await res.json();
+      const found = (data.users || []).find((u: any) => u.id === id);
+      return found ? mapUser(found) : null;
+    } catch {
+      return null;
+    }
   },
 
   async insertUser(user: Omit<User, 'id'>): Promise<User | null> {
-    const { role, placaVeiculo, rota, ...rest } = user;
-    const payload = { 
-      ...rest, 
-      perfil: role,
-      placa_veiculo: placaVeiculo,
-      rota: rota || 'ROTA_01'
-    };
-
-    const { data, error } = await supabase.from('app_users').insert(payload).select().single();
-    if (error) {
-      console.error('Erro ao inserir usuário em app_users:', error);
+    try {
+      const res = await fetch('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify(user),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        console.error('Erro ao criar usuario:', err?.error || res.status);
+        return null;
+      }
+      const data = await res.json();
+      return data.user ? mapUser(data.user) : null;
+    } catch (e) {
+      console.error('Erro ao criar usuario:', e);
       return null;
     }
-    
-    return {
-      id: data.id,
-      nome: data.nome,
-      email: data.email,
-      role: data.perfil as UserRole,
-      ativo: !!data.ativo,
-      telefone: data.telefone,
-      whatsapp: data.whatsapp,
-      foto: data.foto,
-      pin: data.pin,
-      placaVeiculo: data.placa_veiculo,
-      rota: data.rota
-    } as User;
   },
 
   async updateUser(id: string, updates: Partial<User>): Promise<User | null> {
-    const { role, placaVeiculo, ...rest } = updates;
-    const payload: any = { ...rest };
-    if (role !== undefined) payload.perfil = role;
-    if (placaVeiculo !== undefined) payload.placa_veiculo = placaVeiculo;
-
-    const { data, error } = await supabase.from('app_users').update(payload).eq('id', id).select().single();
-    if (error) {
-      console.error('Erro ao atualizar usuário em app_users:', error);
+    try {
+      const res = await fetch('/api/users', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ ...updates, id }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        console.error('Erro ao atualizar usuario:', err?.error || res.status);
+        return null;
+      }
+      const data = await res.json();
+      return data.user ? mapUser(data.user) : null;
+    } catch (e) {
+      console.error('Erro ao atualizar usuario:', e);
       return null;
     }
-
-    return {
-      id: data.id,
-      nome: data.nome,
-      email: data.email,
-      role: data.perfil as UserRole,
-      ativo: !!data.ativo,
-      telefone: data.telefone,
-      whatsapp: data.whatsapp,
-      foto: data.foto,
-      pin: data.pin,
-      placaVeiculo: data.placa_veiculo,
-      rota: data.rota
-    } as User;
   },
 
   async deleteUser(id: string): Promise<boolean> {
-    const { error } = await supabase.from('app_users').delete().eq('id', id);
-    if (error) {
-      console.error('Erro ao excluir usuário:', error);
+    try {
+      const res = await fetch(`/api/users?id=${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+      });
+      if (!res.ok) {
+        console.error('Erro ao excluir usuario:', res.status);
+        return false;
+      }
+      return true;
+    } catch (e) {
+      console.error('Erro ao excluir usuario:', e);
       return false;
     }
-    return true;
   }
 };

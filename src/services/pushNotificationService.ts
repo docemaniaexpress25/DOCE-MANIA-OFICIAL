@@ -1,13 +1,16 @@
 import { supabase } from '@/lib/supabaseClient';
 
-const VAPID_PUBLIC_KEY = 'BK6v9AgRkhRVvHVeU8qpORoMybYJ41KHxhpluV2PIG-awhUIJxcMBOhnGNzNEhKPo_VNl6YrdQPa3DcOmvYAh60';
+// Chave publica VAPID (dado publico por natureza). Configurar
+// NEXT_PUBLIC_VAPID_PUBLIC_KEY na Vercel para permitir rotacao futura.
+const VAPID_PUBLIC_KEY = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || 'BK6v9AgRkhRVvHVeU8qpORoMybYJ41KHxhpluV2PIG-awhUIJxcMBOhnGNzNEhKPo_VNl6YrdQPa3DcOmvYAh60';
 
 // Converte a chave VAPID de base64 para Uint8Array
-function urlBase64ToUint8Array(base64String: string): Uint8Array {
+function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
   const padding = '='.repeat((4 - base64String.length % 4) % 4);
   const base64 = (base64String + padding).replace(/\-/g, '+').replace(/_/g, '/');
   const rawData = window.atob(base64);
-  const outputArray = new Uint8Array(rawData.length);
+  const buffer = new ArrayBuffer(rawData.length);
+  const outputArray = new Uint8Array(buffer);
   for (let i = 0; i < rawData.length; ++i) {
     outputArray[i] = rawData.charCodeAt(i);
   }

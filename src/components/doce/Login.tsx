@@ -1,6 +1,7 @@
 "use client";
 import React, { useState } from 'react';
 import { User } from '@/lib/types';
+import { saveSessionToken } from '@/services/userService';
 
 interface LoginProps {
   users: User[];
@@ -12,6 +13,7 @@ const Login: React.FC<LoginProps> = ({ users, onLogin, logo }) => {
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
   const [logoClicks, setLogoClicks] = useState(0);
   const [isAdminUnlocked, setIsAdminUnlocked] = useState(false);
 
@@ -42,23 +44,39 @@ const Login: React.FC<LoginProps> = ({ users, onLogin, logo }) => {
     }, 3000);
   };
 
-  const handleConfirm = (e: React.FormEvent) => {
+  // A validacao do PIN agora acontece NO SERVIDOR (via /api/login).
+  // O visual e o fluxo permanecem identicos.
+  const handleConfirm = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedUser) return;
+    if (!selectedUser || busy) return;
 
-    const correctPin = selectedUser.pin;
-
-    if (!correctPin) {
-      setError("Erro: PIN de login não configurado.");
-      setPin("");
+    if (!pin) {
+      setError("Digite o PIN.");
       return;
     }
 
-    if (pin === correctPin) {
-      onLogin(selectedUser);
-    } else {
-      setError("PIN incorreto. Tente novamente.");
+    setBusy(true);
+    setError("");
+    try {
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: selectedUser.id, pin }),
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (res.ok && data.ok && data.user) {
+        if (data.token) saveSessionToken(data.token);
+        onLogin(data.user);
+      } else {
+        setError(data.error || "PIN incorreto. Tente novamente.");
+        setPin("");
+      }
+    } catch {
+      setError("Falha de conexao. Tente novamente.");
       setPin("");
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -100,9 +118,10 @@ const Login: React.FC<LoginProps> = ({ users, onLogin, logo }) => {
             <div className="flex flex-col gap-3">
               <button
                 type="submit"
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-black py-5 rounded-2xl shadow-xl active:scale-95 transition-all uppercase text-xs tracking-widest"
+                disabled={busy}
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-black py-5 rounded-2xl shadow-xl active:scale-95 transition-all uppercase text-xs tracking-widest disabled:opacity-60"
               >
-                Entrar
+                {busy ? 'Verificando...' : 'Entrar'}
               </button>
               <button
                 type="button"

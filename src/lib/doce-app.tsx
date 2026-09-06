@@ -6,7 +6,7 @@ import VendedorDashboard from '@/components/doce/VendedorDashboard';
 import Login from '@/components/doce/Login';
 import { haptics } from '@/utils/haptics';
 import { offlineSync } from '@/utils/offlineSync';
-import { userService } from '@/services/userService';
+import { userService, clearSessionToken } from '@/services/userService';
 import { productService } from '@/services/productService';
 import { clientService } from '@/services/clientService';
 import { appSettingsService, AppSettings } from '@/services/appSettingsService';
@@ -591,7 +591,7 @@ const App: React.FC = () => {
         {logo ? <img src={logo} alt="" className="h-14 w-auto object-contain" /> : <span className="font-black text-[11px] text-gray-300 uppercase tracking-widest">{companyName}</span>}
         <div className="flex items-center gap-3">
           <div className="text-right"><p className="text-[10px] font-black uppercase text-gray-400">{currentUser.role}</p><p className="text-sm font-bold text-gray-800">{currentUser.nome}</p></div>
-          <button onClick={() => setCurrentUser(null)} className="text-gray-400 p-2"><i className="fa-solid fa-right-from-bracket"></i></button>
+          <button onClick={() => { clearSessionToken(); setCurrentUser(null); }} className="text-gray-400 p-2"><i className="fa-solid fa-right-from-bracket"></i></button>
         </div>
       </header>
       

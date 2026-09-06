@@ -31,12 +31,13 @@ function mapUser(u: any): User {
     id: u.id,
     nome: u.nome,
     email: u.email,
-    role: u.perfil as UserRole,
+    // /api/users retorna camelCase com "role"; rows diretas do Supabase usam "perfil"
+    role: (u.role ?? u.perfil) as UserRole,
     ativo: !!u.ativo,
     telefone: u.telefone,
     whatsapp: u.whatsapp,
     foto: u.foto,
-    placaVeiculo: u.placa_veiculo,
+    placaVeiculo: u.placaVeiculo ?? u.placa_veiculo,
     rota: u.rota || 'ROTA_01',
   };
 }

@@ -96,8 +96,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [comprovantesLoading, setComprovantesLoading] = useState(true);
   const [comprovantesTick, setComprovantesTick] = useState(0);
   const [comprovantesFilter, setComprovantesFilter] = useState<'PENDENTE' | 'CONFIRMADO' | 'REJEITADO' | 'TODOS'>('PENDENTE');
+  const [comprovantesBadge, setComprovantesBadge] = useState(0);
   const [fotoComprovanteModal, setFotoComprovanteModal] = useState<{ id: string; titulo: string } | null>(null);
   const [fotoComprovanteUrl, setFotoComprovanteUrl] = useState<string | null>(null);
+  // IDs pendentes ja vistos (para detectar NOVOS comprovantes no polling)
+  const seenComprovantesRef = useRef<Set<string> | null>(null);
 
   // Estado para relatórios individuais
   const [activeReport, setActiveReport] = useState<ReportType>(null);
@@ -130,12 +133,32 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       try {
         const res = await fetch('/api/comprovantes', { headers: authHeaders() });
         const d = await res.json();
-        if (!cancelled && res.ok) setComprovantes(d.comprovantes || []);
+        if (cancelled || !res.ok) return;
+        const list = d.comprovantes || [];
+        setComprovantes(list);
+        // Detecta NOVOS comprovantes pendentes (chegados via polling)
+        const pendentes = list.filter((c: any) => c.status === 'PENDENTE').map((c: any) => c.id);
+        if (seenComprovantesRef.current) {
+          const novos = pendentes.filter((id: string) => !seenComprovantesRef.current!.has(id));
+          if (novos.length > 0 && activeTab !== 'COMPROVANTES') {
+            setComprovantesBadge(b => b + novos.length);
+            setToast({ message: `${novos.length} novo(s) comprovante(s) Pix aguardando revisao!`, type: 'success' });
+            setTimeout(() => setToast(null), 4000);
+          }
+        }
+        seenComprovantesRef.current = new Set(pendentes);
       } catch {}
       if (!cancelled) setComprovantesLoading(false);
     })();
     return () => { cancelled = true; };
   }, [comprovantesTick, activeTab]);
+
+  // Polling a cada 45s: cobertura quando o push VAPID nao chega
+  // (ex.: admin usando o APK WebView — a aba/badge atualiza sozinha)
+  useEffect(() => {
+    const id = setInterval(() => setComprovantesTick(t => t + 1), 45_000);
+    return () => clearInterval(id);
+  }, []);
 
   const filteredComprovantes = useMemo(() => {
     if (comprovantesFilter === 'TODOS') return comprovantes;
@@ -908,9 +931,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     return filtered;
   }, [props.sales, filterOverdueOnly, creditTypeFilter, search, activeTab, props.clients]);
 
-  const MenuCard = ({ icon, title, tab, color }: any) => (
-    <button onClick={() => setActiveTab(tab)} className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col items-center justify-center gap-3 active:scale-95 transition-all text-center group">
-      <div className={`w-14 h-14 ${color} rounded-2xl flex items-center justify-center text-xl shadow-inner group-hover:scale-110 transition-transform`}><i className={`fa-solid ${icon}`}></i></div>
+  const MenuCard = ({ icon, title, tab, color, badge }: any) => (
+    <button onClick={() => { setActiveTab(tab); if (tab === 'COMPROVANTES') setComprovantesBadge(0); }} className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col items-center justify-center gap-3 active:scale-95 transition-all text-center group">
+      <div className={`relative w-14 h-14 ${color} rounded-2xl flex items-center justify-center text-xl shadow-inner group-hover:scale-110 transition-transform`}>
+        <i className={`fa-solid ${icon}`}></i>
+        {!!badge && badge > 0 && <span className="absolute -top-1.5 -right-1.5 min-w-[22px] h-[22px] px-1 bg-rose-500 text-white text-[10px] font-black rounded-full flex items-center justify-center shadow-lg border-2 border-white animate-pulse">{badge > 9 ? '9+' : badge}</span>}
+      </div>
       <span className="text-[11px] font-black uppercase text-gray-700 tracking-tight">{title}</span>
     </button>
   );
@@ -1257,7 +1283,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             <MenuCard icon="fa-calendar-days" title="Roteiro" tab="ROTEIRO" color="bg-indigo-50 text-indigo-600" />
             <MenuCard icon="fa-chart-line" title="Relatórios" tab="REPORTS" color="bg-emerald-50 text-emerald-600" />
             <MenuCard icon="fa-file-invoice-dollar" title="Contas a Receber" tab="CONTAS_RECEBER" color="bg-rose-50 text-rose-600" />
-            <MenuCard icon="fa-clipboard-check" title="Comprovantes Pix" tab="COMPROVANTES" color="bg-teal-50 text-teal-600" />
+            <MenuCard icon="fa-clipboard-check" title="Comprovantes Pix" tab="COMPROVANTES" color="bg-teal-50 text-teal-600" badge={comprovantesBadge} />
             <MenuCard icon="fa-database" title="Backup" tab="BACKUP" color="bg-gray-100 text-gray-600" />
             <MenuCard icon="fa-gear" title="Configurações" tab="SETTINGS" color="bg-slate-50 text-slate-600" />
           </div>

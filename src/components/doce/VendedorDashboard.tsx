@@ -148,50 +148,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     }
   }, [selectedClient, clients]);
 
-  // GPS: envia localizacao via watchPosition + fallback interval
-  useEffect(() => {
-    if (!('geolocation' in navigator)) return;
-    let watchId: number | null = null;
-    let lastSave = 0;
-    const MIN_INTERVAL = 60_000; // salva no maximo a cada 1 min
-
-    const sendLocation = (lat: number, lng: number) => {
-      const now = Date.now();
-      if (now - lastSave < MIN_INTERVAL) return;
-      lastSave = now;
-      locationService.saveLocation(user.id, lat, lng);
-    };
-
-    // Tenta watchPosition primeiro (mais eficiente)
-    if (navigator.geolocation.watchPosition) {
-      watchId = navigator.geolocation.watchPosition(
-        (pos) => sendLocation(pos.coords.latitude, pos.coords.longitude),
-        () => {},
-        { enableHighAccuracy: false, timeout: 15000, maximumAge: 60000 }
-      );
-    }
-
-    // Fallback: envia via interval tambem
-    const fallback = setInterval(() => {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => sendLocation(pos.coords.latitude, pos.coords.longitude),
-        () => {},
-        { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 }
-      );
-    }, 3 * 60 * 1000);
-
-    // Primeiro envio imediato
-    navigator.geolocation.getCurrentPosition(
-      (pos) => sendLocation(pos.coords.latitude, pos.coords.longitude),
-      () => {},
-      { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 }
-    );
-
-    return () => {
-      if (watchId !== null) navigator.geolocation.clearWatch(watchId);
-      clearInterval(fallback);
-    };
-  }, [user.id]);
 
   const [showReceiveModal, setShowReceiveModal] = useState<Sale | null>(null);
   const [valorRecebidoParcial, setValorRecebidoParcial] = useState<string>('');
@@ -298,6 +254,71 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
   };
+
+  // GPS: envia localizacao via watchPosition + fallback interval
+  useEffect(() => {
+    if (!('geolocation' in navigator)) return;
+    let watchId: number | null = null;
+    let lastSave = 0;
+    let avisouPermissao = false; // avisa so 1x por sessao (nao spammeia toast)
+    let avisouFalhaSave = false;
+    const MIN_INTERVAL = 60_000; // salva no maximo a cada 1 min
+
+    const sendLocation = async (lat: number, lng: number) => {
+      const now = Date.now();
+      if (now - lastSave < MIN_INTERVAL) return;
+      lastSave = now;
+      const ok = await locationService.saveLocation(user.id, lat, lng);
+      if (!ok && !avisouFalhaSave) {
+        avisouFalhaSave = true;
+        setToast({ message: 'Sua localização não pôde ser registrada. O admin não verá seu GPS.', type: 'error' });
+        setTimeout(() => setToast(null), 3500);
+      }
+    };
+
+    const onGeoError = (err: GeolocationPositionError) => {
+      if (avisouPermissao) return;
+      avisouPermissao = true;
+      if (err.code === err.PERMISSION_DENIED) {
+        setToast({ message: 'Permissão de localização NEGADA. Ative o GPS para o admin te acompanhar.', type: 'error' });
+        setTimeout(() => setToast(null), 3500);
+      } else if (err.code === err.POSITION_UNAVAILABLE) {
+        setToast({ message: 'Sinal de GPS indisponível no momento.', type: 'error' });
+        setTimeout(() => setToast(null), 3500);
+      }
+      // TIMEOUT: silencioso (comum em areas cobertas, tenta de novo no fallback)
+    };
+
+    // Tenta watchPosition primeiro (mais eficiente)
+    if (navigator.geolocation.watchPosition) {
+      watchId = navigator.geolocation.watchPosition(
+        (pos) => { sendLocation(pos.coords.latitude, pos.coords.longitude); },
+        onGeoError,
+        { enableHighAccuracy: false, timeout: 15000, maximumAge: 60000 }
+      );
+    }
+
+    // Fallback: envia via interval tambem
+    const fallback = setInterval(() => {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => { sendLocation(pos.coords.latitude, pos.coords.longitude); },
+        onGeoError,
+        { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 }
+      );
+    }, 3 * 60 * 1000);
+
+    // Primeiro envio imediato
+    navigator.geolocation.getCurrentPosition(
+      (pos) => { sendLocation(pos.coords.latitude, pos.coords.longitude); },
+      onGeoError,
+      { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 }
+    );
+
+    return () => {
+      if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+      clearInterval(fallback);
+    };
+  }, [user.id]);
 
   // Memo para última venda de cada cliente (mantido para uso em outras abas)
   const lastSaleByClient = useMemo(() => {

@@ -1,19 +1,28 @@
 import { supabase } from '@/lib/supabaseClient';
+import { authHeaders } from '@/services/userService';
 
-// Salva a ultima localizacao conhecida do vendedor
+/**
+ * GPS: conversa com /api/location (server-side, service_role).
+ * user_locations esta fechada para o anon (RLS + REVOKE) — o upsert
+ * direto pelo cliente Supabase falhava com 42501 em silencio, e por
+ * isso o admin nunca via a localizacao do vendedor.
+ *
+ * notificationService (realtime de vendas) continua usando o cliente
+ * Supabase anon — sales segue legivel para o app.
+ */
+
+// Salva a ultima localizacao conhecida do usuario logado (user_id vem da sessao)
 export const locationService = {
-  async saveLocation(userId: string, lat: number, lng: number): Promise<boolean> {
+  async saveLocation(_userId: string, lat: number, lng: number): Promise<boolean> {
     try {
-      const { error } = await supabase
-        .from('user_locations')
-        .upsert({
-          user_id: userId,
-          latitude: lat,
-          longitude: lng,
-          updated_at: new Date().toISOString(),
-        }, { onConflict: 'user_id' });
-      if (error) {
-        console.error('[LOCATION] Erro ao salvar:', error.message, error.code);
+      const res = await fetch('/api/location', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ latitude: lat, longitude: lng }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        console.error('[LOCATION] Erro ao salvar:', res.status, d?.error || '');
         return false;
       }
       console.log('[LOCATION] Salva com sucesso:', lat.toFixed(5), lng.toFixed(5));
@@ -26,24 +35,35 @@ export const locationService = {
 
   async getLocation(userId: string): Promise<{ latitude: number; longitude: number; updated_at: string } | null> {
     try {
-      const { data, error } = await supabase
-        .from('user_locations')
-        .select('latitude, longitude, updated_at')
-        .eq('user_id', userId)
-        .single();
-      if (error) {
-        console.error('[LOCATION] Erro ao buscar:', error.message, error.code);
+      const res = await fetch(`/api/location?userId=${encodeURIComponent(userId)}`, {
+        headers: authHeaders(),
+      });
+      if (!res.ok) {
+        console.error('[LOCATION] Erro ao buscar:', res.status);
         return null;
       }
-      if (!data) return null;
+      const d = await res.json();
+      if (!d?.location) return null;
       return {
-        latitude: data.latitude,
-        longitude: data.longitude,
-        updated_at: data.updated_at,
+        latitude: d.location.latitude,
+        longitude: d.location.longitude,
+        updated_at: d.location.updated_at,
       };
     } catch (err: any) {
       console.error('[LOCATION] Excecao ao buscar:', err?.message);
       return null;
+    }
+  },
+
+  /** Localizacao de todos os usuarios de uma vez (painel admin) */
+  async getAllLocations(): Promise<Array<{ userId: string; nome: string; latitude: number; longitude: number; updatedAt: string }>> {
+    try {
+      const res = await fetch('/api/location?all=1', { headers: authHeaders() });
+      if (!res.ok) return [];
+      const d = await res.json();
+      return d?.locations || [];
+    } catch {
+      return [];
     }
   },
 };

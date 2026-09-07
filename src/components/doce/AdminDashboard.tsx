@@ -8,6 +8,7 @@ import Cupom from '@/components/doce/Cupom';
 import ClientHistory from '@/components/doce/ClientHistory';
 import { loadLocalState, saveLocalState } from '@/utils/persistence';
 import { locationService, notificationService, NOTIFICATION_TYPES, AppNotification, NotificationType } from '@/services/locationService';
+import { authHeaders } from '@/services/userService';
 
 interface AdminDashboardProps {
   products: Product[];
@@ -77,7 +78,7 @@ interface AdminDashboardProps {
   setClientOrder: (ids: string[]) => void;
 }
 
-type TabType = 'HOME' | 'CATALOGO' | 'CATEGORIAS' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'BACKUP' | 'SETTINGS';
+type TabType = 'HOME' | 'CATALOGO' | 'CATEGORIAS' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'COMPROVANTES' | 'BACKUP' | 'SETTINGS';
 
 type ReportType = 'RESUMO' | 'TOP_CLIENTES' | 'TOP_PRODUTOS' | 'CLIENTES_RISCO' | 'VENDAS_CATEGORIAS' | 'PRODUTOS_RENTAVEIS' | null;
 type ReportFilterType = 'RESUMO' | 'TOP_PRODUTOS' | 'TOP_CLIENTES' | 'CATEGORIAS' | 'VENDEDORES' | 'DIVIDAS' | 'PRODUTOS_RENTAVEIS';
@@ -89,6 +90,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [filterOverdueOnly, setFilterOverdueOnly] = useState(false);
   const [routeFilter, setRouteFilter] = useState<string>('TODOS');
   const [creditTypeFilter, setCreditTypeFilter] = useState<'TODOS' | 'COMUM' | 'CHEQUE' | 'BOLETO'>('TODOS');
+
+  // Comprovantes Pix enviados pelo portal do cliente
+  const [comprovantes, setComprovantes] = useState<any[]>([]);
+  const [comprovantesLoading, setComprovantesLoading] = useState(true);
+  const [comprovantesTick, setComprovantesTick] = useState(0);
+  const [comprovantesFilter, setComprovantesFilter] = useState<'PENDENTE' | 'CONFIRMADO' | 'REJEITADO' | 'TODOS'>('PENDENTE');
+  const [fotoComprovanteModal, setFotoComprovanteModal] = useState<{ id: string; titulo: string } | null>(null);
+  const [fotoComprovanteUrl, setFotoComprovanteUrl] = useState<string | null>(null);
 
   // Estado para relatórios individuais
   const [activeReport, setActiveReport] = useState<ReportType>(null);
@@ -110,6 +119,54 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       props.clearAdminNotification?.();
     }
   }, [props.adminNotification]);
+
+  // ---- Comprovantes do portal ----
+  // Refetch = incrementa o tick; os setState acontecem so apos await (sem cascata)
+  const loadComprovantes = () => setComprovantesTick(t => t + 1);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/comprovantes', { headers: authHeaders() });
+        const d = await res.json();
+        if (!cancelled && res.ok) setComprovantes(d.comprovantes || []);
+      } catch {}
+      if (!cancelled) setComprovantesLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [comprovantesTick, activeTab]);
+
+  const filteredComprovantes = useMemo(() => {
+    if (comprovantesFilter === 'TODOS') return comprovantes;
+    return comprovantes.filter(c => c.status === comprovantesFilter);
+  }, [comprovantes, comprovantesFilter]);
+
+  const handleRevisarComprovante = async (id: string, acao: 'CONFIRMAR' | 'REJEITAR') => {
+    try {
+      const res = await fetch('/api/comprovantes/revisar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ id, acao }),
+      });
+      const d = await res.json();
+      if (!res.ok) { showToast(d.error || 'Erro ao revisar comprovante', 'error'); return; }
+      showToast(acao === 'CONFIRMAR' ? 'Pagamento confirmado e divida baixada!' : 'Comprovante recusado.');
+      loadComprovantes();
+    } catch {
+      showToast('Erro de conexao ao revisar comprovante', 'error');
+    }
+  };
+
+  const abrirFotoComprovante = async (id: string, titulo: string) => {
+    setFotoComprovanteModal({ id, titulo });
+    setFotoComprovanteUrl(null);
+    try {
+      const res = await fetch(`/api/comprovantes/foto?id=${id}`, { headers: authHeaders() });
+      const d = await res.json();
+      if (res.ok) setFotoComprovanteUrl(d.foto);
+    } catch {}
+  };
 
   const [showProductModal, setShowProductModal] = useState<Product | 'NEW' | null>(null);
   const [showEntryModal, setShowEntryModal] = useState<Product | null>(null);
@@ -1200,6 +1257,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             <MenuCard icon="fa-calendar-days" title="Roteiro" tab="ROTEIRO" color="bg-indigo-50 text-indigo-600" />
             <MenuCard icon="fa-chart-line" title="Relatórios" tab="REPORTS" color="bg-emerald-50 text-emerald-600" />
             <MenuCard icon="fa-file-invoice-dollar" title="Contas a Receber" tab="CONTAS_RECEBER" color="bg-rose-50 text-rose-600" />
+            <MenuCard icon="fa-clipboard-check" title="Comprovantes Pix" tab="COMPROVANTES" color="bg-teal-50 text-teal-600" />
             <MenuCard icon="fa-database" title="Backup" tab="BACKUP" color="bg-gray-100 text-gray-600" />
             <MenuCard icon="fa-gear" title="Configurações" tab="SETTINGS" color="bg-slate-50 text-slate-600" />
           </div>
@@ -1884,6 +1942,84 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         </div>
       )}
 
+      {activeTab === 'COMPROVANTES' && (
+        <div className="space-y-4">
+          <header className="px-1 flex justify-between items-center">
+            <div>
+              <h2 className="text-2xl font-black text-gray-800 tracking-tight">Comprovantes Pix</h2>
+              <p className="text-[10px] text-gray-400 font-bold uppercase mt-1">Pagamentos enviados pelo portal do cliente</p>
+            </div>
+            <button onClick={loadComprovantes} className="w-10 h-10 bg-white text-blue-600 rounded-xl flex items-center justify-center shadow-sm border border-gray-100 active:scale-90"><i className={`fa-solid fa-rotate ${comprovantesLoading ? 'animate-spin' : ''}`}></i></button>
+          </header>
+
+          <div className="flex bg-gray-100 p-1 rounded-2xl mx-1 shadow-inner overflow-x-auto gap-1">
+            {(['PENDENTE', 'CONFIRMADO', 'REJEITADO', 'TODOS'] as const).map(t => (
+              <button
+                key={t}
+                onClick={() => setComprovantesFilter(t)}
+                className={`flex-1 min-w-[70px] py-2 rounded-xl text-[9px] font-black uppercase transition-all ${comprovantesFilter === t ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}
+              >
+                {t === 'PENDENTE' ? `Pendentes (${comprovantes.filter(c => c.status === 'PENDENTE').length})` : t === 'CONFIRMADO' ? 'Confirmados' : t === 'REJEITADO' ? 'Recusados' : 'Todos'}
+              </button>
+            ))}
+          </div>
+
+          {comprovantesLoading && comprovantes.length === 0 ? (
+            <div className="bg-white rounded-2xl p-10 text-center border border-gray-100 mx-1">
+              <div className="w-8 h-8 border-4 border-blue-100 border-t-blue-500 rounded-full animate-spin mx-auto"></div>
+            </div>
+          ) : filteredComprovantes.length === 0 ? (
+            <div className="bg-white rounded-2xl p-10 text-center border border-gray-100 mx-1">
+              <i className="fa-solid fa-clipboard-check text-gray-200 text-4xl mb-3 block"></i>
+              <p className="text-xs text-gray-400 font-semibold">Nenhum comprovante aqui</p>
+            </div>
+          ) : (
+            <div className="grid gap-3">
+              {filteredComprovantes.map(c => {
+                const clientName = props.clients.find(cl => cl.id === c.client_id)?.nomeFantasia || 'Cliente';
+                const sale = props.sales.find(s => s.id === c.sale_id);
+                const saldo = sale ? Number(((sale.valorTotal ?? 0) - (sale.valorPago ?? 0)).toFixed(2)) : null;
+                const isPending = c.status === 'PENDENTE';
+
+                return (
+                  <div key={c.id} className={`p-4 rounded-3xl border shadow-sm transition-all ${c.status === 'PENDENTE' ? 'bg-white border-amber-200' : c.status === 'CONFIRMADO' ? 'bg-white border-emerald-100' : 'bg-white border-rose-100'}`}>
+                    <div className="flex items-start gap-3">
+                      <button onClick={() => abrirFotoComprovante(c.id, clientName)} className="w-16 h-16 rounded-2xl bg-gray-50 border border-gray-100 flex flex-col items-center justify-center gap-1 shrink-0 active:scale-95" title="Ver comprovante">
+                        <i className="fa-solid fa-image text-gray-300 text-lg"></i>
+                        <span className="text-[7px] font-black text-gray-300 uppercase">Ver foto</span>
+                      </button>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <h4 className="font-bold text-sm text-gray-800 uppercase truncate">{clientName}</h4>
+                          <span className={`text-[8px] font-black px-2 py-0.5 rounded uppercase shrink-0 ${c.status === 'PENDENTE' ? 'bg-amber-100 text-amber-700 animate-pulse' : c.status === 'CONFIRMADO' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
+                            {c.status === 'PENDENTE' ? 'EM ANALISE' : c.status === 'CONFIRMADO' ? 'CONFIRMADO' : 'RECUSADO'}
+                          </span>
+                        </div>
+                        <p className="text-[9px] text-gray-400 font-bold mt-1">
+                          {new Date(c.created_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })}{c.txid ? ` • ID ${c.txid}` : ''}
+                        </p>
+                        {c.observacao && <p className="text-[9px] text-gray-500 font-semibold mt-1 italic truncate">"{c.observacao}"</p>}
+                        {c.status !== 'PENDENTE' && c.review_note && <p className="text-[9px] text-rose-500 font-bold mt-1">Obs: {c.review_note}</p>}
+                      </div>
+                      <div className="text-right shrink-0">
+                        <p className="text-base font-black text-gray-800">R$ {Number(c.valor).toFixed(2)}</p>
+                        {saldo !== null && saldo > 0 && <p className="text-[8px] font-black text-rose-400 uppercase mt-0.5">Saldo: R$ {saldo.toFixed(2)}</p>}
+                      </div>
+                    </div>
+                    {isPending && (
+                      <div className="flex gap-2 mt-3">
+                        <button onClick={() => handleRevisarComprovante(c.id, 'CONFIRMAR')} className="flex-1 py-3 rounded-2xl text-[10px] font-black uppercase bg-emerald-600 text-white active:scale-95 shadow-md flex items-center justify-center gap-1.5"><i className="fa-solid fa-check"></i>Confirmar e Baixar Divida</button>
+                        <button onClick={() => handleRevisarComprovante(c.id, 'REJEITAR')} className="px-5 py-3 rounded-2xl text-[10px] font-black uppercase bg-rose-50 text-rose-600 border border-rose-100 active:scale-95" title="Recusar comprovante"><i className="fa-solid fa-xmark"></i></button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       {activeTab === 'BACKUP' && (
         <div className="space-y-4">
           <header className="px-1">
@@ -2325,6 +2461,37 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
               ))}
             </div>
             <div className="p-5 pt-0"><button onClick={() => setShowNotifPrefs(false)} className="w-full bg-gray-100 text-gray-600 font-black py-4 rounded-2xl active:scale-95 uppercase text-xs tracking-widest">Fechar</button></div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================ */}
+      {/* MODAL DE FOTO DO COMPROVANTE (PORTAL DO CLIENTE)            */}
+      {/* ============================================================ */}
+      {fotoComprovanteModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[260] flex items-end sm:items-center justify-center p-4" onClick={() => setFotoComprovanteModal(null)}>
+          <div className="bg-white w-full max-sm rounded-t-[2rem] sm:rounded-[2rem] overflow-hidden shadow-2xl animate-in slide-in-from-bottom duration-300" onClick={e => e.stopPropagation()}>
+            <div className="bg-gradient-to-br from-teal-500 to-emerald-600 p-5 flex items-center justify-between">
+              <div>
+                <h3 className="font-black text-white text-sm uppercase">Comprovante do Cliente</h3>
+                <p className="text-white/70 text-[9px] font-bold mt-1">{fotoComprovanteModal.titulo}</p>
+              </div>
+              <button onClick={() => setFotoComprovanteModal(null)} className="text-white/70 active:scale-90"><i className="fa-solid fa-xmark text-lg"></i></button>
+            </div>
+            <div className="p-5">
+              {fotoComprovanteUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={fotoComprovanteUrl} className="w-full rounded-2xl border border-gray-100" alt="Comprovante do cliente" />
+              ) : (
+                <div className="py-14 flex flex-col items-center gap-3">
+                  <div className="w-8 h-8 border-4 border-teal-100 border-t-teal-500 rounded-full animate-spin"></div>
+                  <p className="text-[10px] font-black text-gray-400 uppercase">Carregando foto...</p>
+                </div>
+              )}
+            </div>
+            <div className="p-5 pt-0">
+              <button onClick={() => setFotoComprovanteModal(null)} className="w-full bg-gray-100 text-gray-500 font-black py-3 rounded-2xl active:scale-95 uppercase text-[10px]">Fechar</button>
+            </div>
           </div>
         </div>
       )}

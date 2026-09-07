@@ -18,7 +18,7 @@ export function clearSessionToken() {
   try { localStorage.removeItem(SESSION_KEY); } catch {}
 }
 
-function authHeaders(): HeadersInit {
+export function authHeaders(): HeadersInit {
   try {
     const token = localStorage.getItem(SESSION_KEY);
     if (token) return { Authorization: `Bearer ${token}` };

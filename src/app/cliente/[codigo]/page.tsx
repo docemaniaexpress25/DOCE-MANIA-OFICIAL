@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useParams } from 'next/navigation';
 
 interface SaleItem { produto_id: string; quantidade: number; preco_venda: number; }
@@ -15,15 +15,80 @@ interface Stats {
   frequenciaDias: number; totalCompras: number;
   produtoFavorito: string; produtoFavoritoQtd: number;
 }
+interface Comprovante {
+  id: string; sale_id: string; valor: number; txid: string | null;
+  status: 'PENDENTE' | 'CONFIRMADO' | 'REJEITADO';
+  observacao: string | null; review_note: string | null;
+  created_at: string; reviewed_at: string | null;
+}
 interface ApiResponse {
   client: { id: string; nome_fantasia: string; endereco: string; bairro: string };
   sales: Sale[]; products: Record<string, string>; stats: Stats; sugestoes: Sugestao[];
+  comprovantes?: Comprovante[];
   error?: string;
+}
+interface PixData {
+  payload: string; valor: number; txid: string;
+  chave: string; chaveFormatada: string; nome: string; cidade: string;
+  qrDataUrl: string; cliente: string; saleId: string;
 }
 
 function formatDate(d: string) { return new Date(d).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' }); }
 function formatCurrency(v: number) { return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }); }
 function getPaymentLabel(m: string) { return { DINHEIRO: 'Dinheiro', PIX: 'PIX', A_PRAZO: 'A Prazo' }[m] || m; }
+
+/** Comprime a foto do comprovante no proprio aparelho antes de enviar */
+function compressImage(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const max = 1280;
+        let { width, height } = img;
+        if (width > max || height > max) {
+          const ratio = Math.min(max / width, max / height);
+          width = Math.round(width * ratio);
+          height = Math.round(height * ratio);
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) { reject(new Error('Canvas indisponivel')); return; }
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', 0.75));
+      };
+      img.onerror = () => reject(new Error('Imagem invalida'));
+      img.src = reader.result as string;
+    };
+    reader.onerror = () => reject(new Error('Erro ao ler arquivo'));
+    reader.readAsDataURL(file);
+  });
+}
+
+/** Copia com fallback para WebView/APK antigos (sem Clipboard API) */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+}
 
 export default function ClienteDashboard() {
   const params = useParams();
@@ -34,6 +99,18 @@ export default function ClienteDashboard() {
   const [tab, setTab] = useState<'todas' | 'pendentes'>('todas');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
+  // Pagamento Pix
+  const [pixSale, setPixSale] = useState<Sale | null>(null);
+  const [pixData, setPixData] = useState<PixData | null>(null);
+  const [pixLoading, setPixLoading] = useState(false);
+  const [pixError, setPixError] = useState('');
+  const [copiado, setCopiado] = useState(false);
+  const [enviando, setEnviando] = useState(false);
+  const [enviado, setEnviado] = useState(false);
+  const [compError, setCompError] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
+
   useEffect(() => {
     if (!codigo) return;
     fetch(`/api/cliente/${codigo}`)
@@ -41,10 +118,78 @@ export default function ClienteDashboard() {
       .then((d: ApiResponse) => { if (d.error) { setError(d.error); return; } setData(d); })
       .catch(() => setError('Erro ao carregar.'))
       .finally(() => setLoading(false));
-  }, [codigo]);
+  }, [codigo, refreshKey]);
 
   function toggle(id: string) {
     setExpanded(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  }
+
+  // ---- Fluxo Pix ----
+  async function abrirPix(sale: Sale) {
+    setPixSale(sale);
+    setPixData(null);
+    setPixError('');
+    setCopiado(false);
+    setEnviado(false);
+    setCompError('');
+    setPixLoading(true);
+    try {
+      const res = await fetch(`/api/cliente/${codigo}/pix`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ saleId: sale.id }),
+      });
+      const d = await res.json();
+      if (!res.ok) { setPixError(d.error || 'Erro ao gerar o Pix.'); return; }
+      setPixData(d);
+    } catch {
+      setPixError('Erro ao gerar o Pix. Verifique a conexão.');
+    } finally {
+      setPixLoading(false);
+    }
+  }
+
+  function fecharPix() {
+    setPixSale(null);
+    setPixData(null);
+    setPixError('');
+    setEnviado(false);
+    setCompError('');
+  }
+
+  async function copiarCodigo() {
+    if (!pixData) return;
+    const ok = await copyText(pixData.payload);
+    setCopiado(ok);
+    if (ok) setTimeout(() => setCopiado(false), 2500);
+  }
+
+  function escolherArquivo() {
+    fileInputRef.current?.click();
+  }
+
+  async function onArquivoSelecionado(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !pixData) return;
+    setEnviando(true);
+    setCompError('');
+    try {
+      const foto = await compressImage(file);
+      const res = await fetch(`/api/cliente/${codigo}/comprovante`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ saleId: pixData.saleId, valor: pixData.valor, foto }),
+      });
+      const d = await res.json();
+      if (!res.ok) { setCompError(d.error || 'Erro ao enviar comprovante.'); return; }
+      setEnviado(true);
+      setRefreshKey(k => k + 1); // recarrega status dos comprovantes
+    } catch {
+      setCompError('Erro ao processar a imagem. Tente novamente.');
+    } finally {
+      setEnviando(false);
+    }
   }
 
   if (loading) return (<div className="min-h-screen bg-gray-100 flex items-center justify-center"><div className="w-10 h-10 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin"></div></div>);
@@ -59,12 +204,13 @@ export default function ClienteDashboard() {
     </div>
   );
 
-  const { client, sales, products, stats, sugestoes } = data;
+  const { client, sales, products, stats, sugestoes, comprovantes = [] } = data;
   const saldoDevedor = stats.totalComprado - stats.totalPago;
   const vendasPendentes = sales.filter(s => s.status_pagamento === 'PENDENTE');
   const saldoPendente = vendasPendentes.reduce((a, s) => a + (Number(s.valor_total) - Number(s.valor_pago)), 0);
   const listSales = tab === 'pendentes' ? vendasPendentes : sales;
   const firstName = (client.nome_fantasia || '').split(' ')[0];
+  const compPendentes = comprovantes.filter(c => c.status === 'PENDENTE').length;
 
   return (
     <div className="min-h-screen bg-gray-100">
@@ -148,7 +294,7 @@ export default function ClienteDashboard() {
         </div>
       </div>
 
-      {/* Pendente */}
+      {/* Pendente — com botao de pagar via Pix */}
       {vendasPendentes.length > 0 && (
         <div className="max-w-md mx-auto px-4 mt-4">
           <div className="bg-gradient-to-r from-rose-50 to-orange-50 rounded-2xl px-4 py-3 border border-rose-100 flex items-center gap-3">
@@ -160,6 +306,46 @@ export default function ClienteDashboard() {
               <p className="text-sm font-black text-rose-800">{formatCurrency(saldoPendente)}</p>
             </div>
             <span className="text-[9px] font-bold text-rose-500 bg-rose-100 px-2.5 py-1 rounded-lg">{vendasPendentes.length}</span>
+          </div>
+          <button
+            onClick={() => vendasPendentes.length === 1 ? abrirPix(vendasPendentes[0]) : setTab('pendentes')}
+            className="w-full mt-2 py-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-2xl text-xs font-black uppercase tracking-wider shadow-lg active:scale-[0.98] transition-transform flex items-center justify-center gap-2"
+          >
+            <i className="fa-brands fa-pix text-base"></i>
+            Pagar com Pix
+          </button>
+        </div>
+      )}
+
+      {/* Meus comprovantes enviados */}
+      {comprovantes.length > 0 && (
+        <div className="max-w-md mx-auto px-4 mt-4">
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 bg-teal-50 rounded-xl flex items-center justify-center">
+                  <i className="fa-solid fa-paper-plane text-teal-500 text-[11px]"></i>
+                </div>
+                <p className="text-[10px] font-black text-gray-700">Meus comprovantes</p>
+              </div>
+              {compPendentes > 0 && (
+                <span className="text-[9px] font-black text-amber-600 bg-amber-50 px-2 py-1 rounded-lg border border-amber-100">{compPendentes} em analise</span>
+              )}
+            </div>
+            <div className="space-y-2 max-h-64 overflow-y-auto">
+              {comprovantes.slice(0, 8).map(c => (
+                <div key={c.id} className="flex items-center gap-3 bg-gray-50 rounded-xl px-3 py-2.5 border border-gray-100">
+                  <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${c.status === 'CONFIRMADO' ? 'bg-emerald-400' : c.status === 'REJEITADO' ? 'bg-rose-400' : 'bg-amber-400 animate-pulse'}`}></div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[11px] font-black text-gray-700">{formatCurrency(Number(c.valor))}</p>
+                    <p className="text-[9px] text-gray-400 font-semibold">{formatDate(c.created_at)}{c.review_note ? ` — ${c.review_note}` : ''}</p>
+                  </div>
+                  <span className={`text-[8px] font-black uppercase px-2 py-1 rounded-lg shrink-0 ${c.status === 'CONFIRMADO' ? 'bg-emerald-100 text-emerald-700' : c.status === 'REJEITADO' ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'}`}>
+                    {c.status === 'CONFIRMADO' ? 'Confirmado' : c.status === 'REJEITADO' ? 'Recusado' : 'Em analise'}
+                  </span>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       )}
@@ -257,10 +443,20 @@ export default function ClienteDashboard() {
                       <span className="text-base font-black text-gray-800">{formatCurrency(Number(sale.valor_total))}</span>
                     </div>
                     {isPending && restante > 0 && (
-                      <div className="bg-rose-50 px-4 py-2 border-t border-rose-100 flex items-center justify-between">
-                        <span className="text-[9px] font-bold text-rose-500">Falta pagar</span>
-                        <span className="text-[11px] font-black text-rose-600">{formatCurrency(restante)}</span>
-                      </div>
+                      <>
+                        <div className="bg-rose-50 px-4 py-2 border-t border-rose-100 flex items-center justify-between">
+                          <span className="text-[9px] font-bold text-rose-500">Falta pagar</span>
+                          <span className="text-[11px] font-black text-rose-600">{formatCurrency(restante)}</span>
+                        </div>
+                        <div className="px-4 py-3 border-t border-rose-100 bg-white">
+                          <button
+                            onClick={(e) => { e.stopPropagation(); abrirPix(sale); }}
+                            className="w-full py-3 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-xl text-[11px] font-black uppercase tracking-wider shadow-md active:scale-[0.98] transition-transform flex items-center justify-center gap-2"
+                          >
+                            <i className="fa-brands fa-pix text-sm"></i>Pagar com Pix
+                          </button>
+                        </div>
+                      </>
                     )}
                     {isPending && sale.data_vencimento && (
                       <div className="bg-amber-50 px-4 py-2 border-t border-amber-100">
@@ -280,6 +476,127 @@ export default function ClienteDashboard() {
       <div className="text-center pb-6">
         <p className="text-[9px] text-gray-300 font-semibold tracking-widest uppercase">Doce Mania Distribuidora</p>
       </div>
+
+      {/* ===== MODAL PIX ===== */}
+      {pixSale && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm" onClick={fecharPix}>
+          <div
+            className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl max-h-[92vh] overflow-y-auto animate-in slide-in-from-bottom duration-300"
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="sticky top-0 bg-gradient-to-r from-emerald-600 to-teal-600 text-white px-5 py-4 flex items-center justify-between rounded-t-3xl">
+              <div>
+                <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-emerald-100/80">Pagamento</p>
+                <h3 className="text-base font-black uppercase flex items-center gap-2"><i className="fa-brands fa-pix"></i>Pix — Doce Mania</h3>
+              </div>
+              <button onClick={fecharPix} className="w-9 h-9 bg-white/15 rounded-xl flex items-center justify-center active:scale-90">
+                <i className="fa-solid fa-xmark"></i>
+              </button>
+            </div>
+
+            {enviado ? (
+              /* Sucesso */
+              <div className="p-8 text-center">
+                <div className="w-20 h-20 bg-emerald-50 rounded-full flex items-center justify-center mx-auto mb-5">
+                  <i className="fa-solid fa-check text-emerald-500 text-3xl"></i>
+                </div>
+                <h4 className="text-base font-black text-gray-800 uppercase">Comprovante enviado!</h4>
+                <p className="text-xs text-gray-400 font-semibold mt-2 leading-relaxed">
+                  Recebemos seu comprovante de {formatCurrency(pixData?.valor || 0)}.<br />
+                  A confirmacao e feita pela nossa equipe — em<br />poucos minutos sua divida sera atualizada aqui.
+                </p>
+                <button onClick={fecharPix} className="w-full mt-6 py-3.5 bg-gray-800 text-white rounded-2xl text-xs font-black uppercase tracking-wider active:scale-[0.98] transition-transform">
+                  Voltar ao extrato
+                </button>
+              </div>
+            ) : pixLoading ? (
+              /* Carregando QR */
+              <div className="p-10 text-center">
+                <div className="w-10 h-10 border-4 border-emerald-100 border-t-emerald-600 rounded-full animate-spin mx-auto"></div>
+                <p className="text-[10px] font-bold text-gray-400 uppercase mt-4">Gerando seu Pix...</p>
+              </div>
+            ) : pixError ? (
+              /* Erro */
+              <div className="p-8 text-center">
+                <div className="w-14 h-14 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <i className="fa-solid fa-triangle-exclamation text-rose-400 text-xl"></i>
+                </div>
+                <p className="text-xs font-bold text-gray-700">{pixError}</p>
+                <button onClick={fecharPix} className="w-full mt-5 py-3 bg-gray-100 text-gray-600 rounded-2xl text-[11px] font-black uppercase">Fechar</button>
+              </div>
+            ) : pixData ? (
+              <div className="p-5">
+                {/* Valor */}
+                <div className="text-center mb-4">
+                  <p className="text-[9px] font-black text-gray-400 uppercase tracking-wider">Valor da divida</p>
+                  <p className="text-3xl font-black text-gray-800 mt-1">{formatCurrency(pixData.valor)}</p>
+                  <p className="text-[9px] text-gray-400 font-semibold mt-1">Venda de {formatDate(pixSale.data_venda)} • ID {pixData.txid}</p>
+                </div>
+
+                {/* QR Code */}
+                <div className="bg-gray-50 border border-gray-100 rounded-2xl p-4 flex flex-col items-center">
+                  <img src={pixData.qrDataUrl} alt="QR Code Pix" className="w-52 h-52 object-contain bg-white rounded-xl border border-gray-100 shadow-inner" />
+                  <p className="text-[8px] font-bold text-gray-400 uppercase mt-3 text-center leading-relaxed">
+                    Abra o app do seu banco &gt; Pix &gt; Escanear QR Code
+                  </p>
+                </div>
+
+                {/* Copia e cola */}
+                <div className="mt-3">
+                  <p className="text-[9px] font-black text-gray-400 uppercase tracking-wider mb-2">Ou use o Pix Copia e Cola</p>
+                  <div className="bg-gray-50 border border-gray-100 rounded-xl p-3">
+                    <p className="text-[9px] font-mono text-gray-500 break-all leading-relaxed max-h-16 overflow-hidden">{pixData.payload}</p>
+                  </div>
+                  <button
+                    onClick={copiarCodigo}
+                    className={`w-full mt-2 py-3 rounded-xl text-[11px] font-black uppercase tracking-wider transition-all active:scale-[0.98] flex items-center justify-center gap-2 ${copiado ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-800 text-white'}`}
+                  >
+                    <i className={`fa-solid ${copiado ? 'fa-check' : 'fa-copy'}`}></i>
+                    {copiado ? 'Codigo copiado!' : 'Copiar codigo Pix'}
+                  </button>
+                </div>
+
+                {/* Recebedor */}
+                <div className="mt-3 bg-blue-50/50 border border-blue-100 rounded-xl p-3 grid grid-cols-2 gap-2 text-center">
+                  <div>
+                    <p className="text-[8px] font-black text-gray-400 uppercase">Recebedor</p>
+                    <p className="text-[10px] font-black text-gray-700 mt-0.5">{pixData.nome}</p>
+                  </div>
+                  <div>
+                    <p className="text-[8px] font-black text-gray-400 uppercase">Chave (CPF)</p>
+                    <p className="text-[10px] font-black text-gray-700 mt-0.5">{pixData.chaveFormatada}</p>
+                  </div>
+                </div>
+
+                {/* Anexar comprovante */}
+                <div className="mt-4 pt-4 border-t border-dashed border-gray-200">
+                  <p className="text-[9px] font-black text-gray-500 uppercase tracking-wider text-center mb-3">
+                    <i className="fa-solid fa-circle-info mr-1 text-blue-400"></i>Ja pagou? Envie o print do comprovante
+                  </p>
+                  {compError && (
+                    <div className="mb-3 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2.5 text-center">
+                      <p className="text-[10px] font-bold text-rose-600">{compError}</p>
+                    </div>
+                  )}
+                  <button
+                    onClick={escolherArquivo}
+                    disabled={enviando}
+                    className="w-full py-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-2xl text-xs font-black uppercase tracking-wider shadow-lg active:scale-[0.98] transition-transform flex items-center justify-center gap-2 disabled:opacity-60"
+                  >
+                    {enviando ? (
+                      <><div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin"></div>Enviando...</>
+                    ) : (
+                      <><i className="fa-solid fa-paperclip"></i>Anexar comprovante</>
+                    )}
+                  </button>
+                  <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={onArquivoSelecionado} />
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

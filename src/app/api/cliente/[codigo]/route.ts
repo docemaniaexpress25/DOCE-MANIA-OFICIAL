@@ -95,6 +95,20 @@ export async function GET(
       sugestoes = [];
     }
 
+    // 6. Comprovantes enviados pelo portal (sem a foto — so status)
+    let comprovantes: any[] = [];
+    try {
+      const { data: compData } = await supabase
+        .from('payment_comprovantes')
+        .select('id, sale_id, valor, txid, status, observacao, review_note, created_at, reviewed_at')
+        .eq('client_id', found.id)
+        .order('created_at', { ascending: false })
+        .limit(15);
+      comprovantes = compData || [];
+    } catch {
+      comprovantes = []; // tabela ainda nao existe (Bloco 3 nao rodou)
+    }
+
     return NextResponse.json({
       client: found,
       sales,
@@ -109,6 +123,7 @@ export async function GET(
         produtoFavoritoQtd,
       },
       sugestoes,
+      comprovantes,
     });
   } catch (e: any) {
     console.error('[api/cliente] erro:', e?.message);

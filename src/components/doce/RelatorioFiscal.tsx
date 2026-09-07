@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import { User, Product, Carga } from '@/lib/types';
 import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
+import PrinterSelector from '@/components/doce/PrinterSelector';
 
 interface RelatorioFiscalProps {
   user: User;
@@ -136,6 +137,10 @@ const RelatorioFiscal: React.FC<RelatorioFiscalProps> = ({ user, carga, products
           >
             56MM (PADRAO)
           </button>
+        </div>
+
+        <div className="mb-8">
+          <PrinterSelector accent="slate" />
         </div>
 
         <div className={`bg-white shadow-2xl mx-auto mb-10 p-6 sm:p-10 transition-all duration-300 ${format === '80MM' ? 'max-w-[400px]' : 'max-w-[300px]'}`}>

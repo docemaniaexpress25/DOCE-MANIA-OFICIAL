@@ -109,6 +109,12 @@ export interface PrintJob {
   error?: string;
 }
 
+/** Impressora previamente autorizada pelo usuario neste aparelho */
+export interface KnownPrinter {
+  id: string;
+  name: string;
+}
+
 // ============================================================
 // Service UUIDs for common thermal printers
 // ============================================================
@@ -137,7 +143,7 @@ const PRINTER_WRITE_UUIDS = [
 class BluetoothPrinterService {
   private printer: BluetoothPrinter | null = null;
   private lastPrinterId: string | null = null;
-  private onStatusChange: ((job: PrintJob) => void) | null = null;
+  private statusListeners = new Set<(job: PrintJob) => void>();
 
   constructor() {
     // Recover last printer ID from localStorage
@@ -168,14 +174,125 @@ class BluetoothPrinterService {
   }
 
   /**
-   * Subscribe to print job status changes
+   * Get the id of the connected printer
    */
-  onStatus(callback: (job: PrintJob) => void) {
-    this.onStatusChange = callback;
+  getConnectedPrinterId(): string | null {
+    return this.printer?.device.id ?? null;
+  }
+
+  /**
+   * Nome da impressora salva como padrao (ultima usada)
+   */
+  getSavedPrinterName(): string | null {
+    if (typeof window === 'undefined') return null;
+    return localStorage.getItem('bt_printer_name');
+  }
+
+  /**
+   * Subscribe to print job status changes (suporta varios ouvintes).
+   * Retorna funcao para cancelar a inscricao; onStatus(null) limpa todos.
+   */
+  onStatus(callback: ((job: PrintJob) => void) | null): () => void {
+    if (!callback) {
+      this.statusListeners.clear();
+      return () => {};
+    }
+    this.statusListeners.add(callback);
+    return () => { this.statusListeners.delete(callback); };
   }
 
   private emitStatus(job: PrintJob) {
-    this.onStatusChange?.(job);
+    this.statusListeners.forEach(listener => {
+      try { listener(job); } catch { /* listener isolado */ }
+    });
+  }
+
+  /**
+   * Conecta GATT (com timeout) e descobre servico/caracteristica de
+   * escrita de um dispositivo. Usado por scan, reconexao e troca manual.
+   */
+  private async openDevice(device: BluetoothDevice, timeoutMs: number = 8000): Promise<BluetoothPrinter> {
+    const server = await Promise.race([
+      device.gatt!.connect(),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('TEMPO_DE_CONEXAO_EXCEDIDO')), timeoutMs)
+      ),
+    ]);
+
+    // Try to find the printer service
+    let service: BluetoothRemoteGATTService | null = null;
+    for (const uuid of PRINTER_SERVICE_UUIDS) {
+      try {
+        service = await server.getPrimaryService(uuid);
+        break;
+      } catch {
+        continue;
+      }
+    }
+
+    // Fallback: try to get any service
+    if (!service) {
+      const services = await server.getPrimaryServices();
+      if (services.length > 0) {
+        service = services[0];
+      }
+    }
+
+    if (!service) {
+      throw new Error('SERVICO_NAO_ENCONTRADO');
+    }
+
+    // Try to find the write characteristic
+    let characteristic: BluetoothRemoteGATTCharacteristic | null = null;
+    for (const uuid of PRINTER_WRITE_UUIDS) {
+      try {
+        characteristic = await service.getCharacteristic(uuid);
+        break;
+      } catch {
+        continue;
+      }
+    }
+
+    // Fallback: get any writable characteristic
+    if (!characteristic) {
+      const chars = await service.getCharacteristics();
+      characteristic = chars.find(c =>
+        c.properties.write || c.properties.writeWithoutResponse
+      ) || null;
+    }
+
+    if (!characteristic) {
+      throw new Error('CARACTERISTICA_ESCRITA_NAO_ENCONTRADA');
+    }
+
+    return { device, server, service, characteristic, name: device.name || 'Impressora BT' };
+  }
+
+  /**
+   * Torna uma impressora a ATIVA e a PADRAO (salva em localStorage) e
+   * registra listener de desconexao protegido por identidade (trocar de
+   * impressora nao faz a antiga "derrubar" a nova).
+   */
+  private installPrinter(printer: BluetoothPrinter): void {
+    // Se estiver trocando de impressora, libera a conexao anterior
+    if (this.printer && this.printer.device.id !== printer.device.id) {
+      try { this.printer.device.gatt?.disconnect(); } catch { /* ignora */ }
+    }
+
+    this.printer = printer;
+    this.lastPrinterId = printer.device.id;
+    localStorage.setItem('bt_printer_id', printer.device.id);
+    localStorage.setItem('bt_printer_name', printer.name);
+
+    printer.device.addEventListener('gattserverdisconnected', () => {
+      // So limpa se a impressora desconectada for a ativa
+      if (this.printer?.device.id === printer.device.id) {
+        this.printer = null;
+        this.emitStatus({ status: 'idle' });
+      }
+    });
+
+    this.emitStatus({ status: 'connected', printerName: printer.name });
   }
 
   /**
@@ -203,80 +320,8 @@ class BluetoothPrinterService {
 
       this.emitStatus({ status: 'connecting', printerName: device.name || 'Impressora' });
 
-      // Connect GATT com timeout — impressora desligada nao pode travar o fluxo
-      const server = await Promise.race([
-        device.gatt!.connect(),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('TEMPO_DE_CONEXAO_EXCEDIDO')), 8000)
-        ),
-      ]);
-
-      // Try to find the printer service
-      let service: BluetoothRemoteGATTService | null = null;
-      for (const uuid of PRINTER_SERVICE_UUIDS) {
-        try {
-          service = await server.getPrimaryService(uuid);
-          break;
-        } catch {
-          continue;
-        }
-      }
-
-      // Fallback: try to get any service
-      if (!service) {
-        const services = await server.getPrimaryServices();
-        if (services.length > 0) {
-          service = services[0];
-        }
-      }
-
-      if (!service) {
-        throw new Error('SERVICO_NAO_ENCONTRADO');
-      }
-
-      // Try to find the write characteristic
-      let characteristic: BluetoothRemoteGATTCharacteristic | null = null;
-      for (const uuid of PRINTER_WRITE_UUIDS) {
-        try {
-          characteristic = await service.getCharacteristic(uuid);
-          break;
-        } catch {
-          continue;
-        }
-      }
-
-      // Fallback: get any writable characteristic
-      if (!characteristic) {
-        const chars = await service.getCharacteristics();
-        characteristic = chars.find(c =>
-          c.properties.write || c.properties.writeWithoutResponse
-        ) || null;
-      }
-
-      if (!characteristic) {
-        throw new Error('CARACTERISTICA_ESCRITA_NAO_ENCONTRADA');
-      }
-
-      this.printer = {
-        device,
-        server,
-        service,
-        characteristic,
-        name: device.name || 'Impressora BT',
-      };
-
-      // Save printer ID for reconnection
-      this.lastPrinterId = device.id;
-      localStorage.setItem('bt_printer_id', device.id);
-      localStorage.setItem('bt_printer_name', this.printer.name);
-
-      // Listen for disconnection
-      device.addEventListener('gattserverdisconnected', () => {
-        this.printer = null;
-        this.emitStatus({ status: 'idle' });
-      });
-
-      this.emitStatus({ status: 'connected', printerName: this.printer.name });
+      const printer = await this.openDevice(device, 8000);
+      this.installPrinter(printer);
       return true;
 
     } catch (error: any) {
@@ -316,46 +361,13 @@ class BluetoothPrinterService {
 
         this.emitStatus({ status: 'connecting', printerName: device.name || 'Impressora' });
 
-        const server = await device.gatt!.connect();
-
-        let service: BluetoothRemoteGATTService | null = null;
-        for (const uuid of PRINTER_SERVICE_UUIDS) {
-          try {
-            service = await server.getPrimaryService(uuid);
-            break;
-          } catch { continue; }
-        }
-        if (!service) {
-          const services = await server.getPrimaryServices();
-          if (services.length > 0) service = services[0];
-        }
-        if (!service) return false;
-
-        let characteristic: BluetoothRemoteGATTCharacteristic | null = null;
-        for (const uuid of PRINTER_WRITE_UUIDS) {
-          try {
-            characteristic = await service.getCharacteristic(uuid);
-            break;
-          } catch { continue; }
-        }
-        if (!characteristic) {
-          const chars = await service.getCharacteristics();
-          characteristic = chars.find(c => c.properties.write || c.properties.writeWithoutResponse) || null;
-        }
-        if (!characteristic) return false;
+        const printer = await this.openDevice(device, 8000);
 
         // Guarda: se o usuario ja conectou outra impressora (fluxo ativo),
         // a reconexao em atraso nao deve sobrescrever a conexao atual.
         if (this.printer) return true;
 
-        this.printer = { device, server, service, characteristic, name: device.name || 'Impressora BT' };
-
-        device.addEventListener('gattserverdisconnected', () => {
-          this.printer = null;
-          this.emitStatus({ status: 'idle' });
-        });
-
-        this.emitStatus({ status: 'connected', printerName: this.printer.name });
+        this.installPrinter(printer);
         return true;
       } catch {
         return false;
@@ -370,6 +382,45 @@ class BluetoothPrinterService {
       run(),
       new Promise<boolean>(resolve => setTimeout(() => resolve(false), timeoutMs)),
     ]);
+  }
+
+  /**
+   * Lista as impressoras que o vendedor ja autorizou neste aparelho
+   * (navigator.bluetooth.getDevices). Fallback seguro: [] quando a API
+   * nao existe no navegador/WebView.
+   */
+  async listKnownPrinters(): Promise<KnownPrinter[]> {
+    if (!this.isAvailable() || typeof navigator.bluetooth?.getDevices !== 'function') return [];
+    try {
+      const devices = await navigator.bluetooth.getDevices();
+      return devices.map(d => ({ id: d.id, name: d.name || 'Impressora BT' }));
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Conecta direto a uma impressora conhecida (por id) e a torna padrao.
+   * Usada pelo seletor de impressoras quando ha mais de uma pareada.
+   */
+  async connectToPrinter(id: string, timeoutMs: number = 6000): Promise<boolean> {
+    if (!id || !this.isAvailable() || typeof navigator.bluetooth?.getDevices !== 'function') return false;
+    if (this.printer?.device.id === id && this.isConnected()) return true;
+
+    try {
+      const devices = await navigator.bluetooth.getDevices();
+      const device = devices.find(d => d.id === id);
+      if (!device) return false;
+
+      this.emitStatus({ status: 'connecting', printerName: device.name || 'Impressora' });
+
+      const printer = await this.openDevice(device, timeoutMs);
+      this.installPrinter(printer); // troca a ativa + padrao
+      return true;
+    } catch {
+      this.emitStatus({ status: 'idle' });
+      return false;
+    }
   }
 
   /**
@@ -444,15 +495,31 @@ class BluetoothPrinterService {
     for (const line of lines) {
       const trimmed = line.trimEnd();
 
-      // Detect centered lines (start with spaces on both sides, or are short)
-      if (trimmed.includes('***') || trimmed.startsWith('CUPOM') || trimmed.includes('OBRIGADO') || trimmed === '*'.repeat(trimmed.length) || trimmed === '-'.repeat(trimmed.length) || trimmed === '='.repeat(trimmed.length)) {
+      if (width !== '80MM') {
+        // ------------------------------------------------------------
+        // 56MM: imprime o cupom inteiro como um BLOCO CENTRALIZADO.
+        // Todas as linhas sao normalizadas para 32 colunas e enviadas
+        // com alinhamento CENTRAL do papel:
+        //  - Na impressora de 56mm: o bloco preenche a largura inteira
+        //    e o resultado e identico ao de antes (sem mudanca visual).
+        //  - Na impressora de 80mm: o cupom sai CENTRADO no papel, com
+        //    tracos e colunas perfeitamente alinhados (antes o texto
+        //    ficava colado na esquerda e os tracos no meio = "bugado").
+        // ------------------------------------------------------------
+        push(escpos.align(1));
+        if (trimmed.includes('TOTAL GERAL')) push(escpos.bold(true));
+        push(escpos.text(trimmed.padEnd(cols, ' ') + '\n'));
+        if (trimmed.includes('TOTAL GERAL')) push(escpos.bold(false));
+        continue;
+      }
+
+      // ------------------------------------------------------------
+      // 80MM: layout em largura cheia (48 colunas). Cabecalhos entre
+      // asteriscos/obrigado centralizados, corpo a esquerda.
+      // ------------------------------------------------------------
+      if (trimmed.includes('***') || trimmed.startsWith('CUPOM') || trimmed.includes('OBRIGADO')) {
         push(escpos.align(1)); // center
       }
-      // Detect right-aligned (lines that are padded on the left)
-      else if (/^\s{4,}\S/.test(line) && !trimmed.includes('TOTAL') && !trimmed.includes('Metodo') && !trimmed.includes('Vencimento') && !trimmed.includes('Info:')) {
-        push(escpos.align(0)); // left (data lines)
-      }
-      // Total line - right align the value
       else if (trimmed.includes('TOTAL GERAL')) {
         push(escpos.align(0));
         push(escpos.bold(true));
@@ -461,10 +528,8 @@ class BluetoothPrinterService {
         push(escpos.align(0)); // default left
       }
 
-      // Send the text line
       push(escpos.text(trimmed + '\n'));
 
-      // Reset formatting after bold
       if (trimmed.includes('TOTAL GERAL')) {
         push(escpos.bold(false));
       }

@@ -3,6 +3,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Product, Client, Carga, Sale, SaleItem, PaymentMethod, Category, Subcategory } from '@/lib/types';
 import Cupom from '@/components/doce/Cupom';
 import ConfirmModal from '@/components/doce/ConfirmModal';
+import PrinterSelector from '@/components/doce/PrinterSelector';
 import { loadLocalState, saveLocalState } from '@/utils/persistence';
 import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
 import { wakeLockManager } from '@/utils/wakeLock';
@@ -563,6 +564,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           </div>
 
           <div className="bg-gray-100 p-5 flex flex-col gap-3 border-t border-gray-200">
+            <PrinterSelector accent="indigo" />
+
             <div className="flex bg-gray-200 p-1 rounded-2xl mb-1">
               <button onClick={() => setPrintWidth('56MM')} className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${printWidth === '56MM' ? 'bg-white shadow-sm text-indigo-600' : 'text-gray-500'}`}>56mm</button>
               <button onClick={() => setPrintWidth('80MM')} className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${printWidth === '80MM' ? 'bg-white shadow-sm text-indigo-600' : 'text-gray-400'}`}>80mm</button>

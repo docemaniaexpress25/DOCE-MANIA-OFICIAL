@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Sale, Client, Product } from '@/lib/types';
 import { bluetoothPrinter, PrintJob } from '@/services/bluetoothPrinterService';
 import ConfirmModal from '@/components/doce/ConfirmModal';
+import PrinterSelector from '@/components/doce/PrinterSelector';
 
 type PrinterWidth = '56MM' | '80MM';
 
@@ -27,8 +28,8 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
 
   // Subscribe to print job status
   useEffect(() => {
-    bluetoothPrinter.onStatus(setPrintJob);
-    return () => bluetoothPrinter.onStatus(null);
+    const unsubscribe = bluetoothPrinter.onStatus(setPrintJob);
+    return () => unsubscribe();
   }, []);
 
   // Check connection on mount
@@ -252,6 +253,8 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
         </div>
 
         <div className="bg-gray-100 p-5 flex flex-col gap-3 border-t border-gray-200">
+          <PrinterSelector accent="blue" />
+
           {/* Paper width selector */}
           <div className="flex bg-gray-200 p-1 rounded-2xl mb-1">
             <button 

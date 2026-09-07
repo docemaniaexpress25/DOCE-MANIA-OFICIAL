@@ -5,7 +5,8 @@ import { isAdminSession } from '@/lib/session';
 
 /**
  * Gerenciamento de usuarios via servidor (service_role).
- * - GET    /api/users          -> lista SEM pin/pin_hash (tela de login)
+ * - GET    /api/users          -> anonimo (tela de login): APENAS id/nome/perfil/
+ *                               ativo/rota. Com sessao ADMIN: lista completa.
  * - POST   /api/users          -> cria usuario (hash do PIN)      [ADMIN]
  * - PUT    /api/users          -> atualiza usuario (re-hash PIN)   [ADMIN]
  * - DELETE /api/users?id=...   -> exclui usuario                   [ADMIN]
@@ -15,6 +16,8 @@ import { isAdminSession } from '@/lib/session';
  */
 
 const SAFE_COLUMNS = 'id, nome, email, perfil, ativo, telefone, whatsapp, foto, placa_veiculo, rota';
+// Minimo necessario para a tela de login escolher o usuario (sem dados pessoais)
+const LOGIN_COLUMNS = 'id, nome, perfil, ativo, rota';
 
 function mapUser(u: any) {
   return {
@@ -31,14 +34,17 @@ function mapUser(u: any) {
   };
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   if (!isServerSupabaseConfigured()) {
     return NextResponse.json({ error: 'Servidor nao configurado (SUPABASE_SERVICE_ROLE_KEY).' }, { status: 503 });
   }
   try {
+    // Com sessao ADMIN: lista completa (gerenciamento de usuarios).
+    // Sem sessao (tela de login): apenas o minimo para escolher o usuario.
+    const isAdmin = isAdminSession(req);
     const { data, error } = await getServiceClient()
       .from('app_users')
-      .select(SAFE_COLUMNS)
+      .select(isAdmin ? SAFE_COLUMNS : LOGIN_COLUMNS)
       .order('nome', { ascending: true });
     if (error) throw error;
     return NextResponse.json({ users: (data || []).map(mapUser) });

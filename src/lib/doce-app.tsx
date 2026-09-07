@@ -571,7 +571,8 @@ const App: React.FC = () => {
     updateSetting('clientOrder', ids);
   }, [updateSetting]);
 
-  if (!currentUser) return <Login users={users} onLogin={setCurrentUser} logo={logo} />;
+  if (!currentUser) return <Login users={users} onLogin={(u) => { setCurrentUser(u); // Re-busca usuarios com a sessao ativa (admin recebe lista completa para gerenciamento)
+ userService.getAllUsers().then(setUsers).catch(() => {}); }} logo={logo} />;
 
   const sellerClients = currentUser.role === 'VENDEDOR' 
     ? clients.filter(c => c.rota === (currentUser.rota || 'ROTA_01'))

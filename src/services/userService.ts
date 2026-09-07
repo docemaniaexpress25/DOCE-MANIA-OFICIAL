@@ -45,7 +45,9 @@ function mapUser(u: any): User {
 export const userService = {
   async getAllUsers(): Promise<User[]> {
     try {
-      const res = await fetch('/api/users');
+      // Com sessao ativa a API devolve a lista completa (admin); sem sessao,
+      // apenas o minimo para a tela de login.
+      const res = await fetch('/api/users', { headers: authHeaders() });
       if (!res.ok) {
         console.error('Erro ao buscar usuarios:', res.status);
         return [];
@@ -60,7 +62,7 @@ export const userService = {
 
   async getUserById(id: string): Promise<User | null> {
     try {
-      const res = await fetch('/api/users');
+      const res = await fetch('/api/users', { headers: authHeaders() });
       if (!res.ok) return null;
       const data = await res.json();
       const found = (data.users || []).find((u: any) => u.id === id);

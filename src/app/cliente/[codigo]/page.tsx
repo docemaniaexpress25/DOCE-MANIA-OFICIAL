@@ -22,7 +22,7 @@ interface Comprovante {
   created_at: string; reviewed_at: string | null;
 }
 interface ApiResponse {
-  client: { id: string; nome_fantasia: string; endereco: string; bairro: string };
+  client: { id: string; nome_fantasia: string; endereco: string; bairro: string; portal_code?: string };
   sales: Sale[]; products: Record<string, string>; stats: Stats; sugestoes: Sugestao[];
   comprovantes?: Comprovante[];
   error?: string;
@@ -205,6 +205,8 @@ export default function ClienteDashboard() {
   );
 
   const { client, sales, products, stats, sugestoes, comprovantes = [] } = data;
+  // Link do catalogo de pedidos ja identificando o cliente
+  const pedidoUrl = `https://pedidos-doce-mania.netlify.app/?cliente=${encodeURIComponent((client.nome_fantasia || '').trim())}&cod=${encodeURIComponent(client.portal_code || codigo)}`;
   const saldoDevedor = stats.totalComprado - stats.totalPago;
   const vendasPendentes = sales.filter(s => s.status_pagamento === 'PENDENTE');
   const saldoPendente = vendasPendentes.reduce((a, s) => a + (Number(s.valor_total) - Number(s.valor_pago)), 0);
@@ -294,6 +296,22 @@ export default function ClienteDashboard() {
         </div>
       </div>
 
+      {/* Fazer pedido no catalogo online (identificado) */}
+      <div className="max-w-md mx-auto px-4 mt-4">
+        <a href={pedidoUrl} target="_blank" rel="noopener noreferrer" className="block bg-gradient-to-r from-blue-600 to-indigo-600 rounded-2xl px-4 py-3.5 shadow-lg active:scale-[0.98] transition-transform">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 bg-white/15 rounded-xl flex items-center justify-center shrink-0">
+              <i className="fa-solid fa-cart-shopping text-white text-sm"></i>
+            </div>
+            <div className="flex-1 min-w-0 text-left">
+              <p className="text-[11px] font-black text-white uppercase">Faca seu pedido online</p>
+              <p className="text-[9px] text-blue-100/80 font-semibold">Monte seu carrinho no catalogo — cai direto no nosso WhatsApp</p>
+            </div>
+            <i className="fa-solid fa-arrow-right text-white/70 text-xs shrink-0"></i>
+          </div>
+        </a>
+      </div>
+
       {/* Pendente — com botao de pagar via Pix */}
       {vendasPendentes.length > 0 && (
         <div className="max-w-md mx-auto px-4 mt-4">
@@ -373,7 +391,6 @@ export default function ClienteDashboard() {
                     <p className="text-[11px] font-bold text-gray-700 truncate capitalize">{s.nome}</p>
                     <p className="text-[9px] text-amber-600 font-semibold">{s.popularidade}% dos clientes compram</p>
                   </div>
-                  {s.preco > 0 && <span className="text-[10px] font-black text-gray-500">{formatCurrency(s.preco)}</span>}
                 </div>
               ))}
             </div>

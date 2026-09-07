@@ -94,10 +94,10 @@ export async function POST(
       .single();
 
     if (insErr) {
-      const missingTable = insErr.code === '42P01' || /does not exist|relation/i.test(insErr.message || '');
+      const missingTable = insErr.code === '42P01' || insErr.code === 'PGRST205' || /does not exist|relation|could not find the table/i.test(insErr.message || '');
       if (missingTable) {
         return NextResponse.json(
-          { error: 'Sistema em atualizacao: rode o SQL do Bloco 3 (tabela payment_comprovantes).' },
+          { error: 'Sistema em atualizacao (rode o SQL do Bloco 3 no Supabase para ativar os comprovantes).' },
           { status: 503 }
         );
       }

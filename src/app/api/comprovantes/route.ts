@@ -27,9 +27,9 @@ export async function GET(req: NextRequest) {
       .limit(80);
 
     if (error) {
-      const missingTable = error.code === '42P01' || /does not exist|relation/i.test(error.message || '');
+      const missingTable = error.code === '42P01' || error.code === 'PGRST205' || /does not exist|relation|could not find the table/i.test(error.message || '');
       if (missingTable) {
-        return NextResponse.json({ comprovantes: [], aviso: 'Rode o SQL do Bloco 3 (tabela payment_comprovantes).' });
+        return NextResponse.json({ comprovantes: [], aviso: 'Rode o SQL do Bloco 3 no Supabase (tabela payment_comprovantes).' });
       }
       throw error;
     }

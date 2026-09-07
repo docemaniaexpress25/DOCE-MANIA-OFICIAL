@@ -36,7 +36,7 @@ export async function GET(
     // 1. Cliente pelo codigo aleatorio (indice unico)
     const { data: found, error: findErr } = await supabase
       .from('clients')
-      .select('id, nome_fantasia, endereco, bairro')
+      .select('id, nome_fantasia, endereco, bairro, portal_code')
       .eq('portal_code', codigo.toUpperCase())
       .limit(1)
       .maybeSingle();

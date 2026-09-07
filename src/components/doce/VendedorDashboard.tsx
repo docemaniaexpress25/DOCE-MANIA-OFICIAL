@@ -772,7 +772,10 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         t += '='.repeat(W) + '\n';
         t += '\n\n\n\n\n\n\n\n';
         try {
-          await bluetoothPrinter.print(t, '56MM', { skipConfirm: true });
+          const ok = await bluetoothPrinter.print(t, '56MM', { skipConfirm: true });
+          if (!ok) {
+            setConfirmAction({ title: 'Impressao nao realizada', message: 'Nenhuma impressora foi conectada.\n\n1. Ligue a impressora Bluetooth\n2. Tente imprimir novamente\n3. Selecione o aparelho na janela do Chrome', icon: 'fa-solid fa-bluetooth-b', type: 'alert', onConfirm: () => setConfirmAction(null) });
+          }
         } catch (err: any) {
           const msg = err?.message || 'Erro desconhecido';
           setConfirmAction({ title: 'Erro na Impressao', message: msg.includes('BLUETOOTH_NAO_SUPORTADO') ? 'Bluetooth nao disponivel neste dispositivo.' : 'Falha: ' + msg, icon: 'fa-solid fa-triangle-exclamation', type: 'alert', onConfirm: () => setConfirmAction(null) });

@@ -498,8 +498,12 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       onConfirm: async () => {
         setConfirmModal(null);
         try {
-          await bluetoothPrinter.print(rawText, printWidth, { skipConfirm: true });
-          setAppModal({ title: 'Sucesso', message: 'Pré-pedido impresso com sucesso!', icon: 'fa-solid fa-check', iconColor: 'text-emerald-500', type: 'success' });
+          const ok = await bluetoothPrinter.print(rawText, printWidth, { skipConfirm: true });
+          if (ok) {
+            setAppModal({ title: 'Sucesso', message: 'Pré-pedido impresso com sucesso!', icon: 'fa-solid fa-check', iconColor: 'text-emerald-500', type: 'success' });
+          } else {
+            setAppModal({ title: 'Impressão não realizada', message: 'Nenhuma impressora foi conectada.\n\n1. Ligue a impressora Bluetooth\n2. Tente imprimir novamente\n3. Selecione o aparelho na janela do Chrome', icon: 'fa-solid fa-bluetooth-b', iconColor: 'text-gray-400', type: 'error' });
+          }
         } catch (error: any) {
           const msg = error?.message || 'Erro desconhecido';
           if (msg === 'BLUETOOTH_NAO_SUPORTADO') {

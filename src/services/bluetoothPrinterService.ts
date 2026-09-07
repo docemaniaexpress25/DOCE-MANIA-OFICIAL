@@ -203,8 +203,13 @@ class BluetoothPrinterService {
 
       this.emitStatus({ status: 'connecting', printerName: device.name || 'Impressora' });
 
-      // Connect GATT
-      const server = await device.gatt!.connect();
+      // Connect GATT com timeout — impressora desligada nao pode travar o fluxo
+      const server = await Promise.race([
+        device.gatt!.connect(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('TEMPO_DE_CONEXAO_EXCEDIDO')), 8000)
+        ),
+      ]);
 
       // Try to find the printer service
       let service: BluetoothRemoteGATTService | null = null;
@@ -292,58 +297,79 @@ class BluetoothPrinterService {
   }
 
   /**
-   * Try to reconnect to the last used printer
+   * Try to reconnect to the last used printer.
+   * Com timeout (ms) para nao travar o fluxo quando a impressora
+   * esta desligada/fora de alcance — isso preserva o "user gesture"
+   * necessario para abrir o seletor nativo do Chrome logo em seguida.
    */
-  async reconnect(): Promise<boolean> {
+  async reconnect(timeoutMs: number = 2500): Promise<boolean> {
+    if (this.isConnected()) return true;
     if (!this.lastPrinterId || !this.isAvailable()) return false;
+    // API getDevices() nao existe em todos os navegadores/WebView
+    if (typeof navigator.bluetooth?.getDevices !== 'function') return false;
 
-    try {
-      const devices = await navigator.bluetooth.getDevices();
-      const device = devices.find(d => d.id === this.lastPrinterId);
-      if (!device) return false;
+    const run = async (): Promise<boolean> => {
+      try {
+        const devices = await navigator.bluetooth.getDevices();
+        const device = devices.find(d => d.id === this.lastPrinterId);
+        if (!device) return false;
 
-      this.emitStatus({ status: 'connecting', printerName: device.name || 'Impressora' });
+        this.emitStatus({ status: 'connecting', printerName: device.name || 'Impressora' });
 
-      const server = await device.gatt!.connect();
+        const server = await device.gatt!.connect();
 
-      let service: BluetoothRemoteGATTService | null = null;
-      for (const uuid of PRINTER_SERVICE_UUIDS) {
-        try {
-          service = await server.getPrimaryService(uuid);
-          break;
-        } catch { continue; }
+        let service: BluetoothRemoteGATTService | null = null;
+        for (const uuid of PRINTER_SERVICE_UUIDS) {
+          try {
+            service = await server.getPrimaryService(uuid);
+            break;
+          } catch { continue; }
+        }
+        if (!service) {
+          const services = await server.getPrimaryServices();
+          if (services.length > 0) service = services[0];
+        }
+        if (!service) return false;
+
+        let characteristic: BluetoothRemoteGATTCharacteristic | null = null;
+        for (const uuid of PRINTER_WRITE_UUIDS) {
+          try {
+            characteristic = await service.getCharacteristic(uuid);
+            break;
+          } catch { continue; }
+        }
+        if (!characteristic) {
+          const chars = await service.getCharacteristics();
+          characteristic = chars.find(c => c.properties.write || c.properties.writeWithoutResponse) || null;
+        }
+        if (!characteristic) return false;
+
+        // Guarda: se o usuario ja conectou outra impressora (fluxo ativo),
+        // a reconexao em atraso nao deve sobrescrever a conexao atual.
+        if (this.printer) return true;
+
+        this.printer = { device, server, service, characteristic, name: device.name || 'Impressora BT' };
+
+        device.addEventListener('gattserverdisconnected', () => {
+          this.printer = null;
+          this.emitStatus({ status: 'idle' });
+        });
+
+        this.emitStatus({ status: 'connected', printerName: this.printer.name });
+        return true;
+      } catch {
+        return false;
       }
-      if (!service) {
-        const services = await server.getPrimaryServices();
-        if (services.length > 0) service = services[0];
-      }
-      if (!service) return false;
+    };
 
-      let characteristic: BluetoothRemoteGATTCharacteristic | null = null;
-      for (const uuid of PRINTER_WRITE_UUIDS) {
-        try {
-          characteristic = await service.getCharacteristic(uuid);
-          break;
-        } catch { continue; }
-      }
-      if (!characteristic) {
-        const chars = await service.getCharacteristics();
-        characteristic = chars.find(c => c.properties.write || c.properties.writeWithoutResponse) || null;
-      }
-      if (!characteristic) return false;
+    if (!timeoutMs || timeoutMs <= 0) return run();
 
-      this.printer = { device, server, service, characteristic, name: device.name || 'Impressora BT' };
-
-      device.addEventListener('gattserverdisconnected', () => {
-        this.printer = null;
-        this.emitStatus({ status: 'idle' });
-      });
-
-      this.emitStatus({ status: 'connected', printerName: this.printer.name });
-      return true;
-    } catch {
-      return false;
-    }
+    // Corrida contra o tempo: se a impressora nao responder rapido,
+    // seguimos o fluxo (o seletor nativo abre com o gesto ainda valido).
+    return await Promise.race([
+      run(),
+      new Promise<boolean>(resolve => setTimeout(() => resolve(false), timeoutMs)),
+    ]);
   }
 
   /**
@@ -468,9 +494,9 @@ class BluetoothPrinterService {
       throw new Error('BLUETOOTH_NAO_SUPORTADO');
     }
 
-    // Step 1: Check if connected, try reconnect, or scan
+    // Step 1: Check if connected, try reconnect (com timeout curto), or scan
     if (!this.isConnected()) {
-      const reconnected = await this.reconnect();
+      const reconnected = await this.reconnect(2500);
       if (!reconnected) {
         if (!options?.skipConfirm) {
           const wantsToScan = window.confirm(

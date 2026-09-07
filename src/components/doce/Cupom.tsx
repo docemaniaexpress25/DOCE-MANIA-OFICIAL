@@ -122,6 +122,14 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
             if (success) {
               setModal({title:'Impresso!', message:'Cupom impresso com sucesso!', icon:'fa-solid fa-circle-check', type:'success', onConfirm:()=>setModal(null)});
               if (showToast) showToast('Impresso com sucesso!', 'success');
+            } else {
+              // print() retornou false: seletor cancelado ou impressora nao conectada
+              setModal({
+                title:'Impressao nao realizada',
+                message:'Nenhuma impressora foi conectada.\n\n1. Ligue a impressora Bluetooth\n2. Toque em Imprimir novamente\n3. Selecione o aparelho na janela do Chrome',
+                icon:'fa-solid fa-bluetooth-b', type:'alert', onConfirm:()=>setModal(null)
+              });
+              if (showToast) showToast('Impressao nao realizada.', 'error');
             }
           } catch (error: any) {
             const msg = error?.message || 'Erro desconhecido';

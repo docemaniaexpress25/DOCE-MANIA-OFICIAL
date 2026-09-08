@@ -9,6 +9,7 @@ import ClientHistory from '@/components/doce/ClientHistory';
 import { loadLocalState, saveLocalState } from '@/utils/persistence';
 import { locationService, notificationService, NOTIFICATION_TYPES, AppNotification, NotificationType } from '@/services/locationService';
 import { authHeaders } from '@/services/userService';
+import AdminEntregas from '@/components/doce/AdminEntregas';
 
 interface AdminDashboardProps {
   products: Product[];
@@ -78,7 +79,7 @@ interface AdminDashboardProps {
   setClientOrder: (ids: string[]) => void;
 }
 
-type TabType = 'HOME' | 'CATALOGO' | 'CATEGORIAS' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'COMPROVANTES' | 'BACKUP' | 'SETTINGS';
+type TabType = 'HOME' | 'CATALOGO' | 'CATEGORIAS' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'COMPROVANTES' | 'ENTREGAS' | 'BACKUP' | 'SETTINGS';
 
 type ReportType = 'RESUMO' | 'TOP_CLIENTES' | 'TOP_PRODUTOS' | 'CLIENTES_RISCO' | 'VENDAS_CATEGORIAS' | 'PRODUTOS_RENTAVEIS' | null;
 type ReportFilterType = 'RESUMO' | 'TOP_PRODUTOS' | 'TOP_CLIENTES' | 'CATEGORIAS' | 'VENDEDORES' | 'DIVIDAS' | 'PRODUTOS_RENTAVEIS';
@@ -1294,6 +1295,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             <MenuCard icon="fa-chart-line" title="Relatórios" tab="REPORTS" color="bg-emerald-50 text-emerald-600" />
             <MenuCard icon="fa-file-invoice-dollar" title="Contas a Receber" tab="CONTAS_RECEBER" color="bg-rose-50 text-rose-600" />
             <MenuCard icon="fa-clipboard-check" title="Comprovantes Pix" tab="COMPROVANTES" color="bg-teal-50 text-teal-600" badge={comprovantesBadge} />
+            <MenuCard icon="fa-truck" title="Entregas" tab="ENTREGAS" color="bg-emerald-50 text-emerald-600" />
             <MenuCard icon="fa-database" title="Backup" tab="BACKUP" color="bg-gray-100 text-gray-600" />
             <MenuCard icon="fa-gear" title="Configurações" tab="SETTINGS" color="bg-slate-50 text-slate-600" />
           </div>
@@ -2055,6 +2057,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           )}
         </div>
       )}
+
+      {activeTab === 'ENTREGAS' && <AdminEntregas />}
 
       {activeTab === 'BACKUP' && (
         <div className="space-y-4">

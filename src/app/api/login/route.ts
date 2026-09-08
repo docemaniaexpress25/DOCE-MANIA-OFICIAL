@@ -63,7 +63,7 @@ export async function POST(req: NextRequest) {
     const supabase = getServiceClient();
     const { data, error } = await supabase
       .from('app_users')
-      .select('id, nome, email, perfil, ativo, telefone, whatsapp, foto, placa_veiculo, rota, pin_hash')
+      .select('id, nome, email, perfil, ativo, telefone, whatsapp, foto, placa_veiculo, rota, pre_venda, pin_hash')
       .eq('id', userId)
       .single();
 
@@ -99,6 +99,7 @@ export async function POST(req: NextRequest) {
       foto: data.foto,
       placaVeiculo: data.placa_veiculo,
       rota: data.rota,
+      preVenda: !!data.pre_venda,
     };
 
     const token = createSessionToken(data.id, String(data.perfil || 'VENDEDOR'));

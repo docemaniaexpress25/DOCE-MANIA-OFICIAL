@@ -12,6 +12,8 @@ export interface User {
   pin?: string;
   placaVeiculo?: string;
   rota?: string;
+  /** Pre-vendedor (ex.: Edipo): vende do estoque principal e gera rota de entrega */
+  preVenda?: boolean;
 }
 
 export interface Category {

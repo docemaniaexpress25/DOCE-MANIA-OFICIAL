@@ -112,6 +112,21 @@ const App: React.FC = () => {
   }, [currentUser]);
 
   useEffect(() => { saveLocalState('currentUser', currentUser); }, [currentUser]);
+
+  // Pre-venda: sincroniza a flag do usuario cacheado (ex.: Edipo) com o servidor.
+  // Se o Bloco 5 marcou o vendedor como pre-venda e o app ainda esta com o
+  // user antigo no localStorage, a aba Entregas aparece sem precisar re-logar.
+  useEffect(() => {
+    if (!currentUser) return;
+    userService.getAllUsers()
+      .then(list => {
+        const u = list.find(x => x.id === currentUser.id);
+        if (u && !!u.preVenda !== !!currentUser.preVenda) {
+          setCurrentUser(prev => prev ? { ...prev, preVenda: !!u.preVenda } : prev);
+        }
+      })
+      .catch(() => {});
+  }, []);
   useEffect(() => { saveLocalState('dailyRouteState', dailyRouteState); }, [dailyRouteState]);
 
   const fetchTransactionalData = useCallback(async () => {
@@ -478,6 +493,54 @@ const App: React.FC = () => {
     }
   };
 
+  const processPreVenda = async (data: any) => {
+    try {
+      const { authHeaders } = await import('@/services/userService');
+      const res = await fetch('/api/pre-venda/venda', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify(data),
+      });
+      const d = await res.json().catch(() => null);
+      if (!res.ok || !d?.ok) {
+        console.error('[pre-venda] falha:', d?.error || res.status);
+        haptics.error();
+        return null;
+      }
+      fetchTransactionalData();
+      const { sounds } = await import('@/utils/sound');
+      sounds.kaChing();
+      haptics.success();
+      try {
+        fetch('/api/send-push', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: 'Novo Pedido (Pre-Venda)!', body: `R$ ${Number(d.sale.valor_total || 0).toFixed(2)} — entrega hoje`, url: '/' }),
+        }).catch(() => {});
+      } catch {}
+      // Mapeia para o tipo Sale usado pelo app
+      const s: any = d.sale;
+      const mapped: Sale = {
+        id: s.id,
+        vendedorId: currentUser?.id || '',
+        clientId: data.clientId,
+        data: new Date(s.data_venda || Date.now()),
+        valorTotal: Number(s.valor_total),
+        valorPago: Number(s.valor_pago || 0),
+        metodoPagamento: 'A_PRAZO',
+        detalhePagamento: s.detalhe_pagamento || 'PRE-VENDA',
+        statusPagamento: 'PENDENTE',
+        itens: (data.itens || []).map((i: any) => ({ produtoId: i.produtoId, quantidade: i.quantidade, precoVenda: i.precoVenda })),
+        dataVencimento: s.data_vencimento ? new Date(s.data_vencimento) : undefined,
+      };
+      return mapped;
+    } catch (e) {
+      console.error(e);
+      haptics.error();
+      return null;
+    }
+  };
+
   const deleteSale = async (id: string) => {
     const success = await saleService.deleteSale(id);
     if (success) fetchTransactionalData();
@@ -614,7 +677,7 @@ const App: React.FC = () => {
         ) : (
           <VendedorDashboard 
             {...{ products, users, cargas, cargasPendentes, sales, commissions, payoutLogs, expenses, messages, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, companyName, companyCnpj, user: currentUser, clients: sellerClients, categories, subcategories, clientOrder }}
-            markMessageAsRead={markMessageAsRead} processSale={processSale} addClient={addClient} updateClient={updateClient} deleteClient={deleteClient}
+            markMessageAsRead={markMessageAsRead} processSale={processSale} processPreVenda={processPreVenda} addClient={addClient} updateClient={updateClient} deleteClient={deleteClient}
             receivePayment={receiveAccount} deleteSale={deleteSale} aceitarCarga={aceitarCarga} addExpense={addExpense} updateDailyRoute={updateDailyRoute}
             setClientOrder={setClientOrderWithPersistence}
           />

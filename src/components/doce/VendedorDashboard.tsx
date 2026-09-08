@@ -9,6 +9,7 @@ import PDV from '@/components/doce/PDV';
 import Cupom from '@/components/doce/Cupom';
 import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
 import ConfirmModal from '@/components/doce/ConfirmModal';
+import EntregasView from '@/components/doce/EntregasView';
 
 
 import ClientHistory from '@/components/doce/ClientHistory';
@@ -29,6 +30,7 @@ interface VendedorDashboardProps {
   subcategories: Subcategory[];
   markMessageAsRead: (id: string) => void;
   processSale: (data: any) => Promise<Sale | null>;
+  processPreVenda: (data: any) => Promise<Sale | null>;
   addClient: (data: Omit<Client, 'id'>) => Promise<void>; 
   updateClient: (id: string, data: Partial<Client>) => void;
   deleteClient: (id: string) => void; 
@@ -50,7 +52,7 @@ interface VendedorDashboardProps {
   setClientOrder: (ids: string[]) => void;
 }
 
-type TabType = 'HOME' | 'ROTEIRO' | 'CARGA' | 'HISTORY' | 'FINANCE' | 'CREDIT' | 'CLIENTES' | 'WEEKLY' | 'STOCK_VIEW' | 'AVISOS';
+type TabType = 'HOME' | 'ROTEIRO' | 'CARGA' | 'HISTORY' | 'FINANCE' | 'CREDIT' | 'CLIENTES' | 'WEEKLY' | 'STOCK_VIEW' | 'AVISOS' | 'ENTREGAS';
 
 // Helpers para comprovante
 const compressImage = (file: File): Promise<string> => new Promise((resolve) => {
@@ -86,10 +88,13 @@ const shareImage = async (base64: string, fileName: string) => {
 };
 
 const VendedorDashboard: React.FC<VendedorDashboardProps> = ({ 
-  user, products = [], clients = [], cargas = [], cargasPendentes = [], sales = [], commissions = [], payoutLogs = [], expenses = [], messages = [], categories = [], subcategories = [], markMessageAsRead, processSale, addClient, updateClient, deleteClient, receivePayment, deleteSale, aceitarCarga, addExpense, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, updateDailyRoute, companyName, companyCnpj, clientOrder, setClientOrder
+  user, products = [], clients = [], cargas = [], cargasPendentes = [], sales = [], commissions = [], payoutLogs = [], expenses = [], messages = [], categories = [], subcategories = [], markMessageAsRead, processSale, processPreVenda, addClient, updateClient, deleteClient, receivePayment, deleteSale, aceitarCarga, addExpense, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, updateDailyRoute, companyName, companyCnpj, clientOrder, setClientOrder
 }) => {
   const [activeTab, setActiveTab] = useState<TabType>(() => loadLocalState('v_activeTab', 'HOME'));
   const [selectedClient, setSelectedClient] = useState<Client | null>(() => loadLocalState('v_selectedClient', null));
+  // Pre-venda: modo de atendimento escolhido ao abrir o cliente (Edipo)
+  const [modoSheet, setModoSheet] = useState<Client | null>(null);
+  const [modoAtendimento, setModoAtendimento] = useState<'PRONTA' | 'PRE_VENDA'>('PRONTA');
   const [viewingSale, setViewingSale] = useState<Sale | null>(() => loadLocalState('v_viewingSale', null));
 
   const [viewingClientHistory, setViewingClientHistory] = useState<Client | null>(null);
@@ -199,9 +204,19 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       setGpsPinStr(client.pinLocalizacao || '');
       setGpsStatus(client.pinLocalizacao && client.pinLocalizacao.length >= 5 ? 'done' : 'idle');
       setClientInfoModal(client);
+    } else if (user.preVenda) {
+      // Pre-vendedor (Edipo): escolhe pronta entrega x pre-venda antes do PDV
+      setModoSheet(client);
     } else {
       setSelectedClient(client);
     }
+  };
+
+  // Abre o PDV no modo escolhido no sheet (so para pre-vendedor)
+  const abrirNoModo = (client: Client, modo: 'PRONTA' | 'PRE_VENDA') => {
+    setModoAtendimento(modo);
+    setModoSheet(null);
+    setSelectedClient(client);
   };
 
   const handleGetGPS = () => {
@@ -247,7 +262,11 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       updateClient(clientInfoModal.id, updates);
     }
     setClientInfoModal(null);
-    setSelectedClient(clientInfoModal);
+    if (user.preVenda) {
+      setModoSheet(clientInfoModal);
+    } else {
+      setSelectedClient(clientInfoModal);
+    }
   };
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
@@ -807,9 +826,9 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         onFinish={() => { 
           setSelectedClient(null); 
           setActiveTab('ROTEIRO'); 
-          showToast("Venda realizada com sucesso!", 'success'); 
+          showToast(modoAtendimento === 'PRE_VENDA' ? "Pedido de pre-venda registrado!" : "Venda realizada com sucesso!", 'success'); 
         }}
-        processSale={processSale} margemMinima={margemMinima} margemMinimaAtiva={margemMinimaAtiva} pix1Name={pix1Name} pix1Code={pix1Code} pix2Name={pix2Name} pix2Code={pix2Code}
+        processSale={processSale} processPreVenda={processPreVenda} modoVenda={modoAtendimento} margemMinima={margemMinima} margemMinimaAtiva={margemMinimaAtiva} pix1Name={pix1Name} pix1Code={pix1Code} pix2Name={pix2Name} pix2Code={pix2Code}
         sales={sales} 
         onNavigateToCredit={handleNavigateToCredit}
         categories={categories}
@@ -848,9 +867,12 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
       {activeTab !== 'HOME' && <button onClick={() => { setActiveTab('HOME'); setCreditSearch(''); }} className="w-10 h-10 bg-white text-blue-600 rounded-xl flex items-center justify-center shadow-sm border border-gray-100 mb-2 active:scale-90 transition-transform"><i className="fa-solid fa-arrow-left"></i></button>}
 
+      {activeTab === 'ENTREGAS' && <EntregasView user={user} showToast={showToast} />}
+
       {activeTab === 'HOME' && (
         <div className="py-4 grid grid-cols-2 gap-4">
           <MenuCard icon="fa-route" title="Rota do Dia" tab="ROTEIRO" color="bg-blue-50 text-blue-600" />
+          {user.preVenda && <MenuCard icon="fa-truck" title="Entregas" tab="ENTREGAS" color="bg-emerald-50 text-emerald-600" />}
           <MenuCard icon="fa-bell" title="Avisos" tab="AVISOS" color="bg-rose-50 text-rose-600" badge={atRiskClients.length > 0 ? atRiskClients.length : false} />
           <MenuCard icon="fa-truck-fast" title="Minha Carga" tab="CARGA" color="bg-purple-50 text-purple-600" badge={(cargasPendentes || []).length > 0} />
           <MenuCard icon="fa-receipt" title="Vendas" tab="HISTORY" color="bg-blue-50 text-[#1E3A5F]" />
@@ -1593,6 +1615,33 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
           onConfirm={confirmAction.onConfirm}
           onCancel={() => setConfirmAction(null)}
         />
+      )}
+
+      {/* ===== SHEET: ESCOLHER MODO (PRE-VENDEDOR) ===== */}
+      {modoSheet && (
+        <div className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-sm flex items-end justify-center" onClick={() => setModoSheet(null)}>
+          <div className="bg-white w-full max-w-md rounded-t-3xl p-6 animate-in slide-in-from-bottom duration-300" onClick={e => e.stopPropagation()}>
+            <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-4"></div>
+            <p className="text-[9px] font-black text-gray-400 uppercase text-center tracking-widest">Atender cliente</p>
+            <h3 className="text-sm font-black text-gray-800 uppercase text-center mt-1 capitalize">{modoSheet.nomeFantasia}</h3>
+            <p className="text-[10px] text-gray-400 font-semibold text-center mt-1">Como voce vai vender agora?</p>
+            <div className="grid grid-cols-2 gap-2.5 mt-5">
+              <button onClick={() => abrirNoModo(modoSheet, 'PRONTA')}
+                className="py-5 rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-600 text-white shadow-md active:scale-95 transition-transform">
+                <i className="fa-solid fa-truck-fast text-lg block mb-1.5"></i>
+                <span className="text-[10px] font-black uppercase">Pronta entrega</span>
+                <span className="block text-[8px] font-bold text-blue-100 mt-0.5">Vende da carga da van</span>
+              </button>
+              <button onClick={() => abrirNoModo(modoSheet, 'PRE_VENDA')}
+                className="py-5 rounded-2xl bg-gradient-to-br from-emerald-600 to-teal-600 text-white shadow-md active:scale-95 transition-transform">
+                <i className="fa-solid fa-clipboard-list text-lg block mb-1.5"></i>
+                <span className="text-[10px] font-black uppercase">Pre-venda</span>
+                <span className="block text-[8px] font-bold text-emerald-100 mt-0.5">Pedido p/ entrega hoje</span>
+              </button>
+            </div>
+            <button onClick={() => setModoSheet(null)} className="w-full mt-3 py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Cancelar</button>
+          </div>
+        </div>
       )}
 </div>
   );

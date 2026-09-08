@@ -27,6 +27,9 @@ interface PDVProps {
   onNavigateToCredit: () => void;
   categories: Category[];
   subcategories: Subcategory[];
+  /** Pre-venda: quando definido, o PDV registra PEDIDO (estoque principal, entrega na rota) */
+  modoVenda?: 'PRONTA' | 'PRE_VENDA';
+  processPreVenda?: (data: any) => Promise<Sale | null>;
 }
 
 type PDVView = 'CART' | 'RECEIPT_PREVIEW' | 'PAYMENT' | 'PRE_PEDIDO_PREVIEW';
@@ -34,9 +37,10 @@ type PDVView = 'CART' | 'RECEIPT_PREVIEW' | 'PAYMENT' | 'PRE_PEDIDO_PREVIEW';
 // Tipo do item do carrinho
 type CartItem = { quantidade: number; precoVenda: string };
 
-const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onCancel, onFinish, processSale, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, sales, onNavigateToCredit, categories, subcategories }) => {
+const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onCancel, onFinish, processSale, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, sales, onNavigateToCredit, categories, subcategories, modoVenda, processPreVenda }) => {
   const [view, setView] = useState<PDVView>('CART');
   const [isPrePedido, setIsPrePedido] = useState(false);
+  const isPreVenda = modoVenda === 'PRE_VENDA' && !!processPreVenda;
 
   // Wake Lock: mantem tela acordada durante o PDV
   useEffect(() => {
@@ -47,7 +51,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   // ============================================================
   // MODAL: Venda finalizada com comissao
   // ============================================================
-  const [saleResultModal, setSaleResultModal] = useState<{ total: number; comissao: number; troca: number; isPrazo: boolean; clientName: string; sale: Sale } | null>(null);
+  const [saleResultModal, setSaleResultModal] = useState<{ total: number; comissao: number; troca: number; isPrazo: boolean; isPreVenda?: boolean; clientName: string; sale: Sale } | null>(null);
 
   // ============================================================
   // MODAL: Comprovante foto (venda a prazo)
@@ -338,8 +342,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     // TRAVA ABSOLUTA - não passa daqui se houver violação
     if (!validateAndBlockIfNeeded()) return;
 
-    // VALIDAÇÃO: DINHEIRO exige valor recebido
-    if (metodo === 'DINHEIRO') {
+    // VALIDAÇÃO: DINHEIRO exige valor recebido (na pre-venda o pagamento e na entrega)
+    if (!isPreVenda && metodo === 'DINHEIRO') {
       const rec = parseFloat(valorRecebido) || 0;
       if (rec <= 0) {
         setAppModal({ title: 'Valor Obrigatorio', message: 'Digite o valor recebido pelo cliente antes de concluir a venda.', icon: 'fa-solid fa-money-bill-wave', iconColor: 'text-amber-500', type: 'error' });
@@ -356,6 +360,25 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     const itens = getOrderedItems();
     const vt = parseFloat(valorTroca) || 0;
     const descontoInfo = isTrocaActive && vt > 0 ? ` (Troca: R$ ${vt.toFixed(2)})` : '';
+
+    // ===== PRE-VENDA: registra o PEDIDO (sem cobranca, sem baixa de carga) =====
+    if (isPreVenda) {
+      const pedido = await processPreVenda!({ clientId: client.id, valorTotal: total, itens });
+      if (pedido) {
+        localStorage.removeItem(cartKey);
+        setCart({});
+        lastFinishedSaleRef.current = pedido;
+        let comissaoTotal = 0;
+        itens.forEach(item => {
+          const prod = products.find(p => p.id === item.produtoId);
+          if (prod) comissaoTotal += (item.quantidade * item.precoVenda) * ((prod.comissaoPercentual || 0) / 100);
+        });
+        setSaleResultModal({ total, comissao: comissaoTotal, troca: isTrocaActive ? vt : 0, isPrazo: false, isPreVenda: true, clientName: client.nomeFantasia, sale: pedido });
+      } else {
+        isFinalizingRef.current = false;
+      }
+      return;
+    }
     
     let finalDetalhe = '';
     if (metodo === 'PIX') {
@@ -417,7 +440,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const productIdsInCarga = useMemo(() => new Set(minhaCarga.map(c => c.produtoId)), [minhaCarga]);
   
   const filteredProducts = useMemo(() => {
-    if (isPrePedido) {
+    // Pre-venda e pre-pedido vendem do estoque principal: catálogo completo
+    if (isPrePedido || isPreVenda) {
       const activeProds = products.filter(p => p.ativo);
       if (!activeCategoryId) return activeProds;
       return activeProds.filter(p => p.categoryId === activeCategoryId);
@@ -779,13 +803,21 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       {view === 'PAYMENT' && (
         <div className="fixed inset-0 bg-black/60 z-[110] flex items-end justify-center p-4">
            <div className="bg-white w-full max-sm rounded-[2.5rem] p-8 animate-in slide-in-from-bottom max-h-[95vh] overflow-y-auto">
-              <h3 className="font-black text-gray-800 text-lg mb-4 text-center uppercase tracking-tight">Finalizar Pagamento</h3>
+              <h3 className="font-black text-gray-800 text-lg mb-4 text-center uppercase tracking-tight">{isPreVenda ? 'Registrar Pedido' : 'Finalizar Pagamento'}</h3>
               
               <div className="bg-gray-50 p-4 rounded-2xl mb-6 text-center border border-gray-100">
                 <p className="text-[10px] font-black text-gray-400 uppercase mb-1">Valor Total Devido</p>
                 <p className="text-3xl font-black text-blue-600">R$ {total.toFixed(2)}</p>
               </div>
 
+              {isPreVenda ? (
+                <div className="mb-6 bg-emerald-50 border border-emerald-100 rounded-2xl p-4 text-center animate-in fade-in duration-300">
+                  <i className="fa-solid fa-clipboard-list text-emerald-500 text-lg"></i>
+                  <p className="text-[10px] font-black text-emerald-700 uppercase mt-1">Pre-venda — pagamento na entrega</p>
+                  <p className="text-[9px] text-emerald-600/70 font-semibold mt-0.5">O pedido entra na rota de entrega de hoje. Finalize o dia para gerar a rota.</p>
+                </div>
+              ) : (
+              <>
               <div className="flex gap-1.5 mb-6 justify-center">
                 {(['DINHEIRO', 'PIX', 'A_PRAZO'] as const).map(m => (
                   <button key={m} onClick={() => setMetodo(m)} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${metodo === m ? 'bg-blue-600 text-white shadow-md' : 'bg-gray-50 text-gray-400'}`}>{m === 'A_PRAZO' ? 'PRAZO' : m}</button>
@@ -861,13 +893,15 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                    </div>
                 </div>
               )}
+              </>
+              )}
 
               <button 
                 onClick={handleConfirmFinalize} 
                 disabled={hasMarginViolation}
                 className={`w-full bg-emerald-600 text-white py-5 rounded-2xl font-black uppercase text-xs shadow-xl active:scale-95 transition-all mb-2 tracking-widest ${hasMarginViolation ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
-                Concluir Venda
+                {isPreVenda ? 'Registrar Pedido (Pre-Venda)' : 'Concluir Venda'}
               </button>
               <button onClick={() => setView('RECEIPT_PREVIEW')} className="w-full py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Voltar ao Cupom</button>
            </div>
@@ -883,7 +917,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
             <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-3">
               <i className="fa-solid fa-circle-check text-white text-3xl"></i>
             </div>
-            <h3 className="font-black text-white text-lg uppercase tracking-tight">Venda Finalizada</h3>
+            <h3 className="font-black text-white text-lg uppercase tracking-tight">{saleResultModal.isPreVenda ? 'Pedido Registrado!' : 'Venda Finalizada'}</h3>
             <p className="text-white/80 text-[10px] font-bold uppercase mt-1">{saleResultModal.clientName}</p>
           </div>
 
@@ -897,6 +931,13 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               <div className="bg-orange-50 p-3 rounded-2xl flex items-center justify-between border border-orange-100">
                 <span className="text-[10px] font-black text-orange-400 uppercase">Desconto Troca</span>
                 <span className="text-sm font-black text-orange-600">- R$ {saleResultModal.troca.toFixed(2)}</span>
+              </div>
+            )}
+
+            {saleResultModal.isPreVenda && (
+              <div className="bg-emerald-50 p-3 rounded-2xl flex items-center gap-3 border border-emerald-100">
+                <i className="fa-solid fa-truck text-emerald-500"></i>
+                <span className="text-[10px] font-black text-emerald-700 uppercase">Entra na rota de entrega de hoje — finalize o dia no menu Entregas</span>
               </div>
             )}
 

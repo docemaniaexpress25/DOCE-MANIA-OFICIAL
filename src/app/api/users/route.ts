@@ -15,9 +15,11 @@ import { isAdminSession } from '@/lib/session';
  * vira bcrypt e so pin_hash vai para o banco.
  */
 
-const SAFE_COLUMNS = 'id, nome, email, perfil, ativo, telefone, whatsapp, foto, placa_veiculo, rota';
-// Minimo necessario para a tela de login escolher o usuario (sem dados pessoais)
-const LOGIN_COLUMNS = 'id, nome, perfil, ativo, rota';
+const SAFE_COLUMNS = 'id, nome, email, perfil, ativo, telefone, whatsapp, foto, placa_veiculo, rota, pre_venda';
+// Minimo necessario para a tela de login escolher o usuario (sem dados pessoais).
+// pre_venda vem junto: nao e dado sensivel e permite o app liberar a aba
+// Entregas mesmo com currentUser cacheado no localStorage.
+const LOGIN_COLUMNS = 'id, nome, perfil, ativo, rota, pre_venda';
 
 function mapUser(u: any) {
   return {
@@ -31,6 +33,7 @@ function mapUser(u: any) {
     foto: u.foto,
     placaVeiculo: u.placa_veiculo,
     rota: u.rota,
+    preVenda: !!u.pre_venda,
   };
 }
 

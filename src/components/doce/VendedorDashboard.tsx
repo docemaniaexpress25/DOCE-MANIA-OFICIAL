@@ -255,19 +255,14 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     setTimeout(() => setToast(null), 3000);
   };
 
-  // GPS: envia localizacao via watchPosition + fallback interval
-  // gpsState alimenta o CHIP de status (o vendedor ve exatamente o que acontece)
-  type GpsState = 'unsupported' | 'starting' | 'ok' | 'denied' | 'unavailable' | 'save_failed' | 'no_session';
-  const [gpsState, setGpsState] = useState<GpsState>(() => (typeof navigator !== 'undefined' && 'geolocation' in navigator ? 'starting' : 'unsupported'));
-  const [gpsDetail, setGpsDetail] = useState<string>('');
-  const [gpsChipMinimized, setGpsChipMinimized] = useState(false);
-
+  // GPS: rastreamento SILENCIOSO — sem chip, sem toast, nenhum aviso na UI do
+  // vendedor. Diagnostico apenas via console.debug (visivel em debug remoto).
+  // Nota: o aviso de permissao (1a vez) e o icone de localizacao na barra de
+  // status sao do navegador/OS — nenhuma aplicacao consegue oculta-los.
   useEffect(() => {
     if (!('geolocation' in navigator)) return;
     let watchId: number | null = null;
     let lastSave = 0;
-    let avisouPermissao = false; // avisa so 1x por sessao (nao spammeia toast)
-    let avisouFalhaSave = false;
     const MIN_INTERVAL = 60_000; // salva no maximo a cada 1 min
 
     const sendLocation = async (lat: number, lng: number) => {
@@ -275,39 +270,12 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       if (now - lastSave < MIN_INTERVAL) return;
       lastSave = now;
       const r = await locationService.saveLocation(user.id, lat, lng);
-      if (r.ok) {
-        setGpsState('ok');
-        setGpsDetail(`Posicao enviada as ${new Date().toLocaleTimeString().slice(0, 5)} (${lat.toFixed(5)}, ${lng.toFixed(5)})`);
-      } else {
-        if (r.status === 401) {
-          setGpsState('no_session');
-          setGpsDetail('Sessao expirada. Saia do app e entre novamente com seu PIN.');
-        } else {
-          setGpsState('save_failed');
-          setGpsDetail(r.detail || `Erro HTTP ${r.status}`);
-        }
-        if (!avisouFalhaSave) {
-          avisouFalhaSave = true;
-          setToast({ message: r.status === 401 ? 'GPS: sessão expirada — entre novamente no app.' : 'Sua localização não pôde ser registrada. O admin não verá seu GPS.', type: 'error' });
-          setTimeout(() => setToast(null), 4000);
-        }
-      }
+      if (!r.ok) console.debug(`[gps] falha ao salvar (${r.status})`, r.detail || '');
     };
 
     const onGeoError = (err: GeolocationPositionError) => {
-      if (err.code === err.PERMISSION_DENIED) {
-        setGpsState('denied');
-        setGpsDetail('Permissao de localizacao negada neste aparelho. Toque e segure no cadeado do site (Chrome) ou confira as permissoes do APK.');
-        if (!avisouPermissao) {
-          avisouPermissao = true;
-          setToast({ message: 'Permissão de localização NEGADA. Ative o GPS para o admin te acompanhar.', type: 'error' });
-          setTimeout(() => setToast(null), 4000);
-        }
-      } else if (err.code === err.POSITION_UNAVAILABLE) {
-        setGpsState('unavailable');
-        setGpsDetail('Sinal de GPS indisponivel (sem sinal de satelite/redes). Tente em area aberta.');
-      }
-      // TIMEOUT: continua 'starting' — o fallback tenta de novo a cada 3 min
+      console.debug(`[gps] erro code=${err.code}`, err.message);
+      // TIMEOUT: o fallback tenta de novo a cada 3 min
     };
 
     // Tenta watchPosition primeiro (mais eficiente)
@@ -875,35 +843,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
           <div className={`${toast.type === 'success' ? 'bg-emerald-600' : 'bg-rose-600'} text-white px-6 py-3 rounded-2xl shadow-2xl font-black text-xs uppercase flex items-center gap-3 animate-in slide-in-from-top`}>
             <i className={`fa-solid ${toast.type === 'success' ? 'fa-circle-check' : 'fa-circle-exclamation'}`}></i>{toast.message}
           </div>
-        </div>
-      )}
-
-      {/* CHIP DE STATUS GPS — auto-diagnostico sempre visivel para o vendedor */}
-      {gpsState !== 'unsupported' && !(gpsState === 'ok' && gpsChipMinimized) && (
-        <div className="fixed bottom-24 left-3 z-[250] max-w-[85%]">
-          <button
-            onClick={() => { showToast(gpsDetail || 'Aguardando o primeiro sinal de GPS...'); }}
-            className={`${gpsState === 'ok'
-              ? 'bg-white/95 text-emerald-700 border-emerald-200'
-              : gpsState === 'starting' || gpsState === 'unavailable'
-                ? 'bg-amber-500 text-white border-amber-600'
-                : 'bg-rose-600 text-white border-rose-700'} border shadow-lg rounded-full pl-2.5 pr-3 py-1.5 flex items-center gap-2 active:scale-95 transition-transform`}
-          >
-            <i className={`fa-solid ${gpsState === 'ok' ? 'fa-location-dot' : 'fa-triangle-exclamation'} text-[9px] ${gpsState === 'starting' ? 'animate-pulse' : ''}`}></i>
-            <span className="text-[9px] font-black uppercase tracking-wide whitespace-nowrap">
-              {gpsState === 'ok' && `GPS ok · ${(gpsDetail.match(/\d{2}:\d{2}/) || ['--:--'])[0]}`}
-              {gpsState === 'starting' && 'GPS aguardando sinal…'}
-              {gpsState === 'denied' && 'GPS bloqueado — toque'}
-              {gpsState === 'unavailable' && 'GPS sem sinal — toque'}
-              {gpsState === 'save_failed' && 'Falha no envio — toque'}
-              {gpsState === 'no_session' && 'Sessão expirada — toque'}
-            </span>
-            {gpsState === 'ok' && (
-              <span onClick={(e) => { e.stopPropagation(); setGpsChipMinimized(true); }} className="w-4 h-4 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center">
-                <i className="fa-solid fa-check text-[7px]"></i>
-              </span>
-            )}
-          </button>
         </div>
       )}
 

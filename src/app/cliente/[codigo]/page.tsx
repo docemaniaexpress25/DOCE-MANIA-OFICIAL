@@ -10,6 +10,7 @@ interface Sale {
   sale_items: SaleItem[];
 }
 interface Sugestao { produto_id: string; nome: string; popularidade: number; clientesQueCompram: number; preco: number; }
+interface Destaque { produto_id: string; nome: string; }
 interface Stats {
   totalComprado: number; totalPago: number; clienteDesde: string;
   frequenciaDias: number; totalCompras: number;
@@ -23,7 +24,7 @@ interface Comprovante {
 }
 interface ApiResponse {
   client: { id: string; nome_fantasia: string; endereco: string; bairro: string; portal_code?: string };
-  sales: Sale[]; products: Record<string, string>; stats: Stats; sugestoes: Sugestao[];
+  sales: Sale[]; products: Record<string, string>; stats: Stats; sugestoes: Sugestao[]; destaques?: Destaque[];
   comprovantes?: Comprovante[];
   error?: string;
 }
@@ -204,14 +205,20 @@ export default function ClienteDashboard() {
     </div>
   );
 
-  const { client, sales, products, stats, sugestoes, comprovantes = [] } = data;
+  const { client, sales, products, stats, sugestoes, destaques = [], comprovantes = [] } = data;
   // Link do catalogo de pedidos ja identificando o cliente
   const pedidoUrl = `https://pedidos-doce-mania.netlify.app/?cliente=${encodeURIComponent((client.nome_fantasia || '').trim())}&cod=${encodeURIComponent(client.portal_code || codigo)}`;
   const saldoDevedor = stats.totalComprado - stats.totalPago;
+  // Pedidos online so para quem esta em dia (tolerancia de centavos)
+  const temDebito = saldoDevedor > 0.005;
+  // Destaques comerciais (os "mais comprados / nao pode ficar sem");
+  // fallback para as sugestoes personalizadas se o cadastro mudar de nome.
+  const ofertas = destaques.length > 0
+    ? destaques.map(d => ({ id: d.produto_id, nome: d.nome }))
+    : sugestoes.map(s => ({ id: s.produto_id, nome: s.nome }));
   const vendasPendentes = sales.filter(s => s.status_pagamento === 'PENDENTE');
   const saldoPendente = vendasPendentes.reduce((a, s) => a + (Number(s.valor_total) - Number(s.valor_pago)), 0);
   const listSales = tab === 'pendentes' ? vendasPendentes : sales;
-  const firstName = (client.nome_fantasia || '').split(' ')[0];
   const compPendentes = comprovantes.filter(c => c.status === 'PENDENTE').length;
 
   return (
@@ -296,20 +303,34 @@ export default function ClienteDashboard() {
         </div>
       </div>
 
-      {/* Fazer pedido no catalogo online (identificado) */}
+      {/* Fazer pedido no catalogo online (identificado) — so para quem nao deve */}
       <div className="max-w-md mx-auto px-4 mt-4">
-        <a href={pedidoUrl} target="_blank" rel="noopener noreferrer" className="block bg-gradient-to-r from-blue-600 to-indigo-600 rounded-2xl px-4 py-3.5 shadow-lg active:scale-[0.98] transition-transform">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 bg-white/15 rounded-xl flex items-center justify-center shrink-0">
-              <i className="fa-solid fa-cart-shopping text-white text-sm"></i>
+        {!temDebito ? (
+          <a href={pedidoUrl} target="_blank" rel="noopener noreferrer" className="block bg-gradient-to-r from-blue-600 to-indigo-600 rounded-2xl px-4 py-3.5 shadow-lg active:scale-[0.98] transition-transform">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 bg-white/15 rounded-xl flex items-center justify-center shrink-0">
+                <i className="fa-solid fa-cart-shopping text-white text-sm"></i>
+              </div>
+              <div className="flex-1 min-w-0 text-left">
+                <p className="text-[11px] font-black text-white uppercase">Faca seu pedido online</p>
+                <p className="text-[9px] text-blue-100/80 font-semibold">Monte seu carrinho no catalogo — cai direto no nosso WhatsApp</p>
+              </div>
+              <i className="fa-solid fa-arrow-right text-white/70 text-xs shrink-0"></i>
             </div>
-            <div className="flex-1 min-w-0 text-left">
-              <p className="text-[11px] font-black text-white uppercase">Faca seu pedido online</p>
-              <p className="text-[9px] text-blue-100/80 font-semibold">Monte seu carrinho no catalogo — cai direto no nosso WhatsApp</p>
+          </a>
+        ) : (
+          <div className="bg-white border border-dashed border-gray-200 rounded-2xl px-4 py-3.5">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 bg-gray-100 rounded-xl flex items-center justify-center shrink-0">
+                <i className="fa-solid fa-lock text-gray-400 text-sm"></i>
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-[11px] font-black text-gray-500 uppercase">Pedido online bloqueado</p>
+                <p className="text-[9px] text-gray-400 font-semibold">Quite seu debito de {formatCurrency(saldoDevedor)} para liberar o pedido pelo catalogo</p>
+              </div>
             </div>
-            <i className="fa-solid fa-arrow-right text-white/70 text-xs shrink-0"></i>
           </div>
-        </a>
+        )}
       </div>
 
       {/* Pendente — com botao de pagar via Pix */}
@@ -368,29 +389,24 @@ export default function ClienteDashboard() {
         </div>
       )}
 
-      {/* Sugestoes - produtos que outros compram */}
-      {sugestoes && sugestoes.length > 0 && (
+      {/* Destaques — os mais comprados, nao pode ficar sem */}
+      {ofertas.length > 0 && (
         <div className="max-w-md mx-auto px-4 mt-4">
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
             <div className="flex items-center gap-2 mb-3">
-              <div className="w-8 h-8 bg-amber-50 rounded-xl flex items-center justify-center">
-                <i className="fa-solid fa-lightbulb text-amber-500 text-xs"></i>
+              <div className="w-8 h-8 bg-orange-50 rounded-xl flex items-center justify-center">
+                <i className="fa-solid fa-fire text-orange-500 text-xs"></i>
               </div>
               <div>
-                <p className="text-[10px] font-black text-gray-700">Sugestoes para {firstName}</p>
-                <p className="text-[9px] text-gray-400 font-semibold">Produtos que a maioria dos clientes compra</p>
+                <p className="text-[10px] font-black text-gray-700">Os mais comprados</p>
+                <p className="text-[9px] text-gray-400 font-semibold">O que não pode faltar no seu estoque</p>
               </div>
             </div>
-            <div className="space-y-2">
-              {sugestoes.slice(0, 4).map((s, i) => (
-                <div key={i} className="flex items-center gap-3 bg-amber-50/50 rounded-xl px-3 py-2.5 border border-amber-100/50">
-                  <div className="w-7 h-7 bg-amber-100 rounded-lg flex items-center justify-center shrink-0">
-                    <i className="fa-solid fa-cart-plus text-amber-600 text-[9px]"></i>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-[11px] font-bold text-gray-700 truncate capitalize">{s.nome}</p>
-                    <p className="text-[9px] text-amber-600 font-semibold">{s.popularidade}% dos clientes compram</p>
-                  </div>
+            <div className="grid grid-cols-2 gap-2">
+              {ofertas.slice(0, 8).map((p, i) => (
+                <div key={p.id || i} className="bg-orange-50/60 border border-orange-100 rounded-xl px-3 py-2.5 flex items-start gap-2">
+                  <span className="w-4 h-4 bg-orange-500 text-white rounded-md text-[8px] font-black flex items-center justify-center shrink-0 mt-0.5">{i + 1}</span>
+                  <p className="text-[11px] font-bold text-gray-700 capitalize leading-tight">{p.nome}</p>
                 </div>
               ))}
             </div>

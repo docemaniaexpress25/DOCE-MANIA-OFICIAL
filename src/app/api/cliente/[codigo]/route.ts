@@ -95,6 +95,28 @@ export async function GET(
       sugestoes = [];
     }
 
+    // 5b. Destaques comerciais fixos — os "mais comprados / nao pode ficar sem"
+    // Casados POR NOME (robusto: nao quebra se o produto for recadastrado).
+    const DESTAQUE_ORDER = ['toddynho', 'chargito', 'kit wanflo', 'batata palha'];
+    const isDestaque = (nome: string) => {
+      const n = String(nome || '').toLowerCase();
+      return (
+        n.includes('toddynho') ||
+        n.includes('chargito') ||
+        (n.includes('kit') && n.includes('wanflo')) ||
+        (n.includes('batata palha') && n.includes('deut'))
+      );
+    };
+    const rankDestaque = (nome: string) => {
+      const n = String(nome || '').toLowerCase();
+      const i = DESTAQUE_ORDER.findIndex((k) => n.includes(k));
+      return i === -1 ? 99 : i;
+    };
+    const destaques = (prodData || ([] as any[]))
+      .filter((p: any) => isDestaque(p.nome))
+      .sort((a: any, b: any) => rankDestaque(a.nome) - rankDestaque(b.nome))
+      .map((p: any) => ({ produto_id: p.id as string, nome: p.nome as string }));
+
     // 6. Comprovantes enviados pelo portal (sem a foto — so status)
     let comprovantes: any[] = [];
     try {
@@ -123,6 +145,7 @@ export async function GET(
         produtoFavoritoQtd,
       },
       sugestoes,
+      destaques,
       comprovantes,
     });
   } catch (e: any) {

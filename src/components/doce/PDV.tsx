@@ -43,6 +43,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const isPreVenda = modoVenda === 'PRE_VENDA' && !!processPreVenda;
   // Pre-venda: forma de pagamento que o CLIENTE escolheu pagar na entrega
   const [metodoEntrega, setMetodoEntrega] = useState<'DINHEIRO' | 'PIX' | 'BOLETO'>('DINHEIRO');
+  // Pre-venda e pre-pedido vendem do ESTOQUE CENTRAL (nao da carga da van)
+  const sellFromCentral = isPrePedido || isPreVenda;
 
   // Wake Lock: mantem tela acordada durante o PDV
   useEffect(() => {
@@ -128,9 +130,11 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   // OBS: O modal de GPS/WhatsApp para clientes incompletos fica no VendedorDashboard (handleAtenderClient),
   // não aqui no PDV, para evitar duplicação de modais.
 
-  const cartKey = isPrePedido 
-    ? `pdv_pre_pedido_cart_${vendedorId}_${client.id}`
-    : `pdv_cart_${vendedorId}_${client.id}`;
+  const cartKey = isPreVenda
+    ? `pdv_pre_venda_cart_${vendedorId}_${client.id}`
+    : isPrePedido 
+      ? `pdv_pre_pedido_cart_${vendedorId}_${client.id}`
+      : `pdv_cart_${vendedorId}_${client.id}`;
   
   const [activeCategoryId, setActiveCategoryId] = useState<string>(() => {
     return categories.length > 0 ? categories[0].id : '';
@@ -249,7 +253,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const updateCart = (pId: string, delta: number, basePrice: number) => {
     setCart(prev => {
       const current = prev[pId] || { quantidade: 0, precoVenda: basePrice.toString() };
-      const maxLimit = isPrePedido 
+      // Pre-venda trabalha com o estoque central (nao com a carga da van)
+      const maxLimit = sellFromCentral 
         ? (products.find(p => p.id === pId)?.estoquePrincipal || 0)
         : (minhaCarga.find(c => c.produtoId === pId)?.quantidade || 0);
       const novaQtd = Math.max(0, Math.min(maxLimit, (current.quantidade ?? 0) + delta)); 
@@ -378,6 +383,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         setSaleResultModal({ total, comissao: comissaoTotal, troca: isTrocaActive ? vt : 0, isPrazo: false, isPreVenda: true, clientName: client.nomeFantasia, sale: pedido });
       } else {
         isFinalizingRef.current = false;
+        // Falha SEM silencio: avisa o vendedor na hora
+        setAppModal({ title: 'Falha ao Registrar', message: 'Nao foi possivel registrar o pedido.\nVerifique sua conexao e tente novamente.', icon: 'fa-solid fa-circle-exclamation', iconColor: 'text-rose-500', type: 'error' });
       }
       return;
     }
@@ -443,7 +450,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   
   const filteredProducts = useMemo(() => {
     // Pre-venda e pre-pedido vendem do estoque principal: catálogo completo
-    if (isPrePedido || isPreVenda) {
+    if (sellFromCentral) {
       const activeProds = products.filter(p => p.ativo);
       if (!activeCategoryId) return activeProds;
       return activeProds.filter(p => p.categoryId === activeCategoryId);
@@ -451,7 +458,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     const productsInCarga = products.filter(p => productIdsInCarga.has(p.id));
     if (!activeCategoryId) return productsInCarga;
     return productsInCarga.filter(p => p.categoryId === activeCategoryId);
-  }, [products, productIdsInCarga, activeCategoryId, isPrePedido]);
+  }, [products, productIdsInCarga, activeCategoryId, sellFromCentral]);
 
   const generatePrePedidoText = (width: '56MM' | '80MM') => {
     const totalWidth = width === '80MM' ? 48 : 32; 
@@ -561,7 +568,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               data: new Date(), 
               valorTotal: total, 
               valorPago: 0, 
-              metodoPagamento: metodo, 
+              metodoPagamento: (isPreVenda ? metodoEntrega : metodo) as any, 
               statusPagamento: metodo === 'A_PRAZO' ? 'PENDENTE' : 'PAGO', 
               itens: getOrderedItems() 
             }} 
@@ -630,7 +637,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           <button onClick={onCancel} className="w-9 h-9 bg-gray-50 text-gray-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-arrow-left"></i></button>
           <div className="text-center px-4 truncate">
             <p className="text-[9px] text-gray-400 uppercase font-black tracking-tighter">
-              {isPrePedido ? 'Pré-Pedido Rascunho' : 'Atendimento'}
+              {isPreVenda ? 'Pre-Venda — Pedido p/ Entrega' : isPrePedido ? 'Pré-Pedido Rascunho' : 'Atendimento'}
             </p>
             <h2 className="font-black text-xs text-gray-800 uppercase truncate">{client.nomeFantasia}</h2>
             {client.nome && <p className="text-[9px] text-blue-500 font-semibold">{client.nome}</p>} 
@@ -667,7 +674,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       <div className="flex-1 overflow-y-auto p-2 space-y-1.5" style={{ paddingBottom: '280px' }}>
         {filteredProducts.map(p => { 
           const item = cart[p.id];
-          const cargaOriginal = isPrePedido ? (p.estoquePrincipal || 0) : (minhaCarga.find(c => c.produtoId === p.id)?.quantidade || 0);
+          const cargaOriginal = sellFromCentral ? (p.estoquePrincipal || 0) : (minhaCarga.find(c => c.produtoId === p.id)?.quantidade || 0);
           const minPrice = p.precoMinimo || 0;
           const itemPrice = item ? parseFloat(item.precoVenda) || 0 : p.precoVenda;
           // Só considera violação se tem preço mínimo cadastrado (> 0)
@@ -704,15 +711,15 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                           </span>
                         )}
                      </div>
-                     {/* ICONE DE ESTOQUE CENTRAL NO PRÉ-PEDIDO - MAIS CLEAN */}
-                     {isPrePedido && (
-                       <div className="flex items-center gap-1.5 bg-indigo-50 px-2 py-0.5 rounded-lg border border-indigo-100 shadow-inner whitespace-nowrap" title="Estoque Central">
-                         <i className="fa-solid fa-warehouse text-indigo-400 text-[10px]"></i>
-                         <span className="text-[10px] font-black text-indigo-600">{cargaOriginal - (item?.quantidade ?? 0)}</span>
+                     {/* ICONE DE ESTOQUE CENTRAL (PRE-VENDA / PRE-PEDIDO) - MAIS CLEAN */}
+                     {sellFromCentral && (
+                       <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded-lg border shadow-inner whitespace-nowrap ${isPreVenda ? 'bg-emerald-50 border-emerald-100' : 'bg-indigo-50 border-indigo-100'}`} title="Estoque Central">
+                         <i className={`fa-solid fa-warehouse text-[10px] ${isPreVenda ? 'text-emerald-400' : 'text-indigo-400'}`}></i>
+                         <span className={`text-[10px] font-black ${isPreVenda ? 'text-emerald-600' : 'text-indigo-600'}`}>{cargaOriginal - (item?.quantidade ?? 0)}</span>
                        </div>
                      )}
-                     {!isPrePedido && (
-                       <span className={`text-[9px] font-bold uppercase ${isPrePedido ? 'text-indigo-600' : 'text-blue-500'}`}>
+                     {!sellFromCentral && (
+                       <span className="text-[9px] font-bold uppercase text-blue-500">
                          {cargaOriginal - (item?.quantidade ?? 0)} UN
                        </span>
                      )}
@@ -741,7 +748,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       </div>
 
       <footer className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 p-4 pb-8 space-y-3 shadow-[0_-10px_20px_rgba(0,0,0,0.05)] max-w-lg mx-auto z-[70]">
-        {!allCategoriesVisited && !isPrePedido && (
+        {!allCategoriesVisited && !sellFromCentral && (
           <div className="bg-amber-100 text-amber-700 p-2 rounded-xl text-center font-black text-[8px] uppercase tracking-widest animate-in fade-in duration-300">
             <i className="fa-solid fa-eye mr-1"></i> Visualize todas as abas para liberar o cupom ({visitedCategoryIds.length}/{categories.length})
           </div>
@@ -764,7 +771,9 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           </div>
 
           <div className="flex items-center gap-2">
-            <button 
+            {!isPreVenda && (
+              <>
+                <button 
               onClick={() => {
                 setIsPrePedido(!isPrePedido);
                 setCart({});
@@ -774,6 +783,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${isPrePedido ? 'left-5' : 'left-1'}`}></div>
             </button>
             <span className="text-[9px] font-black text-gray-400 uppercase">Pré-Pedido</span>
+              </>
+            )}
           </div>
 
           {isTrocaActive && <input type="number" value={valorTroca} onChange={e => setValorTroca(e.target.value)} placeholder="R$ 0.00" className="w-24 bg-white border border-orange-100 rounded-lg text-[11px] font-black text-orange-600 p-2 text-right outline-none" />}
@@ -782,7 +793,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         <div className="flex justify-between items-end px-1">
           <div>
             <p className="text-[9px] font-black text-gray-400 uppercase mb-0.5">
-              {isPrePedido ? 'Total Rascunho' : 'Total Líquido'}
+              {isPreVenda ? 'Total do Pedido' : isPrePedido ? 'Total Rascunho' : 'Total Líquido'}
             </p>
             <p className="text-xl font-black text-gray-800">R$ {total.toFixed(2)}</p>
           </div>
@@ -794,8 +805,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                 setView('RECEIPT_PREVIEW');
               }
             }} 
-            disabled={(total <= 0 && getOrderedItems().length === 0) || hasMarginViolation || (!allCategoriesVisited && !isPrePedido)} 
-            className={`px-6 py-4 rounded-2xl font-black uppercase text-xs ${(total > 0 || getOrderedItems().length > 0) && !hasMarginViolation && (allCategoriesVisited || isPrePedido) ? (isPrePedido ? 'bg-indigo-600 text-white shadow-lg' : 'bg-blue-600 text-white shadow-lg') : 'bg-gray-200 text-gray-400'}`}
+            disabled={(total <= 0 && getOrderedItems().length === 0) || hasMarginViolation || (!allCategoriesVisited && !sellFromCentral)} 
+            className={`px-6 py-4 rounded-2xl font-black uppercase text-xs ${(total > 0 || getOrderedItems().length > 0) && !hasMarginViolation && (allCategoriesVisited || sellFromCentral) ? (isPreVenda ? 'bg-emerald-600 text-white shadow-lg' : isPrePedido ? 'bg-indigo-600 text-white shadow-lg' : 'bg-blue-600 text-white shadow-lg') : 'bg-gray-200 text-gray-400'}`}
           >
             {isPrePedido ? 'Gerar Rascunho' : 'Gerar Cupom'}
           </button>

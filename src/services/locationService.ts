@@ -13,7 +13,7 @@ import { authHeaders } from '@/services/userService';
 
 // Salva a ultima localizacao conhecida do usuario logado (user_id vem da sessao)
 export const locationService = {
-  async saveLocation(_userId: string, lat: number, lng: number): Promise<boolean> {
+  async saveLocation(_userId: string, lat: number, lng: number): Promise<{ ok: boolean; status?: number; detail?: string }> {
     try {
       const res = await fetch('/api/location', {
         method: 'POST',
@@ -22,36 +22,49 @@ export const locationService = {
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
-        console.error('[LOCATION] Erro ao salvar:', res.status, d?.error || '');
-        return false;
+        console.error('[LOCATION] Erro ao salvar:', res.status, d?.error || '', d?.detail || '');
+        return { ok: false, status: res.status, detail: d?.detail || d?.error || `HTTP ${res.status}` };
       }
       console.log('[LOCATION] Salva com sucesso:', lat.toFixed(5), lng.toFixed(5));
-      return true;
+      return { ok: true };
     } catch (err: any) {
       console.error('[LOCATION] Excecao ao salvar:', err?.message);
-      return false;
+      return { ok: false, status: 0, detail: `Rede: ${err?.message || 'sem conexao'}` };
     }
   },
 
-  async getLocation(userId: string): Promise<{ latitude: number; longitude: number; updated_at: string } | null> {
+  /**
+   * Busca a localizacao de um usuario (ADMIN via API).
+   * Retorna location=null quando o vendedor nunca enviou,
+   * com status/error para o admin saber o motivo real.
+   */
+  async getLocation(userId: string): Promise<{
+    location: { latitude: number; longitude: number; updated_at: string } | null;
+    status: number | null;
+    error?: string;
+  }> {
     try {
       const res = await fetch(`/api/location?userId=${encodeURIComponent(userId)}`, {
         headers: authHeaders(),
       });
       if (!res.ok) {
-        console.error('[LOCATION] Erro ao buscar:', res.status);
-        return null;
+        const d = await res.json().catch(() => ({}));
+        console.error('[LOCATION] Erro ao buscar:', res.status, d?.error || '');
+        return { location: null, status: res.status, error: d?.error || `HTTP ${res.status}` };
       }
       const d = await res.json();
-      if (!d?.location) return null;
+      if (!d?.location) return { location: null, status: 200 };
       return {
-        latitude: d.location.latitude,
-        longitude: d.location.longitude,
-        updated_at: d.location.updated_at,
+        location: {
+          latitude: d.location.latitude,
+          longitude: d.location.longitude,
+          updated_at: d.location.updated_at,
+        },
+        status: 200,
       };
     } catch (err: any) {
       console.error('[LOCATION] Excecao ao buscar:', err?.message);
-      return null;
+      return { location: null, status: 0, error: `Rede: ${err?.message || 'sem conexao'}` };
     }
   },
 

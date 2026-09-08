@@ -361,13 +361,23 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
   const handleViewLocation = async (userId: string, userName: string) => {
     setLocationLoading(userId);
-    const loc = await locationService.getLocation(userId);
-    if (loc) {
-      setLocationMap(prev => ({ ...prev, [userId]: { lat: loc.latitude, lng: loc.longitude, updated_at: loc.updated_at } }));
+    const r = await locationService.getLocation(userId);
+    if (r.location) {
+      setLocationMap(prev => ({ ...prev, [userId]: { lat: r.location!.latitude, lng: r.location!.longitude, updated_at: r.location!.updated_at } }));
       setShowLocationModal({ userId, userName });
     } else {
       setLocationMap(prev => ({ ...prev, [userId]: null }));
-      showToast('Localização indisponível. O vendedor pode estar offline.', 'error');
+      setShowLocationModal({ userId, userName });
+      // Mensagem espefica: nunca enviou vs erro real (nada de "offline" generico)
+      if (r.status === 401) {
+        showToast('Sua sessão de admin expirou. Saia e entre novamente.', 'error');
+      } else if (r.status === 0) {
+        showToast(`Falha de rede ao consultar: ${r.error || 'sem conexão'}`, 'error');
+      } else if (r.status && r.status >= 500) {
+        showToast(`Erro do servidor ao consultar GPS: ${r.error || r.status}`, 'error');
+      } else {
+        showToast('Este vendedor NUNCA enviou localização. No aparelho dele: atualize o app (recarregue), aceite a permissão de GPS e veja se o chip "GPS ok" aparece na tela.', 'error');
+      }
     }
     setLocationLoading(null);
   };
@@ -2451,7 +2461,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                   </div>
                   <div>
                     <p className="font-black text-gray-800 text-sm uppercase">Sem Localizacao</p>
-                    <p className="text-[10px] text-gray-400 font-semibold mt-2">O vendedor ainda nao enviou sua localizacao. Verifique se o app esta aberto e o GPS esta ativo.</p>
+                    <p className="text-[10px] text-gray-400 font-semibold mt-2">Este vendedor ainda nao enviou nenhuma posicao. No aparelho dele:<br />1. Atualize o app (recarregue a pagina)<br />2. Aceite a permissao de localizacao<br />3. Veja se aparece o chip <b>GPS ok</b> na tela</p>
                   </div>
                   <button onClick={() => handleViewLocation(showLocationModal.userId, showLocationModal.userName)} disabled={locationLoading === showLocationModal.userId} className="bg-blue-50 text-blue-600 font-black py-3 px-6 rounded-2xl uppercase text-[10px] tracking-widest inline-flex items-center gap-2 active:scale-95">
                     <i className={`fa-solid ${locationLoading === showLocationModal.userId ? "fa-spinner fa-spin" : "fa-rotate"}`}></i>

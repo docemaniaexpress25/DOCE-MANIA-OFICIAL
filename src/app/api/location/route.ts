@@ -40,6 +40,9 @@ export async function POST(request: NextRequest) {
     }
 
     const supabase = getServiceClient();
+    const now = new Date().toISOString();
+
+    // 1. Tentativa normal: UPSERT (caminho rapido)
     const { error } = await supabase
       .from('user_locations')
       .upsert(
@@ -47,26 +50,47 @@ export async function POST(request: NextRequest) {
           user_id: session.sub,
           latitude: lat,
           longitude: lng,
-          updated_at: new Date().toISOString(),
+          updated_at: now,
         },
         { onConflict: 'user_id' }
       );
 
-    if (error) {
-      const missingTable = error.code === '42P01' || error.code === 'PGRST205';
-      if (missingTable) {
-        return NextResponse.json(
-          { error: 'Tabela user_locations nao existe (rode o SQL do Bloco 4).' },
-          { status: 503 }
-        );
-      }
-      throw error;
+    if (!error) return NextResponse.json({ ok: true });
+
+    // 2. Fallback resiliente: UPDATE e, se nao alterar nada, INSERT.
+    //    Cobre o caso de a tabela nao ter indice unique em user_id
+    //    (o ON CONFLICT do upsert falha com 42P10).
+    const updErrCode = error.code;
+    const { data: upd, error: updErr } = await supabase
+      .from('user_locations')
+      .update({ latitude: lat, longitude: lng, updated_at: now })
+      .eq('user_id', session.sub)
+      .select('user_id');
+
+    if (!updErr && upd && upd.length > 0) {
+      return NextResponse.json({ ok: true, via: 'update' });
+    }
+    if (!updErr) {
+      const { error: insErr } = await supabase
+        .from('user_locations')
+        .insert({ user_id: session.sub, latitude: lat, longitude: lng, updated_at: now });
+      if (!insErr) return NextResponse.json({ ok: true, via: 'insert' });
+      return NextResponse.json(
+        { error: 'Falha ao registrar localizacao.', code: insErr.code, detail: insErr.message },
+        { status: 500 }
+      );
     }
 
-    return NextResponse.json({ ok: true });
+    // Ambos os caminhos falharam — devolve o motivo real para diagnostico
+    // (a rota exige sessao, entao nao expoe nada a anonimos)
+    console.error('[api/location POST] falha:', updErrCode, error.message, '| update:', updErr?.message);
+    return NextResponse.json(
+      { error: 'Falha ao registrar localizacao.', code: updErrCode || updErr?.code, detail: (error.message || updErr?.message || '').slice(0, 200) },
+      { status: 500 }
+    );
   } catch (e: any) {
     console.error('[api/location POST] erro:', e?.message);
-    return NextResponse.json({ error: 'Erro ao salvar localizacao.' }, { status: 500 });
+    return NextResponse.json({ error: 'Erro ao salvar localizacao.', detail: String(e?.message || '').slice(0, 200) }, { status: 500 });
   }
 }
 
@@ -125,6 +149,6 @@ export async function GET(request: NextRequest) {
     });
   } catch (e: any) {
     console.error('[api/location GET] erro:', e?.message);
-    return NextResponse.json({ error: 'Erro ao buscar localizacao.' }, { status: 500 });
+    return NextResponse.json({ error: 'Erro ao buscar localizacao.', detail: String(e?.message || '').slice(0, 200) }, { status: 500 });
   }
 }

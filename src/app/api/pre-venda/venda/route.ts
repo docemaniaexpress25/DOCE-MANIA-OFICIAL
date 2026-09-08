@@ -52,6 +52,10 @@ export async function POST(req: NextRequest) {
 
     const supabase = getServiceClient();
 
+    // Forma de pagamento que o CLIENTE escolheu para o entregador cobrar
+    const metodoRaw = String((body as any).metodoEntrega || '').toUpperCase();
+    const metodoEntrega = ['DINHEIRO', 'PIX', 'BOLETO'].includes(metodoRaw) ? metodoRaw : 'DINHEIRO';
+
     // Cliente existe?
     const { data: client, error: clientErr } = await supabase
       .from('clients').select('id').eq('id', clientId).limit(1).maybeSingle();
@@ -70,7 +74,7 @@ export async function POST(req: NextRequest) {
         valor_total: valorTotal,
         valor_pago: 0,
         metodo_pagamento: 'A_PRAZO',
-        detalhe_pagamento: 'PRE-VENDA — pagamento na entrega',
+        detalhe_pagamento: `PRE-VENDA — cobrar ${metodoEntrega} na entrega`,
         status_pagamento: 'PENDENTE',
         data_venda: new Date().toISOString(),
         data_vencimento: vencimentoIso,

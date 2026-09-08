@@ -9,7 +9,8 @@
 --   3) sales: tipo_venda / entrega_status / entrega_seq / route_id / estoque_baixado
 --   4) RPC baixar_estoque_principal (baixa do estoque CENTRAL ao entregar,
 --      idempotente — nunca desconta duas vezes)
---   5) Trigger que impede excluir pedido de pré-venda (protege rota/estorno)
+--   5) Exclusão de venda sai da rota + estorna estoque central se entregue
+--      (substituída pelo Bloco 6; mantido aqui para instalações novas)
 --   6) Índices de performance
 --   7) RLS FECHADA nas tabelas novas (padrão do projeto: tudo via API)
 --
@@ -48,10 +49,11 @@ create table if not exists public.entrega_rotas (
 create table if not exists public.entrega_eventos (
   id         uuid primary key default gen_random_uuid(),
   route_id   uuid references public.entrega_rotas(id),
-  sale_id    uuid references public.sales(id),
+  sale_id    uuid references public.sales(id) on delete cascade,
   user_id    uuid,
   status     text not null,                              -- ROTA_GERADA | EM_ROTA | ENTREGUE | FALHOU
   motivo     text,
+  foto       text,
   lat        double precision,
   lng        double precision,
   criado_em  timestamptz not null default now()
@@ -95,24 +97,75 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------
--- 5) TRIGGER: pedido de PRÉ-VENDA não pode ser excluído
+-- 5) EXCLUSÃO DE PRÉ-VENDA: sai da rota + estorna estoque central
+--    (substitui a antiga trava anti-delete — ver Bloco 6)
 -- ---------------------------------------------------------------------------
-create or replace function public.protege_pre_venda_delete()
+drop trigger if exists trg_protege_pre_venda_delete on public.sales;
+drop function if exists public.protege_pre_venda_delete();
+
+create or replace function public.pre_venda_estorna_item()
 returns trigger
 language plpgsql
 as $$
+declare
+  v_sale record;
 begin
-  if old.tipo_venda = 'PRE_VENDA' then
-    raise exception 'Pedido de pre-venda nao pode ser excluido (protege a rota de entrega e o estoque).';
+  select tipo_venda, estoque_baixado into v_sale
+    from public.sales where id = old.sale_id;
+  if found and v_sale.tipo_venda = 'PRE_VENDA' and v_sale.estoque_baixado is true then
+    update public.products
+       set estoque_principal = coalesce(estoque_principal, 0) + old.quantidade
+     where id = old.produto_id;
+    update public.sales set estoque_baixado = false where id = old.sale_id;
   end if;
   return old;
 end;
 $$;
 
-drop trigger if exists trg_protege_pre_venda_delete on public.sales;
-create trigger trg_protege_pre_venda_delete
+drop trigger if exists trg_pre_venda_estorna_item on public.sale_items;
+create trigger trg_pre_venda_estorna_item
+  before delete on public.sale_items
+  for each row execute function public.pre_venda_estorna_item();
+
+create or replace function public.pre_venda_estorna_venda()
+returns trigger
+language plpgsql
+as $$
+begin
+  if old.tipo_venda = 'PRE_VENDA' and old.estoque_baixado is true then
+    update public.products p
+       set estoque_principal = coalesce(p.estoque_principal, 0) + i.quantidade
+      from public.sale_items i
+     where i.sale_id = old.id
+       and i.produto_id = p.id;
+  end if;
+  return old;
+end;
+$$;
+
+drop trigger if exists trg_pre_venda_estorna_venda on public.sales;
+create trigger trg_pre_venda_estorna_venda
   before delete on public.sales
-  for each row execute function public.protege_pre_venda_delete();
+  for each row execute function public.pre_venda_estorna_venda();
+
+create or replace function public.pre_venda_atualiza_rota()
+returns trigger
+language plpgsql
+as $$
+begin
+  if old.route_id is not null then
+    update public.entrega_rotas r
+       set total_paradas = (select count(*) from public.sales s where s.route_id = r.id)
+     where r.id = old.route_id;
+  end if;
+  return old;
+end;
+$$;
+
+drop trigger if exists trg_pre_venda_atualiza_rota on public.sales;
+create trigger trg_pre_venda_atualiza_rota
+  after delete on public.sales
+  for each row execute function public.pre_venda_atualiza_rota();
 
 -- ---------------------------------------------------------------------------
 -- 6) ÍNDICES

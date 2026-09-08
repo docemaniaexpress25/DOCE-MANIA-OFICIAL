@@ -6,7 +6,16 @@ import { authHeaders } from '@/services/userService';
 /**
  * ENTREGAS — visao do entregador (estilo Shopee):
  * rota do dia gerada ao finalizar o dia de pre-venda, paradas numeradas
- * em ordem, progresso, mapa, WhatsApp e confirmacao de entrega com cobranca.
+ * em ordem, progresso, mapa, WhatsApp e confirmacao de entrega.
+ *
+ * No card da parada o entregador ve: nome do cliente, endereco, itens,
+ * valor e a FORMA DE PAGAMENTO escolhida pelo cliente no pedido.
+ * Pode abrir o cupom do pedido. Ao receber:
+ *  - DINHEIRO: informa/conserta o valor recebido (calcula troco)
+ *  - PIX: confirma o recebimento do valor correto
+ *  - BOLETO: EXIGE foto do boleto entregue (comprovacao)
+ *  - alternativa: ja pagou / nao cobrou
+ * Nao entregue: escolhe o motivo.
  */
 
 interface Parada {
@@ -16,9 +25,11 @@ interface Parada {
   valorTotal: number;
   valorPago: number;
   statusPagamento: string;
+  formaPgto: string;     // DINHEIRO | PIX | BOLETO
+  temFoto: boolean;      // foto do boleto entregue (Bloco 6)
   motivo: string | null;
   cliente: { id: string; nome: string; endereco: string; bairro: string; telefone: string; lat: number | null; lng: number | null };
-  itens: { nome: string; quantidade: number }[];
+  itens: { nome: string; quantidade: number; precoVenda: number }[];
   eventos: { status: string; motivo: string | null; criado_em: string }[];
 }
 interface Rota {
@@ -36,6 +47,13 @@ interface ApiResp {
 const fmt = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const hora = (iso: string) => new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 
+const PGTO_META: Record<string, { label: string; icon: string; chip: string }> = {
+  DINHEIRO: { label: 'Dinheiro', icon: 'fa-solid fa-money-bill-wave', chip: 'bg-emerald-50 text-emerald-700' },
+  PIX: { label: 'Pix', icon: 'fa-brands fa-pix', chip: 'bg-teal-50 text-teal-700' },
+  BOLETO: { label: 'Boleto', icon: 'fa-solid fa-barcode', chip: 'bg-amber-50 text-amber-700' },
+};
+const pgtoMeta = (m: string) => PGTO_META[m] || PGTO_META.DINHEIRO;
+
 /** GPS silencioso da acao (best-effort, 6s de tolerancia) */
 function pegaGps(): Promise<{ lat: number; lng: number } | null> {
   return new Promise(resolve => {
@@ -46,6 +64,31 @@ function pegaGps(): Promise<{ lat: number; lng: number } | null> {
       () => { clearTimeout(t); resolve(null); },
       { enableHighAccuracy: true, timeout: 5500, maximumAge: 15000 }
     );
+  });
+}
+
+/** Comprime a foto para base64 jpeg (~max 900px) antes de enviar */
+function compressImage(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const max = 900;
+        const scale = Math.min(1, max / Math.max(img.width, img.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return reject(new Error('canvas'));
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL('image/jpeg', 0.7));
+      };
+      img.onerror = () => reject(new Error('img'));
+      img.src = String(reader.result);
+    };
+    reader.onerror = () => reject(new Error('reader'));
+    reader.readAsDataURL(file);
   });
 }
 
@@ -80,6 +123,15 @@ const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' 
   const [sheetFalhou, setSheetFalhou] = useState<Parada | null>(null);
   const [motivoOutro, setMotivoOutro] = useState('');
   const [motivoSel, setMotivoSel] = useState<string>(MOTIVOS_FALHA[0]);
+  // Recebimento por forma de pagamento
+  const [valorRecebido, setValorRecebido] = useState('');
+  const [fotoBoleto, setFotoBoleto] = useState<string | null>(null);
+  // Cupom do pedido (visao entregador)
+  const [cupom, setCupom] = useState<Parada | null>(null);
+  // Foto do boleto entregue
+  const [verFoto, setVerFoto] = useState<Parada | null>(null);
+  const [fotoUrl, setFotoUrl] = useState<string | null>(null);
+  const [fotoLoading, setFotoLoading] = useState(false);
   const mounted = useRef(true);
 
   const load = useCallback(async (silencioso = false) => {
@@ -130,6 +182,37 @@ const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' 
     }
   }
 
+  // Confirma o recebimento conforme a forma de pagamento
+  async function confirmarEntrega(p: Parada, pagamento: string, extra: Record<string, any> = {}) {
+    const ok = await acao({ acao: 'ENTREGUE', saleId: p.saleId, pagamento, ...extra },
+      pagamento === 'BOLETO' ? 'Entrega confirmada — boleto com foto!' :
+      pagamento === 'DINHEIRO' ? 'Entrega confirmada — dinheiro!' :
+      pagamento === 'PIX' ? 'Entrega confirmada — Pix!' :
+      pagamento === 'JA_PAGO' ? 'Entrega confirmada — ja pago!' :
+      'Entrega confirmada — a receber!');
+    if (ok) {
+      setSheetEntregue(null);
+      setValorRecebido('');
+      setFotoBoleto(null);
+    }
+  }
+
+  async function abrirFotoBoleto(p: Parada) {
+    setVerFoto(p);
+    setFotoUrl(null);
+    setFotoLoading(true);
+    try {
+      const res = await fetch(`/api/pre-venda/foto?saleId=${p.saleId}`, { headers: authHeaders() });
+      const d = await res.json();
+      if (res.ok && d.foto) setFotoUrl(d.foto);
+      else showToast(d.error || 'Foto nao encontrada.', 'error');
+    } catch {
+      showToast('Sem conexao. Tente novamente.', 'error');
+    } finally {
+      if (mounted.current) setFotoLoading(false);
+    }
+  }
+
   if (loading && !data) {
     return <div className="py-14 flex justify-center"><div className="w-9 h-9 border-4 border-blue-100 border-t-blue-600 rounded-full animate-spin" /></div>;
   }
@@ -142,6 +225,13 @@ const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' 
   const ativas = paradas.length - entregues - falhadas;
   const progresso = paradas.length > 0 ? Math.round((entregues / paradas.length) * 100) : 0;
   const valorRota = paradas.reduce((a, p) => a + p.valorTotal, 0);
+
+  // Parada em foco no sheet de entrega
+  const sp = sheetEntregue;
+  const spMetodo = sp ? (PGTO_META[sp.formaPgto] ? sp.formaPgto : 'DINHEIRO') : 'DINHEIRO';
+  const rec = parseFloat(valorRecebido) || 0;
+  const troco = sp && rec > sp.valorTotal ? rec - sp.valorTotal : 0;
+  const falta = sp && rec > 0 && rec < sp.valorTotal ? sp.valorTotal - rec : 0;
 
   return (
     <div className="space-y-4">
@@ -236,6 +326,7 @@ const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' 
         const st = STATUS_STYLE[p.entregaStatus] || STATUS_STYLE.PENDENTE;
         const pend = p.entregaStatus === 'PENDENTE' || p.entregaStatus === 'EM_ROTA';
         const zap = zapUrl(p);
+        const pg = pgtoMeta(p.formaPgto);
         const ultimoEvento = p.eventos.length > 0 ? p.eventos[p.eventos.length - 1] : null;
         return (
           <div key={p.saleId} className={`bg-white rounded-2xl shadow-sm border overflow-hidden ${p.entregaStatus === 'ENTREGUE' ? 'border-emerald-100' : p.entregaStatus === 'FALHOU' ? 'border-rose-100' : 'border-gray-100'}`}>
@@ -249,27 +340,37 @@ const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' 
                   <p className="text-[12px] font-black text-gray-800 truncate capitalize">{p.cliente.nome}</p>
                   <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded-md shrink-0 ${st.chip}`}>{st.label}</span>
                 </div>
+                {/* endereco escrito no card */}
                 <p className="text-[9px] text-gray-400 font-semibold mt-0.5 truncate">
                   <i className="fa-solid fa-location-dot mr-1"></i>{p.cliente.endereco || 'Sem endereco'}{p.cliente.bairro ? ` — ${p.cliente.bairro}` : ''}
                 </p>
                 <p className="text-[9px] text-gray-500 font-bold mt-1 truncate">
                   {p.itens.map(i => `${i.quantidade}x ${i.nome}`).join(', ')}
                 </p>
-                <div className="flex items-center gap-2 mt-1.5">
+                <div className="flex items-center gap-2 mt-1.5 flex-wrap">
                   <span className="text-[12px] font-black text-gray-800">{fmt(p.valorTotal)}</span>
                   {p.statusPagamento === 'PAGO'
                     ? <span className="text-[8px] font-black text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-md uppercase">Pago</span>
-                    : <span className="text-[8px] font-black text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-md uppercase">Cobrar na entrega</span>}
+                    : (
+                      <span className={`text-[8px] font-black px-1.5 py-0.5 rounded-md uppercase ${pg.chip}`}>
+                        <i className={`${pg.icon} mr-1`}></i>Cobrar {pg.label}
+                      </span>
+                    )}
                 </div>
               </div>
             </div>
 
             {/* faixa de resultado */}
             {p.entregaStatus === 'ENTREGUE' && (
-              <div className="bg-emerald-50 px-4 py-2 border-t border-emerald-100">
-                <p className="text-[9px] font-black text-emerald-700 uppercase">
+              <div className="bg-emerald-50 px-4 py-2 border-t border-emerald-100 flex items-center justify-between gap-2">
+                <p className="text-[9px] font-black text-emerald-700 uppercase leading-snug">
                   <i className="fa-solid fa-circle-check mr-1"></i>Entregue{ultimoEvento ? ` as ${hora(ultimoEvento.criado_em)}` : ''}{ultimoEvento?.motivo ? ` · ${ultimoEvento.motivo}` : ''}
                 </p>
+                {p.temFoto && (
+                  <button onClick={() => abrirFotoBoleto(p)} className="text-[8px] font-black text-emerald-700 underline uppercase shrink-0">
+                    <i className="fa-solid fa-camera mr-0.5"></i>Foto boleto
+                  </button>
+                )}
               </div>
             )}
             {p.entregaStatus === 'FALHOU' && (
@@ -279,23 +380,32 @@ const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' 
             )}
 
             {/* acoes */}
-            {pend && rota?.status === 'EM_ROTA' && (
-              <div className="px-4 pb-4 flex flex-wrap gap-2 border-t border-gray-50 pt-3">
-                <a href={mapaUrl(p)} target="_blank" rel="noopener noreferrer" className="flex-1 min-w-[64px] py-2.5 rounded-xl bg-blue-50 text-blue-600 text-[9px] font-black uppercase text-center active:scale-95 transition-transform">
-                  <i className="fa-solid fa-diamond-turn-right mr-1"></i>Mapa
+            <div className="px-4 pb-4 flex flex-wrap gap-2 border-t border-gray-50 pt-3">
+              <a href={mapaUrl(p)} target="_blank" rel="noopener noreferrer" className="flex-1 min-w-[64px] py-2.5 rounded-xl bg-blue-50 text-blue-600 text-[9px] font-black uppercase text-center active:scale-95 transition-transform">
+                <i className="fa-solid fa-diamond-turn-right mr-1"></i>Mapa
+              </a>
+              {p.cliente.telefone && (
+                <a href={`tel:${p.cliente.telefone}`} className="flex-1 min-w-[64px] py-2.5 rounded-xl bg-gray-50 text-gray-600 text-[9px] font-black uppercase text-center active:scale-95 transition-transform">
+                  <i className="fa-solid fa-phone mr-1"></i>Ligar
                 </a>
-                {p.cliente.telefone && (
-                  <a href={`tel:${p.cliente.telefone}`} className="flex-1 min-w-[64px] py-2.5 rounded-xl bg-gray-50 text-gray-600 text-[9px] font-black uppercase text-center active:scale-95 transition-transform">
-                    <i className="fa-solid fa-phone mr-1"></i>Ligar
-                  </a>
-                )}
-                {zap && (
-                  <a href={zap} target="_blank" rel="noopener noreferrer" className="flex-1 min-w-[64px] py-2.5 rounded-xl bg-emerald-50 text-emerald-600 text-[9px] font-black uppercase text-center active:scale-95 transition-transform">
-                    <i className="fa-brands fa-whatsapp mr-1"></i>Zap
-                  </a>
-                )}
+              )}
+              {zap && (
+                <a href={zap} target="_blank" rel="noopener noreferrer" className="flex-1 min-w-[64px] py-2.5 rounded-xl bg-emerald-50 text-emerald-600 text-[9px] font-black uppercase text-center active:scale-95 transition-transform">
+                  <i className="fa-brands fa-whatsapp mr-1"></i>Zap
+                </a>
+              )}
+              <button
+                onClick={() => setCupom(p)}
+                className="flex-1 min-w-[64px] py-2.5 rounded-xl bg-amber-50 text-amber-700 text-[9px] font-black uppercase text-center active:scale-95 transition-transform"
+              >
+                <i className="fa-solid fa-receipt mr-1"></i>Cupom
+              </button>
+            </div>
+
+            {pend && rota?.status === 'EM_ROTA' && (
+              <div className="px-4 pb-4 flex flex-wrap gap-2">
                 <button
-                  onClick={() => { setMotivoSel(MOTIVOS_FALHA[0]); setMotivoOutro(''); setSheetEntregue(p); }}
+                  onClick={() => { setValorRecebido(''); setFotoBoleto(null); setSheetEntregue(p); }}
                   disabled={!!busy}
                   className="flex-[1.4] min-w-[90px] py-2.5 rounded-xl bg-emerald-600 text-white text-[9px] font-black uppercase shadow-sm active:scale-95 transition-transform disabled:opacity-60"
                 >
@@ -311,7 +421,7 @@ const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' 
               </div>
             )}
             {pend && rota?.status === 'GERADA' && (
-              <div className="px-4 pb-3 pt-1">
+              <div className="px-4 pb-3">
                 <p className="text-[8px] font-bold text-gray-300 uppercase text-center">Inicie a rota para liberar as acoes</p>
               </div>
             )}
@@ -337,31 +447,123 @@ const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' 
         </div>
       )}
 
-      {/* ===== SHEET: CONFIRMAR ENTREGA ===== */}
-      {sheetEntregue && (
+      {/* ===== SHEET: CONFIRMAR ENTREGA / RECEBIMENTO ===== */}
+      {sp && (
         <div className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-sm flex items-end justify-center" onClick={() => setSheetEntregue(null)}>
-          <div className="bg-white w-full max-w-md rounded-t-3xl p-6 animate-in slide-in-from-bottom duration-300" onClick={e => e.stopPropagation()}>
+          <div className="bg-white w-full max-w-md rounded-t-3xl p-6 animate-in slide-in-from-bottom duration-300 max-h-[92vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-4"></div>
-            <h3 className="text-sm font-black text-gray-800 uppercase text-center">Entrega #{sheetEntregue.seq ?? ''} — {sheetEntregue.cliente.nome}</h3>
-            <p className="text-[10px] text-gray-400 font-semibold text-center mt-1">Recebeu {fmt(sheetEntregue.valorTotal)}?</p>
-            <div className="grid grid-cols-2 gap-2 mt-5">
-              <button onClick={() => { const p = sheetEntregue; setSheetEntregue(null); acao({ acao: 'ENTREGUE', saleId: p.saleId, pagamento: 'DINHEIRO' }, 'Entrega confirmada — dinheiro!'); }}
-                className="py-4 rounded-2xl bg-emerald-600 text-white text-[10px] font-black uppercase shadow-md active:scale-95 transition-transform">
-                <i className="fa-solid fa-money-bill-wave mr-1"></i>Dinheiro
-              </button>
-              <button onClick={() => { const p = sheetEntregue; setSheetEntregue(null); acao({ acao: 'ENTREGUE', saleId: p.saleId, pagamento: 'PIX' }, 'Entrega confirmada — Pix!'); }}
-                className="py-4 rounded-2xl bg-teal-600 text-white text-[10px] font-black uppercase shadow-md active:scale-95 transition-transform">
-                <i className="fa-brands fa-pix mr-1"></i>Pix
-              </button>
-              <button onClick={() => { const p = sheetEntregue; setSheetEntregue(null); acao({ acao: 'ENTREGUE', saleId: p.saleId, pagamento: 'JA_PAGO' }, 'Entrega confirmada — ja pago!'); }}
-                className="py-4 rounded-2xl bg-blue-600 text-white text-[10px] font-black uppercase shadow-md active:scale-95 transition-transform">
-                <i className="fa-solid fa-circle-check mr-1"></i>Ja pagou
-              </button>
-              <button onClick={() => { const p = sheetEntregue; setSheetEntregue(null); acao({ acao: 'ENTREGUE', saleId: p.saleId, pagamento: 'NAO_PAGO' }, 'Entrega confirmada — a receber!'); }}
-                className="py-4 rounded-2xl bg-amber-500 text-white text-[10px] font-black uppercase shadow-md active:scale-95 transition-transform">
-                <i className="fa-solid fa-hand-holding-dollar mr-1"></i>Nao cobrou
-              </button>
+            <h3 className="text-sm font-black text-gray-800 uppercase text-center">Entrega #{sp.seq ?? ''} — {sp.cliente.nome}</h3>
+            <p className="text-[10px] text-gray-400 font-semibold text-center mt-1">
+              Cliente escolheu pagar com <span className="text-gray-700 font-black uppercase">{pgtoMeta(spMetodo).label}</span>
+            </p>
+
+            {/* --- DINHEIRO: valor recebido + troco --- */}
+            {spMetodo === 'DINHEIRO' && (
+              <div className="mt-4 space-y-3 animate-in fade-in duration-300">
+                <div className="bg-gray-50 rounded-2xl p-4 text-center border border-gray-100">
+                  <p className="text-[9px] font-black text-gray-400 uppercase">Valor a receber</p>
+                  <p className="text-2xl font-black text-gray-800">{fmt(sp.valorTotal)}</p>
+                </div>
+                <div>
+                  <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Dinheiro recebido R$ (opcional)</label>
+                  <input
+                    type="number" inputMode="decimal"
+                    value={valorRecebido}
+                    onChange={e => setValorRecebido(e.target.value)}
+                    placeholder="0.00"
+                    className="w-full p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-xl font-black text-center outline-none focus:ring-2 focus:ring-emerald-100"
+                  />
+                </div>
+                {troco > 0 && (
+                  <div className="bg-emerald-50 p-3.5 rounded-2xl border border-emerald-100 text-center animate-in zoom-in-95">
+                    <p className="text-[9px] font-black text-emerald-600 uppercase">Troco a devolver</p>
+                    <p className="text-xl font-black text-emerald-700">{fmt(troco)}</p>
+                  </div>
+                )}
+                {falta > 0 && (
+                  <p className="text-[9px] font-black text-amber-600 text-center uppercase">Faltam {fmt(falta)} — confira com o cliente</p>
+                )}
+                <button
+                  onClick={() => confirmarEntrega(sp, 'DINHEIRO', { valorConfirmado: true, valorRecebido: rec > 0 ? rec : undefined })}
+                  disabled={!!busy}
+                  className="w-full py-4 bg-emerald-600 text-white rounded-2xl text-xs font-black uppercase tracking-wider shadow-lg active:scale-[0.98] transition-transform disabled:opacity-60"
+                >
+                  <i className="fa-solid fa-check mr-1"></i>Confirmei que recebi {fmt(sp.valorTotal)}
+                </button>
+              </div>
+            )}
+
+            {/* --- PIX: confirmacao do valor correto --- */}
+            {spMetodo === 'PIX' && (
+              <div className="mt-4 space-y-3 animate-in fade-in duration-300">
+                <div className="bg-teal-50 rounded-2xl p-4 text-center border border-teal-100">
+                  <i className="fa-brands fa-pix text-teal-600 text-2xl"></i>
+                  <p className="text-[9px] font-black text-teal-700 uppercase mt-1">Confirmar recebimento via Pix</p>
+                  <p className="text-2xl font-black text-teal-800">{fmt(sp.valorTotal)}</p>
+                </div>
+                <button
+                  onClick={() => confirmarEntrega(sp, 'PIX', { valorConfirmado: true })}
+                  disabled={!!busy}
+                  className="w-full py-4 bg-teal-600 text-white rounded-2xl text-xs font-black uppercase tracking-wider shadow-lg active:scale-[0.98] transition-transform disabled:opacity-60"
+                >
+                  <i className="fa-solid fa-check mr-1"></i>Recebi o valor correto
+                </button>
+              </div>
+            )}
+
+            {/* --- BOLETO: foto obrigatoria --- */}
+            {spMetodo === 'BOLETO' && (
+              <div className="mt-4 space-y-3 animate-in fade-in duration-300">
+                <div className="bg-amber-50 rounded-2xl p-4 text-center border border-amber-100">
+                  <i className="fa-solid fa-barcode text-amber-600 text-2xl"></i>
+                  <p className="text-[9px] font-black text-amber-700 uppercase mt-1">Foto do boleto entregue obrigatoria</p>
+                  <p className="text-[9px] text-amber-600/80 font-semibold">O valor entra como pendente ate compensar</p>
+                </div>
+                <label className="block cursor-pointer">
+                  <input
+                    type="file" accept="image/*" capture="environment" className="hidden"
+                    onChange={async e => {
+                      const f = e.target.files?.[0];
+                      if (!f) return;
+                      try { setFotoBoleto(await compressImage(f)); }
+                      catch { showToast('Nao foi possivel processar a foto.', 'error'); }
+                    }}
+                  />
+                  <div className="py-3.5 rounded-2xl bg-amber-500 text-white text-[10px] font-black uppercase text-center shadow-md active:scale-95 transition-transform">
+                    <i className="fa-solid fa-camera mr-1"></i>{fotoBoleto ? 'Trocar foto' : 'Tirar foto do boleto'}
+                  </div>
+                </label>
+                {fotoBoleto && (
+                  <div className="relative rounded-2xl overflow-hidden border border-gray-100 animate-in zoom-in-95">
+                    <img src={fotoBoleto} alt="Foto do boleto entregue" className="w-full max-h-56 object-cover" />
+                    <span className="absolute top-2 right-2 bg-emerald-500 text-white text-[8px] font-black uppercase px-2 py-1 rounded-md">Foto anexada</span>
+                  </div>
+                )}
+                <button
+                  onClick={() => fotoBoleto && confirmarEntrega(sp, 'BOLETO', { foto: fotoBoleto })}
+                  disabled={!!busy || !fotoBoleto}
+                  className="w-full py-4 bg-emerald-600 text-white rounded-2xl text-xs font-black uppercase tracking-wider shadow-lg active:scale-[0.98] transition-transform disabled:opacity-50"
+                >
+                  <i className="fa-solid fa-check mr-1"></i>Confirmar entrega do boleto
+                </button>
+              </div>
+            )}
+
+            {/* --- alternativas (qualquer forma) --- */}
+            <div className="mt-4 pt-3 border-t border-gray-100">
+              <p className="text-[8px] font-black text-gray-300 uppercase text-center mb-2">Pagou de outra forma?</p>
+              <div className="grid grid-cols-2 gap-2">
+                <button onClick={() => confirmarEntrega(sp, 'JA_PAGO')}
+                  className="py-3 rounded-xl bg-blue-50 text-blue-600 text-[9px] font-black uppercase active:scale-95 transition-transform">
+                  <i className="fa-solid fa-circle-check mr-1"></i>Ja pagou
+                </button>
+                <button onClick={() => confirmarEntrega(sp, 'NAO_PAGO')}
+                  className="py-3 rounded-xl bg-amber-50 text-amber-600 text-[9px] font-black uppercase active:scale-95 transition-transform">
+                  <i className="fa-solid fa-hand-holding-dollar mr-1"></i>Nao cobrou
+                </button>
+              </div>
             </div>
+
             <button onClick={() => setSheetEntregue(null)} className="w-full mt-3 py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Cancelar</button>
           </div>
         </div>
@@ -399,6 +601,77 @@ const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' 
               Confirmar nao entrega
             </button>
             <button onClick={() => setSheetFalhou(null)} className="w-full mt-2 py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Cancelar</button>
+          </div>
+        </div>
+      )}
+
+      {/* ===== MODAL: CUPOM DO PEDIDO ===== */}
+      {cupom && (
+        <div className="fixed inset-0 z-[160] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setCupom(null)}>
+          <div className="bg-white w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl animate-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            {/* cupom */}
+            <div className="bg-gray-800 text-white px-5 py-3 text-center">
+              <p className="text-[10px] font-black uppercase tracking-[0.2em]">Doce Mania</p>
+              <p className="text-[8px] font-bold uppercase text-white/60 mt-0.5">Pedido de Pre-Venda</p>
+            </div>
+            <div className="flex-1 overflow-y-auto p-5 font-mono">
+              <div className="text-center border-b border-dashed border-gray-200 pb-3">
+                <p className="text-xs font-black text-gray-800 capitalize">{cupom.cliente.nome}</p>
+                <p className="text-[9px] text-gray-400 mt-0.5">{cupom.cliente.endereco || 'Sem endereco'}{cupom.cliente.bairro ? ` — ${cupom.cliente.bairro}` : ''}</p>
+                {cupom.cliente.telefone && <p className="text-[9px] text-gray-400">{cupom.cliente.telefone}</p>}
+              </div>
+              <div className="py-3 space-y-1.5 border-b border-dashed border-gray-200">
+                {cupom.itens.map((i, idx) => (
+                  <div key={idx} className="flex justify-between text-[10px] text-gray-600">
+                    <span className="truncate pr-2">{i.quantidade}x {i.nome}</span>
+                    <span className="font-bold">{fmt(i.quantidade * (i.precoVenda || 0))}</span>
+                  </div>
+                ))}
+                {cupom.itens.length === 0 && <p className="text-[10px] text-gray-400 text-center">Sem itens detalhados.</p>}
+              </div>
+              <div className="py-3 space-y-1.5">
+                <div className="flex justify-between text-[11px] font-black text-gray-800">
+                  <span>TOTAL</span>
+                  <span>{fmt(cupom.valorTotal)}</span>
+                </div>
+                <div className="flex items-center justify-between text-[10px] text-gray-600">
+                  <span>Pagamento na entrega</span>
+                  <span className={`px-1.5 py-0.5 rounded font-black uppercase text-[8px] ${pgtoMeta(cupom.formaPgto).chip}`}>
+                    <i className={`${pgtoMeta(cupom.formaPgto).icon} mr-1`}></i>{pgtoMeta(cupom.formaPgto).label}
+                  </span>
+                </div>
+              </div>
+              <p className="text-center text-[8px] text-gray-300 pt-2 border-t border-dashed border-gray-200 uppercase tracking-widest">
+                Obrigado pela preferencia!
+              </p>
+            </div>
+            <div className="p-4 bg-gray-50 border-t border-gray-100">
+              <button onClick={() => setCupom(null)} className="w-full py-3 text-gray-400 font-bold text-[10px] uppercase tracking-widest">Fechar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== MODAL: FOTO DO BOLETO ENTREGUE ===== */}
+      {verFoto && (
+        <div className="fixed inset-0 z-[160] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setVerFoto(null)}>
+          <div className="bg-white w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl animate-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="px-5 py-3 bg-amber-500 text-white text-center">
+              <p className="text-[10px] font-black uppercase">Foto do boleto entregue</p>
+              <p className="text-[9px] font-bold text-white/80 capitalize">{verFoto.cliente.nome}</p>
+            </div>
+            <div className="flex-1 overflow-y-auto p-3 bg-gray-50 flex items-center justify-center min-h-[220px]">
+              {fotoLoading ? (
+                <div className="w-8 h-8 border-4 border-amber-100 border-t-amber-500 rounded-full animate-spin"></div>
+              ) : fotoUrl ? (
+                <img src={fotoUrl} alt="Foto do boleto entregue" className="w-full rounded-xl" />
+              ) : (
+                <p className="text-[10px] text-gray-400 font-bold uppercase">Foto nao encontrada.</p>
+              )}
+            </div>
+            <div className="p-4 bg-white border-t border-gray-100">
+              <button onClick={() => setVerFoto(null)} className="w-full py-3 text-gray-400 font-bold text-[10px] uppercase tracking-widest">Fechar</button>
+            </div>
           </div>
         </div>
       )}

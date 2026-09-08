@@ -16,9 +16,9 @@ import { getServiceClient } from '@/lib/serverSupabase';
 const TTL_MS = 30_000;
 
 type Probe = { ok: boolean; at: number };
-const probes: Record<string, Probe | null> = { preVenda: null, entrega: null };
+const probes: Record<string, Probe | null> = { preVenda: null, entrega: null, foto: null };
 
-async function probeColumn(table: string, column: string, key: 'preVenda' | 'entrega'): Promise<boolean> {
+async function probeColumn(table: string, column: string, key: string): Promise<boolean> {
   const now = Date.now();
   const cached = probes[key];
   if (cached && now - cached.at < TTL_MS) return cached.ok;
@@ -41,4 +41,9 @@ export function hasPreVendaColumn(): Promise<boolean> {
 /** sales.tipo_venda / entrega_rotas existem? (Bloco 5 aplicado) */
 export function hasEntregaTables(): Promise<boolean> {
   return probeColumn('sales', 'tipo_venda', 'entrega');
+}
+
+/** entrega_eventos.foto existe? (Bloco 6 aplicado — foto do boleto entregue) */
+export function hasBoletoFotoColumn(): Promise<boolean> {
+  return probeColumn('entrega_eventos', 'foto', 'foto');
 }

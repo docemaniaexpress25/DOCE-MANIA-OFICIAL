@@ -41,6 +41,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const [view, setView] = useState<PDVView>('CART');
   const [isPrePedido, setIsPrePedido] = useState(false);
   const isPreVenda = modoVenda === 'PRE_VENDA' && !!processPreVenda;
+  // Pre-venda: forma de pagamento que o CLIENTE escolheu pagar na entrega
+  const [metodoEntrega, setMetodoEntrega] = useState<'DINHEIRO' | 'PIX' | 'BOLETO'>('DINHEIRO');
 
   // Wake Lock: mantem tela acordada durante o PDV
   useEffect(() => {
@@ -363,7 +365,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
 
     // ===== PRE-VENDA: registra o PEDIDO (sem cobranca, sem baixa de carga) =====
     if (isPreVenda) {
-      const pedido = await processPreVenda!({ clientId: client.id, valorTotal: total, itens });
+      const pedido = await processPreVenda!({ clientId: client.id, valorTotal: total, itens, metodoEntrega });
       if (pedido) {
         localStorage.removeItem(cartKey);
         setCart({});
@@ -811,10 +813,18 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               </div>
 
               {isPreVenda ? (
-                <div className="mb-6 bg-emerald-50 border border-emerald-100 rounded-2xl p-4 text-center animate-in fade-in duration-300">
-                  <i className="fa-solid fa-clipboard-list text-emerald-500 text-lg"></i>
-                  <p className="text-[10px] font-black text-emerald-700 uppercase mt-1">Pre-venda — pagamento na entrega</p>
-                  <p className="text-[9px] text-emerald-600/70 font-semibold mt-0.5">O pedido entra na rota de entrega de hoje. Finalize o dia para gerar a rota.</p>
+                <div className="mb-6 animate-in fade-in duration-300">
+                  <p className="text-[9px] font-black text-gray-400 uppercase text-center mb-2">O cliente vai pagar a entrega com:</p>
+                  <div className="flex gap-1.5 mb-4 justify-center">
+                    {(['DINHEIRO', 'PIX', 'BOLETO'] as const).map(m => (
+                      <button key={m} onClick={() => setMetodoEntrega(m)} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${metodoEntrega === m ? 'bg-emerald-600 text-white shadow-md' : 'bg-gray-50 text-gray-400'}`}>{m}</button>
+                    ))}
+                  </div>
+                  <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 text-center">
+                    <i className="fa-solid fa-clipboard-list text-emerald-500 text-lg"></i>
+                    <p className="text-[10px] font-black text-emerald-700 uppercase mt-1">Entregador cobra {metodoEntrega === 'PIX' ? 'Pix' : metodoEntrega.toLowerCase()} na entrega</p>
+                    <p className="text-[9px] text-emerald-600/70 font-semibold mt-0.5">O pedido entra na rota de entrega de hoje. Finalize o dia para gerar a rota.</p>
+                  </div>
                 </div>
               ) : (
               <>

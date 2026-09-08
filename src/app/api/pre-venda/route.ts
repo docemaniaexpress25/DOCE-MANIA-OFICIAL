@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServiceClient, isServerSupabaseConfigured } from '@/lib/serverSupabase';
 import { sessionFromRequest, isAdminSession } from '@/lib/session';
-import { hasEntregaTables } from '@/lib/serverSchema';
+import { hasEntregaTables, hasBoletoFotoColumn } from '@/lib/serverSchema';
 
 /**
  * PRÉ-VENDA / ROTAS DE ENTREGA (estilo Shopee)
@@ -34,8 +34,18 @@ function dayRangeIso(): { start: string; end: string } {
   return { start: new Date(`${d}T00:00:00${OFF}`).toISOString(), end: new Date(`${d}T23:59:59.999${OFF}`).toISOString() };
 }
 
-const SALE_COLS = 'id, vendedor_id, client_id, valor_total, valor_pago, metodo_pagamento, status_pagamento, entrega_status, entrega_seq, route_id, data_venda';
+const SALE_COLS = 'id, vendedor_id, client_id, valor_total, valor_pago, metodo_pagamento, detalhe_pagamento, status_pagamento, entrega_status, entrega_seq, route_id, data_venda';
 const CLIENT_COLS = 'id, nome_fantasia, endereco, bairro, telefone, localizacao, pin_localizacao';
+
+/** Forma de pagamento a cobrar na entrega (gravada pelo pedido: "cobrar X na entrega") */
+function formaPgtoDeSale(s: any): string {
+  const det = String(s.detalhe_pagamento || '');
+  const m = det.match(/cobrar\s+(DINHEIRO|PIX|BOLETO)/i);
+  if (m) return m[1].toUpperCase();
+  const mp = String(s.metodo_pagamento || '').toUpperCase();
+  if (mp === 'DINHEIRO' || mp === 'PIX' || mp === 'BOLETO') return mp;
+  return 'DINHEIRO';
+}
 
 async function fetchParadas(supabase: any, routeId: string) {
   const { data: salesRows, error } = await supabase
@@ -52,10 +62,14 @@ async function enrichParadas(supabase: any, salesRows: any[]) {
   const clientIds = [...new Set(salesRows.map((s: any) => s.client_id).filter(Boolean))];
   const saleIds = salesRows.map((s: any) => s.id);
 
-  const [clientsRes, itemsRes, eventsRes] = await Promise.all([
+  const [clientsRes, itemsRes, eventsRes, fotosRes] = await Promise.all([
     supabase.from('clients').select(CLIENT_COLS).in('id', clientIds),
-    supabase.from('sale_items').select('sale_id, produto_id, quantidade').in('sale_id', saleIds),
+    supabase.from('sale_items').select('sale_id, produto_id, quantidade, preco_venda').in('sale_id', saleIds),
     supabase.from('entrega_eventos').select('sale_id, status, motivo, criado_em').in('sale_id', saleIds).order('criado_em', { ascending: true }),
+    // Bloco 6: foto do boleto (so consulta se a coluna existir)
+    hasBoletoFotoColumn().then(ok =>
+      ok ? supabase.from('entrega_eventos').select('sale_id').not('foto', 'is', null).in('sale_id', saleIds)
+         : Promise.resolve({ data: [] as any[] })),
   ]);
 
   const clientMap: Record<string, any> = {};
@@ -75,8 +89,12 @@ async function enrichParadas(supabase: any, salesRows: any[]) {
       nome: prodMap[i.produto_id] || 'Produto',
       produtoId: i.produto_id,
       quantidade: i.quantidade,
+      precoVenda: Number(i.preco_venda || 0),
     });
   });
+
+  const temFotoSet: Record<string, boolean> = {};
+  (fotosRes.data || []).forEach((f: any) => { temFotoSet[f.sale_id] = true; });
 
   const eventsBySale: Record<string, any[]> = {};
   (eventsRes.data || []).forEach((e: any) => {
@@ -98,6 +116,8 @@ async function enrichParadas(supabase: any, salesRows: any[]) {
       valorTotal: Number(s.valor_total),
       valorPago: Number(s.valor_pago || 0),
       statusPagamento: s.status_pagamento,
+      formaPgto: formaPgtoDeSale(s),
+      temFoto: !!temFotoSet[s.id],
       motivo: null as string | null,
       cliente: {
         id: s.client_id,
@@ -166,8 +186,8 @@ async function getRotaDeHoje(supabase: any, vendedorId: string) {
   return data || null;
 }
 
-async function logEvento(supabase: any, routeId: string, saleId: string | null, userId: string, status: string, motivo?: string | null, lat?: number | null, lng?: number | null) {
-  await supabase.from('entrega_eventos').insert({
+async function logEvento(supabase: any, routeId: string, saleId: string | null, userId: string, status: string, motivo?: string | null, lat?: number | null, lng?: number | null, foto?: string | null) {
+  const row: any = {
     route_id: routeId,
     sale_id: saleId,
     user_id: userId,
@@ -175,7 +195,9 @@ async function logEvento(supabase: any, routeId: string, saleId: string | null, 
     motivo: motivo || null,
     lat: typeof lat === 'number' ? lat : null,
     lng: typeof lng === 'number' ? lng : null,
-  });
+  };
+  if (foto && (await hasBoletoFotoColumn())) row.foto = foto;
+  await supabase.from('entrega_eventos').insert(row);
 }
 
 async function checarConclusao(supabase: any, routeId: string) {
@@ -356,17 +378,50 @@ export async function POST(req: NextRequest) {
 
     if (acao === 'ENTREGUE') {
       if (sale.entrega_status === 'ENTREGUE') return NextResponse.json({ ok: false, error: 'Parada ja entregue.' }, { status: 409 });
-      const pagamento = String(body.pagamento || 'DINHEIRO');
+      const pagamento = String(body.pagamento || 'DINHEIRO').toUpperCase();
+      if (!['DINHEIRO', 'PIX', 'BOLETO', 'JA_PAGO', 'NAO_PAGO'].includes(pagamento)) {
+        return NextResponse.json({ ok: false, error: 'Forma de pagamento invalida.' }, { status: 400 });
+      }
+
       const updates: any = { entrega_status: 'ENTREGUE' };
+      let eventoMotivo = '';
+      let eventoFoto: string | null = null;
+
       if (pagamento === 'DINHEIRO' || pagamento === 'PIX') {
-        updates.valor_pago = Number(sale.valor_total);
+        // Confirmacao de recebimento do valor correto (frontend envia valorConfirmado)
+        const total = Number(sale.valor_total);
+        const recebido = Number(body.valorRecebido);
+        updates.valor_pago = total;
         updates.status_pagamento = 'PAGO';
         updates.metodo_pagamento = pagamento;
-        updates.detalhe_pagamento = `PRE-VENDA — recebido na entrega (${pagamento})`;
+        let det = `PRE-VENDA — recebido na entrega (${pagamento})`;
+        if (isFinite(recebido) && recebido > total) det += ` · troco ${(recebido - total).toFixed(2)}`;
+        updates.detalhe_pagamento = det;
+        eventoMotivo = pagamento === 'PIX' ? 'Pagamento: PIX confirmado' : 'Pagamento: dinheiro confirmado';
+      } else if (pagamento === 'BOLETO') {
+        // Boleto entregue: EXIGE foto do documento como comprovacao.
+        // Pagamento fica PENDENTE ate a compensacao bancaria.
+        const foto = typeof body.foto === 'string' && body.foto.startsWith('data:image') ? body.foto : null;
+        if (!foto) {
+          return NextResponse.json({ ok: false, error: 'Foto do boleto entregue obrigatoria.' }, { status: 400 });
+        }
+        if (foto.length > 3_500_000) {
+          return NextResponse.json({ ok: false, error: 'Foto muito grande. Tente novamente.' }, { status: 400 });
+        }
+        updates.metodo_pagamento = 'BOLETO';
+        updates.detalhe_pagamento = 'PRE-VENDA — boleto entregue (aguardando compensacao)';
+        eventoMotivo = 'Boleto entregue — foto anexada';
+        eventoFoto = foto;
       } else if (pagamento === 'JA_PAGO') {
         updates.valor_pago = Number(sale.valor_total);
         updates.status_pagamento = 'PAGO';
-      } // NAO_PAGO: mantem PENDENTE para cobrar depois
+        eventoMotivo = 'Entregue — cliente ja havia pago';
+      } else {
+        // NAO_PAGO: mantem PENDENTE para cobrar depois
+        updates.detalhe_pagamento = 'PRE-VENDA — entregue sem pagamento (a receber)';
+        eventoMotivo = 'Entregue sem pagamento';
+      }
+
       const { error: upErr } = await supabase.from('sales').update(updates).eq('id', saleId);
       if (upErr) throw upErr;
 
@@ -375,7 +430,7 @@ export async function POST(req: NextRequest) {
         console.error('[pre-venda] baixa estoque falhou:', (e as any)?.message);
       }
 
-      await logEvento(supabase, rota.id, saleId, userId, 'ENTREGUE', pagamento === 'NAO_PAGO' ? 'Entregue sem pagamento' : `Pagamento: ${pagamento}`, lat, lng);
+      await logEvento(supabase, rota.id, saleId, userId, 'ENTREGUE', eventoMotivo, lat, lng, eventoFoto);
       await checarConclusao(supabase, rota.id);
       return NextResponse.json({ ok: true });
     }

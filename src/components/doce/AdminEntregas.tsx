@@ -10,8 +10,9 @@ import { authHeaders } from '@/services/userService';
 interface Parada {
   saleId: string; seq: number | null; entregaStatus: string;
   valorTotal: number; valorPago: number; statusPagamento: string; motivo: string | null;
+  formaPgto?: string; temFoto?: boolean;
   cliente: { id: string; nome: string; endereco: string; bairro: string; telefone: string; lat: number | null; lng: number | null };
-  itens: { nome: string; quantidade: number }[];
+  itens: { nome: string; quantidade: number; precoVenda?: number }[];
   eventos: { status: string; motivo: string | null; criado_em: string }[];
 }
 interface RotaBloco {
@@ -28,6 +29,12 @@ const ST: Record<string, { chip: string; label: string }> = {
   EM_ROTA: { chip: 'bg-blue-100 text-blue-700', label: 'Em rota' },
   ENTREGUE: { chip: 'bg-emerald-100 text-emerald-700', label: 'Entregue' },
   FALHOU: { chip: 'bg-rose-100 text-rose-700', label: 'Falhou' },
+};
+
+const PGTO: Record<string, { label: string; icon: string; chip: string }> = {
+  DINHEIRO: { label: 'Dinheiro', icon: 'fa-solid fa-money-bill-wave', chip: 'bg-emerald-50 text-emerald-700' },
+  PIX: { label: 'Pix', icon: 'fa-brands fa-pix', chip: 'bg-teal-50 text-teal-700' },
+  BOLETO: { label: 'Boleto', icon: 'fa-solid fa-barcode', chip: 'bg-amber-50 text-amber-700' },
 };
 
 const AdminEntregas: React.FC = () => {
@@ -147,6 +154,7 @@ const AdminEntregas: React.FC = () => {
               <div className="border-t border-gray-100">
                 {[...bloco.paradas].sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0)).map(p => {
                   const st = ST[p.entregaStatus] || ST.PENDENTE;
+                  const pg = PGTO[p.formaPgto || 'DINHEIRO'] || PGTO.DINHEIRO;
                   return (
                     <div key={p.saleId} className="px-4 py-3 border-b border-gray-50 last:border-b-0 flex items-start gap-3">
                       <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-[11px] font-black ${p.entregaStatus === 'ENTREGUE' ? 'bg-emerald-500 text-white' : p.entregaStatus === 'FALHOU' ? 'bg-rose-500 text-white' : 'bg-gray-800 text-white'}`}>
@@ -163,6 +171,9 @@ const AdminEntregas: React.FC = () => {
                       </div>
                       <div className="text-right shrink-0">
                         <p className="text-[11px] font-black text-gray-800">{fmt(p.valorTotal)}</p>
+                        <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded-md inline-block mt-0.5 ${pg.chip}`}>
+                          <i className={`${pg.icon} mr-0.5`}></i>{pg.label}
+                        </span>
                         {p.entregaStatus === 'ENTREGUE' && <p className="text-[8px] font-bold text-gray-400">{p.statusPagamento === 'PAGO' ? 'pago' : 'a receber'}</p>}
                       </div>
                     </div>

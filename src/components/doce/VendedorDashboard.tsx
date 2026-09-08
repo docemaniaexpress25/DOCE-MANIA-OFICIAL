@@ -30,7 +30,7 @@ interface VendedorDashboardProps {
   subcategories: Subcategory[];
   markMessageAsRead: (id: string) => void;
   processSale: (data: any) => Promise<Sale | null>;
-  processPreVenda: (data: any) => Promise<Sale | null>;
+  processPreVenda: (data: any) => Promise<{ pedido: Sale | null; erro?: string }>;
   addClient: (data: Omit<Client, 'id'>) => Promise<void>; 
   updateClient: (id: string, data: Partial<Client>) => void;
   deleteClient: (id: string) => void; 

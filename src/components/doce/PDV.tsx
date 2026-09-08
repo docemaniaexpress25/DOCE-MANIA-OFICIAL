@@ -29,7 +29,7 @@ interface PDVProps {
   subcategories: Subcategory[];
   /** Pre-venda: quando definido, o PDV registra PEDIDO (estoque principal, entrega na rota) */
   modoVenda?: 'PRONTA' | 'PRE_VENDA';
-  processPreVenda?: (data: any) => Promise<Sale | null>;
+  processPreVenda?: (data: any) => Promise<{ pedido: Sale | null; erro?: string }>;
 }
 
 type PDVView = 'CART' | 'RECEIPT_PREVIEW' | 'PAYMENT' | 'PRE_PEDIDO_PREVIEW';
@@ -370,8 +370,9 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
 
     // ===== PRE-VENDA: registra o PEDIDO (sem cobranca, sem baixa de carga) =====
     if (isPreVenda) {
-      const pedido = await processPreVenda!({ clientId: client.id, valorTotal: total, itens, metodoEntrega });
-      if (pedido) {
+      const r = await processPreVenda!({ clientId: client.id, valorTotal: total, itens, metodoEntrega });
+      if (r.pedido) {
+        const pedido = r.pedido;
         localStorage.removeItem(cartKey);
         setCart({});
         lastFinishedSaleRef.current = pedido;
@@ -383,8 +384,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         setSaleResultModal({ total, comissao: comissaoTotal, troca: isTrocaActive ? vt : 0, isPrazo: false, isPreVenda: true, clientName: client.nomeFantasia, sale: pedido });
       } else {
         isFinalizingRef.current = false;
-        // Falha SEM silencio: avisa o vendedor na hora
-        setAppModal({ title: 'Falha ao Registrar', message: 'Nao foi possivel registrar o pedido.\nVerifique sua conexao e tente novamente.', icon: 'fa-solid fa-circle-exclamation', iconColor: 'text-rose-500', type: 'error' });
+        // Falha SEM silencio: mostra o motivo REAL vindo da API (sessao expirada, banco desatualizado, etc.)
+        setAppModal({ title: 'Falha ao Registrar', message: r.erro || 'Nao foi possivel registrar o pedido.\nVerifique sua conexao e tente novamente.', icon: 'fa-solid fa-circle-exclamation', iconColor: 'text-rose-500', type: 'error' });
       }
       return;
     }

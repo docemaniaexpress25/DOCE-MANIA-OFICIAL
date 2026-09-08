@@ -493,7 +493,7 @@ const App: React.FC = () => {
     }
   };
 
-  const processPreVenda = async (data: any) => {
+  const processPreVenda = async (data: any): Promise<{ pedido: Sale | null; erro?: string }> => {
     try {
       const { authHeaders } = await import('@/services/userService');
       const res = await fetch('/api/pre-venda/venda', {
@@ -503,9 +503,14 @@ const App: React.FC = () => {
       });
       const d = await res.json().catch(() => null);
       if (!res.ok || !d?.ok) {
-        console.error('[pre-venda] falha:', d?.error || res.status);
+        const motivo = String(
+          d?.error ||
+          (res.status === 401 ? 'Sessao expirada. Faca logout e entre novamente.' : `Erro ${res.status} no servidor.`)
+        );
+        const detalhe = d?.detalhe ? `\n(${String(d.detalhe).slice(0, 140)})` : '';
+        console.error('[pre-venda] falha:', motivo, d?.detalhe || res.status);
         haptics.error();
-        return null;
+        return { pedido: null, erro: `${motivo}${detalhe}` };
       }
       fetchTransactionalData();
       const { sounds } = await import('@/utils/sound');
@@ -533,11 +538,11 @@ const App: React.FC = () => {
         itens: (data.itens || []).map((i: any) => ({ produtoId: i.produtoId, quantidade: i.quantidade, precoVenda: i.precoVenda })),
         dataVencimento: s.data_vencimento ? new Date(s.data_vencimento) : undefined,
       };
-      return mapped;
-    } catch (e) {
+      return { pedido: mapped };
+    } catch (e: any) {
       console.error(e);
       haptics.error();
-      return null;
+      return { pedido: null, erro: 'Sem conexao com o servidor.\nVerifique sua internet e tente novamente.' };
     }
   };
 

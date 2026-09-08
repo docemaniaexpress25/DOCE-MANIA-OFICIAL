@@ -85,12 +85,17 @@ export async function POST(req: NextRequest) {
       .single();
 
     if (saleErr || !sale) {
-      // Colunas do Bloco 5 ainda nao rodadas?
       const code = (saleErr as any)?.code || '';
+      console.error('[api/pre-venda/venda] insert sales falhou:', code, saleErr?.message);
+      // Colunas do Bloco 5 ainda nao rodadas?
       if (code === '42703' || code === 'PGRST204') {
         return NextResponse.json({ ok: false, error: 'Banco desatualizado: rode o Bloco 5 do SQL (colunas de pre-venda).' }, { status: 503 });
       }
-      throw saleErr || new Error('Falha ao gravar pedido');
+      // Falha de FK: cliente ou vendedor inexistente
+      if (code === '23503') {
+        return NextResponse.json({ ok: false, error: 'Registro invalido (cliente/vendedor nao encontrado). Atualize a tela e tente de novo.', detalhe: saleErr?.message }, { status: 400 });
+      }
+      return NextResponse.json({ ok: false, error: 'Erro ao gravar o pedido no banco.', detalhe: saleErr?.message }, { status: 500 });
     }
 
     const itemsRows = itens.map(i => ({
@@ -100,11 +105,16 @@ export async function POST(req: NextRequest) {
       preco_venda: i.precoVenda,
     }));
     const { error: itemsErr } = await supabase.from('sale_items').insert(itemsRows);
-    if (itemsErr) throw itemsErr;
+    if (itemsErr) {
+      // Nao deixa pedido orfao sem itens no banco
+      console.error('[api/pre-venda/venda] insert sale_items falhou:', itemsErr.code, itemsErr.message);
+      await supabase.from('sales').delete().eq('id', sale.id);
+      return NextResponse.json({ ok: false, error: 'Erro ao gravar os itens do pedido.', detalhe: itemsErr.message }, { status: 500 });
+    }
 
     return NextResponse.json({ ok: true, sale });
   } catch (e: any) {
     console.error('[api/pre-venda/venda] erro:', e?.message);
-    return NextResponse.json({ ok: false, error: 'Erro ao registrar o pedido. Tente novamente.' }, { status: 500 });
+    return NextResponse.json({ ok: false, error: 'Erro ao registrar o pedido. Tente novamente.', detalhe: e?.message }, { status: 500 });
   }
 }

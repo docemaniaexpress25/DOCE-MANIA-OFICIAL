@@ -18,7 +18,7 @@ interface RotaBloco {
   rota: { id: string; data: string; status: string; totalParadas: number; criadaEm: string; iniciadaEm: string | null; concluidaEm: string | null; vendedorId: string; vendedorNome: string };
   paradas: Parada[];
 }
-interface ApiResp { hoje: string; rotas: RotaBloco[]; pendentes?: { count: number; valor: number }; error?: string; }
+interface ApiResp { hoje: string; rotas: RotaBloco[]; pendentes?: { count: number; valor: number }; migracaoPendente?: boolean; error?: string; }
 
 const fmt = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const hora = (iso: string) => new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
@@ -74,6 +74,15 @@ const AdminEntregas: React.FC = () => {
           <i className={`fa-solid fa-rotate text-xs ${loading ? 'animate-spin' : ''}`}></i>
         </button>
       </header>
+
+      {data.migracaoPendente && (
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3 flex items-center gap-3">
+          <i className="fa-solid fa-database text-amber-500"></i>
+          <p className="text-[10px] font-black text-amber-700 uppercase leading-snug">
+            Migracao pendente: rode o Bloco 5 (SQL da pre-venda) no Supabase para ativar as entregas.
+          </p>
+        </div>
+      )}
 
       {/* Resumo geral */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 grid grid-cols-3 gap-3 text-center">

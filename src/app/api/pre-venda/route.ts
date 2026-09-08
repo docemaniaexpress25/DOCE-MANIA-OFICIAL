@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServiceClient, isServerSupabaseConfigured } from '@/lib/serverSupabase';
 import { sessionFromRequest, isAdminSession } from '@/lib/session';
+import { hasEntregaTables } from '@/lib/serverSchema';
 
 /**
  * PRÉ-VENDA / ROTAS DE ENTREGA (estilo Shopee)
@@ -200,6 +201,15 @@ export async function GET(req: NextRequest) {
     const url = new URL(req.url);
     const all = url.searchParams.get('all') === '1';
 
+    // Bloco 5 ainda nao rodou: responde vazio + flag para a UI avisar,
+    // em vez de 500 (a aba Entregas nao pode derrubar o resto do app).
+    if (!(await hasEntregaTables())) {
+      return NextResponse.json({
+        hoje: todayStr(), rotas: [], rota: null, paradas: [],
+        pendentes: { count: 0, valor: 0 }, migracaoPendente: true,
+      });
+    }
+
     if (all) {
       if (!isAdminSession(req)) return NextResponse.json({ error: 'Acesso restrito ao admin.' }, { status: 403 });
       const { data: rotas } = await supabase
@@ -233,6 +243,10 @@ export async function POST(req: NextRequest) {
   const admin = isAdminSession(req);
 
   try {
+    if (!(await hasEntregaTables())) {
+      return NextResponse.json({ ok: false, error: 'Banco desatualizado: rode o Bloco 5 do SQL (pre-venda).' }, { status: 503 });
+    }
+
     const body = await req.json();
     const acao = String(body.acao || '');
     const lat = typeof body.lat === 'number' ? body.lat : null;

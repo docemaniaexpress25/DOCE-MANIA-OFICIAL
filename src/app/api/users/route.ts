@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { hash } from 'bcryptjs';
 import { getServiceClient, isServerSupabaseConfigured } from '@/lib/serverSupabase';
 import { isAdminSession } from '@/lib/session';
+import { hasPreVendaColumn } from '@/lib/serverSchema';
 
 /**
  * Gerenciamento de usuarios via servidor (service_role).
@@ -20,6 +21,18 @@ const SAFE_COLUMNS = 'id, nome, email, perfil, ativo, telefone, whatsapp, foto, 
 // pre_venda vem junto: nao e dado sensivel e permite o app liberar a aba
 // Entregas mesmo com currentUser cacheado no localStorage.
 const LOGIN_COLUMNS = 'id, nome, perfil, ativo, rota, pre_venda';
+// Fallbacks sem pre_venda: funcionam ANTES do Bloco 5 do SQL rodar (a coluna
+// ainda nao existe no Supabase). Sem isso, o GET 500ava e a lista de
+// vendedores sumia do login e das cargas. preVenda fica false ate migrar.
+const SAFE_COLUMNS_SEM_PRE_VENDA = 'id, nome, email, perfil, ativo, telefone, whatsapp, foto, placa_veiculo, rota';
+const LOGIN_COLUMNS_SEM_PRE_VENDA = 'id, nome, perfil, ativo, rota';
+
+async function resolveUserColumns(): Promise<{ safe: string; login: string }> {
+  const comPreVenda = await hasPreVendaColumn();
+  return comPreVenda
+    ? { safe: SAFE_COLUMNS, login: LOGIN_COLUMNS }
+    : { safe: SAFE_COLUMNS_SEM_PRE_VENDA, login: LOGIN_COLUMNS_SEM_PRE_VENDA };
+}
 
 function mapUser(u: any) {
   return {
@@ -45,9 +58,10 @@ export async function GET(req: NextRequest) {
     // Com sessao ADMIN: lista completa (gerenciamento de usuarios).
     // Sem sessao (tela de login): apenas o minimo para escolher o usuario.
     const isAdmin = isAdminSession(req);
+    const cols = await resolveUserColumns();
     const { data, error } = await getServiceClient()
       .from('app_users')
-      .select(isAdmin ? SAFE_COLUMNS : LOGIN_COLUMNS)
+      .select(isAdmin ? cols.safe : cols.login)
       .order('nome', { ascending: true });
     if (error) throw error;
     return NextResponse.json({ users: (data || []).map(mapUser) });
@@ -86,10 +100,11 @@ export async function POST(req: NextRequest) {
       pin_hash: await hash(pin, 10),
     };
 
+    const cols = await resolveUserColumns();
     const { data, error } = await getServiceClient()
       .from('app_users')
       .insert(payload)
-      .select(SAFE_COLUMNS)
+      .select(cols.safe)
       .single();
     if (error) throw error;
 
@@ -133,15 +148,21 @@ export async function PUT(req: NextRequest) {
       payload.pin_hash = await hash(body.pin, 10);
     }
 
+    // Flag de pre-venda (so existe depois do Bloco 5)
+    if (body.preVenda !== undefined && (await hasPreVendaColumn())) {
+      payload.pre_venda = !!body.preVenda;
+    }
+
     if (Object.keys(payload).length === 0) {
       return NextResponse.json({ error: 'Nada para atualizar.' }, { status: 400 });
     }
 
+    const cols = await resolveUserColumns();
     const { data, error } = await getServiceClient()
       .from('app_users')
       .update(payload)
       .eq('id', body.id)
-      .select(SAFE_COLUMNS)
+      .select(cols.safe)
       .single();
     if (error) throw error;
 

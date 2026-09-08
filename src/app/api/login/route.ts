@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { compare } from 'bcryptjs';
 import { getServiceClient, isServerSupabaseConfigured } from '@/lib/serverSupabase';
 import { createSessionToken } from '@/lib/session';
+import { hasPreVendaColumn } from '@/lib/serverSchema';
 
 /**
  * POST /api/login  { userId, pin }
@@ -61,26 +62,35 @@ export async function POST(req: NextRequest) {
     }
 
     const supabase = getServiceClient();
+    // pre_venda so existe depois do Bloco 5 do SQL; enquanto isso o login NAO
+    // PODE quebrar por causa dela (antes, o select 500ava para todo mundo).
+    // (`as any` evita o ParserError do typegen do supabase-js com string dinamica)
+    const comPreVenda = await hasPreVendaColumn();
+    const userCols = comPreVenda
+      ? 'id, nome, email, perfil, ativo, telefone, whatsapp, foto, placa_veiculo, rota, pre_venda, pin_hash'
+      : 'id, nome, email, perfil, ativo, telefone, whatsapp, foto, placa_veiculo, rota, pin_hash';
     const { data, error } = await supabase
       .from('app_users')
-      .select('id, nome, email, perfil, ativo, telefone, whatsapp, foto, placa_veiculo, rota, pre_venda, pin_hash')
+      .select(userCols as any)
       .eq('id', userId)
       .single();
 
     if (error || !data) {
       return NextResponse.json({ ok: false, error: 'Usuario nao encontrado.' }, { status: 404 });
     }
-    if (!data.ativo) {
+    // data vem com tipo dinamico (select montado em runtime) -> alias tipado
+    const u = data as any;
+    if (!u.ativo) {
       return NextResponse.json({ ok: false, error: 'Usuario inativo. Contate o administrador.' }, { status: 403 });
     }
-    if (!data.pin_hash) {
+    if (!u.pin_hash) {
       return NextResponse.json(
         { ok: false, error: 'PIN nao configurado. Contate o administrador para redefinir.' },
         { status: 409 }
       );
     }
 
-    const valid = await compare(pin, data.pin_hash);
+    const valid = await compare(pin, u.pin_hash);
     if (!valid) {
       return NextResponse.json({ ok: false, error: 'PIN incorreto. Tente novamente.' }, { status: 401 });
     }
@@ -89,20 +99,20 @@ export async function POST(req: NextRequest) {
 
     // Objeto do usuario SEM dados sensiveis (mesma shape usada pelo app)
     const user = {
-      id: data.id,
-      nome: data.nome,
-      email: data.email,
-      role: data.perfil as string,
-      ativo: !!data.ativo,
-      telefone: data.telefone,
-      whatsapp: data.whatsapp,
-      foto: data.foto,
-      placaVeiculo: data.placa_veiculo,
-      rota: data.rota,
-      preVenda: !!data.pre_venda,
+      id: u.id,
+      nome: u.nome,
+      email: u.email,
+      role: u.perfil as string,
+      ativo: !!u.ativo,
+      telefone: u.telefone,
+      whatsapp: u.whatsapp,
+      foto: u.foto,
+      placaVeiculo: u.placa_veiculo,
+      rota: u.rota,
+      preVenda: !!u.pre_venda,
     };
 
-    const token = createSessionToken(data.id, String(data.perfil || 'VENDEDOR'));
+    const token = createSessionToken(u.id, String(u.perfil || 'VENDEDOR'));
 
     return NextResponse.json({ ok: true, user, token });
   } catch (e: any) {

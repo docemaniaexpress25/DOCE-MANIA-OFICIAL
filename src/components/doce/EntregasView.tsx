@@ -29,6 +29,7 @@ interface Rota {
 interface ApiResp {
   hoje: string; rota: Rota | null; paradas: Parada[];
   pendentes?: { count: number; valor: number };
+  migracaoPendente?: boolean;
   error?: string;
 }
 
@@ -144,6 +145,16 @@ const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' 
 
   return (
     <div className="space-y-4">
+      {/* Bloco 5 (SQL) ainda nao rodou no Supabase */}
+      {data.migracaoPendente && (
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3 flex items-center gap-3">
+          <i className="fa-solid fa-database text-amber-500"></i>
+          <p className="text-[10px] font-black text-amber-700 uppercase leading-snug">
+            Pre-venda em preparacao: aguardando a migracao do banco (Bloco 5). Fale com o administrador.
+          </p>
+        </div>
+      )}
+
       {/* ===== RESUMO DA ROTA ===== */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
         <div className="flex items-center justify-between mb-1">

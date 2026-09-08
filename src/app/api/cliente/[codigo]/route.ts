@@ -13,8 +13,40 @@ import { getServiceClient, isServerSupabaseConfigured } from '@/lib/serverSupaba
  *   do banco a cada visita.
  * - Usa service_role no servidor; anon nao precisa ler nada daqui.
  *
- * Formato de resposta mantido IDENTICO — a tela nao muda.
+ * Formato de resposta: igual ao anterior + campo "pagamentos" por venda
+ * (historico organizado dos recebimentos parciais, parseado do log em
+ * detalhe_pagamento — nao expõe o detalhe bruto ao cliente).
  */
+
+/**
+ * Parseia o log de recebimentos acumulado no detalhe_pagamento da venda.
+ * Padroes gravados pelo sistema:
+ * - Recebimento manual do vendedor: "05/02/2025 14:33:12: R$ 50.00 (DINHEIRO)"
+ *   (receiveAccount — aceita horario opcional e variacoes do toLocaleString)
+ * - Comprovante Pix do portal confirmado: "PIX PORTAL R$ 30.00 em 06/02/2025"
+ * O primeiro segmento do detalhe e a forma original da venda (ex: "Prazo Comum"),
+ * nao e um pagamento — por isso o slice(1) apos dividir por " | ".
+ */
+function parsePagamentos(detalhe: string | null | undefined): { data: string; valor: number; metodo: string }[] {
+  if (!detalhe) return [];
+  const out: { data: string; valor: number; metodo: string }[] = [];
+  const parts = String(detalhe).split(' | ');
+  for (const raw of parts.slice(1)) {
+    const p = raw.trim();
+    let m = p.match(/^(\d{2}\/\d{2}\/\d{4})(?:,?\s*\d{2}:\d{2}(?::\d{2})?)?:\s*R\$\s*([\d.,]+)\s*\((.+)\)$/);
+    if (m) {
+      const v = Number(m[2]);
+      if (isFinite(v) && v > 0) out.push({ data: m[1], valor: v, metodo: m[3].trim() });
+      continue;
+    }
+    m = p.match(/^PIX PORTAL R\$\s*([\d.,]+)\s+em (.+)$/);
+    if (m) {
+      const v = Number(m[1]);
+      if (isFinite(v) && v > 0) out.push({ data: m[2].trim(), valor: v, metodo: 'Pix (portal)' });
+    }
+  }
+  return out;
+}
 
 export async function GET(
   request: NextRequest,
@@ -44,10 +76,10 @@ export async function GET(
     if (findErr) throw findErr;
     if (!found) return NextResponse.json({ error: 'Cliente nao encontrado' }, { status: 404 });
 
-    // 2. Vendas do cliente
+    // 2. Vendas do cliente (detalhe_pagamento carrega o log de pagamentos parciais)
     const { data: salesData } = await supabase
       .from('sales')
-      .select('id, valor_total, valor_pago, metodo_pagamento, status_pagamento, data_venda, data_vencimento, sale_items(produto_id, quantidade, preco_venda)')
+      .select('id, valor_total, valor_pago, metodo_pagamento, status_pagamento, data_venda, data_vencimento, detalhe_pagamento, sale_items(produto_id, quantidade, preco_venda)')
       .eq('client_id', found.id)
       .order('data_venda', { ascending: false });
 
@@ -133,7 +165,11 @@ export async function GET(
 
     return NextResponse.json({
       client: found,
-      sales,
+      // Cada venda ganha "pagamentos": historico organizado dos recebimentos parciais
+      sales: (salesData || []).map((s: any) => {
+        const { detalhe_pagamento, ...rest } = s;
+        return { ...rest, pagamentos: parsePagamentos(detalhe_pagamento) };
+      }),
       products: Object.fromEntries(Object.entries(productMap).map(([k, v]) => [k, v.nome])),
       stats: {
         totalComprado,

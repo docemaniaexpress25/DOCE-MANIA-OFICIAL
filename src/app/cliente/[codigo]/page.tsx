@@ -4,10 +4,13 @@ import { useEffect, useState, useRef } from 'react';
 import { useParams } from 'next/navigation';
 
 interface SaleItem { produto_id: string; quantidade: number; preco_venda: number; }
+interface Pagamento { data: string; valor: number; metodo: string; }
 interface Sale {
   id: string; valor_total: number; valor_pago: number; metodo_pagamento: string;
   status_pagamento: string; data_venda: string; data_vencimento: string | null;
   sale_items: SaleItem[];
+  /** Historico organizado dos recebimentos (pagamentos parciais) */
+  pagamentos?: Pagamento[];
 }
 interface Sugestao { produto_id: string; nome: string; popularidade: number; clientesQueCompram: number; preco: number; }
 interface Destaque { produto_id: string; nome: string; }
@@ -433,7 +436,14 @@ export default function ClienteDashboard() {
             </div>
           ) : listSales.map(sale => {
             const isPending = sale.status_pagamento === 'PENDENTE';
-            const restante = Number(sale.valor_total) - Number(sale.valor_pago);
+            const valorTotal = Number(sale.valor_total) || 0;
+            const valorPago = Number(sale.valor_pago) || 0;
+            const restante = valorTotal - valorPago;
+            // Pagamento parcial: ja pagou uma parte mas ainda falta
+            const isPartial = isPending && valorPago > 0.005 && restante > 0.005;
+            const pctPago = valorTotal > 0 ? Math.min(100, Math.round((valorPago / valorTotal) * 100)) : 0;
+            const compsDaVenda = comprovantes.filter(c => c.sale_id === sale.id);
+            const compsEmAnalise = compsDaVenda.filter(c => c.status === 'PENDENTE');
             const isOpen = expanded.has(sale.id);
 
             return (
@@ -441,17 +451,26 @@ export default function ClienteDashboard() {
                 {/* Linha resumida - SEMPRE VISIVEL */}
                 <button onClick={() => toggle(sale.id)} className="w-full px-4 py-3.5 flex items-center justify-between text-left">
                   <div className="flex items-center gap-3 min-w-0">
-                    <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${isPending ? 'bg-rose-400' : 'bg-emerald-400'}`}></div>
+                    <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${isPartial ? 'bg-amber-400' : isPending ? 'bg-rose-400' : 'bg-emerald-400'}`}></div>
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
-                        <span className={`text-[10px] font-black uppercase ${isPending ? 'text-rose-600' : 'text-emerald-600'}`}>{isPending ? 'Devendo' : 'Pago'}</span>
+                        <span className={`text-[10px] font-black uppercase ${isPartial ? 'text-amber-600' : isPending ? 'text-rose-600' : 'text-emerald-600'}`}>{isPartial ? 'Pago parcial' : isPending ? 'Devendo' : 'Pago'}</span>
                         <span className="text-[10px] text-gray-400 font-semibold">{formatDate(sale.data_venda)}</span>
                       </div>
-                      <p className="text-[9px] text-gray-400 font-medium mt-0.5">{getPaymentLabel(sale.metodo_pagamento)}</p>
+                      <p className="text-[9px] text-gray-400 font-medium mt-0.5">
+                        {isPartial ? (
+                          <>Ja pagou <span className="text-emerald-600 font-bold">{formatCurrency(valorPago)}</span> de {formatCurrency(valorTotal)}</>
+                        ) : (
+                          getPaymentLabel(sale.metodo_pagamento)
+                        )}
+                      </p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2.5 shrink-0">
-                    <span className="text-sm font-black text-gray-800">{formatCurrency(Number(sale.valor_total))}</span>
+                    <div className="flex flex-col items-end">
+                      <span className="text-sm font-black text-gray-800">{formatCurrency(valorTotal)}</span>
+                      {isPartial && <span className="text-[8px] font-black text-rose-500 uppercase">falta {formatCurrency(restante)}</span>}
+                    </div>
                     <i className={`fa-solid fa-chevron-down text-[9px] text-gray-300 transition-transform ${isOpen ? 'rotate-180' : ''}`}></i>
                   </div>
                 </button>
@@ -473,8 +492,58 @@ export default function ClienteDashboard() {
                     <div className="border-t border-dashed border-gray-200 mx-4"></div>
                     <div className="px-4 py-3 flex items-center justify-between">
                       <span className="text-[9px] font-bold uppercase text-gray-400 tracking-wider">Total</span>
-                      <span className="text-base font-black text-gray-800">{formatCurrency(Number(sale.valor_total))}</span>
+                      <span className="text-base font-black text-gray-800">{formatCurrency(valorTotal)}</span>
                     </div>
+
+                    {/* PAGAMENTO PARCIAL: progresso + historico organizado */}
+                    {isPartial && (
+                      <div className="px-4 pb-3">
+                        <div className="flex items-center justify-between mb-1.5">
+                          <span className="text-[9px] font-black uppercase text-gray-400">{pctPago}% pago</span>
+                          <span className="text-[9px] font-bold text-gray-500"><span className="text-emerald-600 font-black">{formatCurrency(valorPago)}</span> de {formatCurrency(valorTotal)}</span>
+                        </div>
+                        <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                          <div className="h-full bg-gradient-to-r from-emerald-500 to-teal-500 rounded-full transition-all" style={{ width: `${pctPago}%` }}></div>
+                        </div>
+                      </div>
+                    )}
+
+                    {(sale.pagamentos?.length || 0) > 0 && (
+                      <div className="px-4 pb-3">
+                        <p className="text-[9px] font-black uppercase text-gray-400 tracking-wider mb-2">
+                          <i className="fa-solid fa-clock-rotate-left mr-1 text-gray-300"></i>Pagamentos registrados
+                        </p>
+                        <div className="space-y-1.5">
+                          {sale.pagamentos!.map((pg, i) => (
+                            <div key={i} className="flex items-center gap-2.5 bg-emerald-50/70 rounded-xl px-3 py-2 border border-emerald-100/70">
+                              <div className="w-5 h-5 bg-emerald-100 rounded-full flex items-center justify-center shrink-0">
+                                <i className="fa-solid fa-check text-emerald-600 text-[8px]"></i>
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-[10px] font-black text-gray-700 capitalize truncate">{pg.metodo}</p>
+                                <p className="text-[8px] text-gray-400 font-semibold">{pg.data}</p>
+                              </div>
+                              <span className="text-[11px] font-black text-emerald-600 shrink-0">+ {formatCurrency(pg.valor)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Comprovante enviado pelo portal aguardando confirmacao */}
+                    {compsEmAnalise.map(c => (
+                      <div key={c.id} className="mx-4 mb-3 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2 flex items-center gap-2.5">
+                        <div className="w-5 h-5 bg-amber-100 rounded-full flex items-center justify-center shrink-0">
+                          <i className="fa-solid fa-hourglass-half text-amber-600 text-[8px]"></i>
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-[10px] font-black text-amber-700">Comprovante em análise</p>
+                          <p className="text-[8px] text-amber-600/80 font-semibold">Enviado em {formatDate(c.created_at)} — aguarde a confirmacao</p>
+                        </div>
+                        <span className="text-[10px] font-black text-amber-700 shrink-0">{formatCurrency(Number(c.valor))}</span>
+                      </div>
+                    ))}
+
                     {isPending && restante > 0 && (
                       <>
                         <div className="bg-rose-50 px-4 py-2 border-t border-rose-100 flex items-center justify-between">
@@ -562,8 +631,13 @@ export default function ClienteDashboard() {
               <div className="p-5">
                 {/* Valor */}
                 <div className="text-center mb-4">
-                  <p className="text-[9px] font-black text-gray-400 uppercase tracking-wider">Valor da divida</p>
+                  <p className="text-[9px] font-black text-gray-400 uppercase tracking-wider">Saldo em aberto</p>
                   <p className="text-3xl font-black text-gray-800 mt-1">{formatCurrency(pixData.valor)}</p>
+                  {Number(pixSale.valor_pago || 0) > 0.005 && (
+                    <p className="text-[9px] text-emerald-600 font-bold mt-1">
+                      <i className="fa-solid fa-check mr-1"></i>Você já pagou {formatCurrency(Number(pixSale.valor_pago))} desta compra
+                    </p>
+                  )}
                   <p className="text-[9px] text-gray-400 font-semibold mt-1">Venda de {formatDate(pixSale.data_venda)} • ID {pixData.txid}</p>
                 </div>
 

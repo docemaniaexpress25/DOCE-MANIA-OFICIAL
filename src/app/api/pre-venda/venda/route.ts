@@ -101,6 +101,10 @@ export async function POST(req: NextRequest) {
     const itemsRows = itens.map(i => ({
       sale_id: sale.id,
       produto_id: i.produtoId,
+      // LEGADO: a tabela real tem product_id NOT NULL (o RPC processar_venda_v2
+      // sempre preencheu as duas). Sem isso o insert dos itens falha (23502)
+      // e o pedido fica orfao.
+      product_id: i.produtoId,
       quantidade: i.quantidade,
       preco_venda: i.precoVenda,
     }));

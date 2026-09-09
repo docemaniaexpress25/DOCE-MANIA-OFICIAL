@@ -533,6 +533,27 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, ...resumo });
     }
 
+    // ---------- SET_CONFIG: taxa da comissao de pre-venda (admin) ----------
+    // (antes do gate de saleId — esta acao nao precisa de venda)
+    if (acao === 'SET_CONFIG') {
+      if (!admin) return NextResponse.json({ ok: false, error: 'Acesso restrito ao admin.' }, { status: 403 });
+      const pct = Number(body.comissaoPct);
+      if (!isFinite(pct) || pct <= 0 || pct > 100) {
+        return NextResponse.json({ ok: false, error: 'Informe um percentual entre 1 e 100.' }, { status: 400 });
+      }
+      const { error: cfgErr } = await supabase
+        .from('app_config')
+        .upsert({ chave: 'comissao_pre_venda_pct', valor: String(pct), updated_at: new Date().toISOString() }, { onConflict: 'chave' });
+      if (cfgErr) {
+        const code = (cfgErr as any).code || '';
+        if (code === '42P01' || code === '42501') {
+          return NextResponse.json({ ok: false, error: 'Banco desatualizado: rode o Bloco 7 do SQL (tabela app_config).' }, { status: 503 });
+        }
+        throw cfgErr;
+      }
+      return NextResponse.json({ ok: true, comissaoPct: pct });
+    }
+
     // ---------- Acoes por parada ----------
     const saleId = String(body.saleId || '');
     if (!saleId) return NextResponse.json({ ok: false, error: 'saleId obrigatoria.' }, { status: 400 });
@@ -700,26 +721,6 @@ export async function POST(req: NextRequest) {
       await supabase.from('entrega_rotas').update({ status: 'EM_ROTA', concluida_em: null }).eq('id', rota.id);
       await logEvento(supabase, rota.id, saleId, userId, 'EM_ROTA', 'Parada reaberta', lat, lng);
       return NextResponse.json({ ok: true });
-    }
-
-    // ---------- SET_CONFIG: taxa da comissao de pre-venda (admin) ----------
-    if (acao === 'SET_CONFIG') {
-      if (!admin) return NextResponse.json({ ok: false, error: 'Acesso restrito ao admin.' }, { status: 403 });
-      const pct = Number(body.comissaoPct);
-      if (!isFinite(pct) || pct <= 0 || pct > 100) {
-        return NextResponse.json({ ok: false, error: 'Informe um percentual entre 1 e 100.' }, { status: 400 });
-      }
-      const { error: cfgErr } = await supabase
-        .from('app_config')
-        .upsert({ chave: 'comissao_pre_venda_pct', valor: String(pct), updated_at: new Date().toISOString() }, { onConflict: 'chave' });
-      if (cfgErr) {
-        const code = (cfgErr as any).code || '';
-        if (code === '42P01' || code === '42501') {
-          return NextResponse.json({ ok: false, error: 'Banco desatualizado: rode o Bloco 7 do SQL (tabela app_config).' }, { status: 503 });
-        }
-        throw cfgErr;
-      }
-      return NextResponse.json({ ok: true, comissaoPct: pct });
     }
 
     return NextResponse.json({ ok: false, error: 'Acao desconhecida.' }, { status: 400 });

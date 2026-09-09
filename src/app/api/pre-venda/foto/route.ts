@@ -30,7 +30,8 @@ export async function GET(req: NextRequest) {
 
     const { data: rota } = await supabase.from('entrega_rotas').select('vendedor_id').eq('id', sale.route_id).maybeSingle();
     if (!rota) return NextResponse.json({ error: 'Rota nao encontrada.' }, { status: 404 });
-    if (!isAdminSession(req) && rota.vendedor_id !== session.sub) {
+    // Dono da rota, admin ou ENTREGADOR
+    if (!isAdminSession(req) && session.perfil !== 'ENTREGADOR' && rota.vendedor_id !== session.sub) {
       return NextResponse.json({ error: 'Sem acesso a esta foto.' }, { status: 403 });
     }
 

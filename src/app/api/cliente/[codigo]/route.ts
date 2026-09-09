@@ -76,10 +76,11 @@ export async function GET(
     if (findErr) throw findErr;
     if (!found) return NextResponse.json({ error: 'Cliente nao encontrado' }, { status: 404 });
 
-    // 2. Vendas do cliente (detalhe_pagamento carrega o log de pagamentos parciais)
+    // 2. Vendas do cliente (detalhe_pagamento carrega o log de pagamentos parciais;
+    //    entrega_status mostra a situacao da pre-venda no portal)
     const { data: salesData } = await supabase
       .from('sales')
-      .select('id, valor_total, valor_pago, metodo_pagamento, status_pagamento, data_venda, data_vencimento, detalhe_pagamento, sale_items(produto_id, quantidade, preco_venda)')
+      .select('id, valor_total, valor_pago, metodo_pagamento, status_pagamento, data_venda, data_vencimento, detalhe_pagamento, entrega_status, sale_items(produto_id, quantidade, preco_venda)')
       .eq('client_id', found.id)
       .order('data_venda', { ascending: false });
 

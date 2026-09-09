@@ -5,9 +5,19 @@ import { useParams } from 'next/navigation';
 
 interface SaleItem { produto_id: string; quantidade: number; preco_venda: number; }
 interface Pagamento { data: string; valor: number; metodo: string; }
+
+/** Selo de situacao da entrega da pre-venda (visivel no cartao da venda) */
+const ENTREGA_META: Record<string, { label: string; cls: string }> = {
+  PENDENTE: { label: 'Aguardando entrega', cls: 'text-amber-600 bg-amber-50' },
+  EM_ROTA: { label: 'Saiu p/ entrega', cls: 'text-blue-600 bg-blue-50' },
+  ENTREGUE: { label: 'Entregue', cls: 'text-emerald-600 bg-emerald-50' },
+  FALHOU: { label: 'Entrega nao realizada', cls: 'text-rose-600 bg-rose-50' },
+};
 interface Sale {
   id: string; valor_total: number; valor_pago: number; metodo_pagamento: string;
   status_pagamento: string; data_venda: string; data_vencimento: string | null;
+  /** Situacao da entrega da pre-venda (PENDENTE | EM_ROTA | ENTREGUE | FALHOU) */
+  entrega_status?: string | null;
   sale_items: SaleItem[];
   /** Historico organizado dos recebimentos (pagamentos parciais) */
   pagamentos?: Pagamento[];
@@ -456,6 +466,11 @@ export default function ClienteDashboard() {
                       <div className="flex items-center gap-2">
                         <span className={`text-[10px] font-black uppercase ${isPartial ? 'text-amber-600' : isPending ? 'text-rose-600' : 'text-emerald-600'}`}>{isPartial ? 'Pago parcial' : isPending ? 'Devendo' : 'Pago'}</span>
                         <span className="text-[10px] text-gray-400 font-semibold">{formatDate(sale.data_venda)}</span>
+                        {sale.entrega_status && ENTREGA_META[sale.entrega_status] && (
+                          <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded ${ENTREGA_META[sale.entrega_status].cls}`}>
+                            <i className="fa-solid fa-truck-fast mr-1"></i>{ENTREGA_META[sale.entrega_status].label}
+                          </span>
+                        )}
                       </div>
                       <p className="text-[9px] text-gray-400 font-medium mt-0.5">
                         {isPartial ? (

@@ -37,8 +37,10 @@ interface Rota {
   criadaEm: string; iniciadaEm: string | null; concluidaEm: string | null;
   vendedorId: string; vendedorNome: string;
 }
+interface RotaBloco { rota: Rota; paradas: Parada[]; }
 interface ApiResp {
   hoje: string; rota: Rota | null; paradas: Parada[];
+  rotas?: RotaBloco[];
   pendentes?: { count: number; valor: number };
   migracaoPendente?: boolean;
   error?: string;
@@ -115,7 +117,7 @@ const STATUS_STYLE: Record<string, { chip: string; label: string }> = {
 
 const MOTIVOS_FALHA = ['Cliente ausente', 'Recusou o pedido', 'Endereco errado', 'Loja fechada', 'Outro motivo'];
 
-const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' | 'error') => void }> = ({ user, showToast }) => {
+const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' | 'error') => void; entregador?: boolean }> = ({ user, showToast, entregador = false }) => {
   const [data, setData] = useState<ApiResp | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
@@ -125,7 +127,9 @@ const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' 
   const [motivoSel, setMotivoSel] = useState<string>(MOTIVOS_FALHA[0]);
   // Recebimento por forma de pagamento
   const [valorRecebido, setValorRecebido] = useState('');
+  const [valorPix, setValorPix] = useState('');
   const [fotoBoleto, setFotoBoleto] = useState<string | null>(null);
+  const [fotoPix, setFotoPix] = useState<string | null>(null);
   // Cupom do pedido (visao entregador)
   const [cupom, setCupom] = useState<Parada | null>(null);
   // Foto do boleto entregue
@@ -137,7 +141,7 @@ const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' 
   const load = useCallback(async (silencioso = false) => {
     if (!silencioso) setLoading(true);
     try {
-      const res = await fetch('/api/pre-venda', { headers: authHeaders() });
+      const res = await fetch(entregador ? '/api/pre-venda?all=1' : '/api/pre-venda', { headers: authHeaders() });
       const d: ApiResp = await res.json();
       if (!mounted.current) return;
       if (!res.ok) { if (!silencioso) showToast(d.error || 'Erro ao carregar entregas.', 'error'); }
@@ -187,14 +191,23 @@ const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' 
     const ok = await acao({ acao: 'ENTREGUE', saleId: p.saleId, pagamento, ...extra },
       pagamento === 'BOLETO' ? 'Entrega confirmada — boleto com foto!' :
       pagamento === 'DINHEIRO' ? 'Entrega confirmada — dinheiro!' :
-      pagamento === 'PIX' ? 'Entrega confirmada — Pix!' :
+      pagamento === 'PIX' ? 'Entrega confirmada — Pix com comprovante!' :
       pagamento === 'JA_PAGO' ? 'Entrega confirmada — ja pago!' :
       'Entrega confirmada — a receber!');
     if (ok) {
       setSheetEntregue(null);
       setValorRecebido('');
+      setValorPix('');
       setFotoBoleto(null);
+      setFotoPix(null);
     }
+  }
+
+  // Exclusao de pedido: vendedor ate 11h59 (o servidor revalida; admin qualquer hora)
+  async function excluirPedido(p: Parada) {
+    const nome = p.cliente.nome || 'cliente';
+    if (!window.confirm(`Excluir o pedido de ${nome}?\n\nO pedido sai da rota de entrega.\nRegra: o vendedor pode excluir ate as 11:59 de hoje; apos isso somente o administrador.`)) return;
+    await acao({ acao: 'EXCLUIR_VENDA', saleId: p.saleId }, 'Pedido excluido da rota.');
   }
 
   async function abrirFotoBoleto(p: Parada) {
@@ -218,13 +231,22 @@ const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' 
   }
   if (!data) return null;
 
-  const rota = data.rota;
   const paradas = data.paradas || [];
-  const entregues = paradas.filter(p => p.entregaStatus === 'ENTREGUE').length;
-  const falhadas = paradas.filter(p => p.entregaStatus === 'FALHOU').length;
-  const ativas = paradas.length - entregues - falhadas;
-  const progresso = paradas.length > 0 ? Math.round((entregues / paradas.length) * 100) : 0;
-  const valorRota = paradas.reduce((a, p) => a + p.valorTotal, 0);
+  const secoes: RotaBloco[] = data.rotas && data.rotas.length > 0
+    ? data.rotas
+    : (data.rota ? [{ rota: data.rota, paradas }] : []);
+  const rota = data.rota;
+  // Totais globais (entregador soma todas as rotas; vendedor tem uma so)
+  const todas = secoes.flatMap(sb => sb.paradas);
+  const entregues = todas.filter(p => p.entregaStatus === 'ENTREGUE').length;
+  const falhadas = todas.filter(p => p.entregaStatus === 'FALHOU').length;
+  const ativas = todas.length - entregues - falhadas;
+  const progresso = todas.length > 0 ? Math.round((entregues / todas.length) * 100) : 0;
+  const valorRota = todas.reduce((a, p) => a + p.valorTotal, 0);
+  const aReceber = todas
+    .filter(p => p.entregaStatus !== 'ENTREGUE')
+    .reduce((a, p) => a + Math.max(0, p.valorTotal - p.valorPago), 0);
+  const rotaImutavel = entregues > 0 || falhadas > 0;
 
   // Parada em foco no sheet de entrega
   const sp = sheetEntregue;
@@ -245,46 +267,62 @@ const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' 
         </div>
       )}
 
-      {/* ===== RESUMO DA ROTA ===== */}
+      {/* ===== RESUMO ===== */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
         <div className="flex items-center justify-between mb-1">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 bg-emerald-50 rounded-xl flex items-center justify-center">
               <i className="fa-solid fa-route text-emerald-500 text-xs"></i>
             </div>
-            <p className="text-[10px] font-black text-gray-700 uppercase">Rota de entrega de hoje</p>
+            <p className="text-[10px] font-black text-gray-700 uppercase">
+              {entregador ? 'Entregas de hoje' : 'Rota de entrega de hoje'}
+            </p>
           </div>
           <button onClick={() => load()} className="w-8 h-8 rounded-lg bg-gray-50 text-gray-400 flex items-center justify-center active:scale-90">
             <i className={`fa-solid fa-rotate text-[11px] ${busy ? 'animate-spin' : ''}`}></i>
           </button>
         </div>
 
-        {rota ? (
+        {todas.length > 0 ? (
           <>
-            <div className="flex items-center gap-2 mt-2">
-              <span className={`text-[8px] font-black uppercase px-2 py-1 rounded-lg ${rota.status === 'CONCLUIDA' ? 'bg-emerald-100 text-emerald-700' : rota.status === 'EM_ROTA' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>
-                {rota.status === 'CONCLUIDA' ? 'Concluida' : rota.status === 'EM_ROTA' ? 'Em rota' : 'Gerada'}
-              </span>
-              <span className="text-[9px] text-gray-400 font-semibold">{paradas.length} paradas · {fmt(valorRota)}</span>
-            </div>
+            {/* Entregador: um selo por rota/vendedor */}
+            {entregador && (
+              <div className="flex flex-wrap gap-1.5 mt-2">
+                {secoes.map(sb => (
+                  <span key={sb.rota.id} className={`text-[8px] font-black uppercase px-2 py-1 rounded-lg ${sb.rota.status === 'CONCLUIDA' ? 'bg-emerald-100 text-emerald-700' : sb.rota.status === 'EM_ROTA' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>
+                    <i className="fa-solid fa-user mr-1"></i>{sb.rota.vendedorNome || 'Vendedor'}: {sb.rota.status === 'CONCLUIDA' ? 'concluida' : sb.rota.status === 'EM_ROTA' ? 'em rota' : 'gerada'}
+                  </span>
+                ))}
+              </div>
+            )}
+            {!entregador && rota && (
+              <div className="flex items-center gap-2 mt-2">
+                <span className={`text-[8px] font-black uppercase px-2 py-1 rounded-lg ${rota.status === 'CONCLUIDA' ? 'bg-emerald-100 text-emerald-700' : rota.status === 'EM_ROTA' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>
+                  {rota.status === 'CONCLUIDA' ? 'Concluida' : rota.status === 'EM_ROTA' ? 'Em rota' : 'Gerada'}
+                </span>
+                <span className="text-[9px] text-gray-400 font-semibold">{todas.length} paradas · {fmt(valorRota)}</span>
+              </div>
+            )}
 
             {/* Progresso estilo Shopee */}
             <div className="mt-3">
               <div className="flex justify-between text-[9px] font-black uppercase text-gray-400 mb-1">
-                <span>{entregues} de {paradas.length} entregues</span>
+                <span>{entregues} de {todas.length} entregues</span>
                 <span>{progresso}%</span>
               </div>
               <div className="h-2.5 bg-gray-100 rounded-full overflow-hidden">
                 <div className="h-full bg-gradient-to-r from-emerald-500 to-teal-500 rounded-full transition-all" style={{ width: `${progresso}%` }}></div>
               </div>
-              <div className="flex gap-3 mt-2 text-[9px] font-bold">
+              <div className="flex gap-3 mt-2 text-[9px] font-bold flex-wrap">
                 <span className="text-emerald-600"><i className="fa-solid fa-circle-check mr-1"></i>{entregues} ok</span>
                 <span className="text-amber-600"><i className="fa-solid fa-clock mr-1"></i>{ativas} na fila</span>
                 {falhadas > 0 && <span className="text-rose-600"><i className="fa-solid fa-circle-xmark mr-1"></i>{falhadas} falhas</span>}
+                <span className="text-gray-700"><i className="fa-solid fa-wallet mr-1"></i>A receber: {fmt(aReceber)}</span>
               </div>
             </div>
 
-            {rota.status === 'GERADA' && (
+            {/* Vendedor: inicia a propria rota */}
+            {!entregador && rota?.status === 'GERADA' && (
               <button
                 onClick={() => acao({ acao: 'INICIAR_ROTA' }, 'Rota iniciada — boas entregas!')}
                 disabled={!!busy}
@@ -293,16 +331,37 @@ const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' 
                 <i className="fa-solid fa-play"></i> Iniciar rota de entrega
               </button>
             )}
-            {rota.status === 'EM_ROTA' && (
+            {!entregador && rota?.status === 'EM_ROTA' && (
               <p className="mt-3 bg-blue-50 border border-blue-100 rounded-xl px-3 py-2 text-[9px] font-bold text-blue-600 text-center uppercase">
                 <i className="fa-solid fa-location-dot mr-1"></i>Sua posicao esta sendo registrada para o admin acompanhar
+              </p>
+            )}
+
+            {/* Vendedor: regenerar enquanto NADA foi registrado (inclui novos pedidos / reordena) */}
+            {!entregador && rota && !rotaImutavel && (
+              <button
+                onClick={() => acao({ acao: 'GERAR_ROTA' }, 'Rota regenerada!')}
+                disabled={!!busy}
+                className="w-full mt-3 py-3.5 bg-white border-2 border-dashed border-blue-200 text-blue-600 rounded-2xl text-[10px] font-black uppercase tracking-wider active:scale-[0.98] transition-transform disabled:opacity-60 flex items-center justify-center gap-2"
+              >
+                <i className="fa-solid fa-rotate"></i> Regenerar rota (reordenar / incluir novos pedidos)
+              </button>
+            )}
+            {!entregador && rota && rotaImutavel && (
+              <p className="mt-3 bg-gray-50 border border-gray-100 rounded-xl px-3 py-2 text-[9px] font-bold text-gray-400 text-center uppercase">
+                <i className="fa-solid fa-lock mr-1"></i>Rota travada — ja ha entregas registradas (so o admin pode excluir pedidos)
               </p>
             )}
           </>
         ) : (
           <div className="text-center py-4">
-            <i className="fa-solid fa-clipboard-list text-gray-200 text-4xl mb-2 block"></i>
-            {data.pendentes && data.pendentes.count > 0 ? (
+            {entregador ? (
+              <>
+                <i className="fa-solid fa-truck text-gray-200 text-4xl mb-2 block"></i>
+                <p className="text-xs font-black text-gray-700">Nenhuma rota foi gerada hoje ainda.</p>
+                <p className="text-[10px] text-gray-400 font-semibold mt-1">Aguarde o vendedor finalizar o dia.</p>
+              </>
+            ) : data.pendentes && data.pendentes.count > 0 ? (
               <>
                 <p className="text-xs font-black text-gray-700">Voce tem {data.pendentes.count} pedido(s) de pre-venda hoje</p>
                 <p className="text-[10px] text-gray-400 font-semibold mt-1">Total {fmt(data.pendentes.valor)} — finalize o dia para montar a rota</p>
@@ -321,8 +380,30 @@ const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' 
         )}
       </div>
 
-      {/* ===== PARADAS EM ORDEM ===== */}
-      {paradas.map(p => {
+      {/* ===== PARADAS EM ORDEM (agrupadas por vendedor) ===== */}
+      {secoes.map(sb => (
+        <div key={sb.rota.id} className="space-y-3">
+          {/* Cabeçalho por vendedor — o entregador entrega tudo e vê separado */}
+          <div className="flex items-center justify-between px-1">
+            <p className="text-[10px] font-black text-gray-500 uppercase flex items-center gap-1.5">
+              <i className="fa-solid fa-user text-[8px]"></i>
+              {entregador ? `Vendedor: ${sb.rota.vendedorNome || 'N/D'}` : 'Suas paradas'}
+              <span className="text-gray-300 font-normal">·</span>
+              <span className="text-gray-400">{sb.paradas.length} paradas</span>
+            </p>
+            <p className="text-[10px] font-black text-gray-500">{fmt(sb.paradas.reduce((a, p) => a + p.valorTotal, 0))}</p>
+          </div>
+          {/* Entregador: inicia cada rota para liberar as acoes de entrega */}
+          {entregador && sb.rota.status === 'GERADA' && (
+            <button
+              onClick={() => acao({ acao: 'INICIAR_ROTA', rotaId: sb.rota.id }, 'Rota iniciada — boas entregas!')}
+              disabled={!!busy}
+              className="w-full py-3 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-wider shadow-md active:scale-[0.98] transition-transform disabled:opacity-60 flex items-center justify-center gap-2"
+            >
+              <i className="fa-solid fa-play"></i> Iniciar rota de {sb.rota.vendedorNome || 'vendedor'}
+            </button>
+          )}
+          {sb.paradas.map(p => {
         const st = STATUS_STYLE[p.entregaStatus] || STATUS_STYLE.PENDENTE;
         const pend = p.entregaStatus === 'PENDENTE' || p.entregaStatus === 'EM_ROTA';
         const zap = zapUrl(p);
@@ -400,12 +481,21 @@ const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' 
               >
                 <i className="fa-solid fa-receipt mr-1"></i>Cupom
               </button>
+              {pend && !entregador && (
+                <button
+                  onClick={() => excluirPedido(p)}
+                  disabled={!!busy}
+                  className="flex-1 min-w-[64px] py-2.5 rounded-xl bg-rose-50 text-rose-500 text-[9px] font-black uppercase text-center active:scale-95 transition-transform disabled:opacity-60"
+                >
+                  <i className="fa-solid fa-trash-can mr-1"></i>Excluir
+                </button>
+              )}
             </div>
 
-            {pend && rota?.status === 'EM_ROTA' && (
+            {pend && sb.rota.status === 'EM_ROTA' && (
               <div className="px-4 pb-4 flex flex-wrap gap-2">
                 <button
-                  onClick={() => { setValorRecebido(''); setFotoBoleto(null); setSheetEntregue(p); }}
+                  onClick={() => { setValorRecebido(''); setValorPix(''); setFotoBoleto(null); setFotoPix(null); setSheetEntregue(p); }}
                   disabled={!!busy}
                   className="flex-[1.4] min-w-[90px] py-2.5 rounded-xl bg-emerald-600 text-white text-[9px] font-black uppercase shadow-sm active:scale-95 transition-transform disabled:opacity-60"
                 >
@@ -420,12 +510,12 @@ const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' 
                 </button>
               </div>
             )}
-            {pend && rota?.status === 'GERADA' && (
+            {pend && sb.rota.status === 'GERADA' && (
               <div className="px-4 pb-3">
                 <p className="text-[8px] font-bold text-gray-300 uppercase text-center">Inicie a rota para liberar as acoes</p>
               </div>
             )}
-            {p.entregaStatus === 'FALHOU' && rota?.status === 'EM_ROTA' && (
+            {p.entregaStatus === 'FALHOU' && sb.rota.status === 'EM_ROTA' && (
               <div className="px-4 pb-4">
                 <button
                   onClick={() => acao({ acao: 'REABRIR', saleId: p.saleId }, 'Parada reaberta.')}
@@ -439,6 +529,8 @@ const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' 
           </div>
         );
       })}
+        </div>
+      ))}
 
       {rota && paradas.length === 0 && (
         <div className="bg-white rounded-2xl p-8 text-center border border-gray-100">
@@ -484,29 +576,74 @@ const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' 
                   <p className="text-[9px] font-black text-amber-600 text-center uppercase">Faltam {fmt(falta)} — confira com o cliente</p>
                 )}
                 <button
-                  onClick={() => confirmarEntrega(sp, 'DINHEIRO', { valorConfirmado: true, valorRecebido: rec > 0 ? rec : undefined })}
+                  onClick={() => {
+                    if (falta > 0) {
+                      if (window.confirm(`Registrar pagamento PARCIAL?\n\nRecebeu ${fmt(rec)} de ${fmt(sp.valorTotal)}.\nO restante (${fmt(falta)}) continua em aberto no sistema.`)) {
+                        confirmarEntrega(sp, 'DINHEIRO', { valorRecebido: rec });
+                      }
+                      return;
+                    }
+                    confirmarEntrega(sp, 'DINHEIRO', { valorConfirmado: true, valorRecebido: rec > 0 ? rec : undefined });
+                  }}
                   disabled={!!busy}
                   className="w-full py-4 bg-emerald-600 text-white rounded-2xl text-xs font-black uppercase tracking-wider shadow-lg active:scale-[0.98] transition-transform disabled:opacity-60"
                 >
-                  <i className="fa-solid fa-check mr-1"></i>Confirmei que recebi {fmt(sp.valorTotal)}
+                  <i className="fa-solid fa-check mr-1"></i>
+                  {falta > 0 ? `Registrar parcial — recebi ${fmt(rec)}` : `Confirmei que recebi ${fmt(sp.valorTotal)}`}
                 </button>
               </div>
             )}
 
-            {/* --- PIX: confirmacao do valor correto --- */}
+            {/* --- PIX: valor (parcial ok) + FOTO DO COMPROVANTE OBRIGATORIA --- */}
             {spMetodo === 'PIX' && (
               <div className="mt-4 space-y-3 animate-in fade-in duration-300">
                 <div className="bg-teal-50 rounded-2xl p-4 text-center border border-teal-100">
                   <i className="fa-brands fa-pix text-teal-600 text-2xl"></i>
-                  <p className="text-[9px] font-black text-teal-700 uppercase mt-1">Confirmar recebimento via Pix</p>
+                  <p className="text-[9px] font-black text-teal-700 uppercase mt-1">Pagamento via Pix</p>
                   <p className="text-2xl font-black text-teal-800">{fmt(sp.valorTotal)}</p>
                 </div>
+                <div>
+                  <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Valor recebido no Pix (vazio = total)</label>
+                  <input
+                    type="number" inputMode="decimal"
+                    value={valorPix}
+                    onChange={e => setValorPix(e.target.value)}
+                    placeholder="0.00"
+                    className="w-full p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-xl font-black text-center outline-none focus:ring-2 focus:ring-teal-100"
+                  />
+                </div>
+                <label className="block cursor-pointer">
+                  <input
+                    type="file" accept="image/*" capture="environment" className="hidden"
+                    onChange={async e => {
+                      const f = e.target.files?.[0];
+                      if (!f) return;
+                      try { setFotoPix(await compressImage(f)); }
+                      catch { showToast('Nao foi possivel processar a foto.', 'error'); }
+                    }}
+                  />
+                  <div className="py-3.5 rounded-2xl bg-teal-500 text-white text-[10px] font-black uppercase text-center shadow-md active:scale-95 transition-transform">
+                    <i className="fa-solid fa-camera mr-1"></i>{fotoPix ? 'Trocar comprovante' : 'Foto do comprovante Pix (obrigatoria)'}
+                  </div>
+                </label>
+                {fotoPix && (
+                  <div className="relative rounded-2xl overflow-hidden border border-gray-100 animate-in zoom-in-95">
+                    <img src={fotoPix} alt="Comprovante Pix" className="w-full max-h-56 object-cover" />
+                    <span className="absolute top-2 right-2 bg-emerald-500 text-white text-[8px] font-black uppercase px-2 py-1 rounded-md">Comprovante anexado</span>
+                  </div>
+                )}
                 <button
-                  onClick={() => confirmarEntrega(sp, 'PIX', { valorConfirmado: true })}
-                  disabled={!!busy}
-                  className="w-full py-4 bg-teal-600 text-white rounded-2xl text-xs font-black uppercase tracking-wider shadow-lg active:scale-[0.98] transition-transform disabled:opacity-60"
+                  onClick={() => {
+                    const pv = parseFloat(valorPix) || 0;
+                    if (pv > 0 && pv < sp.valorTotal) {
+                      if (!window.confirm(`Registrar pagamento PARCIAL?\n\nRecebeu ${fmt(pv)} de ${fmt(sp.valorTotal)}.\nO restante (${fmt(sp.valorTotal - pv)}) continua em aberto.`)) return;
+                    }
+                    confirmarEntrega(sp, 'PIX', { foto: fotoPix, valorRecebido: pv > 0 ? pv : undefined });
+                  }}
+                  disabled={!!busy || !fotoPix}
+                  className="w-full py-4 bg-teal-600 text-white rounded-2xl text-xs font-black uppercase tracking-wider shadow-lg active:scale-[0.98] transition-transform disabled:opacity-50"
                 >
-                  <i className="fa-solid fa-check mr-1"></i>Recebi o valor correto
+                  <i className="fa-solid fa-check mr-1"></i>Recebi com o comprovante
                 </button>
               </div>
             )}

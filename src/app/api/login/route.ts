@@ -61,6 +61,32 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: 'PIN incorreto. Tente novamente.' }, { status: 400 });
     }
 
+    // ---------- ENTREGADOR ----------
+    // Login fixo (PIN 1234): nao existe na lista de usuarios. A tela de login
+    // revela este acesso por 5 toques no logo, igual ao admin. O token de
+    // sessao tem perfil ENTREGADOR e da acesso apenas a tela de rotas.
+    if (String(userId) === 'ENTREGADOR') {
+      if (pin !== '1234') {
+        return NextResponse.json({ ok: false, error: 'PIN incorreto. Tente novamente.' }, { status: 401 });
+      }
+      clearAttempts(ip);
+      const user = {
+        id: 'ENTREGADOR',
+        nome: 'Entregador',
+        email: '',
+        role: 'ENTREGADOR',
+        ativo: true,
+        telefone: '',
+        whatsapp: '',
+        foto: null,
+        placaVeiculo: '',
+        rota: '',
+        preVenda: false,
+      };
+      const token = createSessionToken('ENTREGADOR', 'ENTREGADOR');
+      return NextResponse.json({ ok: true, user, token });
+    }
+
     const supabase = getServiceClient();
     // pre_venda so existe depois do Bloco 5 do SQL; enquanto isso o login NAO
     // PODE quebrar por causa dela (antes, o select 500ava para todo mundo).

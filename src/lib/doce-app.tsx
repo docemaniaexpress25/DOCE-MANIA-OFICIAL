@@ -3,6 +3,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { User, Product, Carga, Sale, Commission, Client, PaymentMethod, CargaPendente, CommissionPaymentLog, SystemMessage, Expense, Category, Subcategory } from '@/lib/types';
 import AdminDashboard from '@/components/doce/AdminDashboard';
 import VendedorDashboard from '@/components/doce/VendedorDashboard';
+import EntregasView from '@/components/doce/EntregasView';
 import Login from '@/components/doce/Login';
 import { haptics } from '@/utils/haptics';
 import { offlineSync } from '@/utils/offlineSync';
@@ -24,6 +25,31 @@ import { pushService } from '@/services/pushNotificationService';
 const getTodayDateString = () => {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+};
+
+/**
+ * Tela do ENTREGADOR: somente a rota do dia (todas as rotas, separadas por
+ * vendedor). Login oculto (5 toques no logo), PIN 1234 — sem acesso ao resto
+ * do sistema. Entregador recebe SALARIO fixo: aqui nao existe comissao.
+ */
+const EntregadorShell: React.FC<{ user: User }> = ({ user }) => {
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const showToast = useCallback((message: string, type: 'success' | 'error' = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3200);
+  }, []);
+  return (
+    <div className="space-y-4 pb-10">
+      {toast && (
+        <div className="fixed top-20 left-4 right-4 z-[300] flex justify-center pointer-events-none">
+          <div className={`${toast.type === 'success' ? 'bg-emerald-600' : 'bg-rose-600'} text-white px-6 py-3 rounded-2xl shadow-2xl font-black text-xs uppercase flex items-center gap-3 animate-in slide-in-from-top`}>
+            <i className={`fa-solid ${toast.type === 'success' ? 'fa-circle-check' : 'fa-circle-exclamation'}`}></i>{toast.message}
+          </div>
+        </div>
+      )}
+      <EntregasView user={user} showToast={showToast} entregador />
+    </div>
+  );
 };
 
 const App: React.FC = () => {
@@ -113,6 +139,11 @@ const App: React.FC = () => {
 
   useEffect(() => { saveLocalState('currentUser', currentUser); }, [currentUser]);
 
+  // Papel do usuario em ref (usado para o ENTREGADOR pular as buscas pesadas
+  // de estoque/vendas/comissoes — ele so usa a tela de rota)
+  const roleRef = useRef<string>('');
+  useEffect(() => { roleRef.current = currentUser?.role || ''; }, [currentUser]);
+
   // Pre-venda: sincroniza a flag do usuario cacheado (ex.: Edipo) com o servidor.
   // Se o Bloco 5 marcou o vendedor como pre-venda e o app ainda esta com o
   // user antigo no localStorage, a aba Entregas aparece sem precisar re-logar.
@@ -130,6 +161,7 @@ const App: React.FC = () => {
   useEffect(() => { saveLocalState('dailyRouteState', dailyRouteState); }, [dailyRouteState]);
 
   const fetchTransactionalData = useCallback(async () => {
+    if (roleRef.current === 'ENTREGADOR') return;
     try {
       const [s, c, p, m, cg, cgp, ex] = await Promise.all([
         saleService.getAllSales(),
@@ -153,6 +185,7 @@ const App: React.FC = () => {
   }, []);
 
   const fetchCoreData = useCallback(async () => {
+    if (roleRef.current === 'ENTREGADOR') return;
     try {
       const settings = await appSettingsService.getSettings();
       setLogo(settings.logo);
@@ -538,6 +571,9 @@ const App: React.FC = () => {
         itens: (data.itens || []).map((i: any) => ({ produtoId: i.produtoId, quantidade: i.quantidade, precoVenda: i.precoVenda })),
         dataVencimento: s.data_vencimento ? new Date(s.data_vencimento) : undefined,
       };
+      // Merge otimista: o cliente aparece como ATENDIDO no Roteiro do Dia
+      // na hora, sem esperar o refetch do servidor.
+      setSales(prev => (prev.some(x => x.id === mapped.id) ? prev : [mapped, ...prev]));
       return { pedido: mapped };
     } catch (e: any) {
       console.error(e);
@@ -665,7 +701,9 @@ const App: React.FC = () => {
       </header>
       
       <main className="container mx-auto p-4 max-w-lg">
-        {currentUser.role === 'ADMIN' ? (
+        {currentUser.role === 'ENTREGADOR' ? (
+          <EntregadorShell user={currentUser} />
+        ) : currentUser.role === 'ADMIN' ? (
           <AdminDashboard 
             {...{ products, users, cargas, clients, sales, commissions, payoutLogs, expenses, logo, margemGlobalAtiva, margemGlobalValor, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, adminNotification, companyName, companyCnpj, orderedProductIds: productOrder, categories, subcategories, clientOrder }}
             addProduct={addProduct} updateProduct={updateProduct} deleteProduct={deleteProduct} registerStockEntry={()=>{}} adjustStockManual={()=>{}}

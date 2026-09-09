@@ -42,6 +42,16 @@ const AdminEntregas: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [aberta, setAberta] = useState<string | null>(null);
   const mounted = useRef(true);
+  // Config da comissao de pre-venda (taxa em % da comissao normal)
+  const [comissaoPct, setComissaoPct] = useState<string>('');
+  const [salvandoPct, setSalvandoPct] = useState(false);
+  const [gerando, setGerando] = useState(false);
+  const [msg, setMsg] = useState<{ t: 'success' | 'error'; m: string } | null>(null);
+
+  const aviso = (m: string, t: 'success' | 'error' = 'success') => {
+    setMsg({ t, m });
+    setTimeout(() => setMsg(null), 4000);
+  };
 
   const load = useCallback(async (silencioso = false) => {
     if (!silencioso) setLoading(true);
@@ -52,6 +62,49 @@ const AdminEntregas: React.FC = () => {
     } catch { /* silencioso */ }
     finally { if (mounted.current) setLoading(false); }
   }, []);
+
+  // Taxa da comissao de pre-venda (admin)
+  useEffect(() => {
+    fetch('/api/pre-venda?config=1', { headers: authHeaders() })
+      .then(r => r.json())
+      .then(d => { if (mounted.current && d.comissaoPct != null) setComissaoPct(String(d.comissaoPct)); })
+      .catch(() => {});
+  }, []);
+
+  async function salvarPct() {
+    const v = Number(comissaoPct);
+    if (!isFinite(v) || v <= 0 || v > 100) { aviso('Informe um percentual entre 1 e 100.', 'error'); return; }
+    setSalvandoPct(true);
+    try {
+      const res = await fetch('/api/pre-venda', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ acao: 'SET_CONFIG', comissaoPct: v }),
+      });
+      const d = await res.json();
+      if (res.ok && d.ok) aviso(`Taxa da pre-venda salva: ${v}% da comissao normal.`);
+      else aviso(d.error || 'Nao foi possivel salvar (Bloco 7 rodou no Supabase?).', 'error');
+    } catch { aviso('Sem conexao. Tente novamente.', 'error'); }
+    finally { if (mounted.current) setSalvandoPct(false); }
+  }
+
+  /** Finaliza o dia geral: gera as rotas de TODOS os vendedores com pendentes */
+  async function gerarTodasRotas() {
+    if (!window.confirm('Finalizar o dia de TODOS os vendedores e gerar as rotas de entrega?')) return;
+    setGerando(true);
+    try {
+      const res = await fetch('/api/pre-venda', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ acao: 'GERAR_ROTA' }),
+      });
+      const d = await res.json();
+      if (res.ok && d.ok) aviso(`Rotas geradas: ${d.geradas ?? 0}.`);
+      else aviso(d.error || 'Nao foi possivel gerar as rotas.', 'error');
+      await load(true);
+    } catch { aviso('Sem conexao. Tente novamente.', 'error'); }
+    finally { if (mounted.current) setGerando(false); }
+  }
 
   useEffect(() => {
     mounted.current = true;
@@ -91,6 +144,14 @@ const AdminEntregas: React.FC = () => {
         </div>
       )}
 
+      {msg && (
+        <div className={`${msg.t === 'success' ? 'bg-emerald-50 border-emerald-100 text-emerald-700' : 'bg-rose-50 border-rose-100 text-rose-700'} border rounded-2xl px-4 py-3`}>
+          <p className="text-[10px] font-black uppercase leading-snug">
+            <i className={`fa-solid ${msg.t === 'success' ? 'fa-circle-check' : 'fa-circle-exclamation'} mr-1`}></i>{msg.m}
+          </p>
+        </div>
+      )}
+
       {/* Resumo geral */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 grid grid-cols-3 gap-3 text-center">
         <div>
@@ -112,8 +173,50 @@ const AdminEntregas: React.FC = () => {
           <p className="text-[10px] font-black text-amber-700 uppercase">
             <i className="fa-solid fa-hourglass-half mr-1"></i>{data.pendentes.count} pedido(s) de pre-venda ainda nao incluidos em rota — {fmt(data.pendentes.valor)}
           </p>
+          <button
+            onClick={gerarTodasRotas}
+            disabled={gerando}
+            className="mt-3 w-full py-3 bg-amber-500 text-white rounded-xl text-[10px] font-black uppercase tracking-wider active:scale-[0.98] transition-transform disabled:opacity-60"
+          >
+            <i className="fa-solid fa-flag-checkered mr-1"></i>Finalizar dia geral e gerar todas as rotas
+          </button>
         </div>
       )}
+
+      {/* CONFIG: taxa da comissao de pre-venda (so entra no financeiro na entrega) */}
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
+        <div className="flex items-center gap-2 mb-1">
+          <div className="w-7 h-7 bg-purple-50 rounded-lg flex items-center justify-center shrink-0">
+            <i className="fa-solid fa-percent text-purple-500 text-[10px]"></i>
+          </div>
+          <p className="text-[10px] font-black text-gray-700 uppercase">Comissao da pre-venda</p>
+        </div>
+        <p className="text-[9px] text-gray-400 font-semibold leading-snug">
+          % da comissao normal do produto que o vendedor ganha em pre-venda.
+          A comissao e gerada somente quando a entrega e confirmada com pagamento
+          (proporcional ao valor recebido). O entregador recebe salario fixo e nao
+          participa desta taxa.
+        </p>
+        <div className="flex items-center gap-2 mt-3">
+          <div className="flex-1 flex items-center bg-gray-50 border border-gray-100 rounded-xl px-3">
+            <input
+              type="number" inputMode="decimal" min="1" max="100"
+              value={comissaoPct}
+              onChange={e => setComissaoPct(e.target.value)}
+              placeholder="50"
+              className="w-full py-2.5 bg-transparent text-sm font-black text-center outline-none"
+            />
+            <span className="text-[10px] font-black text-gray-400">%</span>
+          </div>
+          <button
+            onClick={salvarPct}
+            disabled={salvandoPct}
+            className="px-5 py-2.5 bg-purple-600 text-white rounded-xl text-[10px] font-black uppercase active:scale-95 transition-transform disabled:opacity-60"
+          >
+            {salvandoPct ? 'Salvando...' : 'Salvar'}
+          </button>
+        </div>
+      </div>
 
       {/* Rotas */}
       {(data.rotas || []).length === 0 && (

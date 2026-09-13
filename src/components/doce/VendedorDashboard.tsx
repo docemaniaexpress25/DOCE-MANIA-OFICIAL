@@ -5,6 +5,7 @@ import { User, Product, Client, Carga, Sale, Commission, PaymentMethod, CargaPen
 import { saleService } from '@/services/saleService';
 import { locationService } from '@/services/locationService';
 import { DIAS_SEMANA } from '@/lib/constants';
+import { buscarCnpjReceita, mascararCnpj, mensagemCnpj, CnpjBusca } from '@/lib/cnpjAutocomplete';
 import PDV from '@/components/doce/PDV';
 import Cupom from '@/components/doce/Cupom';
 import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
@@ -164,6 +165,8 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [confirmAction, setConfirmAction] = useState<{title:string;message:string;icon:string;onConfirm:()=>void;type?:string}|null>(null);
   const [cForm, setCForm] = useState<Partial<Client>>({});
+  const [cnpjBusca, setCnpjBusca] = useState<{ loading: boolean; msg: string; ok: boolean }>({ loading: false, msg: '', ok: false });
+  const cnpjBuscadoRef = useRef('');
   const [confirmSkipId, setConfirmSkipId] = useState<string | null>(null);
   const [expandedRouteClientId, setExpandedRouteClientId] = useState<string | null>(null);
   const [showExpenseForm, setShowExpenseForm] = useState(false);
@@ -507,8 +510,10 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   };
 
   const handleOpenEditClient = (c: Client | 'NEW') => {
-    if (c === 'NEW') setCForm({ nomeFantasia: '', nome: '', telefone: '', endereco: '', bairro: '', diaRoteiro: diaAtual, ativo: true, ativarCnpj: false, cnpj: '', pinLocalizacao: '', ordem: 0, rota: user.rota });
+    if (c === 'NEW') setCForm({ nomeFantasia: '', nome: '', telefone: '', endereco: '', bairro: '', diaRoteiro: diaAtual, ativo: true, ativarCnpj: false, cnpj: '', pinLocalizacao: '', ordem: 0, rota: user.rota, razaoSocial: '', inscricaoEstadual: '', enderecoNumero: '', enderecoCep: '', enderecoMunicipio: '', enderecoUf: '' });
     else setCForm({ ...c, endereco: (c.endereco && c.endereco !== '0') ? c.endereco : '', bairro: (c.bairro && c.bairro !== '0') ? c.bairro : '' });
+    setCnpjBusca({ loading: false, msg: '', ok: false });
+    cnpjBuscadoRef.current = '';
     setEditingClient(c);
   };
 
@@ -558,9 +563,50 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     );
   };
 
+  /** Preenche os dados do cliente com o retorno da Receita (autocomplete CNPJ). */
+  const aplicarCnpjNoForm = (d: CnpjBusca) => {
+    setCForm(prev => ({
+      ...prev,
+      razaoSocial: d.razaoSocial || prev.razaoSocial || '',
+      nomeFantasia: prev.nomeFantasia || d.nomeFantasia || '',
+      endereco: d.endereco || prev.endereco || '',
+      bairro: d.bairro || prev.bairro || '',
+      enderecoNumero: d.numero || prev.enderecoNumero || '',
+      enderecoCep: d.cep || prev.enderecoCep || '',
+      enderecoMunicipio: d.municipio || prev.enderecoMunicipio || '',
+      enderecoUf: d.uf || prev.enderecoUf || '',
+      telefone: prev.telefone || d.telefone || '',
+    }));
+  };
+
+  const executarBuscaCnpj = async (digitos: string) => {
+    cnpjBuscadoRef.current = digitos;
+    setCnpjBusca({ loading: true, msg: '⏳ Buscando CNPJ na Receita Federal...', ok: false });
+    const r = await buscarCnpjReceita(digitos);
+    if (!r.ok) { setCnpjBusca({ loading: false, msg: mensagemCnpj(r).msg, ok: false }); return; }
+    aplicarCnpjNoForm(r);
+    setCnpjBusca({ loading: false, ...mensagemCnpj(r) });
+  };
+
+  /** Mascara o CNPJ e dispara a busca automatica ao completar 14 digitos. */
+  const handleCnpjChange = (raw: string) => {
+    const mascarado = mascararCnpj(raw);
+    setCForm(prev => ({ ...prev, cnpj: mascarado }));
+    const digitos = mascarado.replace(/\D/g, '');
+    if (digitos.length < 14) {
+      cnpjBuscadoRef.current = '';
+      if (cnpjBusca.msg || cnpjBusca.loading) setCnpjBusca({ loading: false, msg: '', ok: false });
+      return;
+    }
+    if (cnpjBuscadoRef.current === digitos) return;
+    void executarBuscaCnpj(digitos);
+  };
+
   const handleSaveClientBasic = () => {
     if (!cForm.nomeFantasia || !cForm.telefone) { showToast("Preencha ao menos Nome e Telefone.", 'error'); return; }
-    
+    const cnpjDigitos = (cForm.cnpj || '').replace(/\D/g, '');
+    if (cnpjDigitos.length > 0 && cnpjDigitos.length < 14) { showToast("CNPJ incompleto — complete os 14 dígitos ou apague o campo.", 'error'); return; }
+
     const clientData: Omit<Client, 'id'> = { 
       nomeFantasia: cForm.nomeFantasia!, 
       telefone: cForm.telefone!, 
@@ -574,7 +620,13 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       pinLocalizacao: cForm.pinLocalizacao, 
       nome: cForm.nome, 
       observacoes: cForm.observacoes,
-      rota: user.rota 
+      rota: user.rota,
+      razaoSocial: cForm.razaoSocial,
+      inscricaoEstadual: cForm.inscricaoEstadual,
+      enderecoNumero: cForm.enderecoNumero,
+      enderecoCep: cForm.enderecoCep,
+      enderecoMunicipio: cForm.enderecoMunicipio,
+      enderecoUf: cForm.enderecoUf
     };
 
     if (editingClient === 'NEW') addClient(clientData);
@@ -1530,6 +1582,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Telefone / WhatsApp</label><input value={cForm.telefone || ''} onChange={e => setCForm({...cForm, telefone: e.target.value})} placeholder="Telefone" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100" /></div>
                 <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Endereço</label><input value={cForm.endereco || ''} onChange={e => setCForm({...cForm, endereco: e.target.value})} placeholder="Endereço" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100 uppercase" /></div>
                 <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Bairro</label><input value={cForm.bairro || ''} onChange={e => setCForm({...cForm, bairro: e.target.value})} placeholder="Bairro" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100 uppercase" /></div>
+                <div className="space-y-1 rounded-2xl bg-blue-50 border border-blue-100 p-4"><label className="text-[10px] font-black text-blue-600 uppercase ml-1 flex items-center gap-1"><i className="fa-solid fa-file-invoice"></i> CNPJ (Nota Fiscal — opcional)</label><input value={cForm.cnpj || ''} onChange={e => handleCnpjChange(e.target.value)} placeholder="00.000.000/0000-00" inputMode="numeric" className="w-full p-4 bg-white border rounded-2xl font-semibold" />{cnpjBusca.msg && <p className={`text-[9px] font-bold leading-snug ${cnpjBusca.loading ? 'text-gray-500' : cnpjBusca.ok ? 'text-green-600' : 'text-amber-600'}`}>{cnpjBusca.msg}</p>}<p className="text-[8px] font-bold text-blue-400 leading-snug">Com CNPJ → a nota sai NF-e para a empresa. Sem CNPJ → NFC-e de consumidor.</p></div>
                 <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Dia de Atendimento</label><select value={cForm.diaRoteiro ?? 1} onChange={e => setCForm({...cForm, diaRoteiro: parseInt(e.target.value)})} className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100">{[1, 2, 3, 4, 5, 6].map(d => (<option key={d} value={d}>{DIAS_SEMANA[d] ?? 'N/D'}</option>))}</select></div> 
                 
                 <div className="space-y-1">

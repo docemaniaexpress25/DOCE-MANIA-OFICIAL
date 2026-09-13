@@ -91,3 +91,36 @@ create index if not exists idx_sales_nota_status on sales (nota_status) where no
 - `src/components/doce/Cupom.tsx` — seção Nota Fiscal no detalhe da venda.
 - `src/components/doce/VendedorDashboard.tsx` — badge NF no histórico.
 - `src/components/doce/AdminDashboard.tsx` — dados fiscais no cadastro do cliente.
+
+## Autocomplete de CNPJ (Bloco 10.1)
+
+No cadastro de cliente (Admin **e** Vendedor), ao digitar o CNPJ completo
+(14 dígitos) o app busca automaticamente na Receita Federal:
+
+- **Razão social** e nome fantasia
+- **Endereço oficial** (logradouro, número, bairro, município, UF, CEP)
+- **Telefone** (só preenche se o campo estiver vazio)
+- **Situação cadastral** — avisa se o CNPJ não estiver ATIVA
+- **Simples Nacional / MEI** — aparece no feedback do formulário
+
+### Como funciona
+
+- Rota server-side `GET /api/cnpj?cnpj=...` (autenticada por sessão).
+- Fontes em cascata: **BrasilAPI** → **minhareceita.org** (fallback).
+- Cache em memória de 24h por instância (reconsulta não bate na fonte).
+- Sem SQL novo, sem env var, sem chave de API, sem custo.
+
+### Regra NF-e × NFC-e (automática no momento de emitir)
+
+| Cadastro do cliente | Documento emitido |
+| --- | --- |
+| Com CNPJ válido | **NF-e (modelo 55)** — nota de entrada para a mercearia/rede |
+| Sem CNPJ | **NFC-e (modelo 65)** — consumidor não identificado |
+
+Inscrição Estadual não é pública na Receita — continua manual
+(`ISENTO` para Simples Nacional, ou a IE que o cliente informar).
+
+### Arquivos novos
+
+- `src/app/api/cnpj/route.ts` — consulta Receita + cache + normalização.
+- `src/lib/cnpjAutocomplete.ts` — máscara, busca e feedback (client-side).

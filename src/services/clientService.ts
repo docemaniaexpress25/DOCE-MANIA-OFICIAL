@@ -18,6 +18,13 @@ function mapClient(c: any): Client {
     pinLocalizacao: c.pin_localizacao,
     rota: c.rota || 'ROTA_01',
     portalCodigo: c.portal_code,
+    // Fiscais (Bloco 10) — podem nao existir antes do SQL
+    razaoSocial: c.razao_social || undefined,
+    inscricaoEstadual: c.inscricao_estadual || undefined,
+    enderecoNumero: c.endereco_numero || undefined,
+    enderecoCep: c.endereco_cep || undefined,
+    enderecoMunicipio: c.endereco_municipio || undefined,
+    enderecoUf: c.endereco_uf || undefined,
   } as Client;
 }
 
@@ -32,8 +39,8 @@ export const clientService = {
   },
 
   async insertClient(client: Omit<Client, 'id'>): Promise<Client | null> {
-    const { nomeFantasia, nome, ativarCnpj, cnpj, telefone, endereco, bairro, ativo, localizacao, diaRoteiro, ordem, observacoes, pinLocalizacao, rota } = client;
-    const payload = {
+    const { nomeFantasia, nome, ativarCnpj, cnpj, telefone, endereco, bairro, ativo, localizacao, diaRoteiro, ordem, observacoes, pinLocalizacao, rota, razaoSocial, inscricaoEstadual, enderecoNumero, enderecoCep, enderecoMunicipio, enderecoUf } = client;
+    const payload: Record<string, unknown> = {
       nome_fantasia: nomeFantasia,
       nome,
       ativar_cnpj: ativarCnpj,
@@ -50,8 +57,22 @@ export const clientService = {
       rota: rota || 'ROTA_01',
       portal_code: generatePortalCode(),
     };
+    // Fiscais (Bloco 10): envia com checagem suave — se a coluna ainda nao
+    // existir o Supabase rejeita o insert, entao refaz sem elas (fallback).
+    const fiscal = {
+      razao_social: razaoSocial || null,
+      inscricao_estadual: inscricaoEstadual || null,
+      endereco_numero: enderecoNumero || null,
+      endereco_cep: enderecoCep || null,
+      endereco_municipio: enderecoMunicipio || null,
+      endereco_uf: enderecoUf || null,
+    };
 
-    const { data, error } = await supabase.from('clients').insert(payload).select().single();
+    let { data, error } = await supabase.from('clients').insert({ ...payload, ...fiscal }).select().single();
+    if (error && /razao_social|inscricao_estadual|endereco_numero|endereco_cep|endereco_municipio|endereco_uf/i.test(error.message || '')) {
+      console.warn('Colunas fiscais ausentes (Bloco 10 nao rodado). Salvando sem elas.');
+      ({ data, error } = await supabase.from('clients').insert(payload).select().single());
+    }
     if (error) {
       console.error('Erro ao inserir cliente:', error);
       return null;
@@ -84,6 +105,13 @@ export const clientService = {
     if (updates.observacoes !== undefined) payload.observacoes = updates.observacoes;
     if (updates.pinLocalizacao !== undefined) payload.pin_localizacao = updates.pinLocalizacao;
     if (updates.rota !== undefined) payload.rota = updates.rota;
+    // Fiscais (Bloco 10)
+    if ((updates as Record<string, unknown>).razaoSocial !== undefined) payload.razao_social = (updates as Record<string, unknown>).razaoSocial;
+    if ((updates as Record<string, unknown>).inscricaoEstadual !== undefined) payload.inscricao_estadual = (updates as Record<string, unknown>).inscricaoEstadual;
+    if ((updates as Record<string, unknown>).enderecoNumero !== undefined) payload.endereco_numero = (updates as Record<string, unknown>).enderecoNumero;
+    if ((updates as Record<string, unknown>).enderecoCep !== undefined) payload.endereco_cep = (updates as Record<string, unknown>).enderecoCep;
+    if ((updates as Record<string, unknown>).enderecoMunicipio !== undefined) payload.endereco_municipio = (updates as Record<string, unknown>).enderecoMunicipio;
+    if ((updates as Record<string, unknown>).enderecoUf !== undefined) payload.endereco_uf = (updates as Record<string, unknown>).enderecoUf;
 
     const { data, error } = await supabase.from('clients').update(payload).eq('id', id).select().single();
     if (error) {

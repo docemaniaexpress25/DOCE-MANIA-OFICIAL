@@ -40,6 +40,10 @@ export interface Product {
   ativo: boolean;
   categoryId?: string;
   subcategoryId?: string;
+  /** Fiscais (Bloco 10) — usados na emissao de NFe/NFCe */
+  ncm?: string;
+  cest?: string;
+  cfop?: string;
 }
 
 export interface Carga {
@@ -75,7 +79,16 @@ export interface Client {
   rota?: string;
   /** Codigo aleatorio do portal do cliente (link do extrato) */
   portalCodigo?: string;
+  /** Fiscais (Bloco 10) — completos para emissao de NFe no cliente */
+  razaoSocial?: string;
+  inscricaoEstadual?: string;
+  enderecoNumero?: string;
+  enderecoCep?: string;
+  enderecoMunicipio?: string;
+  enderecoUf?: string;
 }
+
+export type NotaStatus = 'NAO_EMITIDA' | 'EMITINDO' | 'AUTORIZADA' | 'REJEITADA' | 'CANCELADA';
 
 export interface SaleItem {
   produtoId: string;
@@ -96,6 +109,11 @@ export interface Sale {
   itens: SaleItem[];
   dataVencimento?: Date;
   comprovanteFoto?: string;
+  /** Nota fiscal (Bloco 10) — preenchido via /api/notas */
+  notaStatus?: NotaStatus;
+  notaNumero?: string;
+  notaPdfUrl?: string;
+  notaErro?: string;
 }
 
 export interface Commission {

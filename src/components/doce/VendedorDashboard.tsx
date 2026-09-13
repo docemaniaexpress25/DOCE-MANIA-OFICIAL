@@ -851,7 +851,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         && saleDate.getDate() === now.getDate();
       return sameDay;
     })();
-    return ( <Cupom sale={viewingSale} client={cupomClient} products={products} onClose={() => setViewingSale(null)} onDeleteSale={deleteSale} allowDelete={canDeleteSale} showToast={showToast} /> );
+    return ( <Cupom sale={viewingSale} client={cupomClient} products={products} onClose={() => setViewingSale(null)} onDeleteSale={deleteSale} allowDelete={canDeleteSale} showToast={showToast} allowNota /> );
   }
 
 
@@ -1179,6 +1179,9 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                         {isCheque ? 'CHEQUE' : s.metodoPagamento === 'A_PRAZO' ? 'PRAZO' : s.metodoPagamento}
                       </span>
                       <span className="text-[9px] text-gray-300 font-bold">{new Date(s.data).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
+                      {s.notaStatus === 'AUTORIZADA' && (<span className="text-[8px] font-black px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-600 uppercase">NF {s.notaNumero || '✓'}</span>)}
+                      {s.notaStatus === 'REJEITADA' && (<span className="text-[8px] font-black px-1.5 py-0.5 rounded-full bg-rose-50 text-rose-600 uppercase">NF ✗</span>)}
+                      {s.notaStatus === 'EMITINDO' && (<span className="text-[8px] font-black px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-600 uppercase">NF...</span>)}
                     </div>
                     <h4 className="font-black text-gray-800 text-[13px] leading-tight uppercase truncate cursor-pointer hover:text-blue-600" onClick={() => setViewingClientHistory(client!)}>
                       {client?.nomeFantasia ?? 'Cliente'}

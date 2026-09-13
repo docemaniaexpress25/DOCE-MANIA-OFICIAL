@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Sale, Client, Product } from '@/lib/types';
 import { bluetoothPrinter, PrintJob } from '@/services/bluetoothPrinterService';
+import { notaService, NotaInfo } from '@/services/notaService';
 import ConfirmModal from '@/components/doce/ConfirmModal';
 import PrinterSelector from '@/components/doce/PrinterSelector';
 
@@ -18,13 +19,63 @@ interface CupomProps {
   allowDelete?: boolean;
   showToast?: (msg: string, type?: 'success' | 'error') => void;
   closeLabel?: string; 
+  /** Bloco 10: habilita emissao de NF-e/NFC-e nesta tela (so em venda salva) */
+  allowNota?: boolean;
 }
 
-const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, onDeleteSale, allowDelete, showToast, closeLabel }) => {
+const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, onDeleteSale, allowDelete, showToast, closeLabel, allowNota }) => {
   const [printWidth, setPrintWidth] = useState<PrinterWidth>('56MM');
   const [printJob, setPrintJob] = useState<PrintJob>({ status: 'idle' });
   const [modal, setModal] = useState<{title:string;message:string;icon:string;iconColor?:string;onConfirm:()=>void;type?:string}|null>(null);
   const [isBluetoothAvailable] = useState(() => bluetoothPrinter.isAvailable());
+
+  // ===== Bloco 10: nota fiscal da venda =====
+  const isVendaSalva = allowNota && !!sale.id && sale.id !== 'preview';
+  const [nota, setNota] = useState<NotaInfo>(() => ({
+    status: sale.notaStatus || 'NAO_EMITIDA',
+    numero: sale.notaNumero,
+    pdfUrl: sale.notaPdfUrl,
+    erro: sale.notaErro,
+  }));
+  const [notaBusy, setNotaBusy] = useState(false);
+
+  const handleEmitirNota = async () => {
+    if (notaBusy || !isVendaSalva) return;
+    setNotaBusy(true);
+    const r = await notaService.emitir(sale.id);
+    setNotaBusy(false);
+    if (r.erro && !r.nota) {
+      showToast?.(r.erro, 'error');
+      setModal({ title: 'Nota Fiscal', message: r.erro, icon: 'fa-solid fa-triangle-exclamation', type: 'danger', onConfirm: () => setModal(null) });
+      return;
+    }
+    if (r.nota) setNota(r.nota);
+    if (r.ok && r.nota?.status === 'AUTORIZADA') {
+      showToast?.('Nota autorizada!', 'success');
+    } else if (r.nota?.status === 'REJEITADA') {
+      showToast?.(r.nota.erro || 'Nota rejeitada pela SEFAZ', 'error');
+    }
+  };
+
+  const handleConsultarNota = async () => {
+    if (notaBusy || !isVendaSalva) return;
+    setNotaBusy(true);
+    const r = await notaService.consultar(sale.id);
+    setNotaBusy(false);
+    if (r.erro && !r.nota) { showToast?.(r.erro, 'error'); return; }
+    if (r.nota) setNota(r.nota);
+  };
+
+  const notaBadge = () => {
+    switch (nota.status) {
+      case 'AUTORIZADA': return { cls: 'bg-emerald-50 text-emerald-700 border-emerald-200', icon: 'fa-circle-check', txt: `NF-e ${nota.numero || ''} AUTORIZADA` };
+      case 'EMITINDO': return { cls: 'bg-amber-50 text-amber-700 border-amber-200', icon: 'fa-hourglass-half', txt: 'Processando na SEFAZ...' };
+      case 'REJEITADA': return { cls: 'bg-rose-50 text-rose-700 border-rose-200', icon: 'fa-circle-xmark', txt: 'Rejeitada — toque para tentar de novo' };
+      case 'CANCELADA': return { cls: 'bg-gray-100 text-gray-500 border-gray-200', icon: 'fa-ban', txt: 'Nota cancelada' };
+      default: return { cls: 'bg-gray-50 text-gray-500 border-gray-200', icon: 'fa-file-invoice', txt: 'Sem nota fiscal' };
+    }
+  };
+  const nb = notaBadge();
 
   // Subscribe to print job status
   useEffect(() => {
@@ -253,6 +304,37 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
         </div>
 
         <div className="bg-gray-100 p-5 flex flex-col gap-3 border-t border-gray-200">
+          {/* ===== Bloco 10: Nota Fiscal (NF-e / NFC-e) ===== */}
+          {isVendaSalva && (
+            <div className={`rounded-2xl border p-3 space-y-2 ${nb.cls}`}>
+              <div className="flex items-center gap-2">
+                <i className={`fa-solid ${nb.icon}`}></i>
+                <span className="text-[10px] font-black uppercase flex-1">{nb.txt}</span>
+                {nota.status === 'EMITINDO' && (
+                  <button onClick={handleConsultarNota} disabled={notaBusy} className="text-[9px] font-black underline disabled:opacity-50">
+                    Atualizar
+                  </button>
+                )}
+              </div>
+              {nota.status === 'REJEITADA' && nota.erro && (
+                <p className="text-[9px] leading-snug font-bold opacity-80 break-words">{nota.erro}</p>
+              )}
+              {nota.status === 'AUTORIZADA' && nota.pdfUrl && (
+                <a href={nota.pdfUrl} target="_blank" rel="noopener noreferrer"
+                  className="block w-full bg-emerald-600 text-white font-black py-3 rounded-xl text-center text-[10px] uppercase tracking-widest active:scale-95">
+                  <i className="fa-solid fa-file-pdf mr-1"></i> Abrir DANFE (PDF)
+                </a>
+              )}
+              {(nota.status === 'NAO_EMITIDA' || nota.status === 'REJEITADA' || nota.status === 'CANCELADA') && (
+                <button onClick={handleEmitirNota} disabled={notaBusy}
+                  className="block w-full bg-slate-800 text-white font-black py-3 rounded-xl text-[10px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
+                  <i className={`fa-solid ${notaBusy ? 'fa-spinner fa-spin' : 'fa-file-invoice-dollar'} mr-1`}></i>
+                  {notaBusy ? 'Emitindo...' : nota.status === 'REJEITADA' ? 'Emitir Novamente' : 'Emitir Nota Fiscal'}
+                </button>
+              )}
+            </div>
+          )}
+
           <PrinterSelector accent="blue" />
 
           {/* Paper width selector */}

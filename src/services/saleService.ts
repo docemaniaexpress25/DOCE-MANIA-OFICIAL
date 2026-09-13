@@ -23,7 +23,12 @@ export const saleService = {
         produtoId: i.produto_id,
         quantidade: safeNumber(i.quantidade),
         precoVenda: safeNumber(i.preco_venda)
-      }))
+      })),
+      // Nota fiscal (Bloco 10) — campos podem nao existir antes do SQL
+      notaStatus: s.nota_status || undefined,
+      notaNumero: s.nota_numero || undefined,
+      notaPdfUrl: s.nota_pdf_url || undefined,
+      notaErro: s.nota_erro || undefined,
     })) as Sale[];
   },
 

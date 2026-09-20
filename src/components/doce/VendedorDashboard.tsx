@@ -37,7 +37,7 @@ interface VendedorDashboardProps {
   deleteClient: (id: string) => void; 
   receivePayment: (id: string, method: PaymentMethod, amount?: number) => void;
   deleteSale: (id: string) => void;
-  aceitarCarga: (id: string) => void;
+  aceitarCarga: (id: string) => Promise<{ ok: boolean; erro?: string }>;
   addExpense: (sellerId: string, descricao: string, valor: number) => Promise<boolean>;
   margemMinima: number;
   margemMinimaAtiva: boolean;
@@ -408,6 +408,10 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
   const diaAtual = new Date().getDay();
   const minhaCarga = useMemo(() => (cargas || []).filter(c => c.vendedorId === user.id), [cargas, user.id]);
+  // BLOCO 11: so as pendentes DESTE vendedor. Antes: qualquer pendente de
+  // qualquer vendedor mostrava o card "ACEITAR CARGA" aqui — e o botao
+  // aceitava cargasPendentes[0] (que podia ser de OUTRO vendedor).
+  const minhasPendentes = useMemo(() => (cargasPendentes || []).filter(cp => cp.vendedorId === user.id), [cargasPendentes, user.id]);
   
   const orderedCargaProducts = useMemo(() => {
     const cargaMap = new Map(minhaCarga.map(c => [c.produtoId, c]));
@@ -926,7 +930,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
           <MenuCard icon="fa-route" title="Rota do Dia" tab="ROTEIRO" color="bg-blue-50 text-blue-600" />
           {user.preVenda && <MenuCard icon="fa-truck" title="Entregas" tab="ENTREGAS" color="bg-emerald-50 text-emerald-600" />}
           <MenuCard icon="fa-bell" title="Avisos" tab="AVISOS" color="bg-rose-50 text-rose-600" badge={atRiskClients.length > 0 ? atRiskClients.length : false} />
-          <MenuCard icon="fa-truck-fast" title="Minha Carga" tab="CARGA" color="bg-purple-50 text-purple-600" badge={(cargasPendentes || []).length > 0} />
+          <MenuCard icon="fa-truck-fast" title="Minha Carga" tab="CARGA" color="bg-purple-50 text-purple-600" badge={minhasPendentes.length > 0} />
           <MenuCard icon="fa-receipt" title="Vendas" tab="HISTORY" color="bg-blue-50 text-[#1E3A5F]" />
           <MenuCard icon="fa-wallet" title="Financeiro" tab="FINANCE" color="bg-emerald-50 text-[#1F7A4D]" badge={(messages || []).some(m => !m.lida && m.type === 'COMMISSION_CONFIRMATION')} />
           <MenuCard icon="fa-file-invoice-dollar" title="Contas a Receber" tab="CREDIT" color="bg-rose-50 text-rose-600" />
@@ -1163,15 +1167,31 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
       {activeTab === 'CARGA' && (
         <div className="space-y-4">
-          {(cargasPendentes || []).length > 0 ? (
-            <div className="bg-orange-50 p-6 rounded-3xl shadow-xl flex flex-col gap-4 items-center text-center">
-              <i className="fa-solid fa-truck-loading text-orange-600 text-4xl mb-2"></i>
-              <h3 className="text-xl font-black text-orange-800 uppercase">Nova Carga Disponível!</h3>
-              <button onClick={() => aceitarCarga(cargasPendentes[0].id)} className="w-full bg-orange-600 text-white font-black py-5 rounded-2xl shadow-lg active:scale-95 text-sm uppercase">ACEITAR CARGA</button>
-            </div>
-          ) : (
-            <>
-              <div className="bg-purple-600 text-white p-6 rounded-3xl shadow-xl flex justify-between items-center">
+          {minhasPendentes.length > 0 && (() => {
+            const pend = minhasPendentes[0];
+            const itensPend = pend.itens || [];
+            const unidadesPend = itensPend.reduce((a, i) => a + (i.quantidade || 0), 0);
+            const precoMap = new Map(products.map(p => [p.id, p.precoVenda || 0]));
+            const valorPend = itensPend.reduce((a, i) => a + (i.quantidade || 0) * (precoMap.get(i.produtoId) || 0), 0);
+            const handleAceitar = async () => {
+              const r = await aceitarCarga(pend.id);
+              if (r?.ok) showToast('Carga aceita! Estoque da van atualizado.');
+              else showToast(r?.erro || 'Erro ao aceitar a carga.', 'error');
+            };
+            return (
+              <div className="bg-orange-50 p-6 rounded-3xl shadow-xl flex flex-col gap-4 items-center text-center">
+                <i className="fa-solid fa-truck-loading text-orange-600 text-4xl mb-2"></i>
+                <h3 className="text-xl font-black text-orange-800 uppercase">Nova Carga Disponível!</h3>
+                <p className="text-xs font-black text-orange-700 uppercase">{unidadesPend} unidades · R$ {valorPend.toFixed(2)}</p>
+                {unidadesPend > 0 ? (
+                  <button onClick={handleAceitar} className="w-full bg-orange-600 text-white font-black py-5 rounded-2xl shadow-lg active:scale-95 text-sm uppercase">ACEITAR CARGA</button>
+                ) : (
+                  <p className="text-[11px] font-bold text-red-600 uppercase">Esta carga veio vazia (erro de envio). Peça ao admin para reenviar.</p>
+                )}
+              </div>
+            );
+          })()}
+          <div className="bg-purple-600 text-white p-6 rounded-3xl shadow-xl flex justify-between items-center">
                  <div><p className="text-[10px] font-black uppercase opacity-60">Valor Total Carga</p><h3 className="text-2xl font-black">R$ {valorTotalCarga.toFixed(2)}</h3></div>
                  <div className="text-right"><p className="text-[10px] font-black uppercase opacity-60">Volume Total</p><h3 className="text-2xl font-black">{totalUnidadesCarga}</h3></div>
               </div>
@@ -1197,8 +1217,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
               >
                 <i className="fa-solid fa-print text-lg"></i> Imprimir Carga
               </button>
-            </>
-          )}
         </div>
       )}
 

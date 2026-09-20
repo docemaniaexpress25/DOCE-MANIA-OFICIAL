@@ -28,8 +28,9 @@ interface AdminDashboardProps {
   deleteProduct: (id: string) => void;
   registerStockEntry: (id: string, q: number, c: number) => void;
   adjustStockManual: (id: string, q: number, t: 'ADICAO' | 'SUBTRACAO') => void;
-  syncVendedorCarga: (vId: string, itens: { produtoId: string, quantidade: number }[]) => void;
-  applyCargaDirectly: (vId: string, itens: { produtoId: string, quantidade: number }[]) => void;
+  syncVendedorCarga: (vId: string, itens: { produtoId: string, quantidade: number }[]) => Promise<{ ok: boolean; erro?: string }>;
+  applyCargaDirectly: (vId: string, itens: { produtoId: string, quantidade: number }[]) => Promise<{ ok: boolean; erro?: string }>;
+  cargasLoaded: boolean;
   addClient: (data: Omit<Client, 'id'>) => void;
   updateClient: (id: string, data: Partial<Client>) => void;
   deleteClient: (id: string) => void;
@@ -430,15 +431,18 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   };
 
   useEffect(() => {
-    if (selectedVendedorId) {
-      const atual = props.cargas
-        .filter(c => c.vendedorId === selectedVendedorId)
-        .reduce((acc, curr) => ({ ...acc, [curr.produtoId]: curr.quantidade ?? 0 }), {}); 
-      setStagingCarga(atual);
-    } else {
-      setStagingCarga({});
-    }
-  }, [selectedVendedorId]);
+    if (!selectedVendedorId) { setStagingCarga({}); return; }
+    // BLOCO 11: so inicializa o rascunho quando os dados de carga REALMENTE
+    // chegaram (cargasLoaded). Antes: se o admin selecionava o vendedor antes
+    // do fetch terminar, o rascunho nascia VAZIO mas a tela mostrava os valores
+    // atuais como fallback (staged ?? atual) — e o "Aplicar/Sincronizar"
+    // enviava 0 em tudo que nao foi tocado, ZERANDO a carga do vendedor.
+    if (!props.cargasLoaded) return;
+    const atual = props.cargas
+      .filter(c => c.vendedorId === selectedVendedorId)
+      .reduce((acc, curr) => ({ ...acc, [curr.produtoId]: curr.quantidade ?? 0 }), {}); 
+    setStagingCarga(atual);
+  }, [selectedVendedorId, props.cargasLoaded]);
 
   const hasCargaChanges = useMemo(() => {
     if (!selectedVendedorId) return false;
@@ -643,18 +647,33 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     showToast("Pagamento registrado!");
   };
 
-  const handleSync = () => {
-    if (!selectedVendedorId) return;
-    const itens = props.products.map(p => ({ produtoId: p.id, quantidade: stagingCarga[p.id] || 0 })); 
-    props.syncVendedorCarga(selectedVendedorId, itens);
-    setShowConfirmSync(false);
+  /** BLOCO 11: monta os itens caindo no valor atual REAL quando o rascunho nao
+   * tem o produto — nunca envia 0 silenciosamente (causa do "carga zerada"). */
+  const montarItensCarga = (): { produtoId: string, quantidade: number }[] => {
+    const cargaAtualMap = props.cargas
+      .filter(c => c.vendedorId === selectedVendedorId)
+      .reduce((acc, curr) => ({ ...acc, [curr.produtoId]: curr.quantidade ?? 0 }), {} as { [id: string]: number });
+    return props.products.map(p => ({ produtoId: p.id, quantidade: stagingCarga[p.id] ?? cargaAtualMap[p.id] ?? 0 }));
   };
 
-  const handleApply = () => {
+  const handleSync = async () => {
     if (!selectedVendedorId) return;
-    const itens = props.products.map(p => ({ produtoId: p.id, quantidade: stagingCarga[p.id] || 0 })); 
-    props.applyCargaDirectly(selectedVendedorId, itens);
+    if (!props.cargasLoaded) { showToast('A carga atual ainda está carregando — aguarde 2 segundos e tente de novo.', 'error'); return; }
+    const itens = montarItensCarga();
+    const r = await props.syncVendedorCarga(selectedVendedorId, itens);
+    setShowConfirmSync(false);
+    if (r?.ok) showToast('Carga enviada! O vendedor precisa aceitar na aba Minha Carga.');
+    else showToast(r?.erro || 'Erro ao enviar a carga.', 'error');
+  };
+
+  const handleApply = async () => {
+    if (!selectedVendedorId) return;
+    if (!props.cargasLoaded) { showToast('A carga atual ainda está carregando — aguarde 2 segundos e tente de novo.', 'error'); return; }
+    const itens = montarItensCarga();
+    const r = await props.applyCargaDirectly(selectedVendedorId, itens);
     setShowConfirmApply(false);
+    if (r?.ok) showToast('Carga aplicada com sucesso!');
+    else showToast(r?.erro || 'Erro ao aplicar a carga.', 'error');
   };
 
   const handleZeroCarga = () => {
@@ -941,7 +960,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     if (!p) return;
     const noV = props.cargas.find(c => c.vendedorId === selectedVendedorId && c.produtoId === pId)?.quantidade ?? 0; 
     const totalDisp = (p.estoquePrincipal ?? 0) + noV; 
-    const novaQ = Math.max(0, Math.min(totalDisp, (stagingCarga[pId] ?? 0) + delta));
+    const novaQ = Math.max(0, Math.min(totalDisp, (stagingCarga[pId] ?? noV) + delta));
     setStagingCarga(prev => ({ ...prev, [pId]: novaQ }));
   };
 

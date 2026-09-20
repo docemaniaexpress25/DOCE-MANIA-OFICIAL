@@ -80,6 +80,9 @@ const App: React.FC = () => {
 
   const [cargas, setCargas] = useState<Carga[]>([]);
   const [cargasPendentes, setCargasPendentes] = useState<CargaPendente[]>([]);
+  // true quando os dados de carga chegaram de verdade do Supabase ao menos uma vez.
+  // Evita o race do rascunho de carga no admin (inicializava com cargas ainda vazio).
+  const [cargasLoaded, setCargasLoaded] = useState(false);
   const [sales, setSales] = useState<Sale[]>([]);
   const [commissions, setCommissions] = useState<Commission[]>([]);
   const [payoutLogs, setPayoutLogs] = useState<CommissionPaymentLog[]>([]);
@@ -160,28 +163,51 @@ const App: React.FC = () => {
   }, []);
   useEffect(() => { saveLocalState('dailyRouteState', dailyRouteState); }, [dailyRouteState]);
 
+  /** Carrega SOMENTE cargas + pendentes (barato) — usado no polling/focus e pos-mutacoes. */
+  const fetchCargas = useCallback(async () => {
+    if (roleRef.current === 'ENTREGADOR') return;
+    const [cgR, cgpR] = await Promise.allSettled([
+      cargaService.getAllCargas(),
+      cargaService.getAllCargasPendentes(),
+    ]);
+    if (cgR.status === 'fulfilled') setCargas(cgR.value);
+    else console.error('[cargas] falha ao carregar cargas:', cgR.reason);
+    if (cgpR.status === 'fulfilled') setCargasPendentes(cgpR.value);
+    else console.error('[cargas] falha ao carregar pendentes:', cgpR.reason);
+    if (cgR.status === 'fulfilled' && cgpR.status === 'fulfilled') setCargasLoaded(true);
+  }, []);
+
+  // SINCRONISMO DA CARGA: polling leve (45s) + refresh ao voltar o foco do app.
+  // Antes o vendedor so via a carga ao reabrir o app — carga enviada pelo admin
+  // ficava invisivel (e o card "ACEITAR CARGA" nunca aparecia).
+  useEffect(() => {
+    if (!currentUser || currentUser.role === 'ENTREGADOR') return;
+    const iv = setInterval(fetchCargas, 45_000);
+    window.addEventListener('focus', fetchCargas);
+    return () => { clearInterval(iv); window.removeEventListener('focus', fetchCargas); };
+  }, [currentUser, fetchCargas]);
+
   const fetchTransactionalData = useCallback(async () => {
     if (roleRef.current === 'ENTREGADOR') return;
-    try {
-      const [s, c, p, m, cg, cgp, ex] = await Promise.all([
-        saleService.getAllSales(),
-        commissionService.getAllCommissions(),
-        commissionService.getAllPayouts(),
-        messageService.getAllMessages(),
-        cargaService.getAllCargas(),
-        cargaService.getAllCargasPendentes(),
-        expenseService.getAllExpenses()
-      ]);
-      setSales(s);
-      setCommissions(c);
-      setPayoutLogs(p);
-      setMessages(m);
-      setCargas(cg);
-      setCargasPendentes(cgp);
-      setExpenses(ex);
-    } catch (e) {
-      console.error("Erro ao carregar dados transacionais:", e);
-    }
+    // allSettled: uma query que falhar NAO mais zera as outras (antes, se qualquer
+    // uma das 7 falhasse, cargas/vendas/comissoes ficavam vazias em silencio).
+    const [sR, cR, pR, mR, cgR, cgpR, exR] = await Promise.allSettled([
+      saleService.getAllSales(),
+      commissionService.getAllCommissions(),
+      commissionService.getAllPayouts(),
+      messageService.getAllMessages(),
+      cargaService.getAllCargas(),
+      cargaService.getAllCargasPendentes(),
+      expenseService.getAllExpenses()
+    ]);
+    if (sR.status === 'fulfilled') setSales(sR.value); else console.error('[dados] sales:', sR.reason);
+    if (cR.status === 'fulfilled') setCommissions(cR.value); else console.error('[dados] comissoes:', cR.reason);
+    if (pR.status === 'fulfilled') setPayoutLogs(pR.value); else console.error('[dados] payouts:', pR.reason);
+    if (mR.status === 'fulfilled') setMessages(mR.value); else console.error('[dados] mensagens:', mR.reason);
+    if (cgR.status === 'fulfilled') setCargas(cgR.value); else console.error('[dados] cargas:', cgR.reason);
+    if (cgpR.status === 'fulfilled') setCargasPendentes(cgpR.value); else console.error('[dados] cargas pendentes:', cgpR.reason);
+    if (exR.status === 'fulfilled') setExpenses(exR.value); else console.error('[dados] despesas:', exR.reason);
+    if (cgR.status === 'fulfilled' && cgpR.status === 'fulfilled') setCargasLoaded(true);
   }, []);
 
   const fetchCoreData = useCallback(async () => {
@@ -463,29 +489,52 @@ const App: React.FC = () => {
     fetchCoreData();
   };
 
-  const applyCargaDirectly = async (vId: string, itens: { produtoId: string, quantidade: number }[]) => {
+  const applyCargaDirectly = async (vId: string, itens: { produtoId: string, quantidade: number }[]): Promise<{ ok: boolean; erro?: string }> => {
     try {
       await cargaService.applyCargaAdminRPC(vId, itens);
       setAdminNotification("Carga aplicada com sucesso!");
-      fetchTransactionalData();
-    } catch (e) {
+      fetchCargas();
+      return { ok: true };
+    } catch (e: any) {
       console.error(e);
       setAdminNotification("Erro ao aplicar carga.");
+      return { ok: false, erro: e?.message || 'Erro ao aplicar carga.' };
     }
   };
 
-  const syncVendedorCarga = async (vId: string, itens: { produtoId: string, quantidade: number }[]) => {
-    await cargaService.insertCargaPendente({ vendedorId: vId, itens, data: new Date() });
-    fetchTransactionalData();
+  const syncVendedorCarga = async (vId: string, itens: { produtoId: string, quantidade: number }[]): Promise<{ ok: boolean; erro?: string }> => {
+    try {
+      await cargaService.insertCargaPendente({ vendedorId: vId, itens, data: new Date() });
+      fetchCargas();
+      return { ok: true };
+    } catch (e: any) {
+      console.error('[carga] falha ao enviar pendente:', e);
+      return { ok: false, erro: e?.message || 'Erro ao enviar a carga. Tente novamente.' };
+    }
   };
 
-  const aceitarCarga = async (pendenciaId: string) => {
+  const aceitarCarga = async (pendenciaId: string): Promise<{ ok: boolean; erro?: string }> => {
     try {
-      await cargaService.aceitarCargaRPC(pendenciaId);
+      // Via API server-side: valida sessao + dono da carga + bloqueia carga vazia.
+      // (Antes ia direto no RPC via chave anon, sem validar dono e engolindo erros.)
+      const { authHeaders } = await import('@/services/userService');
+      const res = await fetch('/api/cargas/aceitar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ pendenciaId }),
+      });
+      const d = await res.json().catch(() => null);
+      if (!res.ok || !d?.ok) {
+        const erro = String(d?.erro || (res.status === 401 ? 'Sessao expirada. Entre novamente.' : `Erro ${res.status} ao aceitar a carga.`));
+        console.error('[carga] aceitar falhou:', res.status, erro);
+        return { ok: false, erro };
+      }
       setAdminNotification("Carga aceita!");
-      fetchTransactionalData();
-    } catch (e) {
-      console.error(e);
+      fetchCargas();
+      return { ok: true };
+    } catch (e: any) {
+      console.error('[carga] aceitar erro:', e);
+      return { ok: false, erro: e?.message || 'Falha de conexao ao aceitar a carga.' };
     }
   };
 
@@ -705,7 +754,7 @@ const App: React.FC = () => {
           <EntregadorShell user={currentUser} />
         ) : currentUser.role === 'ADMIN' ? (
           <AdminDashboard 
-            {...{ products, users, cargas, clients, sales, commissions, payoutLogs, expenses, logo, margemGlobalAtiva, margemGlobalValor, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, adminNotification, companyName, companyCnpj, orderedProductIds: productOrder, categories, subcategories, clientOrder }}
+            {...{ products, users, cargas, cargasLoaded, clients, sales, commissions, payoutLogs, expenses, logo, margemGlobalAtiva, margemGlobalValor, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, adminNotification, companyName, companyCnpj, orderedProductIds: productOrder, categories, subcategories, clientOrder }}
             addProduct={addProduct} updateProduct={updateProduct} deleteProduct={deleteProduct} registerStockEntry={()=>{}} adjustStockManual={()=>{}}
             syncVendedorCarga={syncVendedorCarga} applyCargaDirectly={applyCargaDirectly} addClient={addClient} updateClient={updateClient} deleteClient={deleteClient}
             addUser={addUser} updateUser={updateUser} deleteUser={deleteUser} payCommission={payCommission} setCommissions={()=>{}} updateEstoqueCentral={()=>{}} reinforceCarga={()=>{}} deleteSale={deleteSale} receiveAccount={receiveAccount}

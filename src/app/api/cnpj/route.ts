@@ -32,6 +32,10 @@ export interface CnpjInfo {
   uf: string;
   cep: string;
   telefone: string;
+  /** Endereco completo em uma linha (logradouro, numero - bairro - cidade/UF - CEP) */
+  enderecoCompleto: string;
+  /** Email na Receita (quando a empresa o publicou — raro; senao preencher manual) */
+  email: string;
   situacao: string;
   situacaoOk: boolean;
   simples: boolean;
@@ -85,6 +89,19 @@ function normalizar(digitos: string, src: Record<string, unknown>): CnpjInfo {
       ? `${tipoLog} ${logradouro}`.trim()
       : logradouro;
 
+  const numero = str(src, 'numero');
+  const bairro = str(src, 'bairro');
+  const municipio = str(src, 'municipio');
+  const uf = str(src, 'uf').toUpperCase();
+  const cep = formatarCep(src.cep);
+
+  const enderecoCompleto = [
+    endereco && numero ? `${endereco}, ${numero}` : endereco,
+    bairro,
+    municipio && uf ? `${municipio}/${uf}` : municipio || uf,
+    cep ? `CEP ${cep}` : '',
+  ].filter(Boolean).join(' - ');
+
   const situacao = (str(src, 'descricao_situacao_cadastral') || str(src, 'situacao_cadastral') || 'INDEFINIDA').toUpperCase();
 
   return {
@@ -92,12 +109,14 @@ function normalizar(digitos: string, src: Record<string, unknown>): CnpjInfo {
     razaoSocial: str(src, 'razao_social'),
     nomeFantasia: str(src, 'nome_fantasia'),
     endereco,
-    numero: str(src, 'numero'),
-    bairro: str(src, 'bairro'),
-    municipio: str(src, 'municipio'),
-    uf: str(src, 'uf').toUpperCase(),
-    cep: formatarCep(src.cep),
+    numero,
+    bairro,
+    municipio,
+    uf,
+    cep,
     telefone: formatarTelefone(src.ddd_telefone_1 || src.ddd_telefone_2),
+    enderecoCompleto,
+    email: str(src, 'email'),
     situacao,
     situacaoOk: situacao === 'ATIVA',
     simples: src.opcao_pelo_simples === true,

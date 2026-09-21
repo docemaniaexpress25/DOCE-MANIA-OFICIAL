@@ -4,7 +4,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Product, User, Carga, Sale, Commission, Client, PaymentMethod, CommissionPaymentLog, Expense, Category, Subcategory } from '@/lib/types';
 import ConfirmModal from '@/components/doce/ConfirmModal';
 import { DIAS_SEMANA } from '@/lib/constants';
-import { buscarCnpjReceita, mascararCnpj, mensagemCnpj, CnpjBusca } from '@/lib/cnpjAutocomplete';
+import { buscarCnpjReceita, mascararCnpj, mensagemCnpj, clienteAptoNfe, CnpjBusca } from '@/lib/cnpjAutocomplete';
 import Cupom from '@/components/doce/Cupom';
 import ClientHistory from '@/components/doce/ClientHistory';
 import { loadLocalState, saveLocalState } from '@/utils/persistence';
@@ -23,7 +23,7 @@ interface AdminDashboardProps {
   expenses: Expense[];
   categories: Category[];
   subcategories: Subcategory[];
-  addProduct: (n: string, c: number, v: number, com: number, estoque?: number, categoryId?: string, subcategoryId?: string, precoMinimo?: number) => void;
+  addProduct: (n: string, c: number, v: number, com: number, estoque?: number, categoryId?: string, subcategoryId?: string, precoMinimo?: number, fiscal?: Partial<Product>) => void;
   updateProduct: (id: string, data: Partial<Product>) => void;
   deleteProduct: (id: string) => void;
   registerStockEntry: (id: string, q: number, c: number) => void;
@@ -92,6 +92,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [viewingClientHistory, setViewingClientHistory] = useState<Client | null>(null);
   const [filterOverdueOnly, setFilterOverdueOnly] = useState(false);
   const [routeFilter, setRouteFilter] = useState<string>('TODOS');
+  // BLOCO 12: aba do dia selecionada no Roteiro Semanal (padrao: hoje, Seg-Sab)
+  const [roteiroDia, setRoteiroDia] = useState<number>(() => { const d = new Date().getDay(); return d >= 1 && d <= 6 ? d : 1; });
   const [creditTypeFilter, setCreditTypeFilter] = useState<'TODOS' | 'COMUM' | 'CHEQUE' | 'BOLETO'>('TODOS');
 
   // Comprovantes Pix enviados pelo portal do cliente
@@ -225,9 +227,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [newSubName, setNewSubName] = useState('');
   const [editingSub, setEditingSub] = useState<Subcategory | null>(null);
 
-  const [pForm, setPForm] = useState({ nome: '', custo: '', venda: '', comissao: '', margem: '', ativo: true, estoquePrincipal: '', categoryId: '', subcategoryId: '', precoMinimo: '' });
-  const [clientForm, setClientForm] = useState<Partial<Client>>({ nomeFantasia: '', nome: '', telefone: '', endereco: '', bairro: '', diaRoteiro: 1, ativo: true, ativarCnpj: false, cnpj: '', pinLocalizacao: '', ordem: 0, rota: 'ROTA_01', razaoSocial: '', inscricaoEstadual: '', enderecoNumero: '', enderecoCep: '', enderecoMunicipio: '', enderecoUf: '' });
-  const [cnpjBusca, setCnpjBusca] = useState<{ loading: boolean; msg: string; ok: boolean }>({ loading: false, msg: '', ok: false });
+  const [pForm, setPForm] = useState({ nome: '', custo: '', venda: '', comissao: '', margem: '', ativo: true, estoquePrincipal: '', categoryId: '', subcategoryId: '', precoMinimo: '', ncm: '', cest: '', cfop: '', ean: '', unidade: 'UN', origem: '0' });
+  const [clientForm, setClientForm] = useState<Partial<Client>>({ nomeFantasia: '', nome: '', telefone: '', endereco: '', bairro: '', diaRoteiro: 1, ativo: true, ativarCnpj: false, cnpj: '', pinLocalizacao: '', ordem: 0, rota: 'ROTA_01', razaoSocial: '', inscricaoEstadual: '', enderecoNumero: '', enderecoCep: '', enderecoMunicipio: '', enderecoUf: '', email: '' });
+  const [cnpjBusca, setCnpjBusca] = useState<{ loading: boolean; msg: string; ok: boolean; endereco?: string }>({ loading: false, msg: '', ok: false });
   const cnpjBuscadoRef = useRef('');
   const [userForm, setUserForm] = useState<Partial<User>>({ nome: '', telefone: '', foto: '', pin: '', placaVeiculo: '', rota: 'ROTA_01' });
   const [selectedVendedorId, setSelectedVendedorId] = useState('');
@@ -752,7 +754,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         estoquePrincipal: '0', 
         categoryId: elmaChipsCat?.id || '', 
         subcategoryId: '',
-        precoMinimo: '0.00'
+        precoMinimo: '0.00',
+        ncm: '', cest: '', cfop: '5102', ean: '', unidade: 'UN', origem: '0'
       });
     } else {
       const precoVenda = Number(p.precoVenda) || 0;
@@ -768,7 +771,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         estoquePrincipal: (p.estoquePrincipal ?? 0).toString(), 
         categoryId: p.categoryId || elmaChipsCat?.id || '', 
         subcategoryId: p.subcategoryId || '',
-        precoMinimo: (p.precoMinimo ?? 0).toFixed(2)
+        precoMinimo: (p.precoMinimo ?? 0).toFixed(2),
+        ncm: p.ncm || '', cest: p.cest || '', cfop: p.cfop || '5102', ean: p.ean || '', unidade: p.unidade || 'UN', origem: p.origem || '0'
       });
     }
     setShowProductModal(p);
@@ -785,9 +789,15 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       ativo: pForm.ativo ?? true, 
       estoquePrincipal: parseInt(pForm.estoquePrincipal) || 0, 
       categoryId: pForm.categoryId || undefined, 
-      subcategoryId: pForm.subcategoryId || undefined 
+      subcategoryId: pForm.subcategoryId || undefined,
+      ncm: (pForm.ncm || '').trim() || undefined,
+      cest: (pForm.cest || '').trim() || undefined,
+      cfop: (pForm.cfop || '').trim() || undefined,
+      ean: (pForm.ean || '').trim() || undefined,
+      unidade: (pForm.unidade || 'UN').trim() || 'UN',
+      origem: (pForm.origem || '0').trim() || '0'
     };
-    if (showProductModal === 'NEW') props.addProduct(data.nome!, data.precoCusto!, data.precoVenda!, data.comissaoPercentual!, data.estoquePrincipal, data.categoryId, data.subcategoryId, data.precoMinimo);
+    if (showProductModal === 'NEW') props.addProduct(data.nome!, data.precoCusto!, data.precoVenda!, data.comissaoPercentual!, data.estoquePrincipal, data.categoryId, data.subcategoryId, data.precoMinimo, { ncm: data.ncm, cest: data.cest, cfop: data.cfop, ean: data.ean, unidade: data.unidade, origem: data.origem });
     else if (typeof showProductModal === 'object') props.updateProduct(showProductModal.id, data);
     setShowProductModal(null);
     showToast("Produto salvo!");
@@ -796,7 +806,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const handleConfirmDelete = async () => {
     if (!confirmDelete) return;
     if (confirmDelete.type === 'PRODUCT') props.deleteProduct(confirmDelete.id);
-    else if (confirmDelete.type === 'CLIENT') props.deleteClient(confirmDelete.id);
+    else if (confirmDelete.type === 'CLIENT') { await props.deleteClient(confirmDelete.id); setConfirmDelete(null); return; } // feedback no toast da API (excluido ou desativado)
     else if (confirmDelete.type === 'USER') await props.deleteUser(confirmDelete.id);
     else if (confirmDelete.type === 'CATEGORY') props.deleteCategory(confirmDelete.id);
     else if (confirmDelete.type === 'SUBCATEGORY') props.deleteSubcategory(confirmDelete.id);
@@ -805,7 +815,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   };
 
   const handleOpenClient = (c: Client | 'NEW') => {
-    if (c === 'NEW') setClientForm({ nomeFantasia: '', telefone: '', endereco: '', bairro: '', diaRoteiro: 1, ativo: true, ativarCnpj: false, cnpj: '', pinLocalizacao: '', ordem: 0, rota: availableRoutes[0] || 'ROTA_01', razaoSocial: '', inscricaoEstadual: '', enderecoNumero: '', enderecoCep: '', enderecoMunicipio: '', enderecoUf: '' });
+    if (c === 'NEW') setClientForm({ nomeFantasia: '', telefone: '', endereco: '', bairro: '', diaRoteiro: 1, ativo: true, ativarCnpj: false, cnpj: '', pinLocalizacao: '', ordem: 0, rota: availableRoutes[0] || 'ROTA_01', razaoSocial: '', inscricaoEstadual: '', enderecoNumero: '', enderecoCep: '', enderecoMunicipio: '', enderecoUf: '', email: '' });
     else setClientForm({ ...c, rota: c.rota || availableRoutes[0] || 'ROTA_01' });
     setCnpjBusca({ loading: false, msg: '', ok: false });
     cnpjBuscadoRef.current = '';
@@ -850,14 +860,16 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       enderecoMunicipio: d.municipio || prev.enderecoMunicipio || '',
       enderecoUf: d.uf || prev.enderecoUf || '',
       telefone: prev.telefone || d.telefone || '',
+      // Bloco 12: email so preenche se a Receita tiver e o campo estiver vazio
+      email: prev.email || d.email || '',
     }));
   };
 
   const executarBuscaCnpj = async (digitos: string) => {
     cnpjBuscadoRef.current = digitos;
-    setCnpjBusca({ loading: true, msg: '⏳ Buscando CNPJ na Receita Federal...', ok: false });
+    setCnpjBusca({ loading: true, msg: '⏳ Buscando CNPJ na Receita Federal...', ok: false, endereco: '' });
     const r = await buscarCnpjReceita(digitos);
-    if (!r.ok) { setCnpjBusca({ loading: false, msg: mensagemCnpj(r).msg, ok: false }); return; }
+    if (!r.ok) { setCnpjBusca({ loading: false, msg: mensagemCnpj(r).msg, ok: false, endereco: '' }); return; }
     aplicarCnpjNoForm(r);
     setCnpjBusca({ loading: false, ...mensagemCnpj(r) });
   };
@@ -880,7 +892,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     if (!clientForm.nomeFantasia || !clientForm.telefone) { showToast("Preencha Nome e Telefone.", 'error'); return; }
     const cnpjDigitos = (clientForm.cnpj || '').replace(/\D/g, '');
     if (cnpjDigitos.length > 0 && cnpjDigitos.length < 14) { showToast("CNPJ incompleto — complete os 14 dígitos ou apague o campo.", 'error'); return; }
-    const payload: Omit<Client, 'id'> = { nomeFantasia: clientForm.nomeFantasia!, telefone: clientForm.telefone!, endereco: clientForm.endereco || '', bairro: clientForm.bairro || '', diaRoteiro: clientForm.diaRoteiro ?? 1, ativo: clientForm.ativo ?? true, ativarCnpj: clientForm.ativarCnpj ?? false, cnpj: clientForm.cnpj, pinLocalizacao: clientForm.pinLocalizacao, ordem: clientForm.ordem ?? 0, nome: clientForm.nome, observacoes: clientForm.observacoes, rota: clientForm.rota || availableRoutes[0] || 'ROTA_01', razaoSocial: clientForm.razaoSocial, inscricaoEstadual: clientForm.inscricaoEstadual, enderecoNumero: clientForm.enderecoNumero, enderecoCep: clientForm.enderecoCep, enderecoMunicipio: clientForm.enderecoMunicipio, enderecoUf: clientForm.enderecoUf };
+    const payload: Omit<Client, 'id'> = { nomeFantasia: clientForm.nomeFantasia!, telefone: clientForm.telefone!, endereco: clientForm.endereco || '', bairro: clientForm.bairro || '', diaRoteiro: clientForm.diaRoteiro ?? 1, ativo: clientForm.ativo ?? true, ativarCnpj: clientForm.ativarCnpj ?? false, cnpj: clientForm.cnpj, pinLocalizacao: clientForm.pinLocalizacao, ordem: clientForm.ordem ?? 0, nome: clientForm.nome, observacoes: clientForm.observacoes, rota: clientForm.rota || availableRoutes[0] || 'ROTA_01', razaoSocial: clientForm.razaoSocial, inscricaoEstadual: clientForm.inscricaoEstadual, enderecoNumero: clientForm.enderecoNumero, enderecoCep: clientForm.enderecoCep, enderecoMunicipio: clientForm.enderecoMunicipio, enderecoUf: clientForm.enderecoUf, email: clientForm.email };
     if (showClientModal === 'NEW') props.addClient(payload);
     else if (typeof showClientModal === 'object') props.updateClient(showClientModal.id, payload);
     setShowClientModal(null);
@@ -1053,10 +1065,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     
     return clients;
   }, [props.clients, search, routeFilter, props.clientOrder]);
-
-  const handleActivateAll = () => {
-    setConfirmAction({title: 'Ativar Produtos', message: 'Deseja marcar TODOS os produtos inativos como ATIVOS agora?', icon: 'fa-solid fa-check-double', onConfirm: () => { setConfirmAction(null); props.activateAllProducts?.(); }});
-  };
 
   // Helper para renderizar cards de relatório
   const REPORT_COLOR_MAP: Record<string, { active: string; icon: string; inactive: string; chevron: string }> = {
@@ -1369,7 +1377,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
       {activeTab === 'CATALOGO' && (
         <div className="space-y-4">
-          <div className="px-2 flex justify-between items-center"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Estoque Central</h2><div className="flex gap-2"><button onClick={handleActivateAll} className="bg-emerald-100 text-emerald-600 px-4 py-2 rounded-xl font-black text-[9px] uppercase shadow-sm active:scale-95 transition-all"><i className="fa-solid fa-check-double mr-2"></i>Ativar Todos</button><button onClick={() => handleOpenProduct('NEW')} className="bg-blue-600 text-white w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg active:scale-90 transition-transform"><i className="fa-solid fa-plus text-lg"></i></button></div></div>
+          <div className="px-2 flex justify-between items-center gap-2 flex-wrap"><h2 className="text-xl sm:text-2xl font-black text-gray-800 tracking-tight">Estoque Central</h2><div className="flex gap-2"><button onClick={() => handleOpenProduct('NEW')} className="bg-blue-600 text-white w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg active:scale-90 transition-transform"><i className="fa-solid fa-plus text-lg"></i></button></div></div>
           <div className="px-1"><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar produto..." className="w-full p-4 bg-white border border-gray-100 rounded-2xl shadow-sm text-sm focus:ring-2 focus:ring-blue-100 outline-none" /></div>
           <div className="grid gap-2">
             {filteredProducts.map(p => (
@@ -1380,7 +1388,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                 </div>
                 <div className="flex-1 min-w-0 cursor-pointer" onClick={() => handleOpenProduct(p)}>
                   <h3 className="font-bold text-gray-800 text-[13px] leading-tight uppercase truncate">{p.nome}</h3>
-                  <div className="flex items-center gap-2 mt-1">
+                  <div className="flex items-center gap-2 mt-1 flex-wrap">
                     <span className="text-[10px] font-black text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg border border-blue-100 uppercase tracking-tighter">Estoque: {p.estoquePrincipal} un</span>
                     <span className="text-[10px] font-black text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-lg border border-emerald-100 uppercase tracking-tighter">R$ {p.precoVenda.toFixed(2)}</span>
                   </div>
@@ -1663,10 +1671,19 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       {activeTab === 'ROTEIRO' && (
         <div className="space-y-4">
           <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Roteiro Semanal</h2></div>
+          {/* BLOCO 12: abas de dia funcionais — mostra SOMENTE o dia selecionado */}
           <div className="flex bg-gray-100 p-1 rounded-2xl mx-1 shadow-inner overflow-x-auto gap-1">
-            {DIAS_SEMANA.map((dia, idx) => (
-              <button key={idx} onClick={() => {}} className={`flex-1 min-w-[50px] py-2.5 rounded-xl text-[9px] font-black uppercase transition-all whitespace-nowrap ${true ? 'text-gray-400' : 'bg-white text-indigo-600 shadow-sm'}`}>{dia}</button>
-            ))}
+            {DIAS_SEMANA.slice(1).map((dia, i) => {
+              const d = i + 1;
+              const qtdDia = props.clients.filter(c => (c.diaRoteiro ?? 1) === d && c.ativo && (routeFilter === 'TODOS' || c.rota === routeFilter)).length;
+              const isToday = new Date().getDay() === d;
+              return (
+                <button key={d} onClick={() => setRoteiroDia(d)} className={`flex-1 min-w-[52px] px-1 py-2 rounded-xl text-[9px] font-black uppercase transition-all whitespace-nowrap ${roteiroDia === d ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-400'}`}>
+                  {isToday ? <i className="fa-solid fa-location-dot text-[7px] mr-0.5"></i> : null}{dia.slice(0, 3)}
+                  <span className={`block text-[8px] ${roteiroDia === d ? 'text-indigo-400' : 'text-gray-300'}`}>{qtdDia} cli</span>
+                </button>
+              );
+            })}
           </div>
           <div className="flex bg-gray-100 p-1 rounded-2xl mx-1 overflow-x-auto gap-1">
             <button onClick={() => setRouteFilter('TODOS')} className={`flex-1 min-w-[60px] py-2 rounded-xl text-[9px] font-black uppercase transition-all ${routeFilter === 'TODOS' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-400'}`}>Todos</button>
@@ -1675,7 +1692,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             ))}
           </div>
           <div className="space-y-2 px-1">
-            {[1,2,3,4,5,6,7].map(dia => {
+            {(() => {
+              const dia = roteiroDia;
               const clientsDia = props.clients.filter(c => {
                 const matchDia = (c.diaRoteiro ?? 1) === dia && c.ativo;
                 const matchRoute = routeFilter === 'TODOS' || c.rota === routeFilter;
@@ -1685,10 +1703,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                 const idxB = props.clientOrder.indexOf(b.id) >= 0 ? props.clientOrder.indexOf(b.id) : (b.ordem || 999);
                 return idxA - idxB;
               });
-              if (clientsDia.length === 0) return null;
+              const totalDividaDia = clientsDia.reduce((a, c) => a + props.sales.filter(s => s.clientId === c.id && s.metodoPagamento === 'A_PRAZO' && s.statusPagamento === 'PENDENTE').reduce((x, s) => x + ((s.valorTotal ?? 0) - (s.valorPago ?? 0)), 0), 0);
               return (
-                <div key={dia} className="space-y-2">
-                  <div className="flex items-center gap-2 px-1 pt-2"><div className="w-8 h-8 bg-indigo-600 text-white rounded-xl flex items-center justify-center text-[10px] font-black">{dia}</div><span className="font-black text-gray-800 text-xs uppercase">{DIAS_SEMANA[dia]} - {clientsDia.length} clientes</span></div>
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 px-1 pt-2">
+                    <div className="w-8 h-8 bg-indigo-600 text-white rounded-xl flex items-center justify-center text-[10px] font-black">{dia}</div>
+                    <span className="font-black text-gray-800 text-xs uppercase">{DIAS_SEMANA[dia]} — {clientsDia.length} cliente{clientsDia.length === 1 ? '' : 's'}</span>
+                    {totalDividaDia > 0 && <span className="text-[9px] font-black text-rose-600 bg-rose-50 border border-rose-100 px-2 py-0.5 rounded-lg ml-auto uppercase">A receber: R$ {totalDividaDia.toFixed(2)}</span>}
+                  </div>
                   {clientsDia.map((c, idx) => {
                     const totalDivida = props.sales.filter(s => s.clientId === c.id && s.metodoPagamento === 'A_PRAZO' && s.statusPagamento === 'PENDENTE').reduce((a, s) => a + ((s.valorTotal ?? 0) - (s.valorPago ?? 0)), 0);
                     return (
@@ -1700,8 +1722,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                         <div className="flex-1 min-w-0">
                           <h4 className="font-bold text-gray-800 text-[11px] uppercase truncate">{c.nomeFantasia}</h4>
                           <div className="flex items-center gap-2 mt-0.5">
-                            <span className="text-[8px] font-bold text-gray-400">{c.endereco || 'Sem endereco'}</span>
-                            {totalDivida > 0 && <span className="text-[8px] font-black text-rose-600 bg-rose-50 px-1.5 py-0.5 rounded">R$ {totalDivida.toFixed(2)}</span>}
+                            <span className="text-[8px] font-bold text-gray-400 truncate max-w-[180px]">{c.endereco || 'Sem endereco'}</span>
+                            {totalDivida > 0 && <span className="text-[8px] font-black text-rose-600 bg-rose-50 px-1.5 py-0.5 rounded flex-shrink-0">R$ {totalDivida.toFixed(2)}</span>}
                           </div>
                         </div>
                         <div className="flex items-center gap-1 flex-shrink-0">
@@ -1711,10 +1733,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                       </div>
                     );
                   })}
+                  {clientsDia.length === 0 && <p className="text-center py-8 text-gray-400 text-xs font-bold uppercase">Nenhum cliente ativo em {DIAS_SEMANA[dia]}</p>}
                 </div>
               );
-            })}
-            {props.clients.filter(c => c.ativo && (routeFilter === 'TODOS' || c.rota === routeFilter)).length === 0 && <p className="text-center py-8 text-gray-400 text-xs font-bold uppercase">Nenhum cliente ativo</p>}
+            })()}
           </div>
         </div>
       )}
@@ -2257,9 +2279,20 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-sm rounded-[2rem] p-8 shadow-2xl overflow-y-auto max-h-[90vh]"><h3 className="font-black text-gray-800 uppercase text-sm mb-6 text-center">{showUserModal === 'NEW' ? 'Novo Vendedor' : 'Editar Vendedor'}</h3><div className="flex flex-col items-center mb-6"><div onClick={() => userPhotoInputRef.current?.click()} className="w-24 h-24 bg-purple-100 text-purple-600 rounded-[2rem] flex items-center justify-center font-black overflow-hidden border-4 border-white shadow-xl cursor-pointer relative group transition-all hover:scale-105">{userForm.foto ? <img src={userForm.foto} className="w-full h-full object-cover" /> : <i className="fa-solid fa-camera text-2xl"></i>}</div><input type="file" ref={userPhotoInputRef} className="hidden" accept="image/*" onChange={handleUserPhotoUpload} /></div><div className="space-y-4"><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome do Vendedor</label><input value={userForm.nome ?? ''} onChange={e => setUserForm({...userForm, nome: e.target.value})} placeholder="Nome Completo" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Telefone / WhatsApp</label><input value={userForm.telefone ?? ''} onChange={e => setUserForm({...userForm, telefone: e.target.value})} placeholder="Telefone" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Placa do Veículo</label><input value={userForm.placaVeiculo ?? ''} onChange={e => setUserForm({...userForm, placaVeiculo: e.target.value})} placeholder="Ex: ABC-1234" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div>{showUserModal !== 'NEW' && (<div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Rota Responsável</label><select value={userForm.rota || 'ROTA_01'} onChange={e => setUserForm({...userForm, rota: e.target.value})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold">{Array.from({ length: 50 }).map((_, i) => { const r = `ROTA_${String(i + 1).padStart(2, '0')}`; return <option key={r} value={r}>Rota {String(i + 1).padStart(2, '0')}</option>; })}</select></div>)}<div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">PIN de Acesso (6 dígitos)</label><input type="password" value={userForm.pin ?? ''} onChange={e => setUserForm({...userForm, pin: e.target.value})} placeholder="123456" maxLength={6} className="w-full p-4 bg-gray-50 border rounded-2xl font-black text-center text-xl tracking-[0.5em]" /></div><button onClick={handleSaveUser} className="w-full bg-purple-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 uppercase text-xs mt-4 tracking-widest">Salvar Vendedor</button><button onClick={() => setShowUserModal(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button></div></div></div>
       )}
 
-      {showClientModal && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-md rounded-[2rem] p-8 shadow-2xl overflow-y-auto max-h-[90vh]"><h3 className="font-black text-gray-800 uppercase text-sm mb-6 text-center">{showClientModal === 'NEW' ? 'Novo Cliente' : 'Editar Cliente'}</h3><div className="space-y-4"><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome Fantasia (Estabelecimento)</label><input value={clientForm.nomeFantasia || ''} onChange={e => setClientForm({...clientForm, nomeFantasia: e.target.value})} placeholder="Nome Fantasia" className="w-full p-4 bg-gray-50 rounded-2xl font-bold uppercase" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome do Cliente</label><input value={clientForm.nome || ''} onChange={e => setClientForm({...clientForm, nome: e.target.value})} placeholder="Nome real do cliente" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Telefone</label><input value={clientForm.telefone || ''} onChange={e => setClientForm({...clientForm, telefone: e.target.value})} placeholder="Telefone" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Endereço</label><input value={clientForm.endereco || ''} onChange={e => setClientForm({...clientForm, endereco: e.target.value})} placeholder="Endereço" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Bairro</label><input value={clientForm.bairro || ''} onChange={e => setClientForm({...clientForm, bairro: e.target.value})} placeholder="Bairro" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div><div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 space-y-3"><p className="text-[9px] font-black text-blue-600 uppercase tracking-widest flex items-center gap-1"><i className="fa-solid fa-file-invoice"></i> Dados Fiscais (NF-e)</p><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">CNPJ (do cliente)</label><input value={clientForm.cnpj || ''} onChange={e => handleCnpjChange(e.target.value)} placeholder="00.000.000/0000-00" inputMode="numeric" className="w-full p-4 bg-white border rounded-2xl font-bold" />{cnpjBusca.msg && <p className={`text-[9px] font-bold leading-snug ${cnpjBusca.loading ? 'text-gray-500' : cnpjBusca.ok ? 'text-green-600' : 'text-amber-600'}`}>{cnpjBusca.msg}</p>}</div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Razão Social</label><input value={clientForm.razaoSocial || ''} onChange={e => setClientForm({...clientForm, razaoSocial: e.target.value})} placeholder="Nome oficial da empresa no CNPJ" className="w-full p-4 bg-white border rounded-2xl font-bold uppercase" /></div><div className="grid grid-cols-2 gap-3"><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Inscrição Estadual</label><input value={clientForm.inscricaoEstadual || ''} onChange={e => setClientForm({...clientForm, inscricaoEstadual: e.target.value})} placeholder="IE ou ISENTO" className="w-full p-4 bg-white border rounded-2xl font-bold uppercase" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">CEP</label><input value={clientForm.enderecoCep || ''} onChange={e => setClientForm({...clientForm, enderecoCep: e.target.value})} placeholder="00000-000" inputMode="numeric" className="w-full p-4 bg-white border rounded-2xl font-bold" /></div></div><div className="grid grid-cols-3 gap-3"><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Número</label><input value={clientForm.enderecoNumero || ''} onChange={e => setClientForm({...clientForm, enderecoNumero: e.target.value})} placeholder="123" inputMode="numeric" className="w-full p-4 bg-white border rounded-2xl font-bold" /></div><div className="space-y-1 col-span-2"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Município</label><input value={clientForm.enderecoMunicipio || ''} onChange={e => setClientForm({...clientForm, enderecoMunicipio: e.target.value})} placeholder="Cidade" className="w-full p-4 bg-white border rounded-2xl font-bold uppercase" /></div></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">UF</label><select value={clientForm.enderecoUf || ''} onChange={e => setClientForm({...clientForm, enderecoUf: e.target.value})} className="w-full p-4 bg-white border rounded-2xl font-bold"><option value="">—</option>{['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'].map(uf => (<option key={uf} value={uf}>{uf}</option>))}</select></div><p className="text-[8px] font-bold text-blue-400 leading-snug">Digite o CNPJ completo: razão social e endereço são buscados automaticamente na Receita. Sem CNPJ, a venda emite NFC-e de consumidor.</p></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Dia de Atendimento</label><select value={clientForm.diaRoteiro ?? 1} onChange={e => setClientForm({...clientForm, diaRoteiro: parseInt(e.target.value)})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold">{[1, 2, 3, 4, 5, 6].map(d => (<option key={d} value={d}>{DIAS_SEMANA[d]}</option>))}</select></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Rota</label><select value={clientForm.rota || availableRoutes[0] || 'ROTA_01'} onChange={e => setClientForm({...clientForm, rota: e.target.value})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold">{availableRoutes.length > 0 ? availableRoutes.map(r => (<option key={r} value={r}>{formatRouteName(r)}</option>)) : <option value="ROTA_01">Sem rotas disponíveis</option>}</select></div><button onClick={handlePinLocation} className="w-full bg-indigo-50 text-indigo-600 font-black py-3 rounded-2xl uppercase text-[10px] tracking-widest flex items-center justify-center gap-2 mb-2"><i className="fa-solid fa-location-dot"></i> Localização Atual</button><button onClick={handleSaveClient} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 uppercase text-xs mt-4 tracking-widest">Salvar Cliente</button><button onClick={() => setShowClientModal(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button></div></div></div>
-      )}
+      {showClientModal && (() => {
+        const aptoNfe = clienteAptoNfe({ cnpj: clientForm.cnpj, razaoSocial: clientForm.razaoSocial, endereco: clientForm.endereco, bairro: clientForm.bairro, enderecoMunicipio: clientForm.enderecoMunicipio, enderecoUf: clientForm.enderecoUf });
+        return (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-w-md rounded-[2rem] p-6 shadow-2xl overflow-y-auto max-h-[90vh]"><h3 className="font-black text-gray-800 uppercase text-sm mb-6 text-center">{showClientModal === 'NEW' ? 'Novo Cliente' : 'Editar Cliente'}</h3><div className="space-y-4">
+        {/* ===== BLOCO 1: DADOS FISCAIS (NO TOPO — define se o cliente apto a NF-e) ===== */}
+        <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 space-y-3"><div className="flex items-center justify-between gap-2"><p className="text-[9px] font-black text-blue-600 uppercase tracking-widest flex items-center gap-1"><i className="fa-solid fa-file-invoice"></i> Dados Fiscais (NF-e)</p>{aptoNfe ? <span className="text-[8px] font-black text-emerald-700 bg-emerald-100 border border-emerald-200 px-2 py-1 rounded-lg uppercase whitespace-nowrap"><i className="fa-solid fa-circle-check mr-1"></i>Apto a NF-e</span> : <span className="text-[8px] font-black text-gray-400 bg-gray-100 border border-gray-200 px-2 py-1 rounded-lg uppercase whitespace-nowrap">Sem NF-e</span>}</div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">CNPJ (do cliente)</label><input value={clientForm.cnpj || ''} onChange={e => handleCnpjChange(e.target.value)} placeholder="00.000.000/0000-00" inputMode="numeric" className="w-full p-4 bg-white border rounded-2xl font-bold" />{cnpjBusca.msg && <p className={`text-[9px] font-bold leading-snug ${cnpjBusca.loading ? 'text-gray-500' : cnpjBusca.ok ? 'text-green-600' : 'text-amber-600'}`}>{cnpjBusca.msg}</p>}{cnpjBusca.ok && cnpjBusca.endereco && <p className="text-[9px] font-bold text-blue-700 bg-blue-100/60 border border-blue-200 rounded-xl px-3 py-2 leading-snug"><i className="fa-solid fa-map-location-dot mr-1"></i>{cnpjBusca.endereco}</p>}</div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Razão Social</label><input value={clientForm.razaoSocial || ''} onChange={e => setClientForm({...clientForm, razaoSocial: e.target.value})} placeholder="Nome oficial da empresa no CNPJ" className="w-full p-4 bg-white border rounded-2xl font-bold uppercase" /></div><div className="grid grid-cols-2 gap-3"><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Inscrição Estadual</label><input value={clientForm.inscricaoEstadual || ''} onChange={e => setClientForm({...clientForm, inscricaoEstadual: e.target.value})} placeholder="IE ou ISENTO" className="w-full p-4 bg-white border rounded-2xl font-bold uppercase" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">CEP</label><input value={clientForm.enderecoCep || ''} onChange={e => setClientForm({...clientForm, enderecoCep: e.target.value})} placeholder="00000-000" inputMode="numeric" className="w-full p-4 bg-white border rounded-2xl font-bold" /></div></div><div className="grid grid-cols-3 gap-3"><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Número</label><input value={clientForm.enderecoNumero || ''} onChange={e => setClientForm({...clientForm, enderecoNumero: e.target.value})} placeholder="123" inputMode="numeric" className="w-full p-4 bg-white border rounded-2xl font-bold" /></div><div className="space-y-1 col-span-2"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Município</label><input value={clientForm.enderecoMunicipio || ''} onChange={e => setClientForm({...clientForm, enderecoMunicipio: e.target.value})} placeholder="Cidade" className="w-full p-4 bg-white border rounded-2xl font-bold uppercase" /></div></div><div className="grid grid-cols-3 gap-3"><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">UF</label><select value={clientForm.enderecoUf || ''} onChange={e => setClientForm({...clientForm, enderecoUf: e.target.value})} className="w-full p-4 bg-white border rounded-2xl font-bold"><option value="">—</option>{['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'].map(uf => (<option key={uf} value={uf}>{uf}</option>))}</select></div><div className="space-y-1 col-span-2"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Email (NF-e)</label><input type="email" value={clientForm.email || ''} onChange={e => setClientForm({...clientForm, email: e.target.value})} placeholder="financeiro@empresa.com" className="w-full p-4 bg-white border rounded-2xl font-bold" /></div></div><p className="text-[8px] font-bold text-blue-400 leading-snug">Digite o CNPJ completo: razão social e endereço (com número) são buscados na Receita. Email raramente vem da Receita — confirme manualmente. Com cadastro fiscal completo = cliente apto a NF-e. Sem CNPJ = NFC-e de consumidor.</p></div>
+        {/* ===== BLOCO 2: IDENTIFICAÇÃO ===== */}
+        <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome Fantasia (Estabelecimento)</label><input value={clientForm.nomeFantasia || ''} onChange={e => setClientForm({...clientForm, nomeFantasia: e.target.value})} placeholder="Nome Fantasia" className="w-full p-4 bg-gray-50 rounded-2xl font-bold uppercase" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome do Cliente</label><input value={clientForm.nome || ''} onChange={e => setClientForm({...clientForm, nome: e.target.value})} placeholder="Nome real do cliente" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Telefone</label><input value={clientForm.telefone || ''} onChange={e => setClientForm({...clientForm, telefone: e.target.value})} placeholder="Telefone" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div>
+        {/* ===== BLOCO 3: ENDEREÇO DE VISITA ===== */}
+        <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Endereço</label><input value={clientForm.endereco || ''} onChange={e => setClientForm({...clientForm, endereco: e.target.value})} placeholder="Endereço" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Bairro</label><input value={clientForm.bairro || ''} onChange={e => setClientForm({...clientForm, bairro: e.target.value})} placeholder="Bairro" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div>
+        {/* ===== BLOCO 4: ATENDIMENTO ===== */}
+        <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Dia de Atendimento</label><select value={clientForm.diaRoteiro ?? 1} onChange={e => setClientForm({...clientForm, diaRoteiro: parseInt(e.target.value)})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold">{[1, 2, 3, 4, 5, 6].map(d => (<option key={d} value={d}>{DIAS_SEMANA[d]}</option>))}</select></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Rota</label><select value={clientForm.rota || availableRoutes[0] || 'ROTA_01'} onChange={e => setClientForm({...clientForm, rota: e.target.value})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold">{availableRoutes.length > 0 ? availableRoutes.map(r => (<option key={r} value={r}>{formatRouteName(r)}</option>)) : <option value="ROTA_01">Sem rotas disponíveis</option>}</select></div><button onClick={handlePinLocation} className="w-full bg-indigo-50 text-indigo-600 font-black py-3 rounded-2xl uppercase text-[10px] tracking-widest flex items-center justify-center gap-2 mb-2"><i className="fa-solid fa-location-dot"></i> Localização Atual</button><button onClick={handleSaveClient} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 uppercase text-xs mt-4 tracking-widest">Salvar Cliente</button><button onClick={() => setShowClientModal(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button></div></div></div>
+        );
+      })()}
 
       {showProductModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-md rounded-[2rem] p-8 shadow-2xl overflow-y-auto max-h-[90vh]"><h3 className="font-black text-gray-800 uppercase text-sm mb-6 text-center">{showProductModal === 'NEW' ? 'Novo Produto' : 'Editar Produto'}</h3><div className="space-y-4"><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome do Produto</label><input value={pForm.nome} onChange={e => setPForm({...pForm, nome: e.target.value})} placeholder="Nome do Produto" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div>
@@ -2267,7 +2300,24 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         {pForm.categoryId && props.subcategories.filter(s => s.categoryId === pForm.categoryId).length > 0 && (
           <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Subcategoria</label><select value={pForm.subcategoryId} onChange={e => setPForm({...pForm, subcategoryId: e.target.value})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase"><option value="">Nenhuma</option>{props.subcategories.filter(s => s.categoryId === pForm.categoryId).map(sub => (<option key={sub.id} value={sub.id}>{sub.name}</option>))}</select></div>
         )}
-        <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Custo R$</label><input type="number" value={pForm.custo} onChange={e => { const val = parseFloat(e.target.value) || 0; const venda = props.margemGlobalAtiva ? updatePriceFromMargin(val, props.margemGlobalValor) : parseFloat(pForm.venda) || 0; const margem = props.margemGlobalAtiva ? props.margemGlobalValor : updateMarginFromPrice(val, venda); setPForm({...pForm, custo: e.target.value, venda: venda.toFixed(2), margem: margem.toFixed(2)}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Venda R$</label><input type="number" value={pForm.venda} onChange={e => { const val = parseFloat(e.target.value) || 0; const margem = updateMarginFromPrice(parseFloat(pForm.custo) || 0, val); setPForm({...pForm, margem: margem.toFixed(2), venda: e.target.value}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Margem %</label><input type="number" value={pForm.margem} onChange={e => { const val = parseFloat(e.target.value) || 0; const venda = updatePriceFromMargin(parseFloat(pForm.custo) || 0, val); setPForm({...pForm, margem: e.target.value, venda: venda.toFixed(2)}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Preço Mínimo R$</label><input type="number" value={pForm.precoMinimo} onChange={e => setPForm({...pForm, precoMinimo: e.target.value})} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Comissão %</label><input type="number" value={pForm.comissao} onChange={e => setPForm({...pForm, comissao: e.target.value})} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Estoque Central</label><input type="number" value={pForm.estoquePrincipal} onChange={e => setPForm({...pForm, estoquePrincipal: e.target.value})} placeholder="0" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="flex items-center gap-2 py-2"><input type="checkbox" id="prod_ativo" checked={pForm.ativo} onChange={e => setPForm({...pForm, ativo: e.target.checked})} className="w-5 h-5" /><label htmlFor="prod_ativo" className="text-xs font-bold text-gray-700 uppercase">Produto Ativo</label></div><button onClick={handleSaveProduct} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 uppercase text-xs mt-4 tracking-widest">Salvar Produto</button><button onClick={() => setShowProductModal(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button></div></div></div>
+        <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Custo R$</label><input type="number" value={pForm.custo} onChange={e => { const val = parseFloat(e.target.value) || 0; const venda = props.margemGlobalAtiva ? updatePriceFromMargin(val, props.margemGlobalValor) : parseFloat(pForm.venda) || 0; const margem = props.margemGlobalAtiva ? props.margemGlobalValor : updateMarginFromPrice(val, venda); setPForm({...pForm, custo: e.target.value, venda: venda.toFixed(2), margem: margem.toFixed(2)}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Venda R$</label><input type="number" value={pForm.venda} onChange={e => { const val = parseFloat(e.target.value) || 0; const margem = updateMarginFromPrice(parseFloat(pForm.custo) || 0, val); setPForm({...pForm, margem: margem.toFixed(2), venda: e.target.value}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Margem %</label><input type="number" value={pForm.margem} onChange={e => { const val = parseFloat(e.target.value) || 0; const venda = updatePriceFromMargin(parseFloat(pForm.custo) || 0, val); setPForm({...pForm, margem: e.target.value, venda: venda.toFixed(2)}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Preço Mínimo R$</label><input type="number" value={pForm.precoMinimo} onChange={e => setPForm({...pForm, precoMinimo: e.target.value})} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Comissão %</label><input type="number" value={pForm.comissao} onChange={e => setPForm({...pForm, comissao: e.target.value})} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Estoque Central</label><input type="number" value={pForm.estoquePrincipal} onChange={e => setPForm({...pForm, estoquePrincipal: e.target.value})} placeholder="0" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div>
+        <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-4 space-y-3">
+          <p className="text-[9px] font-black text-indigo-600 uppercase tracking-widest flex items-center gap-1"><i className="fa-solid fa-file-invoice"></i> Dados Fiscais (NF-e / NFC-e)</p>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">NCM *</label><input value={pForm.ncm} onChange={e => setPForm({...pForm, ncm: e.target.value})} placeholder="21069090" inputMode="numeric" className="w-full p-4 bg-white border rounded-2xl font-bold" /></div>
+            <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">CFOP *</label><input value={pForm.cfop} onChange={e => setPForm({...pForm, cfop: e.target.value})} placeholder="5102" inputMode="numeric" className="w-full p-4 bg-white border rounded-2xl font-bold" /></div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">CEST (se houver ST)</label><input value={pForm.cest} onChange={e => setPForm({...pForm, cest: e.target.value})} placeholder="Ex: 12.001.00" inputMode="numeric" className="w-full p-4 bg-white border rounded-2xl font-bold" /></div>
+            <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">EAN (cód. barras)</label><input value={pForm.ean} onChange={e => setPForm({...pForm, ean: e.target.value})} placeholder="7891234567890" inputMode="numeric" className="w-full p-4 bg-white border rounded-2xl font-bold" /></div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Unidade</label><select value={pForm.unidade} onChange={e => setPForm({...pForm, unidade: e.target.value})} className="w-full p-4 bg-white border rounded-2xl font-bold">{['UN','KG','LT','PC','CX','FD','MT','GR','ML'].map(u => (<option key={u} value={u}>{u}</option>))}</select></div>
+            <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Origem</label><select value={pForm.origem} onChange={e => setPForm({...pForm, origem: e.target.value})} className="w-full p-4 bg-white border rounded-2xl font-bold"><option value="0">0 — Nacional</option><option value="1">1 — Estrangeira (imp. direta)</option><option value="2">2 — Estrangeira (merc. interno)</option><option value="3">3 — Nacional + imp. &lt; 40%</option><option value="7">7 — Nacional, sem imp.</option></select></div>
+          </div>
+          <p className="text-[8px] font-bold text-indigo-400 leading-snug">* NCM e CFOP são os principais para a nota sair sem rejeição. Rodar o SQL do Bloco 12 no Supabase para salvar estes campos.</p>
+        </div>
+        <div className="flex items-center gap-2 py-2"><input type="checkbox" id="prod_ativo" checked={pForm.ativo} onChange={e => setPForm({...pForm, ativo: e.target.checked})} className="w-5 h-5" /><label htmlFor="prod_ativo" className="text-xs font-bold text-gray-700 uppercase">Produto Ativo</label></div><button onClick={handleSaveProduct} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 uppercase text-xs mt-4 tracking-widest">Salvar Produto</button><button onClick={() => setShowProductModal(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button></div></div></div>
       )}
 
       {showEntryModal && (

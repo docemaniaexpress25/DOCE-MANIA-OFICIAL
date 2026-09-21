@@ -150,7 +150,7 @@ export async function POST(req: NextRequest) {
   // Cliente da venda
   const { data: client } = await db
     .from('clients')
-    .select('nome_fantasia, nome, cnpj, telefone, endereco, bairro, razao_social, inscricao_estadual, endereco_numero, endereco_cep, endereco_municipio, endereco_uf')
+    .select('nome_fantasia, nome, cnpj, telefone, endereco, bairro, razao_social, inscricao_estadual, endereco_numero, endereco_cep, endereco_municipio, endereco_uf, email')
     .eq('id', sale.client_id)
     .single();
 
@@ -177,7 +177,7 @@ export async function POST(req: NextRequest) {
   const prodIds = [...new Set(items.map((i: Record<string, unknown>) => i.produto_id as string))];
   const { data: prodsData } = await db
     .from('products')
-    .select(fiscalCols ? 'id, nome, ncm, cest, cfop' : 'id, nome')
+    .select(fiscalCols ? 'id, nome, ncm, cest, cfop, ean, unidade, origem' : 'id, nome')
     .in('id', prodIds);
   const prods = (prodsData || []) as unknown as Record<string, unknown>[];
   const prodMap = new Map(prods.map(p => [p.id as string, p]));
@@ -192,7 +192,9 @@ export async function POST(req: NextRequest) {
       ncm: fiscalCols ? (p.ncm as string) || undefined : undefined,
       cest: fiscalCols ? (p.cest as string) || undefined : undefined,
       cfop: fiscalCols ? (p.cfop as string) || undefined : undefined,
-      unidade: 'UN',
+      ean: fiscalCols ? (p.ean as string) || undefined : undefined,
+      unidade: fiscalCols ? ((p.unidade as string) || 'UN') : 'UN',
+      origem: fiscalCols ? (p.origem as string) || undefined : undefined,
       quantidade: Number(i.quantidade) || 0,
       valorUnitario: Number(i.preco_venda) || 0,
     };
@@ -231,18 +233,40 @@ export async function POST(req: NextRequest) {
       endereco_bairro: bairro,
       endereco_cep: String(client.endereco_cep || '').replace(/\D/g, '') || undefined,
       telefone: String(client.telefone || '').replace(/\D/g, '') || undefined,
+      email: String((client as Record<string, unknown>).email || '').trim() || undefined,
     };
-  } else if (razao) {
-    // NFC-e identificada (melhor para o cliente) — sem validacao dura
-    clientePayload = {
-      razao_social: razao.slice(0, 60),
-      endereco_uf: uf || cfg.ufEmitente,
-      endereco_municipio: municipio || '-',
-      endereco_logradouro: logradouro || '-',
-      endereco_numero: numeroDoEndereco(client.endereco_numero as string, logradouro),
-      endereco_bairro: bairro || '-',
-    };
-    if (cpfCnpj) clientePayload.cpf_cnpj = String(client.cnpj).replace(/\D/g, '');
+  } else {
+    // NFC-e (Bloco 12): escolha explicita do vendedor na tela de venda
+    // - CPF informado (e valido): NFC-e identificando o consumidor
+    // - Sem CPF: NFC-e ANONIMA (CONSUMIDOR NAO IDENTIFICADO)
+    const cpfNaNota = String(body.cpf || '').replace(/\D/g, '');
+    if (cpfNaNota) {
+      if (validaCpfCnpj(cpfNaNota) !== 'CPF') {
+        return BAD(422, 'CPF invalido (digitos verificadores nao conferem). Corrija o CPF ou deixe vazio para NFC-e sem identificacao.');
+      }
+      const nomeConsumidor = String(client.nome || client.nome_fantasia || '').trim();
+      clientePayload = {
+        cpf_cnpj: cpfNaNota,
+        razao_social: (nomeConsumidor || 'CONSUMIDOR').slice(0, 60),
+        endereco_uf: uf || cfg.ufEmitente,
+        endereco_municipio: municipio || '-',
+        endereco_logradouro: logradouro || '-',
+        endereco_numero: numeroDoEndereco(client.endereco_numero as string, logradouro),
+        endereco_bairro: bairro || '-',
+      };
+    } else if (razao && tipoEscolhido !== 'NFCE') {
+      // Fluxo automatico (sem escolha): NFC-e identificada pelo cadastro (melhor para o cliente)
+      clientePayload = {
+        razao_social: razao.slice(0, 60),
+        endereco_uf: uf || cfg.ufEmitente,
+        endereco_municipio: municipio || '-',
+        endereco_logradouro: logradouro || '-',
+        endereco_numero: numeroDoEndereco(client.endereco_numero as string, logradouro),
+        endereco_bairro: bairro || '-',
+      };
+      if (cpfCnpj) clientePayload.cpf_cnpj = String(client.cnpj).replace(/\D/g, '');
+    }
+    // tipoEscolhido NFCE sem CPF (ou sem razao): fica anonimo de proposito
   }
 
   const ref = refForSale(saleId, nextTentativa(sale.nota_ref as string));

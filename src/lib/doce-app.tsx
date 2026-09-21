@@ -411,8 +411,8 @@ const App: React.FC = () => {
     return success;
   };
 
-  const addProduct = async (nome: string, custo: number, venda: number, comissao: number, estoque: number = 0, categoryId?: string, subcategoryId?: string, precoMinimo?: number) => {
-    const res = await productService.insertProduct({ nome, precoCusto: custo, precoVenda: venda, precoMinimo: precoMinimo || 0, comissaoPercentual: comissao, estoquePrincipal: estoque, ativo: true, categoryId, subcategoryId });
+  const addProduct = async (nome: string, custo: number, venda: number, comissao: number, estoque: number = 0, categoryId?: string, subcategoryId?: string, precoMinimo?: number, fiscal?: Partial<Product>) => {
+    const res = await productService.insertProduct({ nome, precoCusto: custo, precoVenda: venda, precoMinimo: precoMinimo || 0, comissaoPercentual: comissao, estoquePrincipal: estoque, ativo: true, categoryId, subcategoryId, ...fiscal });
     if (res) {
       await appSettingsService.updateSettings({ productOrder: [...productOrder, res.id] });
       fetchCoreData();
@@ -452,7 +452,9 @@ const App: React.FC = () => {
   };
 
   const deleteClient = async (id: string) => {
-    await clientService.deleteClient(id);
+    const r = await clientService.deleteClient(id);
+    if (r.ok) setAdminNotification('Cliente excluído!');
+    else setAdminNotification(r.erro || 'Erro ao excluir o cliente.');
     fetchCoreData();
   };
 

@@ -18,7 +18,14 @@ export const productService = {
       estoquePrincipal: Number(p.estoque_principal) || 0,
       ativo: !!p.ativo,
       categoryId: p.category_id,
-      subcategoryId: p.subcategory_id
+      subcategoryId: p.subcategory_id,
+      // Fiscais (Bloco 12) — podem nao existir antes do SQL
+      ncm: p.ncm || undefined,
+      cest: p.cest || undefined,
+      cfop: p.cfop || undefined,
+      ean: p.ean || undefined,
+      unidade: p.unidade || undefined,
+      origem: p.origem || undefined,
     })) as Product[];
   },
 
@@ -34,8 +41,21 @@ export const productService = {
       category_id: product.categoryId,
       subcategory_id: product.subcategoryId
     };
+    // Fiscais (Bloco 12): envia com fallback — se a coluna ainda nao existir,
+    // o Supabase rejeita o insert e refaz sem elas.
+    const fiscal: Record<string, string | null> = {};
+    if (product.ncm !== undefined) fiscal.ncm = product.ncm || null;
+    if (product.cest !== undefined) fiscal.cest = product.cest || null;
+    if (product.cfop !== undefined) fiscal.cfop = product.cfop || null;
+    if (product.ean !== undefined) fiscal.ean = product.ean || null;
+    if (product.unidade !== undefined) fiscal.unidade = product.unidade || null;
+    if (product.origem !== undefined) fiscal.origem = product.origem || null;
 
-    const { data, error } = await supabase.from('products').insert(payload).select().single();
+    let { data, error } = await supabase.from('products').insert({ ...payload, ...fiscal }).select().single();
+    if (error && /ncm|cest|cfop|\bean\b|unidade|origem/i.test(error.message || '')) {
+      console.warn('Colunas fiscais de produto ausentes (Bloco 12 nao rodado). Salvando sem elas.');
+      ({ data, error } = await supabase.from('products').insert(payload).select().single());
+    }
     if (error) {
       console.error('Erro ao inserir produto:', error);
       return null;
@@ -51,7 +71,13 @@ export const productService = {
       estoquePrincipal: data.estoque_principal,
       ativo: data.ativo,
       categoryId: data.category_id,
-      subcategoryId: data.subcategory_id
+      subcategoryId: data.subcategory_id,
+      ncm: data.ncm || undefined,
+      cest: data.cest || undefined,
+      cfop: data.cfop || undefined,
+      ean: data.ean || undefined,
+      unidade: data.unidade || undefined,
+      origem: data.origem || undefined,
     } as Product;
   },
 
@@ -66,8 +92,21 @@ export const productService = {
     if (updates.ativo !== undefined) payload.ativo = updates.ativo;
     if (updates.categoryId !== undefined) payload.category_id = updates.categoryId;
     if (updates.subcategoryId !== undefined) payload.subcategory_id = updates.subcategoryId;
+    // Fiscais (Bloco 12)
+    if (updates.ncm !== undefined) payload.ncm = updates.ncm || null;
+    if (updates.cest !== undefined) payload.cest = updates.cest || null;
+    if (updates.cfop !== undefined) payload.cfop = updates.cfop || null;
+    if (updates.ean !== undefined) payload.ean = updates.ean || null;
+    if (updates.unidade !== undefined) payload.unidade = updates.unidade || null;
+    if (updates.origem !== undefined) payload.origem = updates.origem || null;
 
-    const { data, error } = await supabase.from('products').update(payload).eq('id', id).select().single();
+    let { data, error } = await supabase.from('products').update(payload).eq('id', id).select().single();
+    if (error && /ncm|cest|cfop|\bean\b|unidade|origem/i.test(error.message || '')) {
+      const fallback: Record<string, unknown> = { ...payload };
+      delete fallback.ncm; delete fallback.cest; delete fallback.cfop;
+      delete fallback.ean; delete fallback.unidade; delete fallback.origem;
+      ({ data, error } = await supabase.from('products').update(fallback).eq('id', id).select().single());
+    }
     if (error) {
       console.error('Erro ao atualizar produto:', error);
       return null;
@@ -83,7 +122,13 @@ export const productService = {
       estoquePrincipal: data.estoque_principal,
       ativo: data.ativo,
       categoryId: data.category_id,
-      subcategoryId: data.subcategory_id
+      subcategoryId: data.subcategory_id,
+      ncm: data.ncm || undefined,
+      cest: data.cest || undefined,
+      cfop: data.cfop || undefined,
+      ean: data.ean || undefined,
+      unidade: data.unidade || undefined,
+      origem: data.origem || undefined,
     } as Product;
   },
 

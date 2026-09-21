@@ -24,6 +24,7 @@ export interface FocusItem {
   numero_item: string;
   codigo_produto?: string;
   descricao: string;
+  codigo_ean?: string;
   codigo_ncm?: string;
   codigo_cest?: string;
   cfop: string;
@@ -215,7 +216,7 @@ export function montarPayloadNfe(opts: {
   natureza?: string;
   ufEmitente?: string;
   cliente: FocusCliente;
-  itens: { codigo?: string; descricao: string; ncm?: string; cest?: string; cfop?: string; unidade?: string; quantidade: number; valorUnitario: number }[];
+  itens: { codigo?: string; descricao: string; ncm?: string; cest?: string; cfop?: string; ean?: string; unidade?: string; origem?: string; quantidade: number; valorUnitario: number }[];
   valorTotalVenda: number;
   pagamento: FocusPagamento;
   informacoesAdicionais?: string;
@@ -234,6 +235,7 @@ export function montarPayloadNfe(opts: {
       numero_item: String(i + 1),
       codigo_produto: (it.codigo || '').slice(0, 60) || undefined,
       descricao: normalizaTexto(it.descricao, 120),
+      codigo_ean: soDigitos(it.ean) || undefined,
       codigo_ncm: soDigitos(it.ncm) || '21069090',
       codigo_cest: soDigitos(it.cest) || undefined,
       // 5102 = venda interna (mesma UF); 6102 = venda para outra UF
@@ -246,7 +248,7 @@ export function montarPayloadNfe(opts: {
       valor_unitario_tributavel: round2(it.valorUnitario).toFixed(2),
       valor_total: round2(bruto - desconto).toFixed(2),
       valor_desconto: desconto > 0 ? desconto.toFixed(2) : undefined,
-      origem_mercadoria: '0',
+      origem_mercadoria: soDigitos(it.origem) || '0',
       tributacao_icms: '102', // CSOSN 102 — Simples Nacional, sem cobranca de ICMS
       icms_aliquota: '0.00',
       icms_base_calculo: '0.00',

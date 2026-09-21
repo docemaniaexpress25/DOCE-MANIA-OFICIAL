@@ -9,6 +9,7 @@ import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
 import { wakeLockManager } from '@/utils/wakeLock';
 import { saleService } from '@/services/saleService';
 import { notaService } from '@/services/notaService';
+import { clienteAptoNfe, mascararCpf, validaCpf } from '@/lib/cnpjAutocomplete';
 
 interface PDVProps {
   client: Client;
@@ -59,24 +60,35 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const [saleResultModal, setSaleResultModal] = useState<{ total: number; comissao: number; troca: number; isPrazo: boolean; isPreVenda?: boolean; clientName: string; sale: Sale } | null>(null);
 
   // ============================================================
-  // Bloco 10: emissao de NF-e/NFC-e direto no fechamento da venda
+  // Bloco 10/12: emissao de NF-e/NFC-e direto no fechamento da venda.
+  // O vendedor ESCOLHE a forma: NF-e (cliente CNPJ apto), NFC-e
+  // (com ou sem CPF) ou cupom nao fiscal (botao OK, fluxo comum).
   // ============================================================
   const [notaResult, setNotaResult] = useState<{ status: string; numero?: string; pdfUrl?: string; erro?: string } | null>(null);
   const [notaEmitindo, setNotaEmitindo] = useState(false);
-  useEffect(() => { if (!saleResultModal) setNotaResult(null); }, [saleResultModal]);
+  const [nfcCpfPanel, setNfcCpfPanel] = useState(false);
+  const [nfcCpfInput, setNfcCpfInput] = useState('');
+  useEffect(() => {
+    if (!saleResultModal) { setNotaResult(null); setNfcCpfPanel(false); setNfcCpfInput(''); }
+  }, [saleResultModal]);
 
-  const handleEmitirNotaModal = async () => {
+  const handleEmitirNotaModal = async (tipo: 'NFE' | 'NFCE', cpfNaNota?: string) => {
     const s = saleResultModal?.sale;
     if (!s || notaEmitindo || saleResultModal?.isPreVenda) return;
+    if (tipo === 'NFCE' && cpfNaNota && !validaCpf(cpfNaNota)) {
+      setAppModal({ title: 'NFC-e', message: 'CPF invalido (digitos verificadores nao conferem). Corrija o CPF ou deixe vazio para emitir sem identificacao.', icon: 'fa-solid fa-triangle-exclamation', iconColor: 'text-rose-500', type: 'error' });
+      return;
+    }
     setNotaEmitindo(true);
-    const r = await notaService.emitir(s.id);
+    const r = await notaService.emitir(s.id, tipo, cpfNaNota || undefined);
     setNotaEmitindo(false);
     if (!r.ok) {
-      setAppModal({ title: 'Nota Fiscal', message: r.erro || 'Nao foi possivel emitir a nota.', icon: 'fa-solid fa-triangle-exclamation', iconColor: 'text-rose-500', type: 'error' });
+      setAppModal({ title: tipo === 'NFE' ? 'NF-e' : 'NFC-e', message: r.erro || 'Nao foi possivel emitir a nota.', icon: 'fa-solid fa-triangle-exclamation', iconColor: 'text-rose-500', type: 'error' });
       if (r.nota) setNotaResult({ status: r.nota.status || 'REJEITADA', erro: r.nota.erro });
       return;
     }
     setNotaResult({ status: r.nota?.status || 'EMITINDO', numero: r.nota?.numero, pdfUrl: r.nota?.pdfUrl, erro: r.nota?.erro });
+    setNfcCpfPanel(false);
   };
 
   // ============================================================
@@ -1001,14 +1013,14 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           </div>
 
           <div className="p-5 pt-0 space-y-2">
-            {/* Bloco 10: nota fiscal direto no fechamento (so venda pronta entrega) */}
+            {/* BLOCO 12: escolha da forma de venda — NF-e / NFC-e / cupom nao fiscal */}
             {!saleResultModal.isPreVenda && (
               <>
                 {notaResult?.status === 'AUTORIZADA' ? (
                   <div className="space-y-2">
                     <div className="bg-emerald-50 border border-emerald-200 p-3 rounded-2xl flex items-center gap-2">
                       <i className="fa-solid fa-circle-check text-emerald-600"></i>
-                      <span className="text-[10px] font-black text-emerald-700 uppercase flex-1">NF-e {notaResult.numero || ''} Autorizada</span>
+                      <span className="text-[10px] font-black text-emerald-700 uppercase flex-1">{notaResult.numero ? `Nota ${notaResult.numero} ` : ''}Autorizada</span>
                     </div>
                     {notaResult.pdfUrl && (
                       <a href={notaResult.pdfUrl} target="_blank" rel="noopener noreferrer" className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest flex items-center justify-center">
@@ -1022,14 +1034,45 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                     <p className="text-[9px] text-rose-500 font-bold mt-1 uppercase">Voce pode emitir novamente pelo historico da venda.</p>
                   </div>
                 ) : (
-                  <button
-                    onClick={handleEmitirNotaModal}
-                    disabled={notaEmitindo}
-                    className="w-full bg-slate-800 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest disabled:opacity-60 flex items-center justify-center"
-                  >
-                    <i className={`fa-solid ${notaEmitindo ? 'fa-spinner fa-spin' : 'fa-file-invoice-dollar'} mr-2`}></i>
-                    {notaEmitindo ? 'Emitindo Nota...' : 'Emitir Nota Fiscal (NFe)'}
-                  </button>
+                  <>
+                    {clienteAptoNfe(client) ? (
+                      <button
+                        onClick={() => handleEmitirNotaModal('NFE')}
+                        disabled={notaEmitindo}
+                        className="w-full bg-slate-800 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest disabled:opacity-60 flex items-center justify-center"
+                      >
+                        <i className={`fa-solid ${notaEmitindo ? 'fa-spinner fa-spin' : 'fa-file-invoice-dollar'} mr-2`}></i>
+                        {notaEmitindo ? 'Emitindo Nota...' : 'Emitir NF-e (CNPJ do cliente)'}
+                      </button>
+                    ) : (
+                      <p className="text-[9px] font-bold text-gray-400 text-center leading-snug bg-gray-50 border border-gray-100 rounded-2xl px-3 py-2"><i className="fa-solid fa-circle-info mr-1"></i>NF-e indisponivel: complete os dados fiscais do cliente no Admin &gt; Clientes (CNPJ, razao social, endereco, bairro, municipio e UF).</p>
+                    )}
+                    {!nfcCpfPanel ? (
+                      <button
+                        onClick={() => setNfcCpfPanel(true)}
+                        disabled={notaEmitindo}
+                        className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest disabled:opacity-60 flex items-center justify-center"
+                      >
+                        <i className="fa-solid fa-receipt mr-2"></i>Emitir NFC-e
+                      </button>
+                    ) : (
+                      <div className="bg-blue-50 border border-blue-100 rounded-2xl p-3 space-y-2">
+                        <p className="text-[9px] font-black text-blue-600 uppercase">NFC-e — Cliente quer CPF na nota? (opcional)</p>
+                        <input
+                          value={nfcCpfInput}
+                          onChange={e => setNfcCpfInput(mascararCpf(e.target.value))}
+                          placeholder="000.000.000-00"
+                          inputMode="numeric"
+                          className="w-full p-3 bg-white border rounded-xl font-bold text-sm"
+                        />
+                        <div className="flex gap-2">
+                          <button onClick={() => handleEmitirNotaModal('NFCE', nfcCpfInput.replace(/\D/g, ''))} disabled={notaEmitindo} className="flex-1 bg-blue-600 text-white font-black py-3 rounded-xl uppercase text-[10px] tracking-widest disabled:opacity-60"><i className={`fa-solid ${notaEmitindo ? 'fa-spinner fa-spin' : 'fa-receipt'} mr-1`}></i>{notaEmitindo ? 'Emitindo...' : 'Emitir'}</button>
+                          <button onClick={() => { setNfcCpfPanel(false); setNfcCpfInput(''); }} className="flex-1 bg-gray-100 text-gray-500 font-black py-3 rounded-xl uppercase text-[10px] tracking-widest">Cancelar</button>
+                        </div>
+                        <p className="text-[8px] font-bold text-blue-400 leading-snug">Com CPF → NFC-e identificada. Sem CPF → NFC-e sem identificacao. Nenhuma nota = fluxo comum do cupom nao fiscal.</p>
+                      </div>
+                    )}
+                  </>
                 )}
               </>
             )}
@@ -1042,7 +1085,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               </button>
             )}
             {!(saleResultModal.isPrazo && !saleResultModal.sale.comprovanteFoto) && (
-              <button onClick={() => { const s = saleResultModal.sale; setSaleResultModal(null); onFinish(s); }} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest"><i className="fa-solid fa-check mr-2"></i>OK</button>
+              <button onClick={() => { const s = saleResultModal.sale; setSaleResultModal(null); onFinish(s); }} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest"><i className="fa-solid fa-check mr-2"></i>{saleResultModal.isPreVenda ? 'OK' : 'OK — Cupom Nao Fiscal'}</button>
             )}
           </div>
         </div>

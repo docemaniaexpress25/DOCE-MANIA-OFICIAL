@@ -25,6 +25,7 @@ function mapClient(c: any): Client {
     enderecoCep: c.endereco_cep || undefined,
     enderecoMunicipio: c.endereco_municipio || undefined,
     enderecoUf: c.endereco_uf || undefined,
+    email: c.email || undefined,
   } as Client;
 }
 
@@ -39,7 +40,7 @@ export const clientService = {
   },
 
   async insertClient(client: Omit<Client, 'id'>): Promise<Client | null> {
-    const { nomeFantasia, nome, ativarCnpj, cnpj, telefone, endereco, bairro, ativo, localizacao, diaRoteiro, ordem, observacoes, pinLocalizacao, rota, razaoSocial, inscricaoEstadual, enderecoNumero, enderecoCep, enderecoMunicipio, enderecoUf } = client;
+    const { nomeFantasia, nome, ativarCnpj, cnpj, telefone, endereco, bairro, ativo, localizacao, diaRoteiro, ordem, observacoes, pinLocalizacao, rota, razaoSocial, inscricaoEstadual, enderecoNumero, enderecoCep, enderecoMunicipio, enderecoUf, email } = client;
     const payload: Record<string, unknown> = {
       nome_fantasia: nomeFantasia,
       nome,
@@ -66,10 +67,11 @@ export const clientService = {
       endereco_cep: enderecoCep || null,
       endereco_municipio: enderecoMunicipio || null,
       endereco_uf: enderecoUf || null,
+      email: email || null,
     };
 
     let { data, error } = await supabase.from('clients').insert({ ...payload, ...fiscal }).select().single();
-    if (error && /razao_social|inscricao_estadual|endereco_numero|endereco_cep|endereco_municipio|endereco_uf/i.test(error.message || '')) {
+    if (error && /razao_social|inscricao_estadual|endereco_numero|endereco_cep|endereco_municipio|endereco_uf|\bemail\b/i.test(error.message || '')) {
       console.warn('Colunas fiscais ausentes (Bloco 10 nao rodado). Salvando sem elas.');
       ({ data, error } = await supabase.from('clients').insert(payload).select().single());
     }
@@ -112,8 +114,13 @@ export const clientService = {
     if ((updates as Record<string, unknown>).enderecoCep !== undefined) payload.endereco_cep = (updates as Record<string, unknown>).enderecoCep;
     if ((updates as Record<string, unknown>).enderecoMunicipio !== undefined) payload.endereco_municipio = (updates as Record<string, unknown>).enderecoMunicipio;
     if ((updates as Record<string, unknown>).enderecoUf !== undefined) payload.endereco_uf = (updates as Record<string, unknown>).enderecoUf;
+    if ((updates as Record<string, unknown>).email !== undefined) payload.email = (updates as Record<string, unknown>).email || null;
 
-    const { data, error } = await supabase.from('clients').update(payload).eq('id', id).select().single();
+    let { data, error } = await supabase.from('clients').update(payload).eq('id', id).select().single();
+    if (error && /\bemail\b/i.test(error.message || '')) {
+      const fallback = { ...payload }; delete fallback.email;
+      ({ data, error } = await supabase.from('clients').update(fallback).eq('id', id).select().single());
+    }
     if (error) {
       console.error('Erro ao atualizar cliente:', error);
       return null;
@@ -130,12 +137,27 @@ export const clientService = {
     } as Client;
   },
 
-  async deleteClient(id: string): Promise<boolean> {
-    const { error } = await supabase.from('clients').delete().eq('id', id);
-    if (error) {
-      console.error('Erro ao deletar cliente:', error);
-      return false;
+  /**
+   * Bloco 12: exclusao de cliente via API server-side (service role).
+   * Antes: delete direto pelo browser com chave anon — o RLS do Supabase
+   * bloqueava e o admin nunca conseguia excluir.
+   * Cliente com vendas no historico NAO e excluido (FK) — e desativado.
+   */
+  async deleteClient(id: string): Promise<{ ok: boolean; desativado?: boolean; erro?: string }> {
+    const { authHeaders } = await import('@/services/userService');
+    try {
+      const res = await fetch('/api/clientes/excluir', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ clientId: id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        return { ok: false, desativado: !!data.desativado, erro: data.erro || `Erro ${res.status} ao excluir.` };
+      }
+      return { ok: true };
+    } catch {
+      return { ok: false, erro: 'Falha de conexao ao excluir o cliente.' };
     }
-    return true;
   },
 };

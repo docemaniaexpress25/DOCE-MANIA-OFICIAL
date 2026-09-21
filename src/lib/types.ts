@@ -40,10 +40,13 @@ export interface Product {
   ativo: boolean;
   categoryId?: string;
   subcategoryId?: string;
-  /** Fiscais (Bloco 10) — usados na emissao de NFe/NFCe */
+  /** Fiscais (Bloco 12) — usados na emissao de NFe/NFCe */
   ncm?: string;
   cest?: string;
   cfop?: string;
+  ean?: string;
+  unidade?: string;
+  origem?: string;
 }
 
 export interface Carga {
@@ -86,6 +89,8 @@ export interface Client {
   enderecoCep?: string;
   enderecoMunicipio?: string;
   enderecoUf?: string;
+  /** Email do cliente (NF-e envia para o financeiro; normalmente manual) */
+  email?: string;
 }
 
 export type NotaStatus = 'NAO_EMITIDA' | 'EMITINDO' | 'AUTORIZADA' | 'REJEITADA' | 'CANCELADA';

@@ -15,13 +15,18 @@ export interface NotaInfo {
 }
 
 export const notaService = {
-  /** Emite a nota da venda. Tipo automatico: CNPJ -> NFe, senao NFC-e. */
-  async emitir(saleId: string, tipo?: 'NFE' | 'NFCE'): Promise<{ ok: boolean; jaEmitida?: boolean; nota?: NotaInfo; erro?: string }> {
+  /**
+   * Emite a nota da venda.
+   * - Sem tipo: automatico (CNPJ valido -> NFe, senao NFC-e).
+   * - tipo 'NFCE': NFC-e; se `cpfNaNota` informado e valido, emite
+   *   identificando o consumidor; se vazio, NFC-e sem identificacao.
+   */
+  async emitir(saleId: string, tipo?: 'NFE' | 'NFCE', cpfNaNota?: string): Promise<{ ok: boolean; jaEmitida?: boolean; nota?: NotaInfo; erro?: string }> {
     try {
       const res = await fetch('/api/notas', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify({ acao: 'EMITIR', saleId, tipo }),
+        body: JSON.stringify({ acao: 'EMITIR', saleId, tipo, cpf: cpfNaNota || undefined }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}`, nota: data.nota };

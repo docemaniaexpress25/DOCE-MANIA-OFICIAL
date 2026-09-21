@@ -43,21 +43,18 @@ function mapUser(u: any): User {
 }
 
 export const userService = {
+  /**
+   * Bloco 12: agora LANCA em caso de falha (rede/API 5xx) para que a tela
+   * de login possa mostrar erro + "Tentar novamente" em vez de um card
+   * vazio que parecia app quebrado ("o login nao aparece").
+   */
   async getAllUsers(): Promise<User[]> {
-    try {
-      // Com sessao ativa a API devolve a lista completa (admin); sem sessao,
-      // apenas o minimo para a tela de login.
-      const res = await fetch('/api/users', { headers: authHeaders() });
-      if (!res.ok) {
-        console.error('Erro ao buscar usuarios:', res.status);
-        return [];
-      }
-      const data = await res.json();
-      return (data.users || []).map(mapUser);
-    } catch (e) {
-      console.error('Erro ao buscar usuarios:', e);
-      return [];
+    const res = await fetch('/api/users', { headers: authHeaders() });
+    if (!res.ok) {
+      throw new Error(`Erro ${res.status} ao buscar usuarios`);
     }
+    const data = await res.json();
+    return (data.users || []).map(mapUser);
   },
 
   async getUserById(id: string): Promise<User | null> {

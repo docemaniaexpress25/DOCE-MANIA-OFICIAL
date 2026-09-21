@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServiceClient } from '@/lib/serverSupabase';
+import { getServiceClient, devBridge } from '@/lib/serverSupabase';
 import { sessionFromRequest } from '@/lib/session';
 
 /**
@@ -17,6 +17,8 @@ import { sessionFromRequest } from '@/lib/session';
  */
 
 export async function POST(req: NextRequest) {
+  const bridged = await devBridge(req);
+  if (bridged) return bridged;
   const session = sessionFromRequest(req);
   if (!session) {
     return NextResponse.json({ ok: false, erro: 'Sessao expirada. Entre novamente.' }, { status: 401 });

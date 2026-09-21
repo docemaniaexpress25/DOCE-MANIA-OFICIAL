@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { hash } from 'bcryptjs';
-import { getServiceClient, isServerSupabaseConfigured } from '@/lib/serverSupabase';
+import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/serverSupabase';
 import { isAdminSession } from '@/lib/session';
 import { hasPreVendaColumn } from '@/lib/serverSchema';
 
@@ -52,6 +52,8 @@ function mapUser(u: any) {
 
 export async function GET(req: NextRequest) {
   if (!isServerSupabaseConfigured()) {
+    const bridged = await devBridge(req);
+    if (bridged) return bridged;
     return NextResponse.json({ error: 'Servidor nao configurado (SUPABASE_SERVICE_ROLE_KEY).' }, { status: 503 });
   }
   try {
@@ -73,6 +75,8 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   if (!isServerSupabaseConfigured()) {
+    const bridged = await devBridge(req);
+    if (bridged) return bridged;
     return NextResponse.json({ error: 'Servidor nao configurado.' }, { status: 503 });
   }
   if (!isAdminSession(req)) {
@@ -117,6 +121,8 @@ export async function POST(req: NextRequest) {
 
 export async function PUT(req: NextRequest) {
   if (!isServerSupabaseConfigured()) {
+    const bridged = await devBridge(req);
+    if (bridged) return bridged;
     return NextResponse.json({ error: 'Servidor nao configurado.' }, { status: 503 });
   }
   if (!isAdminSession(req)) {
@@ -175,6 +181,8 @@ export async function PUT(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   if (!isServerSupabaseConfigured()) {
+    const bridged = await devBridge(req);
+    if (bridged) return bridged;
     return NextResponse.json({ error: 'Servidor nao configurado.' }, { status: 503 });
   }
   if (!isAdminSession(req)) {

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServiceClient } from '@/lib/serverSupabase';
+import { getServiceClient, devBridge } from '@/lib/serverSupabase';
 import { sessionFromRequest } from '@/lib/session';
 import { hasNotaColumns, hasProductFiscalColumns } from '@/lib/serverSchema';
 import {
@@ -66,6 +66,8 @@ function notaPublica(s: Record<string, unknown>): NotaPublica {
 }
 
 export async function POST(req: NextRequest) {
+  const bridged = await devBridge(req);
+  if (bridged) return bridged;
   const session = sessionFromRequest(req);
   if (!session) return BAD(401, 'Sessao expirada. Faca login novamente.');
 

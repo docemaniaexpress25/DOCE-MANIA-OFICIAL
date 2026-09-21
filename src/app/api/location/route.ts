@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServiceClient, isServerSupabaseConfigured } from '@/lib/serverSupabase';
+import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/serverSupabase';
 import { sessionFromRequest, isAdminSession } from '@/lib/session';
 
 /**
@@ -26,6 +26,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Nao autenticado.' }, { status: 401 });
   }
   if (!isServerSupabaseConfigured()) {
+    const bridged = await devBridge(request);
+    if (bridged) return bridged;
     return NextResponse.json({ error: 'Servidor temporariamente indisponivel.' }, { status: 503 });
   }
 
@@ -99,6 +101,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Acesso restrito a administradores.' }, { status: 401 });
   }
   if (!isServerSupabaseConfigured()) {
+    const bridged = await devBridge(request);
+    if (bridged) return bridged;
     return NextResponse.json({ error: 'Servidor temporariamente indisponivel.' }, { status: 503 });
   }
 

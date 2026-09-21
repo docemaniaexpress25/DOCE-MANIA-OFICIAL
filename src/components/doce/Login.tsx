@@ -7,6 +7,10 @@ interface LoginProps {
   users: User[];
   onLogin: (user: User) => void;
   logo: string | null;
+  /** Bloco 12: estado da busca de usuarios (evita card vazio "sem login") */
+  status?: 'LOADING' | 'OK' | 'ERRO';
+  /** Bloco 12: chamado pelo botao "Tentar novamente" apos falha */
+  onRetry?: () => void;
 }
 
 // Acesso oculto do ENTREGADOR (revelado junto ao admin pelos 5 toques no logo).
@@ -25,7 +29,7 @@ const roleLabel = (role: string) =>
 const roleIcon = (role: string) =>
   role === 'ADMIN' ? 'fa-lock' : role === 'ENTREGADOR' ? 'fa-truck-fast' : 'fa-user-shield';
 
-const Login: React.FC<LoginProps> = ({ users, onLogin, logo }) => {
+const Login: React.FC<LoginProps> = ({ users, onLogin, logo, status = 'OK', onRetry }) => {
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
@@ -172,6 +176,25 @@ const Login: React.FC<LoginProps> = ({ users, onLogin, logo }) => {
         </div>
         
         <div className="space-y-3">
+          {/* Bloco 12: nunca deixar a tela muda — carregando, erro ou lista */}
+          {status === 'LOADING' && (
+            <div className="py-8 flex flex-col items-center gap-3">
+              <i className="fa-solid fa-circle-notch fa-spin text-blue-500 text-2xl"></i>
+              <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Carregando usuários...</p>
+            </div>
+          )}
+          {status === 'ERRO' && (
+            <div className="py-6 px-4 bg-rose-50 border border-rose-100 rounded-2xl flex flex-col items-center gap-3">
+              <i className="fa-solid fa-wifi text-rose-400 text-2xl"></i>
+              <p className="text-[10px] font-black text-rose-600 uppercase leading-snug text-center">Não foi possível carregar os usuários.<br />Verifique sua conexão.</p>
+              <button onClick={onRetry} className="bg-blue-600 text-white font-black px-6 py-3 rounded-xl uppercase text-[10px] tracking-widest active:scale-95 shadow-lg">
+                <i className="fa-solid fa-rotate-right mr-1"></i>Tentar novamente
+              </button>
+            </div>
+          )}
+          {status === 'OK' && visibleUsers.length === 0 && (
+            <p className="py-6 text-[10px] font-black text-gray-400 uppercase tracking-widest">Nenhum usuário cadastrado</p>
+          )}
           {visibleUsers.map(user => (
             <button
               key={user.id}

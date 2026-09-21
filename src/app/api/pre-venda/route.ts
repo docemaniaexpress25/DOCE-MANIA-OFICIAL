@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServiceClient, isServerSupabaseConfigured } from '@/lib/serverSupabase';
+import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/serverSupabase';
 import { sessionFromRequest, isAdminSession } from '@/lib/session';
 import { hasEntregaTables, hasBoletoFotoColumn } from '@/lib/serverSchema';
 
@@ -398,6 +398,8 @@ async function gerarRotaParaVendedor(supabase: any, vendedorId: string, solicita
 
 export async function GET(req: NextRequest) {
   if (!isServerSupabaseConfigured()) {
+    const bridged = await devBridge(req);
+    if (bridged) return bridged;
     return NextResponse.json({ error: 'Servidor nao configurado.' }, { status: 503 });
   }
   const session = sessionFromRequest(req);
@@ -453,6 +455,8 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   if (!isServerSupabaseConfigured()) {
+    const bridged = await devBridge(req);
+    if (bridged) return bridged;
     return NextResponse.json({ ok: false, error: 'Servidor nao configurado.' }, { status: 503 });
   }
   const session = sessionFromRequest(req);

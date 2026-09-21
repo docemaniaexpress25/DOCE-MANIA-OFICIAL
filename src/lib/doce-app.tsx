@@ -73,6 +73,15 @@ const App: React.FC = () => {
   const [isOnline, setIsOnline] = useState(true);
   
   const [users, setUsers] = useState<User[]>([]);
+  // Bloco 12: estado da busca de usuarios para a tela de login
+  // (LOADING mostra spinner; ERRO mostra "Tentar novamente").
+  const [usersStatus, setUsersStatus] = useState<'LOADING' | 'OK' | 'ERRO'>('LOADING');
+  const reloadUsers = useCallback(() => {
+    setUsersStatus('LOADING');
+    userService.getAllUsers()
+      .then(list => { setUsers(list); setUsersStatus('OK'); })
+      .catch((e) => { console.error('[users] recarga falhou:', e?.message); setUsersStatus('ERRO'); });
+  }, []);
   const [products, setProducts] = useState<Product[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -229,7 +238,9 @@ const App: React.FC = () => {
       setCompanyCnpj(settings.companyCnpj ?? "00.000.000/0001-00");
 
       const [u, cl, p, cats, subs] = await Promise.all([
-        userService.getAllUsers(),
+        // Bloco 12: getAllUsers lanca em caso de falha — sinaliza ERRO para a
+        // tela de login mostrar "Tentar novamente" em vez do card vazio.
+        userService.getAllUsers().then((list) => { setUsersStatus('OK'); return list; }).catch((e) => { console.error('[users] falha ao carregar:', e?.message); setUsersStatus('ERRO'); return []; }),
         clientService.getAllClients(),
         productService.getAllProducts(),
         categoryService.getAllCategories(),
@@ -726,8 +737,7 @@ const App: React.FC = () => {
     updateSetting('clientOrder', ids);
   }, [updateSetting]);
 
-  if (!currentUser) return <Login users={users} onLogin={(u) => { setCurrentUser(u); // Re-busca usuarios com a sessao ativa (admin recebe lista completa para gerenciamento)
- userService.getAllUsers().then(setUsers).catch(() => {}); }} logo={logo} />;
+  if (!currentUser) return <Login users={users} status={usersStatus} onRetry={reloadUsers} onLogin={(u) => { setCurrentUser(u); reloadUsers(); }} logo={logo} />;
 
   const sellerClients = currentUser.role === 'VENDEDOR' 
     ? clients.filter(c => c.rota === (currentUser.rota || 'ROTA_01'))

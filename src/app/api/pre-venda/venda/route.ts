@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServiceClient, isServerSupabaseConfigured } from '@/lib/serverSupabase';
+import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/serverSupabase';
 import { sessionFromRequest } from '@/lib/session';
 
 /**
@@ -19,6 +19,8 @@ interface ItemPayload { produtoId?: string; produtoid?: string; quantidade?: num
 
 export async function POST(req: NextRequest) {
   if (!isServerSupabaseConfigured()) {
+    const bridged = await devBridge(req);
+    if (bridged) return bridged;
     return NextResponse.json({ ok: false, error: 'Servidor nao configurado.' }, { status: 503 });
   }
 

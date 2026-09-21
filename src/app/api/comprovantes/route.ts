@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServiceClient, isServerSupabaseConfigured } from '@/lib/serverSupabase';
+import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/serverSupabase';
 import { isAdminSession } from '@/lib/session';
 
 /**
@@ -11,6 +11,8 @@ import { isAdminSession } from '@/lib/session';
  */
 export async function GET(req: NextRequest) {
   if (!isServerSupabaseConfigured()) {
+    const bridged = await devBridge(req);
+    if (bridged) return bridged;
     return NextResponse.json({ error: 'Servidor nao configurado.' }, { status: 503 });
   }
   if (!isAdminSession(req)) {

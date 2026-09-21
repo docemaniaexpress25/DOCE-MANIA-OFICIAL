@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { compare } from 'bcryptjs';
-import { getServiceClient, isServerSupabaseConfigured } from '@/lib/serverSupabase';
+import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/serverSupabase';
 import { createSessionToken } from '@/lib/session';
 import { hasPreVendaColumn } from '@/lib/serverSchema';
 
@@ -41,6 +41,8 @@ function clientIp(req: NextRequest): string {
 
 export async function POST(req: NextRequest) {
   if (!isServerSupabaseConfigured()) {
+    const bridged = await devBridge(req);
+    if (bridged) return bridged;
     return NextResponse.json(
       { ok: false, error: 'Servidor nao configurado: defina SUPABASE_SERVICE_ROLE_KEY na Vercel.' },
       { status: 503 }

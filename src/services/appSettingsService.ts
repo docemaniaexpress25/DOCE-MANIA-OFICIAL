@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabaseClient';
+import { MelhoriasFlags, MELHORIAS_DEFAULT } from '@/lib/types';
 
 export interface AppSettings {
   logo: string | null;
@@ -14,6 +15,7 @@ export interface AppSettings {
   clientOrder: string[];
   companyName: string | null;
   companyCnpj: string | null;
+  melhorias: MelhoriasFlags;
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -29,7 +31,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   productOrder: [],
   clientOrder: [],
   companyName: "DOCE MANIA DISTRIBUIDORA",
-  companyCnpj: "00.000.000/0001-00"
+  companyCnpj: "00.000.000/0001-00",
+  melhorias: { ...MELHORIAS_DEFAULT }
 };
 
 const safeNumber = (value: any): number => Number(value || 0);
@@ -74,6 +77,14 @@ export const appSettingsService = {
       clientOrder: Array.isArray(data.client_order) ? data.client_order : DEFAULT_SETTINGS.clientOrder,
       companyName: data.company_name ?? DEFAULT_SETTINGS.companyName,
       companyCnpj: data.company_cnpj ?? DEFAULT_SETTINGS.companyCnpj,
+      melhorias: {
+        trocaSeparacao: data.melhor_troca_separacao !== false,
+        pushEntrega: data.melhor_push_entrega !== false,
+        whatsapp: data.melhor_whatsapp !== false,
+        bairroCard: data.melhor_bairro !== false,
+        fotoEntrega: data.melhor_foto_entrega !== false,
+        pushFalha: data.melhor_push_falha !== false,
+      },
     };
   },
 
@@ -93,6 +104,14 @@ export const appSettingsService = {
     if (settings.clientOrder !== undefined) payload.client_order = settings.clientOrder;
     if (settings.companyName !== undefined) payload.company_name = settings.companyName;
     if (settings.companyCnpj !== undefined) payload.company_cnpj = settings.companyCnpj;
+    if (settings.melhorias !== undefined) {
+      payload.melhor_troca_separacao = settings.melhorias.trocaSeparacao;
+      payload.melhor_push_entrega = settings.melhorias.pushEntrega;
+      payload.melhor_whatsapp = settings.melhorias.whatsapp;
+      payload.melhor_bairro = settings.melhorias.bairroCard;
+      payload.melhor_foto_entrega = settings.melhorias.fotoEntrega;
+      payload.melhor_push_falha = settings.melhorias.pushFalha;
+    }
 
     const upsertPayload = {
         id: 'global_settings',

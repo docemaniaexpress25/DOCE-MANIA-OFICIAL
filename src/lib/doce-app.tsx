@@ -1,6 +1,6 @@
 "use client";
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { User, Product, Carga, Sale, Commission, Client, PaymentMethod, CargaPendente, CommissionPaymentLog, SystemMessage, Expense, Category, Subcategory } from '@/lib/types';
+import { User, Product, Carga, Sale, Commission, Client, PaymentMethod, CargaPendente, CommissionPaymentLog, SystemMessage, Expense, Category, Subcategory, MelhoriasFlags, MELHORIAS_DEFAULT } from '@/lib/types';
 import AdminDashboard from '@/components/doce/AdminDashboard';
 import VendedorDashboard from '@/components/doce/VendedorDashboard';
 import FilaEntregas from '@/components/doce/FilaEntregas';
@@ -33,7 +33,7 @@ const getTodayDateString = () => {
  * Login oculto (5 toques no logo) OU usuario real ENTREGADOR criado pelo admin.
  * Entregador recebe SALARIO fixo: aqui nao existe comissao.
  */
-const EntregadorShell: React.FC<{ user: User }> = ({ user }) => {
+const EntregadorShell: React.FC<{ user: User; melhorias: MelhoriasFlags }> = ({ user, melhorias }) => {
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const showToast = useCallback((message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
@@ -48,7 +48,7 @@ const EntregadorShell: React.FC<{ user: User }> = ({ user }) => {
           </div>
         </div>
       )}
-      <FilaEntregas user={user} showToast={showToast} modo="ENTREGADOR" />
+      <FilaEntregas user={user} showToast={showToast} modo="ENTREGADOR" melhorias={melhorias} />
     </div>
   );
 };
@@ -58,7 +58,7 @@ const EntregadorShell: React.FC<{ user: User }> = ({ user }) => {
  * Ve cada pedido novo (com alarme sonoro), imprime o cupom identico e
  * marca SEPARADO. Nao vende, nao entrega, nao mexe em valores.
  */
-const SecretarioShell: React.FC<{ user: User }> = ({ user }) => {
+const SecretarioShell: React.FC<{ user: User; melhorias: MelhoriasFlags }> = ({ user, melhorias }) => {
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const showToast = useCallback((message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
@@ -73,7 +73,7 @@ const SecretarioShell: React.FC<{ user: User }> = ({ user }) => {
           </div>
         </div>
       )}
-      <SecretarioView user={user} showToast={showToast} />
+      <SecretarioView user={user} showToast={showToast} melhorias={melhorias} />
     </div>
   );
 };
@@ -94,6 +94,8 @@ const App: React.FC = () => {
   const [clientOrder, setClientOrder] = useState<string[]>([]);
   const [companyName, setCompanyName] = useState("DOCE MANIA DISTRIBUIDORA");
   const [companyCnpj, setCompanyCnpj] = useState("00.000.000/0001-00");
+  // BLOCO 14: interruptores das melhorias (liga/desliga pelo admin)
+  const [melhorias, setMelhorias] = useState<MelhoriasFlags>({ ...MELHORIAS_DEFAULT });
 
   const [adminNotification, setAdminNotification] = useState<string | null>(null);
   const [isOnline, setIsOnline] = useState(true);
@@ -168,7 +170,7 @@ const App: React.FC = () => {
     if (!currentUser) return;
     // Aguardar um momento para nao conflitar com outros init
     const timer = setTimeout(() => {
-      pushService.init().then(ok => {
+      pushService.init(currentUser.id).then(ok => {
         if (ok) console.log('[APP] Push notifications ativo');
       });
     }, 3000);
@@ -267,6 +269,7 @@ const App: React.FC = () => {
       setClientOrder(settings.clientOrder || []);
       setCompanyName(settings.companyName ?? "DOCE MANIA DISTRIBUIDORA");
       setCompanyCnpj(settings.companyCnpj ?? "00.000.000/0001-00");
+      setMelhorias(settings.melhorias ?? { ...MELHORIAS_DEFAULT });
 
       const [u, cl, p, cats, subs] = await Promise.all([
         // Bloco 12: getAllUsers lanca em caso de falha — sinaliza ERRO para a
@@ -400,6 +403,7 @@ const App: React.FC = () => {
     else if (key === 'pix2Code') setPix2Code(value);
     else if (key === 'companyName') setCompanyName(value);
     else if (key === 'companyCnpj') setCompanyCnpj(value);
+    else if (key === 'melhorias') setMelhorias(value as MelhoriasFlags);
     else if (key === 'productOrder') {
       setProductOrder(value);
       setProducts(prev => {
@@ -748,33 +752,24 @@ const App: React.FC = () => {
     }
   };
 
+  // BLOCO 14: acerto de comissao via API (FIFO no servidor — saldo sempre certo)
   const payCommission = async (vId: string, amount: number, type: 'TOTAL' | 'PARCIAL', adminId: string) => {
-    const vendedor = users.find(u => u.id === vId);
-    const success = await commissionService.insertPayout({
-      vendedorId: vId,
-      vendedorNome: vendedor?.nome || 'Vendedor',
-      valorPago: amount,
-      valorRestante: 0,
-      tipo: type,
-      dataPagamento: new Date(),
-      adminId: adminId
-    });
-
-    if (success) {
-      if (type === 'TOTAL') {
-        await commissionService.bulkUpdateStatusByVendedor(vId, 'DISPONIVEL', 'PAGO');
-      }
-
-      await messageService.insertMessage({
-        vendedorId: vId,
-        titulo: "Comissão Paga",
-        mensagem: `O Admin confirmou seu pagamento de R$ ${amount.toFixed(2)}.`,
-        data: new Date(),
-        lida: false,
-        type: 'COMMISSION_CONFIRMATION'
+    try {
+      const { authHeaders } = await import('@/services/userService');
+      const res = await fetch('/api/comissoes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ acao: 'PAGAR', vendedorId: vId, total: type === 'TOTAL', valor: type === 'PARCIAL' ? amount : undefined, adminId }),
       });
-
+      const d = await res.json().catch(() => null);
+      if (!res.ok || !d?.ok) {
+        setAdminNotification(String(d?.error || 'Nao foi possivel registrar o pagamento.'));
+        return;
+      }
+      setAdminNotification(`Pagamento de R$ ${amount.toFixed(2)} registrado! O vendedor recebeu o aviso.`);
       fetchTransactionalData();
+    } catch {
+      setAdminNotification('Sem conexao para registrar o pagamento.');
     }
   };
 
@@ -833,12 +828,12 @@ const App: React.FC = () => {
       
       <main className="container mx-auto p-4 max-w-lg">
         {currentUser.role === 'ENTREGADOR' ? (
-          <EntregadorShell user={currentUser} />
+          <EntregadorShell user={currentUser} melhorias={melhorias} />
         ) : currentUser.role === 'SECRETARIO' ? (
-          <SecretarioShell user={currentUser} />
+          <SecretarioShell user={currentUser} melhorias={melhorias} />
         ) : currentUser.role === 'ADMIN' ? (
           <AdminDashboard 
-            {...{ products, users, cargas, cargasLoaded, clients, sales, commissions, payoutLogs, expenses, logo, margemGlobalAtiva, margemGlobalValor, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, adminNotification, companyName, companyCnpj, orderedProductIds: productOrder, categories, subcategories, clientOrder }}
+            {...{ products, users, cargas, cargasLoaded, clients, sales, commissions, payoutLogs, expenses, logo, margemGlobalAtiva, margemGlobalValor, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, adminNotification, companyName, companyCnpj, orderedProductIds: productOrder, categories, subcategories, clientOrder, melhorias }}
             addProduct={addProduct} updateProduct={updateProduct} deleteProduct={deleteProduct} registerStockEntry={()=>{}} adjustStockManual={()=>{}}
             syncVendedorCarga={syncVendedorCarga} applyCargaDirectly={applyCargaDirectly} addClient={addClient} updateClient={updateClient} deleteClient={deleteClient}
             addUser={addUser} updateUser={updateUser} deleteUser={deleteUser} payCommission={payCommission} setCommissions={()=>{}} updateEstoqueCentral={()=>{}} reinforceCarga={()=>{}} deleteSale={deleteSale} receiveAccount={receiveAccount}
@@ -846,13 +841,14 @@ const App: React.FC = () => {
             setMargemMinima={(v)=>updateSetting('margemMinima', v)} setMargemMinimaAtiva={(v)=>updateSetting('margemMinimaAtiva', v)} setPix1Name={(v)=>updateSetting('pix1Name', v)} setPix1Code={(v)=>updateSetting('pix1Code', v)}
             setPix2Name={(v)=>updateSetting('pix2Name', v)} setPix2Code={(v)=>updateSetting('pix2Code', v)} clearAdminNotification={() => setAdminNotification(null)} setOrderedProductIds={(v)=>updateSetting('productOrder', v)}
             setCompanyName={(v)=>updateSetting('companyName', v)} setCompanyCnpj={(v)=>updateSetting('companyCnpj', v)}
+            setMelhorias={(v: MelhoriasFlags)=>updateSetting('melhorias', v)}
             activateAllProducts={activateAllProducts} addCategory={addCategory} updateCategory={updateCategory} deleteCategory={deleteCategory}
             addSubcategory={addSubcategory} updateSubcategory={updateSubcategory} deleteSubcategory={deleteSubcategory}
             setClientOrder={setClientOrderWithPersistence}
           />
         ) : (
           <VendedorDashboard 
-            {...{ products, users, cargas, cargasPendentes, sales, commissions, payoutLogs, expenses, messages, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, companyName, companyCnpj, user: currentUser, clients: sellerClients, categories, subcategories, clientOrder }}
+            {...{ products, users, cargas, cargasPendentes, sales, commissions, payoutLogs, expenses, messages, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, companyName, companyCnpj, user: currentUser, clients: sellerClients, categories, subcategories, clientOrder, melhorias }}
             markMessageAsRead={markMessageAsRead} processSale={processSale} processPreVenda={processPreVenda} addClient={addClient} updateClient={updateClient} deleteClient={deleteClient}
             receivePayment={receiveAccount} deleteSale={deleteSale} aceitarCarga={aceitarCarga} addExpense={addExpense} updateDailyRoute={updateDailyRoute}
             setClientOrder={setClientOrderWithPersistence}

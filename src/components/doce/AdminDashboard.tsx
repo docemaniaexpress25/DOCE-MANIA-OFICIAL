@@ -1,7 +1,7 @@
 "use client";
 // @ts-nocheck
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Product, User, Carga, Sale, Commission, Client, PaymentMethod, CommissionPaymentLog, Expense, Category, Subcategory } from '@/lib/types';
+import { Product, User, Carga, Sale, Commission, Client, PaymentMethod, CommissionPaymentLog, Expense, Category, Subcategory, MelhoriasFlags } from '@/lib/types';
 import ConfirmModal from '@/components/doce/ConfirmModal';
 import { DIAS_SEMANA } from '@/lib/constants';
 import { buscarCnpjReceita, mascararCnpj, mensagemCnpj, clienteAptoNfe, CnpjBusca } from '@/lib/cnpjAutocomplete';
@@ -79,6 +79,9 @@ interface AdminDashboardProps {
   activateAllProducts?: () => void;
   clientOrder: string[];
   setClientOrder: (ids: string[]) => void;
+  /** BLOCO 14: interruptores das melhorias + taxa padrão da comissão PV */
+  melhorias?: MelhoriasFlags;
+  setMelhorias?: (v: MelhoriasFlags) => void;
 }
 
 type TabType = 'HOME' | 'CATALOGO' | 'CATEGORIAS' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'COMPROVANTES' | 'ENTREGAS' | 'BACKUP' | 'SETTINGS';
@@ -210,6 +213,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [payoutVendedor, setPayoutVendedor] = useState<User | null>(null);
   const [payoutType, setPayoutType] = useState<'TOTAL' | 'PARCIAL'>('TOTAL');
   const [partialAmount, setPartialAmount] = useState<string>('');
+  // BLOCO 14: detalhes da comissão por vendedor + taxa padrão da pré-venda
+  const [caixaDetalhe, setCaixaDetalhe] = useState<string | null>(null);
+  const [taxaPv, setTaxaPv] = useState<string>('');
+  const [taxaPvLoading, setTaxaPvLoading] = useState(false);
   const [periodoRelatorio, setPeriodoRelatorio] = useState<'HOJE' | 'SEMANA' | 'MES' | 'GERAL'>('MES');
   const [reportFilter, setReportFilter] = useState<ReportFilterType>('RESUMO');
   const [reportPeriodo, setReportPeriodo] = useState<'HOJE' | 'SEMANA' | 'MES' | 'GERAL'>('MES');
@@ -227,7 +234,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [newSubName, setNewSubName] = useState('');
   const [editingSub, setEditingSub] = useState<Subcategory | null>(null);
 
-  const [pForm, setPForm] = useState({ nome: '', custo: '', venda: '', comissao: '', margem: '', ativo: true, estoquePrincipal: '', categoryId: '', subcategoryId: '', precoMinimo: '', ncm: '', cest: '', cfop: '', ean: '', unidade: 'UN', origem: '0' });
+  const [pForm, setPForm] = useState({ nome: '', custo: '', venda: '', comissao: '', comissaoPv: '', margem: '', ativo: true, estoquePrincipal: '', categoryId: '', subcategoryId: '', precoMinimo: '', ncm: '', cest: '', cfop: '', ean: '', unidade: 'UN', origem: '0' });
   const [clientForm, setClientForm] = useState<Partial<Client>>({ nomeFantasia: '', nome: '', telefone: '', endereco: '', bairro: '', diaRoteiro: 1, ativo: true, ativarCnpj: false, cnpj: '', pinLocalizacao: '', ordem: 0, rota: 'ROTA_01', razaoSocial: '', inscricaoEstadual: '', enderecoNumero: '', enderecoCep: '', enderecoMunicipio: '', enderecoUf: '', email: '' });
   const [cnpjBusca, setCnpjBusca] = useState<{ loading: boolean; msg: string; ok: boolean; endereco?: string }>({ loading: false, msg: '', ok: false });
   const cnpjBuscadoRef = useRef('');
@@ -472,14 +479,17 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     const sellerComms = props.commissions.filter(c => c.vendedorId === vId);
     const sellerLogs = props.payoutLogs.filter(l => l.vendedorId === vId);
     const sellerExps = props.expenses.filter(e => e.sellerId === vId);
-    const totalCommsEligible = sellerComms.filter(c => c.status !== 'A_RECEBER').reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
-    const jaPago = sellerLogs.reduce((acc, curr) => acc + (curr.valorPago ?? 0), 0);
+    // BLOCO 14 — contas simples e certas:
+    // Disponivel = comissoes cujo dinheiro JÁ ENTROU, descontando o que já foi
+    // pago dentro delas (acerto parcial FIFO). Despesas descontam do valor a pagar.
+    const comissaoDisponivel = sellerComms.filter(c => c.status === 'DISPONIVEL').reduce((acc, c) => acc + Math.max(0, (c.valor ?? 0) - (c.valorPago ?? 0)), 0);
     const totalDespesas = sellerExps.reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
-    const disponivel = totalCommsEligible - jaPago - totalDespesas;
-    const aReceber = sellerComms.filter(c => c.status === 'A_RECEBER').reduce((acc, curr) => acc + (curr.valor ?? 0), 0); 
+    const comissaoAPagar = Math.max(0, comissaoDisponivel - totalDespesas);
+    const comissaoAReceber = sellerComms.filter(c => c.status === 'A_RECEBER').reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
+    const totalPago = sellerLogs.reduce((acc, l) => acc + (l.valorPago ?? 0), 0);
     const vendasHoje = vSales.reduce((acc, curr) => acc + (curr.valorTotal ?? 0), 0);
     const comissaoGerada = sellerComms.filter(c => filterByPeriod(c.dataGeracao, 'HOJE')).reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
-    return { vendasHoje: Number(vendasHoje.toFixed(2)), comissaoGerada: Number(comissaoGerada.toFixed(2)), comissaoDisponivel: Number(disponivel.toFixed(2)), comissaoAReceber: Number(aReceber.toFixed(2)) };
+    return { vendasHoje: Number(vendasHoje.toFixed(2)), comissaoGerada: Number(comissaoGerada.toFixed(2)), comissaoDisponivel: Number(comissaoDisponivel.toFixed(2)), totalDespesas: Number(totalDespesas.toFixed(2)), comissaoAPagar: Number(comissaoAPagar.toFixed(2)), comissaoAReceber: Number(comissaoAReceber.toFixed(2)), totalPago: Number(totalPago.toFixed(2)) };
   };
 
   // ============================================================
@@ -639,14 +649,41 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     setPartialAmount('');
   };
 
+  // BLOCO 14: carrega a taxa padrão da comissão PV quando a aba Configurações abre
+  useEffect(() => {
+    if (activeTab !== 'SETTINGS') return;
+    let vivo = true;
+    setTaxaPvLoading(true);
+    fetch('/api/pre-venda?config=1', { headers: authHeaders() })
+      .then(r => r.json())
+      .then(d => { if (vivo && d?.comissaoPct !== undefined) setTaxaPv(String(d.comissaoPct)); })
+      .catch(() => {})
+      .finally(() => { if (vivo) setTaxaPvLoading(false); });
+    return () => { vivo = false; };
+  }, [activeTab]);
+
+  const salvarTaxaPv = async () => {
+    const pct = parseFloat(taxaPv);
+    if (!isFinite(pct) || pct <= 0 || pct > 100) { showToast('Informe um percentual entre 1 e 100.', 'error'); return; }
+    setTaxaPvLoading(true);
+    try {
+      const res = await fetch('/api/pre-venda', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ acao: 'SET_CONFIG', comissaoPct: pct }) });
+      const d = await res.json().catch(() => null);
+      if (!res.ok || !d?.ok) { showToast(d?.error || 'Nao foi possivel salvar.', 'error'); return; }
+      showToast('Taxa padrão da pré-venda salva!');
+    } catch { showToast('Sem conexao. Tente novamente.', 'error'); } finally { setTaxaPvLoading(false); }
+  };
+
   const handleConfirmPayout = () => {
     if (!payoutVendedor) return;
     const stats = getVendedorStats(payoutVendedor.id);
-    const amount = payoutType === 'TOTAL' ? stats.comissaoDisponivel : parseFloat(partialAmount);
+    // BLOCO 14: TOTAL = acerta tudo que está a pagar; PARCIAL = valor específico
+    const amount = payoutType === 'TOTAL' ? stats.comissaoAPagar : parseFloat(partialAmount);
     if (isNaN(amount) || amount <= 0) { showToast("Valor inválido", "error"); return; }
+    if (payoutType === 'PARCIAL' && amount > stats.comissaoAPagar + 0.005) { showToast(`Máximo disponível: R$ ${stats.comissaoAPagar.toFixed(2)}`, "error"); return; }
     props.payCommission(payoutVendedor.id, amount, payoutType, props.adminUser.id);
     setPayoutVendedor(null);
-    showToast("Pagamento registrado!");
+    showToast("Pagamento registrado! O vendedor recebeu o aviso.");
   };
 
   /** BLOCO 11: monta os itens caindo no valor atual REAL quando o rascunho nao
@@ -755,6 +792,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         categoryId: elmaChipsCat?.id || '', 
         subcategoryId: '',
         precoMinimo: '0.00',
+        comissaoPv: '',
         ncm: '', cest: '', cfop: '5102', ean: '', unidade: 'UN', origem: '0'
       });
     } else {
@@ -772,6 +810,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         categoryId: p.categoryId || elmaChipsCat?.id || '', 
         subcategoryId: p.subcategoryId || '',
         precoMinimo: (p.precoMinimo ?? 0).toFixed(2),
+        comissaoPv: (p.comissaoPvPercentual === undefined || p.comissaoPvPercentual === null) ? '' : Number(p.comissaoPvPercentual).toFixed(2),
         ncm: p.ncm || '', cest: p.cest || '', cfop: p.cfop || '5102', ean: p.ean || '', unidade: p.unidade || 'UN', origem: p.origem || '0'
       });
     }
@@ -797,7 +836,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       unidade: (pForm.unidade || 'UN').trim() || 'UN',
       origem: (pForm.origem || '0').trim() || '0'
     };
-    if (showProductModal === 'NEW') props.addProduct(data.nome!, data.precoCusto!, data.precoVenda!, data.comissaoPercentual!, data.estoquePrincipal, data.categoryId, data.subcategoryId, data.precoMinimo, { ncm: data.ncm, cest: data.cest, cfop: data.cfop, ean: data.ean, unidade: data.unidade, origem: data.origem });
+    // BLOCO 14: comissão PV — vazio = usa a taxa padrão da pré-venda
+    data.comissaoPvPercentual = pForm.comissaoPv === '' ? undefined : parseFloat(pForm.comissaoPv);
+    if (showProductModal === 'NEW') props.addProduct(data.nome!, data.precoCusto!, data.precoVenda!, data.comissaoPercentual!, data.estoquePrincipal, data.categoryId, data.subcategoryId, data.precoMinimo, { ncm: data.ncm, cest: data.cest, cfop: data.cfop, ean: data.ean, unidade: data.unidade, origem: data.origem, comissaoPvPercentual: data.comissaoPvPercentual });
     else if (typeof showProductModal === 'object') props.updateProduct(showProductModal.id, data);
     setShowProductModal(null);
     showToast("Produto salvo!");
@@ -1560,43 +1601,81 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       )}
 
       {activeTab === 'CAIXA' && (() => {
-        const totalComissoesGeradas = props.commissions.reduce((a, c) => a + (c.valor ?? 0), 0);
+        // BLOCO 14 — contas na língua do dia a dia:
+        // A PAGAR AGORA = comissão que o vendedor pode receber hoje (dinheiro entrou − despesas)
+        // AGUARDANDO = comissão de vendas que o cliente AINDA NÃO pagou (a prazo/boleto/não cobrou)
+        const totalDisponivel = props.users.filter(u => u.role === 'VENDEDOR').reduce((a, v) => a + getVendedorStats(v.id).comissaoDisponivel, 0);
+        const totalAPagar = props.users.filter(u => u.role === 'VENDEDOR').reduce((a, v) => a + getVendedorStats(v.id).comissaoAPagar, 0);
+        const totalAguardando = props.commissions.filter(c => c.status === 'A_RECEBER').reduce((a, c) => a + (c.valor ?? 0), 0);
         const totalJaPago = props.payoutLogs.reduce((a, l) => a + (l.valorPago ?? 0), 0);
-        const totalAPagar = Math.max(0, totalComissoesGeradas - totalJaPago);
-        const totalAReceber = props.commissions.filter(c => c.status === 'A_RECEBER').reduce((a, c) => a + (c.valor ?? 0), 0);
         return (
           <div className="space-y-4">
-            <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Comissoes</h2><p className="text-[10px] text-gray-400 font-bold uppercase mt-1">Gestao de repasses e pagamentos</p></div>
+            <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Comissões</h2><p className="text-[10px] text-gray-400 font-bold uppercase mt-1">A comissão entra quando o DINHEIRO entra — nunca antes</p></div>
+            <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 mx-2">
+              <p className="text-[9px] font-bold text-blue-700 leading-relaxed">
+                <i className="fa-solid fa-circle-info mr-1"></i>
+                <b>Disponível</b> = vendas com dinheiro já recebido (à vista na venda/aceite, ou a prazo quando o cliente pagou). <b>Aguardando</b> = a venda a prazo foi entregue, mas o cliente ainda não pagou. Despesas do vendedor descontam no "a pagar".
+              </p>
+            </div>
             <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-md mx-2">
               <div className="grid grid-cols-2 gap-3">
-                <div className="text-center bg-amber-50 p-4 rounded-2xl"><p className="text-[8px] font-black text-amber-500 uppercase mb-1">Total Gerado</p><p className="text-lg font-black text-amber-700">R$ {totalComissoesGeradas.toFixed(2)}</p></div>
-                <div className="text-center bg-emerald-50 p-4 rounded-2xl"><p className="text-[8px] font-black text-emerald-500 uppercase mb-1">Ja Pago</p><p className="text-lg font-black text-emerald-700">R$ {totalJaPago.toFixed(2)}</p></div>
-                <div className="text-center bg-blue-50 p-4 rounded-2xl"><p className="text-[8px] font-black text-blue-500 uppercase mb-1">A Pagar</p><p className="text-lg font-black text-blue-700">R$ {totalAPagar.toFixed(2)}</p></div>
-                <div className="text-center bg-rose-50 p-4 rounded-2xl"><p className="text-[8px] font-black text-rose-500 uppercase mb-1">A Receber (Vend.)</p><p className="text-lg font-black text-rose-700">R$ {totalAReceber.toFixed(2)}</p></div>
+                <div className="text-center bg-emerald-50 p-4 rounded-2xl col-span-2"><p className="text-[8px] font-black text-emerald-500 uppercase mb-1">A Pagar Agora (todos os vendedores)</p><p className="text-2xl font-black text-emerald-700">R$ {totalAPagar.toFixed(2)}</p><p className="text-[8px] font-bold text-emerald-500 uppercase mt-1">Comissão disponível: R$ {totalDisponivel.toFixed(2)} − despesas</p></div>
+                <div className="text-center bg-amber-50 p-4 rounded-2xl"><p className="text-[8px] font-black text-amber-500 uppercase mb-1">Aguardando Dinheiro</p><p className="text-lg font-black text-amber-700">R$ {totalAguardando.toFixed(2)}</p></div>
+                <div className="text-center bg-blue-50 p-4 rounded-2xl"><p className="text-[8px] font-black text-blue-500 uppercase mb-1">Já Pago (histórico)</p><p className="text-lg font-black text-blue-700">R$ {totalJaPago.toFixed(2)}</p></div>
               </div>
             </div>
 
-            <div className="px-1"><h3 className="font-black text-gray-800 uppercase text-xs tracking-wider px-1 mb-3"><i className="fa-solid fa-coins text-amber-500 mr-2"></i>Comissoes por Vendedor</h3>
+            <div className="px-1"><h3 className="font-black text-gray-800 uppercase text-xs tracking-wider px-1 mb-3"><i className="fa-solid fa-coins text-amber-500 mr-2"></i>Comissão por Vendedor</h3>
               <div className="grid gap-3">
                 {props.users.filter(u => u.role === 'VENDEDOR').map(v => {
                   const stats = getVendedorStats(v.id);
+                  const vComms = props.commissions.filter(c => c.vendedorId === v.id).sort((a, b) => new Date(b.dataGeracao).getTime() - new Date(a.dataGeracao).getTime());
+                  const detalheAberto = caixaDetalhe === v.id;
                   return (
                     <div key={v.id} className="bg-white rounded-3xl p-4 border border-gray-100 shadow-sm">
                       <div className="flex items-center justify-between mb-3">
                         <div className="flex items-center gap-3">
                           <div className="w-10 h-10 bg-gray-100 rounded-xl overflow-hidden flex items-center justify-center flex-shrink-0">{v.foto ? <img src={v.foto} className="w-full h-full object-cover" /> : <i className="fa-solid fa-user text-gray-400"></i>}</div>
-                          <div><h4 className="font-bold text-gray-800 text-[11px] uppercase">{v.nome}</h4><p className="text-[9px] text-gray-400 font-bold uppercase">{formatRouteName(v.rota)}</p></div>
+                          <div><h4 className="font-bold text-gray-800 text-[11px] uppercase">{v.nome}</h4><p className="text-[9px] text-gray-400 font-bold uppercase">Vendas hoje: R$ {stats.vendasHoje.toFixed(2)}</p></div>
                         </div>
-                        <button onClick={() => handleOpenPayout(v)} disabled={stats.comissaoDisponivel <= 0} className={`px-4 py-2 rounded-xl text-[9px] font-black uppercase active:scale-95 shadow-sm ${stats.comissaoDisponivel > 0 ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-300'}`}>
-                          <i className="fa-solid fa-money-bill-transfer mr-1"></i>Pagar
+                        <button onClick={() => handleOpenPayout(v)} disabled={stats.comissaoAPagar <= 0} className={`px-4 py-2 rounded-xl text-[9px] font-black uppercase active:scale-95 shadow-sm ${stats.comissaoAPagar > 0 ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-300'}`}>
+                          <i className="fa-solid fa-money-bill-transfer mr-1"></i>Acertar
                         </button>
                       </div>
-                      <div className="grid grid-cols-3 gap-2">
-                        <div className="text-center bg-blue-50 p-2 rounded-xl"><p className="text-[7px] font-black text-blue-500 uppercase">Vendas Hoje</p><p className="text-[11px] font-black text-blue-700">R$ {stats.vendasHoje.toFixed(2)}</p></div>
-                        <div className="text-center bg-amber-50 p-2 rounded-xl"><p className="text-[7px] font-black text-amber-500 uppercase">Gerada Hoje</p><p className="text-[11px] font-black text-amber-700">R$ {stats.comissaoGerada.toFixed(2)}</p></div>
-                        <div className="text-center bg-emerald-50 p-2 rounded-xl"><p className="text-[7px] font-black text-emerald-500 uppercase">Disponivel</p><p className="text-[11px] font-black text-emerald-700">R$ {stats.comissaoDisponivel.toFixed(2)}</p></div>
+                      <div className="bg-emerald-50 rounded-2xl p-3 flex items-center justify-between mb-2">
+                        <div><p className="text-[8px] font-black text-emerald-500 uppercase">A pagar agora</p><p className="text-[8px] font-bold text-emerald-400 uppercase">Disponível R$ {stats.comissaoDisponivel.toFixed(2)}{stats.totalDespesas > 0 ? ` − despesas R$ ${stats.totalDespesas.toFixed(2)}` : ''}</p></div>
+                        <p className="text-xl font-black text-emerald-700">R$ {stats.comissaoAPagar.toFixed(2)}</p>
                       </div>
-                      {stats.comissaoAReceber > 0 && <div className="mt-2 text-center bg-rose-50 p-2 rounded-xl"><p className="text-[7px] font-black text-rose-500 uppercase">A Receber</p><p className="text-[11px] font-black text-rose-700">R$ {stats.comissaoAReceber.toFixed(2)}</p></div>}
+                      <div className="grid grid-cols-3 gap-2">
+                        <div className="text-center bg-amber-50 p-2 rounded-xl"><p className="text-[7px] font-black text-amber-500 uppercase">Aguardando</p><p className="text-[11px] font-black text-amber-700">R$ {stats.comissaoAReceber.toFixed(2)}</p></div>
+                        <div className="text-center bg-blue-50 p-2 rounded-xl"><p className="text-[7px] font-black text-blue-500 uppercase">Gerada hoje</p><p className="text-[11px] font-black text-blue-700">R$ {stats.comissaoGerada.toFixed(2)}</p></div>
+                        <div className="text-center bg-gray-50 p-2 rounded-xl"><p className="text-[7px] font-black text-gray-400 uppercase">Já pago</p><p className="text-[11px] font-black text-gray-600">R$ {stats.totalPago.toFixed(2)}</p></div>
+                      </div>
+                      <button onClick={() => setCaixaDetalhe(detalheAberto ? null : v.id)} className="w-full mt-2 py-2 text-[9px] font-black text-gray-400 uppercase active:scale-95 transition-transform">
+                        <i className={`fa-solid ${detalheAberto ? 'fa-chevron-up' : 'fa-chevron-down'} mr-1`}></i>{detalheAberto ? 'Esconder' : 'Ver de onde vem'} ({vComms.length} comissões)
+                      </button>
+                      {detalheAberto && (
+                        <div className="mt-1 border-t border-gray-50 pt-2 space-y-1.5 max-h-72 overflow-y-auto">
+                          {vComms.length === 0 && <p className="text-[9px] text-gray-300 font-bold uppercase text-center py-3">Nenhuma comissão ainda</p>}
+                          {vComms.map(c => {
+                            const saldo = Math.max(0, (c.valor ?? 0) - (c.valorPago ?? 0));
+                            const chip = c.status === 'DISPONIVEL' ? 'bg-emerald-50 text-emerald-600' : c.status === 'A_RECEBER' ? 'bg-amber-50 text-amber-600' : 'bg-gray-100 text-gray-400';
+                            const lbl = c.status === 'DISPONIVEL' ? 'Disponível' : c.status === 'A_RECEBER' ? 'Aguardando pagamento da venda' : 'Paga';
+                            return (
+                              <div key={c.id} className="flex items-center justify-between bg-gray-50 rounded-xl px-3 py-2">
+                                <div>
+                                  <p className="text-[9px] font-black text-gray-600 uppercase">{new Date(c.dataGeracao).toLocaleDateString('pt-BR')} · venda R$ {(c.valorBase ?? 0).toFixed(2)}</p>
+                                  <span className={`text-[7px] font-black uppercase px-1.5 py-0.5 rounded-md ${chip}`}>{lbl}</span>
+                                </div>
+                                <div className="text-right">
+                                  <p className="text-[11px] font-black text-gray-700">R$ {(c.valor ?? 0).toFixed(2)}</p>
+                                  {c.status === 'DISPONIVEL' && saldo < (c.valor ?? 0) && <p className="text-[7px] font-bold text-gray-400 uppercase">saldo R$ {saldo.toFixed(2)}</p>}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -2300,7 +2379,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         {pForm.categoryId && props.subcategories.filter(s => s.categoryId === pForm.categoryId).length > 0 && (
           <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Subcategoria</label><select value={pForm.subcategoryId} onChange={e => setPForm({...pForm, subcategoryId: e.target.value})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase"><option value="">Nenhuma</option>{props.subcategories.filter(s => s.categoryId === pForm.categoryId).map(sub => (<option key={sub.id} value={sub.id}>{sub.name}</option>))}</select></div>
         )}
-        <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Custo R$</label><input type="number" value={pForm.custo} onChange={e => { const val = parseFloat(e.target.value) || 0; const venda = props.margemGlobalAtiva ? updatePriceFromMargin(val, props.margemGlobalValor) : parseFloat(pForm.venda) || 0; const margem = props.margemGlobalAtiva ? props.margemGlobalValor : updateMarginFromPrice(val, venda); setPForm({...pForm, custo: e.target.value, venda: venda.toFixed(2), margem: margem.toFixed(2)}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Venda R$</label><input type="number" value={pForm.venda} onChange={e => { const val = parseFloat(e.target.value) || 0; const margem = updateMarginFromPrice(parseFloat(pForm.custo) || 0, val); setPForm({...pForm, margem: margem.toFixed(2), venda: e.target.value}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Margem %</label><input type="number" value={pForm.margem} onChange={e => { const val = parseFloat(e.target.value) || 0; const venda = updatePriceFromMargin(parseFloat(pForm.custo) || 0, val); setPForm({...pForm, margem: e.target.value, venda: venda.toFixed(2)}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Preço Mínimo R$</label><input type="number" value={pForm.precoMinimo} onChange={e => setPForm({...pForm, precoMinimo: e.target.value})} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Comissão %</label><input type="number" value={pForm.comissao} onChange={e => setPForm({...pForm, comissao: e.target.value})} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Estoque Central</label><input type="number" value={pForm.estoquePrincipal} onChange={e => setPForm({...pForm, estoquePrincipal: e.target.value})} placeholder="0" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div>
+        <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Custo R$</label><input type="number" value={pForm.custo} onChange={e => { const val = parseFloat(e.target.value) || 0; const venda = props.margemGlobalAtiva ? updatePriceFromMargin(val, props.margemGlobalValor) : parseFloat(pForm.venda) || 0; const margem = props.margemGlobalAtiva ? props.margemGlobalValor : updateMarginFromPrice(val, venda); setPForm({...pForm, custo: e.target.value, venda: venda.toFixed(2), margem: margem.toFixed(2)}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Venda R$</label><input type="number" value={pForm.venda} onChange={e => { const val = parseFloat(e.target.value) || 0; const margem = updateMarginFromPrice(parseFloat(pForm.custo) || 0, val); setPForm({...pForm, margem: margem.toFixed(2), venda: e.target.value}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Margem %</label><input type="number" value={pForm.margem} onChange={e => { const val = parseFloat(e.target.value) || 0; const venda = updatePriceFromMargin(parseFloat(pForm.custo) || 0, val); setPForm({...pForm, margem: e.target.value, venda: venda.toFixed(2)}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Preço Mínimo R$</label><input type="number" value={pForm.precoMinimo} onChange={e => setPForm({...pForm, precoMinimo: e.target.value})} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Comissão Pronta Entrega %</label><input type="number" value={pForm.comissao} onChange={e => setPForm({...pForm, comissao: e.target.value})} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Comissão Pré-Venda % (vazio = taxa padrão)</label><input type="number" value={pForm.comissaoPv} onChange={e => setPForm({...pForm, comissaoPv: e.target.value})} placeholder="padrão" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Estoque Central</label><input type="number" value={pForm.estoquePrincipal} onChange={e => setPForm({...pForm, estoquePrincipal: e.target.value})} placeholder="0" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div>
         <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-4 space-y-3">
           <p className="text-[9px] font-black text-indigo-600 uppercase tracking-widest flex items-center gap-1"><i className="fa-solid fa-file-invoice"></i> Dados Fiscais (NF-e / NFC-e)</p>
           <div className="grid grid-cols-2 gap-3">
@@ -2355,7 +2434,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       )}
 
       {payoutVendedor && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-w-xs rounded-3xl p-8 shadow-2xl text-center"><h3 className="font-black text-gray-800 uppercase text-sm mb-4">Pagar Comissão</h3><p className="text-xs text-gray-400 font-bold uppercase mb-4">{payoutVendedor.nome}</p><div className="space-y-4 text-left"><div className="flex gap-2 mb-4"><button onClick={() => setPayoutType('TOTAL')} className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase ${payoutType === 'TOTAL' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-400'}`}>Total</button><button onClick={() => setPayoutType('PARCIAL')} className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase ${payoutType === 'PARCIAL' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-400'}`}>Parcial</button></div>{payoutType === 'PARCIAL' && (<div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Valor R$</label><input type="number" value={partialAmount} onChange={e => setPartialAmount(e.target.value)} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-center" /></div>)}<button onClick={handleConfirmPayout} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest">Confirmar Pagamento</button><button onClick={() => setPayoutVendedor(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button></div></div></div>
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-w-xs rounded-3xl p-8 shadow-2xl text-center"><h3 className="font-black text-gray-800 uppercase text-sm mb-1">Acerto de Comissão</h3><p className="text-xs text-gray-400 font-bold uppercase mb-3">{payoutVendedor.nome}</p>{(() => { const s = getVendedorStats(payoutVendedor.id); return <div className="bg-emerald-50 rounded-2xl p-3 mb-4"><p className="text-[8px] font-black text-emerald-500 uppercase">A pagar agora</p><p className="text-xl font-black text-emerald-700">R$ {s.comissaoAPagar.toFixed(2)}</p>{s.totalDespesas > 0 && <p className="text-[8px] font-bold text-emerald-400 uppercase">descontando despesas R$ {s.totalDespesas.toFixed(2)}</p>}</div>; })()}<div className="space-y-4 text-left"><div className="flex gap-2 mb-4"><button onClick={() => setPayoutType('TOTAL')} className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase ${payoutType === 'TOTAL' ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-400'}`}>Acertar tudo</button><button onClick={() => setPayoutType('PARCIAL')} className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase ${payoutType === 'PARCIAL' ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-400'}`}>Valor específico</button></div>{payoutType === 'PARCIAL' && (<div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Valor R$</label><input type="number" value={partialAmount} onChange={e => setPartialAmount(e.target.value)} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-center" /></div>)}<button onClick={handleConfirmPayout} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest">Confirmar Pagamento</button><button onClick={() => setPayoutVendedor(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button></div></div></div>
       )}
 
       {/* MODAL: Comprovante de Pagamento (Admin) */}
@@ -2468,6 +2547,44 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             <div className="border-t border-gray-100 pt-3">
               <div className="flex items-center justify-between mb-3"><span className="text-[11px] font-bold text-gray-600 uppercase">Preco minimo obrigatorio</span><button onClick={() => props.setMargemMinimaAtiva(!props.margemMinimaAtiva)} className={`w-12 h-7 rounded-full relative transition-colors ${props.margemMinimaAtiva ? 'bg-amber-600' : 'bg-gray-300'}`}><div className={`absolute top-0.5 w-6 h-6 bg-white rounded-full transition-all shadow-sm ${props.margemMinimaAtiva ? 'left-5.5' : 'left-0.5'}`}></div></button></div>
               {props.margemMinimaAtiva && (<div><label className="text-[9px] font-black text-gray-400 uppercase block mb-1">Margem Minima (%)</label><input type="number" value={props.margemMinima} onChange={e => props.setMargemMinima(parseFloat(e.target.value) || 0)} className="w-full p-3 bg-gray-50 border border-gray-100 rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-amber-100" /></div>)}
+            </div>
+          </div>
+
+          <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm mx-2 space-y-4">
+            <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider"><i className="fa-solid fa-wand-magic-sparkles text-violet-600 mr-2"></i>Melhorias do sistema (liga / desliga)</h3>
+            {(() => {
+              const m = props.melhorias || { trocaSeparacao: true, pushEntrega: true, whatsapp: true, bairroCard: true, fotoEntrega: true, pushFalha: true };
+              const setM = (k: keyof MelhoriasFlags, val: boolean) => { if (props.setMelhorias) props.setMelhorias({ ...m, [k]: val }); };
+              const itens: { k: keyof MelhoriasFlags; icon: string; cor: string; titulo: string; desc: string }[] = [
+                { k: 'trocaSeparacao', icon: 'fa-solid fa-right-left', cor: 'text-orange-500', titulo: 'Trocas na separação', desc: 'Secretário ajusta as trocas no card e sai no cupom' },
+                { k: 'pushEntrega', icon: 'fa-solid fa-bell', cor: 'text-emerald-500', titulo: 'Avisar vendedor na entrega', desc: 'Push quando a venda dele é entregue e a comissão entra' },
+                { k: 'pushFalha', icon: 'fa-solid fa-triangle-exclamation', cor: 'text-rose-500', titulo: 'Avisar vendedor na falha', desc: 'Push quando a entrega do cliente dele não rolar' },
+                { k: 'whatsapp', icon: 'fa-brands fa-whatsapp', cor: 'text-green-600', titulo: 'Zap para o cliente', desc: 'Botão na fila avisando que o pedido está a caminho' },
+                { k: 'bairroCard', icon: 'fa-solid fa-city', cor: 'text-violet-500', titulo: 'Bairro em destaque', desc: 'Bairro visível no card para juntar entregas vizinhas' },
+                { k: 'fotoEntrega', icon: 'fa-solid fa-camera', cor: 'text-blue-500', titulo: 'Foto da entrega', desc: 'Foto opcional da entrega concluída (prova)' },
+              ];
+              return (
+                <div className="space-y-3">
+                  {itens.map(it => (
+                    <div key={it.k} className="flex items-center justify-between border-t border-gray-50 pt-3 first:border-0 first:pt-0">
+                      <div className="flex items-center gap-3 pr-2">
+                        <i className={`${it.icon} ${it.cor} text-base w-5 text-center`}></i>
+                        <div><p className="text-[11px] font-black text-gray-700 uppercase">{it.titulo}</p><p className="text-[8px] font-bold text-gray-400 uppercase">{it.desc}</p></div>
+                      </div>
+                      <button onClick={() => setM(it.k, !m[it.k])} className={`w-12 h-7 rounded-full relative transition-colors flex-shrink-0 ${m[it.k] ? 'bg-emerald-500' : 'bg-gray-300'}`}><div className={`absolute top-0.5 w-6 h-6 bg-white rounded-full transition-all shadow-sm ${m[it.k] ? 'left-5.5' : 'left-0.5'}`}></div></button>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+          </div>
+
+          <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm mx-2 space-y-4">
+            <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider"><i className="fa-solid fa-percent text-amber-600 mr-2"></i>Comissão Pré-Venda — Taxa Padrão</h3>
+            <p className="text-[9px] font-bold text-gray-400 uppercase">Usada nos produtos SEM comissão de pré-venda própria (regra antiga: comissão de pronta entrega × esta taxa)</p>
+            <div className="flex gap-2">
+              <input type="number" value={taxaPv} onChange={e => setTaxaPv(e.target.value)} placeholder={taxaPvLoading ? '...' : '50'} className="w-full p-3 bg-gray-50 border border-gray-100 rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-amber-100" />
+              <button onClick={salvarTaxaPv} disabled={taxaPvLoading} className="px-5 py-3 rounded-xl text-[10px] font-black uppercase bg-amber-500 text-white active:scale-95 disabled:opacity-50">Salvar</button>
             </div>
           </div>
 

@@ -20,8 +20,10 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
 export const pushService = {
   /**
    * Registra o Service Worker e solicita permissao de notificacao
+   * Bloco 14: userId opcional — grava de quem é o dispositivo para permitir
+   * push direcionado (ex.: avisar o vendedor da venda).
    */
-  async init(): Promise<boolean> {
+  async init(userId?: string): Promise<boolean> {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
       console.warn('[PUSH] Service Worker ou PushManager nao suportado');
       return false;
@@ -46,7 +48,7 @@ export const pushService = {
       });
 
       // 4. Salvar inscrio no Supabase
-      await this.saveSubscription(subscription);
+      await this.saveSubscription(subscription, userId);
       console.log('[PUSH] Inscricao salva com sucesso');
       return true;
     } catch (err: any) {
@@ -57,8 +59,9 @@ export const pushService = {
 
   /**
    * Salva a push subscription no Supabase
+   * Bloco 14: userId opcional — associado ao token para push direcionado.
    */
-  async saveSubscription(subscription: PushSubscription): Promise<boolean> {
+  async saveSubscription(subscription: PushSubscription, userId?: string): Promise<boolean> {
     const subData = subscription.toJSON();
     const { error } = await supabase
       .from('push_tokens')
@@ -66,6 +69,7 @@ export const pushService = {
         endpoint: subData.endpoint,
         keys_auth: subData.keys?.auth,
         keys_p256dh: subData.keys?.p256dh,
+        user_id: userId || null,
         updated_at: new Date().toISOString(),
       }, { onConflict: 'endpoint' });
 

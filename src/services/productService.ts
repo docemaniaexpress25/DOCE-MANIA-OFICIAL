@@ -15,6 +15,8 @@ export const productService = {
       precoVenda: Number(p.preco_venda) || 0,
       precoMinimo: Number(p.preco_minimo) || 0,
       comissaoPercentual: Number(p.comissao_percentual) || 0,
+      // Bloco 14: comissão de pré-venda — undefined = herda a taxa padrão da PV
+      comissaoPvPercentual: (p.comissao_pv_percentual === null || p.comissao_pv_percentual === undefined) ? undefined : Number(p.comissao_pv_percentual),
       estoquePrincipal: Number(p.estoque_principal) || 0,
       ativo: !!p.ativo,
       categoryId: p.category_id,
@@ -50,11 +52,17 @@ export const productService = {
     if (product.ean !== undefined) fiscal.ean = product.ean || null;
     if (product.unidade !== undefined) fiscal.unidade = product.unidade || null;
     if (product.origem !== undefined) fiscal.origem = product.origem || null;
+    // Bloco 14: comissão PV (undefined = usa taxa padrão)
+    const extra14: Record<string, number | null> = {};
+    if (product.comissaoPvPercentual !== undefined) extra14.comissao_pv_percentual = product.comissaoPvPercentual;
 
-    let { data, error } = await supabase.from('products').insert({ ...payload, ...fiscal }).select().single();
-    if (error && /ncm|cest|cfop|\bean\b|unidade|origem/i.test(error.message || '')) {
+    let { data, error } = await supabase.from('products').insert({ ...payload, ...fiscal, ...extra14 }).select().single();
+    if (error && /comissao_pv_percentual/i.test(error.message || '')) {
+      console.warn('Coluna comissao_pv_percentual ausente (Bloco 14 nao rodado). Salvando sem ela.');
+      ({ data, error } = await supabase.from('products').insert({ ...payload, ...fiscal }).select().single());
+    } else if (error && /ncm|cest|cfop|\bean\b|unidade|origem/i.test(error.message || '')) {
       console.warn('Colunas fiscais de produto ausentes (Bloco 12 nao rodado). Salvando sem elas.');
-      ({ data, error } = await supabase.from('products').insert(payload).select().single());
+      ({ data, error } = await supabase.from('products').insert({ ...payload, ...extra14 }).select().single());
     }
     if (error) {
       console.error('Erro ao inserir produto:', error);
@@ -68,6 +76,7 @@ export const productService = {
       precoVenda: data.preco_venda,
       precoMinimo: data.preco_minimo,
       comissaoPercentual: data.comissao_percentual,
+      comissaoPvPercentual: (data.comissao_pv_percentual === null || data.comissao_pv_percentual === undefined) ? undefined : Number(data.comissao_pv_percentual),
       estoquePrincipal: data.estoque_principal,
       ativo: data.ativo,
       categoryId: data.category_id,
@@ -88,6 +97,8 @@ export const productService = {
     if (updates.precoVenda !== undefined) payload.preco_venda = updates.precoVenda;
     if (updates.precoMinimo !== undefined) payload.preco_minimo = updates.precoMinimo;
     if (updates.comissaoPercentual !== undefined) payload.comissao_percentual = updates.comissaoPercentual;
+    // Bloco 14: comissão PV — undefined = usa taxa padrão (NULL no banco)
+    if (updates.comissaoPvPercentual !== undefined) payload.comissao_pv_percentual = updates.comissaoPvPercentual;
     if (updates.estoquePrincipal !== undefined) payload.estoque_principal = updates.estoquePrincipal;
     if (updates.ativo !== undefined) payload.ativo = updates.ativo;
     if (updates.categoryId !== undefined) payload.category_id = updates.categoryId;
@@ -101,7 +112,11 @@ export const productService = {
     if (updates.origem !== undefined) payload.origem = updates.origem || null;
 
     let { data, error } = await supabase.from('products').update(payload).eq('id', id).select().single();
-    if (error && /ncm|cest|cfop|\bean\b|unidade|origem/i.test(error.message || '')) {
+    if (error && /comissao_pv_percentual/i.test(error.message || '')) {
+      const fb14: Record<string, unknown> = { ...payload };
+      delete fb14.comissao_pv_percentual;
+      ({ data, error } = await supabase.from('products').update(fb14).eq('id', id).select().single());
+    } else if (error && /ncm|cest|cfop|\bean\b|unidade|origem/i.test(error.message || '')) {
       const fallback: Record<string, unknown> = { ...payload };
       delete fallback.ncm; delete fallback.cest; delete fallback.cfop;
       delete fallback.ean; delete fallback.unidade; delete fallback.origem;
@@ -119,6 +134,7 @@ export const productService = {
       precoVenda: data.preco_venda,
       precoMinimo: data.preco_minimo,
       comissaoPercentual: data.comissao_percentual,
+      comissaoPvPercentual: (data.comissao_pv_percentual === null || data.comissao_pv_percentual === undefined) ? undefined : Number(data.comissao_pv_percentual),
       estoquePrincipal: data.estoque_principal,
       ativo: data.ativo,
       categoryId: data.category_id,

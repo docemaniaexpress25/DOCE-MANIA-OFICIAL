@@ -18,6 +18,7 @@ export const commissionService = {
       valor: safeNumber(c.valor_comissao),
       valorBase: safeNumber(c.valor_base),
       percentual: safeNumber(c.percentual),
+      valorPago: safeNumber(c.valor_pago), // Bloco 14: acerto parcial (FIFO)
       status: (c.status || 'DISPONIVEL').toUpperCase(), // Normaliza o status para maiúsculo
       dataGeracao: new Date(c.created_at)
     })) as Commission[];

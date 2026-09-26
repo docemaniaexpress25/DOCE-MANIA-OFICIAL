@@ -36,6 +36,8 @@ export interface Product {
   precoVenda: number;
   precoMinimo: number;
   comissaoPercentual: number;
+  /** Bloco 14: comissão de PRÉ-VENDA (%) — undefined = usa a taxa padrão da PV */
+  comissaoPvPercentual?: number;
   estoquePrincipal: number;
   ativo: boolean;
   categoryId?: string;
@@ -139,9 +141,36 @@ export interface Commission {
   valor: number;
   valorBase?: number;
   percentual?: number;
+  /** Bloco 14: quanto desta comissão já foi paga ao vendedor (acerto FIFO) */
+  valorPago?: number;
   status: 'DISPONIVEL' | 'A_RECEBER' | 'PAGO';
   dataGeracao: Date;
 }
+
+/** Bloco 14 — interruptores das melhorias (admin liga/desliga em Configurações) */
+export interface MelhoriasFlags {
+  /** Secretário ajusta as trocas do card antes da entrega */
+  trocaSeparacao: boolean;
+  /** Avisa o vendedor (push) quando a entrega dele é confirmada */
+  pushEntrega: boolean;
+  /** Botão Zap na fila para avisar o cliente que o pedido está a caminho */
+  whatsapp: boolean;
+  /** Bairro em destaque no card da fila */
+  bairroCard: boolean;
+  /** Foto opcional da entrega concluída no aceite */
+  fotoEntrega: boolean;
+  /** Avisa o vendedor (push) quando a entrega dele falha */
+  pushFalha: boolean;
+}
+
+export const MELHORIAS_DEFAULT: MelhoriasFlags = {
+  trocaSeparacao: true,
+  pushEntrega: true,
+  whatsapp: true,
+  bairroCard: true,
+  fotoEntrega: true,
+  pushFalha: true,
+};
 
 export interface CommissionPaymentLog {
   id: string;
@@ -206,4 +235,6 @@ export interface AppSettings {
   clientOrder: string[]; // NOVO: ordem dos clientes
   companyName: string | null;
   companyCnpj: string | null;
+  /** Bloco 14: interruptores das melhorias */
+  melhorias: MelhoriasFlags;
 }

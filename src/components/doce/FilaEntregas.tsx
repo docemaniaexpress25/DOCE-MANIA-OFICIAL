@@ -1,6 +1,6 @@
 "use client";
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { User, Product } from '@/lib/types';
+import { User, Product, MelhoriasFlags, MELHORIAS_DEFAULT } from '@/lib/types';
 import { authHeaders } from '@/services/userService';
 import Cupom from '@/components/doce/Cupom';
 
@@ -132,11 +132,13 @@ function mapaUrl(p: FilaItem): string {
 function zapUrl(p: FilaItem): string | null {
   const digits = (p.cliente.telefone || '').replace(/\D/g, '');
   if (digits.length < 10) return null;
-  const msg = encodeURIComponent(`Ola! Aqui e da Doce Mania 🙂 Seu pedido ja esta a caminho!`);
+  const msg = encodeURIComponent(`Ola! Aqui e da Doce Mania 🙂 Seu pedido de ${p.valorTotal.toFixed(2).replace('.', ',')} ja esta a caminho!`);
   return `https://wa.me/${digits.length <= 11 ? '55' + digits : digits}?text=${msg}`;
 }
 
-export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'success' | 'error') => void; modo: 'ENTREGADOR' | 'ADMIN' | 'VENDEDOR' }> = ({ user, showToast, modo }) => {
+export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'success' | 'error') => void; modo: 'ENTREGADOR' | 'ADMIN' | 'VENDEDOR'; melhorias?: MelhoriasFlags }> = ({ user, showToast, modo, melhorias: melhoriasProp }) => {
+  // BLOCO 14: interruptores (admin liga/desliga em Configuracoes)
+  const melhorias = melhoriasProp || MELHORIAS_DEFAULT;
   const [data, setData] = useState<ApiResp | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
@@ -148,6 +150,9 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
   const [valorPix, setValorPix] = useState('');
   const [fotoBoleto, setFotoBoleto] = useState<string | null>(null);
   const [fotoPix, setFotoPix] = useState<string | null>(null);
+  // BLOCO 14: foto opcional da entrega concluída + edição de trocas pelo admin
+  const [fotoEntrega, setFotoEntrega] = useState<string | null>(null);
+  const [sheetTrocas, setSheetTrocas] = useState<{ p: FilaItem; texto: string } | null>(null);
   const [cupom, setCupom] = useState<FilaItem | null>(null);
   const [verEntregues, setVerEntregues] = useState(false);
   const [sheetCaixa, setSheetCaixa] = useState(false);
@@ -222,6 +227,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
       setValorPix('');
       setFotoBoleto(null);
       setFotoPix(null);
+      setFotoEntrega(null);
     }
   }
 
@@ -318,6 +324,9 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-1.5 flex-wrap">
                 <p className="text-[13px] font-black text-gray-800 truncate capitalize">{p.cliente.nome}</p>
+                {melhorias.bairroCard && p.cliente.bairro && (
+                  <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded-md bg-violet-50 text-violet-600 shrink-0"><i className="fa-solid fa-city mr-0.5"></i>{p.cliente.bairro}</span>
+                )}
                 {p.separado && pend && (
                   <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded-md bg-gray-300 text-gray-600"><i className="fa-solid fa-boxes-stacked mr-0.5"></i>Separado</span>
                 )}
@@ -335,6 +344,12 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                   <i className="fa-solid fa-right-left mr-1"></i>Trocas: {p.trocas}
                 </p>
               )}
+              {melhorias.trocaSeparacao && modo === 'ADMIN' && pend && (
+                <button onClick={() => setSheetTrocas({ p, texto: p.trocas || '' })} disabled={!!busy}
+                  className="text-[8px] font-black text-orange-500 uppercase mt-1 active:scale-95 transition-transform">
+                  <i className="fa-solid fa-pencil mr-1"></i>{p.trocas ? 'Editar trocas' : 'Anotar troca da separação'}
+                </button>
+              )}
               <div className="flex items-center gap-2 mt-1.5 flex-wrap">
                 <span className="text-[13px] font-black text-gray-800">{fmt(p.valorTotal)}</span>
                 <span className={`text-[9px] font-black px-2 py-0.5 rounded-md uppercase ${pg.chip}`}><i className={`${pg.icon} mr-1`}></i>{pg.label}</span>
@@ -351,7 +366,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
             <a href={mapaUrl(p)} target="_blank" rel="noopener noreferrer" className="flex-1 min-w-[58px] py-2.5 rounded-xl bg-blue-50 text-blue-600 text-[9px] font-black uppercase text-center active:scale-95 transition-transform">
               <i className="fa-solid fa-diamond-turn-right mr-1"></i>Mapa
             </a>
-            {zap && (
+            {melhorias.whatsapp && zap && (
               <a href={zap} target="_blank" rel="noopener noreferrer" className="flex-1 min-w-[58px] py-2.5 rounded-xl bg-green-50 text-green-600 text-[9px] font-black uppercase text-center active:scale-95 transition-transform">
                 <i className="fa-brands fa-whatsapp mr-1"></i>Zap
               </a>
@@ -377,7 +392,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
           {podeEntregar && pend && (
             <div className="flex gap-2 mt-2">
               <button
-                onClick={() => { setValorRecebido(''); setValorPix(''); setFotoBoleto(null); setFotoPix(null); setSheetEntregue(p); }}
+                onClick={() => { setValorRecebido(''); setValorPix(''); setFotoBoleto(null); setFotoPix(null); setFotoEntrega(null); setSheetEntregue(p); }}
                 disabled={!!busy}
                 className="flex-[1.6] py-4 rounded-2xl bg-emerald-600 text-white text-[11px] font-black uppercase shadow-md active:scale-95 transition-transform disabled:opacity-60"
               >
@@ -612,15 +627,40 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                 {falta > 0 && (
                   <p className="text-[9px] font-black text-amber-600 text-center uppercase">Faltam {fmt(falta)} — registrar parcial?</p>
                 )}
+                {/* BLOCO 14: foto opcional da entrega concluída (interruptor do admin) */}
+                {melhorias.fotoEntrega && (
+                  <div className="space-y-2">
+                    <label className="block cursor-pointer">
+                      <input
+                        type="file" accept="image/*" capture="environment" className="hidden"
+                        onChange={async e => {
+                          const f = e.target.files?.[0];
+                          if (!f) return;
+                          try { setFotoEntrega(await compressImage(f)); }
+                          catch { showToast('Nao foi possivel processar a foto.', 'error'); }
+                        }}
+                      />
+                      <div className="py-3 rounded-2xl bg-gray-50 border border-gray-100 text-gray-500 text-[9px] font-black uppercase text-center active:scale-95 transition-transform">
+                        <i className="fa-solid fa-camera mr-1"></i>{fotoEntrega ? 'Trocar foto da entrega' : 'Foto da entrega (opcional)'}
+                      </div>
+                    </label>
+                    {fotoEntrega && (
+                      <div className="relative rounded-2xl overflow-hidden border border-gray-100 animate-in zoom-in-95">
+                        <img src={fotoEntrega} alt="Foto da entrega" className="w-full max-h-48 object-cover" />
+                        <span className="absolute top-2 right-2 bg-emerald-500 text-white text-[8px] font-black uppercase px-2 py-1 rounded-md">Entrega registrada em foto</span>
+                      </div>
+                    )}
+                  </div>
+                )}
                 <button
                   onClick={() => {
                     if (falta > 0) {
                       if (window.confirm(`Registrar pagamento PARCIAL?\n\nRecebeu ${fmt(rec)} de ${fmt(restante)}.\nO restante (${fmt(falta)}) continua em aberto no sistema.`)) {
-                        confirmarEntrega(sp, 'DINHEIRO', { valorRecebido: rec });
+                        confirmarEntrega(sp, 'DINHEIRO', { valorRecebido: rec, foto: fotoEntrega || undefined });
                       }
                       return;
                     }
-                    confirmarEntrega(sp, 'DINHEIRO', { valorRecebido: rec > 0 ? rec : undefined });
+                    confirmarEntrega(sp, 'DINHEIRO', { valorRecebido: rec > 0 ? rec : undefined, foto: fotoEntrega || undefined });
                   }}
                   disabled={!!busy}
                   className="w-full py-4 bg-emerald-600 text-white rounded-2xl text-xs font-black uppercase tracking-wider shadow-lg active:scale-[0.98] transition-transform disabled:opacity-60"
@@ -727,15 +767,31 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
             <div className="mt-4 pt-3 border-t border-gray-100">
               <p className="text-[8px] font-black text-gray-300 uppercase text-center mb-2">Pagou de outra forma?</p>
               <div className="grid grid-cols-2 gap-2">
-                <button onClick={() => confirmarEntrega(sp, 'JA_PAGO')}
+                <button onClick={() => confirmarEntrega(sp, 'JA_PAGO', { foto: fotoEntrega || undefined })}
                   className="py-3 rounded-xl bg-blue-50 text-blue-600 text-[9px] font-black uppercase active:scale-95 transition-transform">
                   <i className="fa-solid fa-circle-check mr-1"></i>Ja pagou
                 </button>
-                <button onClick={() => confirmarEntrega(sp, 'NAO_PAGO')}
+                <button onClick={() => confirmarEntrega(sp, 'NAO_PAGO', { foto: fotoEntrega || undefined })}
                   className="py-3 rounded-xl bg-amber-50 text-amber-600 text-[9px] font-black uppercase active:scale-95 transition-transform">
                   <i className="fa-solid fa-hand-holding-dollar mr-1"></i>Nao cobrou
                 </button>
               </div>
+              {melhorias.fotoEntrega && spMetodo !== 'DINHEIRO' && (
+                <label className="block cursor-pointer mt-2">
+                  <input
+                    type="file" accept="image/*" capture="environment" className="hidden"
+                    onChange={async e => {
+                      const f = e.target.files?.[0];
+                      if (!f) return;
+                      try { setFotoEntrega(await compressImage(f)); }
+                      catch { showToast('Nao foi possivel processar a foto.', 'error'); }
+                    }}
+                  />
+                  <div className="py-2.5 rounded-xl bg-gray-50 border border-gray-100 text-gray-400 text-[8px] font-black uppercase text-center active:scale-95 transition-transform">
+                    <i className="fa-solid fa-camera mr-1"></i>{fotoEntrega ? 'Foto da entrega anexada ✓' : 'Foto da entrega (opcional)'}
+                  </div>
+                </label>
+              )}
             </div>
 
             <button onClick={() => setSheetEntregue(null)} className="w-full mt-3 py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest print:hidden">Cancelar</button>
@@ -781,6 +837,33 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
       )}
 
       {/* ===== SHEET: FECHAR CAIXA ===== */}
+      {/* ===== SHEET: EDITAR TROCAS (BLOCO 14 — admin ajusta o que sai no cupom) ===== */}
+      {sheetTrocas && (
+        <div className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-sm flex items-end justify-center" onClick={() => setSheetTrocas(null)}>
+          <div className="bg-white w-full max-w-md rounded-t-3xl p-6 animate-in slide-in-from-bottom duration-300" onClick={e => e.stopPropagation()}>
+            <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-4"></div>
+            <h3 className="text-sm font-black text-gray-800 uppercase text-center"><i className="fa-solid fa-right-left text-orange-500 mr-1"></i>Trocas do pedido</h3>
+            <p className="text-[10px] text-gray-400 font-semibold text-center mt-1 capitalize">{sheetTrocas.p.cliente.nome}</p>
+            <p className="text-[9px] text-gray-400 font-bold text-center mt-0.5">Ajuste o que sai no cupom — ex.: item em falta trocado por outro do mesmo valor</p>
+            <textarea
+              value={sheetTrocas.texto}
+              onChange={e => setSheetTrocas({ ...sheetTrocas, texto: e.target.value })}
+              rows={3} maxLength={500}
+              placeholder="Ex.: 1 Lays sour cream 62g"
+              className="w-full mt-3 p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-bold outline-none focus:ring-2 focus:ring-orange-100 resize-none"
+            />
+            <button
+              onClick={async () => { const t = sheetTrocas; setSheetTrocas(null); await acao({ acao: 'EDITAR_TROCAS', saleId: t.p.saleId, trocas: t.texto }, 'Trocas atualizadas! O cupom sai corrigido.'); }}
+              disabled={!!busy}
+              className="w-full mt-3 py-4 bg-orange-500 text-white rounded-2xl text-xs font-black uppercase tracking-wider shadow-lg active:scale-[0.98] transition-transform disabled:opacity-60"
+            >
+              <i className="fa-solid fa-check mr-1"></i>Salvar trocas
+            </button>
+            <button onClick={() => setSheetTrocas(null)} className="w-full mt-2 py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Cancelar</button>
+          </div>
+        </div>
+      )}
+
       {sheetCaixa && modo === 'ENTREGADOR' && (
         <div className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-sm flex items-end justify-center" onClick={() => setSheetCaixa(false)}>
           <div className="bg-white w-full max-w-md rounded-t-3xl p-6 animate-in slide-in-from-bottom duration-300" onClick={e => e.stopPropagation()}>

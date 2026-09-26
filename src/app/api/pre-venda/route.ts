@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/serverSupabase';
 import { sessionFromRequest, isAdminSession } from '@/lib/session';
 import { hasEntregaTables, hasBoletoFotoColumn } from '@/lib/serverSchema';
+import { sendPushToUser } from '@/lib/pushSender';
 
 /**
  * PRÉ-VENDA / ROTAS DE ENTREGA (estilo Shopee)
@@ -88,50 +89,137 @@ async function getComissaoPvPct(supabase: any): Promise<number> {
 }
 
 /**
- * Comissao de PRE-VENDA: criada SOMENTE na entrega confirmada com pagamento.
- * Base = comissao normal dos produtos (comissao_percentual) x taxa da
- * pre-venda (app_config.comissao_pre_venda_pct, %). Valor proporcional ao
- * recebido no evento (parciais geram comissao parcial).
+ * BLOCO 14 — interruptores das melhorias (admin liga/desliga em Configuracoes).
+ * Colunas melhor_* em app_settings; se o SQL 14 nao rodou, tudo LIGADO.
  */
-async function criarComissaoPreVenda(supabase: any, sale: any, valorBase: number) {
+async function getMelhorias(supabase: any): Promise<{ trocaSeparacao: boolean; pushEntrega: boolean; whatsapp: boolean; bairroCard: boolean; fotoEntrega: boolean; pushFalha: boolean }> {
   try {
-    if (!(valorBase > 0)) return;
-    // evita comissao duplicada se a parada for reaberta e re-entregue
-    const { data: existente } = await supabase
-      .from('commissions').select('id').eq('sale_id', sale.id).limit(1);
-    if (existente && existente.length > 0) return;
+    const { data } = await supabase
+      .from('app_settings')
+      .select('melhor_troca_separacao, melhor_push_entrega, melhor_whatsapp, melhor_bairro, melhor_foto_entrega, melhor_push_falha')
+      .eq('id', 'global_settings')
+      .maybeSingle();
+    return {
+      trocaSeparacao: data?.melhor_troca_separacao !== false,
+      pushEntrega: data?.melhor_push_entrega !== false,
+      whatsapp: data?.melhor_whatsapp !== false,
+      bairroCard: data?.melhor_bairro !== false,
+      fotoEntrega: data?.melhor_foto_entrega !== false,
+      pushFalha: data?.melhor_push_falha !== false,
+    };
+  } catch {
+    return { trocaSeparacao: true, pushEntrega: true, whatsapp: true, bairroCard: true, fotoEntrega: true, pushFalha: true };
+  }
+}
 
+/**
+ * BLOCO 14 — comissão de PRÉ-VENDA por produto:
+ *   pct = product.comissao_pv_percentual (campo novo)
+ *   se NULL -> regra antiga: product.comissao_percentual × taxaPV (app_config)
+ * Se a coluna do Bloco 14 nao existir, usa a regra antiga sem falhar.
+ */
+async function comissaoPvDeItens(supabase: any, itens: any[]): Promise<number> {
+  const prodIds = [...new Set(itens.map((i: any) => i.produto_id).filter(Boolean))];
+  if (prodIds.length === 0) return 0;
+
+  const pctPE: Record<string, number> = {};
+  const pctPV: Record<string, number | null> = {};
+  let colOk = true;
+  try {
+    const r = await supabase.from('products').select('id, comissao_percentual, comissao_pv_percentual').in('id', prodIds);
+    if (r.error) colOk = false;
+    else {
+      (r.data || []).forEach((p: any) => {
+        pctPE[p.id] = Number(p.comissao_percentual || 0);
+        pctPV[p.id] = (p.comissao_pv_percentual === null || p.comissao_pv_percentual === undefined) ? null : Number(p.comissao_pv_percentual);
+      });
+    }
+  } catch {
+    colOk = false;
+  }
+  if (!colOk) {
+    const { data: prods } = await supabase.from('products').select('id, comissao_percentual').in('id', prodIds);
+    (prods || []).forEach((p: any) => {
+      pctPE[p.id] = Number(p.comissao_percentual || 0);
+      pctPV[p.id] = null;
+    });
+  }
+
+  const fator = await getComissaoPvPct(supabase);
+  let cheia = 0;
+  itens.forEach((i: any) => {
+    const pv = pctPV[i.produto_id];
+    const pct = (pv !== null && pv !== undefined) ? pv : (pctPE[i.produto_id] || 0) * (fator / 100);
+    cheia += Number(i.quantidade || 0) * Number(i.preco_venda || 0) * (pct / 100);
+  });
+  return round2(cheia);
+}
+
+/**
+ * BLOCO 14 — Comissão de PRE-VENDA: criada/ATUALIZADA sempre na entrega
+ * confirmada (qualquer forma de pagamento), com o VALOR CHEIO da venda.
+ *   - à vista quitado no aceite  -> DISPONIVEL (vendedor pode receber)
+ *   - parcial / boleto / nao pago -> A_RECEBER (entra quando o dinheiro
+ *     da venda entrar completo — o recebimento posterior vira DISPONIVEL)
+ * Nunca reduz valor de comissão já registrada e nunca trava a entrega.
+ */
+async function registrarComissaoPreVenda(supabase: any, sale: any, quitada: boolean) {
+  try {
     const { data: items } = await supabase
       .from('sale_items').select('produto_id, quantidade, preco_venda').eq('sale_id', sale.id);
     const itens = items || [];
     if (itens.length === 0) return;
 
-    const prodIds = [...new Set(itens.map((i: any) => i.produto_id))];
-    const { data: prods } = await supabase
-      .from('products').select('id, comissao_percentual').in('id', prodIds);
-    const pctMap: Record<string, number> = {};
-    (prods || []).forEach((p: any) => { pctMap[p.id] = Number(p.comissao_percentual || 0); });
-
-    const fator = await getComissaoPvPct(supabase);
-    let comissaoCheia = 0;
-    itens.forEach((i: any) => {
-      comissaoCheia += Number(i.quantidade || 0) * Number(i.preco_venda || 0) * ((pctMap[i.produto_id] || 0) / 100);
-    });
-    const comissao = round2(comissaoCheia * (fator / 100) * (valorBase / Math.max(Number(sale.valor_total), 0.01)));
+    const comissao = await comissaoPvDeItens(supabase, itens);
     if (!(comissao > 0)) return;
 
-    await supabase.from('commissions').insert({
-      sale_id: sale.id,
+    const total = Math.max(Number(sale.valor_total || 0), 0.01);
+    const payload = {
       seller_id: sale.vendedor_id,
       valor_comissao: comissao,
-      valor_base: round2(valorBase),
-      percentual: round2(valorBase > 0 ? (comissao / valorBase) * 100 : 0),
-      status: 'DISPONIVEL',
-      created_at: new Date().toISOString(),
-    });
+      valor_base: round2(Number(sale.valor_total || 0)),
+      percentual: round2((comissao / total) * 100),
+      status: quitada ? 'DISPONIVEL' : 'A_RECEBER',
+    };
+
+    // evita duplicar se a parada for reaberta e re-entregue: atualiza a row
+    const { data: existente } = await supabase
+      .from('commissions').select('id').eq('sale_id', sale.id).limit(1);
+    if (existente && existente.length > 0) {
+      await supabase.from('commissions').update(payload).eq('id', existente[0].id);
+    } else {
+      await supabase.from('commissions').insert({
+        sale_id: sale.id,
+        ...payload,
+        valor_pago: 0,
+        created_at: new Date().toISOString(),
+      });
+    }
   } catch (e: any) {
     // comissao nunca deve travar a entrega
     console.error('[pre-venda] comissao pre-venda falhou:', e?.message);
+  }
+}
+
+/** Aviso ao vendedor (push + mensagem no app) — Bloco 14 */
+async function avisarVendedor(supabase: any, vendedorId: string | null | undefined, clientId: string | null | undefined, title: string, corpo: string) {
+  try {
+    if (!vendedorId) return;
+    let nomeCli = 'cliente';
+    if (clientId) {
+      const { data: cli } = await supabase.from('clients').select('nome_fantasia').eq('id', clientId).maybeSingle();
+      nomeCli = cli?.nome_fantasia || nomeCli;
+    }
+    await sendPushToUser(vendedorId, { title, body: `${nomeCli} — ${corpo}`, url: '/' });
+    await supabase.from('system_messages').insert({
+      vendedor_id: vendedorId,
+      titulo: title,
+      mensagem: `${nomeCli}: ${corpo}`,
+      data: new Date().toISOString(),
+      lida: false,
+    });
+  } catch (e: any) {
+    console.error('[pre-venda] aviso vendedor falhou:', e?.message);
   }
 }
 
@@ -839,6 +927,29 @@ export async function POST(req: NextRequest) {
     if (!saleRow) return NextResponse.json({ ok: false, error: 'Pedido nao encontrado.' }, { status: 404 });
     const venda13 = saleRow.tipo_venda === 'PRE_VENDA';
 
+    // ---------- EDITAR_TROCAS (BLOCO 14: secretário ajusta as trocas no card) ----------
+    // Caso de uso: faltou um item -> troca por outro do mesmo valor -> o cupom
+    // precisa refletir a troca real que o cliente vai receber.
+    if (acao === 'EDITAR_TROCAS') {
+      if (!admin && session.perfil !== 'SECRETARIO') {
+        return NextResponse.json({ ok: false, error: 'Somente o secretário da base ou o admin ajustam as trocas.' }, { status: 403 });
+      }
+      if (saleRow.entrega_status === 'ENTREGUE') {
+        return NextResponse.json({ ok: false, error: 'Pedido ja entregue.' }, { status: 409 });
+      }
+      const melhorias = await getMelhorias(supabase);
+      if (!melhorias.trocaSeparacao) {
+        return NextResponse.json({ ok: false, error: 'Recurso desligado nas Configuracoes.' }, { status: 400 });
+      }
+      const trocas = String(body.trocas ?? '').slice(0, 500).trim();
+      const r = await updateSaleFlex(supabase, saleId, { trocas: trocas || null });
+      if (!r.ok) {
+        return NextResponse.json({ ok: false, error: r.erro || 'Banco desatualizado: rode o Bloco 13 do SQL.' }, { status: r.sem13 ? 503 : 500 });
+      }
+      await logEventoSeguro(supabase, saleRow.route_id || null, saleId, userId, 'TROCAS', trocas ? `Trocas ajustadas: ${trocas}` : 'Trocas removidas');
+      return NextResponse.json({ ok: true });
+    }
+
     // ---------- SEPARAR / DESFAZER_SEPARADO (secretario da base + admin) ----------
     if (acao === 'SEPARAR' || acao === 'DESFAZER_SEPARADO') {
       if (!admin && session.perfil !== 'SECRETARIO') {
@@ -987,23 +1098,28 @@ export async function POST(req: NextRequest) {
         eventoMotivo = quitada
           ? (pagamento === 'PIX' ? `Pagamento: PIX — R$ ${recebido.toFixed(2)} (comprovante foto)` : `Pagamento: dinheiro — R$ ${recebido.toFixed(2)}`)
           : `Pagamento parcial (${pagamento === 'PIX' ? 'pix' : 'dinheiro'}): R$ ${recebido.toFixed(2)} de R$ ${restante.toFixed(2)}`;
-        await criarComissaoPreVenda(supabase, saleRow, recebido);
+        // BLOCO 14: comissão da PV — valor cheio; DISPONIVEL se quitou no aceite
+        await registrarComissaoPreVenda(supabase, saleRow, quitada);
       } else if (pagamento === 'BOLETO') {
         // Boleto entregue: entrega concluida, pagamento segue PENDENTE ate
         // o admin confirmar a compensacao. Foto do boleto obrigatoria.
         updates.metodo_pagamento = 'BOLETO';
         updates.detalhe_pagamento = `${detAtual} | ${stamp}: boleto entregue (foto anexada)`;
         eventoMotivo = 'Boleto entregue — foto anexada (aguardando compensacao)';
+        // BLOCO 14: comissão nasce A_RECEBER — só entra quando o boleto for pago
+        await registrarComissaoPreVenda(supabase, saleRow, false);
       } else if (pagamento === 'JA_PAGO') {
         updates.valor_pago = total;
         updates.status_pagamento = 'PAGO';
         updates.detalhe_pagamento = `${detAtual} | ${stamp}: R$ ${restante.toFixed(2)} (JA_PAGO)`;
         eventoMotivo = `Entregue — cliente ja havia pago (R$ ${restante.toFixed(2)})`;
-        await criarComissaoPreVenda(supabase, saleRow, restante);
+        await registrarComissaoPreVenda(supabase, saleRow, true);
       } else {
         // NAO_PAGO: mantem PENDENTE para cobrar depois
         updates.detalhe_pagamento = `${detAtual} | ${stamp}: entregue sem pagamento`;
         eventoMotivo = 'Entregue sem pagamento (a receber)';
+        // BLOCO 14: comissão nasce A_RECEBER — entra quando o cliente pagar
+        await registrarComissaoPreVenda(supabase, saleRow, false);
       }
 
       const r = await updateSaleFlex(supabase, saleId, updates);
@@ -1018,6 +1134,20 @@ export async function POST(req: NextRequest) {
 
       await logEventoSeguro(supabase, rotaIdRef, saleId, userId, 'ENTREGUE', eventoMotivo, lat, lng, eventoFoto);
       if (rotaIdRef) await checarConclusao(supabase, rotaIdRef);
+
+      // BLOCO 14: avisa o VENDEDOR da venda (interruptor nas Configuracoes)
+      try {
+        const melhorias = await getMelhorias(supabase);
+        if (melhorias.pushEntrega) {
+          const recebidoTxt = pagamento === 'BOLETO' ? 'boleto entregue (aguardando compensacao)'
+            : pagamento === 'NAO_PAGO' ? 'entregue — valor a receber'
+            : pagamento === 'JA_PAGO' ? `entregue — R$ ${restante.toFixed(2)} (ja pago)`
+            : `entregue — R$ ${recebido.toFixed(2)} recebidos`;
+          const liberada = updates.status_pagamento === 'PAGO';
+          await avisarVendedor(supabase, saleRow.vendedor_id, saleRow.client_id, 'Venda entregue \u2705', `${recebidoTxt}. Comissao ${liberada ? 'LIBERADA' : 'aguardando pagamento completo'}.`);
+        }
+      } catch { /* nunca trava a entrega */ }
+
       return NextResponse.json({ ok: true });
     }
 
@@ -1028,6 +1158,15 @@ export async function POST(req: NextRequest) {
       if (upErr) throw upErr;
       await logEventoSeguro(supabase, rotaIdRef, saleId, userId, 'FALHOU', motivo, lat, lng);
       if (rotaIdRef) await checarConclusao(supabase, rotaIdRef);
+
+      // BLOCO 14: avisa o VENDEDOR que a entrega falhou (interruptor)
+      try {
+        const melhorias = await getMelhorias(supabase);
+        if (melhorias.pushFalha) {
+          await avisarVendedor(supabase, saleRow.vendedor_id, saleRow.client_id, 'Entrega nao realizada \u26a0\ufe0f', `nao entregue (${motivo}). Vale ligar pro cliente combinar.`);
+        }
+      } catch { /* nunca trava */ }
+
       return NextResponse.json({ ok: true });
     }
 

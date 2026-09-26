@@ -1,6 +1,6 @@
 "use client";
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { User, Product } from '@/lib/types';
+import { User, Product, MelhoriasFlags, MELHORIAS_DEFAULT } from '@/lib/types';
 import { authHeaders } from '@/services/userService';
 import { sounds } from '@/utils/sound';
 import Cupom from '@/components/doce/Cupom';
@@ -52,12 +52,16 @@ const PGTO_META: Record<string, { label: string; icon: string; chip: string }> =
 };
 const pgtoMeta = (m: string) => PGTO_META[m] || PGTO_META.DINHEIRO;
 
-const SecretarioView: React.FC<{ user: User; showToast: (m: string, t?: 'success' | 'error') => void }> = ({ showToast }) => {
+const SecretarioView: React.FC<{ user: User; showToast: (m: string, t?: 'success' | 'error') => void; melhorias?: MelhoriasFlags }> = ({ showToast, melhorias: melhoriasProp }) => {
+  // BLOCO 14: interruptores do admin
+  const melhorias = melhoriasProp || MELHORIAS_DEFAULT;
   const [data, setData] = useState<ApiResp | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [cupom, setCupom] = useState<FilaItem | null>(null);
   const [alarmando, setAlarmando] = useState(false);
+  // BLOCO 14: ajustar trocas no card (ex.: substituiu por outro do mesmo valor)
+  const [editTrocas, setEditTrocas] = useState<{ p: FilaItem; texto: string } | null>(null);
   // quantidade de pedidos ainda NAO separados — base do alarme
   const aSepararRef = useRef<number>(-1);
   const alarmTimer = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -198,6 +202,12 @@ const SecretarioView: React.FC<{ user: User; showToast: (m: string, t?: 'success
                   <i className="fa-solid fa-right-left mr-1"></i>Trocas: {p.trocas}
                 </p>
               )}
+              {melhorias.trocaSeparacao && (
+                <button onClick={() => setEditTrocas({ p, texto: p.trocas || '' })} disabled={!!busy}
+                  className="text-[8px] font-black text-orange-500 uppercase mt-1 active:scale-95 transition-transform">
+                  <i className="fa-solid fa-pencil mr-1"></i>{p.trocas ? 'Editar trocas' : 'Anotar troca'}
+                </button>
+              )}
               <div className="flex items-center gap-2 mt-1.5 flex-wrap">
                 <span className="text-[13px] font-black text-gray-800">{fmt(p.valorTotal)}</span>
                 <span className={`text-[9px] font-black px-2 py-0.5 rounded-md uppercase ${pg.chip}`}><i className={`${pg.icon} mr-1`}></i>{pg.label}</span>
@@ -293,6 +303,33 @@ const SecretarioView: React.FC<{ user: User; showToast: (m: string, t?: 'success
         <div className="space-y-3">
           <p className="text-[10px] font-black text-gray-500 uppercase px-1"><i className="fa-solid fa-check mr-1"></i>Separados — aguardando o entregador</p>
           {separados.map(p => <Card key={p.saleId} p={p} cinza />)}
+        </div>
+      )}
+
+      {/* ===== AJUSTAR TROCAS (BLOCO 14) ===== */}
+      {editTrocas && (
+        <div className="fixed inset-0 z-[250] bg-black/60 backdrop-blur-sm flex items-end justify-center" onClick={() => setEditTrocas(null)}>
+          <div className="bg-white w-full max-w-md rounded-t-3xl p-6 animate-in slide-in-from-bottom duration-300" onClick={e => e.stopPropagation()}>
+            <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-4"></div>
+            <h3 className="text-sm font-black text-gray-800 uppercase text-center"><i className="fa-solid fa-right-left text-orange-500 mr-1"></i>Trocas do pedido</h3>
+            <p className="text-[10px] text-gray-400 font-semibold text-center mt-1 capitalize">{editTrocas.p.cliente.nome}</p>
+            <p className="text-[9px] text-gray-400 font-bold text-center mt-0.5">Item em falta trocado por outro do mesmo valor? Anote aqui — sai no cupom.</p>
+            <textarea
+              value={editTrocas.texto}
+              onChange={e => setEditTrocas({ ...editTrocas, texto: e.target.value })}
+              rows={3} maxLength={500}
+              placeholder="Ex.: 1 Lays sour cream 62g"
+              className="w-full mt-3 p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-bold outline-none focus:ring-2 focus:ring-orange-100 resize-none"
+            />
+            <button
+              onClick={async () => { const t = editTrocas; setEditTrocas(null); await acao({ acao: 'EDITAR_TROCAS', saleId: t.p.saleId, trocas: t.texto }, 'Trocas atualizadas! Imprima o cupom corrigido.'); }}
+              disabled={!!busy}
+              className="w-full mt-3 py-4 bg-orange-500 text-white rounded-2xl text-xs font-black uppercase tracking-wider shadow-lg active:scale-[0.98] transition-transform disabled:opacity-60"
+            >
+              <i className="fa-solid fa-check mr-1"></i>Salvar trocas
+            </button>
+            <button onClick={() => setEditTrocas(null)} className="w-full mt-2 py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Cancelar</button>
+          </div>
         </div>
       )}
 

@@ -114,7 +114,20 @@ export function gerarCupomTexto({ sale, client, products, width }: CupomTextoInp
   if (isPedido) {
     const forma = formaCobrancaDeSale({ metodoPagamento: sale.metodoPagamento as string, detalhePagamento: sale.detalhePagamento });
     const prazo = /A PRAZO/i.test(String(sale.detalhePagamento || ''));
-    t += `Pagamento na entrega: ${forma}${prazo ? ' (A PRAZO)' : ' (A VISTA)'}\n`;
+    // BLOCO 13.3: em 56mm (32 colunas) "Pagamento na entrega: DINHEIRO (A PRAZO)"
+    // estoura a linha. A forma vai completa na linha de baixo (nunca quebra no meio).
+    const pgLabel = 'Pagamento na entrega:';
+    const pgValor = `${forma}${prazo ? ' (A PRAZO)' : ' (A VISTA)'}`;
+    if ((pgLabel + ' ' + pgValor).length <= totalWidth) {
+      t += `${pgLabel} ${pgValor}\n`;
+    } else {
+      t += pgLabel + '\n';
+      let restPg = pgValor;
+      while (restPg.length > 0) {
+        t += padR(restPg.substring(0, totalWidth), totalWidth) + '\n';
+        restPg = restPg.substring(totalWidth);
+      }
+    }
     if (sale.dataVencimento && prazo) {
       t += `Vencimento: ${new Date(sale.dataVencimento).toLocaleDateString()}\n`;
     }

@@ -830,10 +830,10 @@ export async function POST(req: NextRequest) {
 
     const { data: sale } = await supabase.from('sales').select(`${FILA_COLS_13}`).eq('id', saleId).maybeSingle();
 
-    // Fallback sem colunas do Bloco 13
+    // Fallback sem colunas do Bloco 13 (inclui tipo_venda para os guards)
     let saleRow: any = sale;
     if (!saleRow) {
-      const alt = await supabase.from('sales').select(`${SALE_COLS}`).eq('id', saleId).maybeSingle();
+      const alt = await supabase.from('sales').select(`${SALE_COLS}, tipo_venda`).eq('id', saleId).maybeSingle();
       saleRow = alt.data;
     }
     if (!saleRow) return NextResponse.json({ ok: false, error: 'Pedido nao encontrado.' }, { status: 404 });

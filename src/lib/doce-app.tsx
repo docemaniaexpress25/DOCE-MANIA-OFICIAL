@@ -3,7 +3,8 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { User, Product, Carga, Sale, Commission, Client, PaymentMethod, CargaPendente, CommissionPaymentLog, SystemMessage, Expense, Category, Subcategory } from '@/lib/types';
 import AdminDashboard from '@/components/doce/AdminDashboard';
 import VendedorDashboard from '@/components/doce/VendedorDashboard';
-import EntregasView from '@/components/doce/EntregasView';
+import FilaEntregas from '@/components/doce/FilaEntregas';
+import SecretarioView from '@/components/doce/SecretarioView';
 import Login from '@/components/doce/Login';
 import { haptics } from '@/utils/haptics';
 import { offlineSync } from '@/utils/offlineSync';
@@ -28,9 +29,9 @@ const getTodayDateString = () => {
 };
 
 /**
- * Tela do ENTREGADOR: somente a rota do dia (todas as rotas, separadas por
- * vendedor). Login oculto (5 toques no logo), PIN 1234 — sem acesso ao resto
- * do sistema. Entregador recebe SALARIO fixo: aqui nao existe comissao.
+ * BLOCO 13: Tela do ENTREGADOR — fila continua de entregas (P1/P2/antiguidade).
+ * Login oculto (5 toques no logo) OU usuario real ENTREGADOR criado pelo admin.
+ * Entregador recebe SALARIO fixo: aqui nao existe comissao.
  */
 const EntregadorShell: React.FC<{ user: User }> = ({ user }) => {
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -47,7 +48,32 @@ const EntregadorShell: React.FC<{ user: User }> = ({ user }) => {
           </div>
         </div>
       )}
-      <EntregasView user={user} showToast={showToast} entregador />
+      <FilaEntregas user={user} showToast={showToast} modo="ENTREGADOR" />
+    </div>
+  );
+};
+
+/**
+ * BLOCO 13: Tela do SECRETARIO da base fisica — separacao de pedidos.
+ * Ve cada pedido novo (com alarme sonoro), imprime o cupom identico e
+ * marca SEPARADO. Nao vende, nao entrega, nao mexe em valores.
+ */
+const SecretarioShell: React.FC<{ user: User }> = ({ user }) => {
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const showToast = useCallback((message: string, type: 'success' | 'error' = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3200);
+  }, []);
+  return (
+    <div className="space-y-4 pb-10">
+      {toast && (
+        <div className="fixed top-20 left-4 right-4 z-[300] flex justify-center pointer-events-none">
+          <div className={`${toast.type === 'success' ? 'bg-emerald-600' : 'bg-rose-600'} text-white px-6 py-3 rounded-2xl shadow-2xl font-black text-xs uppercase flex items-center gap-3 animate-in slide-in-from-top`}>
+            <i className={`fa-solid ${toast.type === 'success' ? 'fa-circle-check' : 'fa-circle-exclamation'}`}></i>{toast.message}
+          </div>
+        </div>
+      )}
+      <SecretarioView user={user} showToast={showToast} />
     </div>
   );
 };
@@ -209,7 +235,12 @@ const App: React.FC = () => {
       cargaService.getAllCargasPendentes(),
       expenseService.getAllExpenses()
     ]);
-    if (sR.status === 'fulfilled') setSales(sR.value); else console.error('[dados] sales:', sR.reason);
+    if (sR.status === 'fulfilled') {
+      // BLOCO 13: pre-venda so vira "venda" quando a entrega e confirmada.
+      // PENDENTE/EM_ROTA/FALHOU ficam fora dos relatorios de vendas e dividas.
+      setSales(sR.value.filter(s => !(s.tipoVenda === 'PRE_VENDA' && s.entregaStatus !== 'ENTREGUE')));
+    }
+    else console.error('[dados] sales:', sR.reason);
     if (cR.status === 'fulfilled') setCommissions(cR.value); else console.error('[dados] comissoes:', cR.reason);
     if (pR.status === 'fulfilled') setPayoutLogs(pR.value); else console.error('[dados] payouts:', pR.reason);
     if (mR.status === 'fulfilled') setMessages(mR.value); else console.error('[dados] mensagens:', mR.reason);
@@ -389,24 +420,26 @@ const App: React.FC = () => {
     await appSettingsService.updateSettings({ [key]: value });
   };
 
-  const addUser = async (nome: string, foto?: string, telefone?: string) => {
+  const addUser = async (nome: string, foto?: string, telefone?: string, role: 'ADMIN' | 'VENDEDOR' | 'ENTREGADOR' | 'SECRETARIO' = 'VENDEDOR') => {
     const sellerRoutes = users
       .filter(u => u.role === 'VENDEDOR' && u.rota?.startsWith('ROTA_'))
       .map(u => parseInt(u.rota!.replace('ROTA_', '')))
       .filter(n => !isNaN(n));
-    
+
     const maxRouteNum = sellerRoutes.length > 0 ? Math.max(...sellerRoutes) : 0;
     const nextRoute = `ROTA_${String(maxRouteNum + 1).padStart(2, '0')}`;
 
-    await userService.insertUser({ 
-      nome, 
-      email: `${nome.toLowerCase().replace(/\s/g, '')}@sistema.com`, 
-      role: 'VENDEDOR', 
-      ativo: true, 
-      foto, 
-      telefone, 
-      pin: '123456', 
-      rota: nextRoute 
+    // BLOCO 13: admin cria usuarios de QUALQUER perfil (vendedor, entregador,
+    // secretário, admin) com o PIN que quiser — autoridade total sobre acessos.
+    await userService.insertUser({
+      nome,
+      email: `${nome.toLowerCase().replace(/\s/g, '')}@sistema.com`,
+      role,
+      ativo: true,
+      foto,
+      telefone,
+      pin: '123456',
+      rota: role === 'VENDEDOR' ? nextRoute : '',
     });
     fetchCoreData();
   };
@@ -588,6 +621,10 @@ const App: React.FC = () => {
     }
   };
 
+  // BLOCO 13: pedidos de pre-venda pendentes criados nesta sessao — o deleteSale
+  // deles vai pela API da fila (nao pelo RPC de estorno de estoque).
+  const pvPendentesRef = useRef<Set<string>>(new Set());
+
   const processPreVenda = async (data: any): Promise<{ pedido: Sale | null; erro?: string }> => {
     try {
       const { authHeaders } = await import('@/services/userService');
@@ -615,7 +652,7 @@ const App: React.FC = () => {
         fetch('/api/send-push', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title: 'Novo Pedido (Pre-Venda)!', body: `R$ ${Number(d.sale.valor_total || 0).toFixed(2)} — entrega hoje`, url: '/' }),
+          body: JSON.stringify({ title: 'Novo Pedido (Pre-Venda)!', body: `R$ ${Number(d.sale.valor_total || 0).toFixed(2)} — entrou na fila de entregas`, url: '/' }),
         }).catch(() => {});
       } catch {}
       // Mapeia para o tipo Sale usado pelo app
@@ -632,10 +669,19 @@ const App: React.FC = () => {
         statusPagamento: 'PENDENTE',
         itens: (data.itens || []).map((i: any) => ({ produtoId: i.produtoId, quantidade: i.quantidade, precoVenda: i.precoVenda })),
         dataVencimento: s.data_vencimento ? new Date(s.data_vencimento) : undefined,
+        trocas: s.trocas || undefined,
+        tipoVenda: 'PRE_VENDA',
+        entregaStatus: 'PENDENTE',
       };
-      // Merge otimista: o cliente aparece como ATENDIDO no Roteiro do Dia
-      // na hora, sem esperar o refetch do servidor.
-      setSales(prev => (prev.some(x => x.id === mapped.id) ? prev : [mapped, ...prev]));
+      // BLOCO 13: pedido pendente — exclusao dele usa a API da fila
+      pvPendentesRef.current.add(mapped.id);
+      // Aviso de estoque principal insuficiente (nao bloqueia o pedido)
+      if (Array.isArray(d.avisos) && d.avisos.length > 0) {
+        const linhas = d.avisos.map((a: any) => `${a.produto}: pediu ${a.solicitado}, tem ${a.disponivel}`).join('\n');
+        setAdminNotification(`Atencao — estoque principal baixo:\n${linhas}`);
+      }
+      // NAO entra no estado "sales" (venda so existe apos a entrega confirmada).
+      // O cupom usa o pedido retornado direto.
       return { pedido: mapped };
     } catch (e: any) {
       console.error(e);
@@ -645,6 +691,30 @@ const App: React.FC = () => {
   };
 
   const deleteSale = async (id: string) => {
+    // BLOCO 13: pedido de pre-venda pendente — exclui pela API da fila
+    // (nao pode estornar estoque: a baixa so acontece na entrega).
+    if (pvPendentesRef.current.has(id)) {
+      try {
+        const { authHeaders } = await import('@/services/userService');
+        const res = await fetch('/api/pre-venda', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({ acao: 'EXCLUIR_VENDA', saleId: id }),
+        });
+        const d = await res.json().catch(() => null);
+        if (res.ok && d?.ok) {
+          pvPendentesRef.current.delete(id);
+          setAdminNotification('Pedido cancelado!');
+          fetchTransactionalData();
+          return;
+        }
+        setAdminNotification(String(d?.error || 'Nao foi possivel cancelar o pedido.'));
+        return;
+      } catch {
+        setAdminNotification('Sem conexao para cancelar o pedido.');
+        return;
+      }
+    }
     const success = await saleService.deleteSale(id);
     if (success) fetchTransactionalData();
   };
@@ -764,6 +834,8 @@ const App: React.FC = () => {
       <main className="container mx-auto p-4 max-w-lg">
         {currentUser.role === 'ENTREGADOR' ? (
           <EntregadorShell user={currentUser} />
+        ) : currentUser.role === 'SECRETARIO' ? (
+          <SecretarioShell user={currentUser} />
         ) : currentUser.role === 'ADMIN' ? (
           <AdminDashboard 
             {...{ products, users, cargas, cargasLoaded, clients, sales, commissions, payoutLogs, expenses, logo, margemGlobalAtiva, margemGlobalValor, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, adminNotification, companyName, companyCnpj, orderedProductIds: productOrder, categories, subcategories, clientOrder }}

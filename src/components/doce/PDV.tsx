@@ -45,6 +45,33 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const isPreVenda = modoVenda === 'PRE_VENDA' && !!processPreVenda;
   // Pre-venda: forma de pagamento que o CLIENTE escolheu pagar na entrega
   const [metodoEntrega, setMetodoEntrega] = useState<'DINHEIRO' | 'PIX' | 'BOLETO'>('DINHEIRO');
+  // BLOCO 13: condicao combinada — A VISTA (Dinheiro|Pix) ou A PRAZO (Dinheiro|Pix|Boleto)
+  const [condicaoPv, setCondicaoPv] = useState<'AVISTA' | 'APRAZO'>('AVISTA');
+  const [vencimentoPv, setVencimentoPv] = useState<string>(() => {
+    const d = new Date(); d.setDate(d.getDate() + 7);
+    return d.toISOString().slice(0, 10);
+  });
+  // BLOCO 13: trocas anotadas pelo vendedor (sai no cupom) com autocomplete de produto
+  const [trocasTexto, setTrocasTexto] = useState('');
+  const [trocasSugestao, setTrocasSugestao] = useState(false);
+
+  const trocasSugestoes = React.useMemo(() => {
+    const partes = trocasTexto.split(/[\n,]+/);
+    const ultimo = (partes[partes.length - 1] || '').trim().toLowerCase();
+    if (ultimo.length < 2) return [];
+    const jaTem = new Set(partes.slice(0, -1).map(s => s.trim().toLowerCase()));
+    return products
+      .filter(p => p.ativo && p.nome.toLowerCase().includes(ultimo) && !jaTem.has(p.nome.toLowerCase()))
+      .slice(0, 4);
+  }, [trocasTexto, products]);
+
+  const addSugestaoTroca = (nome: string) => {
+    const partes = trocasTexto.split(/[\n,]+/);
+    partes[partes.length - 1] = `1 ${nome}`;
+    setTrocasTexto(partes.join(', '));
+    setTrocasSugestao(false);
+  };
+
   // Pre-venda e pre-pedido vendem do ESTOQUE CENTRAL (nao da carga da van)
   const sellFromCentral = isPrePedido || isPreVenda;
 
@@ -404,11 +431,13 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
 
     // ===== PRE-VENDA: registra o PEDIDO (sem cobranca, sem baixa de carga) =====
     if (isPreVenda) {
-      const r = await processPreVenda!({ clientId: client.id, valorTotal: total, itens, metodoEntrega });
+      const formaFinal = condicaoPv === 'AVISTA' && metodoEntrega === 'BOLETO' ? 'DINHEIRO' : metodoEntrega;
+      const r = await processPreVenda!({ clientId: client.id, valorTotal: total, itens, formaPagamento: formaFinal, condicao: condicaoPv, vencimento: condicaoPv === 'APRAZO' ? vencimentoPv : undefined, trocas: trocasTexto.trim() });
       if (r.pedido) {
         const pedido = r.pedido;
         localStorage.removeItem(cartKey);
         setCart({});
+        setTrocasTexto('');
         lastFinishedSaleRef.current = pedido;
         let comissaoTotal = 0;
         itens.forEach(item => {
@@ -474,8 +503,20 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         troca: isTrocaActive ? vt : 0,
         isPrazo: metodo === 'A_PRAZO',
         clientName: client.nomeFantasia,
-        sale: newSale,
+        sale: { ...newSale, trocas: trocasTexto.trim() || undefined },
       });
+      // BLOCO 13: persiste as trocas da venda de pronta entrega (best-effort)
+      if (trocasTexto.trim()) {
+        try {
+          const { authHeaders } = await import('@/services/userService');
+          fetch('/api/sales/trocas', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            body: JSON.stringify({ saleId: newSale.id, trocas: trocasTexto.trim() }),
+          }).catch(() => {});
+        } catch {}
+        setTrocasTexto('');
+      }
     } else {
       isFinalizingRef.current = false; // Libera se falhou
     }
@@ -605,7 +646,13 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               valorPago: 0, 
               metodoPagamento: (isPreVenda ? metodoEntrega : metodo) as any, 
               statusPagamento: metodo === 'A_PRAZO' ? 'PENDENTE' : 'PAGO', 
-              itens: getOrderedItems() 
+              itens: getOrderedItems(),
+              // BLOCO 13: o preview ja mostra o cupom FINAL (trocas + forma combinada)
+              trocas: trocasTexto.trim() || undefined,
+              tipoVenda: isPreVenda ? 'PRE_VENDA' : 'PRONTA',
+              entregaStatus: isPreVenda ? 'PENDENTE' : undefined,
+              detalhePagamento: isPreVenda ? `PRE-VENDA — cobrar ${condicaoPv === 'AVISTA' && metodoEntrega === 'BOLETO' ? 'DINHEIRO' : metodoEntrega} na entrega (${condicaoPv === 'APRAZO' ? 'A PRAZO' : 'A VISTA'})` : undefined,
+              dataVencimento: isPreVenda && condicaoPv === 'APRAZO' ? new Date(`${vencimentoPv}T23:59:59-03:00`) : undefined,
             }} 
             client={client} 
             products={products} 
@@ -825,6 +872,30 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           {isTrocaActive && <input type="number" value={valorTroca} onChange={e => setValorTroca(e.target.value)} placeholder="R$ 0.00" className="w-24 bg-white border border-orange-100 rounded-lg text-[11px] font-black text-orange-600 p-2 text-right outline-none" />}
         </div>
 
+        {/* BLOCO 13: TROCAS — anotacao que sai impressa no cupom (PE e PV) */}
+        <div className="px-1 pb-1 relative">
+          <div className="flex items-center gap-2">
+            <i className="fa-solid fa-right-left text-orange-400 text-[10px]"></i>
+            <input
+              value={trocasTexto}
+              onChange={e => { setTrocasTexto(e.target.value); setTrocasSugestao(true); }}
+              onFocus={() => setTrocasSugestao(true)}
+              placeholder="Trocas: ex. 1 Lays sour cream 62g"
+              className="flex-1 bg-white border border-orange-100 rounded-xl text-[11px] font-bold text-orange-700 px-3 py-2 outline-none focus:ring-2 focus:ring-orange-100"
+            />
+          </div>
+          {trocasSugestao && trocasSugestoes.length > 0 && (
+            <div className="absolute bottom-full left-1 right-4 mb-1 bg-white border border-gray-100 rounded-xl shadow-lg overflow-hidden z-20">
+              {trocasSugestoes.map(p => (
+                <button key={p.id} onClick={() => addSugestaoTroca(p.nome)} className="w-full text-left px-3 py-2.5 text-[11px] font-bold text-gray-700 hover:bg-orange-50 active:bg-orange-100 flex items-center gap-2">
+                  <i className="fa-solid fa-plus text-orange-400 text-[9px]"></i>{p.nome}
+                </button>
+              ))}
+              <p className="px-3 py-1.5 text-[8px] font-bold text-gray-300 uppercase bg-gray-50">Toque para adicionar — separe por vírgula</p>
+            </div>
+          )}
+        </div>
+
         <div className="flex justify-between items-end px-1">
           <div>
             <p className="text-[9px] font-black text-gray-400 uppercase mb-0.5">
@@ -860,16 +931,34 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
 
               {isPreVenda ? (
                 <div className="mb-6 animate-in fade-in duration-300">
-                  <p className="text-[9px] font-black text-gray-400 uppercase text-center mb-2">O cliente vai pagar a entrega com:</p>
+                  <p className="text-[9px] font-black text-gray-400 uppercase text-center mb-2">Pagamento combinado com o cliente</p>
+                  {/* BLOCO 13: condicao — A VISTA ou A PRAZO (regra do dono) */}
+                  <div className="flex gap-1.5 mb-3 justify-center">
+                    <button onClick={() => { setCondicaoPv('AVISTA'); if (metodoEntrega === 'BOLETO') setMetodoEntrega('DINHEIRO'); }} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${condicaoPv === 'AVISTA' ? 'bg-emerald-600 text-white shadow-md' : 'bg-gray-50 text-gray-400'}`}>
+                      <i className="fa-solid fa-money-bill-wave mr-1"></i>À vista
+                    </button>
+                    <button onClick={() => setCondicaoPv('APRAZO')} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${condicaoPv === 'APRAZO' ? 'bg-indigo-600 text-white shadow-md' : 'bg-gray-50 text-gray-400'}`}>
+                      <i className="fa-regular fa-calendar mr-1"></i>A prazo
+                    </button>
+                  </div>
                   <div className="flex gap-1.5 mb-4 justify-center">
-                    {(['DINHEIRO', 'PIX', 'BOLETO'] as const).map(m => (
-                      <button key={m} onClick={() => setMetodoEntrega(m)} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${metodoEntrega === m ? 'bg-emerald-600 text-white shadow-md' : 'bg-gray-50 text-gray-400'}`}>{m}</button>
+                    {(condicaoPv === 'AVISTA' ? ['DINHEIRO', 'PIX'] as const : ['DINHEIRO', 'PIX', 'BOLETO'] as const).map(m => (
+                      <button key={m} onClick={() => setMetodoEntrega(m)} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${metodoEntrega === m ? 'bg-emerald-600 text-white shadow-md' : 'bg-gray-50 text-gray-400'}`}>{m === 'DINHEIRO' ? 'Dinheiro' : m}</button>
                     ))}
                   </div>
+                  {condicaoPv === 'APRAZO' && (
+                    <div className="mb-3">
+                      <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Vencimento do prazo</label>
+                      <input type="date" value={vencimentoPv} onChange={e => setVencimentoPv(e.target.value)}
+                        className="w-full p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-[12px] font-black text-gray-700 text-center outline-none focus:ring-2 focus:ring-indigo-100" />
+                    </div>
+                  )}
                   <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 text-center">
                     <i className="fa-solid fa-clipboard-list text-emerald-500 text-lg"></i>
-                    <p className="text-[10px] font-black text-emerald-700 uppercase mt-1">Entregador cobra {metodoEntrega === 'PIX' ? 'Pix' : metodoEntrega.toLowerCase()} na entrega</p>
-                    <p className="text-[9px] text-emerald-600/70 font-semibold mt-0.5">O pedido entra na rota de entrega de hoje. Finalize o dia para gerar a rota.</p>
+                    <p className="text-[10px] font-black text-emerald-700 uppercase mt-1">
+                      Entregador cobra {metodoEntrega === 'PIX' ? 'Pix' : metodoEntrega.toLowerCase()} na entrega ({condicaoPv === 'AVISTA' ? 'à vista' : 'a prazo'})
+                    </p>
+                    <p className="text-[9px] text-emerald-600/70 font-semibold mt-0.5">O pedido entra na fila de entregas na hora — o entregador entrega quando puder.</p>
                   </div>
                 </div>
               ) : (

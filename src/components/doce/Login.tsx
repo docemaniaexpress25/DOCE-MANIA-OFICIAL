@@ -13,8 +13,9 @@ interface LoginProps {
   onRetry?: () => void;
 }
 
-// Acesso oculto do ENTREGADOR (revelado junto ao admin pelos 5 toques no logo).
-// Nao consta na lista de usuarios; o PIN e validado no servidor (1234).
+// Acesso oculto do ENTREGADOR e do SECRETARIO (revelados junto ao admin pelos
+// 5 toques no logo). Se o admin criar usuarios REAIS com esses perfis, os
+// pseudo-acessos somem automaticamente (prioridade para o usuario real).
 const ENTREGADOR_USER: User = {
   id: 'ENTREGADOR',
   nome: 'Entregador',
@@ -22,12 +23,19 @@ const ENTREGADOR_USER: User = {
   role: 'ENTREGADOR',
   ativo: true,
 };
+const SECRETARIO_USER: User = {
+  id: 'SECRETARIO',
+  nome: 'Secretário (base)',
+  email: '',
+  role: 'SECRETARIO',
+  ativo: true,
+};
 
 const roleLabel = (role: string) =>
-  role === 'ADMIN' ? 'Administrador' : role === 'ENTREGADOR' ? 'Entregador' : 'Vendedor';
+  role === 'ADMIN' ? 'Administrador' : role === 'ENTREGADOR' ? 'Entregador' : role === 'SECRETARIO' ? 'Secretário' : 'Vendedor';
 
 const roleIcon = (role: string) =>
-  role === 'ADMIN' ? 'fa-lock' : role === 'ENTREGADOR' ? 'fa-truck-fast' : 'fa-user-shield';
+  role === 'ADMIN' ? 'fa-lock' : role === 'ENTREGADOR' ? 'fa-truck-fast' : role === 'SECRETARIO' ? 'fa-boxes-stacked' : 'fa-user-shield';
 
 const Login: React.FC<LoginProps> = ({ users, onLogin, logo, status = 'OK', onRetry }) => {
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
@@ -157,10 +165,13 @@ const Login: React.FC<LoginProps> = ({ users, onLogin, logo, status = 'OK', onRe
     );
   }
 
-  // Filtra os usuários: se não estiver desbloqueado, remove os administradores da lista
-  const visibleUsers = isAdminUnlocked 
-    ? users 
-    : users.filter(u => u.role !== 'ADMIN');
+  // Filtra os usuarios: sem desbloqueio so o VENDEDOR aparece
+  // (admin, entregador e secretario ficam escondidos atras dos 5 toques)
+  const temEntregadorReal = users.some(u => u.role === 'ENTREGADOR');
+  const temSecretarioReal = users.some(u => u.role === 'SECRETARIO');
+  const visibleUsers = isAdminUnlocked
+    ? users
+    : users.filter(u => u.role === 'VENDEDOR');
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-blue-600 p-6">
@@ -203,15 +214,16 @@ const Login: React.FC<LoginProps> = ({ users, onLogin, logo, status = 'OK', onRe
             >
               <div className="flex flex-col items-start">
                 <span className="text-sm">{user.nome}</span>
-                <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded ${user.role === 'ADMIN' ? 'bg-orange-100 text-orange-600' : user.role === 'ENTREGADOR' ? 'bg-emerald-100 text-emerald-600' : 'bg-blue-100 text-blue-600'}`}>
+                <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded ${user.role === 'ADMIN' ? 'bg-orange-100 text-orange-600' : user.role === 'ENTREGADOR' ? 'bg-emerald-100 text-emerald-600' : user.role === 'SECRETARIO' ? 'bg-slate-200 text-slate-600' : 'bg-blue-100 text-blue-600'}`}>
                   {user.role}
                 </span>
               </div>
               <i className="fa-solid fa-chevron-right text-gray-300 group-hover:text-blue-500 transition-colors"></i>
             </button>
           ))}
-          {/* ENTREGADOR: liberado junto com o admin (5 toques no logo) */}
-          {isAdminUnlocked && (
+          {/* ENTREGADOR + SECRETARIO: liberados junto com o admin (5 toques no logo).
+              Se existir usuario real criado pelo admin, o pseudo-acesso some. */}
+          {isAdminUnlocked && !temEntregadorReal && (
             <button
               onClick={() => handleSelectUser(ENTREGADOR_USER)}
               className="w-full bg-emerald-50 hover:bg-emerald-100 text-gray-800 font-bold py-4 px-6 rounded-2xl border border-emerald-100 flex items-center justify-between transition-all active:scale-95 group"
@@ -223,6 +235,20 @@ const Login: React.FC<LoginProps> = ({ users, onLogin, logo, status = 'OK', onRe
                 </span>
               </div>
               <i className="fa-solid fa-truck-fast text-emerald-400 group-hover:text-emerald-500 transition-colors"></i>
+            </button>
+          )}
+          {isAdminUnlocked && !temSecretarioReal && (
+            <button
+              onClick={() => handleSelectUser(SECRETARIO_USER)}
+              className="w-full bg-slate-50 hover:bg-slate-100 text-gray-800 font-bold py-4 px-6 rounded-2xl border border-slate-100 flex items-center justify-between transition-all active:scale-95 group"
+            >
+              <div className="flex flex-col items-start">
+                <span className="text-sm">Secretário (base)</span>
+                <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded bg-slate-200 text-slate-600">
+                  Separação de pedidos
+                </span>
+              </div>
+              <i className="fa-solid fa-boxes-stacked text-slate-400 group-hover:text-slate-500 transition-colors"></i>
             </button>
           )}
           {!isAdminUnlocked && users.some(u => u.role === 'ADMIN') && (

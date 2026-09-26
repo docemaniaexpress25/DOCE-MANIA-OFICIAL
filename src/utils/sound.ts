@@ -67,4 +67,24 @@ export const sounds = {
     playTone(800, 0, 0.1, 0.2, 'sine');
     playTone(1000, 0.08, 0.12, 0.2, 'sine');
   },
+
+  /**
+   * BLOCO 13: alarme de NOVO PEDIDO para o secretário da base.
+   * Sirene curta de 3 bip — toca em loop enquanto o pedido novo
+   * não for reconhecido (o componente controla o interval).
+   */
+  alarmeNovoPedido(): void {
+    if (!this.isSupported()) return;
+    playTone(1400, 0, 0.12, 0.3, 'square');
+    playTone(1000, 0.16, 0.12, 0.3, 'square');
+    playTone(1400, 0.32, 0.12, 0.3, 'square');
+    playTone(1000, 0.48, 0.18, 0.3, 'square');
+  },
+
+  /** Bip curto de confirmação de separado */
+  separado(): void {
+    if (!this.isSupported()) return;
+    playTone(900, 0, 0.08, 0.25, 'sine');
+    playTone(1300, 0.09, 0.1, 0.25, 'sine');
+  },
 };

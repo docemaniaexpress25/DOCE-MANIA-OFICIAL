@@ -10,7 +10,7 @@ import PDV from '@/components/doce/PDV';
 import Cupom from '@/components/doce/Cupom';
 import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
 import ConfirmModal from '@/components/doce/ConfirmModal';
-import EntregasView from '@/components/doce/EntregasView';
+import FilaEntregas from '@/components/doce/FilaEntregas';
 
 
 import ClientHistory from '@/components/doce/ClientHistory';
@@ -207,11 +207,9 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       setGpsPinStr(client.pinLocalizacao || '');
       setGpsStatus(client.pinLocalizacao && client.pinLocalizacao.length >= 5 ? 'done' : 'idle');
       setClientInfoModal(client);
-    } else if (user.preVenda) {
-      // Pre-vendedor (Edipo): escolhe pronta entrega x pre-venda antes do PDV
-      setModoSheet(client);
     } else {
-      setSelectedClient(client);
+      // BLOCO 13: TODOS os vendedores escolhem pronta entrega x pre-venda
+      setModoSheet(client);
     }
   };
 
@@ -265,11 +263,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       updateClient(clientInfoModal.id, updates);
     }
     setClientInfoModal(null);
-    if (user.preVenda) {
-      setModoSheet(clientInfoModal);
-    } else {
-      setSelectedClient(clientInfoModal);
-    }
+    setModoSheet(clientInfoModal);
   };
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
@@ -926,12 +920,13 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
       {activeTab !== 'HOME' && <button onClick={() => { setActiveTab('HOME'); setCreditSearch(''); }} className="w-10 h-10 bg-white text-blue-600 rounded-xl flex items-center justify-center shadow-sm border border-gray-100 mb-2 active:scale-90 transition-transform"><i className="fa-solid fa-arrow-left"></i></button>}
 
-      {activeTab === 'ENTREGAS' && <EntregasView user={user} showToast={showToast} />}
+      {activeTab === 'ENTREGAS' && <FilaEntregas user={user} showToast={showToast} modo="VENDEDOR" />}
 
       {activeTab === 'HOME' && (
         <div className="py-4 grid grid-cols-2 gap-4">
           <MenuCard icon="fa-route" title="Rota do Dia" tab="ROTEIRO" color="bg-blue-50 text-blue-600" />
-          {user.preVenda && <MenuCard icon="fa-truck" title="Entregas" tab="ENTREGAS" color="bg-emerald-50 text-emerald-600" />}
+          {/* BLOCO 13: TODO vendedor acompanha a fila de entregas dos seus pedidos (leitura) */}
+          <MenuCard icon="fa-truck" title="Entregas" tab="ENTREGAS" color="bg-emerald-50 text-emerald-600" />
           <MenuCard icon="fa-bell" title="Avisos" tab="AVISOS" color="bg-rose-50 text-rose-600" badge={atRiskClients.length > 0 ? atRiskClients.length : false} />
           <MenuCard icon="fa-truck-fast" title="Minha Carga" tab="CARGA" color="bg-purple-50 text-purple-600" badge={minhasPendentes.length > 0} />
           <MenuCard icon="fa-receipt" title="Vendas" tab="HISTORY" color="bg-blue-50 text-[#1E3A5F]" />
@@ -1716,7 +1711,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 className="py-5 rounded-2xl bg-gradient-to-br from-emerald-600 to-teal-600 text-white shadow-md active:scale-95 transition-transform">
                 <i className="fa-solid fa-clipboard-list text-lg block mb-1.5"></i>
                 <span className="text-[10px] font-black uppercase">Pre-venda</span>
-                <span className="block text-[8px] font-bold text-emerald-100 mt-0.5">Pedido p/ entrega hoje</span>
+                <span className="block text-[8px] font-bold text-emerald-100 mt-0.5">Pedido na fila — entregador entrega</span>
               </button>
             </div>
             <button onClick={() => setModoSheet(null)} className="w-full mt-3 py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Cancelar</button>

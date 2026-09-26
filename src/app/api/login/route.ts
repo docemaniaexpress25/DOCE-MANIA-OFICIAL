@@ -89,6 +89,32 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, user, token });
     }
 
+    // ---------- SECRETARIO (BLOCO 13) ----------
+    // Mesmo padrao do entregador: acesso fixo (PIN 1234) revelado pelos 5 toques.
+    // O admin tambem pode criar um usuario REAL com perfil SECRETARIO — nesse
+    // caso a tela de login esconde este pseudo-acesso e usa o usuario real.
+    if (String(userId) === 'SECRETARIO') {
+      if (pin !== '1234') {
+        return NextResponse.json({ ok: false, error: 'PIN incorreto. Tente novamente.' }, { status: 401 });
+      }
+      clearAttempts(ip);
+      const user = {
+        id: 'SECRETARIO',
+        nome: 'Secretário (base)',
+        email: '',
+        role: 'SECRETARIO',
+        ativo: true,
+        telefone: '',
+        whatsapp: '',
+        foto: null,
+        placaVeiculo: '',
+        rota: '',
+        preVenda: false,
+      };
+      const token = createSessionToken('SECRETARIO', 'SECRETARIO');
+      return NextResponse.json({ ok: true, user, token });
+    }
+
     const supabase = getServiceClient();
     // pre_venda so existe depois do Bloco 5 do SQL; enquanto isso o login NAO
     // PODE quebrar por causa dela (antes, o select 500ava para todo mundo).

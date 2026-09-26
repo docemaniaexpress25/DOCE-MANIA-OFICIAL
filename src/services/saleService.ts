@@ -29,6 +29,13 @@ export const saleService = {
       notaNumero: s.nota_numero || undefined,
       notaPdfUrl: s.nota_pdf_url || undefined,
       notaErro: s.nota_erro || undefined,
+      // Bloco 13: fila continua de pre-venda (colunas podem nao existir antes do SQL)
+      tipoVenda: s.tipo_venda || undefined,
+      entregaStatus: s.entrega_status || undefined,
+      trocas: s.trocas || undefined,
+      prioridade: typeof s.prioridade === 'number' ? s.prioridade : undefined,
+      separado: typeof s.separado === 'boolean' ? s.separado : undefined,
+      entregadorId: s.entregador_id || undefined,
     })) as Sale[];
   },
 

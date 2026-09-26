@@ -1,4 +1,4 @@
-export type UserRole = 'ADMIN' | 'VENDEDOR' | 'ENTREGADOR';
+export type UserRole = 'ADMIN' | 'VENDEDOR' | 'ENTREGADOR' | 'SECRETARIO';
 
 export interface User {
   id: string;
@@ -114,6 +114,17 @@ export interface Sale {
   itens: SaleItem[];
   dataVencimento?: Date;
   comprovanteFoto?: string;
+  /** Bloco 13: fila continua de pre-venda */
+  tipoVenda?: 'PRONTA' | 'PRE_VENDA';
+  entregaStatus?: string; // PENDENTE | EM_ROTA | ENTREGUE | FALHOU
+  /** Trocas anotadas pelo vendedor (impressas no cupom) ex.: "1 Lays sour cream 62g" */
+  trocas?: string;
+  /** 0 = normal, 1 = PRIORIDADE 1, 2 = PRIORIDADE 2 */
+  prioridade?: number;
+  /** Secretario da base separou o pedido (card cinza) */
+  separado?: boolean;
+  /** Quem fez a entrega (nominal) */
+  entregadorId?: string;
   /** Nota fiscal (Bloco 10) — preenchido via /api/notas */
   notaStatus?: NotaStatus;
   notaNumero?: string;
@@ -165,6 +176,20 @@ export interface DailyRouteState {
   date: string; 
   clientIds: string[]; 
   skippedClientIds: string[]; 
+}
+
+/** Bloco 13: fechamento de caixa do entregador (dinheiro em especie) */
+export interface CaixaFechamento {
+  id: string;
+  entregadorId: string;
+  data: string;
+  valorDinheiro: number;
+  valorPix: number;
+  qtdEntregas: number;
+  obs?: string;
+  confirmado: boolean;
+  confirmadoEm?: string;
+  criadoEm: string;
 }
 
 export interface AppSettings {

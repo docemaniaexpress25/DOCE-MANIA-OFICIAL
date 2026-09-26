@@ -5,7 +5,7 @@ import { sessionFromRequest } from '@/lib/session';
 /**
  * POST /api/pre-venda/venda
  * Cria um PEDIDO de pre-venda (vendedor trabalha com o estoque principal,
- * entrega acontece depois na rota do dia).
+ * entrega acontece depois na FILA CONTINUA — Bloco 13).
  *
  * - Exige sessao (Bearer token): o vendedor_id vem SEMPRE da sessao.
  * - NAO baixa a carga da van (diferente do RPC processar_venda_v2).
@@ -13,9 +13,20 @@ import { sessionFromRequest } from '@/lib/session';
  *   e confirmada (acao ENTREGUE em /api/pre-venda -> RPC baixar_estoque_principal).
  * - A venda nasce tipo_venda='PRE_VENDA', entrega_status='PENDENTE',
  *   status_pagamento='PENDENTE' (pagamento coletado na entrega).
+ *
+ * BLOCO 13:
+ * - trocas: anotacao livre do vendedor (sai impressa no cupom)
+ * - condicao: 'AVISTA' (DINHEIRO|PIX) ou 'APRAZO' (DINHEIRO|PIX|BOLETO)
+ *   -> regra do dono: a vista nao tem boleto; a prazo aceita boleto
+ * - vencimento: data para a prazo (opcional; default = +7 dias)
+ * - avisos: estoque principal insuficiente NAO bloqueia o pedido, mas volta
+ *   como aviso para o vendedor conferir.
  */
 
 interface ItemPayload { produtoId?: string; produtoid?: string; quantidade?: number; precoVenda?: number; precovenda?: number; }
+
+const TZ = 'America/Sao_Paulo';
+const OFF = '-03:00';
 
 export async function POST(req: NextRequest) {
   if (!isServerSupabaseConfigured()) {
@@ -27,6 +38,10 @@ export async function POST(req: NextRequest) {
   const session = sessionFromRequest(req);
   if (!session) {
     return NextResponse.json({ ok: false, error: 'Sessao expirada. Entre novamente.' }, { status: 401 });
+  }
+  // So VENDEDOR (e admin, se preciso) geram pre-venda. Entregador/secretario nao vendem.
+  if (session.perfil === 'ENTREGADOR' || session.perfil === 'SECRETARIO') {
+    return NextResponse.json({ ok: false, error: 'Somente vendedores registram pre-vendas.' }, { status: 403 });
   }
 
   try {
@@ -52,11 +67,36 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: 'Itens do pedido invalidos.' }, { status: 400 });
     }
 
-    const supabase = getServiceClient();
+    // ---------- Forma de pagamento combinada (regra do dono) ----------
+    // A VISTA: DINHEIRO | PIX        A PRAZO: DINHEIRO | PIX | BOLETO
+    const condicaoRaw = String((body as any).condicao || '').toUpperCase();
+    const condicao = condicaoRaw === 'APRAZO' ? 'APRAZO' : 'AVISTA';
+    const formasValidas = condicao === 'APRAZO' ? ['DINHEIRO', 'PIX', 'BOLETO'] : ['DINHEIRO', 'PIX'];
+    const metodoRaw = String((body as any).formaPagamento ?? (body as any).metodoEntrega ?? '').toUpperCase();
+    const forma = formasValidas.includes(metodoRaw) ? metodoRaw : 'DINHEIRO';
 
-    // Forma de pagamento que o CLIENTE escolheu para o entregador cobrar
-    const metodoRaw = String((body as any).metodoEntrega || '').toUpperCase();
-    const metodoEntrega = ['DINHEIRO', 'PIX', 'BOLETO'].includes(metodoRaw) ? metodoRaw : 'DINHEIRO';
+    // Vencimento: a prazo usa a data escolhida (default +7 dias); a vista = hoje
+    let vencimentoIso: string;
+    if (condicao === 'APRAZO') {
+      const vRaw = String((body as any).vencimento || '');
+      const vDate = vRaw ? new Date(`${vRaw}T23:59:59${OFF}`) : null;
+      if (vDate && isFinite(vDate.getTime())) {
+        vencimentoIso = vDate.toISOString();
+      } else {
+        const d = new Date();
+        d.setDate(d.getDate() + 7);
+        const dStr = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+        vencimentoIso = new Date(`${dStr}T23:59:59${OFF}`).toISOString();
+      }
+    } else {
+      const dayStr = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+      vencimentoIso = new Date(`${dayStr}T23:59:59${OFF}`).toISOString();
+    }
+
+    // Trocas: texto livre do vendedor (impresso no cupom)
+    const trocas = String((body as any).trocas || '').trim().slice(0, 500) || null;
+
+    const supabase = getServiceClient();
 
     // Cliente existe?
     const { data: client, error: clientErr } = await supabase
@@ -64,27 +104,39 @@ export async function POST(req: NextRequest) {
     if (clientErr) throw clientErr;
     if (!client) return NextResponse.json({ ok: false, error: 'Cliente nao encontrado.' }, { status: 404 });
 
-    // Pre-venda e para entrega no mesmo dia: vencimento = hoje 23:59 (America/Sao_Paulo)
-    const dayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-    const vencimentoIso = new Date(`${dayStr}T23:59:59-03:00`).toISOString();
+    const etiquetaCond = condicao === 'APRAZO' ? 'A PRAZO' : 'A VISTA';
 
-    const { data: sale, error: saleErr } = await supabase
+    const basePayload: any = {
+      vendedor_id: session.sub,
+      client_id: clientId,
+      valor_total: valorTotal,
+      valor_pago: 0,
+      metodo_pagamento: 'A_PRAZO',
+      detalhe_pagamento: `PRE-VENDA — cobrar ${forma} na entrega (${etiquetaCond})`,
+      status_pagamento: 'PENDENTE',
+      data_venda: new Date().toISOString(),
+      data_vencimento: vencimentoIso,
+      tipo_venda: 'PRE_VENDA',
+      entrega_status: 'PENDENTE',
+    };
+    // Bloco 13 (colunas podem nao existir antes do SQL rodar)
+    const bloco13 = { trocas };
+    let payload = { ...basePayload, ...bloco13 };
+
+    let { data: sale, error: saleErr } = await supabase
       .from('sales')
-      .insert({
-        vendedor_id: session.sub,
-        client_id: clientId,
-        valor_total: valorTotal,
-        valor_pago: 0,
-        metodo_pagamento: 'A_PRAZO',
-        detalhe_pagamento: `PRE-VENDA — cobrar ${metodoEntrega} na entrega`,
-        status_pagamento: 'PENDENTE',
-        data_venda: new Date().toISOString(),
-        data_vencimento: vencimentoIso,
-        tipo_venda: 'PRE_VENDA',
-        entrega_status: 'PENDENTE',
-      })
-      .select('id, valor_total, valor_pago, metodo_pagamento, detalhe_pagamento, status_pagamento, data_venda, data_vencimento, tipo_venda, entrega_status')
+      .insert(payload)
+      .select('id, valor_total, valor_pago, metodo_pagamento, detalhe_pagamento, status_pagamento, data_venda, data_vencimento, tipo_venda, entrega_status, trocas')
       .single();
+
+    if (saleErr && /trocas/i.test(saleErr.message || '')) {
+      payload = { ...basePayload };
+      ({ data: sale, error: saleErr } = await supabase
+        .from('sales')
+        .insert(payload)
+        .select('id, valor_total, valor_pago, metodo_pagamento, detalhe_pagamento, status_pagamento, data_venda, data_vencimento, tipo_venda, entrega_status')
+        .single());
+    }
 
     if (saleErr || !sale) {
       const code = (saleErr as any)?.code || '';
@@ -118,7 +170,24 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: 'Erro ao gravar os itens do pedido.', detalhe: itemsErr.message }, { status: 500 });
     }
 
-    return NextResponse.json({ ok: true, sale });
+    // ---------- AVISO de estoque principal (nao bloqueia o pedido) ----------
+    const avisos: { produto: string; solicitado: number; disponivel: number }[] = [];
+    try {
+      const prodIds = [...new Set(itens.map(i => i.produtoId))];
+      const { data: prods } = await supabase
+        .from('products').select('id, nome, estoque_principal').in('id', prodIds);
+      const map: Record<string, any> = {};
+      (prods || []).forEach((p: any) => { map[p.id] = p; });
+      for (const i of itens) {
+        const p = map[i.produtoId];
+        const disp = Number(p?.estoque_principal ?? 0);
+        if (p && i.quantidade > disp) {
+          avisos.push({ produto: p.nome || 'Produto', solicitado: i.quantidade, disponivel: disp });
+        }
+      }
+    } catch { /* aviso e best-effort */ }
+
+    return NextResponse.json({ ok: true, sale, avisos: avisos.length > 0 ? avisos : undefined });
   } catch (e: any) {
     console.error('[api/pre-venda/venda] erro:', e?.message);
     return NextResponse.json({ ok: false, error: 'Erro ao registrar o pedido. Tente novamente.', detalhe: e?.message }, { status: 500 });

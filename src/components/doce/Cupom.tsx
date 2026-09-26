@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { Sale, Client, Product } from '@/lib/types';
+import { gerarCupomTexto } from '@/lib/cupomTexto';
 import { bluetoothPrinter, PrintJob } from '@/services/bluetoothPrinterService';
 import { notaService, NotaInfo } from '@/services/notaService';
 import ConfirmModal from '@/components/doce/ConfirmModal';
@@ -90,73 +91,15 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
     }
   }, [isBluetoothAvailable]);
 
+  // BLOCO 13: texto do cupom vem do gerador COMPARTILHADO (cupomTexto.ts) —
+  // vendedor, secretario, entregador e admin imprimem EXATAMENTE o mesmo cupom.
   const generateText = (width: PrinterWidth): string => {
-    const totalWidth = width === '80MM' ? 48 : 32; 
-    
-    const padR = (str: string, len: number) => str.substring(0, len).padEnd(len);
-    const padL = (str: string, len: number) => str.substring(0, len).padStart(len);
-    const center = (str: string, len: number) => {
-      const s = str.substring(0, len);
-      const spaces = Math.max(0, Math.floor((len - s.length) / 2));
-      return ' '.repeat(spaces) + s;
-    };
-
-    let t = '';
-    
-    t += '*'.repeat(totalWidth) + '\n';
-    t += center('CUPOM NAO FISCAL', totalWidth) + '\n';
-    t += '*'.repeat(totalWidth) + '\n';
-    
-    const clientName = client.nomeFantasia || 'Consumidor';
-    t += `Cliente: ${clientName}\n`;
-    t += `Data: ${new Date(sale.data).toLocaleDateString()} ${new Date(sale.data).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}\n`;
-    t += '-'.repeat(totalWidth) + '\n';
-
-    const qtyW = 4;
-    const valW = width === '80MM' ? 13 : 8;
-    const descW = totalWidth - qtyW - valW;
-
-    t += padR('DESCRICAO', descW) + padL('QTD', qtyW) + padL('VALOR', valW) + '\n';
-    t += '-'.repeat(totalWidth) + '\n';
-
-    (sale.itens || []).forEach(item => {
-      const p = products.find(prod => prod.id === item.produtoId);
-      const productName = (p?.nome ?? 'Produto');
-      
-      const qtyStr = `${item.quantidade}x`;
-      const valStr = `${(item.quantidade * item.precoVenda).toFixed(2)}`;
-
-      t += padR(productName.substring(0, descW), descW) + padL(qtyStr, qtyW) + padL(valStr, valW) + '\n';
-
-      let remaining = productName.substring(descW);
-      while (remaining.length > 0) {
-        t += padR(remaining.substring(0, totalWidth), totalWidth) + '\n';
-        remaining = remaining.substring(totalWidth);
-      }
+    return gerarCupomTexto({
+      sale: sale as any,
+      client: client as any,
+      products: products as any,
+      width,
     });
-
-    t += '-'.repeat(totalWidth) + '\n';
-    
-    const totalLabel = 'TOTAL GERAL:';
-    const totalVal = `R$ ${(sale.valorTotal || 0).toFixed(2)}`;
-    t += padR(totalLabel, totalWidth - totalVal.length) + totalVal + '\n';
-    
-    t += `Metodo: ${sale.metodoPagamento}\n`;
-    
-    if (sale.detalhePagamento) {
-      t += `Info: ${sale.detalhePagamento}\n`;
-    }
-    
-    if (sale.statusPagamento === 'PENDENTE' && sale.dataVencimento) {
-      t += `Vencimento: ${new Date(sale.dataVencimento).toLocaleDateString()}\n`;
-    }
-
-    t += '-'.repeat(totalWidth) + '\n';
-    t += center('OBRIGADO PELA PREFERENCIA!', totalWidth) + '\n';
-    t += '*'.repeat(totalWidth) + '\n';
-    t += '\n\n\n\n\n';
-
-    return t;
   };
 
   const handlePrint = useCallback(async () => {

@@ -50,6 +50,9 @@ function dayRangeIso(): { start: string; end: string } {
 const SALE_COLS = 'id, vendedor_id, client_id, valor_total, valor_pago, metodo_pagamento, detalhe_pagamento, status_pagamento, entrega_status, entrega_seq, route_id, data_venda';
 const CLIENT_COLS = 'id, nome_fantasia, endereco, bairro, telefone, localizacao, pin_localizacao';
 
+// BLOCO 13: colunas novas da fila continua (podem nao existir antes do SQL)
+const FILA_COLS_13 = `${SALE_COLS}, tipo_venda, trocas, prioridade, separado, separado_em, entregador_id, data_vencimento`;
+
 const round2 = (v: number) => Math.round(v * 100) / 100;
 
 /** Carimbo pt-BR (America/Sao_Paulo) compativel com o parser do portal do cliente:
@@ -306,6 +309,237 @@ async function checarConclusao(supabase: any, routeId: string) {
   }
 }
 
+// ============================================================================
+// BLOCO 13 — FILA CONTINUA
+// ============================================================================
+
+/** logEvento tolerante: nunca bloqueia a acao principal por falha de log */
+async function logEventoSeguro(supabase: any, routeId: string | null, saleId: string | null, userId: string, status: string, motivo?: string | null, lat?: number | null, lng?: number | null, foto?: string | null) {
+  try {
+    const row: any = { route_id: routeId, sale_id: saleId, user_id: userId, status, motivo: motivo || null, lat: typeof lat === 'number' ? lat : null, lng: typeof lng === 'number' ? lng : null };
+    if (foto && (await hasBoletoFotoColumn())) row.foto = foto;
+    try {
+      await supabase.from('entrega_eventos').insert(row);
+    } catch (e: any) {
+      // route_id pode ser NOT NULL em bancos antigos: tenta sem rota
+      if (routeId === null) {
+        const { route_id: _drop, ...semRota } = row;
+        try { await supabase.from('entrega_eventos').insert(semRota); } catch { /* ignora */ }
+      } else { throw e; }
+    }
+  } catch (e: any) {
+    console.error('[pre-venda] logEvento falhou (nao bloqueia):', e?.message);
+  }
+}
+
+/** Update de venda tolerante: se as colunas do Bloco 13 nao existem, refaz sem elas */
+async function updateSaleFlex(supabase: any, saleId: string, payload: Record<string, unknown>): Promise<{ ok: boolean; sem13: boolean; erro?: string }> {
+  const { error } = await supabase.from('sales').update(payload).eq('id', saleId);
+  if (!error) return { ok: true, sem13: false };
+  const msg = String(error.message || '');
+  if (/trocas|prioridade|separado|entregador_id/i.test(msg)) {
+    const flex = { ...payload };
+    delete flex.trocas; delete flex.prioridade; delete flex.separado; delete flex.separado_em; delete flex.entregador_id;
+    const { error: err2 } = await supabase.from('sales').update(flex).eq('id', saleId);
+    if (!err2) return { ok: true, sem13: true };
+    return { ok: false, sem13: true, erro: err2.message };
+  }
+  return { ok: false, sem13: false, erro: error.message };
+}
+
+/** Monta o item da fila (formato UI) a partir das rows de sales */
+async function enrichFila(supabase: any, salesRows: any[]) {
+  if (salesRows.length === 0) return [];
+  const clientIds = [...new Set(salesRows.map((s: any) => s.client_id).filter(Boolean))];
+  const saleIds = salesRows.map((s: any) => s.id);
+  const vendedorIds = [...new Set(salesRows.map((s: any) => s.vendedor_id).filter(Boolean))];
+
+  const [clientsRes, itemsRes, usersRes, fotosRes] = await Promise.all([
+    supabase.from('clients').select(CLIENT_COLS).in('id', clientIds),
+    supabase.from('sale_items').select('sale_id, produto_id, quantidade, preco_venda').in('sale_id', saleIds),
+    vendedorIds.length > 0 ? supabase.from('app_users').select('id, nome').in('id', vendedorIds) : Promise.resolve({ data: [] }),
+    hasBoletoFotoColumn().then(ok =>
+      ok ? supabase.from('entrega_eventos').select('sale_id').not('foto', 'is', null).in('sale_id', saleIds)
+         : Promise.resolve({ data: [] as any[] })),
+  ]);
+
+  const clientMap: Record<string, any> = {};
+  (clientsRes.data || []).forEach((c: any) => { clientMap[c.id] = c; });
+  const userMap: Record<string, string> = {};
+  (usersRes.data || []).forEach((u: any) => { userMap[u.id] = u.nome; });
+
+  const prodIds = [...new Set((itemsRes.data || []).map((i: any) => i.produto_id))];
+  const prodMap: Record<string, string> = {};
+  if (prodIds.length > 0) {
+    const { data: prods } = await supabase.from('products').select('id, nome').in('id', prodIds);
+    (prods || []).forEach((p: any) => { prodMap[p.id] = p.nome; });
+  }
+
+  const itemsBySale: Record<string, any[]> = {};
+  (itemsRes.data || []).forEach((i: any) => {
+    (itemsBySale[i.sale_id] = itemsBySale[i.sale_id] || []).push({
+      nome: prodMap[i.produto_id] || 'Produto',
+      produtoId: i.produto_id,
+      quantidade: i.quantidade,
+      precoVenda: Number(i.preco_venda || 0),
+    });
+  });
+
+  const temFotoSet: Record<string, boolean> = {};
+  (fotosRes.data || []).forEach((f: any) => { temFotoSet[f.sale_id] = true; });
+
+  return salesRows.map((s: any) => {
+    const c = clientMap[s.client_id] || {};
+    let lat: number | null = null, lng: number | null = null;
+    if (c.localizacao && typeof c.localizacao.lat === 'number') { lat = c.localizacao.lat; lng = c.localizacao.lng; }
+    else if (c.pin_localizacao && c.pin_localizacao.includes(',')) {
+      const [a, b] = String(c.pin_localizacao).split(',').map((x: string) => parseFloat(x.trim()));
+      if (isFinite(a) && isFinite(b)) { lat = a; lng = b; }
+    }
+    const det = String(s.detalhe_pagamento || '');
+    const condicao = /A PRAZO/i.test(det) ? 'APRAZO' : 'AVISTA';
+    return {
+      saleId: s.id,
+      numero: `PV-${String(s.id).replace(/-/g, '').slice(-6).toUpperCase()}`,
+      dataVenda: s.data_venda,
+      entregaStatus: s.entrega_status,
+      valorTotal: Number(s.valor_total),
+      valorPago: Number(s.valor_pago || 0),
+      statusPagamento: s.status_pagamento,
+      formaPgto: formaPgtoDeSale(s),
+      condicao,
+      trocas: s.trocas ?? null,
+      prioridade: typeof s.prioridade === 'number' ? s.prioridade : 0,
+      separado: !!s.separado,
+      separadoEm: s.separado_em ?? null,
+      vendedorId: s.vendedor_id,
+      vendedorNome: userMap[s.vendedor_id] || '',
+      temFoto: !!temFotoSet[s.id],
+      dataVencimento: s.data_vencimento ?? null,
+      cliente: {
+        id: s.client_id,
+        nome: c.nome_fantasia || 'Cliente',
+        endereco: c.endereco || '',
+        bairro: c.bairro || '',
+        telefone: c.telefone || '',
+        lat, lng,
+      },
+      itens: itemsBySale[s.id] || [],
+    };
+  });
+}
+
+/** GET ?fila=1 — a fila viva: pendentes (P1 -> P2 -> mais antigo) + falhados + entregues de hoje */
+async function getFila(supabase: any, userId: string, perfil: string) {
+  const { start, end } = dayRangeIso();
+  const proprio = perfil === 'VENDEDOR';
+
+  // ---- Fila ativa: PENDENTE/EM_ROTA (inclui legado) — qualquer dia (fila viva) ----
+  let qAtiva = supabase
+    .from('sales')
+    .select(FILA_COLS_13)
+    .eq('tipo_venda', 'PRE_VENDA')
+    .in('entrega_status', ['PENDENTE', 'EM_ROTA'])
+    .order('data_venda', { ascending: true });
+  if (proprio) qAtiva = qAtiva.eq('vendedor_id', userId);
+  const { data: ativas, error: ativaErr } = await qAtiva;
+
+  // Bloco 13 nao rodou: refaz sem as colunas novas
+  let sem13 = false;
+  let ativasRows = ativas;
+  if (ativaErr && /trocas|prioridade|separado|entregador_id/i.test(String(ativaErr.message || ''))) {
+    sem13 = true;
+    let q2 = supabase
+      .from('sales')
+      .select(SALE_COLS)
+      .eq('tipo_venda', 'PRE_VENDA')
+      .in('entrega_status', ['PENDENTE', 'EM_ROTA'])
+      .order('data_venda', { ascending: true });
+    if (proprio) q2 = q2.eq('vendedor_id', userId);
+    const { data } = await q2;
+    ativasRows = data;
+  } else if (ativaErr) {
+    throw ativaErr;
+  }
+
+  // ---- Falhados (ultimos 7 dias) ----
+  const dias7 = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
+  let qFal = supabase
+    .from('sales')
+    .select(FILA_COLS_13)
+    .eq('tipo_venda', 'PRE_VENDA')
+    .eq('entrega_status', 'FALHOU')
+    .gte('data_venda', dias7)
+    .order('data_venda', { ascending: false });
+  if (proprio) qFal = qFal.eq('vendedor_id', userId);
+  const { data: falhados } = await qFal;
+
+  // ---- Entregues HOJE (para o resumo/transparencia) ----
+  let qEnt = supabase
+    .from('sales')
+    .select(FILA_COLS_13)
+    .eq('tipo_venda', 'PRE_VENDA')
+    .eq('entrega_status', 'ENTREGUE')
+    .gte('data_venda', dias7)
+    .order('data_venda', { ascending: false });
+  if (proprio) qEnt = qEnt.eq('vendedor_id', userId);
+  const { data: entreguesRows } = await qEnt;
+  // entregues hoje = data_venda em qualquer dia, mas o evento ENTREGUE de hoje:
+  // simplificacao segura: usamos os eventos de hoje para filtrar
+  const { data: evHoje } = await supabase
+    .from('entrega_eventos')
+    .select('sale_id, status, motivo, criado_em')
+    .eq('status', 'ENTREGUE')
+    .gte('criado_em', start).lte('criado_em', end);
+  const entreguesHojeIds = new Set((evHoje || []).map((e: any) => e.sale_id));
+  const entreguesHoje = (entreguesRows || []).filter((s: any) => entreguesHojeIds.has(s.id));
+
+  const fila = (await enrichFila(supabase, ativasRows || []))
+    .sort((a: any, b: any) => (a.prioridade - b.prioridade) || (new Date(a.dataVenda).getTime() - new Date(b.dataVenda).getTime()));
+
+  // Extrai valor do recebimento do motivo ("R$ 12,34" ou "R$ 12.34")
+  const valorDeMotivo = (m: string | null): number => {
+    const s = String(m || '');
+    const mm = s.match(/R\$ ?([\d.]+),(\d{2})/) || s.match(/R\$ ?([\d]+\.[\d]{2})/);
+    if (!mm) return 0;
+    return Number(mm[0].replace(/[R$\s]/g, '').replace(',', '.'));
+  };
+
+  // Caixa do dia (dinheiro/pix recebidos hoje nas entregas) — estimativa a partir dos eventos
+  let dinheiroHoje = 0, pixHoje = 0;
+  for (const e of evHoje || []) {
+    const m = String(e.motivo || '');
+    if (!/R\$/.test(m)) continue;
+    const v = valorDeMotivo(m);
+    if (!v) continue;
+    if (/pix/i.test(m)) pixHoje = round2(pixHoje + v);
+    else if (/dinheiro/i.test(m)) dinheiroHoje = round2(dinheiroHoje + v);
+  }
+
+  const filaFmt = fila.map((p: any) => ({
+    ...p,
+    motivo: null,
+  }));
+
+  return {
+    hoje: todayStr(),
+    fila: filaFmt,
+    falhados: await enrichFila(supabase, falhados || []),
+    entreguesHoje: await enrichFila(supabase, entreguesHoje),
+    resumo: {
+      naFila: filaFmt.length,
+      valorFila: round2(filaFmt.reduce((a: number, p: any) => a + p.valorTotal, 0)),
+      atrasados: filaFmt.filter((p: any) => (Date.now() - new Date(p.dataVenda).getTime()) > 24 * 3600 * 1000).length,
+      separados: filaFmt.filter((p: any) => p.separado).length,
+      entreguesHoje: entreguesHoje.length,
+      valorEntregueHoje: round2(entreguesHoje.reduce((a: number, s: any) => a + Number(s.valor_total || 0), 0)),
+      falhados: (falhados || []).length,
+    },
+    caixa: { dinheiroHoje, pixHoje },
+    sem13,
+  };
+}
+
 /**
  * Gera (ou REGERA) a rota de HOJE de um vendedor.
  * Regeneracao: permitida enquanto NENHUMA entrega da rota estiver registrada
@@ -423,6 +657,33 @@ export async function GET(req: NextRequest) {
         hoje: todayStr(), rotas: [], rota: null, paradas: [],
         pendentes: { count: 0, valor: 0 }, migracaoPendente: true,
       });
+    }
+
+    // ---------- BLOCO 13: fila continua ----------
+    if (url.searchParams.get('fila') === '1') {
+      const fila = await getFila(supabase, session.sub, session.perfil);
+
+      // Caixa do dia: entregador ve o dele; admin ve todos + status de confirmacao
+      if (url.searchParams.get('caixa') === '1') {
+        if (session.perfil === 'ENTREGADOR') {
+          const { data: fech } = await supabase
+            .from('caixa_fechamentos')
+            .select('*')
+            .eq('entregador_id', session.sub)
+            .eq('data', todayStr())
+            .maybeSingle();
+          return NextResponse.json({ ...fila, meuFechamento: fech || null });
+        }
+        if (session.perfil === 'ADMIN') {
+          const { data: fechs } = await supabase
+            .from('caixa_fechamentos')
+            .select('*')
+            .eq('data', todayStr())
+            .order('criado_em', { ascending: false });
+          return NextResponse.json({ ...fila, fechamentosHoje: fechs || [] });
+        }
+      }
+      return NextResponse.json(fila);
     }
 
     if (all) {
@@ -562,25 +823,65 @@ export async function POST(req: NextRequest) {
     const saleId = String(body.saleId || '');
     if (!saleId) return NextResponse.json({ ok: false, error: 'saleId obrigatoria.' }, { status: 400 });
 
-    const { data: sale } = await supabase.from('sales').select(`${SALE_COLS}`).eq('id', saleId).maybeSingle();
-    if (!sale) return NextResponse.json({ ok: false, error: 'Pedido nao encontrado.' }, { status: 404 });
+    const { data: sale } = await supabase.from('sales').select(`${FILA_COLS_13}`).eq('id', saleId).maybeSingle();
+
+    // Fallback sem colunas do Bloco 13
+    let saleRow: any = sale;
+    if (!saleRow) {
+      const alt = await supabase.from('sales').select(`${SALE_COLS}`).eq('id', saleId).maybeSingle();
+      saleRow = alt.data;
+    }
+    if (!saleRow) return NextResponse.json({ ok: false, error: 'Pedido nao encontrado.' }, { status: 404 });
+    const venda13 = saleRow.tipo_venda === 'PRE_VENDA';
+
+    // ---------- SEPARAR / DESFAZER_SEPARADO (secretario da base + admin) ----------
+    if (acao === 'SEPARAR' || acao === 'DESFAZER_SEPARADO') {
+      if (!admin && session.perfil !== 'SECRETARIO') {
+        return NextResponse.json({ ok: false, error: 'Somente o secretário da base ou o admin marcam separação.' }, { status: 403 });
+      }
+      if (!venda13) return NextResponse.json({ ok: false, error: 'Pedido invalido.' }, { status: 400 });
+      if (saleRow.entrega_status === 'ENTREGUE') return NextResponse.json({ ok: false, error: 'Pedido ja entregue.' }, { status: 409 });
+      const separar = acao === 'SEPARAR';
+      const r = await updateSaleFlex(supabase, saleId, separar
+        ? { separado: true, separado_em: new Date().toISOString() }
+        : { separado: false, separado_em: null });
+      if (!r.ok) return NextResponse.json({ ok: false, error: r.sem13 ? 'Banco desatualizado: rode o Bloco 13 do SQL.' : (r.erro || 'Erro ao atualizar.') }, { status: r.sem13 ? 503 : 500 });
+      await logEventoSeguro(supabase, saleRow.route_id || null, saleId, userId, separar ? 'SEPARADO' : 'SEPARACAO_DESFEITA', separar ? 'Pedido separado na base' : 'Separação desfeita');
+      return NextResponse.json({ ok: true });
+    }
+
+    // ---------- PRIORIDADE (P1/P2/normal — admin e entregador) ----------
+    if (acao === 'PRIORIDADE') {
+      if (!admin && session.perfil !== 'ENTREGADOR') {
+        return NextResponse.json({ ok: false, error: 'Somente admin ou entregador mudam a prioridade.' }, { status: 403 });
+      }
+      if (!venda13) return NextResponse.json({ ok: false, error: 'Pedido invalido.' }, { status: 400 });
+      const prioridade = Number(body.prioridade);
+      if (![0, 1, 2].includes(prioridade)) return NextResponse.json({ ok: false, error: 'Prioridade invalida (0, 1 ou 2).' }, { status: 400 });
+      if (saleRow.entrega_status === 'ENTREGUE') return NextResponse.json({ ok: false, error: 'Pedido ja entregue.' }, { status: 409 });
+      const r = await updateSaleFlex(supabase, saleId, { prioridade });
+      if (!r.ok) return NextResponse.json({ ok: false, error: r.sem13 ? 'Banco desatualizado: rode o Bloco 13 do SQL.' : (r.erro || 'Erro ao atualizar.') }, { status: r.sem13 ? 503 : 500 });
+      const label = prioridade === 1 ? 'PRIORIDADE 1' : prioridade === 2 ? 'PRIORIDADE 2' : 'prioridade normal';
+      await logEventoSeguro(supabase, saleRow.route_id || null, saleId, userId, 'PRIORIDADE', `Definido: ${label}`);
+      return NextResponse.json({ ok: true, prioridade });
+    }
 
     // ---------- EXCLUIR_VENDA ----------
     // Vendedor: somente o proprio pedido, registrado HOJE, ate as 11h59
     // (America/Sao_Paulo) e sem entrega confirmada. Admin: a qualquer hora.
     // A venda sai da rota de entrega (ou da fila de pendentes).
     if (acao === 'EXCLUIR_VENDA') {
-      if (sale.entrega_status === 'ENTREGUE') {
+      if (saleRow.entrega_status === 'ENTREGUE') {
         return NextResponse.json({ ok: false, error: 'Pedido ja entregue — exclusao indisponivel.' }, { status: 409 });
       }
       if (!admin) {
         if (session.perfil === 'ENTREGADOR') {
           return NextResponse.json({ ok: false, error: 'Entregador nao pode excluir pedidos.' }, { status: 403 });
         }
-        if (sale.vendedor_id !== userId) {
+        if (saleRow.vendedor_id !== userId) {
           return NextResponse.json({ ok: false, error: 'Este pedido nao e seu.' }, { status: 403 });
         }
-        const vendido = new Date(sale.data_venda);
+        const vendido = new Date(saleRow.data_venda);
         const { start, end } = dayRangeIso();
         if (vendido.getTime() < new Date(start).getTime() || vendido.getTime() > new Date(end).getTime()) {
           return NextResponse.json({ ok: false, error: 'So e possivel excluir pedidos registrados hoje.' }, { status: 403 });
@@ -601,35 +902,38 @@ export async function POST(req: NextRequest) {
         }
         throw delErr;
       }
-      if (sale.route_id) {
+      if (saleRow.route_id) {
         const { count } = await supabase
           .from('sales')
           .select('id', { count: 'exact', head: true })
-          .eq('route_id', sale.route_id);
-        await supabase.from('entrega_rotas').update({ total_paradas: count || 0 }).eq('id', sale.route_id);
-        await logEvento(supabase, sale.route_id, null, userId, 'PEDIDO_EXCLUIDO', 'Pedido excluido da rota', lat, lng);
+          .eq('route_id', saleRow.route_id);
+        await supabase.from('entrega_rotas').update({ total_paradas: count || 0 }).eq('id', saleRow.route_id);
+        await logEvento(supabase, saleRow.route_id, null, userId, 'PEDIDO_EXCLUIDO', 'Pedido excluido da rota', lat, lng);
       }
       return NextResponse.json({ ok: true });
     }
 
-    if (!sale.route_id) return NextResponse.json({ ok: false, error: 'Pedido sem rota.' }, { status: 404 });
-    const rotaRes = await supabase.from('entrega_rotas').select('*').eq('id', sale.route_id).maybeSingle();
-    const rota = rotaRes.data;
-    if (!rota) return NextResponse.json({ ok: false, error: 'Rota nao encontrada.' }, { status: 404 });
-    // Dono da rota, admin ou ENTREGADOR (o entregador entrega todas as rotas)
-    if (!admin && session.perfil !== 'ENTREGADOR' && rota.vendedor_id !== userId) {
-      return NextResponse.json({ ok: false, error: 'Esta rota pertence a outro vendedor.' }, { status: 403 });
+    // ============================================================================
+    // BLOCO 13: ENTREGUE / FALHOU / REABRIR — FILA CONTINUA (sem rota obrigatória)
+    // REGRA DO DONO: vendedor NUNCA entrega — somente ENTREGADOR (e o admin).
+    // ============================================================================
+    const podeEntregar = admin || session.perfil === 'ENTREGADOR';
+    if (acao === 'ENTREGUE' || acao === 'FALHOU' || acao === 'REABRIR') {
+      if (!podeEntregar) {
+        return NextResponse.json({ ok: false, error: 'Somente o ENTREGADOR confirma entregas. O vendedor nao entrega.' }, { status: 403 });
+      }
     }
+    const rotaIdRef = saleRow.route_id || null;
 
     if (acao === 'ENTREGUE') {
-      if (sale.entrega_status === 'ENTREGUE') return NextResponse.json({ ok: false, error: 'Parada ja entregue.' }, { status: 409 });
+      if (saleRow.entrega_status === 'ENTREGUE') return NextResponse.json({ ok: false, error: 'Parada ja entregue.' }, { status: 409 });
       const pagamento = String(body.pagamento || 'DINHEIRO').toUpperCase();
       if (!['DINHEIRO', 'PIX', 'BOLETO', 'JA_PAGO', 'NAO_PAGO'].includes(pagamento)) {
         return NextResponse.json({ ok: false, error: 'Forma de pagamento invalida.' }, { status: 400 });
       }
 
-      const total = Number(sale.valor_total || 0);
-      const jaPago = Number(sale.valor_pago || 0);
+      const total = Number(saleRow.valor_total || 0);
+      const jaPago = Number(saleRow.valor_pago || 0);
       const restante = Math.max(0, round2(total - jaPago));
 
       // FOTO OBRIGATORIA: Pix (comprovante) e Boleto (documento) — regra do fluxo.
@@ -658,10 +962,11 @@ export async function POST(req: NextRequest) {
       }
 
       const updates: any = { entrega_status: 'ENTREGUE' };
+      if (session.perfil === 'ENTREGADOR') updates.entregador_id = userId;
       let eventoMotivo = '';
       const eventoFoto: string | null = foto;
       const stamp = carimboAgora();
-      const detAtual = String(sale.detalhe_pagamento || 'PRE-VENDA');
+      const detAtual = String(saleRow.detalhe_pagamento || 'PRE-VENDA');
 
       if (pagamento === 'DINHEIRO' || pagamento === 'PIX') {
         // Dinheiro/Pix: baixa o recebido (total ou PARCIAL) e cria a comissao
@@ -673,10 +978,11 @@ export async function POST(req: NextRequest) {
         updates.metodo_pagamento = pagamento;
         // Log no formato que o portal do cliente parseia (historico de recebimentos)
         updates.detalhe_pagamento = `${detAtual} | ${stamp}: R$ ${recebido.toFixed(2)} (${pagamento}${quitada ? '' : ' — parcial'})`;
+        // Motivo SEMPRE com o valor explicito (o caixa do dia soma a partir dele)
         eventoMotivo = quitada
-          ? (pagamento === 'PIX' ? 'Pagamento: PIX confirmado (com foto)' : 'Pagamento: dinheiro confirmado')
-          : `Pagamento parcial: R$ ${recebido.toFixed(2)} de R$ ${restante.toFixed(2)}`;
-        await criarComissaoPreVenda(supabase, sale, recebido);
+          ? (pagamento === 'PIX' ? `Pagamento: PIX — R$ ${recebido.toFixed(2)} (comprovante foto)` : `Pagamento: dinheiro — R$ ${recebido.toFixed(2)}`)
+          : `Pagamento parcial (${pagamento === 'PIX' ? 'pix' : 'dinheiro'}): R$ ${recebido.toFixed(2)} de R$ ${restante.toFixed(2)}`;
+        await criarComissaoPreVenda(supabase, saleRow, recebido);
       } else if (pagamento === 'BOLETO') {
         // Boleto entregue: entrega concluida, pagamento segue PENDENTE ate
         // o admin confirmar a compensacao. Foto do boleto obrigatoria.
@@ -687,43 +993,92 @@ export async function POST(req: NextRequest) {
         updates.valor_pago = total;
         updates.status_pagamento = 'PAGO';
         updates.detalhe_pagamento = `${detAtual} | ${stamp}: R$ ${restante.toFixed(2)} (JA_PAGO)`;
-        eventoMotivo = 'Entregue — cliente ja havia pago';
-        await criarComissaoPreVenda(supabase, sale, restante);
+        eventoMotivo = `Entregue — cliente ja havia pago (R$ ${restante.toFixed(2)})`;
+        await criarComissaoPreVenda(supabase, saleRow, restante);
       } else {
         // NAO_PAGO: mantem PENDENTE para cobrar depois
         updates.detalhe_pagamento = `${detAtual} | ${stamp}: entregue sem pagamento`;
-        eventoMotivo = 'Entregue sem pagamento';
+        eventoMotivo = 'Entregue sem pagamento (a receber)';
       }
 
-      const { error: upErr } = await supabase.from('sales').update(updates).eq('id', saleId);
-      if (upErr) throw upErr;
+      const r = await updateSaleFlex(supabase, saleId, updates);
+      if (!r.ok) {
+        return NextResponse.json({ ok: false, error: 'Erro ao registrar a entrega. Tente novamente.' }, { status: 500 });
+      }
 
       // Baixa do estoque principal (entregou = saiu do estoque central)
       try { await supabase.rpc('baixar_estoque_principal', { p_sale_id: saleId }); } catch (e) {
         console.error('[pre-venda] baixa estoque falhou:', (e as any)?.message);
       }
 
-      await logEvento(supabase, rota.id, saleId, userId, 'ENTREGUE', eventoMotivo, lat, lng, eventoFoto);
-      await checarConclusao(supabase, rota.id);
+      await logEventoSeguro(supabase, rotaIdRef, saleId, userId, 'ENTREGUE', eventoMotivo, lat, lng, eventoFoto);
+      if (rotaIdRef) await checarConclusao(supabase, rotaIdRef);
       return NextResponse.json({ ok: true });
     }
 
     if (acao === 'FALHOU') {
-      if (sale.entrega_status === 'ENTREGUE') return NextResponse.json({ ok: false, error: 'Parada ja entregue.' }, { status: 409 });
+      if (saleRow.entrega_status === 'ENTREGUE') return NextResponse.json({ ok: false, error: 'Parada ja entregue.' }, { status: 409 });
       const motivo = String(body.motivo || 'Nao entregue').slice(0, 140);
       const { error: upErr } = await supabase.from('sales').update({ entrega_status: 'FALHOU' }).eq('id', saleId);
       if (upErr) throw upErr;
-      await logEvento(supabase, rota.id, saleId, userId, 'FALHOU', motivo, lat, lng);
-      await checarConclusao(supabase, rota.id);
+      await logEventoSeguro(supabase, rotaIdRef, saleId, userId, 'FALHOU', motivo, lat, lng);
+      if (rotaIdRef) await checarConclusao(supabase, rotaIdRef);
       return NextResponse.json({ ok: true });
     }
 
     if (acao === 'REABRIR') {
-      if (rota.status !== 'EM_ROTA') return NextResponse.json({ ok: false, error: 'Rota nao esta em andamento.' }, { status: 409 });
-      const { error: upErr } = await supabase.from('sales').update({ entrega_status: 'EM_ROTA' }).eq('id', saleId);
+      // Fila continua: o pedido falhado VOLTA para a fila (PENDENTE) — nada se perde.
+      const { error: upErr } = await supabase.from('sales').update({ entrega_status: 'PENDENTE' }).eq('id', saleId);
       if (upErr) throw upErr;
-      await supabase.from('entrega_rotas').update({ status: 'EM_ROTA', concluida_em: null }).eq('id', rota.id);
-      await logEvento(supabase, rota.id, saleId, userId, 'EM_ROTA', 'Parada reaberta', lat, lng);
+      await logEventoSeguro(supabase, rotaIdRef, saleId, userId, 'REABERTO', 'Pedido voltou para a fila', lat, lng);
+      return NextResponse.json({ ok: true });
+    }
+
+    // ---------- FECHAR_CAIXA (entregador informa o dinheiro em especie) ----------
+    if (acao === 'FECHAR_CAIXA') {
+      if (session.perfil !== 'ENTREGADOR') {
+        return NextResponse.json({ ok: false, error: 'Somente o entregador fecha o caixa.' }, { status: 403 });
+      }
+      const valorDinheiro = round2(Number(body.valorDinheiro) || 0);
+      const valorPix = round2(Number(body.valorPix) || 0);
+      const qtdEntregas = Math.max(0, Math.floor(Number(body.qtdEntregas) || 0));
+      const obs = String(body.obs || '').slice(0, 300) || null;
+      const { error: caixaErr } = await supabase
+        .from('caixa_fechamentos')
+        .upsert({
+          entregador_id: userId,
+          data: todayStr(),
+          valor_dinheiro: valorDinheiro,
+          valor_pix: valorPix,
+          qtd_entregas: qtdEntregas,
+          obs,
+          confirmado: false,
+          confirmado_por: null,
+          confirmado_em: null,
+        }, { onConflict: 'entregador_id,data' });
+      const code = (caixaErr as any)?.code || '';
+      if (caixaErr && (code === '42P01' || code === '42501' || code === 'PGRST204' || code === '42703')) {
+        return NextResponse.json({ ok: false, error: 'Banco desatualizado: rode o Bloco 13 do SQL (caixa_fechamentos).' }, { status: 503 });
+      }
+      if (caixaErr) throw caixaErr;
+      await logEventoSeguro(supabase, null, null, userId, 'CAIXA_FECHADO', `Dinheiro: R$ ${valorDinheiro.toFixed(2)} · Pix: R$ ${valorPix.toFixed(2)} · ${qtdEntregas} entregas`);
+      return NextResponse.json({ ok: true });
+    }
+
+    // ---------- CONFIRMAR_CAIXA (admin confirma o dinheiro fisico) ----------
+    if (acao === 'CONFIRMAR_CAIXA') {
+      if (!admin) return NextResponse.json({ ok: false, error: 'Acesso restrito ao admin.' }, { status: 403 });
+      const caixaId = String(body.caixaId || '');
+      if (!caixaId) return NextResponse.json({ ok: false, error: 'caixaId obrigatorio.' }, { status: 400 });
+      const { error: confErr } = await supabase
+        .from('caixa_fechamentos')
+        .update({ confirmado: true, confirmado_por: userId, confirmado_em: new Date().toISOString() })
+        .eq('id', caixaId);
+      const code = (confErr as any)?.code || '';
+      if (confErr && (code === '42P01' || code === '42501' || code === 'PGRST204' || code === '42703')) {
+        return NextResponse.json({ ok: false, error: 'Banco desatualizado: rode o Bloco 13 do SQL (caixa_fechamentos).' }, { status: 503 });
+      }
+      if (confErr) throw confErr;
       return NextResponse.json({ ok: true });
     }
 

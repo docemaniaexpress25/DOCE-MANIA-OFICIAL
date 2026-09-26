@@ -340,6 +340,11 @@ async function updateSaleFlex(supabase: any, saleId: string, payload: Record<str
   if (/trocas|prioridade|separado|entregador_id/i.test(msg)) {
     const flex = { ...payload };
     delete flex.trocas; delete flex.prioridade; delete flex.separado; delete flex.separado_em; delete flex.entregador_id;
+    // Se sobrar algo de verdade (ex.: entrega_status), aplica sem as colunas novas.
+    // Se NAO sobrar nada, o update seria vazio = sucesso falso. Exige o SQL.
+    if (Object.keys(flex).length === 0) {
+      return { ok: false, sem13: true, erro: 'Banco desatualizado: rode o Bloco 13 do SQL.' };
+    }
     const { error: err2 } = await supabase.from('sales').update(flex).eq('id', saleId);
     if (!err2) return { ok: true, sem13: true };
     return { ok: false, sem13: true, erro: err2.message };

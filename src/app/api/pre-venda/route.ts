@@ -1112,16 +1112,23 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: false, error: 'Forma de pagamento invalida.' }, { status: 400 });
       }
 
+      // REGRA DO DONO: venda A PRAZO o ENTREGADOR NAO recebe dinheiro — o
+      // VENDEDOR recebe na proxima visita. Entrega a prazo = foto, sem cobranca.
+      const condAprezo = /A PRAZO/i.test(String(saleRow.detalhe_pagamento || ''));
+      if (condAprezo && ['DINHEIRO', 'PIX', 'JA_PAGO'].includes(pagamento)) {
+        return NextResponse.json({ ok: false, error: 'Venda A PRAZO: o entregador nao cobra. O vendedor recebe na proxima visita — confirme a entrega apenas com a foto.' }, { status: 400 });
+      }
+
       const total = Number(saleRow.valor_total || 0);
       const jaPago = Number(saleRow.valor_pago || 0);
       const restante = Math.max(0, round2(total - jaPago));
 
       // FOTO OBRIGATORIA: Pix (comprovante) e Boleto (documento) — regra do fluxo.
       const foto = typeof body.foto === 'string' && body.foto.startsWith('data:image') ? body.foto : null;
-      if ((pagamento === 'PIX' || pagamento === 'BOLETO') && !foto) {
+      if ((pagamento === 'PIX' || pagamento === 'BOLETO' || (condAprezo && pagamento === 'NAO_PAGO')) && !foto) {
         return NextResponse.json({
           ok: false,
-          error: pagamento === 'PIX' ? 'Foto do comprovante Pix obrigatoria.' : 'Foto do boleto obrigatoria.',
+          error: pagamento === 'PIX' ? 'Foto do comprovante Pix obrigatoria.' : pagamento === 'BOLETO' ? 'Foto do boleto obrigatoria.' : 'Foto da entrega obrigatoria (venda a prazo).',
         }, { status: 400 });
       }
       if (foto) {
@@ -1190,9 +1197,15 @@ export async function POST(req: NextRequest) {
         eventoMotivo = `Entregue — cliente ja havia pago (R$ ${restante.toFixed(2)})`;
         await registrarComissaoPreVenda(supabase, saleRow, true);
       } else {
-        // NAO_PAGO: mantem PENDENTE para cobrar depois
-        updates.detalhe_pagamento = `${detAtual} | ${stamp}: entregue sem pagamento`;
-        eventoMotivo = 'Entregue sem pagamento (a receber)';
+        // NAO_PAGO: mantem PENDENTE para cobrar depois. NAO mexe em
+        // metodo_pagamento — a venda a prazo continua listada no Contas a
+        // Receber (admin e vendedor veem o saldo).
+        updates.detalhe_pagamento = condAprezo
+          ? `${detAtual} | ${stamp}: entrega a prazo${foto ? ' (foto anexada)' : ''} — cobranca com o vendedor`
+          : `${detAtual} | ${stamp}: entregue sem pagamento`;
+        eventoMotivo = condAprezo
+          ? 'Entrega a prazo — sem cobranca (vendedor recebe na proxima visita)'
+          : 'Entregue sem pagamento (a receber)';
         // BLOCO 14: comissão nasce A_RECEBER — entra quando o cliente pagar
         await registrarComissaoPreVenda(supabase, saleRow, false);
       }
@@ -1215,7 +1228,7 @@ export async function POST(req: NextRequest) {
         const melhorias = await getMelhorias(supabase);
         if (melhorias.pushEntrega) {
           const recebidoTxt = pagamento === 'BOLETO' ? 'boleto entregue (aguardando compensacao)'
-            : pagamento === 'NAO_PAGO' ? 'entregue — valor a receber'
+            : pagamento === 'NAO_PAGO' ? (condAprezo ? `entregue a prazo — receba R$ ${restante.toFixed(2)} do cliente na proxima visita` : 'entregue — valor a receber')
             : pagamento === 'JA_PAGO' ? `entregue — R$ ${restante.toFixed(2)} (ja pago)`
             : `entregue — R$ ${recebido.toFixed(2)} recebidos`;
           const liberada = updates.status_pagamento === 'PAGO';

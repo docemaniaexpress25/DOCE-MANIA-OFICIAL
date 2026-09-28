@@ -297,6 +297,12 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
   const normais = fila.filter(p => p.prioridade === 0 || p.prioridade == null);
   const falhados = data.falhados || [];
   const entreguesHoje = data.entreguesHoje || [];
+  // A PRAZO entregue hoje e ainda sem pagamento: o entregador NAO cobra —
+  // o vendedor recebe na proxima visita (regra do dono). Mostrado so para
+  // o entregador/admin nao contar esse dinheiro no acerto.
+  const prazoEntregueHoje = entreguesHoje
+    .filter((p: FilaItem) => p.condicao === 'APRAZO' && p.valorPago < p.valorTotal)
+    .reduce((a: number, p: FilaItem) => Math.round((a + (p.valorTotal - p.valorPago)) * 100) / 100, 0);
   const resumo = data.resumo;
   const caixaEst = data.caixa || { dinheiroHoje: 0, pixHoje: 0 };
 
@@ -459,6 +465,9 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                   <span className="mx-2 text-slate-300">·</span>
                   <i className="fa-brands fa-pix text-teal-500 mr-1"></i>{fmt(caixaEst.pixHoje)}
                 </p>
+                {prazoEntregueHoje > 0 && (
+                  <p className="text-[8px] font-black text-orange-500 uppercase mt-1"><i className="fa-solid fa-hand-holding-dollar mr-1"></i>A prazo entregue hoje (NAO cobrar): {fmt(prazoEntregueHoje)}</p>
+                )}
               </div>
               {modo === 'ENTREGADOR' ? (
                 <button onClick={() => { setCaixaDinheiro(caixaEst.dinheiroHoje ? String(caixaEst.dinheiroHoje.toFixed(2)) : ''); setSheetCaixa(true); }}
@@ -598,8 +607,46 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
               </p>
             )}
 
-            {/* --- DINHEIRO: valor recebido + troco --- */}
-            {spMetodo === 'DINHEIRO' && (
+            {/* --- A PRAZO: sem cobranca — vendedor recebe na proxima visita --- */}
+            {sp.condicao === 'APRAZO' && (
+              <div className="mt-4 space-y-3 animate-in fade-in duration-300">
+                <div className="bg-orange-50 rounded-2xl p-4 text-center border border-orange-100">
+                  <i className="fa-solid fa-handshake-angle text-orange-500 text-2xl"></i>
+                  <p className="text-[10px] font-black text-orange-700 uppercase mt-1">Venda a prazo — NAO cobrar agora</p>
+                  <p className="text-[9px] text-orange-600/90 font-semibold mt-0.5 leading-snug">O VENDEDOR recebe na proxima visita. Entregue, anexe a foto e confirme.</p>
+                </div>
+                <label className="block cursor-pointer">
+                  <input
+                    type="file" accept="image/*" capture="environment" className="hidden"
+                    onChange={async e => {
+                      const f = e.target.files?.[0];
+                      if (!f) return;
+                      try { setFotoEntrega(await compressImage(f)); }
+                      catch { showToast('Nao foi possivel processar a foto.', 'error'); }
+                    }}
+                  />
+                  <div className="py-3.5 rounded-2xl bg-orange-500 text-white text-[10px] font-black uppercase text-center shadow-md active:scale-95 transition-transform">
+                    <i className="fa-solid fa-camera mr-1"></i>{fotoEntrega ? 'Trocar foto' : 'Tirar foto da entrega (obrigatoria)'}
+                  </div>
+                </label>
+                {fotoEntrega && (
+                  <div className="relative rounded-2xl overflow-hidden border border-gray-100 animate-in zoom-in-95">
+                    <img src={fotoEntrega} alt="Foto da entrega a prazo" className="w-full max-h-56 object-cover" />
+                    <span className="absolute top-2 right-2 bg-emerald-500 text-white text-[8px] font-black uppercase px-2 py-1 rounded-md">Foto anexada</span>
+                  </div>
+                )}
+                <button
+                  onClick={() => confirmarEntrega(sp, sp.formaPgto === 'BOLETO' ? 'BOLETO' : 'NAO_PAGO', { foto: fotoEntrega })}
+                  disabled={!!busy || !fotoEntrega}
+                  className="w-full py-4 bg-emerald-600 text-white rounded-2xl text-xs font-black uppercase tracking-wider shadow-lg active:scale-[0.98] transition-transform disabled:opacity-50"
+                >
+                  <i className="fa-solid fa-check mr-1"></i>Entregue (sem cobranca)
+                </button>
+              </div>
+            )}
+
+            {/* --- DINHEIRO: valor recebido + troco (so a vista) --- */}
+            {sp.condicao !== 'APRAZO' && spMetodo === 'DINHEIRO' && (
               <div className="mt-4 space-y-3 animate-in fade-in duration-300">
                 <div className="bg-gray-50 rounded-2xl p-4 text-center border border-gray-100">
                   <p className="text-[9px] font-black text-gray-400 uppercase">Valor a receber</p>
@@ -668,8 +715,8 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
               </div>
             )}
 
-            {/* --- PIX: confirmacao manual + FOTO OBRIGATORIA --- */}
-            {spMetodo === 'PIX' && (
+            {/* --- PIX: confirmacao manual + FOTO OBRIGATORIA (so a vista) --- */}
+            {sp.condicao !== 'APRAZO' && spMetodo === 'PIX' && (
               <div className="mt-4 space-y-3 animate-in fade-in duration-300">
                 <div className="bg-teal-50 rounded-2xl p-4 text-center border border-teal-100">
                   <i className="fa-brands fa-pix text-teal-600 text-2xl"></i>
@@ -722,8 +769,8 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
               </div>
             )}
 
-            {/* --- BOLETO: foto obrigatoria --- */}
-            {spMetodo === 'BOLETO' && (
+            {/* --- BOLETO: foto obrigatoria (a prazo usa o painel laranja) --- */}
+            {sp.condicao !== 'APRAZO' && spMetodo === 'BOLETO' && (
               <div className="mt-4 space-y-3 animate-in fade-in duration-300">
                 <div className="bg-amber-50 rounded-2xl p-4 text-center border border-amber-100">
                   <i className="fa-solid fa-barcode text-amber-600 text-2xl"></i>
@@ -760,7 +807,8 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
               </div>
             )}
 
-            {/* --- alternativas --- */}
+            {/* --- alternativas (so a vista) --- */}
+            {sp.condicao !== 'APRAZO' && (
             <div className="mt-4 pt-3 border-t border-gray-100">
               <p className="text-[8px] font-black text-gray-300 uppercase text-center mb-2">Pagou de outra forma?</p>
               <div className="grid grid-cols-2 gap-2">
@@ -790,6 +838,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                 </label>
               )}
             </div>
+            )}
 
             <button onClick={() => setSheetEntregue(null)} className="w-full mt-3 py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest print:hidden">Cancelar</button>
           </div>
@@ -871,6 +920,9 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
               <p className="text-[9px] font-black text-emerald-500 uppercase">Dinheiro recebido hoje (estimado)</p>
               <p className="text-2xl font-black text-emerald-700">{fmt(caixaEst.dinheiroHoje)}</p>
               <p className="text-[9px] font-bold text-teal-600 uppercase mt-1">Pix: {fmt(caixaEst.pixHoje)} (nao vem em especie)</p>
+              {prazoEntregueHoje > 0 && (
+                <p className="text-[9px] font-black text-orange-500 uppercase mt-2 leading-snug">A prazo entregue hoje: {fmt(prazoEntregueHoje)} — NAO entra aqui (vendedor recebe depois)</p>
+              )}
             </div>
             <div className="mt-4">
               <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Dinheiro em especie R$</label>

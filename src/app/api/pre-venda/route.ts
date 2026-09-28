@@ -491,6 +491,16 @@ async function updateSaleFlex(supabase: any, saleId: string, payload: Record<str
     if (!err2) return { ok: true, sem13: true };
     return { ok: false, sem13: true, erro: err2.message };
   }
+  // CHECK legado em sales.metodo_pagamento: so aceita DINHEIRO/PIX/A_PRAZO.
+  // Se o update for rejeitado por constraint com metodo fora disso (ex.:
+  // BOLETO gravado por codigo antigo), refaz com A_PRAZO — a forma real
+  // continua registrada no detalhe_pagamento (a fila parseia de lá).
+  if (/violat|check constraint/i.test(error.message || '') && payload.metodo_pagamento && !['DINHEIRO', 'PIX', 'A_PRAZO'].includes(String(payload.metodo_pagamento))) {
+    const flex2 = { ...payload, metodo_pagamento: 'A_PRAZO' };
+    const { error: err3 } = await supabase.from('sales').update(flex2).eq('id', saleId);
+    if (!err3) return { ok: true, sem13: false };
+    return { ok: false, sem13: false, erro: err3.message };
+  }
   return { ok: false, sem13: false, erro: error.message };
 }
 
@@ -1150,7 +1160,7 @@ export async function POST(req: NextRequest) {
         const quitada = novoPago >= total - 0.005;
         updates.valor_pago = novoPago;
         updates.status_pagamento = quitada ? 'PAGO' : 'PENDENTE';
-        updates.metodo_pagamento = pagamento;
+        updates.metodo_pagamento = pagamento; // valores aceitos pelo CHECK legado
         // Log no formato que o portal do cliente parseia (historico de recebimentos)
         updates.detalhe_pagamento = `${detAtual} | ${stamp}: R$ ${recebido.toFixed(2)} (${pagamento}${quitada ? '' : ' — parcial'})`;
         // Motivo SEMPRE com o valor explicito (o caixa do dia soma a partir dele)
@@ -1162,7 +1172,13 @@ export async function POST(req: NextRequest) {
       } else if (pagamento === 'BOLETO') {
         // Boleto entregue: entrega concluida, pagamento segue PENDENTE ate
         // o admin confirmar a compensacao. Foto do boleto obrigatoria.
-        updates.metodo_pagamento = 'BOLETO';
+        // ATENCAO: o banco legado tem CHECK em sales.metodo_pagamento (so
+        // aceita DINHEIRO/PIX/A_PRAZO) — gravar 'BOLETO' viola a constraint e
+        // DERRUBA o registro da entrega (500). Grava A_PRAZO (boleto e
+        // cobranca a prazo); a forma real fica no detalhe_pagamento ("cobrar
+        // BOLETO na entrega" + "boleto entregue"), que a fila parseia e mostra
+        // o chip "Boleto" normalmente.
+        updates.metodo_pagamento = 'A_PRAZO';
         updates.detalhe_pagamento = `${detAtual} | ${stamp}: boleto entregue (foto anexada)`;
         eventoMotivo = 'Boleto entregue — foto anexada (aguardando compensacao)';
         // BLOCO 14: comissão nasce A_RECEBER — só entra quando o boleto for pago

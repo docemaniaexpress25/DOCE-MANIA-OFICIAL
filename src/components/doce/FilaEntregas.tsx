@@ -336,9 +336,6 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
               <p className="text-[9px] text-gray-400 font-semibold mt-0.5 truncate">
                 <i className="fa-solid fa-location-dot mr-1"></i>{p.cliente.endereco || 'Sem endereco'}{p.cliente.bairro ? ` — ${p.cliente.bairro}` : ''}
               </p>
-              <p className="text-[9px] text-gray-500 font-bold mt-1 leading-snug">
-                {p.itens.map(i => `${i.quantidade}x ${i.nome}`).join(', ')}
-              </p>
               {p.trocas && (
                 <p className="text-[9px] font-black text-orange-600 mt-1 bg-orange-50 rounded-lg px-2 py-1 leading-snug">
                   <i className="fa-solid fa-right-left mr-1"></i>Trocas: {p.trocas}

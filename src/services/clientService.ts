@@ -75,6 +75,11 @@ export const clientService = {
       console.warn('Colunas fiscais ausentes (Bloco 10 nao rodado). Salvando sem elas.');
       ({ data, error } = await supabase.from('clients').insert(payload).select().single());
     }
+    // clients.localizacao (GPS por mapa) pode nao existir (Bloco 12): refaz sem
+    if (error && /localizacao/i.test(error.message || '')) {
+      const semGps = { ...payload }; delete semGps.localizacao;
+      ({ data, error } = await supabase.from('clients').insert(semGps).select().single());
+    }
     if (error) {
       console.error('Erro ao inserir cliente:', error);
       return null;
@@ -117,9 +122,14 @@ export const clientService = {
     if ((updates as Record<string, unknown>).email !== undefined) payload.email = (updates as Record<string, unknown>).email || null;
 
     let { data, error } = await supabase.from('clients').update(payload).eq('id', id).select().single();
+    // Colunas que podem nao existir (Bloco 10/12): refaz sem elas
     if (error && /\bemail\b/i.test(error.message || '')) {
       const fallback = { ...payload }; delete fallback.email;
       ({ data, error } = await supabase.from('clients').update(fallback).eq('id', id).select().single());
+    }
+    if (error && /localizacao/i.test(error.message || '')) {
+      const fallback2 = { ...payload }; delete fallback2.localizacao;
+      ({ data, error } = await supabase.from('clients').update(fallback2).eq('id', id).select().single());
     }
     if (error) {
       console.error('Erro ao atualizar cliente:', error);

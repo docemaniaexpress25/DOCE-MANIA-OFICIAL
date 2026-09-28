@@ -49,7 +49,59 @@ function dayRangeIso(): { start: string; end: string } {
 }
 
 const SALE_COLS = 'id, vendedor_id, client_id, valor_total, valor_pago, metodo_pagamento, detalhe_pagamento, status_pagamento, entrega_status, entrega_seq, route_id, data_venda';
-const CLIENT_COLS = 'id, nome_fantasia, endereco, bairro, telefone, localizacao, pin_localizacao';
+const CLIENT_COLS_BASE = 'id, nome_fantasia, endereco, bairro, telefone';
+const CLIENT_COLS_GPS = `${CLIENT_COLS_BASE}, localizacao, pin_localizacao`;
+
+/**
+ * clients com colunas de GPS flexíveis. Bancos SEM clients.localizacao
+ * (Bloco 12 incompleto) rejeitam o select inteiro (42703) — sem isso o mapa
+ * de clientes fica vazio e TODA parada aparece como "Cliente" sem endereço,
+ * telefone e sem botão de MAPA/ZAP. Tenta a versão completa e degrada.
+ */
+async function fetchClientsFlex(supabase: any, ids: string[]) {
+  if (!ids || ids.length === 0) return { data: [] as any[] };
+  for (const cols of [CLIENT_COLS_GPS, CLIENT_COLS_BASE + ', pin_localizacao', CLIENT_COLS_BASE]) {
+    const r = await supabase.from('clients').select(cols).in('id', ids);
+    if (!r.error) return r;
+  }
+  return { data: [] as any[] };
+}
+
+// ---------------------------------------------------------------------------
+// Colunas uuid (sales.entregador_id, caixa_fechamentos.entregador_id,
+// entrega_eventos.user_id) REJEITAM valores nao-UUID ("invalid input syntax
+// for type uuid"). O login fixo da base (ENTREGADOR/SECRETARIO, PIN 1234)
+// nao tem linha em app_users — o id da sessao e a string "ENTREGADOR", e
+// gravar direto derruba a confirmacao de entrega (500 "Erro ao registrar a
+// entrega") e o fechamento de caixa.
+// Regra do resolver:
+//   1. id ja e UUID (usuario real/admin) -> usa o proprio id (nominal);
+//   2. pseudo-usuario -> se existir EXATAMENTE 1 usuario real ativo com esse
+//      perfil, usa o id dele (a entrega passa a ser nominal automaticamente);
+//   3. senao, UUID fixo e estavel do acesso da base (o caixa e o historico
+//      ficam agrupados no mesmo "entregador" — nunca mais quebram).
+// ---------------------------------------------------------------------------
+const RE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_ACESSO_FIXO: Record<string, string> = {
+  ENTREGADOR: 'e6e10000-0000-4000-8000-00000000e6e1',
+  SECRETARIO: 'e6e20000-0000-4000-8000-00000000e6e2',
+};
+async function resolveEntregadorUuid(supabase: any, userId: string): Promise<string | null> {
+  if (!userId) return null;
+  if (RE_UUID.test(userId)) return userId;
+  const perfil = String(userId).toUpperCase();
+  try {
+    const { data, error } = await supabase
+      .from('app_users').select('id, perfil, ativo').eq('perfil', perfil).eq('ativo', true);
+    if (!error && Array.isArray(data)) {
+      if (data.length === 1) return data[0].id as string;
+      // 2+ usuarios reais: nao da para adivinhar quem esta entregando —
+      // mantem o UUID do acesso fixo (sem quebrar; o nominal volta quando
+      // entrarem com o login real de um deles).
+    }
+  } catch { /* app_users inacessivel: segue com o UUID fixo */ }
+  return UUID_ACESSO_FIXO[perfil] || null;
+}
 
 // BLOCO 13: colunas novas da fila continua (podem nao existir antes do SQL)
 const FILA_COLS_13 = `${SALE_COLS}, tipo_venda, trocas, prioridade, separado, separado_em, entregador_id, data_vencimento`;
@@ -249,7 +301,7 @@ async function enrichParadas(supabase: any, salesRows: any[]) {
   const saleIds = salesRows.map((s: any) => s.id);
 
   const [clientsRes, itemsRes, eventsRes, fotosRes] = await Promise.all([
-    supabase.from('clients').select(CLIENT_COLS).in('id', clientIds),
+    fetchClientsFlex(supabase, clientIds),
     supabase.from('sale_items').select('sale_id, produto_id, quantidade, preco_venda').in('sale_id', saleIds),
     supabase.from('entrega_eventos').select('sale_id, status, motivo, criado_em').in('sale_id', saleIds).order('criado_em', { ascending: true }),
     // Bloco 6: foto do boleto (so consulta se a coluna existir)
@@ -404,7 +456,9 @@ async function checarConclusao(supabase: any, routeId: string) {
 /** logEvento tolerante: nunca bloqueia a acao principal por falha de log */
 async function logEventoSeguro(supabase: any, routeId: string | null, saleId: string | null, userId: string, status: string, motivo?: string | null, lat?: number | null, lng?: number | null, foto?: string | null) {
   try {
-    const row: any = { route_id: routeId, sale_id: saleId, user_id: userId, status, motivo: motivo || null, lat: typeof lat === 'number' ? lat : null, lng: typeof lng === 'number' ? lng : null };
+    const userUuid = await resolveEntregadorUuid(supabase, userId);
+    const row: any = { route_id: routeId, sale_id: saleId, user_id: userUuid, status, motivo: motivo || null, lat: typeof lat === 'number' ? lat : null, lng: typeof lng === 'number' ? lng : null };
+    if (!userUuid) delete row.user_id;
     if (foto && (await hasBoletoFotoColumn())) row.foto = foto;
     try {
       await supabase.from('entrega_eventos').insert(row);
@@ -448,7 +502,7 @@ async function enrichFila(supabase: any, salesRows: any[]) {
   const vendedorIds = [...new Set(salesRows.map((s: any) => s.vendedor_id).filter(Boolean))];
 
   const [clientsRes, itemsRes, usersRes, fotosRes] = await Promise.all([
-    supabase.from('clients').select(CLIENT_COLS).in('id', clientIds),
+    fetchClientsFlex(supabase, clientIds),
     supabase.from('sale_items').select('sale_id, produto_id, quantidade, preco_venda').in('sale_id', saleIds),
     vendedorIds.length > 0 ? supabase.from('app_users').select('id, nome').in('id', vendedorIds) : Promise.resolve({ data: [] }),
     hasBoletoFotoColumn().then(ok =>
@@ -1078,7 +1132,12 @@ export async function POST(req: NextRequest) {
       }
 
       const updates: any = { entrega_status: 'ENTREGUE' };
-      if (session.perfil === 'ENTREGADOR') updates.entregador_id = userId;
+      if (session.perfil === 'ENTREGADOR') {
+        // sales.entregador_id e uuid: o login fixo "ENTREGADOR" nao e UUID —
+        // gravar direto derruba o update e a entrega nunca é registrada.
+        const entUuid = await resolveEntregadorUuid(supabase, userId);
+        if (entUuid) updates.entregador_id = entUuid;
+      }
       let eventoMotivo = '';
       const eventoFoto: string | null = foto;
       const stamp = carimboAgora();
@@ -1187,10 +1246,14 @@ export async function POST(req: NextRequest) {
       const valorPix = round2(Number(body.valorPix) || 0);
       const qtdEntregas = Math.max(0, Math.floor(Number(body.qtdEntregas) || 0));
       const obs = String(body.obs || '').slice(0, 300) || null;
+      const entUuid = await resolveEntregadorUuid(supabase, userId);
+      if (!entUuid) {
+        return NextResponse.json({ ok: false, error: 'Nao foi possivel identificar o entregador. Crie um usuario Entregador real no menu Usuarios.' }, { status: 400 });
+      }
       const { error: caixaErr } = await supabase
         .from('caixa_fechamentos')
         .upsert({
-          entregador_id: userId,
+          entregador_id: entUuid,
           data: todayStr(),
           valor_dinheiro: valorDinheiro,
           valor_pix: valorPix,

@@ -79,7 +79,7 @@ interface AdminDashboardProps {
   activateAllProducts?: () => void;
   clientOrder: string[];
   setClientOrder: (ids: string[]) => void;
-  /** BLOCO 14: interruptores das melhorias + taxa padrão da comissão PV */
+  /** BLOCO 14: interruptores das melhorias */
   melhorias?: MelhoriasFlags;
   setMelhorias?: (v: MelhoriasFlags) => void;
 }
@@ -213,10 +213,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [payoutVendedor, setPayoutVendedor] = useState<User | null>(null);
   const [payoutType, setPayoutType] = useState<'TOTAL' | 'PARCIAL'>('TOTAL');
   const [partialAmount, setPartialAmount] = useState<string>('');
-  // BLOCO 14: detalhes da comissão por vendedor + taxa padrão da pré-venda
+  // BLOCO 14: detalhes da comissão por vendedor
   const [caixaDetalhe, setCaixaDetalhe] = useState<string | null>(null);
-  const [taxaPv, setTaxaPv] = useState<string>('');
-  const [taxaPvLoading, setTaxaPvLoading] = useState(false);
   const [periodoRelatorio, setPeriodoRelatorio] = useState<'HOJE' | 'SEMANA' | 'MES' | 'GERAL'>('MES');
   const [reportFilter, setReportFilter] = useState<ReportFilterType>('RESUMO');
   const [reportPeriodo, setReportPeriodo] = useState<'HOJE' | 'SEMANA' | 'MES' | 'GERAL'>('MES');
@@ -224,9 +222,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [backupFormat, setBackupFormat] = useState<'csv' | 'json'>('csv');
   const [confirmAction, setConfirmAction] = useState<{title:string;message:string;icon:string;iconColor?:string;onConfirm:()=>void;type?:string}|null>(null);
   const [confirmDelete, setConfirmDelete] = useState<{ id: string, type: 'PRODUCT' | 'CLIENT' | 'USER' | 'CATEGORY' | 'SUBCATEGORY', name: string } | null>(null);
-
-  const [pwUser, setPwUser] = useState<string>('');
-  const [pwNew, setPwNew] = useState<string>('');
   const [newCatName, setNewCatName] = useState('');
   const [editingCategory, setEditingCategory] = useState<Category | null>(null);
   
@@ -649,31 +644,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     setPartialAmount('');
   };
 
-  // BLOCO 14: carrega a taxa padrão da comissão PV quando a aba Configurações abre
-  useEffect(() => {
-    if (activeTab !== 'SETTINGS') return;
-    let vivo = true;
-    setTaxaPvLoading(true);
-    fetch('/api/pre-venda?config=1', { headers: authHeaders() })
-      .then(r => r.json())
-      .then(d => { if (vivo && d?.comissaoPct !== undefined) setTaxaPv(String(d.comissaoPct)); })
-      .catch(() => {})
-      .finally(() => { if (vivo) setTaxaPvLoading(false); });
-    return () => { vivo = false; };
-  }, [activeTab]);
-
-  const salvarTaxaPv = async () => {
-    const pct = parseFloat(taxaPv);
-    if (!isFinite(pct) || pct <= 0 || pct > 100) { showToast('Informe um percentual entre 1 e 100.', 'error'); return; }
-    setTaxaPvLoading(true);
-    try {
-      const res = await fetch('/api/pre-venda', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ acao: 'SET_CONFIG', comissaoPct: pct }) });
-      const d = await res.json().catch(() => null);
-      if (!res.ok || !d?.ok) { showToast(d?.error || 'Nao foi possivel salvar.', 'error'); return; }
-      showToast('Taxa padrão da pré-venda salva!');
-    } catch { showToast('Sem conexao. Tente novamente.', 'error'); } finally { setTaxaPvLoading(false); }
-  };
-
   const handleConfirmPayout = () => {
     if (!payoutVendedor) return;
     const stats = getVendedorStats(payoutVendedor.id);
@@ -961,13 +931,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     else if (typeof showUserModal === 'object') props.updateUser(showUserModal.id, userForm);
     setShowUserModal(null);
     showToast("Usuário salvo!");
-  };
-
-  const handleUpdatePassword = () => {
-    if (!pwUser || !pwNew) return;
-    props.updateUser(pwUser, { pin: pwNew });
-    setPwNew('');
-    showToast("PIN atualizado!");
   };
 
   const handleAddCategory = () => {
@@ -2579,26 +2542,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             })()}
           </div>
 
-          <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm mx-2 space-y-4">
-            <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider"><i className="fa-solid fa-percent text-amber-600 mr-2"></i>Comissão Pré-Venda — Taxa Padrão</h3>
-            <p className="text-[9px] font-bold text-gray-400 uppercase">Usada nos produtos SEM comissão de pré-venda própria (regra antiga: comissão de pronta entrega × esta taxa)</p>
-            <div className="flex gap-2">
-              <input type="number" value={taxaPv} onChange={e => setTaxaPv(e.target.value)} placeholder={taxaPvLoading ? '...' : '50'} className="w-full p-3 bg-gray-50 border border-gray-100 rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-amber-100" />
-              <button onClick={salvarTaxaPv} disabled={taxaPvLoading} className="px-5 py-3 rounded-xl text-[10px] font-black uppercase bg-amber-500 text-white active:scale-95 disabled:opacity-50">Salvar</button>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm mx-2 space-y-4">
-            <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider"><i className="fa-solid fa-lock text-rose-600 mr-2"></i>Alterar PIN de Vendedor</h3>
-            <div className="grid grid-cols-2 gap-2">
-              <select value={pwUser} onChange={e => setPwUser(e.target.value)} className="p-3 bg-gray-50 border border-gray-100 rounded-xl text-[11px] font-bold uppercase outline-none">
-                <option value="">Selecione...</option>
-                {props.users.filter(u => u.role === 'VENDEDOR').map(u => (<option key={u.id} value={u.id}>{u.nome}</option>))}
-              </select>
-              <input value={pwNew} onChange={e => setPwNew(e.target.value)} placeholder="Novo PIN" type="text" className="p-3 bg-gray-50 border border-gray-100 rounded-xl text-[11px] font-bold outline-none focus:ring-2 focus:ring-rose-100" />
-            </div>
-            <button onClick={handleUpdatePassword} disabled={!pwUser || !pwNew} className={`w-full py-3 rounded-2xl text-[10px] font-black uppercase shadow-sm active:scale-95 ${pwUser && pwNew ? 'bg-rose-600 text-white' : 'bg-gray-100 text-gray-300'}`}>Atualizar PIN</button>
-          </div>
         </div>
       )}
 

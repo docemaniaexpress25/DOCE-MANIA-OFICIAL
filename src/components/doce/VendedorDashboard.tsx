@@ -924,34 +924,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
       {activeTab === 'HOME' && (
         <div className="py-4 space-y-4">
-          {/* BLOCO 14: minha comissão — entra quando o DINHEIRO entra */}
-          {(() => {
-            const minhas = (commissions || []).filter(c => c.vendedorId === user.id);
-            const disponivel = minhas.filter(c => c.status === 'DISPONIVEL').reduce((a, c) => a + Math.max(0, (c.valor ?? 0) - (c.valorPago ?? 0)), 0);
-            const minhasDespesas = (expenses || []).filter(e => e.sellerId === user.id).reduce((a, e) => a + (e.valor ?? 0), 0);
-            const aPagar = Math.max(0, disponivel - minhasDespesas);
-            const aguardando = minhas.filter(c => c.status === 'A_RECEBER').reduce((a, c) => a + (c.valor ?? 0), 0);
-            return (
-              <button onClick={() => setActiveTab('FINANCE')} className="w-full bg-white rounded-3xl p-5 border border-gray-100 shadow-sm text-left active:scale-[0.99] transition-transform">
-                <div className="flex items-center justify-between mb-2">
-                  <p className="text-[9px] font-black text-gray-400 uppercase"><i className="fa-solid fa-coins text-amber-500 mr-1"></i>Minha comissão</p>
-                  <span className="text-[8px] font-black text-gray-300 uppercase">ver financeiro ›</span>
-                </div>
-                <div className="flex items-end justify-between">
-                  <div>
-                    <p className="text-[8px] font-black text-emerald-500 uppercase">A receber do chefe</p>
-                    <p className="text-2xl font-black text-emerald-600">R$ {aPagar.toFixed(2)}</p>
-                    {minhasDespesas > 0 && <p className="text-[8px] font-bold text-gray-400 uppercase">comissão R$ {disponivel.toFixed(2)} − despesas R$ {minhasDespesas.toFixed(2)}</p>}
-                  </div>
-                  <div className="text-right">
-                    <p className="text-[8px] font-black text-amber-500 uppercase">Aguardando cliente pagar</p>
-                    <p className="text-sm font-black text-amber-600">R$ {aguardando.toFixed(2)}</p>
-                  </div>
-                </div>
-                <p className="text-[8px] font-bold text-gray-300 uppercase mt-2 leading-snug">A comissão entra quando o dinheiro entra: à vista na hora (ou no aceite da entrega); a prazo quando o cliente pagar</p>
-              </button>
-            );
-          })()}
           <div className="grid grid-cols-2 gap-4">
           <MenuCard icon="fa-route" title="Rota do Dia" tab="ROTEIRO" color="bg-blue-50 text-blue-600" />
           {/* BLOCO 13: TODO vendedor acompanha a fila de entregas dos seus pedidos (leitura) */}

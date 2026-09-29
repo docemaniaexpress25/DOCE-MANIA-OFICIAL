@@ -355,6 +355,7 @@ async function enrichParadas(supabase: any, salesRows: any[]) {
       valorPago: Number(s.valor_pago || 0),
       statusPagamento: s.status_pagamento,
       formaPgto: formaPgtoDeSale(s),
+      condicao: /A PRAZO/i.test(String(s.detalhe_pagamento || '')) ? 'APRAZO' : 'AVISTA',
       temFoto: !!temFotoSet[s.id],
       motivo: null as string | null,
       cliente: {

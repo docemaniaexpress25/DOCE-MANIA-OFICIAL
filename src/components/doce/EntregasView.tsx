@@ -26,6 +26,7 @@ interface Parada {
   valorPago: number;
   statusPagamento: string;
   formaPgto: string;     // DINHEIRO | PIX | BOLETO
+  condicao?: string;     // APRAZO | AVISTA (a prazo = entregador NAO cobra, so foto)
   temFoto: boolean;      // foto do boleto entregue (Bloco 6)
   motivo: string | null;
   cliente: { id: string; nome: string; endereco: string; bairro: string; telefone: string; lat: number | null; lng: number | null };
@@ -130,6 +131,8 @@ const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' 
   const [valorPix, setValorPix] = useState('');
   const [fotoBoleto, setFotoBoleto] = useState<string | null>(null);
   const [fotoPix, setFotoPix] = useState<string | null>(null);
+  // Foto da entrega em venda A PRAZO (obrigatoria — regra do dono)
+  const [fotoAprezo, setFotoAprezo] = useState<string | null>(null);
   // Cupom do pedido (visao entregador)
   const [cupom, setCupom] = useState<Parada | null>(null);
   // Foto do boleto entregue
@@ -200,6 +203,7 @@ const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' 
       setValorPix('');
       setFotoBoleto(null);
       setFotoPix(null);
+      setFotoAprezo(null);
     }
   }
 
@@ -251,6 +255,7 @@ const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' 
   // Parada em foco no sheet de entrega
   const sp = sheetEntregue;
   const spMetodo = sp ? (PGTO_META[sp.formaPgto] ? sp.formaPgto : 'DINHEIRO') : 'DINHEIRO';
+  const spAprezo = sp ? sp.condicao === 'APRAZO' : false;
   const rec = parseFloat(valorRecebido) || 0;
   const troco = sp && rec > sp.valorTotal ? rec - sp.valorTotal : 0;
   const falta = sp && rec > 0 && rec < sp.valorTotal ? sp.valorTotal - rec : 0;
@@ -541,16 +546,58 @@ const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' 
 
       {/* ===== SHEET: CONFIRMAR ENTREGA / RECEBIMENTO ===== */}
       {sp && (
-        <div className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-sm flex items-end justify-center" onClick={() => setSheetEntregue(null)}>
+        <div className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-sm flex items-end justify-center" onClick={() => { setFotoAprezo(null); setSheetEntregue(null); }}>
           <div className="bg-white w-full max-w-md rounded-t-3xl p-6 animate-in slide-in-from-bottom duration-300 max-h-[92vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-4"></div>
             <h3 className="text-sm font-black text-gray-800 uppercase text-center">Entrega #{sp.seq ?? ''} — {sp.cliente.nome}</h3>
             <p className="text-[10px] text-gray-400 font-semibold text-center mt-1">
-              Cliente escolheu pagar com <span className="text-gray-700 font-black uppercase">{pgtoMeta(spMetodo).label}</span>
+              {spAprezo ? (
+                <span className="text-amber-600 font-black uppercase">Venda a prazo — nao cobrar agora</span>
+              ) : (
+                <>Cliente escolheu pagar com <span className="text-gray-700 font-black uppercase">{pgtoMeta(spMetodo).label}</span></>
+              )}
             </p>
 
+            {/* --- A PRAZO: foto obrigatoria, SEM cobranca (regra do dono) --- */}
+            {spAprezo && (
+              <div className="mt-4 space-y-3 animate-in fade-in duration-300">
+                <div className="bg-amber-50 rounded-2xl p-4 text-center border border-amber-100">
+                  <i className="fa-solid fa-hand-holding-dollar text-amber-600 text-2xl"></i>
+                  <p className="text-[9px] font-black text-amber-700 uppercase mt-1">O entregador nao cobra venda a prazo</p>
+                  <p className="text-[9px] text-amber-600/80 font-semibold">O vendedor recebe na proxima visita. Anexe a foto da entrega/negociacao e confirme.</p>
+                </div>
+                <label className="block cursor-pointer">
+                  <input
+                    type="file" accept="image/*" capture="environment" className="hidden"
+                    onChange={async e => {
+                      const f = e.target.files?.[0];
+                      if (!f) return;
+                      try { setFotoAprezo(await compressImage(f)); }
+                      catch { showToast('Nao foi possivel processar a foto.', 'error'); }
+                    }}
+                  />
+                  <div className="py-3.5 rounded-2xl bg-amber-500 text-white text-[10px] font-black uppercase text-center shadow-md active:scale-95 transition-transform">
+                    <i className="fa-solid fa-camera mr-1"></i>{fotoAprezo ? 'Trocar foto' : 'Foto da entrega (obrigatoria)'}
+                  </div>
+                </label>
+                {fotoAprezo && (
+                  <div className="relative rounded-2xl overflow-hidden border border-gray-100 animate-in zoom-in-95">
+                    <img src={fotoAprezo} alt="Foto da entrega a prazo" className="w-full max-h-56 object-cover" />
+                    <span className="absolute top-2 right-2 bg-emerald-500 text-white text-[8px] font-black uppercase px-2 py-1 rounded-md">Foto anexada</span>
+                  </div>
+                )}
+                <button
+                  onClick={() => confirmarEntrega(sp, 'NAO_PAGO', { foto: fotoAprezo })}
+                  disabled={!!busy || !fotoAprezo}
+                  className="w-full py-4 bg-emerald-600 text-white rounded-2xl text-xs font-black uppercase tracking-wider shadow-lg active:scale-[0.98] transition-transform disabled:opacity-50"
+                >
+                  <i className="fa-solid fa-check mr-1"></i>Confirmar entrega (sem cobrar)
+                </button>
+              </div>
+            )}
+
             {/* --- DINHEIRO: valor recebido + troco --- */}
-            {spMetodo === 'DINHEIRO' && (
+            {spMetodo === 'DINHEIRO' && !spAprezo && (
               <div className="mt-4 space-y-3 animate-in fade-in duration-300">
                 <div className="bg-gray-50 rounded-2xl p-4 text-center border border-gray-100">
                   <p className="text-[9px] font-black text-gray-400 uppercase">Valor a receber</p>
@@ -595,7 +642,7 @@ const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' 
             )}
 
             {/* --- PIX: valor (parcial ok) + FOTO DO COMPROVANTE OBRIGATORIA --- */}
-            {spMetodo === 'PIX' && (
+            {spMetodo === 'PIX' && !spAprezo && (
               <div className="mt-4 space-y-3 animate-in fade-in duration-300">
                 <div className="bg-teal-50 rounded-2xl p-4 text-center border border-teal-100">
                   <i className="fa-brands fa-pix text-teal-600 text-2xl"></i>
@@ -649,7 +696,7 @@ const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' 
             )}
 
             {/* --- BOLETO: foto obrigatoria --- */}
-            {spMetodo === 'BOLETO' && (
+            {spMetodo === 'BOLETO' && !spAprezo && (
               <div className="mt-4 space-y-3 animate-in fade-in duration-300">
                 <div className="bg-amber-50 rounded-2xl p-4 text-center border border-amber-100">
                   <i className="fa-solid fa-barcode text-amber-600 text-2xl"></i>
@@ -687,21 +734,23 @@ const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' 
             )}
 
             {/* --- alternativas (qualquer forma) --- */}
-            <div className="mt-4 pt-3 border-t border-gray-100">
-              <p className="text-[8px] font-black text-gray-300 uppercase text-center mb-2">Pagou de outra forma?</p>
-              <div className="grid grid-cols-2 gap-2">
-                <button onClick={() => confirmarEntrega(sp, 'JA_PAGO')}
-                  className="py-3 rounded-xl bg-blue-50 text-blue-600 text-[9px] font-black uppercase active:scale-95 transition-transform">
-                  <i className="fa-solid fa-circle-check mr-1"></i>Ja pagou
-                </button>
-                <button onClick={() => confirmarEntrega(sp, 'NAO_PAGO')}
-                  className="py-3 rounded-xl bg-amber-50 text-amber-600 text-[9px] font-black uppercase active:scale-95 transition-transform">
-                  <i className="fa-solid fa-hand-holding-dollar mr-1"></i>Nao cobrou
-                </button>
+            {!spAprezo && (
+              <div className="mt-4 pt-3 border-t border-gray-100">
+                <p className="text-[8px] font-black text-gray-300 uppercase text-center mb-2">Pagou de outra forma?</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <button onClick={() => confirmarEntrega(sp, 'JA_PAGO')}
+                    className="py-3 rounded-xl bg-blue-50 text-blue-600 text-[9px] font-black uppercase active:scale-95 transition-transform">
+                    <i className="fa-solid fa-circle-check mr-1"></i>Ja pagou
+                  </button>
+                  <button onClick={() => confirmarEntrega(sp, 'NAO_PAGO')}
+                    className="py-3 rounded-xl bg-amber-50 text-amber-600 text-[9px] font-black uppercase active:scale-95 transition-transform">
+                    <i className="fa-solid fa-hand-holding-dollar mr-1"></i>Nao cobrou
+                  </button>
+                </div>
               </div>
-            </div>
+            )}
 
-            <button onClick={() => setSheetEntregue(null)} className="w-full mt-3 py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Cancelar</button>
+            <button onClick={() => { setFotoAprezo(null); setSheetEntregue(null); }} className="w-full mt-3 py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Cancelar</button>
           </div>
         </div>
       )}

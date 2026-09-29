@@ -235,10 +235,14 @@ async function registrarComissaoPreVenda(supabase: any, sale: any, quitada: bool
     };
 
     // evita duplicar se a parada for reaberta e re-entregue: atualiza a row
+    // (a comissao conta no dia em que a entrega foi EFETIVADA: created_at
+    // anda junto com a re-entrega — data de entrega = data da comissao)
     const { data: existente } = await supabase
       .from('commissions').select('id').eq('sale_id', sale.id).limit(1);
     if (existente && existente.length > 0) {
-      await supabase.from('commissions').update(payload).eq('id', existente[0].id);
+      await supabase.from('commissions')
+        .update({ ...payload, created_at: new Date().toISOString() })
+        .eq('id', existente[0].id);
     } else {
       await supabase.from('commissions').insert({
         sale_id: sale.id,
@@ -1150,6 +1154,13 @@ export async function POST(req: NextRequest) {
       }
 
       const updates: any = { entrega_status: 'ENTREGUE' };
+      // REGRA DO DONO: a pre-venda so e EFETIVADA na entrega (aceite do
+      // entregador ou do admin). A data da venda passa a ser a data da
+      // entrega — e por essa data que a venda e a comissao entram no dia
+      // ("o vendedor recebe a comissao das entregas efetivadas naquele dia").
+      if (saleRow.tipo_venda === 'PRE_VENDA') {
+        updates.data_venda = new Date().toISOString();
+      }
       if (session.perfil === 'ENTREGADOR') {
         // sales.entregador_id e uuid: o login fixo "ENTREGADOR" nao e UUID —
         // gravar direto derruba o update e a entrega nunca é registrada.

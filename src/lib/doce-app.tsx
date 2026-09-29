@@ -848,7 +848,7 @@ const App: React.FC = () => {
           />
         ) : (
           <VendedorDashboard 
-            {...{ products, users, cargas, cargasPendentes, sales, commissions, payoutLogs, expenses, messages, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, companyName, companyCnpj, user: currentUser, clients: sellerClients, categories, subcategories, clientOrder, melhorias }}
+            {...{ products, users, cargas, cargasPendentes, sales, commissions, payoutLogs, expenses, messages, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, companyName, companyCnpj, user: currentUser, clients: sellerClients, allClients: clients, categories, subcategories, clientOrder, melhorias }}
             markMessageAsRead={markMessageAsRead} processSale={processSale} processPreVenda={processPreVenda} addClient={addClient} updateClient={updateClient} deleteClient={deleteClient}
             receivePayment={receiveAccount} deleteSale={deleteSale} aceitarCarga={aceitarCarga} addExpense={addExpense} updateDailyRoute={updateDailyRoute}
             setClientOrder={setClientOrderWithPersistence}

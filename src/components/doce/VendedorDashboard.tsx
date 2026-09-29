@@ -1,8 +1,9 @@
 "use client";
 // @ts-nocheck
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { User, Product, Client, Carga, Sale, Commission, PaymentMethod, CargaPendente, CommissionPaymentLog, SystemMessage, Expense, Category, Subcategory } from '@/lib/types';
 import { saleService } from '@/services/saleService';
+import { authHeaders } from '@/services/userService';
 import { locationService } from '@/services/locationService';
 import { DIAS_SEMANA } from '@/lib/constants';
 import { buscarCnpjReceita, mascararCnpj, mensagemCnpj, clienteAptoNfe, CnpjBusca } from '@/lib/cnpjAutocomplete';
@@ -20,6 +21,8 @@ interface VendedorDashboardProps {
   user: User;
   products: Product[];
   clients: Client[];
+  /** Lista COMPLETA de clientes (todas as rotas) — usada para resolver nomes na cobrança mesmo com cliente reassinado */
+  allClients?: Client[];
   cargas: Carga[];
   cargasPendentes: CargaPendente[];
   sales: Sale[];
@@ -89,7 +92,7 @@ const shareImage = async (base64: string, fileName: string) => {
 };
 
 const VendedorDashboard: React.FC<VendedorDashboardProps> = ({ 
-  user, products = [], clients = [], cargas = [], cargasPendentes = [], sales = [], commissions = [], payoutLogs = [], expenses = [], messages = [], categories = [], subcategories = [], markMessageAsRead, processSale, processPreVenda, addClient, updateClient, deleteClient, receivePayment, deleteSale, aceitarCarga, addExpense, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, updateDailyRoute, companyName, companyCnpj, clientOrder, setClientOrder
+  user, products = [], clients = [], allClients = [], cargas = [], cargasPendentes = [], sales = [], commissions = [], payoutLogs = [], expenses = [], messages = [], categories = [], subcategories = [], markMessageAsRead, processSale, processPreVenda, addClient, updateClient, deleteClient, receivePayment, deleteSale, aceitarCarga, addExpense, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, updateDailyRoute, companyName, companyCnpj, clientOrder, setClientOrder
 }) => {
   const [activeTab, setActiveTab] = useState<TabType>(() => loadLocalState('v_activeTab', 'HOME'));
   const [selectedClient, setSelectedClient] = useState<Client | null>(() => loadLocalState('v_selectedClient', null));
@@ -109,6 +112,25 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const [comprovantePreview, setComprovantePreview] = useState<string | null>(null);
   const comprovanteFileInputRef = useRef<HTMLInputElement | null>(null);
   const [comprovanteUploading, setComprovanteUploading] = useState(false);
+
+  // Foto da ENTREGA (feita pelo entregador no a prazo) — visivel ao vendedor
+  const [fotoEntregaMap, setFotoEntregaMap] = useState<Record<string, boolean>>({});
+  const [fotoEntregaView, setFotoEntregaView] = useState<{ sale: Sale; url: string } | null>(null);
+  const [fotoEntregaLoading, setFotoEntregaLoading] = useState<string | null>(null);
+
+  const abrirFotoEntrega = async (s: Sale) => {
+    setFotoEntregaLoading(s.id);
+    try {
+      const res = await fetch(`/api/pre-venda/foto?saleId=${s.id}`, { headers: authHeaders() });
+      const d = await res.json().catch(() => null);
+      if (res.ok && d?.foto) setFotoEntregaView({ sale: s, url: d.foto });
+      else showToast(d?.error || 'Sem foto da entrega.', 'error');
+    } catch {
+      showToast('Nao foi possivel carregar a foto.', 'error');
+    } finally {
+      setFotoEntregaLoading(null);
+    }
+  };
 
   const handleComprovanteCapture = async (saleId: string, file: File) => {
     setComprovanteUploading(true);
@@ -756,8 +778,25 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     return acc;
   }, { total: 0, dinheiro: 0, pix: 0, prazo: 0 }), [filteredHistory]);
 
+  // Nome do cliente SEMPRE resolve (mesmo com cliente reassinado de rota):
+  // busca primeiro na lista completa (todas as rotas), depois na da rota.
+  const nomeClienteDe = useCallback((clientId: string): string => {
+    const c = (allClients || []).find(x => x.id === clientId) || (clients || []).find(x => x.id === clientId);
+    return c?.nomeFantasia || 'Cliente';
+  }, [allClients, clients]);
+
+  // Clientes da MINHA rota ATUAL (a carteira de cobrança segue o cliente,
+  // não quem fez a venda: cliente passado de Rota 2 p/ Rota 1 cobra aqui).
+  const clientesDaMinhaRota = useMemo(() => {
+    const minhaRota = user.rota || 'ROTA_01';
+    return new Set((allClients || clients || []).filter(c => c.rota === minhaRota).map(c => c.id));
+  }, [allClients, clients, user.rota]);
+
   const contasAReceber = useMemo(() => {
-    let filtered = (sales || []).filter(s => s.vendedorId === user.id && s.metodoPagamento === 'A_PRAZO' && s.statusPagamento === 'PENDENTE');
+    let filtered = (sales || []).filter(s =>
+      (s.vendedorId === user.id || clientesDaMinhaRota.has(s.clientId)) &&
+      s.metodoPagamento === 'A_PRAZO' && s.statusPagamento === 'PENDENTE'
+    );
     if (filterOverdueOnly) {
       const today = new Date();
       today.setHours(0,0,0,0);
@@ -780,14 +819,28 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     }
 
     if (creditSearch) {
-      filtered = filtered.filter(s => {
-        const client = clients.find(c => c.id === s.clientId);
-        return client?.nomeFantasia.toLowerCase().includes(creditSearch.toLowerCase());
-      });
+      filtered = filtered.filter(s => nomeClienteDe(s.clientId).toLowerCase().includes(creditSearch.toLowerCase()));
     }
 
     return filtered;
-  }, [sales, user.id, filterOverdueOnly, creditTypeFilter, creditSearch, clients]);
+  }, [sales, user.id, clientesDaMinhaRota, filterOverdueOnly, creditTypeFilter, creditSearch, nomeClienteDe]);
+
+  // Busca em lote quais vendas a prazo em aberto tem foto da entrega (entregador)
+  useEffect(() => {
+    if (activeTab !== 'CREDIT') return;
+    const ids = contasAReceber.map(s => s.id);
+    if (ids.length === 0) return;
+    let alive = true;
+    (async () => {
+      try {
+        const res = await fetch(`/api/pre-venda/foto?saleIds=${encodeURIComponent(ids.join(','))}`, { headers: authHeaders() });
+        if (!res.ok) return;
+        const d = await res.json().catch(() => null);
+        if (alive && d?.temFoto) setFotoEntregaMap(prev => ({ ...prev, ...d.temFoto }));
+      } catch { /* silencioso */ }
+    })();
+    return () => { alive = false; };
+  }, [activeTab, contasAReceber]);
 
   const valorTotalCarga = useMemo(() => minhaCarga.reduce((acc, curr) => {
     const p = products.find(prod => prod.id === curr.produtoId);
@@ -1418,7 +1471,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
               <div key={s.id} className={`p-5 rounded-3xl border shadow-sm flex flex-col transition-all ${isOverdue ? 'bg-rose-50 border-rose-200' : 'bg-white border-gray-100'}`}>
                 <div className="flex justify-between items-start mb-2">
                    <div className="flex-1 pr-4">
-                      <h4 className={`font-bold text-sm leading-tight uppercase cursor-pointer ${isOverdue ? 'text-rose-900' : 'text-gray-800'}`} onClick={() => setViewingClientHistory(clients.find(c => c.id === s.clientId)!)}>{clients.find(c => c.id === s.clientId)?.nomeFantasia || 'Cliente'}</h4>
+                      <h4 className={`font-bold text-sm leading-tight uppercase cursor-pointer ${isOverdue ? 'text-rose-900' : 'text-gray-800'}`} onClick={() => { const c = (allClients || []).find(x => x.id === s.clientId) || clients.find(x => x.id === s.clientId); if (c) setViewingClientHistory(c); }}>{nomeClienteDe(s.clientId)}</h4>
                       <div className="flex flex-col mt-2">
                         <span className={`text-[9px] font-black uppercase ${isOverdue ? 'text-rose-600' : 'text-gray-400'}`}>Vencimento</span>
                         <span className={`text-xs font-black ${isOverdue ? 'text-rose-700' : 'text-gray-800'}`}>{s.dataVencimento ? new Date(s.dataVencimento).toLocaleDateString() : 'N/D'}</span>
@@ -1460,6 +1513,11 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                     </button>
                   )}
                 </div>
+                {fotoEntregaMap[s.id] && (
+                  <button onClick={(e) => { e.stopPropagation(); abrirFotoEntrega(s); }} disabled={fotoEntregaLoading === s.id} className="w-full py-2.5 rounded-xl text-[9px] font-black uppercase mt-2 bg-teal-50 text-teal-600 active:scale-95 flex items-center justify-center gap-1.5 border border-teal-100">
+                    <i className={`fa-solid ${fotoEntregaLoading === s.id ? 'fa-spinner fa-spin' : 'fa-truck-fast'}`}></i>Foto da Entrega (Entregador)
+                  </button>
+                )}
               </div>
             )})}
             {contasAReceber.length === 0 && (
@@ -1681,6 +1739,32 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
               e.target.value = '';
             }}
           />
+        </div>
+      )}
+
+      {/* MODAL: Foto da entrega (entregador) */}
+      {fotoEntregaView && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[210] flex items-center justify-center p-4" onClick={() => setFotoEntregaView(null)}>
+          <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="bg-gradient-to-br from-teal-500 to-emerald-600 p-5 text-center">
+              <div className="w-12 h-12 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-2">
+                <i className="fa-solid fa-truck-fast text-white text-xl"></i>
+              </div>
+              <h3 className="font-black text-white text-sm uppercase">Foto da Entrega</h3>
+              <p className="text-white/70 text-[9px] font-bold mt-1">{nomeClienteDe(fotoEntregaView.sale.clientId)}</p>
+            </div>
+            <div className="p-5">
+              <img src={fotoEntregaView.url} className="w-full rounded-2xl border border-gray-100" alt="Foto da entrega" />
+              <div className="grid grid-cols-2 gap-2 mt-3">
+                <button onClick={() => shareImage(fotoEntregaView.url, `entrega_${fotoEntregaView.sale.id}.jpg`)} className="py-3 rounded-xl text-[9px] font-black uppercase bg-emerald-50 text-emerald-600 active:scale-95 flex items-center justify-center gap-1.5 border border-emerald-100">
+                  <i className="fa-brands fa-whatsapp"></i>Compartilhar
+                </button>
+                <button onClick={() => setFotoEntregaView(null)} className="py-3 rounded-xl text-[9px] font-black uppercase bg-gray-100 text-gray-600 active:scale-95 flex items-center justify-center gap-1.5">
+                  <i className="fa-solid fa-xmark"></i>Fechar
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
           {confirmAction && (

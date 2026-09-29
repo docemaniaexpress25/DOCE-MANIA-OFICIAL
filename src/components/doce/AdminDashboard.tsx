@@ -243,6 +243,25 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [comprovantePreview, setComprovantePreview] = useState<string | null>(null);
   const [comprovanteUploading, setComprovanteUploading] = useState(false);
   const [comprovanteLocal, setComprovanteLocal] = useState<Record<string, string>>({});
+
+  // Foto da ENTREGA (feita pelo entregador no a prazo) — visivel ao admin
+  const [fotoEntregaMap, setFotoEntregaMap] = useState<Record<string, boolean>>({});
+  const [fotoEntregaView, setFotoEntregaView] = useState<{ sale: Sale; url: string } | null>(null);
+  const [fotoEntregaLoading, setFotoEntregaLoading] = useState<string | null>(null);
+
+  const abrirFotoEntrega = async (s: Sale) => {
+    setFotoEntregaLoading(s.id);
+    try {
+      const res = await fetch(`/api/pre-venda/foto?saleId=${s.id}`, { headers: authHeaders() });
+      const d = await res.json().catch(() => null);
+      if (res.ok && d?.foto) setFotoEntregaView({ sale: s, url: d.foto });
+      else showToast(d?.error || 'Sem foto da entrega.', 'error');
+    } catch {
+      showToast('Nao foi possivel carregar a foto.', 'error');
+    } finally {
+      setFotoEntregaLoading(null);
+    }
+  };
   // Helpers para comprovante
   const compressImage = (file: File): Promise<string> => new Promise((resolve) => {
     const reader = new FileReader();
@@ -1022,6 +1041,23 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
     return filtered;
   }, [props.sales, filterOverdueOnly, creditTypeFilter, search, activeTab, props.clients]);
+
+  // Busca em lote quais vendas a prazo em aberto tem foto da entrega (entregador)
+  useEffect(() => {
+    if (activeTab !== 'CONTAS_RECEBER') return;
+    const ids = contasAReceber.map(s => s.id);
+    if (ids.length === 0) return;
+    let alive = true;
+    (async () => {
+      try {
+        const res = await fetch(`/api/pre-venda/foto?saleIds=${encodeURIComponent(ids.join(','))}`, { headers: authHeaders() });
+        if (!res.ok) return;
+        const d = await res.json().catch(() => null);
+        if (alive && d?.temFoto) setFotoEntregaMap(prev => ({ ...prev, ...d.temFoto }));
+      } catch { /* silencioso */ }
+    })();
+    return () => { alive = false; };
+  }, [activeTab, contasAReceber]);
 
   const MenuCard = ({ icon, title, tab, color, badge }: any) => (
     <button onClick={() => { setActiveTab(tab); if (tab === 'COMPROVANTES') setComprovantesBadge(0); }} className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col items-center justify-center gap-3 active:scale-95 transition-all text-center group">
@@ -2103,6 +2139,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                     </button>
                   )}
                 </div>
+                {fotoEntregaMap[s.id] && (
+                  <button onClick={(e) => { e.stopPropagation(); abrirFotoEntrega(s); }} disabled={fotoEntregaLoading === s.id} className="w-full py-2.5 rounded-xl text-[9px] font-black uppercase mt-2 bg-teal-50 text-teal-600 active:scale-95 flex items-center justify-center gap-1.5 border border-teal-100">
+                    <i className={`fa-solid ${fotoEntregaLoading === s.id ? 'fa-spinner fa-spin' : 'fa-truck-fast'}`}></i>Foto da Entrega (Entregador)
+                  </button>
+                )}
               </div>
             )})}
           </div>
@@ -2451,6 +2492,32 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
               e.target.value = '';
             }}
           />
+        </div>
+      )}
+
+      {/* MODAL: Foto da entrega (entregador) */}
+      {fotoEntregaView && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[260] flex items-center justify-center p-4" onClick={() => setFotoEntregaView(null)}>
+          <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="bg-gradient-to-br from-teal-500 to-emerald-600 p-5 text-center">
+              <div className="w-12 h-12 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-2">
+                <i className="fa-solid fa-truck-fast text-white text-xl"></i>
+              </div>
+              <h3 className="font-black text-white text-sm uppercase">Foto da Entrega</h3>
+              <p className="text-white/70 text-[9px] font-bold mt-1">{props.clients.find(c => c.id === fotoEntregaView.sale.clientId)?.nomeFantasia || 'Cliente'}</p>
+            </div>
+            <div className="p-5">
+              <img src={fotoEntregaView.url} className="w-full rounded-2xl border border-gray-100" alt="Foto da entrega" />
+              <div className="grid grid-cols-2 gap-2 mt-3">
+                <button onClick={() => shareImage(fotoEntregaView.url, `entrega_${fotoEntregaView.sale.id}.jpg`)} className="py-3 rounded-xl text-[9px] font-black uppercase bg-emerald-50 text-emerald-600 active:scale-95 flex items-center justify-center gap-1.5 border border-emerald-100">
+                  <i className="fa-brands fa-whatsapp"></i>Compartilhar
+                </button>
+                <button onClick={() => setFotoEntregaView(null)} className="py-3 rounded-xl text-[9px] font-black uppercase bg-gray-100 text-gray-600 active:scale-95 flex items-center justify-center gap-1.5">
+                  <i className="fa-solid fa-xmark"></i>Fechar
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 

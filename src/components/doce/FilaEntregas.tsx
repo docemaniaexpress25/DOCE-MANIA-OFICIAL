@@ -68,6 +68,7 @@ const PGTO_META: Record<string, { label: string; icon: string; chip: string }> =
   DINHEIRO: { label: 'Dinheiro', icon: 'fa-solid fa-money-bill-wave', chip: 'bg-emerald-50 text-emerald-700' },
   PIX: { label: 'Pix', icon: 'fa-brands fa-pix', chip: 'bg-teal-50 text-teal-700' },
   BOLETO: { label: 'Boleto', icon: 'fa-solid fa-barcode', chip: 'bg-amber-50 text-amber-700' },
+  CHEQUE: { label: 'Cheque', icon: 'fa-solid fa-money-check', chip: 'bg-violet-50 text-violet-700' },
 };
 const pgtoMeta = (m: string) => PGTO_META[m] || PGTO_META.DINHEIRO;
 

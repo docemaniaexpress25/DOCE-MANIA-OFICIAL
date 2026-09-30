@@ -14,10 +14,18 @@ import { sendPushToUser } from '@/lib/pushSender';
  *     • O acerto consome as comissões DISPONIVEL MAIS ANTIGAS primeiro (FIFO):
  *       cada comissão guarda quanto já foi pago (valor_pago) e vira PAGO
  *       quando não sobra nada nela.
- *   Body: total=true -> paga tudo que está disponível; senão valor=montante.
+ *   Body: total=true -> libera tudo que está disponível; senão valor=montante.
+ *
+ * POST { acao: 'RECIBO' }  [VENDEDOR/ADMIN]
+ *   Fluxo novo do dono: o admin LIBERA a comissão e o VENDEDOR dá o ACEITE
+ *   (recibo) confirmando que recebeu. Marca os repasses liberados e ainda
+ *   não confirmados como aceitados (aceitado=true + aceite_em).
+ *   PRE-REQUISITO: SQL do Bloco 15 (colunas aceitado/aceite_em).
  *
  * GET ?saldo=1&vendedorId=... -> saldo do próprio vendedor (VENDEDOR) — usado
  *   pela tela do vendedor; admin pode consultar qualquer um.
+ *   Resposta inclui liberadoPendente = valor liberado pelo admin e ainda sem
+ *   recibo do vendedor (o que aparece no botão "DAR RECIBO").
  */
 
 const round2 = (v: number) => Math.round(v * 100) / 100;
@@ -30,12 +38,34 @@ export async function POST(req: NextRequest) {
   }
   const session = sessionFromRequest(req);
   if (!session) return NextResponse.json({ ok: false, error: 'Sessao expirada. Entre novamente.' }, { status: 401 });
-  if (!isAdminSession(req)) return NextResponse.json({ ok: false, error: 'Acesso restrito ao admin.' }, { status: 403 });
 
   try {
     const body = await req.json();
     const acao = String(body.acao || '');
+
+    // ---------- RECIBO: o vendedor confirma que recebeu o valor liberado ----------
+    if (acao === 'RECIBO') {
+      // Vendedor dá o recibo DO PRÓPRIO valor (admin também pode, sem efeito prático).
+      const supabase = getServiceClient();
+      const { data: upd, error: rErr } = await supabase
+        .from('commission_payment_logs')
+        .update({ aceitado: true, aceite_em: new Date().toISOString() })
+        .eq('seller_id', session.sub)
+        .eq('aceitado', false)
+        .select('id');
+      if (rErr) {
+        const code = (rErr as any).code || '';
+        if (code === '42703' || code === 'PGRST204' || /aceitado/i.test(String(rErr.message || ''))) {
+          return NextResponse.json({ ok: false, error: 'Banco desatualizado: rode o SQL do Bloco 15 (recibo de comissao).' }, { status: 503 });
+        }
+        throw rErr;
+      }
+      return NextResponse.json({ ok: true, recibos: (upd || []).length });
+    }
+
+    // ---------- PAGAR (liberar): somente admin ----------
     if (acao !== 'PAGAR') return NextResponse.json({ ok: false, error: 'Acao desconhecida.' }, { status: 400 });
+    if (!isAdminSession(req)) return NextResponse.json({ ok: false, error: 'Acesso restrito ao admin.' }, { status: 403 });
 
     const vendedorId = String(body.vendedorId || '');
     if (!vendedorId) return NextResponse.json({ ok: false, error: 'vendedorId obrigatorio.' }, { status: 400 });
@@ -68,7 +98,7 @@ export async function POST(req: NextRequest) {
 
     const aPagarMax = Math.max(0, round2(saldoTotal - despesas));
 
-    // Quanto o admin quer pagar agora?
+    // Quanto o admin quer liberar agora?
     let valor: number;
     if (body.total === true) {
       valor = aPagarMax;
@@ -76,12 +106,12 @@ export async function POST(req: NextRequest) {
       valor = round2(Number(body.valor) || 0);
     }
     if (!(valor > 0)) {
-      return NextResponse.json({ ok: false, error: 'Nada a pagar: nao ha comissao disponivel suficiente.' }, { status: 400 });
+      return NextResponse.json({ ok: false, error: 'Nada a liberar: nao ha comissao disponivel suficiente.' }, { status: 400 });
     }
     if (valor > aPagarMax + 0.005) {
       return NextResponse.json({
         ok: false,
-        error: `Valor maior que o disponivel. A pagar agora: R$ ${aPagarMax.toFixed(2)} (comissao R$ ${saldoTotal.toFixed(2)} − despesas R$ ${despesas.toFixed(2)}).`,
+        error: `Valor maior que o disponivel. A liberar agora: R$ ${aPagarMax.toFixed(2)} (comissao R$ ${saldoTotal.toFixed(2)} − despesas R$ ${despesas.toFixed(2)}).`,
       }, { status: 400 });
     }
 
@@ -101,24 +131,35 @@ export async function POST(req: NextRequest) {
       aConsumir = round2(aConsumir - uso);
     }
 
-    // Histórico do repasse
+    // Histórico do repasse (liberação). aceitado=false = aguardando o recibo
+    // do vendedor. Se o SQL do Bloco 15 ainda nao rodou, grava sem a coluna
+    // (o sistema continua funcionando; so o recibo fica indisponível).
     const obs = String(body.obs || '').slice(0, 200) || null;
-    await supabase.from('commission_payment_logs').insert({
+    const logPayload: any = {
       seller_id: vendedorId,
       valor_pago: valor,
       metodo_pagamento: 'DINHEIRO',
-      observacao: obs || `Acerto pelo admin — FIFO + despesas R$ ${despesas.toFixed(2)}`,
+      observacao: obs || `Comissao liberada pelo admin — FIFO + despesas R$ ${despesas.toFixed(2)}`,
       created_at: new Date().toISOString(),
-    });
+      aceitado: false,
+    };
+    let { error: logErr } = await supabase.from('commission_payment_logs').insert(logPayload);
+    if (logErr && (logErr.code === '42703' || logErr.code === 'PGRST204' || /aceitado/i.test(String(logErr.message || '')))) {
+      const semAceite = { ...logPayload };
+      delete semAceite.aceitado;
+      delete semAceite.aceite_em;
+      ({ error: logErr } = await supabase.from('commission_payment_logs').insert(semAceite));
+    }
+    if (logErr) throw logErr;
 
-    // Aviso ao vendedor
+    // Aviso ao vendedor: liberou -> vendedor precisa DAR O RECIBO no app
     try {
-      await sendPushToUser(vendedorId, { title: 'Comissão paga 💰', body: `O admin acertou R$ ${valor.toFixed(2)} da sua comissão.`, url: '/' });
+      await sendPushToUser(vendedorId, { title: 'Comissão liberada 💰', body: `O admin liberou R$ ${valor.toFixed(2)}. Abra o Financeiro e de o RECIBO.`, url: '/' });
       await supabase.from('system_messages').insert({
-        vendedor_id: vendedorId,
-        titulo: 'Comissão Paga',
-        mensagem: `O Admin confirmou seu pagamento de R$ ${valor.toFixed(2)}.`,
-        data: new Date().toISOString(),
+        seller_id: vendedorId,
+        titulo: 'Comissão Liberada',
+        mensagem: `O Admin liberou R$ ${valor.toFixed(2)}. Confirme o recebimento com o botao DAR RECIBO no Financeiro.`,
+        created_at: new Date().toISOString(),
         lida: false,
         type: 'COMMISSION_CONFIRMATION',
       });
@@ -171,11 +212,29 @@ export async function GET(req: NextRequest) {
     const { data: exps } = await supabase.from('seller_expenses').select('valor').eq('seller_id', alvoId);
     const despesas = round2((exps || []).reduce((a: number, e: any) => a + Number(e.valor || 0), 0));
 
+    // Liberado pelo admin e ainda SEM recibo do vendedor (botao "DAR RECIBO").
+    // Se o SQL do Bloco 15 nao rodou, a coluna aceitado nao existe -> sem recibo.
+    let liberadoPendente = 0;
+    let sqlReciboPendente = false;
+    try {
+      const { data: pend, error: pErr } = await supabase
+        .from('commission_payment_logs')
+        .select('valor_pago')
+        .eq('seller_id', alvoId)
+        .eq('aceitado', false);
+      if (pErr) throw pErr;
+      liberadoPendente = round2((pend || []).reduce((a: number, l: any) => a + Number(l.valor_pago || 0), 0));
+    } catch {
+      sqlReciboPendente = true;
+    }
+
     return NextResponse.json({
       disponivel: round2(disp),
       despesas,
       aPagar: round2(Math.max(0, disp - despesas)),
       aguardando: round2(aguardando),
+      liberadoPendente,
+      sqlReciboPendente,
     });
   } catch (e: any) {
     console.error('[api/comissoes][GET] erro:', e?.message);

@@ -44,8 +44,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const [isPrePedido, setIsPrePedido] = useState(false);
   const isPreVenda = modoVenda === 'PRE_VENDA' && !!processPreVenda;
   // Pre-venda: forma de pagamento que o CLIENTE escolheu pagar na entrega
-  const [metodoEntrega, setMetodoEntrega] = useState<'DINHEIRO' | 'PIX' | 'BOLETO'>('DINHEIRO');
-  // BLOCO 13: condicao combinada — A VISTA (Dinheiro|Pix) ou A PRAZO (Dinheiro|Pix|Boleto)
+  const [metodoEntrega, setMetodoEntrega] = useState<'DINHEIRO' | 'PIX' | 'BOLETO' | 'CHEQUE'>('DINHEIRO');
+  // BLOCO 13: condicao combinada — A VISTA (Dinheiro|Pix) ou A PRAZO (Dinheiro|Pix|Boleto|Cheque)
   const [condicaoPv, setCondicaoPv] = useState<'AVISTA' | 'APRAZO'>('AVISTA');
   const [vencimentoPv, setVencimentoPv] = useState<string>(() => {
     const d = new Date(); d.setDate(d.getDate() + 7);
@@ -431,7 +431,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
 
     // ===== PRE-VENDA: registra o PEDIDO (sem cobranca, sem baixa de carga) =====
     if (isPreVenda) {
-      const formaFinal = condicaoPv === 'AVISTA' && metodoEntrega === 'BOLETO' ? 'DINHEIRO' : metodoEntrega;
+      const formaFinal = condicaoPv === 'AVISTA' && (metodoEntrega === 'BOLETO' || metodoEntrega === 'CHEQUE') ? 'DINHEIRO' : metodoEntrega;
       const r = await processPreVenda!({ clientId: client.id, valorTotal: total, itens, formaPagamento: formaFinal, condicao: condicaoPv, vencimento: condicaoPv === 'APRAZO' ? vencimentoPv : undefined, trocas: trocasTexto.trim() });
       if (r.pedido) {
         const pedido = r.pedido;
@@ -651,7 +651,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               trocas: trocasTexto.trim() || undefined,
               tipoVenda: isPreVenda ? 'PRE_VENDA' : 'PRONTA',
               entregaStatus: isPreVenda ? 'PENDENTE' : undefined,
-              detalhePagamento: isPreVenda ? `PRE-VENDA — cobrar ${condicaoPv === 'AVISTA' && metodoEntrega === 'BOLETO' ? 'DINHEIRO' : metodoEntrega} na entrega (${condicaoPv === 'APRAZO' ? 'A PRAZO' : 'A VISTA'})` : undefined,
+              detalhePagamento: isPreVenda ? `PRE-VENDA — cobrar ${condicaoPv === 'AVISTA' && (metodoEntrega === 'BOLETO' || metodoEntrega === 'CHEQUE') ? 'DINHEIRO' : metodoEntrega} na entrega (${condicaoPv === 'APRAZO' ? 'A PRAZO' : 'A VISTA'})` : undefined,
               dataVencimento: isPreVenda && condicaoPv === 'APRAZO' ? new Date(`${vencimentoPv}T23:59:59-03:00`) : undefined,
             }} 
             client={client} 
@@ -934,7 +934,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                   <p className="text-[9px] font-black text-gray-400 uppercase text-center mb-2">Pagamento combinado com o cliente</p>
                   {/* BLOCO 13: condicao — A VISTA ou A PRAZO (regra do dono) */}
                   <div className="flex gap-1.5 mb-3 justify-center">
-                    <button onClick={() => { setCondicaoPv('AVISTA'); if (metodoEntrega === 'BOLETO') setMetodoEntrega('DINHEIRO'); }} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${condicaoPv === 'AVISTA' ? 'bg-emerald-600 text-white shadow-md' : 'bg-gray-50 text-gray-400'}`}>
+                    <button onClick={() => { setCondicaoPv('AVISTA'); if (metodoEntrega === 'BOLETO' || metodoEntrega === 'CHEQUE') setMetodoEntrega('DINHEIRO'); }} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${condicaoPv === 'AVISTA' ? 'bg-emerald-600 text-white shadow-md' : 'bg-gray-50 text-gray-400'}`}>
                       <i className="fa-solid fa-money-bill-wave mr-1"></i>À vista
                     </button>
                     <button onClick={() => setCondicaoPv('APRAZO')} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${condicaoPv === 'APRAZO' ? 'bg-indigo-600 text-white shadow-md' : 'bg-gray-50 text-gray-400'}`}>
@@ -942,8 +942,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                     </button>
                   </div>
                   <div className="flex gap-1.5 mb-4 justify-center">
-                    {(condicaoPv === 'AVISTA' ? ['DINHEIRO', 'PIX'] as const : ['DINHEIRO', 'PIX', 'BOLETO'] as const).map(m => (
-                      <button key={m} onClick={() => setMetodoEntrega(m)} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${metodoEntrega === m ? 'bg-emerald-600 text-white shadow-md' : 'bg-gray-50 text-gray-400'}`}>{m === 'DINHEIRO' ? 'Dinheiro' : m}</button>
+                    {(condicaoPv === 'AVISTA' ? ['DINHEIRO', 'PIX'] as const : ['DINHEIRO', 'PIX', 'BOLETO', 'CHEQUE'] as const).map(m => (
+                      <button key={m} onClick={() => setMetodoEntrega(m)} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${metodoEntrega === m ? 'bg-emerald-600 text-white shadow-md' : 'bg-gray-50 text-gray-400'}`}>{m === 'DINHEIRO' ? 'Dinheiro' : m.charAt(0) + m.slice(1).toLowerCase()}</button>
                     ))}
                   </div>
                   {condicaoPv === 'APRAZO' && (

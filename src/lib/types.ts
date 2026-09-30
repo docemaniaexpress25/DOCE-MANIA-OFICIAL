@@ -181,6 +181,9 @@ export interface CommissionPaymentLog {
   tipo: 'TOTAL' | 'PARCIAL';
   dataPagamento: Date;
   adminId: string;
+  /** Bloco 15: recibo do vendedor — undefined = SQL ainda nao rodou (trata como aceito) */
+  aceitado?: boolean;
+  aceiteEm?: Date;
 }
 
 export interface Expense {

@@ -500,10 +500,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     const totalDespesas = sellerExps.reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
     const comissaoAPagar = Math.max(0, comissaoDisponivel - totalDespesas);
     const comissaoAReceber = sellerComms.filter(c => c.status === 'A_RECEBER').reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
-    const totalPago = sellerLogs.reduce((acc, l) => acc + (l.valorPago ?? 0), 0);
+    const totalPago = sellerLogs.filter(l => l.aceitado !== false).reduce((acc, l) => acc + (l.valorPago ?? 0), 0);
+    // BLOCO 15: liberado pelo admin e ainda SEM o recibo do vendedor
+    const liberadoAguardando = sellerLogs.filter(l => l.aceitado === false).reduce((acc, l) => acc + (l.valorPago ?? 0), 0);
     const vendasHoje = vSales.reduce((acc, curr) => acc + (curr.valorTotal ?? 0), 0);
     const comissaoGerada = sellerComms.filter(c => filterByPeriod(c.dataGeracao, 'HOJE')).reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
-    return { vendasHoje: Number(vendasHoje.toFixed(2)), comissaoGerada: Number(comissaoGerada.toFixed(2)), comissaoDisponivel: Number(comissaoDisponivel.toFixed(2)), totalDespesas: Number(totalDespesas.toFixed(2)), comissaoAPagar: Number(comissaoAPagar.toFixed(2)), comissaoAReceber: Number(comissaoAReceber.toFixed(2)), totalPago: Number(totalPago.toFixed(2)) };
+    return { vendasHoje: Number(vendasHoje.toFixed(2)), comissaoGerada: Number(comissaoGerada.toFixed(2)), comissaoDisponivel: Number(comissaoDisponivel.toFixed(2)), totalDespesas: Number(totalDespesas.toFixed(2)), comissaoAPagar: Number(comissaoAPagar.toFixed(2)), comissaoAReceber: Number(comissaoAReceber.toFixed(2)), totalPago: Number(totalPago.toFixed(2)), liberadoAguardando: Number(liberadoAguardando.toFixed(2)) };
   };
 
   // ============================================================
@@ -1606,10 +1608,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         const totalDisponivel = props.users.filter(u => u.role === 'VENDEDOR').reduce((a, v) => a + getVendedorStats(v.id).comissaoDisponivel, 0);
         const totalAPagar = props.users.filter(u => u.role === 'VENDEDOR').reduce((a, v) => a + getVendedorStats(v.id).comissaoAPagar, 0);
         const totalAguardando = props.commissions.filter(c => c.status === 'A_RECEBER').reduce((a, c) => a + (c.valor ?? 0), 0);
-        const totalJaPago = props.payoutLogs.reduce((a, l) => a + (l.valorPago ?? 0), 0);
+        const totalJaPago = props.payoutLogs.filter(l => l.aceitado !== false).reduce((a, l) => a + (l.valorPago ?? 0), 0);
+        const totalAguardandoRecibo = props.payoutLogs.filter(l => l.aceitado === false).reduce((a, l) => a + (l.valorPago ?? 0), 0);
         return (
           <div className="space-y-4">
-            <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Comissões</h2><p className="text-[10px] text-gray-400 font-bold uppercase mt-1">A comissão entra quando o DINHEIRO entra — nunca antes</p></div>
+            <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Comissões</h2><p className="text-[10px] text-gray-400 font-bold uppercase mt-1">Admin LIBERA — vendedor confirma com o RECIBO no app dele</p></div>
             <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 mx-2">
               <p className="text-[9px] font-bold text-blue-700 leading-relaxed">
                 <i className="fa-solid fa-circle-info mr-1"></i>
@@ -1620,7 +1623,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
               <div className="grid grid-cols-2 gap-3">
                 <div className="text-center bg-emerald-50 p-4 rounded-2xl col-span-2"><p className="text-[8px] font-black text-emerald-500 uppercase mb-1">A Pagar Agora (todos os vendedores)</p><p className="text-2xl font-black text-emerald-700">R$ {totalAPagar.toFixed(2)}</p><p className="text-[8px] font-bold text-emerald-500 uppercase mt-1">Comissão disponível: R$ {totalDisponivel.toFixed(2)} − despesas</p></div>
                 <div className="text-center bg-amber-50 p-4 rounded-2xl"><p className="text-[8px] font-black text-amber-500 uppercase mb-1">Aguardando Dinheiro</p><p className="text-lg font-black text-amber-700">R$ {totalAguardando.toFixed(2)}</p></div>
-                <div className="text-center bg-blue-50 p-4 rounded-2xl"><p className="text-[8px] font-black text-blue-500 uppercase mb-1">Já Pago (histórico)</p><p className="text-lg font-black text-blue-700">R$ {totalJaPago.toFixed(2)}</p></div>
+                <div className="text-center bg-blue-50 p-4 rounded-2xl"><p className="text-[8px] font-black text-blue-500 uppercase mb-1">Pago (recibo ok)</p><p className="text-lg font-black text-blue-700">R$ {totalJaPago.toFixed(2)}</p>{totalAguardandoRecibo > 0 && <p className="text-[8px] font-black text-amber-500 uppercase mt-1">+ R$ {totalAguardandoRecibo.toFixed(2)} aguardando recibo</p>}</div>
               </div>
             </div>
 
@@ -1638,7 +1641,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                           <div><h4 className="font-bold text-gray-800 text-[11px] uppercase">{v.nome}</h4><p className="text-[9px] text-gray-400 font-bold uppercase">Vendas hoje: R$ {stats.vendasHoje.toFixed(2)}</p></div>
                         </div>
                         <button onClick={() => handleOpenPayout(v)} disabled={stats.comissaoAPagar <= 0} className={`px-4 py-2 rounded-xl text-[9px] font-black uppercase active:scale-95 shadow-sm ${stats.comissaoAPagar > 0 ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-300'}`}>
-                          <i className="fa-solid fa-money-bill-transfer mr-1"></i>Acertar
+                          <i className="fa-solid fa-hand-holding-dollar mr-1"></i>Liberar
                         </button>
                       </div>
                       <div className="bg-emerald-50 rounded-2xl p-3 flex items-center justify-between mb-2">
@@ -1648,8 +1651,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                       <div className="grid grid-cols-3 gap-2">
                         <div className="text-center bg-amber-50 p-2 rounded-xl"><p className="text-[7px] font-black text-amber-500 uppercase">Aguardando</p><p className="text-[11px] font-black text-amber-700">R$ {stats.comissaoAReceber.toFixed(2)}</p></div>
                         <div className="text-center bg-blue-50 p-2 rounded-xl"><p className="text-[7px] font-black text-blue-500 uppercase">Gerada hoje</p><p className="text-[11px] font-black text-blue-700">R$ {stats.comissaoGerada.toFixed(2)}</p></div>
-                        <div className="text-center bg-gray-50 p-2 rounded-xl"><p className="text-[7px] font-black text-gray-400 uppercase">Já pago</p><p className="text-[11px] font-black text-gray-600">R$ {stats.totalPago.toFixed(2)}</p></div>
+                        <div className="text-center bg-gray-50 p-2 rounded-xl"><p className="text-[7px] font-black text-gray-400 uppercase">Pago (recibo)</p><p className="text-[11px] font-black text-gray-600">R$ {stats.totalPago.toFixed(2)}</p></div>
                       </div>
+                      {stats.liberadoAguardando > 0 && (
+                        <div className="bg-amber-50 border border-amber-100 rounded-xl px-3 py-2 mt-2 flex items-center justify-between">
+                          <p className="text-[8px] font-black text-amber-600 uppercase"><i className="fa-solid fa-clock mr-1"></i>Aguardando recibo do vendedor</p>
+                          <p className="text-[11px] font-black text-amber-700">R$ {stats.liberadoAguardando.toFixed(2)}</p>
+                        </div>
+                      )}
                       <button onClick={() => setCaixaDetalhe(detalheAberto ? null : v.id)} className="w-full mt-2 py-2 text-[9px] font-black text-gray-400 uppercase active:scale-95 transition-transform">
                         <i className={`fa-solid ${detalheAberto ? 'fa-chevron-up' : 'fa-chevron-down'} mr-1`}></i>{detalheAberto ? 'Esconder' : 'Ver de onde vem'} ({vComms.length} comissões)
                       </button>
@@ -2438,7 +2447,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       )}
 
       {payoutVendedor && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-w-xs rounded-3xl p-8 shadow-2xl text-center"><h3 className="font-black text-gray-800 uppercase text-sm mb-1">Acerto de Comissão</h3><p className="text-xs text-gray-400 font-bold uppercase mb-3">{payoutVendedor.nome}</p>{(() => { const s = getVendedorStats(payoutVendedor.id); return <div className="bg-emerald-50 rounded-2xl p-3 mb-4"><p className="text-[8px] font-black text-emerald-500 uppercase">A pagar agora</p><p className="text-xl font-black text-emerald-700">R$ {s.comissaoAPagar.toFixed(2)}</p>{s.totalDespesas > 0 && <p className="text-[8px] font-bold text-emerald-400 uppercase">descontando despesas R$ {s.totalDespesas.toFixed(2)}</p>}</div>; })()}<div className="space-y-4 text-left"><div className="flex gap-2 mb-4"><button onClick={() => setPayoutType('TOTAL')} className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase ${payoutType === 'TOTAL' ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-400'}`}>Acertar tudo</button><button onClick={() => setPayoutType('PARCIAL')} className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase ${payoutType === 'PARCIAL' ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-400'}`}>Valor específico</button></div>{payoutType === 'PARCIAL' && (<div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Valor R$</label><input type="number" value={partialAmount} onChange={e => setPartialAmount(e.target.value)} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-center" /></div>)}<button onClick={handleConfirmPayout} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest">Confirmar Pagamento</button><button onClick={() => setPayoutVendedor(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button></div></div></div>
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-w-xs rounded-3xl p-8 shadow-2xl text-center"><h3 className="font-black text-gray-800 uppercase text-sm mb-1">Liberar Comissão</h3><p className="text-xs text-gray-400 font-bold uppercase mb-3">{payoutVendedor.nome}</p>{(() => { const s = getVendedorStats(payoutVendedor.id); return <div className="bg-emerald-50 rounded-2xl p-3 mb-4"><p className="text-[8px] font-black text-emerald-500 uppercase">A pagar agora</p><p className="text-xl font-black text-emerald-700">R$ {s.comissaoAPagar.toFixed(2)}</p>{s.totalDespesas > 0 && <p className="text-[8px] font-bold text-emerald-400 uppercase">descontando despesas R$ {s.totalDespesas.toFixed(2)}</p>}</div>; })()}<div className="space-y-4 text-left"><div className="flex gap-2 mb-4"><button onClick={() => setPayoutType('TOTAL')} className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase ${payoutType === 'TOTAL' ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-400'}`}>Liberar tudo</button><button onClick={() => setPayoutType('PARCIAL')} className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase ${payoutType === 'PARCIAL' ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-400'}`}>Valor específico</button></div>{payoutType === 'PARCIAL' && (<div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Valor R$</label><input type="number" value={partialAmount} onChange={e => setPartialAmount(e.target.value)} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-center" /></div>)}<button onClick={handleConfirmPayout} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest">Liberar Comissão</button><button onClick={() => setPayoutVendedor(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button><p className="text-[8px] font-bold text-gray-300 uppercase text-center leading-relaxed">O vendedor recebe o aviso e confirma com o botão DAR RECIBO no app dele</p></div></div></div>
       )}
 
       {/* MODAL: Comprovante de Pagamento (Admin) */}

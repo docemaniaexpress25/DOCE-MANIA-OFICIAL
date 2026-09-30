@@ -751,7 +751,39 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     </button>
   );
 
-  const filteredHistory = useMemo(() => (sales || []).filter(s => s.vendedorId === user.id && filterByPeriod(s.data, historyFilter)).sort((a, b) => (new Date(b.data).getTime() ?? 0) - (new Date(a.data).getTime() ?? 0)), [sales, user.id, historyFilter]); 
+  const filteredHistory = useMemo(() => (sales || []).filter(s => s.vendedorId === user.id && filterByPeriod(s.data, historyFilter)).sort((a, b) => (new Date(b.data).getTime() ?? 0) - (new Date(a.data).getTime() ?? 0)), [sales, user.id, historyFilter]);
+
+  // BLOCO 15 — RECIBO: admin liberou, vendedor confirma que recebeu.
+  // liberadoPendente = repasses do admin ainda sem o aceite (recibo) deste vendedor.
+  const [recibosLocais, setRecibosLocais] = useState<Set<string>>(new Set());
+  const [dandoRecibo, setDandoRecibo] = useState(false);
+  const liberadoPendente = useMemo(() =>
+    (payoutLogs || []).filter(l => l.vendedorId === user.id && l.aceitado === false && !recibosLocais.has(l.id)),
+  [payoutLogs, user.id, recibosLocais]);
+  const liberadoPendenteTotal = liberadoPendente.reduce((a, l) => a + (l.valorPago ?? 0), 0);
+
+  const darRecibo = async () => {
+    if (dandoRecibo || liberadoPendente.length === 0) return;
+    setDandoRecibo(true);
+    try {
+      const res = await fetch('/api/comissoes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ acao: 'RECIBO' }),
+      });
+      const d = await res.json().catch(() => null);
+      if (res.ok && d?.ok) {
+        setRecibosLocais(prev => new Set([...prev, ...liberadoPendente.map(l => l.id)]));
+        showToast(`Recibo registrado! R$ ${liberadoPendenteTotal.toFixed(2)} confirmado.`);
+      } else {
+        showToast(String(d?.error || 'Nao foi possivel registrar o recibo.'));
+      }
+    } catch {
+      showToast('Sem conexao para registrar o recibo.');
+    } finally {
+      setDandoRecibo(false);
+    }
+  }; 
   
   const financeStats = useMemo(() => {
     const vCommsAll = (commissions || []).filter(c => c.vendedorId === user.id);
@@ -1328,6 +1360,20 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
       {activeTab === 'FINANCE' && (
         <div className="space-y-6">
+           {liberadoPendenteTotal > 0 && (
+             <div className="bg-gradient-to-r from-amber-500 to-orange-500 rounded-3xl p-5 shadow-lg text-white">
+               <div className="flex items-center justify-between gap-3">
+                 <div>
+                   <p className="text-[9px] font-black uppercase opacity-80"><i className="fa-solid fa-hand-holding-dollar mr-1"></i>Comissão liberada pelo admin</p>
+                   <h3 className="text-2xl font-black mt-0.5">R$ {liberadoPendenteTotal.toFixed(2)}</h3>
+                   <p className="text-[9px] font-bold uppercase opacity-80 mt-1">Confirme que recebeu — toque no recibo</p>
+                 </div>
+                 <button onClick={darRecibo} disabled={dandoRecibo} className="bg-white text-amber-600 font-black px-5 py-3.5 rounded-2xl shadow-md active:scale-95 transition-transform text-[10px] uppercase whitespace-nowrap">
+                   <i className={`fa-solid ${dandoRecibo ? 'fa-spinner fa-spin' : 'fa-file-signature'} mr-1.5`}></i>{dandoRecibo ? 'Enviando' : 'Dar recibo'}
+                 </button>
+               </div>
+             </div>
+           )}
            <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner">{(['DIA', 'SEMANA', 'MES', 'GERAL'] as const).map(f => (<button key={f} onClick={() => setFinanceFilter(f)} className={`flex-1 py-2 rounded-xl text-[9px] font-black uppercase ${financeFilter === f ? 'bg-white text-emerald-600 shadow-sm' : 'text-gray-400'}`}>{f}</button>))}</div>
            
            <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col text-center">
@@ -1350,7 +1396,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
            <div className="bg-gray-900 text-white p-6 rounded-[2.5rem] shadow-xl flex justify-between items-center">
               <div>
-                 <p className="text-[10px] font-black uppercase opacity-60 mb-1">Total Já Pago pelo Admin</p>
+                 <p className="text-[10px] font-black uppercase opacity-60 mb-1">Total Já Pago pelo Admin (com recibo)</p>
                  <h3 className="text-2xl font-black text-emerald-400">R$ {financeStats.pagas.toFixed(2)}</h3>
               </div>
               <i className="fa-solid fa-circle-check text-emerald-400 text-3xl opacity-30"></i>

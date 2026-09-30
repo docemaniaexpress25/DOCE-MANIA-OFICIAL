@@ -766,7 +766,7 @@ const App: React.FC = () => {
         setAdminNotification(String(d?.error || 'Nao foi possivel registrar o pagamento.'));
         return;
       }
-      setAdminNotification(`Pagamento de R$ ${amount.toFixed(2)} registrado! O vendedor recebeu o aviso.`);
+      setAdminNotification(`Comissão de R$ ${amount.toFixed(2)} liberada! O vendedor recebe o aviso e confirma com o RECIBO no app dele.`);
       fetchTransactionalData();
     } catch {
       setAdminNotification('Sem conexao para registrar o pagamento.');

@@ -219,8 +219,9 @@ export default function ClienteDashboard() {
   );
 
   const { client, sales, products, stats, sugestoes, destaques = [], comprovantes = [] } = data;
-  // Link do catalogo de pedidos ja identificando o cliente
-  const pedidoUrl = `https://pedidos-doce-mania.netlify.app/?cliente=${encodeURIComponent((client.nome_fantasia || '').trim())}&cod=${encodeURIComponent(client.portal_code || codigo)}`;
+  // Link do PEDIDO ONLINE (dentro do proprio sistema — cai na fila como pre-venda).
+  // O nome do cliente vai SEMPRE completo, direto do banco (nao depende de URL externa).
+  const pedidoUrl = `/pedido/${encodeURIComponent(client.portal_code || codigo)}`;
   const saldoDevedor = stats.totalComprado - stats.totalPago;
   // Pedidos online so para quem esta em dia (tolerancia de centavos)
   const temDebito = saldoDevedor > 0.005;
@@ -326,7 +327,7 @@ export default function ClienteDashboard() {
               </div>
               <div className="flex-1 min-w-0 text-left">
                 <p className="text-[11px] font-black text-white uppercase">Faca seu pedido online</p>
-                <p className="text-[9px] text-blue-100/80 font-semibold">Monte seu carrinho no catalogo — cai direto no nosso WhatsApp</p>
+                <p className="text-[9px] text-blue-100/80 font-semibold">Monte seu carrinho — o pedido cai direto no nosso sistema</p>
               </div>
               <i className="fa-solid fa-arrow-right text-white/70 text-xs shrink-0"></i>
             </div>

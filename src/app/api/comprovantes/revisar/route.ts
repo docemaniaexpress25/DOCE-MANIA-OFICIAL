@@ -84,6 +84,21 @@ export async function POST(req: NextRequest) {
       .eq('id', sale.id);
     if (saleUpErr) throw saleUpErr;
 
+    // REGRA DO DONO: comissao entra quando o DINHEIRO entra. A baixa pelo
+    // comprovante do portal vale como recebimento: quitou -> a comissao da
+    // venda sai de AGUARDANDO (A_RECEBER) e fica DISPONIVEL para o acerto.
+    if (quitada) {
+      try {
+        await supabase
+          .from('commissions')
+          .update({ status: 'DISPONIVEL' })
+          .eq('sale_id', sale.id)
+          .eq('status', 'A_RECEBER');
+      } catch (e: any) {
+        console.error('[comprovantes/revisar] promocao de comissao falhou:', e?.message);
+      }
+    }
+
     const { error: compUpErr } = await supabase
       .from('payment_comprovantes')
       .update({

@@ -77,7 +77,10 @@ export const commissionService = {
       valorRestante: 0,
       tipo: 'TOTAL',
       dataPagamento: new Date(l.created_at),
-      adminId: 'N/D'
+      adminId: 'N/D',
+      // Bloco 15: recibo do vendedor (se a coluna ainda nao existe, trata como aceito)
+      aceitado: l.aceitado !== false,
+      aceiteEm: l.aceite_em ? new Date(l.aceite_em) : undefined,
     })) as CommissionPaymentLog[];
   },
 

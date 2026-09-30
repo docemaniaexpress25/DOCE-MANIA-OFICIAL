@@ -71,7 +71,7 @@ export async function POST(req: NextRequest) {
     // A VISTA: DINHEIRO | PIX        A PRAZO: DINHEIRO | PIX | BOLETO
     const condicaoRaw = String((body as any).condicao || '').toUpperCase();
     const condicao = condicaoRaw === 'APRAZO' ? 'APRAZO' : 'AVISTA';
-    const formasValidas = condicao === 'APRAZO' ? ['DINHEIRO', 'PIX', 'BOLETO'] : ['DINHEIRO', 'PIX'];
+    const formasValidas = condicao === 'APRAZO' ? ['DINHEIRO', 'PIX', 'BOLETO', 'CHEQUE'] : ['DINHEIRO', 'PIX'];
     const metodoRaw = String((body as any).formaPagamento ?? (body as any).metodoEntrega ?? '').toUpperCase();
     const forma = formasValidas.includes(metodoRaw) ? metodoRaw : 'DINHEIRO';
 

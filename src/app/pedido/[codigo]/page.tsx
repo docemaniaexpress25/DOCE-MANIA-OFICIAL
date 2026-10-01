@@ -364,6 +364,12 @@ export default function PedidoOnlinePage() {
                               {isPack && <span className="bg-[#13ec5b]/20 text-[#0fb847] text-[7px] px-1.5 py-0.5 rounded-md">Caixa {upb}un</span>}
                             </span>
                             <span className="font-black text-lg text-[#0fb847]">R$ {v.preco.toFixed(2)}</span>
+                            {v.obs && (
+                              <span className="mt-1 text-[10px] font-bold text-[#0fb847] bg-[#13ec5b]/10 border border-[#13ec5b]/30 rounded-xl px-2.5 py-1.5 leading-snug flex items-start gap-1.5">
+                                <i className="fa-solid fa-circle-info mt-[2px] text-[9px] shrink-0"></i>
+                                <span className="min-w-0">{v.obs}</span>
+                              </span>
+                            )}
                             {v.estoque <= 12 && <span className="text-[8px] font-bold text-neutral-400 uppercase">Só {v.estoque} em estoque</span>}
                           </div>
                           <div className="flex items-center gap-3 shrink-0">

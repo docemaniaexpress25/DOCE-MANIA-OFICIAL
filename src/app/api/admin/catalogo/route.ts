@@ -7,10 +7,11 @@ import { devBridge, getServiceClient, isServerSupabaseConfigured } from '@/lib/s
  *
  * GET /api/admin/catalogo   (Bearer session ADMIN obrigatoria)
  *
- * Responde o estado dos campos do Bloco 15 no Supabase (products.imagem e
- * products.unidades_por_caixa) para a aba saber se FOTO/CAIXA ja podem
- * salvar de verdade — e se existe product_order (ordem do PDV) aplicada.
- * Renomear/reordenar NAO dependem deste SQL (colunas de sempre).
+ * Responde o estado das colunas do Bloco 15 no Supabase (products.imagem e
+ * products.unidades_por_caixa) e do Bloco 18 (products.obs) para a aba saber
+ * se FOTO/CAIXA/OBS ja podem salvar de verdade — e se existe product_order
+ * (ordem do PDV) aplicada. Renomear/reordenar NAO dependem deste SQL
+ * (colunas de sempre).
  */
 
 export async function GET(request: NextRequest) {
@@ -40,6 +41,19 @@ export async function GET(request: NextRequest) {
       bloco15ok = false;
     }
 
+    // Probe do Bloco 18: coluna obs (observacao para o cliente no portal)
+    let obsOk = false;
+    try {
+      const { error } = await supabase
+        .from('products')
+        .select('id, obs')
+        .limit(1);
+      obsOk = !error;
+      if (error) console.error('[api/admin/catalogo] probe obs:', error.message);
+    } catch {
+      obsOk = false;
+    }
+
     let totalEmOrdem = 0;
     try {
       const { data: cfg } = await supabase
@@ -51,7 +65,7 @@ export async function GET(request: NextRequest) {
       totalEmOrdem = Array.isArray(ordem) ? ordem.length : 0;
     } catch { /* settings opcional */ }
 
-    return NextResponse.json({ ok: true, bloco15ok, totalEmOrdem });
+    return NextResponse.json({ ok: true, bloco15ok, obsOk, totalEmOrdem });
   } catch (e: any) {
     console.error('[api/admin/catalogo] erro:', e?.message);
     return NextResponse.json({ ok: false, erro: 'Erro interno' }, { status: 500 });

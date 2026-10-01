@@ -26,6 +26,8 @@ export interface ProdutoCatalogo {
   preco: number;
   estoque: number;
   categoryId: string | null;
+  /** Bloco 18: observacao do dono — o cliente le no card do portal (null = sem) */
+  obs?: string | null;
 }
 
 export interface VarianteFamilia {
@@ -34,6 +36,8 @@ export interface VarianteFamilia {
   rotulo: string | null;
   preco: number;
   estoque: number;
+  /** Bloco 18: observacao do dono para ESTA variante (só o cliente ve) */
+  obs?: string | null;
 }
 
 export interface FamiliaCatalogo {
@@ -139,7 +143,7 @@ export function agruparCatalogo(produtos: ProdutoCatalogo[]): FamiliaCatalogo[] 
     } else if (!f.categoryId && p.categoryId) {
       f.categoryId = p.categoryId;
     }
-    f.variantes.push({ produtoId: p.id, rotulo, preco: p.preco, estoque: p.estoque });
+    f.variantes.push({ produtoId: p.id, rotulo, preco: p.preco, estoque: p.estoque, obs: p.obs || null });
   }
 
   const familias = [...map.values()];

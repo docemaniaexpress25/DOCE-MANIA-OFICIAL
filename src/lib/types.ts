@@ -53,6 +53,8 @@ export interface Product {
   imagem?: string;
   /** Bloco 15: caixa fechada com N unidades (atacado) — 1/undefined = vende solto */
   unidadesPorCaixa?: number;
+  /** Bloco 18: observacao visivel SOMENTE ao cliente comprador no catalogo do portal — nao aparece no PDV */
+  obs?: string | null;
 }
 
 export interface Carga {

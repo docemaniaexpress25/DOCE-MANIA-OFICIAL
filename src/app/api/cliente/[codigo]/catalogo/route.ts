@@ -81,6 +81,8 @@ export async function GET(
       // Bloco 15: foto cadastrada sobrepoe a foto do catalogo antigo (resolvida no front)
       imagem: (p.imagem as string) || null,
       unidadesPorCaixa: Math.max(1, Math.floor(Number(p.unidades_por_caixa || 1)) || 1),
+      // Bloco 18: observacao escrita pelo dono — o CLIENTE ve no portal
+      obs: ((p.obs as string) || '').trim() || null,
     }));
 
     // ORDEM = MESMA ORDEM DO PDV (app_settings.product_order — usada pelo

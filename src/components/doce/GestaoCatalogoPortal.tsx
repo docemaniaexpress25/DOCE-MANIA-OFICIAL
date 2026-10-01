@@ -13,6 +13,8 @@
  *   - FOTO: envia do aparelho (comprime e sobe pro Storage) ou cola URL —
  *     grava em products.imagem (Bloco 15) e vale pro portal na hora.
  *   - CAIXA: unidades por caixa (atacado) — products.unidades_por_caixa.
+ *   - OBS (Bloco 18): observacao escrita pelo dono que SO o cliente ve no
+ *     portal — products.obs (nao aparece no PDV nem em mais nada).
  *
  * Familias = mesmo agrupamento do portal (pedidoGrupos.agruparCatalogo),
  * foto de familia = products.imagem da 1a variante que tiver > foto do
@@ -25,11 +27,12 @@ import { agruparCatalogo } from '@/lib/pedidoGrupos';
 import { fotoFamilia } from '@/lib/pedidoFotos';
 import { authHeaders } from '@/services/userService';
 
-/** SQL do Bloco 15 (mesmo conteudo de sql/bloco15_foto_caixa.sql) — botao copiar */
-const SQL_BLOCO15 = `-- BLOCO 15 — Foto do produto + unidades por caixa (atacado)
+/** SQL dos Blocos 15+18 (mesmo conteudo dos arquivos sql/) — botao copiar */
+const SQL_BLOCOS = `-- BLOCO 15 + 18 — Foto, caixa e OBSERVACAO do cliente no produto
 -- Rodar no SQL Editor do Supabase. Idempotente (pode rodar 2x).
 alter table products add column if not exists imagem             text;
 alter table products add column if not exists unidades_por_caixa integer default 1;
+alter table products add column if not exists obs                text;
 
 -- Normaliza caixas invalidas (null/0/negativo = vende solto)
 update products set unidades_por_caixa = 1
@@ -70,6 +73,7 @@ function comprimirImagem(file: File, maxLado = 640, qualidade = 0.72): Promise<s
 export default function GestaoCatalogoPortal(props: GestaoCatalogoPortalProps) {
   const { products } = props;
   const [bloco15ok, setBloco15ok] = useState<boolean | null>(null);
+  const [obsOk, setObsOk] = useState<boolean | null>(null);
   const [busca, setBusca] = useState('');
   const [expandida, setExpandida] = useState<string | null>(null);
   const [savingKey, setSavingKey] = useState<string | null>(null);
@@ -86,6 +90,7 @@ export default function GestaoCatalogoPortal(props: GestaoCatalogoPortalProps) {
         const res = await fetch('/api/admin/catalogo', { headers: authHeaders() });
         const json = await res.json().catch(() => null);
         if (vivo) setBloco15ok(res.ok && json?.ok === true ? json?.bloco15ok === true : null);
+        if (vivo) setObsOk(res.ok && json?.ok === true ? json?.obsOk === true : null);
       } catch {
         if (vivo) setBloco15ok(null);
       }
@@ -174,6 +179,22 @@ export default function GestaoCatalogoPortal(props: GestaoCatalogoPortalProps) {
     }
   };
 
+  /** Bloco 18: observacao SO para o cliente ver no portal (vazio = limpa) */
+  const salvaObs = async (p: Product, valor: string) => {
+    const novo = valor.trim().slice(0, 300);
+    if (novo === (p.obs || '').trim()) return;
+    const key = `${p.id}:obs`;
+    setSavingKey(key);
+    try {
+      await props.updateProduct(p.id, { obs: novo || null } as Partial<Product>);
+      props.showToast(novo ? 'Observação salva! O cliente já vê no portal.' : 'Observação removida.');
+    } catch {
+      props.showToast('Erro ao salvar a observação.', 'error');
+    } finally {
+      setSavingKey((k) => (k === key ? null : k));
+    }
+  };
+
   const aplicaFotoFamilia = async (famKey: string, url: string | null) => {
     const f = familias.find((x) => x.key === famKey);
     if (!f) return;
@@ -214,7 +235,7 @@ export default function GestaoCatalogoPortal(props: GestaoCatalogoPortalProps) {
 
   const copiarSql = async () => {
     try {
-      await navigator.clipboard.writeText(SQL_BLOCO15);
+      await navigator.clipboard.writeText(SQL_BLOCOS);
       props.showToast('SQL copiado! Cole no SQL Editor do Supabase e clique em RUN.');
     } catch {
       props.showToast('Não consegui copiar — selecione o SQL manualmente.', 'error');
@@ -222,6 +243,10 @@ export default function GestaoCatalogoPortal(props: GestaoCatalogoPortalProps) {
   };
 
   const fotosBloqueadas = bloco15ok === false;
+  const obsBloqueada = obsOk === false;
+  const faltando: string[] = [];
+  if (fotosBloqueadas) faltando.push('foto e caixa');
+  if (obsBloqueada) faltando.push('observação do cliente');
   const totalProdutos = products.length;
 
   return (
@@ -242,15 +267,15 @@ export default function GestaoCatalogoPortal(props: GestaoCatalogoPortalProps) {
         </div>
       </div>
 
-      {/* BANNER BLOCO 15 */}
-      {bloco15ok === false && (
+      {/* BANNER BLOCOS 15+18 */}
+      {faltando.length > 0 && (
         <div className="mx-2 bg-amber-50 border border-amber-200 rounded-3xl p-4 space-y-2">
-          <h3 className="font-black text-amber-800 uppercase text-[11px] tracking-wider"><i className="fa-solid fa-triangle-exclamation mr-1.5"></i>Ative fotos e caixas (1 SQL, 30 segundos)</h3>
+          <h3 className="font-black text-amber-800 uppercase text-[11px] tracking-wider"><i className="fa-solid fa-triangle-exclamation mr-1.5"></i>Ative: {faltando.join(' + ')} (1 SQL, 30 segundos)</h3>
           <p className="text-[11px] text-amber-700 font-semibold leading-snug">
-            Renomear e reordenar já funcionam. Para FOTO e CAIXA salvarem de verdade: no Supabase abra <b>SQL Editor → New query</b>, cole o SQL abaixo e clique em <b>RUN</b>.
+            Renomear e reordenar já funcionam. Para {faltando.join(', ')} salvarem de verdade: no Supabase abra <b>SQL Editor → New query</b>, cole o SQL abaixo e clique em <b>RUN</b>.
           </p>
           <button onClick={copiarSql} className="w-full py-3 rounded-xl text-[10px] font-black uppercase bg-amber-500 text-white active:scale-95 shadow-sm flex items-center justify-center gap-2">
-            <i className="fa-solid fa-copy"></i>Copiar SQL do Bloco 15
+            <i className="fa-solid fa-copy"></i>Copiar SQL
           </button>
         </div>
       )}
@@ -268,6 +293,7 @@ export default function GestaoCatalogoPortal(props: GestaoCatalogoPortalProps) {
           const foto = fotoDaFamilia(f);
           const aberta = expandida === f.key;
           const algumaCaixa = f.variantes.some((v) => (porId.get(v.produtoId)?.unidadesPorCaixa || 1) > 1);
+          const algumaObs = f.variantes.some((v) => (porId.get(v.produtoId)?.obs || '').trim());
           const tudoInativo = f.variantes.every((v) => porId.get(v.produtoId)?.ativo === false);
           return (
             <div key={f.key} className={`bg-white rounded-3xl border shadow-sm overflow-hidden transition-all ${aberta ? 'border-blue-200' : 'border-gray-100'} ${tudoInativo ? 'opacity-60 grayscale' : ''}`}>
@@ -288,6 +314,7 @@ export default function GestaoCatalogoPortal(props: GestaoCatalogoPortalProps) {
                     <span className="text-[9px] font-black text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded-lg border border-gray-100 uppercase">{f.variantes.length} {f.variantes.length === 1 ? 'tamanho' : 'tamanhos'}</span>
                     {!foto && <span className="text-[9px] font-black text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-lg border border-amber-200 uppercase">sem foto</span>}
                     {algumaCaixa && <span className="text-[9px] font-black text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-lg border border-emerald-100 uppercase"><i className="fa-solid fa-box mr-0.5 text-[7px]"></i>caixa</span>}
+                    {algumaObs && <span className="text-[9px] font-black text-violet-600 bg-violet-50 px-1.5 py-0.5 rounded-lg border border-violet-100 uppercase"><i className="fa-solid fa-comment-dots mr-0.5 text-[7px]"></i>obs</span>}
                     {tudoInativo && <span className="text-[9px] font-black text-rose-500 bg-rose-50 px-1.5 py-0.5 rounded-lg border border-rose-100 uppercase">inativo</span>}
                   </div>
                 </button>
@@ -344,6 +371,14 @@ export default function GestaoCatalogoPortal(props: GestaoCatalogoPortalProps) {
                           <input key={`${p.id}:cx:${caixaAtual}`} type="number" min={1} inputMode="numeric" defaultValue={caixaAtual} placeholder="solto" disabled={fotosBloqueadas}
                             onBlur={(e) => salvaCaixa(p, e.target.value)}
                             className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-xl text-[12px] font-black outline-none focus:ring-2 focus:ring-blue-100 disabled:opacity-50" />
+                        </div>
+                        <div>
+                          <label className="text-[8px] font-black text-violet-500 uppercase block mb-1">Obs. para o cliente — só aparece no portal</label>
+                          <textarea key={`${p.id}:obs:${p.obs || ''}`} defaultValue={p.obs || ''} rows={2} maxLength={300}
+                            placeholder="Ex.: promoção leve 3 pague 2, novo sabor, vencimento próximo..." disabled={obsBloqueada}
+                            onBlur={(e) => salvaObs(p, e.target.value)}
+                            className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-xl text-[12px] font-semibold outline-none focus:ring-2 focus:ring-blue-100 disabled:opacity-50 resize-none" />
+                          {obsBloqueada && <p className="text-[8px] text-amber-600 font-bold mt-1">Rode o SQL lá em cima para ativar a observação.</p>}
                         </div>
                       </div>
                     );

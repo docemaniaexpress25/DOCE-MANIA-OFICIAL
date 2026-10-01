@@ -31,6 +31,8 @@ export const productService = {
       // Bloco 15: foto + caixa do atacado (podem nao existir antes do SQL)
       imagem: p.imagem || undefined,
       unidadesPorCaixa: (p.unidades_por_caixa === null || p.unidades_por_caixa === undefined) ? undefined : Number(p.unidades_por_caixa),
+      // Bloco 18: observacao do produto — SO o cliente ve (catalogo do portal)
+      obs: p.obs || null,
     })) as Product[];
   },
 
@@ -59,19 +61,25 @@ export const productService = {
     const b15: Record<string, string | number | null> = {};
     if (product.imagem !== undefined) b15.imagem = product.imagem || null;
     if (product.unidadesPorCaixa !== undefined) b15.unidades_por_caixa = Math.max(1, Math.floor(Number(product.unidadesPorCaixa) || 1));
+    // Bloco 18: observacao para o cliente (portal)
+    const b18: Record<string, string | null> = {};
+    if (product.obs !== undefined) b18.obs = product.obs || null;
     // Bloco 14: comissão PV (undefined = usa taxa padrão)
     const extra14: Record<string, number | null> = {};
     if (product.comissaoPvPercentual !== undefined) extra14.comissao_pv_percentual = product.comissaoPvPercentual;
 
-    let { data, error } = await supabase.from('products').insert({ ...payload, ...fiscal, ...extra14, ...b15 }).select().single();
+    let { data, error } = await supabase.from('products').insert({ ...payload, ...fiscal, ...extra14, ...b15, ...b18 }).select().single();
     if (error && /comissao_pv_percentual/i.test(error.message || '')) {
       console.warn('Coluna comissao_pv_percentual ausente (Bloco 14 nao rodado). Salvando sem ela.');
-      ({ data, error } = await supabase.from('products').insert({ ...payload, ...fiscal, ...b15 }).select().single());
+      ({ data, error } = await supabase.from('products').insert({ ...payload, ...fiscal, ...b15, ...b18 }).select().single());
     } else if (error && /imagem|unidades_por_caixa/i.test(error.message || '')) {
       console.warn('Colunas foto/caixa ausentes (Bloco 15 nao rodado). Salvando sem elas.');
-      const sem15: Record<string, unknown> = { ...payload, ...fiscal, ...extra14 };
+      const sem15: Record<string, unknown> = { ...payload, ...fiscal, ...extra14, ...b18 };
       delete (sem15 as any).imagem; delete (sem15 as any).unidades_por_caixa;
       ({ data, error } = await supabase.from('products').insert(sem15).select().single());
+    } else if (error && /\bobs\b/i.test(error.message || '')) {
+      console.warn('Coluna obs ausente (Bloco 18 nao rodado). Salvando sem ela.');
+      ({ data, error } = await supabase.from('products').insert({ ...payload, ...fiscal, ...extra14, ...b15 }).select().single());
     } else if (error && /ncm|cest|cfop|\bean\b|unidade|origem/i.test(error.message || '')) {
       console.warn('Colunas fiscais de produto ausentes (Bloco 12 nao rodado). Salvando sem elas.');
       ({ data, error } = await supabase.from('products').insert({ ...payload, ...extra14 }).select().single());
@@ -101,6 +109,7 @@ export const productService = {
       origem: data.origem || undefined,
       imagem: data.imagem || undefined,
       unidadesPorCaixa: (data.unidades_por_caixa === null || data.unidades_por_caixa === undefined) ? undefined : Number(data.unidades_por_caixa),
+      obs: data.obs || null,
     } as Product;
   },
 
@@ -127,6 +136,8 @@ export const productService = {
     // Bloco 15: foto + caixa do atacado
     if (updates.imagem !== undefined) payload.imagem = updates.imagem || null;
     if (updates.unidadesPorCaixa !== undefined) payload.unidades_por_caixa = Math.max(1, Math.floor(Number(updates.unidadesPorCaixa) || 1));
+    // Bloco 18: observacao para o cliente (portal) — vazio = limpa
+    if (updates.obs !== undefined) payload.obs = updates.obs || null;
 
     let { data, error } = await supabase.from('products').update(payload).eq('id', id).select().single();
     if (error && /comissao_pv_percentual/i.test(error.message || '')) {
@@ -137,6 +148,10 @@ export const productService = {
       const fb15: Record<string, unknown> = { ...payload };
       delete fb15.imagem; delete fb15.unidades_por_caixa;
       ({ data, error } = await supabase.from('products').update(fb15).eq('id', id).select().single());
+    } else if (error && /\bobs\b/i.test(error.message || '')) {
+      const fb18: Record<string, unknown> = { ...payload };
+      delete fb18.obs;
+      ({ data, error } = await supabase.from('products').update(fb18).eq('id', id).select().single());
     } else if (error && /ncm|cest|cfop|\bean\b|unidade|origem/i.test(error.message || '')) {
       const fallback: Record<string, unknown> = { ...payload };
       delete fallback.ncm; delete fallback.cest; delete fallback.cfop;
@@ -168,6 +183,7 @@ export const productService = {
       origem: data.origem || undefined,
       imagem: data.imagem || undefined,
       unidadesPorCaixa: (data.unidades_por_caixa === null || data.unidades_por_caixa === undefined) ? undefined : Number(data.unidades_por_caixa),
+      obs: data.obs || null,
     } as Product;
   },
 

@@ -1199,7 +1199,7 @@ export async function POST(req: NextRequest) {
     if (acao === 'ENTREGUE') {
       if (saleRow.entrega_status === 'ENTREGUE') return NextResponse.json({ ok: false, error: 'Parada ja entregue.' }, { status: 409 });
       const pagamento = String(body.pagamento || 'DINHEIRO').toUpperCase();
-      if (!['DINHEIRO', 'PIX', 'BOLETO', 'JA_PAGO', 'NAO_PAGO'].includes(pagamento)) {
+      if (!['DINHEIRO', 'PIX', 'BOLETO', 'JA_PAGO', 'NAO_PAGO', 'MISTO'].includes(pagamento)) {
         return NextResponse.json({ ok: false, error: 'Forma de pagamento invalida.' }, { status: 400 });
       }
 

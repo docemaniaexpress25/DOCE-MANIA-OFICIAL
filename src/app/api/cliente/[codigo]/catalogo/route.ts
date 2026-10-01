@@ -83,6 +83,26 @@ export async function GET(
       unidadesPorCaixa: Math.max(1, Math.floor(Number(p.unidades_por_caixa || 1)) || 1),
     }));
 
+    // ORDEM = MESMA ORDEM DO PDV (app_settings.product_order — usada pelo
+    // admin e pelo PDV). Familias do portal herdam a ordem pela 1a variante.
+    // Produto fora da lista vai pro fim, mantendo a ordem alfabetica anterior.
+    try {
+      const { data: cfg } = await supabase
+        .from('app_settings')
+        .select('product_order')
+        .eq('id', 'global_settings')
+        .maybeSingle();
+      const ordem: string[] = Array.isArray((cfg as any)?.product_order) ? (cfg as any).product_order : [];
+      if (ordem.length > 0) {
+        const idx = new Map<string, number>(ordem.map((id, i) => [id, i]));
+        produtos.sort((a, b) => {
+          const ia = idx.get(a.id) ?? Number.MAX_SAFE_INTEGER;
+          const ib = idx.get(b.id) ?? Number.MAX_SAFE_INTEGER;
+          return ia - ib;
+        });
+      }
+    } catch { /* sem product_order: segue alfabetico */ }
+
     return NextResponse.json({
       ok: true,
       client: {

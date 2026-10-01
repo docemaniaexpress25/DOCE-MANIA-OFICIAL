@@ -12,6 +12,7 @@ import { loadLocalState, saveLocalState } from '@/utils/persistence';
 import { locationService, notificationService, NOTIFICATION_TYPES, AppNotification, NotificationType } from '@/services/locationService';
 import { authHeaders } from '@/services/userService';
 import AdminEntregas from '@/components/doce/AdminEntregas';
+import GestaoCatalogoPortal from '@/components/doce/GestaoCatalogoPortal';
 
 interface AdminDashboardProps {
   products: Product[];
@@ -85,7 +86,7 @@ interface AdminDashboardProps {
   setMelhorias?: (v: MelhoriasFlags) => void;
 }
 
-type TabType = 'HOME' | 'CATALOGO' | 'CATEGORIAS' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'COMPROVANTES' | 'ENTREGAS' | 'BACKUP' | 'SETTINGS';
+type TabType = 'HOME' | 'CATALOGO' | 'CATALOGO_PORTAL' | 'CATEGORIAS' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'COMPROVANTES' | 'ENTREGAS' | 'BACKUP' | 'SETTINGS';
 
 type ReportType = 'RESUMO' | 'TOP_CLIENTES' | 'TOP_PRODUTOS' | 'CLIENTES_RISCO' | 'VENDAS_CATEGORIAS' | 'PRODUTOS_RENTAVEIS' | null;
 type ReportFilterType = 'RESUMO' | 'TOP_PRODUTOS' | 'TOP_CLIENTES' | 'CATEGORIAS' | 'VENDEDORES' | 'DIVIDAS' | 'PRODUTOS_RENTAVEIS';
@@ -1441,6 +1442,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           <div className="px-2 flex items-center justify-between"><div><h2 className="text-2xl font-black text-gray-800 tracking-tight">Painel Administrativo</h2><p className="text-xs text-gray-400 font-semibold uppercase tracking-wider">Gestão e Controle Total</p></div><div className="flex items-center gap-2"><button onClick={() => setShowNotifPrefs(true)} className="w-10 h-10 bg-white text-gray-400 rounded-xl flex items-center justify-center shadow-sm border border-gray-100 active:scale-90"><i className="fa-solid fa-sliders text-xs"></i></button><button onClick={() => { setShowNotifPanel(!showNotifPanel); if (showNotifPanel) markAllRead(); }} className="w-10 h-10 bg-white text-blue-600 rounded-xl flex items-center justify-center shadow-sm border border-gray-100 active:scale-90 relative"><i className="fa-solid fa-bell text-sm"></i>{unreadCount > 0 && (<span className="absolute -top-1 -right-1 w-5 h-5 bg-rose-500 text-white text-[8px] font-black rounded-full flex items-center justify-center animate-pulse">{unreadCount > 9 ? '9+' : unreadCount}</span>)}</button></div></div>
           <div className="grid grid-cols-2 gap-4">
             <MenuCard icon="fa-boxes-stacked" title="Estoque" tab="CATALOGO" color="bg-blue-50 text-blue-600" />
+            <MenuCard icon="fa-store" title="Catalogo Portal" tab="CATALOGO_PORTAL" color="bg-emerald-50 text-emerald-600" />
             <MenuCard icon="fa-tags" title="Categorias" tab="CATEGORIAS" color="bg-indigo-50 text-indigo-600" />
             <MenuCard icon="fa-truck-ramp-box" title="Cargas" tab="CARGAS" color="bg-orange-50 text-orange-600" />
             <MenuCard icon="fa-users" title="Clientes" tab="CLIENTES" color="bg-green-50 text-green-600" />
@@ -1484,6 +1486,16 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             ))}
           </div>
         </div>
+      )}
+
+      {activeTab === 'CATALOGO_PORTAL' && (
+        <GestaoCatalogoPortal
+          products={props.products}
+          orderedProductIds={props.orderedProductIds}
+          setOrderedProductIds={props.setOrderedProductIds}
+          updateProduct={props.updateProduct}
+          showToast={showToast}
+        />
       )}
 
       {activeTab === 'CATEGORIAS' && (
@@ -2576,6 +2588,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       {activeTab === 'SETTINGS' && (
         <div className="space-y-4">
           <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Configuracoes</h2></div>
+
+          <div className="bg-white rounded-3xl p-6 border border-emerald-100 shadow-sm mx-2 space-y-3">
+            <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider"><i className="fa-solid fa-store text-emerald-600 mr-2"></i>Catalogo do Portal do Cliente</h3>
+            <p className="text-[10px] text-gray-400 font-semibold leading-snug">Ordem, nomes, fotos e caixas do catalogo que o cliente ve no portal — tudo linkado ao estoque central.</p>
+            <button onClick={() => setActiveTab('CATALOGO_PORTAL')} className="w-full py-3 rounded-xl text-[10px] font-black uppercase bg-emerald-600 text-white active:scale-95 shadow-sm flex items-center justify-center gap-2"><i className="fa-solid fa-sliders"></i>Abrir Gestao de Catalogo</button>
+          </div>
 
           <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm mx-2 space-y-4">
             <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider"><i className="fa-solid fa-building text-blue-600 mr-2"></i>Dados da Empresa</h3>

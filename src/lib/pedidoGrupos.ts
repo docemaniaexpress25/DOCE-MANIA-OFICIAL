@@ -146,7 +146,10 @@ export function agruparCatalogo(produtos: ProdutoCatalogo[]): FamiliaCatalogo[] 
   for (const f of familias) {
     f.variantes.sort((a, b) => escalaVariante(b.rotulo) - escalaVariante(a.rotulo));
   }
-  familias.sort((a, b) => a.key.localeCompare(b.key, "pt-BR"));
+  // ORDEM DAS FAMILIAS = ORDEM DE ENTRADA (nao alfabetica).
+  // A API do catalogo devolve os produtos na MESMA ORDEM DO PDV
+  // (app_settings.product_order), entao o portal fica igual ao PDV e
+  // qualquer reordenacao feita na Gestao de Catalogo vale pros dois.
   return familias;
 }
 

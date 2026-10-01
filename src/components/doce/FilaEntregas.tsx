@@ -57,6 +57,7 @@ interface ApiResp {
   caixa?: { dinheiroHoje: number; pixHoje: number };
   meuFechamento?: { id: string; valor_dinheiro: number; valor_pix: number; qtd_entregas: number; confirmado: boolean; obs: string | null } | null;
   fechamentosHoje?: any[];
+  conferencia?: { porEntregador: { entregadorId: string; nome: string; dinheiro: number; pix: number; qtdEntregas: number; vendas: { saleId: string; cliente: string; valorTotal: number; valorPago: number; recebimento: string }[] }[] };
   migracaoPendente?: boolean;
   error?: string;
 }
@@ -149,6 +150,19 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
   const [motivoSel, setMotivoSel] = useState<string>(MOTIVOS_FALHA[0]);
   const [valorRecebido, setValorRecebido] = useState('');
   const [valorPix, setValorPix] = useState('');
+  // PAGAMENTO NA ENTREGA: o cliente pode mudar a forma na hora (combinou
+  // dinheiro, quer metade/metade). O entregador escolhe como recebeu AGORA.
+  const [pgtoAgora, setPgtoAgora] = useState<'DINHEIRO' | 'PIX' | 'MISTO'>('DINHEIRO');
+  const [valorDinMisto, setValorDinMisto] = useState('');
+  const [valorPixMisto, setValorPixMisto] = useState('');
+  // QR Code do Pix na entrega (estilo portal do cliente)
+  const [qrPix, setQrPix] = useState<{ img: string; payload: string; valor: number } | null>(null);
+  const [qrLoading, setQrLoading] = useState(false);
+  const [qrErro, setQrErro] = useState('');
+  const [copiado, setCopiado] = useState(false);
+  // CONFERENCIA do dia (admin): o que o sistema registrou vs o que o entregador trouxe
+  const [verConferencia, setVerConferencia] = useState(false);
+  const [confDetalhe, setConfDetalhe] = useState<string | null>(null);
   const [fotoBoleto, setFotoBoleto] = useState<string | null>(null);
   const [fotoPix, setFotoPix] = useState<string | null>(null);
   // BLOCO 14: foto opcional da entrega concluída + edição de trocas pelo admin
@@ -226,11 +240,82 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
       setSheetEntregue(null);
       setValorRecebido('');
       setValorPix('');
+      setValorDinMisto('');
+      setValorPixMisto('');
+      setQrPix(null);
+      setQrErro('');
+      setCopiado(false);
+      setPgtoAgora('DINHEIRO');
       setFotoBoleto(null);
       setFotoPix(null);
       setFotoEntrega(null);
     }
   }
+
+  /** Abre o sheet de entrega zerando o recebimento (a forma combinada vira o padrao) */
+  function abrirSheetEntrega(p: FilaItem) {
+    setValorRecebido('');
+    setValorPix('');
+    setFotoBoleto(null);
+    setFotoPix(null);
+    setFotoEntrega(null);
+    const m = PGTO_META[p.formaPgto] ? p.formaPgto : 'DINHEIRO';
+    setPgtoAgora(m === 'PIX' ? 'PIX' : 'DINHEIRO');
+    setValorDinMisto('');
+    setValorPixMisto('');
+    setQrPix(null);
+    setQrErro('');
+    setCopiado(false);
+    setSheetEntregue(p);
+  }
+
+  /** QR Code do Pix com o valor exato para o cliente escanear (estilo portal) */
+  async function gerarQrPix(valor: number) {
+    if (!sheetEntregue || qrLoading) return;
+    setQrLoading(true);
+    setQrErro('');
+    setQrPix(null);
+    try {
+      const res = await fetch('/api/pre-venda', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ acao: 'PIX_QRCODE', saleId: sheetEntregue.saleId, valor }),
+      });
+      const d = await res.json();
+      if (res.ok && d?.ok) setQrPix({ img: d.qrDataUrl, payload: String(d.payload || ''), valor: Number(d.valor || valor) });
+      else showToast(d?.error || 'Nao foi possivel gerar o QR Code.', 'error');
+    } catch {
+      showToast('Sem conexao. Tente novamente.', 'error');
+    } finally {
+      setQrLoading(false);
+    }
+  }
+
+  /** Bloco do QR Code do Pix mostrado na entrega (cliente escaneia e paga) */
+  const qrBloco = (valor: number) => (
+    <div className="bg-gray-50 border border-gray-100 rounded-2xl p-3">
+      {!qrPix ? (
+        <button onClick={() => gerarQrPix(valor)} disabled={qrLoading}
+          className="w-full py-3 rounded-xl bg-teal-600 text-white text-[10px] font-black uppercase active:scale-95 transition-transform disabled:opacity-60">
+          <i className="fa-solid fa-qrcode mr-1"></i>{qrLoading ? 'Gerando QR Code...' : `Mostrar QR Code do Pix (${fmt(valor)})`}
+        </button>
+      ) : (
+        <div className="text-center">
+          <img src={qrPix.img} alt="QR Code Pix" className="w-44 h-44 mx-auto rounded-xl border border-gray-200 bg-white" />
+          <p className="text-[9px] font-black text-gray-500 uppercase mt-2">Cliente escaneia e paga {fmt(qrPix.valor)}</p>
+          <button
+            onClick={async () => {
+              try { await navigator.clipboard.writeText(qrPix.payload); setCopiado(true); setTimeout(() => setCopiado(false), 2000); }
+              catch { showToast('Nao foi possivel copiar. Use a camera do banco direto.', 'error'); }
+            }}
+            className="w-full mt-2 py-2.5 rounded-xl bg-gray-800 text-white text-[9px] font-black uppercase active:scale-95 transition-transform">
+            <i className={`fa-solid ${copiado ? 'fa-check' : 'fa-copy'} mr-1`}></i>{copiado ? 'Codigo copiado!' : 'Copiar codigo Pix (copia e cola)'}
+          </button>
+        </div>
+      )}
+      {qrErro && <p className="text-[9px] font-black text-rose-500 uppercase text-center mt-1.5">{qrErro}</p>}
+    </div>
+  );
 
   async function setPrioridade(p: FilaItem, prioridade: number) {
     const novo = p.prioridade === prioridade ? 0 : prioridade;
@@ -313,6 +398,10 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
   const rec = parseFloat(valorRecebido) || 0;
   const troco = sp && rec > restante ? rec - restante : 0;
   const falta = sp && rec > 0 && rec < restante ? restante - rec : 0;
+  // MISTO: metade em dinheiro, metade no Pix (o cliente decide na hora)
+  const dinMisto = parseFloat(valorDinMisto) || 0;
+  const pixMisto = parseFloat(valorPixMisto) || 0;
+  const somaMisto = Math.round((dinMisto + pixMisto) * 100) / 100;
 
   const Card = ({ p, acento }: { p: FilaItem; acento: 'p1' | 'p2' | 'normal' | 'falha' | 'ok' }) => {
     const pend = p.entregaStatus === 'PENDENTE' || p.entregaStatus === 'EM_ROTA';
@@ -396,7 +485,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
           {podeEntregar && pend && (
             <div className="flex gap-2 mt-2">
               <button
-                onClick={() => { setValorRecebido(''); setValorPix(''); setFotoBoleto(null); setFotoPix(null); setFotoEntrega(null); setSheetEntregue(p); }}
+                onClick={() => abrirSheetEntrega(p)}
                 disabled={!!busy}
                 className="flex-[1.6] py-4 rounded-2xl bg-emerald-600 text-white text-[11px] font-black uppercase shadow-md active:scale-95 transition-transform disabled:opacity-60"
               >
@@ -501,6 +590,93 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                   ? <span className="text-emerald-600"><i className="fa-solid fa-circle-check mr-1"></i>Admin confirmou o recebimento</span>
                   : 'Aguardando o admin confirmar o dinheiro na base'}
               </p>
+            )}
+
+            {/* CONFERENCIA DO DIA (admin): o que o sistema registrou vs o que o
+                entregador informou — entrega por entrega, para bater o dinheiro */}
+            {modo === 'ADMIN' && data.conferencia && data.conferencia.porEntregador.length > 0 && (
+              <div className="mt-2 pt-2 border-t border-slate-200">
+                <button onClick={() => setVerConferencia(v => !v)} className="w-full flex items-center justify-between">
+                  <p className="text-[9px] font-black text-slate-500 uppercase"><i className="fa-solid fa-clipboard-check mr-1"></i>Conferencia das entregas de hoje ({data.conferencia.porEntregador.reduce((a: number, g: any) => a + g.qtdEntregas, 0)})</p>
+                  <i className={`fa-solid ${verConferencia ? 'fa-chevron-up' : 'fa-chevron-down'} text-slate-300 text-xs`}></i>
+                </button>
+                {verConferencia && (
+                  <div className="mt-2 space-y-2">
+                    {data.conferencia.porEntregador.map((g: any) => {
+                      const fech = (data.fechamentosHoje || []).find((f: any) => f.entregador_id === g.entregadorId);
+                      const dinDiff = fech ? Math.round((Number(fech.valor_dinheiro) - g.dinheiro) * 100) / 100 : null;
+                      const pixDiff = fech ? Math.round((Number(fech.valor_pix) - g.pix) * 100) / 100 : null;
+                      const bate = (d: number | null) => d !== null && Math.abs(d) < 0.005;
+                      const aberto = confDetalhe === g.entregadorId;
+                      return (
+                        <div key={g.entregadorId} className="bg-white rounded-xl border border-slate-200 p-3">
+                          <div className="flex items-center justify-between">
+                            <p className="text-[10px] font-black text-slate-700 uppercase">{g.nome || 'Entregador'}</p>
+                            <span className="text-[9px] font-bold text-slate-400">{g.qtdEntregas} entrega(s)</span>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2 mt-2">
+                            <div className="bg-emerald-50 rounded-lg p-2 text-center">
+                              <p className="text-[7px] font-black text-emerald-500 uppercase">Sistema: dinheiro</p>
+                              <p className="text-[13px] font-black text-emerald-700">{fmt(g.dinheiro)}</p>
+                            </div>
+                            <div className="bg-teal-50 rounded-lg p-2 text-center">
+                              <p className="text-[7px] font-black text-teal-500 uppercase">Sistema: pix</p>
+                              <p className="text-[13px] font-black text-teal-700">{fmt(g.pix)}</p>
+                            </div>
+                          </div>
+                          {fech ? (
+                            <div className="mt-2 bg-slate-50 rounded-lg p-2.5">
+                              <div className="flex items-center justify-between gap-2">
+                                <p className="text-[8px] font-black text-slate-500 uppercase leading-snug">Entregador informou:<br />{fmt(Number(fech.valor_dinheiro))} din · {fmt(Number(fech.valor_pix))} pix</p>
+                                {fech.confirmado ? (
+                                  <span className="text-[7px] font-black uppercase px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 shrink-0">Confirmado</span>
+                                ) : (
+                                  <button onClick={() => acao({ acao: 'CONFIRMAR_CAIXA', caixaId: fech.id }, 'Recebimento do dinheiro confirmado!')}
+                                    className="text-[8px] font-black uppercase px-2 py-1.5 rounded bg-emerald-600 text-white active:scale-95 shrink-0">Confirmar</button>
+                                )}
+                              </div>
+                              <div className="flex gap-1.5 mt-1.5 flex-wrap">
+                                <span className={`text-[7px] font-black uppercase px-1.5 py-0.5 rounded ${bate(dinDiff) ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
+                                  <i className={`fa-solid ${bate(dinDiff) ? 'fa-check' : 'fa-triangle-exclamation'} mr-0.5`}></i>Dinheiro: {bate(dinDiff) ? 'bateu' : `dif. R$ ${Math.abs(dinDiff!).toFixed(2)}`}
+                                </span>
+                                <span className={`text-[7px] font-black uppercase px-1.5 py-0.5 rounded ${bate(pixDiff) ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
+                                  <i className={`fa-solid ${bate(pixDiff) ? 'fa-check' : 'fa-triangle-exclamation'} mr-0.5`}></i>Pix: {bate(pixDiff) ? 'bateu' : `dif. R$ ${Math.abs(pixDiff!).toFixed(2)}`}
+                                </span>
+                              </div>
+                            </div>
+                          ) : (
+                            <p className="text-[8px] font-black text-amber-500 uppercase mt-2"><i className="fa-solid fa-hourglass-half mr-1"></i>Aguardando o entregador fechar o caixa</p>
+                          )}
+                          <button onClick={() => setConfDetalhe(aberto ? null : g.entregadorId)} className="w-full mt-2 py-1.5 text-[8px] font-black text-slate-400 uppercase">
+                            <i className={`fa-solid ${aberto ? 'fa-chevron-up' : 'fa-chevron-down'} mr-1`}></i>Bater com as entregas ({g.vendas.length})
+                          </button>
+                          {aberto && (
+                            <div className="mt-1 space-y-1">
+                              {g.vendas.map((v: any) => (
+                                <div key={v.saleId} className="flex items-center justify-between bg-slate-50 rounded-lg px-2.5 py-1.5">
+                                  <div className="min-w-0">
+                                    <p className="text-[9px] font-black text-slate-600 capitalize truncate">{v.cliente}</p>
+                                    <p className="text-[7px] font-bold text-slate-400 uppercase">{v.recebimento}</p>
+                                  </div>
+                                  <div className="text-right shrink-0 ml-2">
+                                    <p className="text-[9px] font-black text-slate-700">{fmt(v.valorPago)}</p>
+                                    <p className="text-[7px] font-bold text-slate-400">de {fmt(v.valorTotal)}</p>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                    {(data.fechamentosHoje || []).filter((f: any) => !data.conferencia!.porEntregador.some((g: any) => g.entregadorId === f.entregador_id)).map((f: any) => (
+                      <p key={f.id} className="text-[8px] font-black text-amber-500 uppercase bg-amber-50 rounded-lg px-2.5 py-2">
+                        <i className="fa-solid fa-triangle-exclamation mr-1"></i>Fechamento informado (dinheiro {fmt(Number(f.valor_dinheiro))} · pix {fmt(Number(f.valor_pix))}) sem entregas registradas hoje
+                      </p>
+                    ))}
+                  </div>
+                )}
+              </div>
             )}
           </div>
         )}
@@ -646,9 +822,21 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
               </div>
             )}
 
-            {/* --- DINHEIRO: valor recebido + troco (so a vista) --- */}
-            {sp.condicao !== 'APRAZO' && spMetodo === 'DINHEIRO' && (
+            {/* --- A VISTA: como o cliente esta pagando AGORA (pode mudar na hora — ex.: metade dinheiro, metade Pix) --- */}
+            {sp.condicao !== 'APRAZO' && (spMetodo === 'DINHEIRO' || spMetodo === 'PIX') && (
               <div className="mt-4 space-y-3 animate-in fade-in duration-300">
+                <div>
+                  <p className="text-[9px] font-black text-gray-400 uppercase text-center mb-2">Como o cliente esta pagando agora?</p>
+                  <div className="flex gap-1.5">
+                    {(['DINHEIRO', 'PIX', 'MISTO'] as const).map(m => (
+                      <button key={m} onClick={() => { setPgtoAgora(m); setQrPix(null); setQrErro(''); }}
+                        className={`flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all ${pgtoAgora === m ? 'bg-gray-800 text-white shadow-md' : 'bg-gray-50 text-gray-400'}`}>
+                        {m === 'DINHEIRO' ? 'Dinheiro' : m === 'PIX' ? 'Pix' : 'Misto (2 formas)'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {pgtoAgora === 'DINHEIRO' && (<>
                 <div className="bg-gray-50 rounded-2xl p-4 text-center border border-gray-100">
                   <p className="text-[9px] font-black text-gray-400 uppercase">Valor a receber</p>
                   <p className="text-2xl font-black text-gray-800">{fmt(restante)}</p>
@@ -713,12 +901,9 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                   <i className="fa-solid fa-check mr-1"></i>
                   {falta > 0 ? `Registrar parcial — recebi ${fmt(rec)}` : `Confirmei que recebi ${fmt(restante)}`}
                 </button>
-              </div>
-            )}
+                </>)}
 
-            {/* --- PIX: confirmacao manual + FOTO OBRIGATORIA (so a vista) --- */}
-            {sp.condicao !== 'APRAZO' && spMetodo === 'PIX' && (
-              <div className="mt-4 space-y-3 animate-in fade-in duration-300">
+                {pgtoAgora === 'PIX' && (<>
                 <div className="bg-teal-50 rounded-2xl p-4 text-center border border-teal-100">
                   <i className="fa-brands fa-pix text-teal-600 text-2xl"></i>
                   <p className="text-[9px] font-black text-teal-700 uppercase mt-1">Pagamento via Pix</p>
@@ -734,6 +919,8 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                     className="w-full p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-xl font-black text-center outline-none focus:ring-2 focus:ring-teal-100"
                   />
                 </div>
+                {/* QR CODE DO PIX: cliente escaneia e paga o valor exato (estilo portal) */}
+                {qrBloco(parseFloat(valorPix) > 0 ? parseFloat(valorPix) : restante)}
                 <label className="block cursor-pointer">
                   <input
                     type="file" accept="image/*" capture="environment" className="hidden"
@@ -767,6 +954,75 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                 >
                   <i className="fa-solid fa-check mr-1"></i>Recebi — confirmo o Pix
                 </button>
+                </>)}
+
+                {/* MISTO: duas formas na mesma entrega (ex.: metade dinheiro, metade Pix) */}
+                {pgtoAgora === 'MISTO' && (<>
+                  <div className="bg-blue-50 rounded-2xl p-4 text-center border border-blue-100">
+                    <i className="fa-solid fa-layer-group text-blue-600 text-2xl"></i>
+                    <p className="text-[9px] font-black text-blue-700 uppercase mt-1">Pagamento misto — duas formas</p>
+                    <p className="text-[10px] font-bold text-blue-600/80">Ex.: metade em dinheiro, metade no Pix</p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Dinheiro R$</label>
+                      <input type="number" inputMode="decimal" value={valorDinMisto} onChange={e => setValorDinMisto(e.target.value)} placeholder="0.00"
+                        className="w-full p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-lg font-black text-center outline-none focus:ring-2 focus:ring-emerald-100" />
+                    </div>
+                    <div>
+                      <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Pix R$</label>
+                      <input type="number" inputMode="decimal" value={valorPixMisto} onChange={e => setValorPixMisto(e.target.value)} placeholder="0.00"
+                        className="w-full p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-lg font-black text-center outline-none focus:ring-2 focus:ring-teal-100" />
+                    </div>
+                  </div>
+                  {somaMisto > 0 && (
+                    <div className={`rounded-2xl p-3 border text-center ${somaMisto > restante + 0.005 ? 'bg-rose-50 border-rose-100' : 'bg-gray-50 border-gray-100'}`}>
+                      <p className="text-[9px] font-black text-gray-400 uppercase">Total recebendo agora</p>
+                      <p className={`text-xl font-black ${somaMisto > restante + 0.005 ? 'text-rose-600' : 'text-gray-800'}`}>{fmt(somaMisto)}</p>
+                      {somaMisto <= restante + 0.005 && restante - somaMisto > 0.005 && (
+                        <p className="text-[9px] font-black text-amber-600 uppercase mt-0.5">Faltam {fmt(restante - somaMisto)} — continua em aberto (parcial)</p>
+                      )}
+                    </div>
+                  )}
+                  {pixMisto > 0 && qrBloco(pixMisto)}
+                  <label className="block cursor-pointer">
+                    <input
+                      type="file" accept="image/*" capture="environment" className="hidden"
+                      onChange={async e => {
+                        const f = e.target.files?.[0];
+                        if (!f) return;
+                        try { setFotoPix(await compressImage(f)); }
+                        catch { showToast('Nao foi possivel processar a foto.', 'error'); }
+                      }}
+                    />
+                    <div className="py-3.5 rounded-2xl bg-teal-500 text-white text-[10px] font-black uppercase text-center shadow-md active:scale-95 transition-transform">
+                      <i className="fa-solid fa-camera mr-1"></i>{fotoPix ? 'Trocar comprovante' : 'Foto do comprovante Pix (obrigatoria)'}
+                    </div>
+                  </label>
+                  {fotoPix && (
+                    <div className="relative rounded-2xl overflow-hidden border border-gray-100 animate-in zoom-in-95">
+                      <img src={fotoPix} alt="Comprovante Pix" className="w-full max-h-56 object-cover" />
+                      <span className="absolute top-2 right-2 bg-emerald-500 text-white text-[8px] font-black uppercase px-2 py-1 rounded-md">Comprovante anexado</span>
+                    </div>
+                  )}
+                  <button
+                    onClick={() => {
+                      if (somaMisto <= 0) { showToast('Informe o valor em dinheiro e/ou Pix.', 'error'); return; }
+                      if (somaMisto > restante + 0.005) { showToast('A soma passou do valor do pedido.', 'error'); return; }
+                      if (pixMisto > 0 && !fotoPix) { showToast('Foto do comprovante Pix obrigatoria.', 'error'); return; }
+                      const faltaM = Math.round((restante - somaMisto) * 100) / 100;
+                      if (faltaM > 0.005) {
+                        if (!window.confirm(`Registrar pagamento PARCIAL?\n\nRecebeu ${fmt(somaMisto)} (dinheiro ${fmt(dinMisto)} + pix ${fmt(pixMisto)}) de ${fmt(restante)}.\nO restante (${fmt(faltaM)}) continua em aberto no sistema.`)) return;
+                      }
+                      confirmarEntrega(sp, 'MISTO', { valorDinheiro: dinMisto, valorPix: pixMisto, foto: fotoPix || undefined });
+                    }}
+                    disabled={!!busy}
+                    className="w-full py-4 bg-emerald-600 text-white rounded-2xl text-xs font-black uppercase tracking-wider shadow-lg active:scale-[0.98] transition-transform disabled:opacity-60"
+                  >
+                    <i className="fa-solid fa-check mr-1"></i>
+                    {somaMisto > 0 && restante - somaMisto > 0.005 ? `Registrar parcial — recebi ${fmt(somaMisto)}` : `Confirmei — dinheiro ${fmt(dinMisto)} + pix ${fmt(pixMisto)}`}
+                  </button>
+                </>)}
               </div>
             )}
 

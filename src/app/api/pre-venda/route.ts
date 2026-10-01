@@ -3,6 +3,8 @@ import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/s
 import { sessionFromRequest, isAdminSession } from '@/lib/session';
 import { hasEntregaTables, hasBoletoFotoColumn } from '@/lib/serverSchema';
 import { sendPushToUser } from '@/lib/pushSender';
+import QRCode from 'qrcode';
+import { buildPixPayload, generateTxid } from '@/lib/pix';
 
 /**
  * PRÉ-VENDA / ROTAS DE ENTREGA (estilo Shopee)
@@ -672,22 +674,105 @@ async function getFila(supabase: any, userId: string, perfil: string) {
   for (const e of evHoje || []) {
     const m = String(e.motivo || '');
     if (!/R\$/.test(m)) continue;
+    // PAGAMENTO MISTO: "Pagamento misto: dinheiro R$ 50.00 + pix R$ 50.00" —
+    // separa as duas partes (o parser generico so pegaria a primeira)
+    if (/\bmisto\b/i.test(m)) {
+      const low = m.toLowerCase();
+      const iDin = low.indexOf('dinheiro');
+      const iPix = low.indexOf('pix');
+      if (iDin >= 0) {
+        const seg = iPix > iDin ? m.slice(iDin, iPix) : m.slice(iDin);
+        dinheiroHoje = round2(dinheiroHoje + valorDeMotivo(seg));
+      }
+      if (iPix >= 0) {
+        const seg = iDin >= 0 && iDin > iPix ? m.slice(iPix, iDin) : m.slice(iPix);
+        pixHoje = round2(pixHoje + valorDeMotivo(seg));
+      }
+      continue;
+    }
     const v = valorDeMotivo(m);
     if (!v) continue;
     if (/pix/i.test(m)) pixHoje = round2(pixHoje + v);
     else if (/dinheiro/i.test(m)) dinheiroHoje = round2(dinheiroHoje + v);
   }
 
+  // Resumo legivel do recebimento de uma entrega (para a conferencia do admin)
+  const resumoDeMotivo = (m: string): string => {
+    const s = String(m || '');
+    if (/\bmisto\b/i.test(s)) return 'Dinheiro + Pix';
+    if (/dinheiro/i.test(s)) return 'Dinheiro';
+    if (/pix/i.test(s)) return 'Pix';
+    if (/JA_PAGO/i.test(s)) return 'Ja havia pago';
+    if (/boleto/i.test(s)) return 'Boleto entregue';
+    if (/a prazo/i.test(s)) return 'A prazo — vendedor cobra';
+    if (/sem pagamento/i.test(s)) return 'Sem cobranca (a receber)';
+    return 'Sem cobranca';
+  };
+
   const filaFmt = fila.map((p: any) => ({
     ...p,
     motivo: null,
   }));
 
+  const entreguesHojeEnr = await enrichFila(supabase, entreguesHoje);
+  const nomePorSale: Record<string, string> = {};
+  for (const p of entreguesHojeEnr) nomePorSale[String(p.saleId)] = p.cliente?.nome || 'Cliente';
+
+  // CONFERENCIA DO DIA (admin): o que o SISTEMA registrou de recebimento por
+  // entregador hoje — para bater com o dinheiro que o entregador traz da rua,
+  // entrega por entrega (o entregador pode chegar a qualquer momento).
+  let conferencia: any = null;
+  if (perfil === 'ADMIN') {
+    const evMotivosPorSale: Record<string, string[]> = {};
+    for (const e of evHoje || []) {
+      (evMotivosPorSale[String(e.sale_id)] ||= []).push(String(e.motivo || ''));
+    }
+    const grupos: Record<string, { entregadorId: string; nome: string; dinheiro: number; pix: number; qtdEntregas: number; vendas: any[] }> = {};
+    for (const s of entreguesHoje || []) {
+      const motivos = evMotivosPorSale[String(s.id)] || [];
+      let din = 0, pix = 0;
+      for (const m of motivos) {
+        if (!/R\$/.test(m)) continue;
+        if (/\bmisto\b/i.test(m)) {
+          const low = m.toLowerCase();
+          const iDin = low.indexOf('dinheiro');
+          const iPix = low.indexOf('pix');
+          if (iDin >= 0) { const seg = iPix > iDin ? m.slice(iDin, iPix) : m.slice(iDin); din = round2(din + valorDeMotivo(seg)); }
+          if (iPix >= 0) { const seg = iDin >= 0 && iDin > iPix ? m.slice(iPix, iDin) : m.slice(iPix); pix = round2(pix + valorDeMotivo(seg)); }
+          continue;
+        }
+        const v = valorDeMotivo(m);
+        if (!v) continue;
+        if (/pix/i.test(m)) pix = round2(pix + v);
+        else if (/dinheiro/i.test(m)) din = round2(din + v);
+      }
+      const entKey = String(s.entregador_id || 'SEM_ENTREGADOR');
+      const g = (grupos[entKey] ||= { entregadorId: entKey, nome: '', dinheiro: 0, pix: 0, qtdEntregas: 0, vendas: [] });
+      g.dinheiro = round2(g.dinheiro + din);
+      g.pix = round2(g.pix + pix);
+      g.qtdEntregas += 1;
+      g.vendas.push({
+        saleId: s.id,
+        cliente: nomePorSale[String(s.id)] || 'Cliente',
+        valorTotal: Number(s.valor_total || 0),
+        valorPago: Number(s.valor_pago || 0),
+        recebimento: motivos.length ? resumoDeMotivo(motivos[motivos.length - 1]) : 'Sem cobranca',
+      });
+    }
+    const ids = Object.keys(grupos).filter(k => k !== 'SEM_ENTREGADOR');
+    if (ids.length > 0) {
+      const { data: usrs } = await supabase.from('app_users').select('id, nome').in('id', ids);
+      (usrs || []).forEach((u: any) => { if (grupos[u.id]) grupos[u.id].nome = u.nome; });
+    }
+    if (grupos['SEM_ENTREGADOR']) grupos['SEM_ENTREGADOR'].nome = 'Entregador (registro antigo)';
+    conferencia = { porEntregador: Object.values(grupos).sort((a: any, b: any) => b.qtdEntregas - a.qtdEntregas) };
+  }
+
   return {
     hoje: todayStr(),
     fila: filaFmt,
     falhados: await enrichFila(supabase, falhados || []),
-    entreguesHoje: await enrichFila(supabase, entreguesHoje),
+    entreguesHoje: entreguesHojeEnr,
     resumo: {
       naFila: filaFmt.length,
       valorFila: round2(filaFmt.reduce((a: number, p: any) => a + p.valorTotal, 0)),
@@ -698,6 +783,7 @@ async function getFila(supabase: any, userId: string, perfil: string) {
       falhados: (falhados || []).length,
     },
     caixa: { dinheiroHoje, pixHoje },
+    ...(conferencia ? { conferencia } : {}),
     sem13,
   };
 }
@@ -1120,7 +1206,7 @@ export async function POST(req: NextRequest) {
       // REGRA DO DONO: venda A PRAZO o ENTREGADOR NAO recebe dinheiro — o
       // VENDEDOR recebe na proxima visita. Entrega a prazo = foto, sem cobranca.
       const condAprezo = /A PRAZO/i.test(String(saleRow.detalhe_pagamento || ''));
-      if (condAprezo && ['DINHEIRO', 'PIX', 'JA_PAGO'].includes(pagamento)) {
+      if (condAprezo && ['DINHEIRO', 'PIX', 'MISTO', 'JA_PAGO'].includes(pagamento)) {
         return NextResponse.json({ ok: false, error: 'Venda A PRAZO: o entregador nao cobra. O vendedor recebe na proxima visita — confirme a entrega apenas com a foto.' }, { status: 400 });
       }
 
@@ -1153,6 +1239,26 @@ export async function POST(req: NextRequest) {
         if (recebido > restante) recebido = restante; // troco e tratado na tela
       }
 
+      // PAGAMENTO MISTO (ex.: combinou a vista em dinheiro, mas na entrega o
+      // cliente quer pagar metade em dinheiro e metade no Pix): o entregador
+      // registra as duas partes e o sistema soma — a parte do Pix exige foto
+      // do comprovante, igual ao Pix puro.
+      let mistoDin = 0, mistoPix = 0;
+      if (pagamento === 'MISTO') {
+        mistoDin = round2(Number(body.valorDinheiro) || 0);
+        mistoPix = round2(Number(body.valorPix) || 0);
+        if (mistoDin < 0 || mistoPix < 0 || (mistoDin <= 0 && mistoPix <= 0)) {
+          return NextResponse.json({ ok: false, error: 'Informe quanto recebeu em dinheiro e/ou no Pix.' }, { status: 400 });
+        }
+        if (round2(mistoDin + mistoPix) > restante + 0.005) {
+          return NextResponse.json({ ok: false, error: `A soma (R$ ${(mistoDin + mistoPix).toFixed(2)}) passou do saldo de R$ ${restante.toFixed(2)}.` }, { status: 400 });
+        }
+        if (mistoPix > 0 && !foto) {
+          return NextResponse.json({ ok: false, error: 'Foto do comprovante Pix obrigatoria (parte paga no Pix).' }, { status: 400 });
+        }
+        recebido = round2(mistoDin + mistoPix);
+      }
+
       const updates: any = { entrega_status: 'ENTREGUE' };
       // REGRA DO DONO: a pre-venda so e EFETIVADA na entrega (aceite do
       // entregador ou do admin). A data da venda passa a ser a data da
@@ -1172,20 +1278,26 @@ export async function POST(req: NextRequest) {
       const stamp = carimboAgora();
       const detAtual = String(saleRow.detalhe_pagamento || 'PRE-VENDA');
 
-      if (pagamento === 'DINHEIRO' || pagamento === 'PIX') {
-        // Dinheiro/Pix: baixa o recebido (total ou PARCIAL) e cria a comissao
-        // do vendedor AGORA — e aqui que a pre-venda entra no financeiro.
+      if (pagamento === 'DINHEIRO' || pagamento === 'PIX' || pagamento === 'MISTO') {
+        // Dinheiro/Pix/Misto: baixa o recebido (total ou PARCIAL) e cria a
+        // comissao do vendedor AGORA — e aqui que a pre-venda entra no financeiro.
         const novoPago = round2(jaPago + recebido);
         const quitada = novoPago >= total - 0.005;
         updates.valor_pago = novoPago;
         updates.status_pagamento = quitada ? 'PAGO' : 'PENDENTE';
-        updates.metodo_pagamento = pagamento; // valores aceitos pelo CHECK legado
+        // CHECK legado: metodo so aceita DINHEIRO/PIX/A_PRAZO — no misto grava
+        // pela parte em dinheiro (a forma real completa fica no detalhe).
+        updates.metodo_pagamento = pagamento === 'PIX' || (pagamento === 'MISTO' && mistoDin <= 0) ? 'PIX' : 'DINHEIRO';
         // Log no formato que o portal do cliente parseia (historico de recebimentos)
-        updates.detalhe_pagamento = `${detAtual} | ${stamp}: R$ ${recebido.toFixed(2)} (${pagamento}${quitada ? '' : ' — parcial'})`;
+        updates.detalhe_pagamento = pagamento === 'MISTO'
+          ? `${detAtual} | ${stamp}: R$ ${mistoDin.toFixed(2)} (dinheiro) + R$ ${mistoPix.toFixed(2)} (pix)${quitada ? '' : ' — parcial'}`
+          : `${detAtual} | ${stamp}: R$ ${recebido.toFixed(2)} (${pagamento}${quitada ? '' : ' — parcial'})`;
         // Motivo SEMPRE com o valor explicito (o caixa do dia soma a partir dele)
-        eventoMotivo = quitada
-          ? (pagamento === 'PIX' ? `Pagamento: PIX — R$ ${recebido.toFixed(2)} (comprovante foto)` : `Pagamento: dinheiro — R$ ${recebido.toFixed(2)}`)
-          : `Pagamento parcial (${pagamento === 'PIX' ? 'pix' : 'dinheiro'}): R$ ${recebido.toFixed(2)} de R$ ${restante.toFixed(2)}`;
+        eventoMotivo = pagamento === 'MISTO'
+          ? `Pagamento misto: dinheiro R$ ${mistoDin.toFixed(2)} + pix R$ ${mistoPix.toFixed(2)}`
+          : quitada
+            ? (pagamento === 'PIX' ? `Pagamento: PIX — R$ ${recebido.toFixed(2)} (comprovante foto)` : `Pagamento: dinheiro — R$ ${recebido.toFixed(2)}`)
+            : `Pagamento parcial (${pagamento === 'PIX' ? 'pix' : 'dinheiro'}): R$ ${recebido.toFixed(2)} de R$ ${restante.toFixed(2)}`;
         // BLOCO 14: comissão da PV — valor cheio; DISPONIVEL se quitou no aceite
         await registrarComissaoPreVenda(supabase, saleRow, quitada);
       } else if (pagamento === 'BOLETO') {
@@ -1242,6 +1354,7 @@ export async function POST(req: NextRequest) {
           const recebidoTxt = pagamento === 'BOLETO' ? 'boleto entregue (aguardando compensacao)'
             : pagamento === 'NAO_PAGO' ? (condAprezo ? `entregue a prazo — receba R$ ${restante.toFixed(2)} do cliente na proxima visita` : 'entregue — valor a receber')
             : pagamento === 'JA_PAGO' ? `entregue — R$ ${restante.toFixed(2)} (ja pago)`
+            : pagamento === 'MISTO' ? `entregue — R$ ${recebido.toFixed(2)} recebidos (dinheiro + pix)`
             : `entregue — R$ ${recebido.toFixed(2)} recebidos`;
           const liberada = updates.status_pagamento === 'PAGO';
           await avisarVendedor(supabase, saleRow.vendedor_id, saleRow.client_id, 'Venda entregue \u2705', `${recebidoTxt}. Comissao ${liberada ? 'LIBERADA' : 'aguardando pagamento completo'}.`);
@@ -1276,6 +1389,34 @@ export async function POST(req: NextRequest) {
       if (upErr) throw upErr;
       await logEventoSeguro(supabase, rotaIdRef, saleId, userId, 'REABERTO', 'Pedido voltou para a fila', lat, lng);
       return NextResponse.json({ ok: true });
+    }
+
+    // ---------- PIX_QRCODE (QR Code do Pix na entrega — estilo portal) ----------
+    if (acao === 'PIX_QRCODE') {
+      if (session.perfil !== 'ADMIN' && session.perfil !== 'ENTREGADOR') {
+        return NextResponse.json({ ok: false, error: 'Acesso restrito.' }, { status: 403 });
+      }
+      const qrSaleId = String(body.saleId || '');
+      if (!qrSaleId) return NextResponse.json({ ok: false, error: 'saleId obrigatorio.' }, { status: 400 });
+      const { data: qrSale } = await supabase
+        .from('sales')
+        .select('id, valor_total, valor_pago')
+        .eq('id', qrSaleId)
+        .limit(1)
+        .maybeSingle();
+      if (!qrSale) return NextResponse.json({ ok: false, error: 'Venda nao encontrada.' }, { status: 404 });
+      const qrRestante = round2(Number(qrSale.valor_total || 0) - Number(qrSale.valor_pago || 0));
+      if (qrRestante <= 0) {
+        return NextResponse.json({ ok: false, error: 'Esta venda nao tem saldo em aberto.' }, { status: 400 });
+      }
+      let qrValor = round2(Number(body.valor) || 0);
+      if (qrValor <= 0) qrValor = qrRestante;
+      if (qrValor > qrRestante) {
+        return NextResponse.json({ ok: false, error: `Valor maior que o saldo em aberto (R$ ${qrRestante.toFixed(2)}).` }, { status: 400 });
+      }
+      const pix = buildPixPayload(qrValor, generateTxid('DM'));
+      const qrDataUrl = await QRCode.toDataURL(pix.payload, { margin: 1, width: 360, errorCorrectionLevel: 'M' });
+      return NextResponse.json({ ok: true, ...pix, qrDataUrl, valor: qrValor });
     }
 
     // ---------- FECHAR_CAIXA (entregador informa o dinheiro em especie) ----------

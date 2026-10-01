@@ -278,6 +278,10 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     const pendingSales = sales.filter(s => s.clientId === client.id && s.statusPagamento === 'PENDENTE');
     return pendingSales.reduce((acc, s) => acc + (s.valorTotal - s.valorPago), 0);
   }, [sales, client.id]);
+  const clientDebtQtd = useMemo(
+    () => sales.filter(s => s.clientId === client.id && s.statusPagamento === 'PENDENTE' && s.valorTotal - s.valorPago > 0.005).length,
+    [sales, client.id]
+  );
 
   // ============================================================
   // FUNÇÃO DE VALIDAÇÃO DIRETA - CHAMA EM QUALQUER LUGAR
@@ -747,9 +751,12 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       </header>
 
       {clientDebt > 0 && !isPrePedido && (
-        <button onClick={() => { onCancel(); onNavigateToCredit(); }} className="w-full bg-rose-600 text-white p-3 flex items-center justify-center gap-3 shadow-md">
-          <i className="fa-solid fa-triangle-exclamation text-sm"></i>
-          <span className="text-[10px] font-black uppercase tracking-widest">DÍVIDA PENDENTE: R$ {clientDebt.toFixed(2)}</span>
+        <button onClick={() => { onCancel(); onNavigateToCredit(); }} className="w-full bg-rose-600 text-white p-3 flex items-center justify-center gap-3 shadow-md text-left">
+          <i className="fa-solid fa-triangle-exclamation text-base shrink-0"></i>
+          <span className="min-w-0">
+            <span className="block text-[10px] font-black uppercase tracking-widest">{client.nomeFantasia || 'Cliente'} tem R$ {clientDebt.toFixed(2)} em aberto</span>
+            <span className="block text-[8px] font-bold uppercase opacity-80 mt-0.5">{clientDebtQtd} venda(s) a receber — COBRE ANTES DE VENDER DE NOVO (toque para receber)</span>
+          </span>
         </button>
       )}
 
@@ -929,6 +936,15 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                 <p className="text-3xl font-black text-blue-600">R$ {total.toFixed(2)}</p>
               </div>
 
+              {/* LEMBRETE DO DONO: cobre o a prazo ANTES de vender de novo */}
+              {clientDebt > 0 && !isPrePedido && (
+                <div className="bg-rose-50 border border-rose-200 rounded-2xl p-3.5 mb-5 text-center">
+                  <p className="text-[9px] font-black text-rose-700 uppercase"><i className="fa-solid fa-triangle-exclamation mr-1"></i>Lembrete — cliente com debito</p>
+                  <p className="text-[12px] font-black text-rose-600 mt-1">R$ {clientDebt.toFixed(2)} em aberto ({clientDebtQtd} venda(s))</p>
+                  <p className="text-[9px] text-rose-500 font-semibold mt-0.5">Cobre o a prazo ANTES de vender de novo. Toque no aviso vermelho no topo para receber agora.</p>
+                </div>
+              )}
+
               {isPreVenda ? (
                 <div className="mb-6 animate-in fade-in duration-300">
                   <p className="text-[9px] font-black text-gray-400 uppercase text-center mb-2">Pagamento combinado com o cliente</p>
@@ -956,9 +972,15 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                   <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 text-center">
                     <i className="fa-solid fa-clipboard-list text-emerald-500 text-lg"></i>
                     <p className="text-[10px] font-black text-emerald-700 uppercase mt-1">
-                      Entregador cobra {metodoEntrega === 'PIX' ? 'Pix' : metodoEntrega.toLowerCase()} na entrega ({condicaoPv === 'AVISTA' ? 'à vista' : 'a prazo'})
+                      {condicaoPv === 'APRAZO'
+                        ? 'Entregador entrega e anexa a foto do comprovante'
+                        : `Entregador recebe ${metodoEntrega === 'PIX' ? 'Pix' : metodoEntrega.toLowerCase()} na entrega (à vista)`}
                     </p>
-                    <p className="text-[9px] text-emerald-600/70 font-semibold mt-0.5">O pedido entra na fila de entregas na hora — o entregador entrega quando puder.</p>
+                    <p className="text-[9px] text-emerald-600/70 font-semibold mt-0.5">
+                      {condicaoPv === 'APRAZO'
+                        ? 'Quem cobra o a prazo é o VENDEDOR na próxima visita ou no prazo — o entregador NÃO recebe esse valor.'
+                        : 'O pedido entra na fila de entregas na hora — o entregador entrega quando puder.'}
+                    </p>
                   </div>
                 </div>
               ) : (

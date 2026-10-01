@@ -1,12 +1,14 @@
 import { supabase } from '@/lib/supabaseClient';
+import { fetchAllPages } from '@/lib/supabaseAll';
 import { Sale } from '@/lib/types';
 
 const safeNumber = (value: any): number => Number(value || 0);
 
 export const saleService = {
   async getAllSales(): Promise<Sale[]> {
-    const { data, error } = await supabase.from('sales').select('*, sale_items(*)');
-    if (error) return [];
+    // BLOCO 20: paginado — o servidor corta em 1000 linhas e as vendas novas
+    // sumiam do historico/relatorios/contas a receber (caso Mio Mercato).
+    const data = await fetchAllPages<any>('sales', '*, sale_items(*)');
     return data.map(s => ({
       id: s.id,
       vendedorId: s.vendedor_id,

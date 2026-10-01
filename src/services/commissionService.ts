@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabaseClient';
+import { fetchAllPages } from '@/lib/supabaseAll';
 import { Commission, CommissionPaymentLog } from '@/lib/types';
 
 // Helper function to safely convert database numeric values (which might be null or string) to number
@@ -6,11 +7,8 @@ const safeNumber = (value: any): number => Number(value || 0);
 
 export const commissionService = {
   async getAllCommissions(): Promise<Commission[]> {
-    const { data, error } = await supabase.from('commissions').select('*');
-    if (error) {
-      console.error('Erro ao buscar comissões:', error);
-      return [];
-    }
+    // BLOCO 20: paginado — tabela chegou a 999/1000; sem isso comissoes sumiriam do acerto
+    const data = await fetchAllPages<any>('commissions', '*');
     return (data || []).map(c => ({
       id: c.id,
       saleId: c.sale_id,
@@ -67,8 +65,8 @@ export const commissionService = {
   },
 
   async getAllPayouts(): Promise<CommissionPaymentLog[]> {
-    const { data, error } = await supabase.from('commission_payment_logs').select('*');
-    if (error) return [];
+    // BLOCO 20: paginado (mesmo padrao de vendas/comissoes)
+    const data = await fetchAllPages<any>('commission_payment_logs', '*');
     return data.map(l => ({
       id: l.id,
       vendedorId: l.seller_id,

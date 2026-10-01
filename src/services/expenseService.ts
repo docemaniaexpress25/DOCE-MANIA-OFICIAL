@@ -1,10 +1,11 @@
 import { supabase } from '@/lib/supabaseClient';
+import { fetchAllPages } from '@/lib/supabaseAll';
 import { Expense } from '@/lib/types';
 
 export const expenseService = {
   async getAllExpenses(): Promise<Expense[]> {
-    const { data, error } = await supabase.from('seller_expenses').select('*');
-    if (error) return [];
+    // BLOCO 20: paginado (mesmo padrao de vendas/comissoes)
+    const data = await fetchAllPages<any>('seller_expenses', '*');
     return data.map(e => ({
       id: e.id,
       sellerId: e.seller_id,

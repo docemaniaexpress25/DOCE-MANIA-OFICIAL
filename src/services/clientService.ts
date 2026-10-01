@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabaseClient';
+import { fetchAllPages } from '@/lib/supabaseAll';
 import { Client } from '@/lib/types';
 
 /** Codigo aleatorio do portal (12 chars) para clientes novos */
@@ -31,11 +32,8 @@ function mapClient(c: any): Client {
 
 export const clientService = {
   async getAllClients(): Promise<Client[]> {
-    const { data, error } = await supabase.from('clients').select('*').order('ordem', { ascending: true });
-    if (error) {
-      console.error('Erro ao buscar clientes:', error);
-      return [];
-    }
+    // BLOCO 20: paginado — mantem ordem por 'ordem' com desempate estavel por id
+    const data = await fetchAllPages<any>('clients', '*', { orderCol: 'ordem', ascending: true, tiebreak: true });
     return data.map(mapClient);
   },
 

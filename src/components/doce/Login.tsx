@@ -245,7 +245,7 @@ const Login: React.FC<LoginProps> = ({ users, onLogin, logo, status = 'OK', onRe
               <div className="flex flex-col items-start">
                 <span className="text-sm">Secretário (base)</span>
                 <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded bg-slate-200 text-slate-600">
-                  Separação de pedidos
+                  Separação + estoque
                 </span>
               </div>
               <i className="fa-solid fa-boxes-stacked text-slate-400 group-hover:text-slate-500 transition-colors"></i>

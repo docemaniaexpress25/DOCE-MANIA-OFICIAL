@@ -5,6 +5,7 @@ import AdminDashboard from '@/components/doce/AdminDashboard';
 import VendedorDashboard from '@/components/doce/VendedorDashboard';
 import FilaEntregas from '@/components/doce/FilaEntregas';
 import SecretarioView from '@/components/doce/SecretarioView';
+import SecretarioEstoque from '@/components/doce/SecretarioEstoque';
 import Login from '@/components/doce/Login';
 import { haptics } from '@/utils/haptics';
 import { offlineSync } from '@/utils/offlineSync';
@@ -57,13 +58,19 @@ const EntregadorShell: React.FC<{ user: User; melhorias: MelhoriasFlags }> = ({ 
  * BLOCO 13: Tela do SECRETARIO da base fisica — separacao de pedidos.
  * Ve cada pedido novo (com alarme sonoro), imprime o cupom identico e
  * marca SEPARADO. Nao vende, nao entrega, nao mexe em valores.
+ *
+ * BLOCO 19: ganhou a aba ESTOQUE — ajuste APENAS da quantidade dos
+ * produtos (sem preco, custo, nome ou qualquer outro dado). A gravacao
+ * vai pela rota /api/secretario/estoque (whitelist de coluna no servidor).
  */
-const SecretarioShell: React.FC<{ user: User; melhorias: MelhoriasFlags }> = ({ user, melhorias }) => {
+const SecretarioShell: React.FC<{ user: User; melhorias: MelhoriasFlags; products: Product[]; reloadCore: () => void }> = ({ user, melhorias, products, reloadCore }) => {
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const showToast = useCallback((message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3200);
   }, []);
+  // BLOCO 19: abas do secretario — SEPARACAO (fila, padrao de sempre) + ESTOQUE
+  const [abaSecretario, setAbaSecretario] = useState<'SEPARACAO' | 'ESTOQUE'>('SEPARACAO');
   return (
     <div className="space-y-4 pb-10">
       {toast && (
@@ -73,7 +80,26 @@ const SecretarioShell: React.FC<{ user: User; melhorias: MelhoriasFlags }> = ({ 
           </div>
         </div>
       )}
-      <SecretarioView user={user} showToast={showToast} melhorias={melhorias} />
+      {/* ===== ABAS DO SECRETARIO ===== */}
+      <div className="grid grid-cols-2 gap-1.5 bg-white p-1.5 rounded-2xl border border-gray-100 shadow-sm">
+        <button
+          onClick={() => setAbaSecretario('SEPARACAO')}
+          className={`py-3 rounded-xl text-[10px] font-black uppercase tracking-wide active:scale-95 transition-all ${abaSecretario === 'SEPARACAO' ? 'bg-slate-800 text-white shadow-md' : 'bg-gray-50 text-gray-400'}`}
+        >
+          <i className="fa-solid fa-boxes-packing mr-1.5"></i>Separação
+        </button>
+        <button
+          onClick={() => setAbaSecretario('ESTOQUE')}
+          className={`py-3 rounded-xl text-[10px] font-black uppercase tracking-wide active:scale-95 transition-all ${abaSecretario === 'ESTOQUE' ? 'bg-emerald-600 text-white shadow-md' : 'bg-gray-50 text-gray-400'}`}
+        >
+          <i className="fa-solid fa-boxes-stacked mr-1.5"></i>Estoque
+        </button>
+      </div>
+      {abaSecretario === 'SEPARACAO' ? (
+        <SecretarioView user={user} showToast={showToast} melhorias={melhorias} />
+      ) : (
+        <SecretarioEstoque products={products} showToast={showToast} reloadProducts={reloadCore} />
+      )}
     </div>
   );
 };
@@ -830,7 +856,7 @@ const App: React.FC = () => {
         {currentUser.role === 'ENTREGADOR' ? (
           <EntregadorShell user={currentUser} melhorias={melhorias} />
         ) : currentUser.role === 'SECRETARIO' ? (
-          <SecretarioShell user={currentUser} melhorias={melhorias} />
+          <SecretarioShell user={currentUser} melhorias={melhorias} products={products} reloadCore={fetchCoreData} />
         ) : currentUser.role === 'ADMIN' ? (
           <AdminDashboard 
             {...{ products, users, cargas, cargasLoaded, clients, sales, commissions, payoutLogs, expenses, logo, margemGlobalAtiva, margemGlobalValor, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, adminNotification, companyName, companyCnpj, orderedProductIds: productOrder, categories, subcategories, clientOrder, melhorias }}

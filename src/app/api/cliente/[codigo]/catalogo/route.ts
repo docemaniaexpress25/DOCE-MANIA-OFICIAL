@@ -52,9 +52,11 @@ export async function GET(
     const bloqueado = saldoDevedor > 0.005;
 
     // 3. Catalogo do estoque central (ativo com estoque)
+    // select('*'): imagem/unidades_por_caixa (Bloco 15) entram quando existirem,
+    // sem quebrar antes do SQL rodar.
     const { data: prods, error: prodErr } = await supabase
       .from('products')
-      .select('id, nome, preco_venda, estoque_principal, category_id')
+      .select('*')
       .eq('ativo', true)
       .gt('estoque_principal', 0)
       .order('nome', { ascending: true });
@@ -76,6 +78,9 @@ export async function GET(
       preco: Number(p.preco_venda || 0),
       estoque: Math.max(0, Number(p.estoque_principal || 0)),
       categoryId: (p.category_id as string) || null,
+      // Bloco 15: foto cadastrada sobrepoe a foto do catalogo antigo (resolvida no front)
+      imagem: (p.imagem as string) || null,
+      unidadesPorCaixa: Math.max(1, Math.floor(Number(p.unidades_por_caixa || 1)) || 1),
     }));
 
     return NextResponse.json({

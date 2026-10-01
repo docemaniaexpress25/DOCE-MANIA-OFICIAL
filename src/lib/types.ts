@@ -49,6 +49,10 @@ export interface Product {
   ean?: string;
   unidade?: string;
   origem?: string;
+  /** Bloco 15: foto do produto no catalogo do portal (URL) — sobrepoe a foto do catalogo antigo */
+  imagem?: string;
+  /** Bloco 15: caixa fechada com N unidades (atacado) — 1/undefined = vende solto */
+  unidadesPorCaixa?: number;
 }
 
 export interface Carga {

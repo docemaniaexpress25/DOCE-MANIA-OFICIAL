@@ -21,6 +21,9 @@ import { sendPushToAll } from '@/lib/pushSender';
 
 interface ItemPayload { produtoId?: string; quantidade?: number; }
 
+/** Forma de pagamento pretendida pelo cliente (informativa — o pagamento real e combinado na entrega) */
+const FORMAS_OK = new Set(['PIX', 'DINHEIRO']);
+
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ codigo: string }> }
@@ -40,6 +43,9 @@ export async function POST(
     const body = await request.json();
     const rawItens: ItemPayload[] = Array.isArray(body?.itens) ? body.itens : [];
     const obs = String(body?.observacoes || '').trim().slice(0, 500) || null;
+    // Site de pedidos: o cliente escolhe Pix/Dinheiro na hora do envio (como o site antigo)
+    const formaPretendida = FORMAS_OK.has(String(body?.formaPagamento || '').toUpperCase())
+      ? String(body?.formaPagamento).toUpperCase() : null;
 
     const itens = rawItens
       .map(i => ({ produtoId: String(i.produtoId || ''), quantidade: Math.floor(Number(i.quantidade || 0)) }))
@@ -140,13 +146,16 @@ export async function POST(
     // 5. Grava o PEDIDO (nasce como pre-venda na fila do sistema)
     const d7 = new Date();
     d7.setDate(d7.getDate() + 7);
+    const detalhe = formaPretendida
+      ? `PEDIDO PORTAL — cliente pretende pagar com ${formaPretendida === 'PIX' ? 'PIX' : 'DINHEIRO'} — combinar na entrega`
+      : 'PEDIDO PORTAL — combinar pagamento na entrega';
     const basePayload: any = {
       vendedor_id: vendedorId,
       client_id: client.id,
       valor_total: total,
       valor_pago: 0,
       metodo_pagamento: 'A_PRAZO',
-      detalhe_pagamento: 'PEDIDO PORTAL — combinar pagamento na entrega',
+      detalhe_pagamento: detalhe,
       status_pagamento: 'PENDENTE',
       data_venda: new Date().toISOString(),
       data_vencimento: d7.toISOString(),

@@ -230,7 +230,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [newSubName, setNewSubName] = useState('');
   const [editingSub, setEditingSub] = useState<Subcategory | null>(null);
 
-  const [pForm, setPForm] = useState({ nome: '', custo: '', venda: '', comissao: '', comissaoPv: '', margem: '', ativo: true, estoquePrincipal: '', categoryId: '', subcategoryId: '', precoMinimo: '', ncm: '', cest: '', cfop: '', ean: '', unidade: 'UN', origem: '0' });
+  const [pForm, setPForm] = useState({ nome: '', custo: '', venda: '', comissao: '', comissaoPv: '', margem: '', ativo: true, estoquePrincipal: '', categoryId: '', subcategoryId: '', precoMinimo: '', ncm: '', cest: '', cfop: '', ean: '', unidade: 'UN', origem: '0', imagem: '', caixa: '' });
   const [clientForm, setClientForm] = useState<Partial<Client>>({ nomeFantasia: '', nome: '', telefone: '', endereco: '', bairro: '', diaRoteiro: 1, ativo: true, ativarCnpj: false, cnpj: '', pinLocalizacao: '', ordem: 0, rota: 'ROTA_01', razaoSocial: '', inscricaoEstadual: '', enderecoNumero: '', enderecoCep: '', enderecoMunicipio: '', enderecoUf: '', email: '' });
   const [cnpjBusca, setCnpjBusca] = useState<{ loading: boolean; msg: string; ok: boolean; endereco?: string }>({ loading: false, msg: '', ok: false });
   const cnpjBuscadoRef = useRef('');
@@ -787,7 +787,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         subcategoryId: '',
         precoMinimo: '0.00',
         comissaoPv: '',
-        ncm: '', cest: '', cfop: '5102', ean: '', unidade: 'UN', origem: '0'
+        ncm: '', cest: '', cfop: '5102', ean: '', unidade: 'UN', origem: '0', imagem: '', caixa: ''
       });
     } else {
       const precoVenda = Number(p.precoVenda) || 0;
@@ -805,7 +805,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         subcategoryId: p.subcategoryId || '',
         precoMinimo: (p.precoMinimo ?? 0).toFixed(2),
         comissaoPv: (p.comissaoPvPercentual === undefined || p.comissaoPvPercentual === null) ? '' : Number(p.comissaoPvPercentual).toFixed(2),
-        ncm: p.ncm || '', cest: p.cest || '', cfop: p.cfop || '5102', ean: p.ean || '', unidade: p.unidade || 'UN', origem: p.origem || '0'
+        ncm: p.ncm || '', cest: p.cest || '', cfop: p.cfop || '5102', ean: p.ean || '', unidade: p.unidade || 'UN', origem: p.origem || '0', imagem: p.imagem || '', caixa: (p.unidadesPorCaixa === undefined || p.unidadesPorCaixa === null) ? '' : String(p.unidadesPorCaixa)
       });
     }
     setShowProductModal(p);
@@ -828,11 +828,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       cfop: (pForm.cfop || '').trim() || undefined,
       ean: (pForm.ean || '').trim() || undefined,
       unidade: (pForm.unidade || 'UN').trim() || 'UN',
-      origem: (pForm.origem || '0').trim() || '0'
+      origem: (pForm.origem || '0').trim() || '0',
+      imagem: (pForm.imagem || '').trim() || undefined,
+      unidadesPorCaixa: pForm.caixa === '' ? undefined : Math.max(1, parseInt(pForm.caixa) || 1)
     };
     // BLOCO 14: comissão PV — vazio = usa a taxa padrão da pré-venda
     data.comissaoPvPercentual = pForm.comissaoPv === '' ? undefined : parseFloat(pForm.comissaoPv);
-    if (showProductModal === 'NEW') props.addProduct(data.nome!, data.precoCusto!, data.precoVenda!, data.comissaoPercentual!, data.estoquePrincipal, data.categoryId, data.subcategoryId, data.precoMinimo, { ncm: data.ncm, cest: data.cest, cfop: data.cfop, ean: data.ean, unidade: data.unidade, origem: data.origem, comissaoPvPercentual: data.comissaoPvPercentual });
+    if (showProductModal === 'NEW') props.addProduct(data.nome!, data.precoCusto!, data.precoVenda!, data.comissaoPercentual!, data.estoquePrincipal, data.categoryId, data.subcategoryId, data.precoMinimo, { ncm: data.ncm, cest: data.cest, cfop: data.cfop, ean: data.ean, unidade: data.unidade, origem: data.origem, comissaoPvPercentual: data.comissaoPvPercentual, imagem: data.imagem, unidadesPorCaixa: data.unidadesPorCaixa });
     else if (typeof showProductModal === 'object') props.updateProduct(showProductModal.id, data);
     setShowProductModal(null);
     showToast("Produto salvo!");
@@ -932,6 +934,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       // NCM/CEST so vem de fonte brasileira (GoUp/Cosmos); sobrescreve porque o EAN acabou de mudar
       ncm: r.ncm || prev.ncm,
       cest: r.cest || prev.cest,
+      // Foto da base (Open Food Facts etc.) — so preenche se o campo ainda estiver vazio
+      imagem: (r.imagem && !prev.imagem) ? r.imagem : prev.imagem,
     }));
   };
 
@@ -2440,6 +2444,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Origem</label><select value={pForm.origem} onChange={e => setPForm({...pForm, origem: e.target.value})} className="w-full p-4 bg-white border rounded-2xl font-bold text-base min-w-0"><option value="0">0 — Nacional</option><option value="1">1 — Estr. (imp. direta)</option><option value="2">2 — Estr. (merc. interno)</option><option value="3">3 — Nac. imp. &lt; 40%</option><option value="7">7 — Nac. sem imp.</option></select></div>
           <p className="text-[8px] font-bold text-indigo-400 leading-snug">* NCM e CFOP são os principais para a nota sair sem rejeição. Complete o EAN: nome e unidade são buscados automaticamente (igual o CNPJ do cliente) — quando a base brasileira tiver, o NCM também.</p>
         </div>
+        <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Foto do produto (URL) — aparece no catalogo do portal</label><input value={pForm.imagem} onChange={e => setPForm({...pForm, imagem: e.target.value})} placeholder="https://... (cole o link da foto)" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold min-w-0" />{pForm.imagem && (<img src={pForm.imagem} alt="Prévia da foto do produto" className="mt-1 max-h-40 rounded-xl border border-gray-100 object-contain" onError={(e) => { e.currentTarget.style.display = 'none'; }} />)}</div>
+        <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Unidades por caixa (atacado) — vazio = vende solto</label><input type="number" min="1" value={pForm.caixa} onChange={e => setPForm({...pForm, caixa: e.target.value})} placeholder="Ex: 12 (cliente compra CAIXAS de 12)" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold min-w-0" /></div>
         <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Nome do Produto</label><input value={pForm.nome} onChange={e => setPForm({...pForm, nome: e.target.value})} placeholder="Nome do Produto" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase" /></div>
         <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Categoria</label><select value={pForm.categoryId} onChange={e => setPForm({...pForm, categoryId: e.target.value, subcategoryId: ''})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase">{props.categories.map(cat => (<option key={cat.id} value={cat.id}>{cat.name}</option>))}</select></div>
         {pForm.categoryId && props.subcategories.filter(s => s.categoryId === pForm.categoryId).length > 0 && (

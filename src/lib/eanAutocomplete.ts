@@ -21,6 +21,8 @@ export interface EanBusca {
   ncm?: string;
   cest?: string;
   fonte?: string;
+  /** URL da foto (quando a fonte tiver) — alimenta a foto do catalogo (Bloco 15) */
+  imagem?: string;
   temNcm?: boolean;
 }
 

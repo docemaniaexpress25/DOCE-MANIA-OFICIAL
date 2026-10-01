@@ -33,6 +33,8 @@ export interface EanInfo {
   cest: string;
   /** Nome da fonte usada (para feedback na tela) */
   fonte: string;
+  /** URL da foto do produto (quando a fonte tiver) — alimenta products.imagem (Bloco 15) */
+  imagem: string;
   /** true quando o NCM veio da fonte (nao precisara digitar) */
   temNcm: boolean;
 }
@@ -107,6 +109,7 @@ interface FonteResultado {
   ncm: string;
   cest: string;
   fonte: string;
+  imagem: string;
 }
 
 function parseGoup(d: Record<string, unknown>): FonteResultado | null {
@@ -123,6 +126,7 @@ function parseGoup(d: Record<string, unknown>): FonteResultado | null {
     ncm: soDigitos(d.ncm) || '',
     cest: soDigitos(d.cest) || '',
     fonte: 'GoUp',
+    imagem: str(d.image_url) || str(d.thumbnail) || str(d.photo_url),
   };
 }
 
@@ -140,6 +144,7 @@ function parseCosmos(d: Record<string, unknown>): FonteResultado | null {
     ncm: soDigitos(entry?.ncm) || '',
     cest: soDigitos(entry?.cest) || '',
     fonte: 'Cosmos',
+    imagem: str(entry?.image_url) || str(entry?.thumbnail) || str(entry?.image),
   };
 }
 
@@ -158,6 +163,7 @@ function parseOff(d: Record<string, unknown>, fonte: string): FonteResultado | n
     ncm: '',
     cest: '',
     fonte,
+    imagem: str(product.image_front_url) || str(product.image_url) || str(product.image_small_url),
   };
 }
 
@@ -224,6 +230,7 @@ export async function GET(req: NextRequest) {
     ncm: fonte.ncm,
     cest: fonte.cest,
     fonte: fonte.fonte,
+    imagem: fonte.imagem,
     temNcm: !!fonte.ncm,
   };
   CACHE.set(digitos, { data: info, exp: Date.now() + TTL_MS });

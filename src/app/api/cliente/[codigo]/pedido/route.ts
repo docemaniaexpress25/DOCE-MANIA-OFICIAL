@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServiceClient, isServerSupabaseConfigured } from '@/lib/serverSupabase';
+import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/serverSupabase';
 import { sendPushToAll } from '@/lib/pushSender';
 
 /**
@@ -30,6 +30,9 @@ export async function POST(
     return NextResponse.json({ ok: false, error: 'Codigo invalido' }, { status: 400 });
   }
   if (!isServerSupabaseConfigured()) {
+    // Preview local sem service key: repassa para o deploy de producao (Bloco 12)
+    const bridged = await devBridge(request);
+    if (bridged) return bridged;
     return NextResponse.json({ ok: false, error: 'Pedido online temporariamente indisponivel.' }, { status: 503 });
   }
 

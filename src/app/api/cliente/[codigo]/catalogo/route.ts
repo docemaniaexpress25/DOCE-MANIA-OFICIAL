@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServiceClient, isServerSupabaseConfigured } from '@/lib/serverSupabase';
+import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/serverSupabase';
 
 /**
  * GET /api/cliente/[codigo]/catalogo
@@ -22,6 +22,9 @@ export async function GET(
     return NextResponse.json({ error: 'Codigo invalido' }, { status: 400 });
   }
   if (!isServerSupabaseConfigured()) {
+    // Preview local sem service key: repassa para o deploy de producao (Bloco 12)
+    const bridged = await devBridge(request);
+    if (bridged) return bridged;
     return NextResponse.json({ error: 'Pedido online temporariamente indisponivel.' }, { status: 503 });
   }
 

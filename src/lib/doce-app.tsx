@@ -655,7 +655,7 @@ const App: React.FC = () => {
   // deles vai pela API da fila (nao pelo RPC de estorno de estoque).
   const pvPendentesRef = useRef<Set<string>>(new Set());
 
-  const processPreVenda = async (data: any): Promise<{ pedido: Sale | null; erro?: string }> => {
+  const processPreVenda = async (data: any): Promise<{ pedido: Sale | null; erro?: string; comissaoPrevista?: number }> => {
     try {
       const { authHeaders } = await import('@/services/userService');
       const res = await fetch('/api/pre-venda/venda', {
@@ -712,7 +712,10 @@ const App: React.FC = () => {
       }
       // NAO entra no estado "sales" (venda so existe apos a entrega confirmada).
       // O cupom usa o pedido retornado direto.
-      return { pedido: mapped };
+      // BLOCO 21: previsão da comissão de PRÉ-VENDA calculada pelo SERVIDOR
+      // (mesma regra que gera a comissão na entrega — % própria do produto).
+      const comissaoPrevista = Number(d.comissaoPrevista);
+      return { pedido: mapped, comissaoPrevista: isFinite(comissaoPrevista) && comissaoPrevista > 0 ? comissaoPrevista : undefined };
     } catch (e: any) {
       console.error(e);
       haptics.error();

@@ -5,6 +5,8 @@ import { hasEntregaTables, hasBoletoFotoColumn } from '@/lib/serverSchema';
 import { sendPushToUser } from '@/lib/pushSender';
 import QRCode from 'qrcode';
 import { buildPixPayload, generateTxid } from '@/lib/pix';
+// BLOCO 21: regra ÚNICA da comissão de pré-venda (compartilhada com /api/pre-venda/venda)
+import { comissaoPvDeItens, getComissaoPvPct, round2 } from '@/lib/comissaoPv';
 
 /**
  * PRÉ-VENDA / ROTAS DE ENTREGA (estilo Shopee)
@@ -108,8 +110,6 @@ async function resolveEntregadorUuid(supabase: any, userId: string): Promise<str
 // BLOCO 13: colunas novas da fila continua (podem nao existir antes do SQL)
 const FILA_COLS_13 = `${SALE_COLS}, tipo_venda, trocas, prioridade, separado, separado_em, entregador_id, data_vencimento`;
 
-const round2 = (v: number) => Math.round(v * 100) / 100;
-
 /** Carimbo pt-BR (America/Sao_Paulo) compativel com o parser do portal do cliente:
  *  "12/02/2025 14:33" -> o portal le " | 12/02/2025 14:33: R$ 50.00 (DINHEIRO)" */
 function carimboAgora(): string {
@@ -124,22 +124,6 @@ function horaAgoraSP(): string {
   return new Intl.DateTimeFormat('pt-BR', {
     timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false,
   }).format(new Date());
-}
-
-// ---------------- CONFIG (taxa da comissao de pre-venda) ----------------
-// app_config (Bloco 7): chave/valor. Se a tabela ainda nao existir, usa 50.
-const COMISSAO_PV_DEFAULT = 50;
-
-async function getComissaoPvPct(supabase: any): Promise<number> {
-  try {
-    const { data, error } = await supabase
-      .from('app_config').select('valor').eq('chave', 'comissao_pre_venda_pct').maybeSingle();
-    if (error) return COMISSAO_PV_DEFAULT;
-    const v = Number(data?.valor);
-    return isFinite(v) && v > 0 && v <= 100 ? v : COMISSAO_PV_DEFAULT;
-  } catch {
-    return COMISSAO_PV_DEFAULT;
-  }
 }
 
 /**
@@ -164,49 +148,6 @@ async function getMelhorias(supabase: any): Promise<{ trocaSeparacao: boolean; p
   } catch {
     return { trocaSeparacao: true, pushEntrega: true, whatsapp: true, bairroCard: true, fotoEntrega: true, pushFalha: true };
   }
-}
-
-/**
- * BLOCO 14 — comissão de PRÉ-VENDA por produto:
- *   pct = product.comissao_pv_percentual (campo novo)
- *   se NULL -> regra antiga: product.comissao_percentual × taxaPV (app_config)
- * Se a coluna do Bloco 14 nao existir, usa a regra antiga sem falhar.
- */
-async function comissaoPvDeItens(supabase: any, itens: any[]): Promise<number> {
-  const prodIds = [...new Set(itens.map((i: any) => i.produto_id).filter(Boolean))];
-  if (prodIds.length === 0) return 0;
-
-  const pctPE: Record<string, number> = {};
-  const pctPV: Record<string, number | null> = {};
-  let colOk = true;
-  try {
-    const r = await supabase.from('products').select('id, comissao_percentual, comissao_pv_percentual').in('id', prodIds);
-    if (r.error) colOk = false;
-    else {
-      (r.data || []).forEach((p: any) => {
-        pctPE[p.id] = Number(p.comissao_percentual || 0);
-        pctPV[p.id] = (p.comissao_pv_percentual === null || p.comissao_pv_percentual === undefined) ? null : Number(p.comissao_pv_percentual);
-      });
-    }
-  } catch {
-    colOk = false;
-  }
-  if (!colOk) {
-    const { data: prods } = await supabase.from('products').select('id, comissao_percentual').in('id', prodIds);
-    (prods || []).forEach((p: any) => {
-      pctPE[p.id] = Number(p.comissao_percentual || 0);
-      pctPV[p.id] = null;
-    });
-  }
-
-  const fator = await getComissaoPvPct(supabase);
-  let cheia = 0;
-  itens.forEach((i: any) => {
-    const pv = pctPV[i.produto_id];
-    const pct = (pv !== null && pv !== undefined) ? pv : (pctPE[i.produto_id] || 0) * (fator / 100);
-    cheia += Number(i.quantidade || 0) * Number(i.preco_venda || 0) * (pct / 100);
-  });
-  return round2(cheia);
 }
 
 /**

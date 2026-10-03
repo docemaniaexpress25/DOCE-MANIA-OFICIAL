@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/serverSupabase';
 import { sessionFromRequest } from '@/lib/session';
+import { comissaoPvDeItens } from '@/lib/comissaoPv';
 
 /**
  * POST /api/pre-venda/venda
@@ -187,7 +188,18 @@ export async function POST(req: NextRequest) {
       }
     } catch { /* aviso e best-effort */ }
 
-    return NextResponse.json({ ok: true, sale, avisos: avisos.length > 0 ? avisos : undefined });
+    // ---------- BLOCO 21: PREVISAO da comissao de PRE-VENDA ----------
+    // Mesma regra que GERA a comissao na entrega (lib/comissaoPv): % de
+    // PRE-VENDA do produto; sem o campo, % pronta entrega x taxa padrao.
+    // A tela "Pedido Registrado!" mostra ESTE valor (antes o browser
+    // recalculava com a % de PRONTA ENTREGA — errado).
+    let comissaoPrevista: number | undefined;
+    try {
+      const prev = await comissaoPvDeItens(supabase, itens.map(i => ({ produto_id: i.produtoId, quantidade: i.quantidade, preco_venda: i.precoVenda })));
+      if (isFinite(prev) && prev > 0) comissaoPrevista = prev;
+    } catch { /* previsao e best-effort: nunca bloqueia o pedido */ }
+
+    return NextResponse.json({ ok: true, sale, comissaoPrevista, avisos: avisos.length > 0 ? avisos : undefined });
   } catch (e: any) {
     console.error('[api/pre-venda/venda] erro:', e?.message);
     return NextResponse.json({ ok: false, error: 'Erro ao registrar o pedido. Tente novamente.', detalhe: e?.message }, { status: 500 });

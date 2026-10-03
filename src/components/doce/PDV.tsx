@@ -31,7 +31,7 @@ interface PDVProps {
   subcategories: Subcategory[];
   /** Pre-venda: quando definido, o PDV registra PEDIDO (estoque principal, entrega na rota) */
   modoVenda?: 'PRONTA' | 'PRE_VENDA';
-  processPreVenda?: (data: any) => Promise<{ pedido: Sale | null; erro?: string }>;
+  processPreVenda?: (data: any) => Promise<{ pedido: Sale | null; erro?: string; comissaoPrevista?: number }>;
 }
 
 type PDVView = 'CART' | 'RECEIPT_PREVIEW' | 'PAYMENT' | 'PRE_PEDIDO_PREVIEW';
@@ -443,11 +443,24 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         setCart({});
         setTrocasTexto('');
         lastFinishedSaleRef.current = pedido;
-        let comissaoTotal = 0;
-        itens.forEach(item => {
-          const prod = products.find(p => p.id === item.produtoId);
-          if (prod) comissaoTotal += (item.quantidade * item.precoVenda) * ((prod.comissaoPercentual || 0) / 100);
-        });
+        // BLOCO 21: comissão de PRÉ-VENDA — o valor OFICIAL vem do SERVIDOR
+        // (mesma regra que gera a comissão na entrega: % de PRÉ-VENDA do
+        // produto; só usa a taxa padrão quando o produto não tem % própria).
+        // ANTES: o browser recalculava com a % de PRONTA ENTREGA — errado.
+        let comissaoTotal = Number(r.comissaoPrevista);
+        if (!isFinite(comissaoTotal) || comissaoTotal <= 0) {
+          const TAXA_PV_PADRAO = 50; // igual ao servidor (app_config comissao_pre_venda_pct)
+          comissaoTotal = 0;
+          itens.forEach(item => {
+            const prod = products.find(p => p.id === item.produtoId);
+            if (prod) {
+              const pv = prod.comissaoPvPercentual;
+              const pct = (pv !== undefined && pv !== null) ? pv : (prod.comissaoPercentual || 0) * (TAXA_PV_PADRAO / 100);
+              comissaoTotal += (item.quantidade * item.precoVenda) * (pct / 100);
+            }
+          });
+          comissaoTotal = Math.round(comissaoTotal * 100) / 100;
+        }
         setSaleResultModal({ total, comissao: comissaoTotal, troca: isTrocaActive ? vt : 0, isPrazo: false, isPreVenda: true, clientName: client.nomeFantasia, sale: pedido });
       } else {
         isFinalizingRef.current = false;
@@ -1117,7 +1130,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
 
             {saleResultModal.comissao > 0 && (
               <div className="bg-emerald-50 p-4 rounded-2xl border-2 border-emerald-200 text-center">
-                <p className="text-[10px] font-black text-emerald-600 uppercase mb-1">Comissao Gerada</p>
+                <p className="text-[10px] font-black text-emerald-600 uppercase mb-1">{saleResultModal.isPreVenda ? 'Comissão da Pré-Venda (gera na entrega)' : 'Comissão Gerada'}</p>
                 <p className="text-2xl font-black text-emerald-700">R$ {saleResultModal.comissao.toFixed(2)}</p>
               </div>
             )}

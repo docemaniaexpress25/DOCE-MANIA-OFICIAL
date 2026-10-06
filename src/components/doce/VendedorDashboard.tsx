@@ -6,6 +6,7 @@ import { saleService } from '@/services/saleService';
 import { authHeaders } from '@/services/userService';
 import { locationService } from '@/services/locationService';
 import { DIAS_SEMANA } from '@/lib/constants';
+import { ehContaAReceber, saldoAberto, preVendaNaFila } from '@/lib/contaAReceber';
 import { buscarCnpjReceita, mascararCnpj, mensagemCnpj, clienteAptoNfe, CnpjBusca } from '@/lib/cnpjAutocomplete';
 import PDV from '@/components/doce/PDV';
 import Cupom from '@/components/doce/Cupom';
@@ -804,9 +805,11 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
   const historySummary = useMemo(() => filteredHistory.reduce((acc, sale) => {
     acc.total += (sale.valorTotal ?? 0); 
+    // BLOCO 22: "A Prazo" mostra o saldo A RECEBER de venda entregue — venda
+    // paga aparece no cartao Dinheiro/Pix (metodo real gravado ao receber).
     if (sale.metodoPagamento === 'DINHEIRO') acc.dinheiro += (sale.valorTotal ?? 0);
     if (sale.metodoPagamento === 'PIX') acc.pix += (sale.valorTotal ?? 0);
-    if (sale.metodoPagamento === 'A_PRAZO') acc.prazo += (sale.valorTotal ?? 0);
+    if (ehContaAReceber(sale)) acc.prazo += saldoAberto(sale);
     return acc;
   }, { total: 0, dinheiro: 0, pix: 0, prazo: 0 }), [filteredHistory]);
 
@@ -825,9 +828,12 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   }, [allClients, clients, user.rota]);
 
   const contasAReceber = useMemo(() => {
+    // BLOCO 22: entrega + saldo define a divida (nao mais o metodo gravado) —
+    // pre-venda na fila nao e divida; venda paga sai daqui; parcial mostra o
+    // restante que antes sumia.
     let filtered = (sales || []).filter(s =>
       (s.vendedorId === user.id || clientesDaMinhaRota.has(s.clientId)) &&
-      s.metodoPagamento === 'A_PRAZO' && s.statusPagamento === 'PENDENTE'
+      ehContaAReceber(s)
     );
     if (filterOverdueOnly) {
       const today = new Date();
@@ -1313,26 +1319,31 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
              <div className="grid grid-cols-3 gap-3">
                 <div className="text-center bg-emerald-50 p-3 rounded-xl"><p className="text-[9px] font-black text-emerald-600 uppercase mb-1">Dinheiro</p><p className="text-sm font-black text-emerald-700">R$ {historySummary.dinheiro.toFixed(2)}</p></div>
                 <div className="text-center bg-blue-50 p-3 rounded-xl"><p className="text-[9px] font-black text-blue-600 uppercase mb-1">Pix</p><p className="text-sm font-black text-blue-700">R$ {historySummary.pix.toFixed(2)}</p></div>
-                <div className="text-center bg-orange-50 p-3 rounded-xl"><p className="text-[9px] font-black text-orange-600 uppercase mb-1">A Prazo</p><p className="text-sm font-black text-orange-700">R$ {historySummary.prazo.toFixed(2)}</p></div>
+                <div className="text-center bg-orange-50 p-3 rounded-xl"><p className="text-[9px] font-black text-orange-600 uppercase mb-1">A Receber</p><p className="text-sm font-black text-orange-700">R$ {historySummary.prazo.toFixed(2)}</p></div>
              </div>
           </div>
           <div className="grid gap-3 px-1">
             {filteredHistory.map(s => {
               const client = clients.find(c => c.id === s.clientId);
               const isCheque = s.metodoPagamento === 'A_PRAZO' && s.detalhePagamento?.toUpperCase().includes('CHEQUE');
+              const naFila = preVendaNaFila(s);
               
               return (
-                <div key={s.id} className="bg-white p-5 rounded-[2rem] border border-gray-100 shadow-sm flex items-center justify-between transition-all active:scale-[0.98] hover:border-blue-200 group">
+                <div key={s.id} className={`bg-white p-5 rounded-[2rem] border shadow-sm flex items-center justify-between transition-all active:scale-[0.98] hover:border-blue-200 group ${naFila ? 'border-dashed border-amber-200' : 'border-gray-100'}`}>
                   <div className="flex-1 min-w-0 pr-4">
                     <div className="flex items-center gap-2 mb-1">
-                      <span className={`text-[8px] font-black px-2 py-0.5 rounded-full uppercase tracking-widest ${
-                        s.metodoPagamento === 'DINHEIRO' ? 'bg-emerald-50 text-emerald-600' : 
-                        s.metodoPagamento === 'PIX' ? 'bg-blue-50 text-blue-600' : 
-                        isCheque ? 'bg-purple-50 text-purple-600' :
-                        'bg-orange-50 text-orange-600'
-                      }`}>
-                        {isCheque ? 'CHEQUE' : s.metodoPagamento === 'A_PRAZO' ? 'PRAZO' : s.metodoPagamento}
-                      </span>
+                      {naFila ? (
+                        <span className="text-[8px] font-black px-2 py-0.5 rounded-full uppercase tracking-widest bg-amber-50 text-amber-600 border border-amber-100">NA FILA</span>
+                      ) : (
+                        <span className={`text-[8px] font-black px-2 py-0.5 rounded-full uppercase tracking-widest ${
+                          s.metodoPagamento === 'DINHEIRO' ? 'bg-emerald-50 text-emerald-600' : 
+                          s.metodoPagamento === 'PIX' ? 'bg-blue-50 text-blue-600' : 
+                          isCheque ? 'bg-purple-50 text-purple-600' :
+                          'bg-orange-50 text-orange-600'
+                        }`}>
+                          {isCheque ? 'CHEQUE' : s.metodoPagamento === 'A_PRAZO' ? 'PRAZO' : s.metodoPagamento}
+                        </span>
+                      )}
                       <span className="text-[9px] text-gray-300 font-bold">{new Date(s.data).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
                       {s.notaStatus === 'AUTORIZADA' && (<span className="text-[8px] font-black px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-600 uppercase">NF {s.notaNumero || '✓'}</span>)}
                       {s.notaStatus === 'REJEITADA' && (<span className="text-[8px] font-black px-1.5 py-0.5 rounded-full bg-rose-50 text-rose-600 uppercase">NF ✗</span>)}

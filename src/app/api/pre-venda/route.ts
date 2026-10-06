@@ -1218,6 +1218,10 @@ export async function POST(req: NextRequest) {
       const eventoFoto: string | null = foto;
       const stamp = carimboAgora();
       const detAtual = String(saleRow.detalhe_pagamento || 'PRE-VENDA');
+      // BLOCO 22: a comissao so e gerada DEPOIS que o update da venda CONFIRMA
+      // (antes ficava ANTES — se o update falhasse, a comissao existia mas a
+      // venda nunca era marcada como entregue: "comissao caiu, venda nao caiu").
+      let comissaoQuitada = false;
 
       if (pagamento === 'DINHEIRO' || pagamento === 'PIX' || pagamento === 'MISTO') {
         // Dinheiro/Pix/Misto: baixa o recebido (total ou PARCIAL) e cria a
@@ -1239,8 +1243,7 @@ export async function POST(req: NextRequest) {
           : quitada
             ? (pagamento === 'PIX' ? `Pagamento: PIX — R$ ${recebido.toFixed(2)} (comprovante foto)` : `Pagamento: dinheiro — R$ ${recebido.toFixed(2)}`)
             : `Pagamento parcial (${pagamento === 'PIX' ? 'pix' : 'dinheiro'}): R$ ${recebido.toFixed(2)} de R$ ${restante.toFixed(2)}`;
-        // BLOCO 14: comissão da PV — valor cheio; DISPONIVEL se quitou no aceite
-        await registrarComissaoPreVenda(supabase, saleRow, quitada);
+        comissaoQuitada = quitada;
       } else if (pagamento === 'BOLETO') {
         // Boleto entregue: entrega concluida, pagamento segue PENDENTE ate
         // o admin confirmar a compensacao. Foto do boleto obrigatoria.
@@ -1254,13 +1257,12 @@ export async function POST(req: NextRequest) {
         updates.detalhe_pagamento = `${detAtual} | ${stamp}: boleto entregue (foto anexada)`;
         eventoMotivo = 'Boleto entregue — foto anexada (aguardando compensacao)';
         // BLOCO 14: comissão nasce A_RECEBER — só entra quando o boleto for pago
-        await registrarComissaoPreVenda(supabase, saleRow, false);
       } else if (pagamento === 'JA_PAGO') {
         updates.valor_pago = total;
         updates.status_pagamento = 'PAGO';
         updates.detalhe_pagamento = `${detAtual} | ${stamp}: R$ ${restante.toFixed(2)} (JA_PAGO)`;
         eventoMotivo = `Entregue — cliente ja havia pago (R$ ${restante.toFixed(2)})`;
-        await registrarComissaoPreVenda(supabase, saleRow, true);
+        comissaoQuitada = true;
       } else {
         // NAO_PAGO: mantem PENDENTE para cobrar depois. NAO mexe em
         // metodo_pagamento — a venda a prazo continua listada no Contas a
@@ -1272,13 +1274,16 @@ export async function POST(req: NextRequest) {
           ? 'Entrega a prazo — sem cobranca (vendedor recebe na proxima visita)'
           : 'Entregue sem pagamento (a receber)';
         // BLOCO 14: comissão nasce A_RECEBER — entra quando o cliente pagar
-        await registrarComissaoPreVenda(supabase, saleRow, false);
       }
 
       const r = await updateSaleFlex(supabase, saleId, updates);
       if (!r.ok) {
         return NextResponse.json({ ok: false, error: 'Erro ao registrar a entrega. Tente novamente.' }, { status: 500 });
       }
+
+      // BLOCO 22: comissão APÓS a confirmação da entrega — a comissão nunca
+      // existe sem a venda entregue (idempotente: re-entrega atualiza a row).
+      await registrarComissaoPreVenda(supabase, saleRow, comissaoQuitada);
 
       // Baixa do estoque principal (entregou = saiu do estoque central)
       try { await supabase.rpc('baixar_estoque_principal', { p_sale_id: saleId }); } catch (e) {

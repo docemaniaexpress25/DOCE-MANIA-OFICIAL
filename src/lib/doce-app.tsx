@@ -764,11 +764,14 @@ const App: React.FC = () => {
     const novoLog = `${timestamp}: R$ ${valorRecebido.toFixed(2)} (${method})`;
     const novoDetalhe = sale.detalhePagamento ? `${sale.detalhePagamento} | ${novoLog}` : novoLog;
 
-    const success = await saleService.updateSale(saleId, {
-      valorPago: novoValorPago,
-      statusPagamento,
-      detalhePagamento: novoDetalhe
-    });
+    // BLOCO 22: quando o dinheiro entra, a venda DEIXA de ser "a prazo" —
+    // grava o metodo real (DINHEIRO/PIX passam no CHECK legado do banco).
+    // Antes ficava A_PRAZO para sempre e a venda paga aparecia como "a prazo"
+    // em Vendas Realizadas/Relatorios.
+    const updates: Partial<Sale> = { valorPago: novoValorPago, statusPagamento, detalhePagamento: novoDetalhe };
+    if (method === 'DINHEIRO' || method === 'PIX') updates.metodoPagamento = method;
+
+    const success = await saleService.updateSale(saleId, updates);
 
     if (success) {
       if (statusPagamento === 'PAGO') {

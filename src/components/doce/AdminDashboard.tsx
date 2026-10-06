@@ -4,6 +4,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Product, User, Carga, Sale, Commission, Client, PaymentMethod, CommissionPaymentLog, Expense, Category, Subcategory, MelhoriasFlags } from '@/lib/types';
 import ConfirmModal from '@/components/doce/ConfirmModal';
 import { DIAS_SEMANA } from '@/lib/constants';
+import { ehContaAReceber, saldoAberto, preVendaNaFila } from '@/lib/contaAReceber';
 import { buscarCnpjReceita, mascararCnpj, mensagemCnpj, clienteAptoNfe, CnpjBusca } from '@/lib/cnpjAutocomplete';
 import { buscarEanProduto, soDigitosEan, eanCompleto, mensagemEan, EanBusca } from '@/lib/eanAutocomplete';
 import Cupom from '@/components/doce/Cupom';
@@ -493,7 +494,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   };
 
   const getVendedorStats = (vId: string) => {
-    const vSales = props.sales.filter(s => s.vendedorId === vId && filterByPeriod(s.data, 'HOJE'));
+    // BLOCO 22: pre-venda ainda na fila NAO e venda — entra no dia da entrega
+    const vSales = props.sales.filter(s => s.vendedorId === vId && filterByPeriod(s.data, 'HOJE') && !preVendaNaFila(s));
     const sellerComms = props.commissions.filter(c => c.vendedorId === vId);
     const sellerLogs = props.payoutLogs.filter(l => l.vendedorId === vId);
     const sellerExps = props.expenses.filter(e => e.sellerId === vId);
@@ -1057,7 +1059,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   };
 
   const contasAReceber = useMemo(() => {
-    let filtered = props.sales.filter(s => s.metodoPagamento === 'A_PRAZO' && s.statusPagamento === 'PENDENTE');
+    // BLOCO 22: conta a receber = venda ENTREGUE (ou pronta-entrega) com saldo
+    // em aberto — nao depende do metodo gravado. Pre-venda na fila nao entra
+    // (ainda nao foi entregue); venda paga nao entra (saldo zero). Pega tambem
+    // o restante de pagamento parcial que antes sumia do filtro antigo.
+    let filtered = props.sales.filter(ehContaAReceber);
     if (filterOverdueOnly) {
       const today = new Date(); today.setHours(0,0,0,0);
       filtered = filtered.filter(s => {
@@ -1120,14 +1126,23 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   }, [props.products, search]);
 
   const filteredHistory = useMemo(() => {
-    return props.sales.filter(s => filterByPeriod(s.data, filtroPeriodo)).sort((a, b) => (b.data?.getTime() ?? 0) - (a.data?.getTime() ?? 0)); 
+    // BLOCO 22: "Vendas Realizadas" nao mostra pre-venda ainda na fila/rota —
+    // ela CAI EM VENDAS NO DIA DA ENTREGA (data_venda vira a data da entrega,
+    // regra do Bloco 14). Antes o pedido aparecia no dia do registro como
+    // "EM ABERTO" e depois some daquele dia quando entregue — parecia venda
+    // perdida. FALHOU continua visivel (tentativa real, pode estar paga).
+    return props.sales.filter(s => !preVendaNaFila(s) && filterByPeriod(s.data, filtroPeriodo)).sort((a, b) => (b.data?.getTime() ?? 0) - (a.data?.getTime() ?? 0));
   }, [props.sales, filtroPeriodo]);
 
   const historySummary = useMemo(() => filteredHistory.reduce((acc, sale) => {
     acc.total += (sale.valorTotal ?? 0); 
+    // BLOCO 22: cartoes verdadeiros — Dinheiro/Pix pelo metodo REAL gravado
+    // (receiveAccount grava o metodo ao receber); "A Prazo" virou "A Receber"
+    // = saldo em aberto de venda ja entregue (venda paga NAO aparece mais
+    // como a prazo).
     if (sale.metodoPagamento === 'DINHEIRO') acc.dinheiro += (sale.valorTotal ?? 0);
     if (sale.metodoPagamento === 'PIX') acc.pix += (sale.valorTotal ?? 0);
-    if (sale.metodoPagamento === 'A_PRAZO') acc.prazo += (sale.valorTotal ?? 0);
+    if (ehContaAReceber(sale)) acc.prazo += saldoAberto(sale);
     return acc;
   }, { total: 0, dinheiro: 0, pix: 0, prazo: 0 }), [filteredHistory]);
 
@@ -1632,7 +1647,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           </div>
           <div className="grid gap-3 px-1">
             {filteredClients.map(c => {
-              const totalDivida = props.sales.filter(s => s.clientId === c.id && s.metodoPagamento === 'A_PRAZO' && s.statusPagamento === 'PENDENTE').reduce((a, s) => a + ((s.valorTotal ?? 0) - (s.valorPago ?? 0)), 0);
+              const totalDivida = props.sales.filter(s => s.clientId === c.id && ehContaAReceber(s)).reduce((a, s) => a + saldoAberto(s), 0);
               return (
                 <div key={c.id} className={`bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex items-center gap-3 transition-all ${!c.ativo ? 'opacity-50' : ''}`}>
                   <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setViewingClientHistory(c)}>
@@ -1796,7 +1811,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
              <div className="grid grid-cols-3 gap-3">
                 <div className="text-center bg-emerald-50 p-3 rounded-xl"><p className="text-[9px] font-black text-emerald-600 uppercase mb-1">Dinheiro</p><p className="text-sm font-black text-emerald-700">R$ {historySummary.dinheiro.toFixed(2)}</p></div>
                 <div className="text-center bg-blue-50 p-3 rounded-xl"><p className="text-[9px] font-black text-blue-600 uppercase mb-1">Pix</p><p className="text-sm font-black text-[#1E3A5F]">R$ {historySummary.pix.toFixed(2)}</p></div>
-                <div className="text-center bg-orange-50 p-3 rounded-xl"><p className="text-[9px] font-black text-orange-600 uppercase mb-1">A Prazo</p><p className="text-sm font-black text-orange-700">R$ {historySummary.prazo.toFixed(2)}</p></div>
+                <div className="text-center bg-orange-50 p-3 rounded-xl"><p className="text-[9px] font-black text-orange-600 uppercase mb-1">A Receber</p><p className="text-sm font-black text-orange-700">R$ {historySummary.prazo.toFixed(2)}</p></div>
              </div>
           </div>
           <div className="grid gap-3 px-1">
@@ -1845,7 +1860,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                 const idxB = props.clientOrder.indexOf(b.id) >= 0 ? props.clientOrder.indexOf(b.id) : (b.ordem || 999);
                 return idxA - idxB;
               });
-              const totalDividaDia = clientsDia.reduce((a, c) => a + props.sales.filter(s => s.clientId === c.id && s.metodoPagamento === 'A_PRAZO' && s.statusPagamento === 'PENDENTE').reduce((x, s) => x + ((s.valorTotal ?? 0) - (s.valorPago ?? 0)), 0), 0);
+              const totalDividaDia = clientsDia.reduce((a, c) => a + props.sales.filter(s => s.clientId === c.id && ehContaAReceber(s)).reduce((x, s) => x + saldoAberto(s), 0), 0);
               return (
                 <div className="space-y-2">
                   <div className="flex items-center gap-2 px-1 pt-2">
@@ -1854,7 +1869,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                     {totalDividaDia > 0 && <span className="text-[9px] font-black text-rose-600 bg-rose-50 border border-rose-100 px-2 py-0.5 rounded-lg ml-auto uppercase">A receber: R$ {totalDividaDia.toFixed(2)}</span>}
                   </div>
                   {clientsDia.map((c, idx) => {
-                    const totalDivida = props.sales.filter(s => s.clientId === c.id && s.metodoPagamento === 'A_PRAZO' && s.statusPagamento === 'PENDENTE').reduce((a, s) => a + ((s.valorTotal ?? 0) - (s.valorPago ?? 0)), 0);
+                    const totalDivida = props.sales.filter(s => s.clientId === c.id && ehContaAReceber(s)).reduce((a, s) => a + saldoAberto(s), 0);
                     return (
                       <div key={c.id} className="bg-white p-3 rounded-2xl border border-gray-100 shadow-sm flex items-center gap-3">
                         <div className="flex flex-col gap-0.5 flex-shrink-0">
@@ -2024,8 +2039,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             })()}
 
             {reportFilter === 'DIVIDAS' && (() => {
-              const dividas = props.sales.filter(s => s.metodoPagamento === 'A_PRAZO' && s.statusPagamento === 'PENDENTE');
-              const totalDivida = dividas.reduce((a, s) => a + ((s.valorTotal || 0) - (s.valorPago || 0)), 0);
+              const dividas = props.sales.filter(ehContaAReceber);
+              const totalDivida = dividas.reduce((a, s) => a + saldoAberto(s), 0);
               const vencidas = dividas.filter(s => s.dataVencimento && new Date(s.dataVencimento) <= new Date());
               const totalVencido = vencidas.reduce((a, s) => a + ((s.valorTotal || 0) - (s.valorPago || 0)), 0);
               const porCliente = new Map<string, { nome: string; total: number; qtd: number; vencido: number }>();

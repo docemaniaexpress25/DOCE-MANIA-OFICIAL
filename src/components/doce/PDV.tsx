@@ -449,13 +449,13 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         // ANTES: o browser recalculava com a % de PRONTA ENTREGA — errado.
         let comissaoTotal = Number(r.comissaoPrevista);
         if (!isFinite(comissaoTotal) || comissaoTotal <= 0) {
-          const TAXA_PV_PADRAO = 50; // igual ao servidor (app_config comissao_pre_venda_pct)
+          const PV_PADRAO = 5; // Bloco 23: pré-venda sem % no produto = 5% fixo (lib/comissaoPv)
           comissaoTotal = 0;
           itens.forEach(item => {
             const prod = products.find(p => p.id === item.produtoId);
             if (prod) {
               const pv = prod.comissaoPvPercentual;
-              const pct = (pv !== undefined && pv !== null) ? pv : (prod.comissaoPercentual || 0) * (TAXA_PV_PADRAO / 100);
+              const pct = (pv !== undefined && pv !== null) ? pv : PV_PADRAO;
               comissaoTotal += (item.quantidade * item.precoVenda) * (pct / 100);
             }
           });

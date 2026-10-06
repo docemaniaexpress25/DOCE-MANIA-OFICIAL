@@ -13,6 +13,8 @@ export interface AppSettings {
   pix2Code: string | null;
   productOrder: string[];
   clientOrder: string[];
+  /** Bloco 23: ORDEM DO PORTAL — independente da ordem do PDV (product_order) */
+  catalogoOrder: string[];
   companyName: string | null;
   companyCnpj: string | null;
   melhorias: MelhoriasFlags;
@@ -30,6 +32,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   pix2Code: null,
   productOrder: [],
   clientOrder: [],
+  catalogoOrder: [],
   companyName: "DOCE MANIA DISTRIBUIDORA",
   companyCnpj: "00.000.000/0001-00",
   melhorias: { ...MELHORIAS_DEFAULT }
@@ -75,6 +78,7 @@ export const appSettingsService = {
       pix2Code: data.pix2_code ?? DEFAULT_SETTINGS.pix2Code,
       productOrder: Array.isArray(data.product_order) ? data.product_order : DEFAULT_SETTINGS.productOrder,
       clientOrder: Array.isArray(data.client_order) ? data.client_order : DEFAULT_SETTINGS.clientOrder,
+      catalogoOrder: Array.isArray((data as any).catalogo_order) ? (data as any).catalogo_order : DEFAULT_SETTINGS.catalogoOrder,
       companyName: data.company_name ?? DEFAULT_SETTINGS.companyName,
       companyCnpj: data.company_cnpj ?? DEFAULT_SETTINGS.companyCnpj,
       melhorias: {
@@ -102,6 +106,7 @@ export const appSettingsService = {
     if (settings.pix2Code !== undefined) payload.pix2_code = settings.pix2Code;
     if (settings.productOrder !== undefined) payload.product_order = settings.productOrder;
     if (settings.clientOrder !== undefined) payload.client_order = settings.clientOrder;
+    if (settings.catalogoOrder !== undefined) (payload as any).catalogo_order = settings.catalogoOrder;
     if (settings.companyName !== undefined) payload.company_name = settings.companyName;
     if (settings.companyCnpj !== undefined) payload.company_cnpj = settings.companyCnpj;
     if (settings.melhorias !== undefined) {
@@ -125,6 +130,21 @@ export const appSettingsService = {
       .upsert(upsertPayload, { onConflict: 'id' });
 
     if (error) {
+      // BLOCO 23: coluna catalogo_order ainda nao existe (SQL pendente) —
+      // salva o restante sem perder as outras configurações.
+      if (/catalogo_order/i.test(error.message || '') && (payload as any).catalogo_order !== undefined) {
+        console.warn('[appSettingsService] catalogo_order ausente (Bloco 23 nao rodado). Salvando sem ela.');
+        const sem23 = { ...upsertPayload } as Record<string, unknown>;
+        delete sem23.catalogo_order;
+        const { error: err2 } = await supabase
+          .from('app_settings')
+          .upsert(sem23, { onConflict: 'id' });
+        if (err2) {
+          console.error('[appSettingsService] Erro ao persistir configurações:', err2);
+          return false;
+        }
+        return true;
+      }
       console.error('[appSettingsService] Erro ao persistir configurações:', error);
       return false;
     }

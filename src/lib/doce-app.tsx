@@ -118,6 +118,8 @@ const App: React.FC = () => {
   const [pix2Code, setPix2Code] = useState<string | null>(null);
   const [productOrder, setProductOrder] = useState<string[]>([]);
   const [clientOrder, setClientOrder] = useState<string[]>([]);
+  // BLOCO 23: ordem do PORTAL (catálogo do cliente) — NÃO mexe na ordem do PDV
+  const [catalogoOrder, setCatalogoOrder] = useState<string[]>([]);
   const [companyName, setCompanyName] = useState("DOCE MANIA DISTRIBUIDORA");
   const [companyCnpj, setCompanyCnpj] = useState("00.000.000/0001-00");
   // BLOCO 14: interruptores das melhorias (liga/desliga pelo admin)
@@ -293,6 +295,7 @@ const App: React.FC = () => {
       setPix2Code(settings.pix2Code);
       setProductOrder(settings.productOrder || []);
       setClientOrder(settings.clientOrder || []);
+      setCatalogoOrder((settings as any).catalogoOrder || []);
       setCompanyName(settings.companyName ?? "DOCE MANIA DISTRIBUIDORA");
       setCompanyCnpj(settings.companyCnpj ?? "00.000.000/0001-00");
       setMelhorias(settings.melhorias ?? { ...MELHORIAS_DEFAULT });
@@ -429,6 +432,10 @@ const App: React.FC = () => {
     else if (key === 'pix2Code') setPix2Code(value);
     else if (key === 'companyName') setCompanyName(value);
     else if (key === 'companyCnpj') setCompanyCnpj(value);
+    else if (key === 'catalogoOrder') {
+      // BLOCO 23: só a ordem do PORTAL muda — o PDV (product_order) fica intacto
+      setCatalogoOrder(value);
+    }
     else if (key === 'melhorias') setMelhorias(value as MelhoriasFlags);
     else if (key === 'productOrder') {
       setProductOrder(value);
@@ -865,13 +872,13 @@ const App: React.FC = () => {
           <SecretarioShell user={currentUser} melhorias={melhorias} products={products} reloadCore={fetchCoreData} />
         ) : currentUser.role === 'ADMIN' ? (
           <AdminDashboard 
-            {...{ products, users, cargas, cargasLoaded, clients, sales, commissions, payoutLogs, expenses, logo, margemGlobalAtiva, margemGlobalValor, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, adminNotification, companyName, companyCnpj, orderedProductIds: productOrder, categories, subcategories, clientOrder, melhorias }}
+            {...{ products, users, cargas, cargasLoaded, clients, sales, commissions, payoutLogs, expenses, logo, margemGlobalAtiva, margemGlobalValor, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, adminNotification, companyName, companyCnpj, orderedProductIds: productOrder, portalOrderIds: catalogoOrder, categories, subcategories, clientOrder, melhorias }}
             addProduct={addProduct} updateProduct={updateProduct} deleteProduct={deleteProduct} registerStockEntry={()=>{}} adjustStockManual={()=>{}}
             syncVendedorCarga={syncVendedorCarga} applyCargaDirectly={applyCargaDirectly} addClient={addClient} updateClient={updateClient} deleteClient={deleteClient}
             addUser={addUser} updateUser={updateUser} deleteUser={deleteUser} payCommission={payCommission} setCommissions={()=>{}} updateEstoqueCentral={()=>{}} reinforceCarga={()=>{}} deleteSale={deleteSale} receiveAccount={receiveAccount}
             setLogo={(v)=>updateSetting('logo', v)} adminUser={currentUser} setMargemGlobalAtiva={(v)=>updateSetting('margemGlobalAtiva', v)} setMargemGlobalValor={(v)=>updateSetting('margemGlobalValor', v)}
             setMargemMinima={(v)=>updateSetting('margemMinima', v)} setMargemMinimaAtiva={(v)=>updateSetting('margemMinimaAtiva', v)} setPix1Name={(v)=>updateSetting('pix1Name', v)} setPix1Code={(v)=>updateSetting('pix1Code', v)}
-            setPix2Name={(v)=>updateSetting('pix2Name', v)} setPix2Code={(v)=>updateSetting('pix2Code', v)} clearAdminNotification={() => setAdminNotification(null)} setOrderedProductIds={(v)=>updateSetting('productOrder', v)}
+            setPix2Name={(v)=>updateSetting('pix2Name', v)} setPix2Code={(v)=>updateSetting('pix2Code', v)} clearAdminNotification={() => setAdminNotification(null)} setOrderedProductIds={(v)=>updateSetting('productOrder', v)} setPortalOrderIds={(v)=>updateSetting('catalogoOrder', v as string[])}
             setCompanyName={(v)=>updateSetting('companyName', v)} setCompanyCnpj={(v)=>updateSetting('companyCnpj', v)}
             setMelhorias={(v: MelhoriasFlags)=>updateSetting('melhorias', v)}
             activateAllProducts={activateAllProducts} addCategory={addCategory} updateCategory={updateCategory} deleteCategory={deleteCategory}

@@ -117,6 +117,26 @@ export async function POST(
       return NextResponse.json({ ok: false, error: 'Valor do pedido invalido.' }, { status: 400 });
     }
 
+    // BLOCO 23 — regra do dono: o cliente pede pelo catalogo na ordem que ele
+    // arruma, mas o pedido e MONTADO na ORDEM DO PDV (app_settings.product_order)
+    // — cupom, separacao e atendimento saem sempre no padrao da casa.
+    try {
+      const { data: cfg } = await supabase
+        .from('app_settings')
+        .select('product_order')
+        .eq('id', 'global_settings')
+        .maybeSingle();
+      const ordemPdv: string[] = Array.isArray((cfg as any)?.product_order) ? (cfg as any).product_order : [];
+      if (ordemPdv.length > 0) {
+        const idx = new Map<string, number>(ordemPdv.map((id, i) => [id, i]));
+        itensOk.sort((a, b) => {
+          const ia = idx.get(a.produtoId) ?? Number.MAX_SAFE_INTEGER;
+          const ib = idx.get(b.produtoId) ?? Number.MAX_SAFE_INTEGER;
+          return ia - ib;
+        });
+      }
+    } catch { /* sem ordem salva: segue a ordem do carrinho */ }
+
     // 4. Vendedor responsavel: da ROTA do cliente (fallback: primeiro vendedor ativo)
     let vendedorId: string | null = null;
     const rota = String((client as any).rota || '');

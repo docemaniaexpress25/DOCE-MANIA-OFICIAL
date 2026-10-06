@@ -54,6 +54,21 @@ export async function GET(request: NextRequest) {
       obsOk = false;
     }
 
+    // Probe do Bloco 23: vinculo de familia (products.familia_catalogo)
+    // + ordem do portal (app_settings.catalogo_order)
+    let vinculosOk = false;
+    try {
+      const [{ error: errProd }, { error: errCfg }] = await Promise.all([
+        supabase.from('products').select('id, familia_catalogo').limit(1),
+        supabase.from('app_settings').select('catalogo_order').limit(1),
+      ]);
+      vinculosOk = !errProd && !errCfg;
+      if (errProd) console.error('[api/admin/catalogo] probe familia_catalogo:', errProd.message);
+      if (errCfg) console.error('[api/admin/catalogo] probe catalogo_order:', errCfg.message);
+    } catch {
+      vinculosOk = false;
+    }
+
     let totalEmOrdem = 0;
     try {
       const { data: cfg } = await supabase
@@ -65,7 +80,7 @@ export async function GET(request: NextRequest) {
       totalEmOrdem = Array.isArray(ordem) ? ordem.length : 0;
     } catch { /* settings opcional */ }
 
-    return NextResponse.json({ ok: true, bloco15ok, obsOk, totalEmOrdem });
+    return NextResponse.json({ ok: true, bloco15ok, obsOk, vinculosOk, totalEmOrdem });
   } catch (e: any) {
     console.error('[api/admin/catalogo] erro:', e?.message);
     return NextResponse.json({ ok: false, erro: 'Erro interno' }, { status: 500 });

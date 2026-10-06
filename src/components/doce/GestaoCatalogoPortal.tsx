@@ -1,14 +1,20 @@
 'use client';
 
 /**
- * GESTAO DO CATALOGO DO PORTAL (Bloco 17)
+ * GESTAO DO CATALOGO DO PORTAL (Bloco 17 + 23)
  *
  * Aba do admin onde o dono gerencia EXATAMENTE o que o cliente ve no
  * portal (/pedido/[codigo]) — tudo LINKADO ao estoque central (uma
  * unica fonte de verdade: a tabela products):
  *
- *   - ORDEM: a lista segue a MESMA ORDEM DO PDV (app_settings.product_order).
- *     Mover uma familia aqui reordena PDV e portal juntos.
+ *   - ORDEM (BLOCO 23): a lista do portal tem ORDEM PROPRIA
+ *     (app_settings.catalogo_order). Mover uma familia aqui NAO muda
+ *     mais o PDV — a ordem do PDV (product_order) fica intacta e e
+ *     arrumada pelas setas do Estoque Central.
+ *   - VINCULO (BLOCO 23): cada variante pode ser ligada a uma familia
+ *     do catalogo (products.familia_catalogo) — resolve quando o item
+ *     do estoque aparece com OUTRO nome. Vazio = familia automatica
+ *     pelo nome (regra de sempre).
  *   - RENOMEAR: edita products.nome — muda no estoque, no PDV e no portal.
  *   - FOTO: envia do aparelho (comprime e sobe pro Storage) ou cola URL —
  *     grava em products.imagem (Bloco 15) e vale pro portal na hora.
@@ -27,12 +33,16 @@ import { agruparCatalogo } from '@/lib/pedidoGrupos';
 import { fotoFamilia } from '@/lib/pedidoFotos';
 import { authHeaders } from '@/services/userService';
 
-/** SQL dos Blocos 15+18 (mesmo conteudo dos arquivos sql/) — botao copiar */
-const SQL_BLOCOS = `-- BLOCO 15 + 18 — Foto, caixa e OBSERVACAO do cliente no produto
+/** SQL dos Blocos 15+18+23 (mesmo conteudo dos arquivos sql/) — botao copiar */
+const SQL_BLOCOS = `-- BLOCOS 15 + 18 + 23 — Foto, caixa, OBS do cliente, vínculo de família e ordem do portal
 -- Rodar no SQL Editor do Supabase. Idempotente (pode rodar 2x).
 alter table products add column if not exists imagem             text;
 alter table products add column if not exists unidades_por_caixa integer default 1;
 alter table products add column if not exists obs                text;
+
+-- Bloco 23: vínculo família↔estoque + ordem do portal independente do PDV
+alter table products     add column if not exists familia_catalogo text;
+alter table app_settings add column if not exists catalogo_order   text[];
 
 -- Normaliza caixas invalidas (null/0/negativo = vende solto)
 update products set unidades_por_caixa = 1
@@ -42,6 +52,9 @@ export interface GestaoCatalogoPortalProps {
   products: Product[];
   orderedProductIds: string[];
   setOrderedProductIds: (ids: string[]) => void;
+  /** Bloco 23: ordem do PORTAL — mexer aqui nao muda o PDV */
+  portalOrderIds: string[];
+  setPortalOrderIds: (ids: string[]) => void;
   updateProduct: (id: string, data: Partial<Product>) => void | Promise<void>;
   showToast: (message: string, type?: 'success' | 'error') => void;
 }
@@ -74,10 +87,14 @@ export default function GestaoCatalogoPortal(props: GestaoCatalogoPortalProps) {
   const { products } = props;
   const [bloco15ok, setBloco15ok] = useState<boolean | null>(null);
   const [obsOk, setObsOk] = useState<boolean | null>(null);
+  const [vinculosOk, setVinculosOk] = useState<boolean | null>(null);
   const [busca, setBusca] = useState('');
   const [expandida, setExpandida] = useState<string | null>(null);
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [urlFoto, setUrlFoto] = useState('');
+  // BLOCO 23: nova família manual
+  const [novaFamPara, setNovaFamPara] = useState<string | null>(null);
+  const [novaFamNome, setNovaFamNome] = useState('');
   const fileRef = useRef<HTMLInputElement | null>(null);
   const fotoAlvoRef = useRef<string | null>(null);
 
@@ -91,6 +108,7 @@ export default function GestaoCatalogoPortal(props: GestaoCatalogoPortalProps) {
         const json = await res.json().catch(() => null);
         if (vivo) setBloco15ok(res.ok && json?.ok === true ? json?.bloco15ok === true : null);
         if (vivo) setObsOk(res.ok && json?.ok === true ? json?.obsOk === true : null);
+        if (vivo) setVinculosOk(res.ok && json?.ok === true ? json?.vinculosOk === true : null);
       } catch {
         if (vivo) setBloco15ok(null);
       }
@@ -98,19 +116,31 @@ export default function GestaoCatalogoPortal(props: GestaoCatalogoPortalProps) {
     return () => { vivo = false; };
   }, []);
 
-  // Familias na MESMA ORDEM DO PDV (products ja chega ordenado pelo doce-app)
+  // BLOCO 23 — ORDEM DO PORTAL: produtos ordenados pelo catalogo_order
+  // (independente do PDV). Sem lista salva, segue a ordem de sempre.
+  const produtosPortal = useMemo(() => {
+    const ordem = props.portalOrderIds || [];
+    if (ordem.length === 0) return products;
+    const idx = new Map(ordem.map((id, i) => [id, i]));
+    return [...products].sort(
+      (a, b) => (idx.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (idx.get(b.id) ?? Number.MAX_SAFE_INTEGER)
+    );
+  }, [products, props.portalOrderIds]);
+
+  // Familias NA ORDEM DO PORTAL (produtosPortal ja vem ordenado)
   const familias = useMemo(
     () =>
       agruparCatalogo(
-        products.map((p) => ({
+        produtosPortal.map((p) => ({
           id: p.id,
           nome: p.nome,
           preco: Number(p.precoVenda || 0),
           estoque: Number(p.estoquePrincipal || 0),
           categoryId: p.categoryId || null,
+          familiaCatalogo: (p as any).familiaCatalogo || null,
         }))
       ),
-    [products]
+    [produtosPortal]
   );
 
   const porId = useMemo(() => new Map(products.map((p) => [p.id, p])), [products]);
@@ -134,7 +164,7 @@ export default function GestaoCatalogoPortal(props: GestaoCatalogoPortalProps) {
     });
   }, [familias, busca, porId]);
 
-  /** Reordena a familia inteira (todas as variantes juntas) no product_order */
+  /** Reordena a familia inteira NO PORTAL (catalogo_order) — o PDV NAO muda (Bloco 23) */
   const moveFamilia = (key: string, dir: 'UP' | 'DOWN') => {
     const idx = familias.findIndex((f) => f.key === key);
     if (idx === -1) return;
@@ -143,9 +173,9 @@ export default function GestaoCatalogoPortal(props: GestaoCatalogoPortalProps) {
     const blocos = familias.map((f) => f.variantes.map((v) => v.produtoId));
     [blocos[idx], blocos[alvo]] = [blocos[alvo], blocos[idx]];
     const todosIds = new Set(blocos.flat());
-    const extras = props.orderedProductIds.filter((id) => !todosIds.has(id));
-    props.setOrderedProductIds([...blocos.flat(), ...extras]);
-    props.showToast('Ordem atualizada! PDV e portal juntos.');
+    const extras = (props.portalOrderIds || []).filter((id) => !todosIds.has(id));
+    props.setPortalOrderIds([...blocos.flat(), ...extras]);
+    props.showToast('Ordem do portal atualizada! (a ordem do PDV nao muda)');
   };
 
   const salvaNome = async (p: Product, valor: string) => {
@@ -190,6 +220,23 @@ export default function GestaoCatalogoPortal(props: GestaoCatalogoPortalProps) {
       props.showToast(novo ? 'Observação salva! O cliente já vê no portal.' : 'Observação removida.');
     } catch {
       props.showToast('Erro ao salvar a observação.', 'error');
+    } finally {
+      setSavingKey((k) => (k === key ? null : k));
+    }
+  };
+
+  /** BLOCO 23: vínculo do produto a uma família do catálogo
+   *  (vazio/null = família automática pelo nome do estoque) */
+  const salvaFamilia = async (p: Product, valor: string) => {
+    const novo = valor.trim().slice(0, 80);
+    if (novo === ((p as any).familiaCatalogo || '').trim()) return;
+    const key = `${p.id}:familia`;
+    setSavingKey(key);
+    try {
+      await props.updateProduct(p.id, { familiaCatalogo: novo || null } as Partial<Product>);
+      props.showToast(novo ? `Vinculado à família "${novo}" no portal!` : 'Vínculo removido — família automática pelo nome.');
+    } catch {
+      props.showToast('Erro ao salvar o vínculo.', 'error');
     } finally {
       setSavingKey((k) => (k === key ? null : k));
     }
@@ -244,9 +291,11 @@ export default function GestaoCatalogoPortal(props: GestaoCatalogoPortalProps) {
 
   const fotosBloqueadas = bloco15ok === false;
   const obsBloqueada = obsOk === false;
+  const vinculosBloqueados = vinculosOk === false;
   const faltando: string[] = [];
   if (fotosBloqueadas) faltando.push('foto e caixa');
   if (obsBloqueada) faltando.push('observação do cliente');
+  if (vinculosBloqueados) faltando.push('vínculo de família e ordem do portal');
   const totalProdutos = products.length;
 
   return (
@@ -255,7 +304,7 @@ export default function GestaoCatalogoPortal(props: GestaoCatalogoPortalProps) {
       <div className="px-2 pt-1">
         <h2 className="text-xl sm:text-2xl font-black text-gray-800 tracking-tight">Catálogo do Portal</h2>
         <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider mt-0.5">
-          O cliente vê exatamente esta lista, nesta ordem — linkado ao estoque central
+          Arrume o catálogo do cliente à vontade — a ordem do PDV fica intacta
         </p>
         <div className="flex items-center gap-1.5 mt-2 flex-wrap">
           <span className="text-[9px] font-black text-blue-600 bg-blue-50 px-2 py-1 rounded-lg border border-blue-100 uppercase tracking-tight">{familias.length} famílias</span>
@@ -263,7 +312,7 @@ export default function GestaoCatalogoPortal(props: GestaoCatalogoPortalProps) {
           <span className={`text-[9px] font-black px-2 py-1 rounded-lg border uppercase tracking-tight ${semFotoCount === 0 ? 'text-emerald-600 bg-emerald-50 border-emerald-100' : 'text-amber-600 bg-amber-50 border-amber-200'}`}>
             {semFotoCount === 0 ? 'todas com foto' : `${semFotoCount} sem foto`}
           </span>
-          <span className="text-[9px] font-black text-emerald-600 bg-emerald-50 px-2 py-1 rounded-lg border border-emerald-100 uppercase tracking-tight"><i className="fa-solid fa-shuffle mr-1 text-[8px]"></i>ordem do PDV</span>
+          <span className="text-[9px] font-black text-emerald-600 bg-emerald-50 px-2 py-1 rounded-lg border border-emerald-100 uppercase tracking-tight"><i className="fa-solid fa-shuffle mr-1 text-[8px]"></i>ordem só do portal</span>
         </div>
       </div>
 
@@ -294,6 +343,7 @@ export default function GestaoCatalogoPortal(props: GestaoCatalogoPortalProps) {
           const aberta = expandida === f.key;
           const algumaCaixa = f.variantes.some((v) => (porId.get(v.produtoId)?.unidadesPorCaixa || 1) > 1);
           const algumaObs = f.variantes.some((v) => (porId.get(v.produtoId)?.obs || '').trim());
+          const algumVinculo = f.variantes.some((v) => ((porId.get(v.produtoId) as any)?.familiaCatalogo || '').trim());
           const tudoInativo = f.variantes.every((v) => porId.get(v.produtoId)?.ativo === false);
           return (
             <div key={f.key} className={`bg-white rounded-3xl border shadow-sm overflow-hidden transition-all ${aberta ? 'border-blue-200' : 'border-gray-100'} ${tudoInativo ? 'opacity-60 grayscale' : ''}`}>
@@ -315,6 +365,7 @@ export default function GestaoCatalogoPortal(props: GestaoCatalogoPortalProps) {
                     {!foto && <span className="text-[9px] font-black text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-lg border border-amber-200 uppercase">sem foto</span>}
                     {algumaCaixa && <span className="text-[9px] font-black text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-lg border border-emerald-100 uppercase"><i className="fa-solid fa-box mr-0.5 text-[7px]"></i>caixa</span>}
                     {algumaObs && <span className="text-[9px] font-black text-violet-600 bg-violet-50 px-1.5 py-0.5 rounded-lg border border-violet-100 uppercase"><i className="fa-solid fa-comment-dots mr-0.5 text-[7px]"></i>obs</span>}
+                    {algumVinculo && <span className="text-[9px] font-black text-sky-600 bg-sky-50 px-1.5 py-0.5 rounded-lg border border-sky-100 uppercase"><i className="fa-solid fa-link mr-0.5 text-[7px]"></i>vínculo</span>}
                     {tudoInativo && <span className="text-[9px] font-black text-rose-500 bg-rose-50 px-1.5 py-0.5 rounded-lg border border-rose-100 uppercase">inativo</span>}
                   </div>
                 </button>
@@ -379,6 +430,43 @@ export default function GestaoCatalogoPortal(props: GestaoCatalogoPortalProps) {
                             onBlur={(e) => salvaObs(p, e.target.value)}
                             className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-xl text-[12px] font-semibold outline-none focus:ring-2 focus:ring-blue-100 disabled:opacity-50 resize-none" />
                           {obsBloqueada && <p className="text-[8px] text-amber-600 font-bold mt-1">Rode o SQL lá em cima para ativar a observação.</p>}
+                        </div>
+                        {/* BLOCO 23: VINCULO A FAMILIA DO CATALOGO — para quando o
+                            estoque tem outro nome e o produto cai no card errado */}
+                        <div className="bg-sky-50/60 border border-sky-100 rounded-2xl p-2.5 space-y-1.5">
+                          <label className="text-[8px] font-black text-sky-600 uppercase block">
+                            <i className="fa-solid fa-link mr-1 text-[7px]"></i>Família no catálogo do portal (quando o nome do estoque é outro)
+                          </label>
+                          <select
+                            key={`${p.id}:fam:${(p as any).familiaCatalogo || ''}`}
+                            value={(p as any).familiaCatalogo || '__AUTO__'}
+                            disabled={vinculosBloqueados}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              if (v === '__NOVA__') { setNovaFamPara(p.id); setNovaFamNome(''); return; }
+                              setNovaFamPara((atual) => (atual === p.id ? null : atual));
+                              salvaFamilia(p, v === '__AUTO__' ? '' : v);
+                            }}
+                            className="w-full p-2.5 bg-white border border-sky-100 rounded-xl text-[11px] font-black outline-none focus:ring-2 focus:ring-sky-100 disabled:opacity-50"
+                          >
+                            <option value="__AUTO__">Automática (pelo nome do estoque)</option>
+                            {familias.map((fam) => (
+                              <option key={fam.key} value={fam.nome}>{fam.nome}</option>
+                            ))}
+                            <option value="__NOVA__">➕ Nova família...</option>
+                          </select>
+                          {novaFamPara === p.id && (
+                            <div className="flex gap-1.5">
+                              <input value={novaFamNome} onChange={(e) => setNovaFamNome(e.target.value)} maxLength={80}
+                                placeholder="Nome da nova família no portal..."
+                                className="flex-1 min-w-0 p-2.5 bg-white border border-sky-100 rounded-xl text-[11px] font-black uppercase outline-none focus:ring-2 focus:ring-sky-100" />
+                              <button disabled={!novaFamNome.trim()} onClick={() => { salvaFamilia(p, novaFamNome); setNovaFamPara(null); setNovaFamNome(''); }}
+                                className="px-3 py-2.5 rounded-xl text-[9px] font-black uppercase bg-sky-600 text-white active:scale-95 disabled:opacity-40 flex-shrink-0">Salvar</button>
+                              <button onClick={() => setNovaFamPara(null)}
+                                className="px-3 py-2.5 rounded-xl text-[9px] font-black uppercase bg-gray-100 text-gray-400 active:scale-95 flex-shrink-0">X</button>
+                            </div>
+                          )}
+                          {vinculosBloqueados && <p className="text-[8px] text-amber-600 font-bold">Rode o SQL lá em cima para ativar o vínculo.</p>}
                         </div>
                       </div>
                     );

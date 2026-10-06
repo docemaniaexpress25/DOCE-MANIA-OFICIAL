@@ -6,7 +6,7 @@ import { sendPushToUser } from '@/lib/pushSender';
 import QRCode from 'qrcode';
 import { buildPixPayload, generateTxid } from '@/lib/pix';
 // BLOCO 21: regra ÚNICA da comissão de pré-venda (compartilhada com /api/pre-venda/venda)
-import { comissaoPvDeItens, getComissaoPvPct, round2 } from '@/lib/comissaoPv';
+import { comissaoPvDeItens, COMISSAO_PV_DEFAULT, round2 } from '@/lib/comissaoPv';
 
 /**
  * PRÉ-VENDA / ROTAS DE ENTREGA (estilo Shopee)
@@ -833,10 +833,10 @@ export async function GET(req: NextRequest) {
     const url = new URL(req.url);
     const all = url.searchParams.get('all') === '1';
 
-    // Config da taxa de comissao de pre-venda (somente admin)
+    // Padrão da comissão de pre-venda (somente admin) — Bloco 23: fixo 5
     if (url.searchParams.get('config') === '1') {
       if (!isAdminSession(req)) return NextResponse.json({ error: 'Acesso restrito ao admin.' }, { status: 403 });
-      return NextResponse.json({ comissaoPct: await getComissaoPvPct(supabase) });
+      return NextResponse.json({ comissaoPct: COMISSAO_PV_DEFAULT });
     }
 
     // Bloco 5 ainda nao rodou: responde vazio + flag para a UI avisar,
@@ -988,24 +988,12 @@ export async function POST(req: NextRequest) {
     }
 
     // ---------- SET_CONFIG: taxa da comissao de pre-venda (admin) ----------
-    // (antes do gate de saleId — esta acao nao precisa de venda)
+    // BLOCO 23: obsoleto — o padrao da PV agora e FIXO (5%) e a comissao de
+    // cada produto manda (lib/comissaoPv). Mantido por compatibilidade:
+    // responde ok sem gravar, para nunca travar um cliente antigo.
     if (acao === 'SET_CONFIG') {
       if (!admin) return NextResponse.json({ ok: false, error: 'Acesso restrito ao admin.' }, { status: 403 });
-      const pct = Number(body.comissaoPct);
-      if (!isFinite(pct) || pct <= 0 || pct > 100) {
-        return NextResponse.json({ ok: false, error: 'Informe um percentual entre 1 e 100.' }, { status: 400 });
-      }
-      const { error: cfgErr } = await supabase
-        .from('app_config')
-        .upsert({ chave: 'comissao_pre_venda_pct', valor: String(pct), updated_at: new Date().toISOString() }, { onConflict: 'chave' });
-      if (cfgErr) {
-        const code = (cfgErr as any).code || '';
-        if (code === '42P01' || code === '42501') {
-          return NextResponse.json({ ok: false, error: 'Banco desatualizado: rode o Bloco 7 do SQL (tabela app_config).' }, { status: 503 });
-        }
-        throw cfgErr;
-      }
-      return NextResponse.json({ ok: true, comissaoPct: pct });
+      return NextResponse.json({ ok: true, comissaoPct: COMISSAO_PV_DEFAULT, aviso: 'Padrao fixo a partir do Bloco 23 — comissao por produto manda.' });
     }
 
     // ---------- Acoes por parada ----------

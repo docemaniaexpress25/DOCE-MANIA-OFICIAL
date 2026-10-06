@@ -28,6 +28,9 @@ export interface ProdutoCatalogo {
   categoryId: string | null;
   /** Bloco 18: observacao do dono — o cliente le no card do portal (null = sem) */
   obs?: string | null;
+  /** Bloco 23: família MANUAL escolhida pelo dono (vence o nome do estoque)
+   *  — resolve quando o produto aparece com outro nome no estoque central. */
+  familiaCatalogo?: string | null;
 }
 
 export interface VarianteFamilia {
@@ -133,7 +136,11 @@ export function agruparCatalogo(produtos: ProdutoCatalogo[]): FamiliaCatalogo[] 
       fam.push(tokens[i]);
     }
 
-    const nome = tituloDos(fam) || p.nome;
+    // BLOCO 23 — vínculo manual vence: se o dono ligou o produto a uma
+    // família do catálogo, usa o nome escolhido por ele (o rótulo do
+    // tamanho continua vindo do nome do estoque).
+    const vinculo = (p.familiaCatalogo || "").trim();
+    const nome = vinculo || tituloDos(fam) || p.nome;
     const key = semAcento(nome).toLowerCase();
 
     let f = map.get(key);

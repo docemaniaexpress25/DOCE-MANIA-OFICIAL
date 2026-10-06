@@ -36,8 +36,10 @@ export interface Product {
   precoVenda: number;
   precoMinimo: number;
   comissaoPercentual: number;
-  /** Bloco 14: comissão de PRÉ-VENDA (%) — undefined = usa a taxa padrão da PV */
-  comissaoPvPercentual?: number;
+  /** Bloco 14: comissão de PRÉ-VENDA (%) — null/vazio = padrão do dono (Bloco 23: 5%) */
+  comissaoPvPercentual?: number | null;
+  /** Bloco 23: vínculo manual à família do catálogo do portal — null = automático pelo nome */
+  familiaCatalogo?: string | null;
   estoquePrincipal: number;
   ativo: boolean;
   categoryId?: string;
@@ -242,6 +244,8 @@ export interface AppSettings {
   pix2Code: string | null;
   productOrder: string[];
   clientOrder: string[]; // NOVO: ordem dos clientes
+  /** Bloco 23: ORDEM DO PORTAL — independente da ordem do PDV */
+  catalogoOrder: string[];
   companyName: string | null;
   companyCnpj: string | null;
   /** Bloco 14: interruptores das melhorias */

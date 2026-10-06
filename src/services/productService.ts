@@ -15,8 +15,10 @@ export const productService = {
       precoVenda: Number(p.preco_venda) || 0,
       precoMinimo: Number(p.preco_minimo) || 0,
       comissaoPercentual: Number(p.comissao_percentual) || 0,
-      // Bloco 14: comissão de pré-venda — undefined = herda a taxa padrão da PV
+      // Bloco 14: comissão de pré-venda — undefined = usa o padrão (Bloco 23: 5%)
       comissaoPvPercentual: (p.comissao_pv_percentual === null || p.comissao_pv_percentual === undefined) ? undefined : Number(p.comissao_pv_percentual),
+      // Bloco 23: vínculo manual do produto à família do catálogo do portal (null = automático pelo nome)
+      familiaCatalogo: (p.familia_catalogo === null || p.familia_catalogo === undefined) ? null : String(p.familia_catalogo).trim() || null,
       estoquePrincipal: Number(p.estoque_principal) || 0,
       ativo: !!p.ativo,
       categoryId: p.category_id,
@@ -37,12 +39,16 @@ export const productService = {
   },
 
   async insertProduct(product: Omit<Product, 'id'>): Promise<Product | null> {
+    // BLOCO 23 — padrão do dono: comissão SEMPRE do produto; vazio = 10% PE / 5% PV
+    const peInformada = Number(product.comissaoPercentual);
+    const comissaoPe = (product.comissaoPercentual === null || product.comissaoPercentual === undefined || !isFinite(peInformada))
+      ? 10 /* COMISSAO_PE_DEFAULT */ : peInformada;
     const payload = {
       nome: product.nome,
       preco_custo: product.precoCusto,
       preco_venda: product.precoVenda,
       preco_minimo: product.precoMinimo,
-      comissao_percentual: product.comissaoPercentual,
+      comissao_percentual: comissaoPe,
       estoque_principal: product.estoquePrincipal,
       ativo: product.ativo,
       category_id: product.categoryId,
@@ -64,12 +70,23 @@ export const productService = {
     // Bloco 18: observacao para o cliente (portal)
     const b18: Record<string, string | null> = {};
     if (product.obs !== undefined) b18.obs = product.obs || null;
-    // Bloco 14: comissão PV (undefined = usa taxa padrão)
+    // Bloco 23: vínculo manual à família do catálogo (null/undefined = automático)
+    const b23: Record<string, string | null> = {};
+    if (product.familiaCatalogo) b23.familia_catalogo = String(product.familiaCatalogo).trim().slice(0, 80);
+    // Bloco 14: comissão PV — BLOCO 23: vazio grava o PADRÃO 5 (regra do dono)
     const extra14: Record<string, number | null> = {};
-    if (product.comissaoPvPercentual !== undefined) extra14.comissao_pv_percentual = product.comissaoPvPercentual;
+    if (product.comissaoPvPercentual !== undefined && product.comissaoPvPercentual !== null) {
+      extra14.comissao_pv_percentual = Number(product.comissaoPvPercentual);
+    } else {
+      extra14.comissao_pv_percentual = 5; /* COMISSAO_PV_DEFAULT */
+    }
 
-    let { data, error } = await supabase.from('products').insert({ ...payload, ...fiscal, ...extra14, ...b15, ...b18 }).select().single();
-    if (error && /comissao_pv_percentual/i.test(error.message || '')) {
+    let { data, error } = await supabase.from('products').insert({ ...payload, ...fiscal, ...extra14, ...b15, ...b18, ...b23 }).select().single();
+    if (error && /familia_catalogo/i.test(error.message || '')) {
+      console.warn('Coluna familia_catalogo ausente (Bloco 23 nao rodado). Salvando sem vínculo.');
+      const sem23: Record<string, unknown> = { ...payload, ...fiscal, ...extra14, ...b15, ...b18 };
+      ({ data, error } = await supabase.from('products').insert(sem23).select().single());
+    } else if (error && /comissao_pv_percentual/i.test(error.message || '')) {
       console.warn('Coluna comissao_pv_percentual ausente (Bloco 14 nao rodado). Salvando sem ela.');
       ({ data, error } = await supabase.from('products').insert({ ...payload, ...fiscal, ...b15, ...b18 }).select().single());
     } else if (error && /imagem|unidades_por_caixa/i.test(error.message || '')) {
@@ -97,6 +114,7 @@ export const productService = {
       precoMinimo: data.preco_minimo,
       comissaoPercentual: data.comissao_percentual,
       comissaoPvPercentual: (data.comissao_pv_percentual === null || data.comissao_pv_percentual === undefined) ? undefined : Number(data.comissao_pv_percentual),
+      familiaCatalogo: (data.familia_catalogo === null || data.familia_catalogo === undefined) ? null : String(data.familia_catalogo).trim() || null,
       estoquePrincipal: data.estoque_principal,
       ativo: data.ativo,
       categoryId: data.category_id,
@@ -120,8 +138,10 @@ export const productService = {
     if (updates.precoVenda !== undefined) payload.preco_venda = updates.precoVenda;
     if (updates.precoMinimo !== undefined) payload.preco_minimo = updates.precoMinimo;
     if (updates.comissaoPercentual !== undefined) payload.comissao_percentual = updates.comissaoPercentual;
-    // Bloco 14: comissão PV — undefined = usa taxa padrão (NULL no banco)
+    // Bloco 14: comissão PV — null = volta ao padrão (Bloco 23: 5% na leitura)
     if (updates.comissaoPvPercentual !== undefined) payload.comissao_pv_percentual = updates.comissaoPvPercentual;
+    // Bloco 23: vínculo manual à família do catálogo — null/vazio = volta ao automático
+    if (updates.familiaCatalogo !== undefined) payload.familia_catalogo = (updates.familiaCatalogo ? String(updates.familiaCatalogo).trim().slice(0, 80) : '') || null;
     if (updates.estoquePrincipal !== undefined) payload.estoque_principal = updates.estoquePrincipal;
     if (updates.ativo !== undefined) payload.ativo = updates.ativo;
     if (updates.categoryId !== undefined) payload.category_id = updates.categoryId;
@@ -140,7 +160,11 @@ export const productService = {
     if (updates.obs !== undefined) payload.obs = updates.obs || null;
 
     let { data, error } = await supabase.from('products').update(payload).eq('id', id).select().single();
-    if (error && /comissao_pv_percentual/i.test(error.message || '')) {
+    if (error && /familia_catalogo/i.test(error.message || '')) {
+      const fb23: Record<string, unknown> = { ...payload };
+      delete fb23.familia_catalogo;
+      ({ data, error } = await supabase.from('products').update(fb23).eq('id', id).select().single());
+    } else if (error && /comissao_pv_percentual/i.test(error.message || '')) {
       const fb14: Record<string, unknown> = { ...payload };
       delete fb14.comissao_pv_percentual;
       ({ data, error } = await supabase.from('products').update(fb14).eq('id', id).select().single());
@@ -171,6 +195,7 @@ export const productService = {
       precoMinimo: data.preco_minimo,
       comissaoPercentual: data.comissao_percentual,
       comissaoPvPercentual: (data.comissao_pv_percentual === null || data.comissao_pv_percentual === undefined) ? undefined : Number(data.comissao_pv_percentual),
+      familiaCatalogo: (data.familia_catalogo === null || data.familia_catalogo === undefined) ? null : String(data.familia_catalogo).trim() || null,
       estoquePrincipal: data.estoque_principal,
       ativo: data.ativo,
       categoryId: data.category_id,

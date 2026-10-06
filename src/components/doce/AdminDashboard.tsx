@@ -75,6 +75,9 @@ interface AdminDashboardProps {
   clearAdminNotification?: () => void;
   orderedProductIds: string[]; 
   setOrderedProductIds: (ids: string[]) => void; 
+  /** Bloco 23: ordem do PORTAL (catálogo) — independente do PDV */
+  portalOrderIds: string[];
+  setPortalOrderIds: (ids: string[]) => void;
   companyName: string;
   setCompanyName: (val: string) => void;
   companyCnpj: string;
@@ -815,13 +818,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   };
 
   const handleSaveProduct = () => {
-    if (!pForm.nome || pForm.custo === '' || pForm.venda === '' || pForm.comissao === '' || pForm.precoMinimo === '') { showToast("Preencha todos os campos.", 'error'); return; }
+    if (!pForm.nome || pForm.custo === '' || pForm.venda === '' || pForm.precoMinimo === '') { showToast("Preencha todos os campos.", 'error'); return; }
     const data: Partial<Product> = { 
       nome: pForm.nome, 
       precoCusto: parseFloat(pForm.custo), 
       precoVenda: parseFloat(pForm.venda), 
       precoMinimo: parseFloat(pForm.precoMinimo),
-      comissaoPercentual: parseFloat(pForm.comissao), 
+      // BLOCO 23 — padrão do dono: comissão vazia = 10% pronta entrega
+      comissaoPercentual: pForm.comissao === '' ? 10 : parseFloat(pForm.comissao), 
       ativo: pForm.ativo ?? true, 
       estoquePrincipal: parseInt(pForm.estoquePrincipal) || 0, 
       categoryId: pForm.categoryId || undefined, 
@@ -837,9 +841,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       // Bloco 18: obs para o cliente — sempre envia (vazio = limpa no banco)
       obs: (pForm.obs || '').trim()
     };
-    // BLOCO 14: comissão PV — vazio = usa a taxa padrão da pré-venda
-    data.comissaoPvPercentual = pForm.comissaoPv === '' ? undefined : parseFloat(pForm.comissaoPv);
-    if (showProductModal === 'NEW') props.addProduct(data.nome!, data.precoCusto!, data.precoVenda!, data.comissaoPercentual!, data.estoquePrincipal, data.categoryId, data.subcategoryId, data.precoMinimo, { ncm: data.ncm, cest: data.cest, cfop: data.cfop, ean: data.ean, unidade: data.unidade, origem: data.origem, comissaoPvPercentual: data.comissaoPvPercentual, imagem: data.imagem, unidadesPorCaixa: data.unidadesPorCaixa, obs: data.obs });
+    // BLOCO 14 + 23: comissão PV — vazio = padrão do dono (5% gravado no produto)
+    data.comissaoPvPercentual = pForm.comissaoPv === '' ? null : parseFloat(pForm.comissaoPv);
+    if (showProductModal === 'NEW') props.addProduct(data.nome!, data.precoCusto!, data.precoVenda!, data.comissaoPercentual!, data.estoquePrincipal, data.categoryId, data.subcategoryId, data.precoMinimo, { ncm: data.ncm, cest: data.cest, cfop: data.cfop, ean: data.ean, unidade: data.unidade, origem: data.origem, comissaoPvPercentual: data.comissaoPvPercentual ?? undefined, imagem: data.imagem, unidadesPorCaixa: data.unidadesPorCaixa, obs: data.obs });
     else if (typeof showProductModal === 'object') props.updateProduct(showProductModal.id, data);
     setShowProductModal(null);
     showToast("Produto salvo!");
@@ -1510,6 +1514,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           products={props.products}
           orderedProductIds={props.orderedProductIds}
           setOrderedProductIds={props.setOrderedProductIds}
+          portalOrderIds={props.portalOrderIds}
+          setPortalOrderIds={props.setPortalOrderIds}
           updateProduct={props.updateProduct}
           showToast={showToast}
         />
@@ -2481,7 +2487,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         {pForm.categoryId && props.subcategories.filter(s => s.categoryId === pForm.categoryId).length > 0 && (
           <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Subcategoria</label><select value={pForm.subcategoryId} onChange={e => setPForm({...pForm, subcategoryId: e.target.value})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase"><option value="">Nenhuma</option>{props.subcategories.filter(s => s.categoryId === pForm.categoryId).map(sub => (<option key={sub.id} value={sub.id}>{sub.name}</option>))}</select></div>
         )}
-        <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Custo R$</label><input type="number" value={pForm.custo} onChange={e => { const val = parseFloat(e.target.value) || 0; const venda = props.margemGlobalAtiva ? updatePriceFromMargin(val, props.margemGlobalValor) : parseFloat(pForm.venda) || 0; const margem = props.margemGlobalAtiva ? props.margemGlobalValor : updateMarginFromPrice(val, venda); setPForm({...pForm, custo: e.target.value, venda: venda.toFixed(2), margem: margem.toFixed(2)}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Venda R$</label><input type="number" value={pForm.venda} onChange={e => { const val = parseFloat(e.target.value) || 0; const margem = updateMarginFromPrice(parseFloat(pForm.custo) || 0, val); setPForm({...pForm, margem: margem.toFixed(2), venda: e.target.value}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Margem %</label><input type="number" value={pForm.margem} onChange={e => { const val = parseFloat(e.target.value) || 0; const venda = updatePriceFromMargin(parseFloat(pForm.custo) || 0, val); setPForm({...pForm, margem: e.target.value, venda: venda.toFixed(2)}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Preço Mínimo R$</label><input type="number" value={pForm.precoMinimo} onChange={e => setPForm({...pForm, precoMinimo: e.target.value})} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Comissão Pronta Entrega %</label><input type="number" value={pForm.comissao} onChange={e => setPForm({...pForm, comissao: e.target.value})} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Comissão Pré-Venda % (vazio = taxa padrão)</label><input type="number" value={pForm.comissaoPv} onChange={e => setPForm({...pForm, comissaoPv: e.target.value})} placeholder="padrão" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Estoque Central</label><input type="number" value={pForm.estoquePrincipal} onChange={e => setPForm({...pForm, estoquePrincipal: e.target.value})} placeholder="0" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div>
+        <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Custo R$</label><input type="number" value={pForm.custo} onChange={e => { const val = parseFloat(e.target.value) || 0; const venda = props.margemGlobalAtiva ? updatePriceFromMargin(val, props.margemGlobalValor) : parseFloat(pForm.venda) || 0; const margem = props.margemGlobalAtiva ? props.margemGlobalValor : updateMarginFromPrice(val, venda); setPForm({...pForm, custo: e.target.value, venda: venda.toFixed(2), margem: margem.toFixed(2)}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Venda R$</label><input type="number" value={pForm.venda} onChange={e => { const val = parseFloat(e.target.value) || 0; const margem = updateMarginFromPrice(parseFloat(pForm.custo) || 0, val); setPForm({...pForm, margem: margem.toFixed(2), venda: e.target.value}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Margem %</label><input type="number" value={pForm.margem} onChange={e => { const val = parseFloat(e.target.value) || 0; const venda = updatePriceFromMargin(parseFloat(pForm.custo) || 0, val); setPForm({...pForm, margem: e.target.value, venda: venda.toFixed(2)}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Preço Mínimo R$</label><input type="number" value={pForm.precoMinimo} onChange={e => setPForm({...pForm, precoMinimo: e.target.value})} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Comissão Pronta Entrega % (vazio = 10%)</label><input type="number" value={pForm.comissao} onChange={e => setPForm({...pForm, comissao: e.target.value})} placeholder="10" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Comissão Pré-Venda % (vazio = 5%)</label><input type="number" value={pForm.comissaoPv} onChange={e => setPForm({...pForm, comissaoPv: e.target.value})} placeholder="5" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Estoque Central</label><input type="number" value={pForm.estoquePrincipal} onChange={e => setPForm({...pForm, estoquePrincipal: e.target.value})} placeholder="0" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div>
         <div className="flex items-center gap-2 py-2"><input type="checkbox" id="prod_ativo" checked={pForm.ativo} onChange={e => setPForm({...pForm, ativo: e.target.checked})} className="w-5 h-5" /><label htmlFor="prod_ativo" className="text-xs font-bold text-gray-700 uppercase">Produto Ativo</label></div><button onClick={handleSaveProduct} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 uppercase text-xs mt-4 tracking-widest">Salvar Produto</button><button onClick={() => setShowProductModal(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button></div></div></div>
       )}
 

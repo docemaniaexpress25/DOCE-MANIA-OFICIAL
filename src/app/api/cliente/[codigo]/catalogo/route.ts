@@ -83,18 +83,31 @@ export async function GET(
       unidadesPorCaixa: Math.max(1, Math.floor(Number(p.unidades_por_caixa || 1)) || 1),
       // Bloco 18: observacao escrita pelo dono — o CLIENTE ve no portal
       obs: ((p.obs as string) || '').trim() || null,
+      // Bloco 23: vinculo manual a uma familia do catalogo (null = automatico)
+      familiaCatalogo: ((p.familia_catalogo as string) || '').trim() || null,
     }));
 
-    // ORDEM = MESMA ORDEM DO PDV (app_settings.product_order — usada pelo
-    // admin e pelo PDV). Familias do portal herdam a ordem pela 1a variante.
-    // Produto fora da lista vai pro fim, mantendo a ordem alfabetica anterior.
+    // BLOCO 23 — ORDEM DO PORTAL: catalogo_order (arrumado na aba Catálogo
+    // do Portal). Sem lista do portal, cai para product_order (ordem do PDV,
+    // comportamento de sempre). Leitura RESILIENTE: antes do SQL do Bloco 23
+    // rodar, a coluna catalogo_order nao existe — product_order segue valendo.
     try {
       const { data: cfg } = await supabase
         .from('app_settings')
         .select('product_order')
         .eq('id', 'global_settings')
         .maybeSingle();
-      const ordem: string[] = Array.isArray((cfg as any)?.product_order) ? (cfg as any).product_order : [];
+      let ordemPortal: string[] = [];
+      try {
+        const { data: cfg23 } = await supabase
+          .from('app_settings')
+          .select('catalogo_order')
+          .eq('id', 'global_settings')
+          .maybeSingle();
+        if (Array.isArray((cfg23 as any)?.catalogo_order)) ordemPortal = (cfg23 as any).catalogo_order;
+      } catch { /* Bloco 23 ainda nao rodado */ }
+      const ordemPdv: string[] = Array.isArray((cfg as any)?.product_order) ? (cfg as any).product_order : [];
+      const ordem = ordemPortal.length > 0 ? ordemPortal : ordemPdv;
       if (ordem.length > 0) {
         const idx = new Map<string, number>(ordem.map((id, i) => [id, i]));
         produtos.sort((a, b) => {
@@ -103,7 +116,7 @@ export async function GET(
           return ia - ib;
         });
       }
-    } catch { /* sem product_order: segue alfabetico */ }
+    } catch { /* sem ordem salva: segue alfabetico */ }
 
     return NextResponse.json({
       ok: true,

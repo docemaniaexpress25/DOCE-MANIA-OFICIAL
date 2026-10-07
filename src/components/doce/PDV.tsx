@@ -54,6 +54,28 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   // BLOCO 13: trocas anotadas pelo vendedor (sai no cupom) com autocomplete de produto
   const [trocasTexto, setTrocasTexto] = useState('');
   const [trocasSugestao, setTrocasSugestao] = useState(false);
+  // BLOCO 24: PREÇO TABELA — switch que joga TODOS os itens do carrinho no
+  // PREÇO MÍNIMO cadastrado no estoque central de uma vez (em vez de um por um).
+  // Desligar volta tudo para o PREÇO PADRÃO do estoque central.
+  const [precoTabelaAtivo, setPrecoTabelaAtivo] = useState(false);
+
+  const aplicarPrecoTabela = (ligar: boolean) => {
+    setPrecoTabelaAtivo(ligar);
+    setCart(prev => {
+      const next: typeof prev = {};
+      Object.entries(prev).forEach(([pId, item]) => {
+        if (!item || (item.quantidade ?? 0) <= 0) return;
+        const p = products.find(prod => prod.id === pId);
+        if (!p) return;
+        const min = p.precoMinimo ?? 0;
+        // LIGAR: produto com mínimo cadastrado vai para o mínimo (sem mínimo = segue padrão)
+        // DESLIGAR: volta para o preço padrão do estoque central
+        const preco = ligar ? (min > 0 ? min : (p.precoVenda ?? 0)) : (p.precoVenda ?? 0);
+        next[pId] = { ...item, precoVenda: preco.toFixed(2) };
+      });
+      return next;
+    });
+  };
 
   const trocasSugestoes = React.useMemo(() => {
     const partes = trocasTexto.split(/[\n,]+/);
@@ -778,9 +800,13 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           const item = cart[p.id];
           const cargaOriginal = sellFromCentral ? (p.estoquePrincipal || 0) : (minhaCarga.find(c => c.produtoId === p.id)?.quantidade || 0);
           const minPrice = p.precoMinimo || 0;
+          // BLOCO 24: com PREÇO TABELA ligado, produto com mínimo cadastrado entra/continua no mínimo
+          const precoBase = precoTabelaAtivo && minPrice > 0 ? minPrice : (p.precoVenda ?? 0);
           const itemPrice = item ? parseFloat(item.precoVenda) || 0 : p.precoVenda;
           // Só considera violação se tem preço mínimo cadastrado (> 0)
           const isBelowMin = margemMinimaAtiva && item && item.quantidade > 0 && minPrice > 0 && itemPrice < minPrice && !isPrePedido;
+          // BLOCO 24: preço no mínimo pela tabela = destaque violeta
+          const isPrecoTabela = precoTabelaAtivo && item && item.quantidade > 0 && minPrice > 0 && itemPrice === minPrice;
           const hasBeenSold = soldProductIds.has(p.id);
 
           return (
@@ -801,10 +827,10 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                         <span className={`text-[9px] font-black ${isBelowMin ? 'text-rose-500' : 'text-gray-300'}`}>R$</span>
                         <input 
                           type="text" 
-                          value={item?.precoVenda ?? (p.precoVenda ?? 0).toFixed(2)} 
+                          value={item?.precoVenda ?? precoBase.toFixed(2)} 
                           onChange={(e) => handlePriceChange(p.id, e.target.value)} 
                           onBlur={(e) => handlePriceBlur(p.id, e.target.value)}
-                          className={`w-14 bg-transparent border-none p-0 text-[11px] font-black outline-none ${isBelowMin ? 'text-rose-600' : 'text-emerald-600'}`} 
+                          className={`w-14 bg-transparent border-none p-0 text-[11px] font-black outline-none ${isBelowMin ? 'text-rose-600' : (isPrecoTabela ? 'text-violet-600' : 'text-emerald-600')}`} 
                         />
                         {/* SÓ mostra preço mínimo se cadastrado (> 0) - NUNCA mostra 0 */}
                         {p.precoMinimo && p.precoMinimo > 0 && (
@@ -828,9 +854,9 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                   </div>
                 </div>
                 <div className="flex items-center bg-white rounded-xl p-0.5 border border-gray-100 shadow-sm">
-                  <button onClick={() => updateCart(p.id, -1, p.precoVenda)} className="w-8 h-8 text-gray-400 active:scale-90 flex items-center justify-center"><i className="fa-solid fa-minus text-[10px]"></i></button> 
+                  <button onClick={() => updateCart(p.id, -1, precoBase)} className="w-8 h-8 text-gray-400 active:scale-90 flex items-center justify-center"><i className="fa-solid fa-minus text-[10px]"></i></button> 
                   <span className="font-black text-xs min-w-[22px] text-center">{item?.quantidade ?? 0}</span> 
-                  <button onClick={() => updateCart(p.id, 1, p.precoVenda)} className="w-8 h-8 text-blue-600 active:scale-90 flex items-center justify-center"><i className="fa-solid fa-plus text-[10px]"></i></button> 
+                  <button onClick={() => updateCart(p.id, 1, precoBase)} className="w-8 h-8 text-blue-600 active:scale-90 flex items-center justify-center"><i className="fa-solid fa-plus text-[10px]"></i></button> 
                 </div>
               </div>
               {isBelowMin && (
@@ -863,6 +889,26 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
             Venda Bloqueada: Preço abaixo do mínimo!
           </div>
         )}
+
+        {/* BLOCO 24: PREÇO TABELA — liga/desliga os PREÇOS MÍNIMOS em TODO o carrinho */}
+        <div className="flex items-center justify-between px-1 py-2 bg-gray-50/50 rounded-xl mb-1">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => aplicarPrecoTabela(!precoTabelaAtivo)}
+              aria-pressed={precoTabelaAtivo}
+              aria-label="Preço tabela: aplica o preço mínimo cadastrado em todos os produtos do carrinho"
+              className={`w-10 h-6 rounded-full relative transition-colors ${precoTabelaAtivo ? 'bg-violet-600' : 'bg-gray-300'}`}
+            >
+              <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${precoTabelaAtivo ? 'left-5' : 'left-1'}`}></div>
+            </button>
+            <span className="text-[9px] font-black text-gray-400 uppercase">Preço Tabela <span className="text-gray-300">(mínimos)</span></span>
+          </div>
+          {precoTabelaAtivo && (
+            <span className="text-[8px] font-black text-violet-600 uppercase tracking-widest animate-pulse">
+              <i className="fa-solid fa-tag mr-1"></i>Todos no mínimo
+            </span>
+          )}
+        </div>
 
         <div className="flex items-center justify-between gap-4 px-1 mb-1 bg-gray-50/50 p-2 rounded-xl">
           <div className="flex items-center gap-2">

@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Product, Client, Carga, Sale, SaleItem, PaymentMethod, Category, Subcategory } from '@/lib/types';
 import Cupom from '@/components/doce/Cupom';
+import BoletoCard from '@/components/doce/BoletoCard';
 import ConfirmModal from '@/components/doce/ConfirmModal';
 import PrinterSelector from '@/components/doce/PrinterSelector';
 import { loadLocalState, saveLocalState } from '@/utils/persistence';
@@ -1138,8 +1139,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     {/* MODAL: Venda finalizada com comissao */}
     {saleResultModal && (
       <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
-        <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
-          <div className="bg-gradient-to-br from-emerald-500 to-teal-600 p-6 text-center">
+        <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden flex flex-col max-h-[92vh]">
+          <div className="bg-gradient-to-br from-emerald-500 to-teal-600 p-6 text-center shrink-0">
             <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-3">
               <i className="fa-solid fa-circle-check text-white text-3xl"></i>
             </div>
@@ -1147,7 +1148,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
             <p className="text-white/80 text-[10px] font-bold uppercase mt-1">{saleResultModal.clientName}</p>
           </div>
 
-          <div className="p-6 space-y-3">
+          <div className="p-6 space-y-3 overflow-y-auto">
             <div className="bg-gray-50 p-4 rounded-2xl flex items-center justify-between">
               <span className="text-[10px] font-black text-gray-400 uppercase">Total da Venda</span>
               <span className="text-lg font-black text-gray-800">R$ {saleResultModal.total.toFixed(2)}</span>
@@ -1182,7 +1183,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
             )}
           </div>
 
-          <div className="p-5 pt-0 space-y-2">
+          <div className="p-5 pt-0 space-y-2 shrink-0">
             {/* BLOCO 12: escolha da forma de venda — NF-e / NFC-e / cupom nao fiscal */}
             {!saleResultModal.isPreVenda && (
               <>
@@ -1246,6 +1247,23 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                 )}
               </>
             )}
+
+            {/* ===== Bloco 25 (ajuste): BOLETO INTER direto na venda finalizada —
+                 a venda JA ESTA SALVA aqui, entao o dono gera o boleto na hora,
+                 sem precisar reabrir o cupom pelo historico. Aparece tambem no
+                 PEDIDO REGISTRADO (pre-venda) — boleto a prazo na entrega. ===== */}
+            {saleResultModal.sale?.id && (
+              <BoletoCard
+                saleId={String(saleResultModal.sale.id)}
+                valorTotal={Number(saleResultModal.total) || 0}
+                valorPago={Number(saleResultModal.sale.valorPago) || 0}
+                notaStatus={notaResult?.status}
+                notaNumero={notaResult?.numero}
+                clienteDoc={client.cnpj}
+                clienteTelefone={client.telefone}
+              />
+            )}
+
             {saleResultModal.isPrazo && !saleResultModal.sale.comprovanteFoto && (
               <button
                 onClick={() => { const s = saleResultModal!.sale; setSaleResultModal(null); openComprovanteFlow(s); }}

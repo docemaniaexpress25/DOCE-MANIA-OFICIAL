@@ -52,6 +52,7 @@ const ClientHistory: React.FC<ClientHistoryProps> = ({ client, sales, products, 
           products={products} 
           onClose={() => setSelectedHistoricalSale(null)} 
           allowDelete={false} 
+          allowNota
         />
       </div>
     );

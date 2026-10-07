@@ -5,6 +5,7 @@ import { Sale, Client, Product } from '@/lib/types';
 import { gerarCupomTexto } from '@/lib/cupomTexto';
 import { bluetoothPrinter, PrintJob } from '@/services/bluetoothPrinterService';
 import { notaService, NotaInfo } from '@/services/notaService';
+import { boletoService, BoletoInfo } from '@/services/boletoService';
 import ConfirmModal from '@/components/doce/ConfirmModal';
 import PrinterSelector from '@/components/doce/PrinterSelector';
 
@@ -77,6 +78,132 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
     }
   };
   const nb = notaBadge();
+
+  // ===== Bloco 25: boleto bancario Inter (boleto + pix) =====
+  const [boleto, setBoleto] = useState<BoletoInfo | null>(null);
+  const [boletoIndisponivel, setBoletoIndisponivel] = useState(false);
+  const [boletoBusy, setBoletoBusy] = useState(false);
+  const [boletoForm, setBoletoForm] = useState(false);
+  const [boletoValor, setBoletoValor] = useState('');
+  const [boletoVenc, setBoletoVenc] = useState('');
+  const [boletoAtrelar, setBoletoAtrelar] = useState(true);
+  const [boletoDoc, setBoletoDoc] = useState('');
+
+  useEffect(() => {
+    if (!isVendaSalva) return;
+    let vivo = true;
+    (async () => {
+      const r = await boletoService.status(sale.id);
+      if (!vivo) return;
+      if (!r.ok) { setBoletoIndisponivel(true); return; } // SQL/Inter nao configurado: esconde a secao
+      setBoleto(r.boleto || null);
+      if (r.boleto?.status === 'NAO_GERADO') {
+        const d = new Date(Date.now() + 7 * 24 * 3600 * 1000);
+        setBoletoVenc(new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d));
+        const saldo = Math.max(0, (sale.valorTotal || 0) - (sale.valorPago || 0));
+        setBoletoValor(saldo > 0 ? saldo.toFixed(2) : (sale.valorTotal || 0).toFixed(2));
+      }
+    })();
+    return () => { vivo = false; };
+  }, [sale.id]);
+
+  const dataBR = (iso?: string) => {
+    if (!iso || !/^\d{4}-\d{2}-\d{2}/.test(iso)) return iso || '';
+    const [a, m, d] = iso.slice(0, 10).split('-');
+    return `${d}/${m}/${a}`;
+  };
+
+  const handleGerarBoleto = async () => {
+    if (boletoBusy || !isVendaSalva) return;
+    setBoletoBusy(true);
+    const r = await boletoService.gerar(sale.id, {
+      vencimento: boletoVenc,
+      valor: boletoValor || undefined,
+      atrelarNFe: boletoAtrelar,
+      docManual: boletoDoc || undefined,
+    });
+    setBoletoBusy(false);
+    if (r.erro && !r.boleto) {
+      showToast?.(r.erro, 'error');
+      setModal({ title: 'Boleto', message: r.erro, icon: 'fa-solid fa-triangle-exclamation', type: 'danger', onConfirm: () => setModal(null) });
+      return;
+    }
+    if (r.boleto) setBoleto(r.boleto);
+    setBoletoForm(false);
+    if (r.ok && r.boleto) {
+      if (r.boleto.status === 'EM_PROCESSAMENTO') {
+        showToast?.('Boleto gerado! O Inter esta processando...', 'success');
+        setTimeout(async () => {
+          const c = await boletoService.consultar(sale.id);
+          if (c.ok && c.boleto) setBoleto(c.boleto);
+        }, 4000);
+      } else {
+        showToast?.('Boleto gerado!', 'success');
+      }
+    }
+  };
+
+  const handleConsultarBoleto = async () => {
+    if (boletoBusy || !isVendaSalva) return;
+    setBoletoBusy(true);
+    const r = await boletoService.consultar(sale.id);
+    setBoletoBusy(false);
+    if (r.erro && !r.boleto) { showToast?.(r.erro, 'error'); return; }
+    if (r.boleto) setBoleto(r.boleto);
+  };
+
+  const handlePdfBoleto = async () => {
+    if (boletoBusy || !isVendaSalva) return;
+    setBoletoBusy(true);
+    const r = await boletoService.abrirPdf(sale.id);
+    setBoletoBusy(false);
+    if (!r.ok && r.erro) showToast?.(r.erro, 'error');
+  };
+
+  const handleCopiarTexto = async (txt: string, rotulo: string) => {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(txt);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = txt; ta.style.position = 'fixed'; ta.style.left = '-9999px'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.focus(); ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      showToast?.(`${rotulo} copiado!`, 'success');
+    } catch { showToast?.('Falha ao copiar.', 'error'); }
+  };
+
+  const handleWhatsBoleto = () => {
+    if (!boleto) return;
+    const linhas = [
+      '*BOLETO DOCE MANIA*',
+      boleto.valor ? `Valor: R$ ${Number(boleto.valor).toFixed(2)}` : '',
+      boleto.vencimento ? `Vencimento: ${dataBR(boleto.vencimento)}` : '',
+      boleto.linhaDigitavel ? `Linha digitavel:\n${boleto.linhaDigitavel}` : '',
+      boleto.pixCopiaECola ? `PIX (copia e cola):\n${boleto.pixCopiaECola}` : '',
+    ].filter(Boolean).join('\n\n');
+    const phone = (client.telefone || '').replace(/\D/g, '');
+    window.open(`https://wa.me/55${phone}?text=${encodeURIComponent(linhas)}`, '_blank');
+  };
+
+  const boletoBadge = (): { cls: string; icon: string; txt: string } => {
+    const s = boleto?.status || 'NAO_GERADO';
+    switch (s) {
+      case 'A_RECEBER': return { cls: 'bg-emerald-50 text-emerald-700 border-emerald-200', icon: 'fa-barcode', txt: `BOLETO A RECEBER — venc. ${dataBR(boleto?.vencimento)}` };
+      case 'RECEBIDO': case 'MARCADO_RECEBIDO': return { cls: 'bg-emerald-50 text-emerald-700 border-emerald-200', icon: 'fa-circle-check', txt: `BOLETO PAGO${boleto?.valorRecebido ? ` — R$ ${Number(boleto.valorRecebido).toFixed(2)}` : ''}` };
+      case 'EM_PROCESSAMENTO': return { cls: 'bg-amber-50 text-amber-700 border-amber-200', icon: 'fa-hourglass-half', txt: 'Gerando boleto no Inter...' };
+      case 'ATRASADO': return { cls: 'bg-rose-50 text-rose-700 border-rose-200', icon: 'fa-triangle-exclamation', txt: `BOLETO ATRASADO — venc. ${dataBR(boleto?.vencimento)}` };
+      case 'PROTESTO': return { cls: 'bg-rose-50 text-rose-700 border-rose-200', icon: 'fa-gavel', txt: 'Boleto em protesto' };
+      case 'CANCELADO': case 'EXPIRADO': return { cls: 'bg-gray-100 text-gray-500 border-gray-200', icon: 'fa-ban', txt: 'Boleto cancelado' };
+      case 'FALHA_EMISSAO': return { cls: 'bg-rose-50 text-rose-700 border-rose-200', icon: 'fa-circle-xmark', txt: 'Falha ao gerar — toque em tentar de novo' };
+      default: return { cls: 'bg-gray-50 text-gray-500 border-gray-200', icon: 'fa-file-invoice-dollar', txt: 'Sem boleto' };
+    }
+  };
+  const bb = boletoBadge();
+  const mostrarBoleto = isVendaSalva && !boletoIndisponivel && !!boleto;
+  const clienteTemDoc = !!(client.cnpj || '').replace(/\D/g, '');
 
   // Subscribe to print job status
   useEffect(() => {
@@ -274,6 +401,99 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
                   <i className={`fa-solid ${notaBusy ? 'fa-spinner fa-spin' : 'fa-file-invoice-dollar'} mr-1`}></i>
                   {notaBusy ? 'Emitindo...' : nota.status === 'REJEITADA' ? 'Emitir Novamente' : 'Emitir Nota Fiscal'}
                 </button>
+              )}
+            </div>
+          )}
+
+          {/* ===== Bloco 25: Boleto bancario Inter (boleto + pix) ===== */}
+          {mostrarBoleto && (
+            <div className={`rounded-2xl border p-3 space-y-2 ${bb.cls}`}>
+              <div className="flex items-center gap-2">
+                <i className={`fa-solid ${bb.icon}`}></i>
+                <span className="text-[10px] font-black uppercase flex-1">{bb.txt}</span>
+                {(boleto!.status === 'EM_PROCESSAMENTO' || ['A_RECEBER', 'ATRASADO'].includes(boleto!.status)) && (
+                  <button onClick={handleConsultarBoleto} disabled={boletoBusy} className="text-[9px] font-black underline disabled:opacity-50">
+                    Atualizar
+                  </button>
+                )}
+              </div>
+              {boleto!.erro && boleto!.status === 'FALHA_EMISSAO' && (
+                <p className="text-[9px] leading-snug font-bold opacity-80 break-words">{boleto!.erro}</p>
+              )}
+              {['A_RECEBER', 'ATRASADO'].includes(boleto!.status) && boleto!.linhaDigitavel && (
+                <div className="space-y-1.5">
+                  <button onClick={() => handleCopiarTexto(boleto!.linhaDigitavel!, 'Linha digitavel')}
+                    className="w-full text-left font-mono text-[9px] font-bold bg-white/70 rounded-lg px-2 py-1.5 break-all active:scale-95">
+                    {boleto!.linhaDigitavel}
+                  </button>
+                  {boleto!.pixCopiaECola && (
+                    <button onClick={() => handleCopiarTexto(boleto!.pixCopiaECola!, 'PIX copia e cola')}
+                      className="w-full text-left text-[9px] font-black bg-white/70 rounded-lg px-2 py-1.5 break-all active:scale-95">
+                      <i className="fa-solid fa-qrcode mr-1"></i>PIX COPIA E COLA — TOQUE PARA COPIAR
+                    </button>
+                  )}
+                </div>
+              )}
+              {boleto!.status === 'EM_PROCESSAMENTO' && (
+                <button onClick={handleGerarBoleto} disabled={boletoBusy}
+                  className="block w-full bg-slate-800 text-white font-black py-3 rounded-xl text-[10px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
+                  <i className={`fa-solid ${boletoBusy ? 'fa-spinner fa-spin' : 'fa-arrows-rotate'} mr-1`}></i>
+                  Gerar Novamente
+                </button>
+              )}
+              {['CANCELADO', 'EXPIRADO', 'FALHA_EMISSAO', 'NAO_GERADO'].includes(boleto!.status) && !boletoForm && (
+                <button onClick={() => setBoletoForm(true)} disabled={boletoBusy}
+                  className="block w-full bg-slate-800 text-white font-black py-3 rounded-xl text-[10px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
+                  <i className={`fa-solid ${boletoBusy ? 'fa-spinner fa-spin' : 'fa-file-invoice-dollar'} mr-1`}></i>
+                  {boleto!.status === 'NAO_GERADO' ? 'Gerar Boleto' : 'Gerar Novamente'}
+                </button>
+              )}
+              {['A_RECEBER', 'ATRASADO', 'RECEBIDO', 'MARCADO_RECEBIDO'].includes(boleto!.status) && (
+                <div className="grid grid-cols-2 gap-2">
+                  <button onClick={handlePdfBoleto} disabled={boletoBusy}
+                    className="bg-slate-800 text-white font-black py-2.5 rounded-xl text-[9px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
+                    <i className={`fa-solid ${boletoBusy ? 'fa-spinner fa-spin' : 'fa-file-pdf'} mr-1`}></i> PDF
+                  </button>
+                  <button onClick={handleWhatsBoleto}
+                    className="bg-green-600 text-white font-black py-2.5 rounded-xl text-[9px] uppercase tracking-widest active:scale-95">
+                    <i className="fa-brands fa-whatsapp mr-1"></i> Enviar
+                  </button>
+                </div>
+              )}
+              {boletoForm && (
+                <div className="space-y-2 bg-white/70 rounded-xl p-2.5">
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="block">
+                      <span className="text-[8px] font-black uppercase text-gray-500">Valor (R$)</span>
+                      <input type="number" step="0.01" min="2.5" value={boletoValor} onChange={e => setBoletoValor(e.target.value)}
+                        className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-[11px] font-bold text-gray-800 focus:outline-none focus:border-gray-400" />
+                    </label>
+                    <label className="block">
+                      <span className="text-[8px] font-black uppercase text-gray-500">Vencimento</span>
+                      <input type="date" value={boletoVenc} onChange={e => setBoletoVenc(e.target.value)}
+                        className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-[11px] font-bold text-gray-800 focus:outline-none focus:border-gray-400" />
+                    </label>
+                  </div>
+                  {!clienteTemDoc && (
+                    <label className="block">
+                      <span className="text-[8px] font-black uppercase text-gray-500">CPF/CNPJ do pagador (cliente sem documento no cadastro)</span>
+                      <input type="text" inputMode="numeric" value={boletoDoc} onChange={e => setBoletoDoc(e.target.value)}
+                        placeholder="000.000.000-00"
+                        className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-[11px] font-bold text-gray-800 focus:outline-none focus:border-gray-400" />
+                    </label>
+                  )}
+                  {nota.status === 'AUTORIZADA' && (
+                    <label className="flex items-center gap-2">
+                      <input type="checkbox" checked={boletoAtrelar} onChange={e => setBoletoAtrelar(e.target.checked)} className="w-4 h-4 accent-emerald-600" />
+                      <span className="text-[9px] font-black uppercase text-gray-600">Atrelar NF-e {nota.numero || ''} ao boleto</span>
+                    </label>
+                  )}
+                  <button onClick={handleGerarBoleto} disabled={boletoBusy || !boletoVenc}
+                    className="block w-full bg-emerald-600 text-white font-black py-2.5 rounded-xl text-[10px] uppercase tracking-widest active:scale-95 disabled:opacity-50">
+                    <i className={`fa-solid ${boletoBusy ? 'fa-spinner fa-spin' : 'fa-check'} mr-1`}></i>
+                    Confirmar boleto
+                  </button>
+                </div>
               )}
             </div>
           )}

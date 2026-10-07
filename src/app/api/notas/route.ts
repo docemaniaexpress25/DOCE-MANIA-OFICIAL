@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServiceClient, devBridge } from '@/lib/serverSupabase';
 import { sessionFromRequest } from '@/lib/session';
-import { hasNotaColumns, hasProductFiscalColumns } from '@/lib/serverSchema';
+import { hasNotaColumns, hasProductFiscalColumns, hasBoletoColumns } from '@/lib/serverSchema';
 import {
   getFocusConfig,
   isFocusConfigured,
@@ -112,6 +112,8 @@ export async function POST(req: NextRequest) {
       nota_xml_url: res.xmlUrl || sale.nota_xml_url || null,
       nota_erro: res.autorizada ? null : res.motivo || null,
     };
+    // Bloco 25: guarda a chave de acesso (44 dig) p/ atrelar a NF-e ao boleto Inter
+    if (res.chave && (await hasBoletoColumns())) patch.nota_chave = res.chave;
     await atualizarNota(saleId, patch);
     return NextResponse.json({ ok: true, nota: { ...notaPublica(sale as Record<string, unknown>), ...res } });
   }
@@ -312,6 +314,8 @@ export async function POST(req: NextRequest) {
     nota_xml_url: res.xmlUrl || null,
     nota_erro: res.autorizada ? null : res.motivo || 'Aguardando SEFAZ',
   };
+  // Bloco 25: guarda a chave de acesso (44 dig) p/ atrelar a NF-e ao boleto Inter
+  if (res.chave && (await hasBoletoColumns())) patch.nota_chave = res.chave;
   await atualizarNota(saleId, patch);
 
   return NextResponse.json({

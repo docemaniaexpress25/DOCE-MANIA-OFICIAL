@@ -57,3 +57,8 @@ export function hasNotaColumns(): Promise<boolean> {
 export function hasProductFiscalColumns(): Promise<boolean> {
   return probeColumn('products', 'ncm', 'fiscalProduto');
 }
+
+/** sales.inter_boleto_status existe? (Bloco 25 aplicado — boleto bancario Inter) */
+export function hasBoletoColumns(): Promise<boolean> {
+  return probeColumn('sales', 'inter_boleto_status', 'boletoInter');
+}

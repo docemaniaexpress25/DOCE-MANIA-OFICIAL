@@ -86,6 +86,7 @@ export interface FocusNotaResultado {
   motivos?: string | string[];
   numero?: string;
   serie?: string;
+  chave?: string;            // chave de acesso (44 dig) — Bloco 25: atrelar NF-e ao boleto Inter
   danfe_url?: string;
   arquivo_url?: string;
   pdf_url?: string;
@@ -313,5 +314,6 @@ export function interpretarResultado(data: FocusNotaResultado) {
     pdfUrl: pdf,
     xmlUrl: data.arquivo_url || '',
     statusBruto: status,
+    chave: (data.chave && /^\d{44}$/.test(String(data.chave))) ? String(data.chave) : '',
   };
 }

@@ -1260,6 +1260,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                 notaStatus={notaResult?.status}
                 notaNumero={notaResult?.numero}
                 clienteDoc={client.cnpj}
+                clienteCep={client.enderecoCep}
                 clienteTelefone={client.telefone}
               />
             )}

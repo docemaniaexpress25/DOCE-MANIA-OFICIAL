@@ -25,6 +25,7 @@ export interface GerarBoletoParams {
   mensagem?: string;
   atrelarNFe?: boolean;
   docManual?: string;        // CPF/CNPJ informado na tela quando o cadastro nao tem
+  cepManual?: string;        // CEP informado na tela quando o cadastro nao tem (Inter exige)
 }
 
 export const boletoService = {

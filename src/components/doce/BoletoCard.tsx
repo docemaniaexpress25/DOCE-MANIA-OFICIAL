@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { boletoService, BoletoInfo } from '@/services/boletoService';
+import { validaCpfCnpj } from '@/lib/validaDoc';
 
 /**
  * BLOCO 25 (ajuste "o dono nao achou o botao"): card do BOLETO BANCARIO INTER
@@ -25,6 +26,7 @@ interface BoletoCardProps {
   notaStatus?: string;        // 'AUTORIZADA' habilita o "Atrelar NF-e"
   notaNumero?: number | string;
   clienteDoc?: string;        // CPF/CNPJ do cliente no cadastro
+  clienteCep?: string;        // CEP do cliente no cadastro (Inter exige)
   clienteTelefone?: string;   // para o WhatsApp
   showToast?: (msg: string, type?: 'success' | 'error') => void;
 }
@@ -35,7 +37,7 @@ const dataBR = (iso?: string) => {
   return `${d}/${m}/${a}`;
 };
 
-const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, notaStatus, notaNumero, clienteDoc, clienteTelefone, showToast }) => {
+const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, notaStatus, notaNumero, clienteDoc, clienteCep, clienteTelefone, showToast }) => {
   const [boleto, setBoleto] = useState<BoletoInfo | null>(null);
   const [indisponivel, setIndisponivel] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -44,6 +46,7 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
   const [venc, setVenc] = useState('');
   const [atrelar, setAtrelar] = useState(true);
   const [doc, setDoc] = useState('');
+  const [cep, setCep] = useState('');
   const [erroLocal, setErroLocal] = useState('');
 
   useEffect(() => {
@@ -66,13 +69,32 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
 
   const handleGerar = async () => {
     if (busy || !saleId) return;
-    setBusy(true);
     setErroLocal('');
+    // Validacao local (evita a mensagem generica do Inter e poupa a chamada):
+    const docFinal = doc.replace(/\D/g, '') || (clienteDoc || '').replace(/\D/g, '');
+    if (!docFinal) {
+      setErroLocal('Informe o CPF/CNPJ do pagador.');
+      showToast?.('Informe o CPF/CNPJ do pagador.', 'error');
+      return;
+    }
+    if (!validaCpfCnpj(docFinal)) {
+      setErroLocal('CPF/CNPJ inválido — confira os números (CPF tem 11 dígitos, CNPJ tem 14).');
+      showToast?.('CPF/CNPJ do pagador inválido.', 'error');
+      return;
+    }
+    const cepFinal = cep.replace(/\D/g, '') || (clienteCep || '').replace(/\D/g, '');
+    if (cepFinal.length !== 8) {
+      setErroLocal('O boleto do Inter precisa do CEP do pagador (8 dígitos). Informe abaixo ou complete no cadastro do cliente.');
+      showToast?.('Informe o CEP do pagador (8 dígitos).', 'error');
+      return;
+    }
+    setBusy(true);
     const r = await boletoService.gerar(saleId, {
       vencimento: venc,
       valor: valor || undefined,
       atrelarNFe: atrelar,
       docManual: doc || undefined,
+      cepManual: cep || undefined,
     });
     setBusy(false);
     if (r.erro && !r.boleto) {
@@ -157,6 +179,7 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
   if (indisponivel || !boleto) return null;
   const bb = badge();
   const clienteTemDoc = !!(clienteDoc || '').replace(/\D/g, '');
+  const clienteTemCep = (clienteCep || '').replace(/\D/g, '').length === 8;
 
   return (
     <div className={`rounded-2xl border p-3 space-y-2 ${bb.cls}`}>
@@ -231,6 +254,14 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
               <span className="text-[8px] font-black uppercase text-gray-500">CPF/CNPJ do pagador (cliente sem documento no cadastro)</span>
               <input type="text" inputMode="numeric" value={doc} onChange={e => setDoc(e.target.value)}
                 placeholder="000.000.000-00"
+                className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-[11px] font-bold text-gray-800 focus:outline-none focus:border-gray-400" />
+            </label>
+          )}
+          {!clienteTemCep && (
+            <label className="block">
+              <span className="text-[8px] font-black uppercase text-gray-500">CEP do pagador (obrigatório no Inter — cliente sem CEP no cadastro)</span>
+              <input type="text" inputMode="numeric" value={cep} onChange={e => setCep(e.target.value)}
+                placeholder="89500000"
                 className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-[11px] font-bold text-gray-800 focus:outline-none focus:border-gray-400" />
             </label>
           )}

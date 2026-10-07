@@ -287,13 +287,18 @@ export function interpretarCobranca(data: Record<string, unknown>): CobrancaPubl
 // ---------------------------------------------------------------------------
 // Helpers de pagador (dados do cadastro do cliente)
 // ---------------------------------------------------------------------------
-/** Monta o pagador a partir das colunas do cadastro. Cidade/UF tem fallback
- *  Caxias do Sul/RS (base local). Sem documento -> null (boleto exige). */
-export function montarPagador(client: Record<string, unknown>, docManual?: string): InterPagador | null {
+/** Monta o pagador a partir das colunas do cadastro.
+ *  - docManual: CPF/CNPJ digitado na tela quando o cadastro nao tem documento
+ *  - cepManual: CEP digitado na tela quando o cadastro nao tem CEP
+ *    (o Inter EXIGE cep com 8 digitos — sem ele recusa a cobranca com a
+ *    mensagem generica "Verifique se os dados informados...")
+ *  Cidade/UF tem fallback Caxias do Sul/RS (base local). Sem documento -> null. */
+export function montarPagador(client: Record<string, unknown>, docManual?: string, cepManual?: string): InterPagador | null {
   const dig = (v: unknown) => String(v || '').replace(/\D/g, '');
   const txt = (v: unknown) => String(v || '').trim();
   const doc = dig(docManual) || dig(client.cnpj);
   if (doc.length !== 11 && doc.length !== 14) return null;
+  const cep = dig(cepManual) || dig(client.endereco_cep) || undefined;
 
   const nome = (txt(client.razao_social) || txt(client.nome_fantasia) || txt(client.nome) || 'CLIENTE').slice(0, 60);
   const logradouro = txt(client.endereco);
@@ -310,7 +315,7 @@ export function montarPagador(client: Record<string, unknown>, docManual?: strin
     bairro: (txt(client.bairro) || '-').slice(0, 60),
     cidade: cidade.slice(0, 60),
     uf,
-    cep: dig(client.endereco_cep) || undefined,
+    cep,
     email: txt(client.email) || undefined,
   };
   if (tel.length >= 10) {

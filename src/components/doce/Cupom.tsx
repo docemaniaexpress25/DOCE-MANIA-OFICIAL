@@ -288,6 +288,7 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
               notaStatus={nota.status}
               notaNumero={nota.numero}
               clienteDoc={client.cnpj}
+              clienteCep={client.enderecoCep}
               clienteTelefone={client.telefone}
               showToast={showToast}
             />

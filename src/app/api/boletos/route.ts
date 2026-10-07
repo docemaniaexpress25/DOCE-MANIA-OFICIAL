@@ -3,6 +3,7 @@ import { getServiceClient, devBridge } from '@/lib/serverSupabase';
 import { sessionFromRequest } from '@/lib/session';
 import { hasBoletoColumns } from '@/lib/serverSchema';
 import { isFocusConfigured, consultarNota } from '@/lib/focusNfe';
+import { validaCpfCnpj, mascaraCpfCnpj } from '@/lib/validaDoc';
 import {
   isInterConfigured,
   emitirCobranca,
@@ -186,9 +187,24 @@ export async function POST(req: NextRequest) {
     .single();
   if (!client) return BAD(422, 'Cliente da venda nao encontrado.');
 
-  const pagador = montarPagador(client as Record<string, unknown>, String(body.docManual || ''));
+  const pagador = montarPagador(client as Record<string, unknown>, String(body.docManual || ''), String(body.cepManual || ''));
   if (!pagador) {
     return BAD(422, 'Boleto precisa de CPF ou CNPJ do pagador. Complete o cadastro do cliente (Admin > Clientes) ou informe o documento na tela do boleto.');
+  }
+
+  // CEP: OBRIGATORIO na API do Inter (spec PagadorBase: cpfCnpj, nome,
+  // tipoPessoa, cep, endereco, cidade, uf — cep com 8 digitos exatos).
+  // Sem CEP o Inter recusa com a mensagem generica "Verifique se os dados
+  // informados..." — aqui avisamos exatamente o que falta.
+  const cepDig = String((pagador.cep as string) || '').replace(/\D/g, '');
+  if (cepDig.length !== 8) {
+    return BAD(422, 'O boleto do Inter precisa do CEP do pagador (8 digitos). Complete o CEP no cadastro do cliente (Admin > Clientes > endereço) ou informe o CEP na tela do boleto.');
+  }
+
+  // Documento com dígito verificador invalido tambem cai na mensagem
+  // generica do Inter — validamos aqui para o erro ser claro.
+  if (!validaCpfCnpj(pagador.cpfCnpj as string)) {
+    return BAD(422, `O documento ${mascaraCpfCnpj(pagador.cpfCnpj as string)} está com os números inválidos — confira o CPF (11 digitos) ou CNPJ (14 digitos) do pagador.`);
   }
 
   // Valor: saldo em aberto (ou informado), minimo R$ 2,50 (regra da API)

@@ -1,12 +1,23 @@
--- =============================================
--- Tabela: daily_routes
--- Armazena a rota diaria do vendedor com clientes pulados
--- =============================================
+-- ============================================================
+-- Tabela: daily_routes (rota diaria do vendedor + clientes pulados)
+--
+-- IMPORTANTE: este SQL NAO derruba mais a tabela (antes usava
+-- DROP TABLE e apagava as rotas salvas). So ajusta permissoes.
+--
+-- PADRAO DO PROJETO (igual user_locations):
+-- A tabela fica FECHADA para anon/authenticated. O app usa login
+-- proprio (nunca Supabase Auth), entao todo acesso do browser eh
+-- anon — e as policies antigas "TO authenticated" faziam o upsert
+-- do vendedor falhar com 42501 em silencio ("Erro ao salvar rota
+-- diaria" no console).
+-- O acesso agora eh EXCLUSIVAMENTE pela API /api/daily-route
+-- (service_role, que bypassa RLS).
+--
+-- Execute no Supabase SQL Editor — pode rodar quantas vezes quiser.
+-- ============================================================
 
--- Remove tabela existente (se houver) e recria
-DROP TABLE IF EXISTS public.daily_routes;
-
-CREATE TABLE public.daily_routes (
+-- 1. Criar tabela se ainda nao existir (nao mexe se ja existir)
+CREATE TABLE IF NOT EXISTS public.daily_routes (
   vendedor_id TEXT NOT NULL,
   data TEXT NOT NULL,
   client_ids TEXT[] DEFAULT '{}',
@@ -14,25 +25,20 @@ CREATE TABLE public.daily_routes (
   PRIMARY KEY (vendedor_id, data)
 );
 
--- RLS: desabilita para qualquer usuario autenticado poder ler/escrever
+-- 2. Garantir RLS ativa
 ALTER TABLE public.daily_routes ENABLE ROW LEVEL SECURITY;
 
-DO $$ BEGIN
-  CREATE POLICY "any_auth_read" ON public.daily_routes FOR SELECT TO authenticated USING (true);
-EXCEPTION WHEN duplicate_object THEN NULL;
+-- 3. Remover policies antigas (qualquer nome que exista)
+DO $$
+DECLARE p RECORD;
+BEGIN
+  FOR p IN
+    SELECT policyname FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = 'daily_routes'
+  LOOP
+    EXECUTE format('DROP POLICY IF EXISTS %I ON public.daily_routes', p.policyname);
+  END LOOP;
 END $$;
 
-DO $$ BEGIN
-  CREATE POLICY "any_auth_insert" ON public.daily_routes FOR INSERT TO authenticated WITH CHECK (true);
-EXCEPTION WHEN duplicate_object THEN NULL;
-END $$;
-
-DO $$ BEGIN
-  CREATE POLICY "any_auth_update" ON public.daily_routes FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
-EXCEPTION WHEN duplicate_object THEN NULL;
-END $$;
-
-DO $$ BEGIN
-  CREATE POLICY "any_auth_upsert" ON public.daily_routes FOR ALL TO authenticated USING (true) WITH CHECK (true);
-EXCEPTION WHEN duplicate_object THEN NULL;
-END $$;
+-- 4. Revogar todo acesso direto de anon e authenticated
+REVOKE ALL ON public.daily_routes FROM anon, authenticated;

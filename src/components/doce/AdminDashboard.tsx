@@ -12,6 +12,7 @@ import ClientHistory from '@/components/doce/ClientHistory';
 import { loadLocalState, saveLocalState } from '@/utils/persistence';
 import { locationService, notificationService, NOTIFICATION_TYPES, AppNotification, NotificationType } from '@/services/locationService';
 import { authHeaders } from '@/services/userService';
+import { saleService } from '@/services/saleService';
 import AdminEntregas from '@/components/doce/AdminEntregas';
 import GestaoCatalogoPortal from '@/components/doce/GestaoCatalogoPortal';
 
@@ -167,10 +168,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     return () => { cancelled = true; };
   }, [comprovantesTick, activeTab]);
 
-  // Polling a cada 45s: cobertura quando o push VAPID nao chega
-  // (ex.: admin usando o APK WebView — a aba/badge atualiza sozinha)
+  // Polling a cada 120s: cobertura quando o push VAPID nao chega
+  // (ex.: admin usando o APK WebView — a aba/badge atualiza sozinha).
+  // EGRESS: 45s → 120s + pula quando o app esta em background.
   useEffect(() => {
-    const id = setInterval(() => setComprovantesTick(t => t + 1), 45_000);
+    const id = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      setComprovantesTick(t => t + 1);
+    }, 120_000);
     return () => clearInterval(id);
   }, []);
 
@@ -323,8 +328,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     setComprovanteUploading(false);
   };
 
-  const handleComprovanteShare = (sale: Sale) => {
-    if (sale.comprovanteFoto) shareImage(sale.comprovanteFoto, `comprovante_${sale.id}.jpg`);
+  const handleComprovanteShare = async (sale: Sale) => {
+    // EGRESS: foto sai do banco sob demanda (nao vem mais na lista de vendas)
+    const foto = sale.comprovanteFoto || comprovanteLocal[sale.id] || await saleService.getComprovanteFoto(sale.id).catch(() => null);
+    if (foto) shareImage(foto, `comprovante_${sale.id}.jpg`);
+    else showToast('Nenhum comprovante anexado nesta venda.', 'error');
   };
 
   const pix1InputRef = useRef<HTMLInputElement>(null);
@@ -2209,9 +2217,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                 </div>
                 <button onClick={(e) => { e.stopPropagation(); setShowReceiveModal(s); setValorRecebidoParcial(saldo.toString()); }} className={`w-full py-3 rounded-2xl text-[10px] font-black uppercase mt-3 shadow-lg active:scale-95 ${isOverdue ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white'}`}>Receber Agora</button>
                 <div className="flex gap-2 mt-2">
-                  {(s.comprovanteFoto || comprovanteLocal[s.id]) ? (
+                  {(s.comprovanteFoto || comprovanteLocal[s.id] || s.metodoPagamento === 'PIX') ? (
                     <>
-                      <button onClick={(e) => { e.stopPropagation(); setComprovanteModalSale(s); setComprovantePreview(s.comprovanteFoto || comprovanteLocal[s.id] || null); }} className="flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase bg-blue-50 text-blue-600 active:scale-95 flex items-center justify-center gap-1.5 border border-blue-100">
+                      <button onClick={async (e) => { e.stopPropagation(); const foto = s.comprovanteFoto || comprovanteLocal[s.id] || await saleService.getComprovanteFoto(s.id).catch(() => null); if (!foto) { showToast('Nenhum comprovante anexado ainda.', 'error'); return; } setComprovanteModalSale(s); setComprovantePreview(foto); }} className="flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase bg-blue-50 text-blue-600 active:scale-95 flex items-center justify-center gap-1.5 border border-blue-100">
                         <i className="fa-solid fa-image"></i>Ver Foto
                       </button>
                       <button onClick={(e) => { e.stopPropagation(); handleComprovanteShare({ ...s, comprovanteFoto: s.comprovanteFoto || comprovanteLocal[s.id] }); }} className="flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase bg-emerald-50 text-emerald-600 active:scale-95 flex items-center justify-center gap-1.5 border border-emerald-100">

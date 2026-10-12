@@ -40,42 +40,101 @@ const DEFAULT_SETTINGS: AppSettings = {
 
 const safeNumber = (value: any): number => Number(value || 0);
 
+// ============================================================
+// EGRESS: logo + QR Pix sao base64 GRANDES dentro de app_settings.
+// Antes vinham em TODO getSettings() (load, realtime, cada mutacao),
+// dezenas de vezes por dia por aparelho. Agora vivem em cache
+// localStorage e revalidam 1x a cada 12h (mudam raramente).
+// ============================================================
+const MEDIA_KEY = 'dm_media_cache_v1';
+const MEDIA_TTL = 12 * 60 * 60 * 1000; // 12h
+
+interface MediaCache { logo: string | null; pix1Code: string | null; pix2Code: string | null; ts: number; }
+
+function readMediaLocal(): MediaCache | null {
+  try {
+    const raw = localStorage.getItem(MEDIA_KEY);
+    return raw ? (JSON.parse(raw) as MediaCache) : null;
+  } catch { return null; }
+}
+
+function writeMediaLocal(m: MediaCache) {
+  try { localStorage.setItem(MEDIA_KEY, JSON.stringify(m)); } catch {}
+}
+
+async function fetchMediaFromDb(): Promise<MediaCache | null> {
+  const { data, error } = await supabase
+    .from('app_settings')
+    .select('logo, pix1_code, pix2_code')
+    .eq('id', 'global_settings')
+    .maybeSingle();
+  if (error || !data) return null;
+  const m: MediaCache = {
+    logo: data.logo ?? null,
+    pix1Code: data.pix1_code ?? null,
+    pix2Code: data.pix2_code ?? null,
+    ts: Date.now(),
+  };
+  writeMediaLocal(m);
+  return m;
+}
+
+async function getMedia(): Promise<MediaCache> {
+  const cached = readMediaLocal();
+  if (cached && Date.now() - cached.ts < MEDIA_TTL) return cached;
+  const fresh = await fetchMediaFromDb();
+  return fresh || cached || { logo: null, pix1Code: null, pix2Code: null, ts: 0 };
+}
+
 export const appSettingsService = {
   async getSettings(): Promise<AppSettings> {
-    const { data, error } = await supabase
+    // EGRESS: leitura LEVE — logo/pix_code (base64 pesados) NAO vem mais aqui;
+    // vem do cache localStorage com revalidacao de 12h (getMedia).
+    const COLS = 'margem_global_ativa, margem_global_valor, margem_minima_ativa, margem_minima, pix1_name, pix2_name, product_order, client_order, catalogo_order, company_name, company_cnpj, melhor_troca_separacao, melhor_push_entrega, melhor_whatsapp, melhor_bairro, melhor_foto_entrega, melhor_push_falha';
+
+    let data: any = null;
+    const { data: light, error: lightErr } = await supabase
       .from('app_settings')
-      .select('*')
+      .select(COLS)
       .eq('id', 'global_settings')
       .maybeSingle();
 
-    if (error) {
-      console.error('[appSettingsService] Erro ao buscar configurações:', error);
-      return DEFAULT_SETTINGS;
+    if (lightErr || !light) {
+      // Fallback: coluna ainda inexistente (SQL pendente) → leitura completa (já traz a mídia)
+      const { data: full, error } = await supabase
+        .from('app_settings')
+        .select('*')
+        .eq('id', 'global_settings')
+        .maybeSingle();
+      if (error) {
+        console.error('[appSettingsService] Erro ao buscar configurações:', error);
+        return DEFAULT_SETTINGS;
+      }
+      if (!full) {
+        console.log('[appSettingsService] Nenhuma configuração encontrada, usando defaults');
+        return DEFAULT_SETTINGS;
+      }
+      data = full;
+      // Atualiza o cache de mídia com a leitura completa (custo zero extra)
+      writeMediaLocal({ logo: full.logo ?? null, pix1Code: full.pix1_code ?? null, pix2Code: full.pix2_code ?? null, ts: Date.now() });
+    } else {
+      data = light;
     }
 
-    if (!data) {
-      console.log('[appSettingsService] Nenhuma configuração encontrada, usando defaults');
-      return DEFAULT_SETTINGS;
-    }
-
-    // Debug log para ver o que vem do banco
-    console.log('[appSettingsService] Dados do banco:', {
-      product_order: data.product_order,
-      client_order: data.client_order,
-      company_name: data.company_name,
-      company_cnpj: data.company_cnpj
-    });
+    const media = data.logo !== undefined
+      ? { logo: data.logo ?? null, pix1Code: data.pix1_code ?? null, pix2Code: data.pix2_code ?? null }
+      : await getMedia();
 
     return {
-      logo: data.logo ?? DEFAULT_SETTINGS.logo,
+      logo: media.logo ?? DEFAULT_SETTINGS.logo,
       margemGlobalAtiva: data.margem_global_ativa !== undefined ? !!data.margem_global_ativa : DEFAULT_SETTINGS.margemGlobalAtiva,
       margemGlobalValor: data.margem_global_valor !== undefined ? safeNumber(data.margem_global_valor) : DEFAULT_SETTINGS.margemGlobalValor,
       margemMinimaAtiva: data.margem_minima_ativa !== undefined ? !!data.margem_minima_ativa : DEFAULT_SETTINGS.margemMinimaAtiva,
       margemMinima: data.margem_minima !== undefined ? safeNumber(data.margem_minima) : DEFAULT_SETTINGS.margemMinima,
       pix1Name: data.pix1_name ?? DEFAULT_SETTINGS.pix1Name,
-      pix1Code: data.pix1_code ?? DEFAULT_SETTINGS.pix1Code,
+      pix1Code: media.pix1Code ?? DEFAULT_SETTINGS.pix1Code,
       pix2Name: data.pix2_name ?? DEFAULT_SETTINGS.pix2Name,
-      pix2Code: data.pix2_code ?? DEFAULT_SETTINGS.pix2Code,
+      pix2Code: media.pix2Code ?? DEFAULT_SETTINGS.pix2Code,
       productOrder: Array.isArray(data.product_order) ? data.product_order : DEFAULT_SETTINGS.productOrder,
       clientOrder: Array.isArray(data.client_order) ? data.client_order : DEFAULT_SETTINGS.clientOrder,
       catalogoOrder: Array.isArray((data as any).catalogo_order) ? (data as any).catalogo_order : DEFAULT_SETTINGS.catalogoOrder,
@@ -104,6 +163,17 @@ export const appSettingsService = {
     if (settings.pix1Code !== undefined) payload.pix1_code = settings.pix1Code;
     if (settings.pix2Name !== undefined) payload.pix2_name = settings.pix2Name;
     if (settings.pix2Code !== undefined) payload.pix2_code = settings.pix2Code;
+
+    // EGRESS: mantém o cache local de mídia em sync quando logo/pix mudam
+    if (settings.logo !== undefined || settings.pix1Code !== undefined || settings.pix2Code !== undefined) {
+      const cur = readMediaLocal() || { logo: null, pix1Code: null, pix2Code: null, ts: 0 };
+      writeMediaLocal({
+        logo: settings.logo !== undefined ? settings.logo : cur.logo,
+        pix1Code: settings.pix1Code !== undefined ? settings.pix1Code : cur.pix1Code,
+        pix2Code: settings.pix2Code !== undefined ? settings.pix2Code : cur.pix2Code,
+        ts: Date.now(),
+      });
+    }
     if (settings.productOrder !== undefined) payload.product_order = settings.productOrder;
     if (settings.clientOrder !== undefined) payload.client_order = settings.clientOrder;
     if (settings.catalogoOrder !== undefined) (payload as any).catalogo_order = settings.catalogoOrder;

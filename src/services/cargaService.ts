@@ -3,7 +3,8 @@ import { Carga, CargaPendente } from '@/lib/types';
 
 export const cargaService = {
   async getAllCargas(): Promise<Carga[]> {
-    const { data, error } = await supabase.from('cargas').select('*');
+    // EGRESS: colunas explicitas (a tabela cresce 1 linha por vendedor×produto)
+    const { data, error } = await supabase.from('cargas').select('vendedor_id, produto_id, quantidade');
     if (error) throw error;
     return data.map(c => ({
       vendedorId: c.vendedor_id,
@@ -27,7 +28,8 @@ export const cargaService = {
   },
 
   async getAllCargasPendentes(vId?: string): Promise<CargaPendente[]> {
-    let query = supabase.from('cargas_pendentes').select('*').eq('status', 'PENDENTE');
+    // EGRESS: colunas explicitas
+    let query = supabase.from('cargas_pendentes').select('id, vendedor_id, itens, data_criacao').eq('status', 'PENDENTE');
     if (vId) query = query.eq('vendedor_id', vId);
     const { data, error } = await query;
     if (error) throw error;

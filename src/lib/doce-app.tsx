@@ -242,14 +242,24 @@ const App: React.FC = () => {
     if (cgR.status === 'fulfilled' && cgpR.status === 'fulfilled') setCargasLoaded(true);
   }, []);
 
-  // SINCRONISMO DA CARGA: polling leve (45s) + refresh ao voltar o foco do app.
+  // SINCRONISMO DA CARGA: polling leve (5 min) + refresh ao voltar o foco do app.
   // Antes o vendedor so via a carga ao reabrir o app — carga enviada pelo admin
   // ficava invisivel (e o card "ACEITAR CARGA" nunca aparecia).
+  // EGRESS: 45s → 5min; tick pula quando o app esta em background; foco so
+  // recarrega se a ultima busca foi ha mais de 30s (evita rajada ao alternar apps).
   useEffect(() => {
     if (!currentUser || currentUser.role === 'ENTREGADOR') return;
-    const iv = setInterval(fetchCargas, 45_000);
-    window.addEventListener('focus', fetchCargas);
-    return () => { clearInterval(iv); window.removeEventListener('focus', fetchCargas); };
+    const lastRef = { t: 0 };
+    const wrapped = async () => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      const now = Date.now();
+      if (now - lastRef.t < 30_000) return;
+      lastRef.t = now;
+      await fetchCargas();
+    };
+    const iv = setInterval(wrapped, 300_000);
+    window.addEventListener('focus', wrapped);
+    return () => { clearInterval(iv); window.removeEventListener('focus', wrapped); };
   }, [currentUser, fetchCargas]);
 
   const fetchTransactionalData = useCallback(async () => {
@@ -398,25 +408,41 @@ const App: React.FC = () => {
 
   useEffect(() => {
     let timeoutId: any;
+    let stale = false;
+
+    // EGRESS: antes este canal ouvia QUALQUER write em QUALQUER tabela (inclusive
+    // o GPS de cada vendedor a cada 60s) e disparava fetchCoreData COMPLETO
+    // (~13 consultas full-table com fotos em base64) em TODOS os aparelhos —
+    // o maior consumo de egress do sistema. Agora escuta APENAS INSERT em sales
+    // (venda nova — evento raro) e refaz so os dados transacionais, com debounce
+    // de 2s. Em background adia; ao voltar, recarrega uma unica vez.
+    const run = () => {
+      if (typeof document !== 'undefined' && document.hidden) { stale = true; return; }
+      fetchTransactionalData();
+    };
     const debouncedFetch = () => {
       clearTimeout(timeoutId);
-      timeoutId = setTimeout(() => {
-        fetchCoreData();
-      }, 300);
+      timeoutId = setTimeout(run, 2000);
+    };
+    const onVisible = () => {
+      if (typeof document !== 'undefined' && !document.hidden && stale) {
+        stale = false;
+        fetchTransactionalData();
+      }
     };
 
     const channel = supabase
-      .channel('schema-db-changes')
-      .on('postgres_changes', { event: '*', schema: 'public' }, () => {
-        debouncedFetch();
-      })
+      .channel('sales-insert-changes')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'sales' }, debouncedFetch)
       .subscribe();
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible);
 
     return () => {
       clearTimeout(timeoutId);
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible);
       supabase.removeChannel(channel);
     };
-  }, [fetchCoreData]);
+  }, [fetchTransactionalData]);
 
   useEffect(() => { fetchCoreData(); }, [fetchCoreData]);
 

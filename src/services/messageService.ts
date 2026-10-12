@@ -3,8 +3,17 @@ import { SystemMessage } from '@/lib/types';
 
 export const messageService = {
   async getAllMessages(): Promise<SystemMessage[]> {
-    const { data, error } = await supabase.from('system_messages').select('*');
-    if (error) return [];
+    // EGRESS: colunas explicitas (fallback '*' se coluna pendente)
+    let data: any[] | null;
+    try {
+      const r = await supabase.from('system_messages').select('id, seller_id, titulo, mensagem, created_at, lida, type');
+      if (r.error) throw r.error;
+      data = r.data;
+    } catch {
+      const r = await supabase.from('system_messages').select('*');
+      if (r.error) return [];
+      data = r.data;
+    }
     return data.map(m => ({
       id: m.id,
       vendedorId: m.seller_id, // Mapeando de seller_id

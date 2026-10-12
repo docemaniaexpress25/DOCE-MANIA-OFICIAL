@@ -198,7 +198,8 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
   useEffect(() => {
     mounted.current = true;
     const t0 = setTimeout(() => load(), 0);
-    const t = setInterval(() => load(true), 45_000);
+    // EGRESS: 45s → 120s + pula quando o app esta em background
+    const t = setInterval(() => { if (typeof document !== 'undefined' && !document.hidden) load(true); }, 120_000);
     const onFocus = () => load(true);
     window.addEventListener('focus', onFocus);
     return () => { mounted.current = false; clearTimeout(t0); clearInterval(t); window.removeEventListener('focus', onFocus); };

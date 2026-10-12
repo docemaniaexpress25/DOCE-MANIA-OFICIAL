@@ -78,11 +78,16 @@ export async function GET(
 
     // 2. Vendas do cliente (detalhe_pagamento carrega o log de pagamentos parciais;
     //    entrega_status mostra a situacao da pre-venda no portal)
+    // EGRESS: todas as PENDENTES (saldo exato) + pagas dos ultimos 120 dias
+    // (antes eram TODAS as vendas de todos os tempos em cada visita).
+    const desde = new Date(Date.now() - 120 * 24 * 60 * 60 * 1000).toISOString();
     const { data: salesData } = await supabase
       .from('sales')
       .select('id, valor_total, valor_pago, metodo_pagamento, status_pagamento, data_venda, data_vencimento, detalhe_pagamento, entrega_status, sale_items(produto_id, quantidade, preco_venda)')
       .eq('client_id', found.id)
-      .order('data_venda', { ascending: false });
+      .or(`status_pagamento.eq.PENDENTE,data_venda.gte.${desde}`)
+      .order('data_venda', { ascending: false })
+      .limit(500);
 
     // 3. Nomes dos produtos
     const { data: prodData } = await supabase.from('products').select('id, nome, preco_venda');

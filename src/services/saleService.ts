@@ -8,7 +8,17 @@ export const saleService = {
   async getAllSales(): Promise<Sale[]> {
     // BLOCO 20: paginado — o servidor corta em 1000 linhas e as vendas novas
     // sumiam do historico/relatorios/contas a receber (caso Mio Mercato).
-    const data = await fetchAllPages<any>('sales', '*, sale_items(*)');
+    // ECONOMIA DE EGRESS: colunas explicitas SEM comprovante_foto (base64 de
+    // ate ~500KB por venda era baixado em TODA recarga por TODOS os aparelhos).
+    // A foto agora le sob demanda via getComprovanteFoto(). Fallback '*' caso
+    // alguma coluna ainda nao exista (SQL pendente).
+    const COLS = 'id, vendedor_id, client_id, valor_total, valor_pago, metodo_pagamento, detalhe_pagamento, status_pagamento, data_vencimento, data_venda, nota_status, nota_numero, nota_pdf_url, nota_erro, tipo_venda, entrega_status, trocas, prioridade, separado, entregador_id, sale_items(produto_id, quantidade, preco_venda)';
+    let data: any[];
+    try {
+      data = await fetchAllPages<any>('sales', COLS);
+    } catch {
+      data = await fetchAllPages<any>('sales', '*, sale_items(*)');
+    }
     return data.map(s => ({
       id: s.id,
       vendedorId: s.vendedor_id,
@@ -19,7 +29,8 @@ export const saleService = {
       detalhePagamento: s.detalhe_pagamento,
       statusPagamento: s.status_pagamento,
       dataVencimento: s.data_vencimento ? new Date(s.data_vencimento) : undefined,
-      comprovanteFoto: s.comprovante_foto || undefined,
+      // EGRESS: foto do comprovante nao vem mais na lista — le sob demanda (getComprovanteFoto)
+      comprovanteFoto: undefined,
       data: new Date(s.data_venda),
       itens: (s.sale_items || []).map((i: any) => ({
         produtoId: i.produto_id,
@@ -39,6 +50,17 @@ export const saleService = {
       separado: typeof s.separado === 'boolean' ? s.separado : undefined,
       entregadorId: s.entregador_id || undefined,
     })) as Sale[];
+  },
+
+  /** Le a foto do comprovante de UMA venda sob demanda (egress: 1 venda, nao todas). */
+  async getComprovanteFoto(saleId: string): Promise<string | null> {
+    const { data, error } = await supabase
+      .from('sales')
+      .select('comprovante_foto')
+      .eq('id', saleId)
+      .maybeSingle();
+    if (error) return null;
+    return (data as any)?.comprovante_foto || null;
   },
 
   async insertSale(sale: Omit<Sale, 'id'>): Promise<Sale | null> {

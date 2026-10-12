@@ -52,15 +52,28 @@ export async function GET(
     const bloqueado = saldoDevedor > 0.005;
 
     // 3. Catalogo do estoque central (ativo com estoque)
-    // select('*'): imagem/unidades_por_caixa (Bloco 15) entram quando existirem,
-    // sem quebrar antes do SQL rodar.
-    const { data: prods, error: prodErr } = await supabase
-      .from('products')
-      .select('*')
-      .eq('ativo', true)
-      .gt('estoque_principal', 0)
-      .order('nome', { ascending: true });
-    if (prodErr) throw prodErr;
+    // EGRESS: colunas explicitas — sem NCM/CEST/CFOP/EAN (fiscais, nao usados
+    // no portal) — com fallback '*' caso alguma coluna ainda nao exista.
+    let prods: any[] | null = null;
+    try {
+      const r = await supabase
+        .from('products')
+        .select('id, nome, preco_venda, estoque_principal, category_id, imagem, unidades_por_caixa, obs, familia_catalogo')
+        .eq('ativo', true)
+        .gt('estoque_principal', 0)
+        .order('nome', { ascending: true });
+      if (r.error) throw r.error;
+      prods = r.data;
+    } catch {
+      const r2 = await supabase
+        .from('products')
+        .select('*')
+        .eq('ativo', true)
+        .gt('estoque_principal', 0)
+        .order('nome', { ascending: true });
+      prods = r2.data;
+    }
+    if (!prods) throw new Error('Falha ao carregar catalogo');
 
     // 4. Categorias (para o filtro do passo 1)
     let categorias: { id: string; name: string }[] = [];

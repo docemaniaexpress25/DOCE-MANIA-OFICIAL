@@ -8,7 +8,13 @@ const safeNumber = (value: any): number => Number(value || 0);
 export const commissionService = {
   async getAllCommissions(): Promise<Commission[]> {
     // BLOCO 20: paginado — tabela chegou a 999/1000; sem isso comissoes sumiriam do acerto
-    const data = await fetchAllPages<any>('commissions', '*');
+    // EGRESS: colunas explicitas (fallback '*' se SQL pendente)
+    let data: any[];
+    try {
+      data = await fetchAllPages<any>('commissions', 'id, sale_id, seller_id, valor_comissao, valor_base, percentual, valor_pago, status, created_at');
+    } catch {
+      data = await fetchAllPages<any>('commissions', '*');
+    }
     return (data || []).map(c => ({
       id: c.id,
       saleId: c.sale_id,
@@ -66,7 +72,13 @@ export const commissionService = {
 
   async getAllPayouts(): Promise<CommissionPaymentLog[]> {
     // BLOCO 20: paginado (mesmo padrao de vendas/comissoes)
-    const data = await fetchAllPages<any>('commission_payment_logs', '*');
+    // EGRESS: colunas explicitas (fallback '*' se SQL pendente)
+    let data: any[];
+    try {
+      data = await fetchAllPages<any>('commission_payment_logs', 'id, seller_id, valor_pago, created_at, aceitado, aceite_em');
+    } catch {
+      data = await fetchAllPages<any>('commission_payment_logs', '*');
+    }
     return data.map(l => ({
       id: l.id,
       vendedorId: l.seller_id,

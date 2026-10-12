@@ -33,7 +33,15 @@ function mapClient(c: any): Client {
 export const clientService = {
   async getAllClients(): Promise<Client[]> {
     // BLOCO 20: paginado — mantem ordem por 'ordem' com desempate estavel por id
-    const data = await fetchAllPages<any>('clients', '*', { orderCol: 'ordem', ascending: true, tiebreak: true });
+    // EGRESS: colunas explicitas (206 clientes x colunas fiscais em toda recarga).
+    // Fallback progressivo ao '*' caso alguma coluna ainda nao exista (SQL pendente).
+    const COLS = 'id, nome_fantasia, nome, ativar_cnpj, cnpj, telefone, endereco, bairro, ativo, localizacao, dia_roteiro, ordem, observacoes, pin_localizacao, rota, portal_code, razao_social, inscricao_estadual, endereco_numero, endereco_cep, endereco_municipio, endereco_uf, email';
+    let data: any[];
+    try {
+      data = await fetchAllPages<any>('clients', COLS, { orderCol: 'ordem', ascending: true, tiebreak: true });
+    } catch {
+      data = await fetchAllPages<any>('clients', '*', { orderCol: 'ordem', ascending: true, tiebreak: true });
+    }
     return data.map(mapClient);
   },
 

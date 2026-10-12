@@ -94,7 +94,8 @@ const SecretarioView: React.FC<{ user: User; showToast: (m: string, t?: 'success
   useEffect(() => {
     mounted.current = true;
     const t0 = setTimeout(() => load(), 0);
-    const t = setInterval(() => load(true), 30_000);
+    // EGRESS: 30s → 120s + pula quando o app esta em background
+    const t = setInterval(() => { if (typeof document !== 'undefined' && !document.hidden) load(true); }, 120_000);
     const onFocus = () => load(true);
     window.addEventListener('focus', onFocus);
     return () => { mounted.current = false; clearTimeout(t0); clearInterval(t); window.removeEventListener('focus', onFocus); };

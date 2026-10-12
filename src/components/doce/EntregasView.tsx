@@ -54,6 +54,8 @@ const PGTO_META: Record<string, { label: string; icon: string; chip: string }> =
   DINHEIRO: { label: 'Dinheiro', icon: 'fa-solid fa-money-bill-wave', chip: 'bg-emerald-50 text-emerald-700' },
   PIX: { label: 'Pix', icon: 'fa-brands fa-pix', chip: 'bg-teal-50 text-teal-700' },
   BOLETO: { label: 'Boleto', icon: 'fa-solid fa-barcode', chip: 'bg-amber-50 text-amber-700' },
+  // BLOCO 27 (ROTA 2): pedido pago na visita pelo vendedor — entrega sem cobranca
+  PAGO_VISITA: { label: 'Já pago na visita', icon: 'fa-solid fa-circle-check', chip: 'bg-emerald-100 text-emerald-800' },
 };
 const pgtoMeta = (m: string) => PGTO_META[m] || PGTO_META.DINHEIRO;
 
@@ -256,6 +258,8 @@ const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' 
   const sp = sheetEntregue;
   const spMetodo = sp ? (PGTO_META[sp.formaPgto] ? sp.formaPgto : 'DINHEIRO') : 'DINHEIRO';
   const spAprezo = sp ? sp.condicao === 'APRAZO' : false;
+  // BLOCO 27: cliente ja pagou na visita (wizard ROTA 2) — só confirma a entrega
+  const spPagoVisita = sp ? sp.formaPgto === 'PAGO_VISITA' : false;
   const rec = parseFloat(valorRecebido) || 0;
   const troco = sp && rec > sp.valorTotal ? rec - sp.valorTotal : 0;
   const falta = sp && rec > 0 && rec < sp.valorTotal ? sp.valorTotal - rec : 0;
@@ -436,7 +440,7 @@ const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' 
                 <div className="flex items-center gap-2 mt-1.5 flex-wrap">
                   <span className="text-[12px] font-black text-gray-800">{fmt(p.valorTotal)}</span>
                   {p.statusPagamento === 'PAGO'
-                    ? <span className="text-[8px] font-black text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-md uppercase">Pago</span>
+                    ? <span className="text-[8px] font-black text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-md uppercase">{p.formaPgto === 'PAGO_VISITA' ? 'Já pago na visita' : 'Pago'}</span>
                     : (
                       <span className={`text-[8px] font-black px-1.5 py-0.5 rounded-md uppercase ${pg.chip}`}>
                         <i className={`${pg.icon} mr-1`}></i>Cobrar {pg.label}
@@ -596,8 +600,26 @@ const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' 
               </div>
             )}
 
+            {/* --- BLOCO 27: PAGO NA VISITA — só confirma a entrega --- */}
+            {spPagoVisita && (
+              <div className="mt-4 space-y-3 animate-in fade-in duration-300">
+                <div className="bg-emerald-50 rounded-2xl p-4 text-center border border-emerald-100">
+                  <i className="fa-solid fa-circle-check text-emerald-500 text-2xl"></i>
+                  <p className="text-[10px] font-black text-emerald-700 uppercase mt-1">Cliente já pagou na visita</p>
+                  <p className="text-[9px] text-emerald-600/80 font-semibold mt-0.5">O vendedor recebeu direto do cliente — aqui é SÓ ENTREGAR, nada a cobrar.</p>
+                </div>
+                <button
+                  onClick={() => confirmarEntrega(sp, 'JA_PAGO')}
+                  disabled={!!busy}
+                  className="w-full py-4 bg-emerald-600 text-white rounded-2xl text-xs font-black uppercase tracking-wider shadow-lg active:scale-[0.98] transition-transform disabled:opacity-60"
+                >
+                  <i className="fa-solid fa-check mr-1"></i>Confirmar entrega (já pago)
+                </button>
+              </div>
+            )}
+
             {/* --- DINHEIRO: valor recebido + troco --- */}
-            {spMetodo === 'DINHEIRO' && !spAprezo && (
+            {spMetodo === 'DINHEIRO' && !spAprezo && !spPagoVisita && (
               <div className="mt-4 space-y-3 animate-in fade-in duration-300">
                 <div className="bg-gray-50 rounded-2xl p-4 text-center border border-gray-100">
                   <p className="text-[9px] font-black text-gray-400 uppercase">Valor a receber</p>
@@ -642,7 +664,7 @@ const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' 
             )}
 
             {/* --- PIX: valor (parcial ok) + FOTO DO COMPROVANTE OBRIGATORIA --- */}
-            {spMetodo === 'PIX' && !spAprezo && (
+            {spMetodo === 'PIX' && !spAprezo && !spPagoVisita && (
               <div className="mt-4 space-y-3 animate-in fade-in duration-300">
                 <div className="bg-teal-50 rounded-2xl p-4 text-center border border-teal-100">
                   <i className="fa-brands fa-pix text-teal-600 text-2xl"></i>
@@ -696,7 +718,7 @@ const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' 
             )}
 
             {/* --- BOLETO: foto obrigatoria --- */}
-            {spMetodo === 'BOLETO' && !spAprezo && (
+            {spMetodo === 'BOLETO' && !spAprezo && !spPagoVisita && (
               <div className="mt-4 space-y-3 animate-in fade-in duration-300">
                 <div className="bg-amber-50 rounded-2xl p-4 text-center border border-amber-100">
                   <i className="fa-solid fa-barcode text-amber-600 text-2xl"></i>
@@ -734,7 +756,7 @@ const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' 
             )}
 
             {/* --- alternativas (qualquer forma) --- */}
-            {!spAprezo && (
+            {!spAprezo && !spPagoVisita && (
               <div className="mt-4 pt-3 border-t border-gray-100">
                 <p className="text-[8px] font-black text-gray-300 uppercase text-center mb-2">Pagou de outra forma?</p>
                 <div className="grid grid-cols-2 gap-2">

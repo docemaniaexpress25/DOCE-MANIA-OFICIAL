@@ -3,6 +3,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Product, Client, Carga, Sale, SaleItem, PaymentMethod, Category, Subcategory } from '@/lib/types';
 import Cupom from '@/components/doce/Cupom';
 import BoletoCard from '@/components/doce/BoletoCard';
+import WizardPagamento, { WizardPayload } from '@/components/doce/WizardPagamento';
 import ConfirmModal from '@/components/doce/ConfirmModal';
 import PrinterSelector from '@/components/doce/PrinterSelector';
 import { loadLocalState, saveLocalState } from '@/utils/persistence';
@@ -33,6 +34,8 @@ interface PDVProps {
   /** Pre-venda: quando definido, o PDV registra PEDIDO (estoque principal, entrega na rota) */
   modoVenda?: 'PRONTA' | 'PRE_VENDA';
   processPreVenda?: (data: any) => Promise<{ pedido: Sale | null; erro?: string; comissaoPrevista?: number }>;
+  /** BLOCO 27 (ROTA 2): usa o wizard guiado de pagamento em vez da tela antiga */
+  wizardPagamento?: boolean;
 }
 
 type PDVView = 'CART' | 'RECEIPT_PREVIEW' | 'PAYMENT' | 'PRE_PEDIDO_PREVIEW';
@@ -40,7 +43,7 @@ type PDVView = 'CART' | 'RECEIPT_PREVIEW' | 'PAYMENT' | 'PRE_PEDIDO_PREVIEW';
 // Tipo do item do carrinho
 type CartItem = { quantidade: number; precoVenda: string };
 
-const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onCancel, onFinish, processSale, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, sales, onNavigateToCredit, categories, subcategories, modoVenda, processPreVenda }) => {
+const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onCancel, onFinish, processSale, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, sales, onNavigateToCredit, categories, subcategories, modoVenda, processPreVenda, wizardPagamento }) => {
   const [view, setView] = useState<PDVView>('CART');
   const [isPrePedido, setIsPrePedido] = useState(false);
   const isPreVenda = modoVenda === 'PRE_VENDA' && !!processPreVenda;
@@ -118,6 +121,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const [notaEmitindo, setNotaEmitindo] = useState(false);
   const [nfcCpfPanel, setNfcCpfPanel] = useState(false);
   const [nfcCpfInput, setNfcCpfInput] = useState('');
+  // BLOCO 27: erro de validacao/ salvamento do wizard ROTA 2 (mostrado dentro dele)
+  const [wizardErro, setWizardErro] = useState<string | null>(null);
   useEffect(() => {
     if (!saleResultModal) { setNotaResult(null); setNfcCpfPanel(false); setNfcCpfInput(''); }
   }, [saleResultModal]);
@@ -559,6 +564,158 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       }
     } else {
       isFinalizingRef.current = false; // Libera se falhou
+    }
+  };
+
+  // ============================================================
+  // BLOCO 27 (ROTA 2): fechamento da venda pelo wizard guiado.
+  // Mesmos canais do fluxo antigo (RPC processar_venda_v2 /
+  // processPreVenda), mesmas travas (duplo clique, margem minima).
+  // Regra do dono: a prazo NAO tem dinheiro na entrega — quem cobra
+  // e o vendedor; a vista = cliente ja pagou na visita (pre-venda
+  // nasce PAGO na visita via pagoNaVisita).
+  // ============================================================
+  const handleConfirmWizard = async (w: WizardPayload) => {
+    setWizardErro(null);
+    if (isFinalizingRef.current) return; // BLOQUEIO: evita venda duplicada
+    if (total <= 0 && getOrderedItems().length === 0) return;
+    if (!validateAndBlockIfNeeded()) return; // trava de margem
+
+    if (!isPreVenda && w.condicao === 'AVISTA' && w.forma === 'DINHEIRO') {
+      const rec = w.valorRecebido || 0;
+      if (rec <= 0) { setWizardErro('Digite o valor recebido do cliente.'); return; }
+      if (rec + 0.001 < total) { setWizardErro(`Valor recebido (R$ ${rec.toFixed(2)}) e menor que o total da venda (R$ ${total.toFixed(2)}).`); return; }
+    }
+
+    isFinalizingRef.current = true;
+    const itens = getOrderedItems();
+    const vt = parseFloat(valorTroca) || 0;
+    const descontoInfo = isTrocaActive && vt > 0 ? ` (Troca: R$ ${vt.toFixed(2)})` : '';
+    const notaTxt = w.notaIntencao === 'NFE'
+      ? ' | COM NOTA: NF-e'
+      : w.notaIntencao === 'NFCE'
+        ? ` | COM NOTA: NFC-e${w.nfcCpf ? ` (CPF ${w.nfcCpf})` : ''}`
+        : '';
+
+    // ===== PRE-VENDA via wizard =====
+    if (isPreVenda) {
+      const formaApi = w.condicao === 'AVISTA'
+        ? (w.forma === 'MISTO' ? 'DINHEIRO' : w.forma)
+        : (w.forma === 'PIX_DATA' ? 'PIX' : w.forma);
+      const r = await processPreVenda!({
+        clientId: client.id, valorTotal: total, itens,
+        formaPagamento: formaApi, condicao: w.condicao,
+        vencimento: w.condicao === 'APRAZO' ? w.vencimento : undefined,
+        trocas: trocasTexto.trim(),
+        // a vista no wizard = cliente ja pagou na visita (regra do dono)
+        pagoNaVisita: w.condicao === 'AVISTA',
+        notaIntencao: w.notaIntencao,
+        nfcCpf: w.notaIntencao === 'NFCE' ? w.nfcCpf : undefined,
+      });
+      if (r.pedido) {
+        const pedido = r.pedido;
+        localStorage.removeItem(cartKey);
+        setCart({});
+        setTrocasTexto('');
+        lastFinishedSaleRef.current = pedido;
+        let comissaoTotal = Number(r.comissaoPrevista);
+        if (!isFinite(comissaoTotal) || comissaoTotal <= 0) {
+          const PV_PADRAO = 5; // Bloco 23: pré-venda sem % no produto = 5% fixo (lib/comissaoPv)
+          comissaoTotal = 0;
+          itens.forEach(item => {
+            const prod = products.find(p => p.id === item.produtoId);
+            if (prod) {
+              const pv = prod.comissaoPvPercentual;
+              const pct = (pv !== undefined && pv !== null) ? pv : PV_PADRAO;
+              comissaoTotal += (item.quantidade * item.precoVenda) * (pct / 100);
+            }
+          });
+          comissaoTotal = Math.round(comissaoTotal * 100) / 100;
+        }
+        setSaleResultModal({ total, comissao: comissaoTotal, troca: isTrocaActive ? vt : 0, isPrazo: w.condicao === 'APRAZO', isPreVenda: true, clientName: client.nomeFantasia, sale: pedido });
+      } else {
+        isFinalizingRef.current = false;
+        setWizardErro(r.erro || 'Nao foi possivel registrar o pedido. Verifique sua conexao e tente novamente.');
+      }
+      return;
+    }
+
+    // ===== PRONTA ENTREGA via wizard =====
+    let metodo: PaymentMethod;
+    let finalDetalhe = '';
+    if (w.condicao === 'AVISTA') {
+      if (w.forma === 'DINHEIRO') {
+        metodo = 'DINHEIRO';
+        const rec = w.valorRecebido || 0;
+        const trocoVal = Math.max(0, rec - total);
+        finalDetalhe = `DINHEIRO${trocoVal > 0 ? ` — troco R$ ${trocoVal.toFixed(2)}` : ''}`;
+      } else if (w.forma === 'PIX') {
+        metodo = 'PIX';
+        finalDetalhe = w.pixSlot === 1 ? pix1Name : pix2Name;
+      } else {
+        // MISTO: o banco legado so grava DINHEIRO/PIX/A_PRAZO — grava como
+        // DINHEIRO com o detalhe explícito (mesmo padrão do fluxo antigo)
+        metodo = 'DINHEIRO';
+        finalDetalhe = `MISTO: Dinheiro R$ ${(w.mistoDinheiro || 0).toFixed(2)} + Pix R$ ${(w.mistoPix || 0).toFixed(2)}`;
+      }
+    } else {
+      metodo = 'A_PRAZO';
+      finalDetalhe = w.forma === 'BOLETO' ? 'Boleto' : w.forma === 'CHEQUE' ? `Cheque${w.chequeNumero ? ` nº ${w.chequeNumero}` : ''}${w.chequeBomPara ? ` (bom para ${w.chequeBomPara.split('-').reverse().join('/')})` : ''}` : 'Pix na data';
+    }
+    finalDetalhe += descontoInfo + notaTxt;
+
+    const salePayload: any = {
+      vendedorId,
+      clientId: client.id,
+      valorTotal: total,
+      valorPago: metodo === 'A_PRAZO' ? 0 : total,
+      metodoPagamento: metodo,
+      detalhePagamento: finalDetalhe,
+      itens,
+      data: new Date(),
+    };
+    if (metodo === 'A_PRAZO') {
+      salePayload.statusPagamento = 'PENDENTE';
+      // meio-dia local: evita a data cair no dia anterior (meia-noite UTC em TZ -3)
+      salePayload.dataVencimento = new Date(`${w.vencimento}T12:00:00`);
+    } else {
+      salePayload.statusPagamento = 'PAGO';
+    }
+
+    const newSale = await processSale(salePayload);
+    if (newSale) {
+      localStorage.removeItem(cartKey);
+      setCart({});
+      lastFinishedSaleRef.current = newSale;
+      let comissaoTotal = 0;
+      itens.forEach(item => {
+        const prod = products.find(p => p.id === item.produtoId);
+        if (prod) {
+          comissaoTotal += (item.quantidade * item.precoVenda) * ((prod.comissaoPercentual || 0) / 100);
+        }
+      });
+      setSaleResultModal({
+        total,
+        comissao: comissaoTotal,
+        troca: isTrocaActive ? vt : 0,
+        isPrazo: metodo === 'A_PRAZO',
+        clientName: client.nomeFantasia,
+        sale: { ...newSale, trocas: trocasTexto.trim() || undefined },
+      });
+      if (trocasTexto.trim()) {
+        try {
+          const { authHeaders } = await import('@/services/userService');
+          fetch('/api/sales/trocas', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            body: JSON.stringify({ saleId: newSale.id, trocas: trocasTexto.trim() }),
+          }).catch(() => {});
+        } catch {}
+        setTrocasTexto('');
+      }
+    } else {
+      isFinalizingRef.current = false; // Libera se falhou
+      setWizardErro('Nao foi possivel concluir a venda. Verifique sua conexao e tente novamente.');
     }
   };
 
@@ -1005,7 +1162,19 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                 </div>
               )}
 
-              {isPreVenda ? (
+              {wizardPagamento ? (
+                <WizardPagamento
+                  total={total}
+                  isPreVenda={isPreVenda}
+                  clienteAptoNfe={clienteAptoNfe(client)}
+                  pix1Name={pix1Name} pix1Code={pix1Code}
+                  pix2Name={pix2Name} pix2Code={pix2Code}
+                  mascararCpf={mascararCpf}
+                  erro={wizardErro}
+                  onConfirm={handleConfirmWizard}
+                  onVoltar={() => setView('RECEIPT_PREVIEW')}
+                />
+              ) : isPreVenda ? (
                 <div className="mb-6 animate-in fade-in duration-300">
                   <p className="text-[9px] font-black text-gray-400 uppercase text-center mb-2">Pagamento combinado com o cliente</p>
                   {/* BLOCO 13: condicao — A VISTA ou A PRAZO (regra do dono) */}
@@ -1123,6 +1292,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               </>
               )}
 
+              {!wizardPagamento && (
+                <>
               <button 
                 onClick={handleConfirmFinalize} 
                 disabled={hasMarginViolation}
@@ -1131,6 +1302,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                 {isPreVenda ? 'Registrar Pedido (Pre-Venda)' : 'Concluir Venda'}
               </button>
               <button onClick={() => setView('RECEIPT_PREVIEW')} className="w-full py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Voltar ao Cupom</button>
+                </>
+              )}
            </div>
         </div>
       )}
@@ -1251,8 +1424,10 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
             {/* ===== Bloco 25 (ajuste): BOLETO INTER direto na venda finalizada —
                  a venda JA ESTA SALVA aqui, entao o dono gera o boleto na hora,
                  sem precisar reabrir o cupom pelo historico. Aparece tambem no
-                 PEDIDO REGISTRADO (pre-venda) — boleto a prazo na entrega. ===== */}
-            {saleResultModal.sale?.id && (
+                 PEDIDO REGISTRADO (pre-venda) — boleto a prazo na entrega.
+                 BLOCO 27: so quando ha SALDO em aberto (a vista pago na visita
+                 nao tem boleto para gerar). ===== */}
+            {saleResultModal.sale?.id && (Number(saleResultModal.sale.valorTotal ?? 0) - Number(saleResultModal.sale.valorPago ?? 0) > 0) && (
               <BoletoCard
                 saleId={String(saleResultModal.sale.id)}
                 valorTotal={Number(saleResultModal.total) || 0}

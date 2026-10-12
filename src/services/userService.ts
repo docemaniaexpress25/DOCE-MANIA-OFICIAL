@@ -39,6 +39,10 @@ function mapUser(u: any): User {
     foto: u.foto,
     placaVeiculo: u.placaVeiculo ?? u.placa_veiculo,
     rota: u.rota || 'ROTA_01',
+    // Bloco 27: preserva preVenda e rota2 (antes o mapUser descartava a
+    // preVenda de rows diretas do Supabase — bug latente)
+    preVenda: !!u.preVenda,
+    rota2: !!u.rota2,
   };
 }
 

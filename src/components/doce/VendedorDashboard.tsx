@@ -978,6 +978,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
           showToast(modoAtendimento === 'PRE_VENDA' ? "Pedido de pre-venda registrado!" : "Venda realizada com sucesso!", 'success'); 
         }}
         processSale={processSale} processPreVenda={processPreVenda} modoVenda={modoAtendimento} margemMinima={margemMinima} margemMinimaAtiva={margemMinimaAtiva} pix1Name={pix1Name} pix1Code={pix1Code} pix2Name={pix2Name} pix2Code={pix2Code}
+        wizardPagamento={user.rota2 === true}
         sales={sales} 
         onNavigateToCredit={handleNavigateToCredit}
         categories={categories}

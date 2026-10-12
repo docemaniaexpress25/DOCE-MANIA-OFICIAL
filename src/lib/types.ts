@@ -14,6 +14,8 @@ export interface User {
   rota?: string;
   /** Pre-vendedor (ex.: Edipo): vende do estoque principal e gera rota de entrega */
   preVenda?: boolean;
+  /** Bloco 27: vendedor no teste do NOVO fluxo de venda (wizard guiado) */
+  rota2?: boolean;
 }
 
 export interface Category {

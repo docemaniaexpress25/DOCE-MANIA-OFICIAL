@@ -16,7 +16,7 @@ import { getServiceClient } from '@/lib/serverSupabase';
 const TTL_MS = 30_000;
 
 type Probe = { ok: boolean; at: number };
-const probes: Record<string, Probe | null> = { preVenda: null, entrega: null, foto: null, nota: null, fiscalProduto: null };
+const probes: Record<string, Probe | null> = { preVenda: null, entrega: null, foto: null, nota: null, fiscalProduto: null, rota2: null };
 
 async function probeColumn(table: string, column: string, key: string): Promise<boolean> {
   const now = Date.now();
@@ -61,4 +61,9 @@ export function hasProductFiscalColumns(): Promise<boolean> {
 /** sales.inter_boleto_status existe? (Bloco 25 aplicado — boleto bancario Inter) */
 export function hasBoletoColumns(): Promise<boolean> {
   return probeColumn('sales', 'inter_boleto_status', 'boletoInter');
+}
+
+/** app_users.rota2 existe? (Bloco 27 aplicado — wizard de venda do teste ROTA 2) */
+export function hasRota2Column(): Promise<boolean> {
+  return probeColumn('app_users', 'rota2', 'rota2');
 }

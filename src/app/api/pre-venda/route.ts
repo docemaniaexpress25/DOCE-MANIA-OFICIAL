@@ -222,9 +222,12 @@ async function avisarVendedor(supabase: any, vendedorId: string | null | undefin
   }
 }
 
-/** Forma de pagamento a cobrar na entrega (gravada pelo pedido: "cobrar X na entrega") */
+/** Forma de pagamento a cobrar na entrega (gravada pelo pedido: "cobrar X na entrega")
+ *  BLOCO 27: pedido PAGO NA VISITA (a vista do wizard ROTA 2) -> PAGO_VISITA
+ *  (o entregador NÃO cobra nada — só entrega). */
 function formaPgtoDeSale(s: any): string {
   const det = String(s.detalhe_pagamento || '');
+  if (/PAGO NA VISITA/i.test(det)) return 'PAGO_VISITA';
   const m = det.match(/cobrar\s+(DINHEIRO|PIX|BOLETO|CHEQUE)/i);
   if (m) return m[1].toUpperCase();
   const mp = String(s.metodo_pagamento || '').toUpperCase();

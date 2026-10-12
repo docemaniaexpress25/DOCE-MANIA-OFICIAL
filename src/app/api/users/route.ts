@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { hash } from 'bcryptjs';
 import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/serverSupabase';
 import { isAdminSession } from '@/lib/session';
-import { hasPreVendaColumn } from '@/lib/serverSchema';
+import { hasPreVendaColumn, hasRota2Column } from '@/lib/serverSchema';
 
 /**
  * Gerenciamento de usuarios via servidor (service_role).
@@ -16,6 +16,7 @@ import { hasPreVendaColumn } from '@/lib/serverSchema';
  * vira bcrypt e so pin_hash vai para o banco.
  */
 
+// Bloco 27: rota2 segue o mesmo padrao tolerante (coluna pode ainda nao existir).
 const SAFE_COLUMNS = 'id, nome, email, perfil, ativo, telefone, whatsapp, foto, placa_veiculo, rota, pre_venda';
 // Minimo necessario para a tela de login escolher o usuario (sem dados pessoais).
 // pre_venda vem junto: nao e dado sensivel e permite o app liberar a aba
@@ -28,10 +29,13 @@ const SAFE_COLUMNS_SEM_PRE_VENDA = 'id, nome, email, perfil, ativo, telefone, wh
 const LOGIN_COLUMNS_SEM_PRE_VENDA = 'id, nome, perfil, ativo, rota';
 
 async function resolveUserColumns(): Promise<{ safe: string; login: string }> {
-  const comPreVenda = await hasPreVendaColumn();
-  return comPreVenda
-    ? { safe: SAFE_COLUMNS, login: LOGIN_COLUMNS }
-    : { safe: SAFE_COLUMNS_SEM_PRE_VENDA, login: LOGIN_COLUMNS_SEM_PRE_VENDA };
+  const [comPreVenda, comRota2] = await Promise.all([hasPreVendaColumn(), hasRota2Column()]);
+  const extra = comPreVenda ? ', pre_venda' : '';
+  const extraRota2 = comRota2 ? ', rota2' : '';
+  return {
+    safe: `${SAFE_COLUMNS}${extra}${extraRota2}`,
+    login: `${LOGIN_COLUMNS}${extra}${extraRota2}`,
+  };
 }
 
 function mapUser(u: any) {
@@ -47,6 +51,7 @@ function mapUser(u: any) {
     placaVeiculo: u.placa_veiculo,
     rota: u.rota,
     preVenda: !!u.pre_venda,
+    rota2: !!u.rota2,
   };
 }
 
@@ -157,6 +162,10 @@ export async function PUT(req: NextRequest) {
     // Flag de pre-venda (so existe depois do Bloco 5)
     if (body.preVenda !== undefined && (await hasPreVendaColumn())) {
       payload.pre_venda = !!body.preVenda;
+    }
+    // Bloco 27: flag do teste ROTA 2 (wizard de venda) — so vendedores
+    if (body.rota2 !== undefined && (await hasRota2Column())) {
+      payload.rota2 = !!body.rota2;
     }
 
     if (Object.keys(payload).length === 0) {

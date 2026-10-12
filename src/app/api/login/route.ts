@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { compare } from 'bcryptjs';
 import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/serverSupabase';
 import { createSessionToken } from '@/lib/session';
-import { hasPreVendaColumn } from '@/lib/serverSchema';
+import { hasPreVendaColumn, hasRota2Column } from '@/lib/serverSchema';
 
 /**
  * POST /api/login  { userId, pin }
@@ -84,6 +84,7 @@ export async function POST(req: NextRequest) {
         placaVeiculo: '',
         rota: '',
         preVenda: false,
+        rota2: false,
       };
       const token = createSessionToken('ENTREGADOR', 'ENTREGADOR');
       return NextResponse.json({ ok: true, user, token });
@@ -110,6 +111,7 @@ export async function POST(req: NextRequest) {
         placaVeiculo: '',
         rota: '',
         preVenda: false,
+        rota2: false,
       };
       const token = createSessionToken('SECRETARIO', 'SECRETARIO');
       return NextResponse.json({ ok: true, user, token });
@@ -119,10 +121,12 @@ export async function POST(req: NextRequest) {
     // pre_venda so existe depois do Bloco 5 do SQL; enquanto isso o login NAO
     // PODE quebrar por causa dela (antes, o select 500ava para todo mundo).
     // (`as any` evita o ParserError do typegen do supabase-js com string dinamica)
-    const comPreVenda = await hasPreVendaColumn();
-    const userCols = comPreVenda
-      ? 'id, nome, email, perfil, ativo, telefone, whatsapp, foto, placa_veiculo, rota, pre_venda, pin_hash'
-      : 'id, nome, email, perfil, ativo, telefone, whatsapp, foto, placa_veiculo, rota, pin_hash';
+    const [comPreVenda, comRota2] = await Promise.all([hasPreVendaColumn(), hasRota2Column()]);
+    const userCols = [
+      'id, nome, email, perfil, ativo, telefone, whatsapp, foto, placa_veiculo, rota, pin_hash',
+      comPreVenda ? ', pre_venda' : '',
+      comRota2 ? ', rota2' : '',
+    ].join('');
     const { data, error } = await supabase
       .from('app_users')
       .select(userCols as any)
@@ -164,6 +168,7 @@ export async function POST(req: NextRequest) {
       placaVeiculo: u.placa_veiculo,
       rota: u.rota,
       preVenda: !!u.pre_venda,
+      rota2: !!u.rota2,
     };
 
     const token = createSessionToken(u.id, String(u.perfil || 'VENDEDOR'));

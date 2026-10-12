@@ -72,6 +72,9 @@ export async function POST(req: NextRequest) {
     // A VISTA: DINHEIRO | PIX        A PRAZO: DINHEIRO | PIX | BOLETO
     const condicaoRaw = String((body as any).condicao || '').toUpperCase();
     const condicao = condicaoRaw === 'APRAZO' ? 'APRAZO' : 'AVISTA';
+    // BLOCO 27 (ROTA 2): pagoNaVisita = cliente JA PAGOU na visita (a vista no
+    // wizard) — o pedido nasce PAGO e a entrega nao cobra nada.
+    const pagoNaVisita = (body as any).pagoNaVisita === true && condicao === 'AVISTA';
     const formasValidas = condicao === 'APRAZO' ? ['DINHEIRO', 'PIX', 'BOLETO', 'CHEQUE'] : ['DINHEIRO', 'PIX'];
     const metodoRaw = String((body as any).formaPagamento ?? (body as any).metodoEntrega ?? '').toUpperCase();
     const forma = formasValidas.includes(metodoRaw) ? metodoRaw : 'DINHEIRO';
@@ -107,19 +110,42 @@ export async function POST(req: NextRequest) {
 
     const etiquetaCond = condicao === 'APRAZO' ? 'A PRAZO' : 'A VISTA';
 
-    const basePayload: any = {
-      vendedor_id: session.sub,
-      client_id: clientId,
-      valor_total: valorTotal,
-      valor_pago: 0,
-      metodo_pagamento: 'A_PRAZO',
-      detalhe_pagamento: `PRE-VENDA — cobrar ${forma} na entrega (${etiquetaCond})`,
-      status_pagamento: 'PENDENTE',
-      data_venda: new Date().toISOString(),
-      data_vencimento: vencimentoIso,
-      tipo_venda: 'PRE_VENDA',
-      entrega_status: 'PENDENTE',
-    };
+    // BLOCO 27: intencao de nota gravada no detalhe (escritorio enxerga)
+    const notaIntencaoRaw = String((body as any).notaIntencao || '').toUpperCase();
+    const notaTxt = notaIntencaoRaw === 'NFE'
+      ? ' | COM NOTA: NF-e'
+      : notaIntencaoRaw === 'NFCE'
+        ? ` | COM NOTA: NFC-e${(body as any).nfcCpf ? ` (CPF ${String((body as any).nfcCpf).slice(0, 20)})` : ''}`
+        : '';
+
+    const formaLabel = forma === 'PIX' ? 'PIX' : forma === 'BOLETO' ? 'BOLETO' : forma === 'CHEQUE' ? 'CHEQUE' : 'DINHEIRO';
+
+    const basePayload: any = pagoNaVisita
+      ? {
+          vendedor_id: session.sub,
+          client_id: clientId,
+          valor_total: valorTotal,
+          valor_pago: valorTotal,
+          metodo_pagamento: forma === 'PIX' ? 'PIX' : 'DINHEIRO',
+          detalhe_pagamento: `PAGO NA VISITA pelo vendedor (${formaLabel}) — entrega sem cobranca${notaTxt}`,
+          status_pagamento: 'PAGO',
+          data_venda: new Date().toISOString(),
+          tipo_venda: 'PRE_VENDA',
+          entrega_status: 'PENDENTE',
+        }
+      : {
+          vendedor_id: session.sub,
+          client_id: clientId,
+          valor_total: valorTotal,
+          valor_pago: 0,
+          metodo_pagamento: 'A_PRAZO',
+          detalhe_pagamento: `PRE-VENDA — cobrar ${forma} na entrega (${etiquetaCond})${notaTxt}`,
+          status_pagamento: 'PENDENTE',
+          data_venda: new Date().toISOString(),
+          data_vencimento: vencimentoIso,
+          tipo_venda: 'PRE_VENDA',
+          entrega_status: 'PENDENTE',
+        };
     // Bloco 13 (colunas podem nao existir antes do SQL rodar)
     const bloco13 = { trocas };
     let payload = { ...basePayload, ...bloco13 };

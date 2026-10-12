@@ -70,6 +70,8 @@ const PGTO_META: Record<string, { label: string; icon: string; chip: string }> =
   PIX: { label: 'Pix', icon: 'fa-brands fa-pix', chip: 'bg-teal-50 text-teal-700' },
   BOLETO: { label: 'Boleto', icon: 'fa-solid fa-barcode', chip: 'bg-amber-50 text-amber-700' },
   CHEQUE: { label: 'Cheque', icon: 'fa-solid fa-money-check', chip: 'bg-violet-50 text-violet-700' },
+  // BLOCO 27 (ROTA 2): pedido pago na visita pelo vendedor — entrega sem cobranca
+  PAGO_VISITA: { label: 'Já pago na visita', icon: 'fa-solid fa-circle-check', chip: 'bg-emerald-100 text-emerald-800' },
 };
 const pgtoMeta = (m: string) => PGTO_META[m] || PGTO_META.DINHEIRO;
 
@@ -395,6 +397,8 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
 
   const sp = sheetEntregue;
   const spMetodo = sp ? (PGTO_META[sp.formaPgto] ? sp.formaPgto : 'DINHEIRO') : 'DINHEIRO';
+  // BLOCO 27: cliente ja pagou na visita (wizard ROTA 2) — só confirma a entrega
+  const spPagoVisita = sp ? sp.formaPgto === 'PAGO_VISITA' : false;
   const restante = sp ? Math.max(0, sp.valorTotal - sp.valorPago) : 0;
   const rec = parseFloat(valorRecebido) || 0;
   const troco = sp && rec > restante ? rec - restante : 0;
@@ -785,8 +789,26 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
               </p>
             )}
 
+            {/* --- BLOCO 27: PAGO NA VISITA — só confirma a entrega --- */}
+            {spPagoVisita && (
+              <div className="mt-4 space-y-3 animate-in fade-in duration-300">
+                <div className="bg-emerald-50 rounded-2xl p-4 text-center border border-emerald-100">
+                  <i className="fa-solid fa-circle-check text-emerald-500 text-2xl"></i>
+                  <p className="text-[10px] font-black text-emerald-700 uppercase mt-1">Cliente já pagou na visita</p>
+                  <p className="text-[9px] text-emerald-600/80 font-semibold mt-0.5">O vendedor recebeu direto do cliente — aqui é SÓ ENTREGAR, nada a cobrar.</p>
+                </div>
+                <button
+                  onClick={() => confirmarEntrega(sp, 'JA_PAGO', { foto: fotoEntrega || undefined })}
+                  disabled={!!busy}
+                  className="w-full py-4 bg-emerald-600 text-white rounded-2xl text-xs font-black uppercase tracking-wider shadow-lg active:scale-[0.98] transition-transform disabled:opacity-60"
+                >
+                  <i className="fa-solid fa-check mr-1"></i>Confirmar entrega (já pago)
+                </button>
+              </div>
+            )}
+
             {/* --- A PRAZO: sem cobranca — vendedor recebe na proxima visita --- */}
-            {sp.condicao === 'APRAZO' && (
+            {sp.condicao === 'APRAZO' && !spPagoVisita && (
               <div className="mt-4 space-y-3 animate-in fade-in duration-300">
                 <div className="bg-orange-50 rounded-2xl p-4 text-center border border-orange-100">
                   <i className="fa-solid fa-handshake-angle text-orange-500 text-2xl"></i>
@@ -824,7 +846,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
             )}
 
             {/* --- A VISTA: como o cliente esta pagando AGORA (pode mudar na hora — ex.: metade dinheiro, metade Pix) --- */}
-            {sp.condicao !== 'APRAZO' && (spMetodo === 'DINHEIRO' || spMetodo === 'PIX') && (
+            {sp.condicao !== 'APRAZO' && (spMetodo === 'DINHEIRO' || spMetodo === 'PIX') && !spPagoVisita && (
               <div className="mt-4 space-y-3 animate-in fade-in duration-300">
                 <div>
                   <p className="text-[9px] font-black text-gray-400 uppercase text-center mb-2">Como o cliente esta pagando agora?</p>
@@ -1028,7 +1050,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
             )}
 
             {/* --- BOLETO: foto obrigatoria (a prazo usa o painel laranja) --- */}
-            {sp.condicao !== 'APRAZO' && spMetodo === 'BOLETO' && (
+            {sp.condicao !== 'APRAZO' && spMetodo === 'BOLETO' && !spPagoVisita && (
               <div className="mt-4 space-y-3 animate-in fade-in duration-300">
                 <div className="bg-amber-50 rounded-2xl p-4 text-center border border-amber-100">
                   <i className="fa-solid fa-barcode text-amber-600 text-2xl"></i>

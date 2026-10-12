@@ -212,16 +212,16 @@ const App: React.FC = () => {
   const roleRef = useRef<string>('');
   useEffect(() => { roleRef.current = currentUser?.role || ''; }, [currentUser]);
 
-  // Pre-venda: sincroniza a flag do usuario cacheado (ex.: Edipo) com o servidor.
-  // Se o Bloco 5 marcou o vendedor como pre-venda e o app ainda esta com o
-  // user antigo no localStorage, a aba Entregas aparece sem precisar re-logar.
+  // Pre-venda + ROTA 2 (Bloco 27): sincroniza as flags do usuario cacheado com
+  // o servidor. Se o admin ligar o teste ROTA 2 no painel e o app ainda tem o
+  // user antigo no localStorage, o wizard aparece sem precisar re-logar.
   useEffect(() => {
     if (!currentUser) return;
     userService.getAllUsers()
       .then(list => {
         const u = list.find(x => x.id === currentUser.id);
-        if (u && !!u.preVenda !== !!currentUser.preVenda) {
-          setCurrentUser(prev => prev ? { ...prev, preVenda: !!u.preVenda } : prev);
+        if (u && (!!u.preVenda !== !!currentUser.preVenda || !!u.rota2 !== !!currentUser.rota2)) {
+          setCurrentUser(prev => prev ? { ...prev, preVenda: !!u.preVenda, rota2: !!u.rota2 } : prev);
         }
       })
       .catch(() => {});
@@ -397,7 +397,7 @@ const App: React.FC = () => {
       }
     };
 
-    const interval = setInterval(checkDate, 30000);
+    const interval = setInterval(checkDate, process.env.NEXT_PUBLIC_E2E_MOCK === '1' ? 30 * 60 * 1000 : 30000);
     window.addEventListener('focus', checkDate);
     
     return () => {
@@ -431,6 +431,16 @@ const App: React.FC = () => {
       }
     };
 
+    // E2E local (mock sem websocket): nao assina o canal — evita loop de
+    // retry do realtime que re-dispara fetchTransactionalData sem parar.
+    if (process.env.NEXT_PUBLIC_E2E_MOCK === '1') {
+      if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible);
+      return () => {
+        clearTimeout(timeoutId);
+        if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible);
+      };
+    }
+
     const channel = supabase
       .channel('sales-insert-changes')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'sales' }, debouncedFetch)
@@ -444,7 +454,7 @@ const App: React.FC = () => {
     };
   }, [fetchTransactionalData]);
 
-  useEffect(() => { fetchCoreData(); }, [fetchCoreData]);
+  useEffect(() => { if (process.env.NEXT_PUBLIC_E2E_MOCK === '1') console.log('[TRACE] fetchCoreData:', new Error().stack?.split('\n').slice(1, 5).join(' << ')); fetchCoreData(); }, [fetchCoreData]);
 
   const updateSetting = async (key: keyof AppSettings, value: any) => {
     if (key === 'logo') setLogo(value);

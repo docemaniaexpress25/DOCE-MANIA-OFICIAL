@@ -16,7 +16,7 @@ import { getServiceClient } from '@/lib/serverSupabase';
 const TTL_MS = 30_000;
 
 type Probe = { ok: boolean; at: number };
-const probes: Record<string, Probe | null> = { preVenda: null, entrega: null, foto: null, nota: null, fiscalProduto: null, rota2: null };
+const probes: Record<string, Probe | null> = { preVenda: null, entrega: null, foto: null, nota: null, fiscalProduto: null, rota2: null, estoquesNota: null, modoCarga: null, pendenteModo: null, modoVenda: null, produtoTeste: null };
 
 async function probeColumn(table: string, column: string, key: string): Promise<boolean> {
   const now = Date.now();
@@ -66,4 +66,29 @@ export function hasBoletoColumns(): Promise<boolean> {
 /** app_users.rota2 existe? (Bloco 27 aplicado — wizard de venda do teste ROTA 2) */
 export function hasRota2Column(): Promise<boolean> {
   return probeColumn('app_users', 'rota2', 'rota2');
+}
+
+/** products.estoque_nota existe? (Bloco 29 — dois estoques em casa: COM NF / SEM NF) */
+export function hasEstoquesNotaColumns(): Promise<boolean> {
+  return probeColumn('products', 'estoque_nota', 'estoquesNota');
+}
+
+/** products.produto_teste existe? (Bloco 29 — produtos de teste so na rota 2) */
+export function hasProdutoTesteColumn(): Promise<boolean> {
+  return probeColumn('products', 'produto_teste', 'produtoTeste');
+}
+
+/** cargas.modo_nota existe? (Bloco 29 — modo da van: COM_NF | SEM_NF, 1 ou outro) */
+export function hasModoCargaColumn(): Promise<boolean> {
+  return probeColumn('cargas', 'modo_nota', 'modoCarga');
+}
+
+/** cargas_pendentes.modo_nota existe? (Bloco 29 — modo da carga enviada pelo admin) */
+export function hasCargaPendenteModoColumn(): Promise<boolean> {
+  return probeColumn('cargas_pendentes', 'modo_nota', 'pendenteModo');
+}
+
+/** sales.modo_nota existe? (Bloco 29 — modo do atendimento: NFE | NFCE | CUPOM) */
+export function hasModoVendaColumn(): Promise<boolean> {
+  return probeColumn('sales', 'modo_nota', 'modoVenda');
 }

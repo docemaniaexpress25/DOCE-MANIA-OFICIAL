@@ -7,7 +7,7 @@ import { authHeaders } from '@/services/userService';
 import { locationService } from '@/services/locationService';
 import { DIAS_SEMANA } from '@/lib/constants';
 import { ehContaAReceber, saldoAberto, preVendaNaFila } from '@/lib/contaAReceber';
-import { buscarCnpjReceita, mascararCnpj, mensagemCnpj, clienteAptoNfe, CnpjBusca } from '@/lib/cnpjAutocomplete';
+import { buscarCnpjReceita, mascararCnpj, mensagemCnpj, clienteAptoNfe, mascararCpf, CnpjBusca } from '@/lib/cnpjAutocomplete';
 import PDV from '@/components/doce/PDV';
 import Cupom from '@/components/doce/Cupom';
 import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
@@ -100,6 +100,11 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   // Pre-venda: modo de atendimento escolhido ao abrir o cliente (Edipo)
   const [modoSheet, setModoSheet] = useState<Client | null>(null);
   const [modoAtendimento, setModoAtendimento] = useState<'PRONTA' | 'PRE_VENDA'>('PRONTA');
+  // BLOCO 29 (ROTA 2): pergunta do atendimento — deseja emitir nota? (fixa o estoque do pedido)
+  const [notaSheet, setNotaSheet] = useState<{ client: Client; vendaModo: 'PRONTA' | 'PRE_VENDA' } | null>(null);
+  const [notaModo, setNotaModo] = useState<'NFE' | 'NFCE' | 'CUPOM' | null>(null);
+  const [nfcCpfModo, setNfcCpfModo] = useState('');
+  const [nfcCpfModoPanel, setNfcCpfModoPanel] = useState(false);
   const [viewingSale, setViewingSale] = useState<Sale | null>(() => loadLocalState('v_viewingSale', null));
 
   const [viewingClientHistory, setViewingClientHistory] = useState<Client | null>(null);
@@ -239,11 +244,73 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     }
   };
 
-  // Abre o PDV no modo escolhido no sheet (so para pre-vendedor)
-  const abrirNoModo = (client: Client, modo: 'PRONTA' | 'PRE_VENDA') => {
+  // BLOCO 29 (ROTA 2): modo da VAN do vendedor — definido na CARGA pelo admin (1 ou outro)
+  const vanModo = React.useMemo(() => {
+    const modos = new Set(cargas.filter(c => c.vendedorId === user.id && c.modoNota).map(c => c.modoNota as string));
+    return modos.size === 1 ? ([...modos][0] as 'COM_NF' | 'SEM_NF') : null;
+  }, [cargas, user.id]);
+  // Dois estoques em casa já rodaram no banco? (produtos com estoque_nota presente)
+  const temDualEstoque = products.some(p => p.estoqueNota !== undefined);
+  const rota2FluxoNovo = user.rota2 === true && temDualEstoque;
+
+  // Abre o PDV no modo escolhido no sheet (so para pre-vendedor).
+  // BLOCO 29: nota/nfcCpf = modo fixado na pergunta do atendimento (null = fluxo legado).
+  const abrirNoModo = (client: Client, modo: 'PRONTA' | 'PRE_VENDA', nota?: 'NFE' | 'NFCE' | 'CUPOM' | null, nfcCpf?: string) => {
     setModoAtendimento(modo);
     setModoSheet(null);
+    setNotaSheet(null);
+    setNfcCpfModoPanel(false);
+    setNotaModo(nota ?? null);
+    setNfcCpfModo(nfcCpf || '');
     setSelectedClient(client);
+  };
+
+  /**
+   * BLOCO 29 (ROTA 2) — fluxo do dono, tela a tela:
+   * 1) clicou no cliente -> PRONTA ENTREGA ou PRÉ-VENDA
+   * 2) pergunta: "deseja emitir nota?"
+   *    - PRONTA: a VAN é 1 modo só (definido na CARGA) — SEM NF = cupom direto;
+   *      COM NF = pergunta (cliente pode não querer nota)
+   *    - PRÉ-VENDA: casa tem os 2 estoques -> pergunta sempre
+   *    SIM -> NF-e (só com CNPJ completo) ou NFC-e (CPF opcional) -> ESTOQUE COM NF
+   *    NÃO -> cupom -> ESTOQUE SEM NF
+   */
+  const escolherModoVenda = (client: Client, modo: 'PRONTA' | 'PRE_VENDA') => {
+    if (!rota2FluxoNovo) {
+      abrirNoModo(client, modo);
+      return;
+    }
+    if (modo === 'PRONTA') {
+      if (vanModo === 'SEM_NF') {
+        abrirNoModo(client, modo, 'CUPOM');
+        showToast('VAN DE HOJE: MERCADORIA SEM NF — venda em cupom.', 'success');
+        return;
+      }
+      if (vanModo === 'COM_NF') {
+        setNotaSheet({ client, vendaModo: modo });
+        return;
+      }
+      // carga sem modo (legado/pre-SQL): fluxo antigo
+      abrirNoModo(client, modo);
+      return;
+    }
+    // PRÉ-VENDA: casa tem os dois estoques — pergunta sempre
+    setNotaSheet({ client, vendaModo: modo });
+  };
+
+  /** BLOCO 29: confirma o documento escolhido na pergunta do atendimento */
+  const confirmarNotaSheet = (doc: 'NFE' | 'NFCE' | 'CUPOM') => {
+    if (!notaSheet) return;
+    const { client, vendaModo } = notaSheet;
+    if (doc === 'NFE' && !clienteAptoNfe(client)) {
+      showToast('NF-e exige CNPJ completo no cadastro. Use NFC-e ou cupom.', 'error');
+      return;
+    }
+    if (doc === 'NFCE' && !nfcCpfModoPanel) {
+      setNfcCpfModoPanel(true); // mostra o campo de CPF (opcional) antes de abrir
+      return;
+    }
+    abrirNoModo(client, vendaModo, doc, nfcCpfModoPanel ? nfcCpfModo : '');
   };
 
   const handleGetGPS = () => {
@@ -979,6 +1046,10 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         }}
         processSale={processSale} processPreVenda={processPreVenda} modoVenda={modoAtendimento} margemMinima={margemMinima} margemMinimaAtiva={margemMinimaAtiva} pix1Name={pix1Name} pix1Code={pix1Code} pix2Name={pix2Name} pix2Code={pix2Code}
         wizardPagamento={user.rota2 === true}
+        /* BLOCO 29 (ROTA 2): produtos teste + catálogo pelo estoque do modo */
+        rota2={user.rota2 === true}
+        modoAtendimento={notaModo}
+        nfcCpfInicial={nfcCpfModoPanel ? nfcCpfModo : ''}
         sales={sales} 
         onNavigateToCredit={handleNavigateToCredit}
         categories={categories}
@@ -1850,13 +1921,13 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
             <h3 className="text-sm font-black text-gray-800 uppercase text-center mt-1 capitalize">{modoSheet.nomeFantasia}</h3>
             <p className="text-[10px] text-gray-400 font-semibold text-center mt-1">Como voce vai vender agora?</p>
             <div className="grid grid-cols-2 gap-2.5 mt-5">
-              <button onClick={() => abrirNoModo(modoSheet, 'PRONTA')}
+              <button onClick={() => escolherModoVenda(modoSheet, 'PRONTA')}
                 className="py-5 rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-600 text-white shadow-md active:scale-95 transition-transform">
                 <i className="fa-solid fa-truck-fast text-lg block mb-1.5"></i>
                 <span className="text-[10px] font-black uppercase">Pronta entrega</span>
                 <span className="block text-[8px] font-bold text-blue-100 mt-0.5">Vende da carga da van</span>
               </button>
-              <button onClick={() => abrirNoModo(modoSheet, 'PRE_VENDA')}
+              <button onClick={() => escolherModoVenda(modoSheet, 'PRE_VENDA')}
                 className="py-5 rounded-2xl bg-gradient-to-br from-emerald-600 to-teal-600 text-white shadow-md active:scale-95 transition-transform">
                 <i className="fa-solid fa-clipboard-list text-lg block mb-1.5"></i>
                 <span className="text-[10px] font-black uppercase">Pre-venda</span>
@@ -1864,6 +1935,67 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
               </button>
             </div>
             <button onClick={() => setModoSheet(null)} className="w-full mt-3 py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Cancelar</button>
+          </div>
+        </div>
+      )}
+
+      {/* ===== BLOCO 29 (ROTA 2): PERGUNTA DO ATENDIMENTO — DESEJA EMITIR NOTA? ===== */}
+      {notaSheet && (
+        <div className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-sm flex items-end justify-center" onClick={() => { setNotaSheet(null); setNfcCpfModoPanel(false); }}>
+          <div className="bg-white w-full max-w-md rounded-t-3xl p-6 animate-in slide-in-from-bottom duration-300" onClick={e => e.stopPropagation()}>
+            <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-4"></div>
+            <p className="text-[9px] font-black text-violet-500 uppercase text-center tracking-widest">
+              {notaSheet.vendaModo === 'PRONTA' ? 'Pronta entrega' : 'Pré-venda'} — Iniciando atendimento
+            </p>
+            <h3 className="text-sm font-black text-gray-800 uppercase text-center mt-1 capitalize">{notaSheet.client.nomeFantasia}</h3>
+            <p className="text-[11px] text-gray-600 font-black text-center mt-2">Deseja emitir nota para este cliente?</p>
+
+            {!nfcCpfModoPanel ? (
+              <>
+                <div className="space-y-2.5 mt-5">
+                  {/* NÃO = CUPOM -> ESTOQUE 2 (SEM NF) */}
+                  <button onClick={() => confirmarNotaSheet('CUPOM')}
+                    className="w-full p-4 rounded-2xl border-2 border-gray-200 bg-gray-50 text-left active:scale-[0.98] transition-transform">
+                    <p className="text-[11px] font-black uppercase text-gray-600"><i className="fa-solid fa-receipt mr-1.5"></i>NÃO — só cupom</p>
+                    <p className="text-[8px] font-bold text-gray-400 mt-0.5">Vende do ESTOQUE 2 (sem NF) — cupom não fiscal</p>
+                  </button>
+                  {/* SIM -> NF-e ou NFC-e -> ESTOQUE 1 (COM NF) */}
+                  <div className="rounded-2xl border-2 border-violet-200 bg-violet-50 p-3">
+                    <p className="text-[11px] font-black uppercase text-violet-700 text-center mb-2"><i className="fa-solid fa-file-invoice mr-1.5"></i>SIM, com nota — vende do ESTOQUE 1</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button onClick={() => confirmarNotaSheet('NFE')}
+                        className={`py-3.5 rounded-xl text-[9px] font-black uppercase transition-all ${clienteAptoNfe(notaSheet.client) ? 'bg-violet-600 text-white shadow-md active:scale-95' : 'bg-gray-100 text-gray-300'}`}>
+                        <i className="fa-solid fa-file-invoice-dollar block mb-1 text-sm"></i>NF-e
+                        <span className="block text-[7px] font-bold mt-0.5 opacity-80">{clienteAptoNfe(notaSheet.client) ? 'CNPJ do cadastro' : 'sem CNPJ completo'}</span>
+                      </button>
+                      <button onClick={() => confirmarNotaSheet('NFCE')}
+                        className="py-3.5 rounded-xl text-[9px] font-black uppercase bg-slate-700 text-white shadow-md active:scale-95 transition-transform">
+                        <i className="fa-solid fa-file-lines block mb-1 text-sm"></i>NFC-e
+                        <span className="block text-[7px] font-bold mt-0.5 opacity-80">CPF opcional</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <button onClick={() => { setNotaSheet(null); setNfcCpfModoPanel(false); }} className="w-full mt-3 py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Cancelar</button>
+              </>
+            ) : (
+              /* NFC-e: CPF do consumidor OPCIONAL */
+              <div className="mt-4 space-y-2.5 animate-in fade-in duration-200">
+                <p className="text-[9px] font-black text-slate-500 uppercase text-center">CPF na nota? (opcional — pode pular)</p>
+                <input value={nfcCpfModo} onChange={e => setNfcCpfModo(mascararCpf(e.target.value))} placeholder="000.000.000-00" inputMode="numeric"
+                  className="w-full p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-black text-center outline-none" />
+                <div className="grid grid-cols-2 gap-2">
+                  <button onClick={() => abrirNoModo(notaSheet.client, notaSheet.vendaModo, 'NFCE', nfcCpfModo)}
+                    className="py-3.5 rounded-2xl bg-slate-700 text-white text-[10px] font-black uppercase shadow-md active:scale-95">
+                    Confirmar NFC-e
+                  </button>
+                  <button onClick={() => abrirNoModo(notaSheet.client, notaSheet.vendaModo, 'NFCE', '')}
+                    className="py-3.5 rounded-2xl bg-gray-100 text-gray-500 text-[10px] font-black uppercase active:scale-95">
+                    Sem CPF
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

@@ -12,12 +12,19 @@ export const saleService = {
     // ate ~500KB por venda era baixado em TODA recarga por TODOS os aparelhos).
     // A foto agora le sob demanda via getComprovanteFoto(). Fallback '*' caso
     // alguma coluna ainda nao exista (SQL pendente).
-    const COLS = 'id, vendedor_id, client_id, valor_total, valor_pago, metodo_pagamento, detalhe_pagamento, status_pagamento, data_vencimento, data_venda, nota_status, nota_numero, nota_pdf_url, nota_erro, tipo_venda, entrega_status, trocas, prioridade, separado, entregador_id, sale_items(produto_id, quantidade, preco_venda)';
+    // BLOCO 29: modo_nota entra no COLS com fallback dedicado (nao cai no '*',
+    // que traria comprovante_foto de volta e gastaria egress).
+    const COLS = 'id, vendedor_id, client_id, valor_total, valor_pago, metodo_pagamento, detalhe_pagamento, status_pagamento, data_vencimento, data_venda, nota_status, nota_numero, nota_pdf_url, nota_erro, tipo_venda, entrega_status, trocas, prioridade, separado, entregador_id, modo_nota, sale_items(produto_id, quantidade, preco_venda)';
+    const COLS_SEM_MODO = 'id, vendedor_id, client_id, valor_total, valor_pago, metodo_pagamento, detalhe_pagamento, status_pagamento, data_vencimento, data_venda, nota_status, nota_numero, nota_pdf_url, nota_erro, tipo_venda, entrega_status, trocas, prioridade, separado, entregador_id, sale_items(produto_id, quantidade, preco_venda)';
     let data: any[];
     try {
       data = await fetchAllPages<any>('sales', COLS);
-    } catch {
-      data = await fetchAllPages<any>('sales', '*, sale_items(*)');
+    } catch (e: any) {
+      if (e && /modo_nota/i.test(e?.message || '')) {
+        data = await fetchAllPages<any>('sales', COLS_SEM_MODO);
+      } else {
+        data = await fetchAllPages<any>('sales', '*, sale_items(*)');
+      }
     }
     return data.map(s => ({
       id: s.id,
@@ -49,6 +56,8 @@ export const saleService = {
       prioridade: typeof s.prioridade === 'number' ? s.prioridade : undefined,
       separado: typeof s.separado === 'boolean' ? s.separado : undefined,
       entregadorId: s.entregador_id || undefined,
+      // BLOCO 29 (ROTA 2): modo do atendimento (NFE|NFCE|CUPOM) — pre-SQL = undefined
+      modoNota: s.modo_nota || undefined,
     })) as Sale[];
   },
 
@@ -91,6 +100,19 @@ export const saleService = {
       return null;
     }
 
+    // BLOCO 29 (ROTA 2): grava o modo do atendimento na venda.
+    // O RPC processar_venda_v2 (fora do repo) nao conhece a coluna — o modo
+    // entra por update pos-insert (barato: 1 linha). Falha pre-SQL = ignora.
+    const modo = (sale as any).modoNota;
+    if (modo) {
+      try {
+        const { error: modoErr } = await supabase.from('sales').update({ modo_nota: modo }).eq('id', saleId);
+        if (modoErr && !/modo_nota/i.test(modoErr.message || '')) {
+          console.warn('modo_nota nao gravado:', modoErr.message);
+        }
+      } catch { /* modo e best-effort: nunca quebra a venda */ }
+    }
+
     return { ...sale, id: saleId };
   },
 
@@ -101,6 +123,7 @@ export const saleService = {
     if (updates.metodoPagamento !== undefined) payload.metodo_pagamento = updates.metodoPagamento;
     if (updates.detalhePagamento !== undefined) payload.detalhe_pagamento = updates.detalhePagamento;
     if ((updates as any).comprovanteFoto !== undefined) payload.comprovante_foto = (updates as any).comprovanteFoto;
+    if ((updates as any).modoNota !== undefined) payload.modo_nota = (updates as any).modoNota;
     const { error } = await supabase.from('sales').update(payload).eq('id', id);
     return !error;
   },

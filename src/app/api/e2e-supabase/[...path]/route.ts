@@ -19,15 +19,20 @@ const users = [{
 const clients = [{
   id: 'cli-1', nome_fantasia: 'Emporio Teste', nome: null, ativar_cnpj: false, cnpj: null,
   telefone: '(54) 99999-9999', endereco: 'Rua Teste 123', bairro: 'Centro', ativo: true,
-  localizacao: null, dia_roteiro: 1, ordem: 1, observacoes: null,
+  localizacao: null, dia_roteiro: 3, ordem: 1, observacoes: null,
   pin_localizacao: '-29.166037, -51.210285',
   rota: 'ROTA_02', portal_code: 'TEST1234', razao_social: null, inscricao_estadual: null,
   endereco_numero: null, endereco_cep: null, endereco_municipio: null, endereco_uf: null, email: null,
 }];
 
 const products = [
-  { id: 'prod-1', nome: 'Palitinho Morango', preco_custo: 1.0, preco_venda: 2.39, preco_minimo: 2.39, comissao_percentual: 10, comissao_pv_percentual: 5, estoque_principal: 100, estoque_van: 0, ativo: true, unidade: 'UN', origem: '0', ncm: null, cest: null, cfop: null, ean: null, imagem: null, unidades_por_caixa: null, obs: null, familia_catalogo: null, category_id: null, subcategory_id: null, display_order: null },
-  { id: 'prod-2', nome: 'Bacon Wanflo 110g', preco_custo: 3.0, preco_venda: 4.29, preco_minimo: 3.99, comissao_percentual: 10, comissao_pv_percentual: 5, estoque_principal: 80, estoque_van: 0, ativo: true, unidade: 'UN', origem: '0', ncm: null, cest: null, cfop: null, ean: null, imagem: null, unidades_por_caixa: null, obs: null, familia_catalogo: null, category_id: null, subcategory_id: null, display_order: null },
+  { id: 'prod-1', nome: 'Palitinho Morango', preco_custo: 1.0, preco_venda: 2.39, preco_minimo: 2.39, comissao_percentual: 10, comissao_pv_percentual: 5, estoque_principal: 100, estoque_van: 0, estoque_nota: 0, estoque_semnf: 0, produto_teste: false, ativo: true, unidade: 'UN', origem: '0', ncm: null, cest: null, cfop: null, ean: null, imagem: null, unidades_por_caixa: null, obs: null, familia_catalogo: null, category_id: null, subcategory_id: null, display_order: null },
+  { id: 'prod-2', nome: 'Bacon Wanflo 110g', preco_custo: 3.0, preco_venda: 4.29, preco_minimo: 3.99, comissao_percentual: 10, comissao_pv_percentual: 5, estoque_principal: 80, estoque_van: 0, estoque_nota: 0, estoque_semnf: 0, produto_teste: false, ativo: true, unidade: 'UN', origem: '0', ncm: null, cest: null, cfop: null, ean: null, imagem: null, unidades_por_caixa: null, obs: null, familia_catalogo: null, category_id: null, subcategory_id: null, display_order: null },
+  // BLOCO 29 (ROTA 2): produtos de TESTE — 3 do estoque COM NF + 3 do SEM NF
+  { id: 'prod-t1', nome: 'TESTE NF 01 — Doce A', preco_custo: 0.5, preco_venda: 1.0, preco_minimo: 1.0, comissao_percentual: 10, comissao_pv_percentual: 5, estoque_principal: 0, estoque_van: 0, estoque_nota: 50, estoque_semnf: 0, produto_teste: true, ativo: true, unidade: 'UN', origem: '0', ncm: null, cest: null, cfop: null, ean: null, imagem: null, unidades_por_caixa: null, obs: null, familia_catalogo: null, category_id: null, subcategory_id: null, display_order: null },
+  { id: 'prod-t2', nome: 'TESTE NF 02 — Doce B', preco_custo: 1.0, preco_venda: 2.0, preco_minimo: 2.0, comissao_percentual: 10, comissao_pv_percentual: 5, estoque_principal: 0, estoque_van: 0, estoque_nota: 50, estoque_semnf: 0, produto_teste: true, ativo: true, unidade: 'UN', origem: '0', ncm: null, cest: null, cfop: null, ean: null, imagem: null, unidades_por_caixa: null, obs: null, familia_catalogo: null, category_id: null, subcategory_id: null, display_order: null },
+  { id: 'prod-t3', nome: 'TESTE S/NF 01 — Doce D', preco_custo: 0.5, preco_venda: 1.0, preco_minimo: 1.0, comissao_percentual: 10, comissao_pv_percentual: 5, estoque_principal: 0, estoque_van: 0, estoque_nota: 0, estoque_semnf: 50, produto_teste: true, ativo: true, unidade: 'UN', origem: '0', ncm: null, cest: null, cfop: null, ean: null, imagem: null, unidades_por_caixa: null, obs: null, familia_catalogo: null, category_id: null, subcategory_id: null, display_order: null },
+  { id: 'prod-t4', nome: 'TESTE ZERADO — sem saldo', preco_custo: 1.0, preco_venda: 2.0, preco_minimo: 2.0, comissao_percentual: 10, comissao_pv_percentual: 5, estoque_principal: 0, estoque_van: 0, estoque_nota: 0, estoque_semnf: 0, produto_teste: true, ativo: true, unidade: 'UN', origem: '0', ncm: null, cest: null, cfop: null, ean: null, imagem: null, unidades_por_caixa: null, obs: null, familia_catalogo: null, category_id: null, subcategory_id: null, display_order: null },
 ];
 
 const settings = [{
@@ -44,7 +49,7 @@ const tables: Record<string, any[]> = {
   app_settings: settings,
   product_categories: [],
   product_subcategories: [],
-  cargas: [{ id: 'carga-1', vendedor_id: 'rota2user', produto_id: 'prod-1', quantidade: 50, data: new Date().toISOString() }],
+  cargas: [{ id: 'carga-1', vendedor_id: 'rota2user', produto_id: 'prod-t1', quantidade: 30, modo_nota: 'COM_NF', data: new Date().toISOString() }, { id: 'carga-2', vendedor_id: 'rota2user', produto_id: 'prod-1', quantidade: 20, data: new Date().toISOString() }],
   cargas_pendentes: [],
   system_messages: [],
   commissions: [],
@@ -131,6 +136,11 @@ async function handle(req: NextRequest, segments: string[]) {
           clone.entrega_status = clone.entrega_status ?? 'PENDENTE';
           clone.trocas = clone.trocas ?? null;
           clone.comprovante_foto = clone.comprovante_foto ?? null;
+          clone.modo_nota = clone.modo_nota ?? null; // BLOCO 29 (ROTA 2)
+        }
+        if (table === 'cargas_pendentes') {
+          clone.status = clone.status ?? 'PENDENTE';
+          clone.modo_nota = clone.modo_nota ?? null; // BLOCO 29 (ROTA 2)
         }
         tables[table].push(clone);
       });

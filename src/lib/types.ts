@@ -59,12 +59,20 @@ export interface Product {
   unidadesPorCaixa?: number;
   /** Bloco 18: observacao visivel SOMENTE ao cliente comprador no catalogo do portal — nao aparece no PDV */
   obs?: string | null;
+  /** Bloco 29 (ROTA 2): ESTOQUE 1 em casa — mercadoria COM NF. undefined = SQL do bloco 29 ainda nao rodado */
+  estoqueNota?: number;
+  /** Bloco 29 (ROTA 2): ESTOQUE 2 em casa — mercadoria SEM NF. undefined = SQL do bloco 29 ainda nao rodado */
+  estoqueSemnf?: number;
+  /** Bloco 29 (ROTA 2): produto de TESTE — aparece SOMENTE para vendedores rota2 */
+  produtoTeste?: boolean;
 }
 
 export interface Carga {
   vendedorId: string;
   produtoId: string;
   quantidade: number;
+  /** Bloco 29 (ROTA 2): modo da van — 'COM_NF' | 'SEM_NF' (1 ou outro, nunca mistura). undefined = pre-SQL */
+  modoNota?: string | null;
 }
 
 export interface CargaPendente {
@@ -72,7 +80,12 @@ export interface CargaPendente {
   vendedorId: string;
   itens: { produtoId: string; quantidade: number }[];
   data: Date;
+  /** Bloco 29 (ROTA 2): modo da carga enviada pelo admin — casa baixa no aceite (coluna certa) */
+  modoNota?: string | null;
 }
+
+/** Bloco 29 (ROTA 2): modo do ATENDIMENTO — fixado na pergunta do início e gravado na venda */
+export type ModoNota = 'NFE' | 'NFCE' | 'CUPOM';
 
 export type PaymentMethod = 'DINHEIRO' | 'PIX' | 'A_PRAZO';
 
@@ -142,6 +155,8 @@ export interface Sale {
   notaNumero?: string;
   notaPdfUrl?: string;
   notaErro?: string;
+  /** Bloco 29 (ROTA 2): modo do atendimento — define o estoque de casa da baixa e a margem real */
+  modoNota?: ModoNota;
 }
 
 export interface Commission {

@@ -632,6 +632,29 @@ const App: React.FC = () => {
     }
   };
 
+  // ===== BLOCO 29 (ROTA 2): carga da van com MODO (COM_NF | SEM_NF) =====
+  // Toda a logica (bloqueio de mistura + movimento de casa) roda no SERVIDOR.
+  const applyCargaDirectlyRota2 = async (vId: string, itens: { produtoId: string, quantidade: number }[], modo: 'COM_NF' | 'SEM_NF'): Promise<{ ok: boolean; erro?: string }> => {
+    const r = await cargaService.aplicarCargaRota2(vId, itens, modo, 'APLICAR');
+    if (r.ok) {
+      setAdminNotification(`Carga ${modo === 'COM_NF' ? 'COM NF' : 'SEM NF'} aplicada com sucesso!`);
+      fetchCargas();
+      fetchCoreData(); // estoque de casa mudou
+      return { ok: true };
+    }
+    setAdminNotification(r.erro || 'Erro ao aplicar carga.');
+    return { ok: false, erro: r.erro };
+  };
+
+  const syncVendedorCargaRota2 = async (vId: string, itens: { produtoId: string, quantidade: number }[], modo: 'COM_NF' | 'SEM_NF'): Promise<{ ok: boolean; erro?: string }> => {
+    const r = await cargaService.aplicarCargaRota2(vId, itens, modo, 'PENDENTE');
+    if (r.ok) {
+      fetchCargas();
+      return { ok: true };
+    }
+    return { ok: false, erro: r.erro };
+  };
+
   const aceitarCarga = async (pendenciaId: string): Promise<{ ok: boolean; erro?: string }> => {
     try {
       // Via API server-side: valida sessao + dono da carga + bloqueia carga vazia.
@@ -910,7 +933,9 @@ const App: React.FC = () => {
           <AdminDashboard 
             {...{ products, users, cargas, cargasLoaded, clients, sales, commissions, payoutLogs, expenses, logo, margemGlobalAtiva, margemGlobalValor, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, adminNotification, companyName, companyCnpj, orderedProductIds: productOrder, portalOrderIds: catalogoOrder, categories, subcategories, clientOrder, melhorias }}
             addProduct={addProduct} updateProduct={updateProduct} deleteProduct={deleteProduct} registerStockEntry={()=>{}} adjustStockManual={()=>{}}
-            syncVendedorCarga={syncVendedorCarga} applyCargaDirectly={applyCargaDirectly} addClient={addClient} updateClient={updateClient} deleteClient={deleteClient}
+            syncVendedorCarga={syncVendedorCarga} applyCargaDirectly={applyCargaDirectly}
+            syncVendedorCargaRota2={syncVendedorCargaRota2} applyCargaDirectlyRota2={applyCargaDirectlyRota2}
+            addClient={addClient} updateClient={updateClient} deleteClient={deleteClient}
             addUser={addUser} updateUser={updateUser} deleteUser={deleteUser} payCommission={payCommission} setCommissions={()=>{}} updateEstoqueCentral={()=>{}} reinforceCarga={()=>{}} deleteSale={deleteSale} receiveAccount={receiveAccount}
             setLogo={(v)=>updateSetting('logo', v)} adminUser={currentUser} setMargemGlobalAtiva={(v)=>updateSetting('margemGlobalAtiva', v)} setMargemGlobalValor={(v)=>updateSetting('margemGlobalValor', v)}
             setMargemMinima={(v)=>updateSetting('margemMinima', v)} setMargemMinimaAtiva={(v)=>updateSetting('margemMinimaAtiva', v)} setPix1Name={(v)=>updateSetting('pix1Name', v)} setPix1Code={(v)=>updateSetting('pix1Code', v)}

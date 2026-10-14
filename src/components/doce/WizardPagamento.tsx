@@ -40,6 +40,10 @@ interface WizardPagamentoProps {
   onVoltar: () => void;
   /** Mensagem de erro vinda do PDV (falha ao salvar etc.) — mostra no resumo */
   erro?: string | null;
+  /** BLOCO 29 (ROTA 2): modo fixado na PERGUNTA DO ATENDIMENTO — pula o passo NOTA */
+  modoInicial?: 'NFE' | 'NFCE' | 'CUPOM' | null;
+  /** BLOCO 29: CPF do NFC-e capturado no atendimento (opcional) */
+  nfcCpfInicial?: string;
 }
 
 const fmt = (v: number) => `R$ ${v.toFixed(2)}`;
@@ -53,13 +57,15 @@ const somaDias = (n: number) => {
   return d.toISOString().slice(0, 10);
 };
 
-const PASSOS = ['CONDIÇÃO', 'FORMA', 'NOTA', 'RESUMO'];
+const PASSOS_PADRAO = ['CONDIÇÃO', 'FORMA', 'NOTA', 'RESUMO'];
+const PASSOS_MODO_FIXO = ['CONDIÇÃO', 'FORMA', 'RESUMO'];
 
 const WizardPagamento: React.FC<WizardPagamentoProps> = ({
   total, isPreVenda, clienteAptoNfe,
   pix1Name, pix1Code, pix2Name, pix2Code,
   mascararCpf,
   onConfirm, onVoltar, erro,
+  modoInicial, nfcCpfInicial,
 }) => {
   const [passo, setPasso] = useState(0);
   const [condicao, setCondicao] = useState<'AVISTA' | 'APRAZO'>('AVISTA');
@@ -72,8 +78,13 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
   const [vencAtalho, setVencAtalho] = useState<number | null>(7);
   const [chequeNumero, setChequeNumero] = useState('');
   const [chequeBomPara, setChequeBomPara] = useState(somaDias(7));
-  const [notaIntencao, setNotaIntencao] = useState<'NENHUMA' | 'NFE' | 'NFCE'>('NENHUMA');
-  const [nfcCpf, setNfcCpf] = useState('');
+  // BLOCO 29: com modo fixado no atendimento, o passo NOTA NEM EXISTE (3 passos)
+  const temPassoNota = !modoInicial;
+  const PASSOS = temPassoNota ? PASSOS_PADRAO : PASSOS_MODO_FIXO;
+  const passoResumo = PASSOS.length - 1;
+  const notaIntencaoInicial = modoInicial === 'NFE' ? 'NFE' : modoInicial === 'NFCE' ? 'NFCE' : 'NENHUMA';
+  const [notaIntencao, setNotaIntencao] = useState<'NENHUMA' | 'NFE' | 'NFCE'>(notaIntencaoInicial);
+  const [nfcCpf, setNfcCpf] = useState(nfcCpfInicial || '');
   const [erroLocal, setErroLocal] = useState<string | null>(null);
 
   const troco = useMemo(() => Math.max(0, (parseFloat(valorRecebido) || 0) - total), [valorRecebido, total]);
@@ -108,10 +119,11 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
           return setErroLocal(`Dinheiro + Pix precisa fechar o total: falta ${fmt(Math.abs(mistoFalta))} (ou passou).`);
         }
       }
+      // BLOCO 29: com modo fixado no atendimento, forma -> RESUMO direto (sem nota)
       setPasso(2);
       return;
     }
-    if (passo === 2) {
+    if (passo === 2 && temPassoNota) {
       if (notaIntencao === 'NFE' && !clienteAptoNfe) {
         return setErroLocal('NF-e exige CNPJ completo no cadastro do cliente. Escolha SÓ CUPOM ou NFC-e.');
       }
@@ -145,6 +157,9 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
   };
 
   const erroMostrar = erro || erroLocal;
+
+  // Rótulo do modo (BLOCO 29 — fixado no atendimento quando modoInicial veio)
+  const modoLabel = notaIntencao === 'NENHUMA' ? 'Só cupom' : notaIntencao === 'NFE' ? 'NF-e' : 'NFC-e';
 
   return (
     <div className="animate-in fade-in duration-300">
@@ -296,8 +311,8 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
         </div>
       )}
 
-      {/* ===== PASSO 3: NOTA ===== */}
-      {passo === 2 && (
+      {/* ===== PASSO 3: NOTA (pulado quando o modo veio do atendimento) ===== */}
+      {passo === 2 && temPassoNota && (
         <div className="space-y-3 mb-5">
           <p className="text-[9px] font-black text-gray-400 uppercase text-center">3. Quer nota fiscal nesta venda?</p>
           <div className="space-y-2">
@@ -328,8 +343,8 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
         </div>
       )}
 
-      {/* ===== PASSO 4: RESUMO ===== */}
-      {passo === 3 && (
+      {/* ===== PASSO FINAL: RESUMO ===== */}
+      {passo === passoResumo && (
         <div className="space-y-3 mb-5">
           <p className="text-[9px] font-black text-gray-400 uppercase text-center">4. Confira e confirme</p>
           <div className="bg-gray-50 border border-gray-100 rounded-2xl divide-y divide-gray-100">
@@ -367,7 +382,9 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
             )}
             <div className="p-3.5 flex items-center justify-between">
               <span className="text-[9px] font-black text-gray-400 uppercase">Nota</span>
-              <span className="text-[11px] font-black text-gray-700 uppercase">{notaIntencao === 'NENHUMA' ? 'Só cupom' : notaIntencao === 'NFE' ? 'NF-e' : 'NFC-e'}</span>
+              <span className="text-[11px] font-black text-gray-700 uppercase">
+                {modoLabel}{!temPassoNota && <i className="fa-solid fa-lock text-[8px] text-violet-400 ml-1" title="Fixado no atendimento"></i>}
+              </span>
             </div>
             <div className="p-3.5 flex items-center justify-between bg-white">
               <span className="text-[10px] font-black text-gray-400 uppercase">Total</span>
@@ -398,7 +415,7 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
             <i className="fa-solid fa-arrow-left mr-1"></i>Voltar
           </button>
         )}
-        {passo < 3 ? (
+        {passo < passoResumo ? (
           <button onClick={proximo} className="flex-1 py-4 rounded-2xl bg-violet-600 text-white font-black uppercase text-xs tracking-widest shadow-lg active:scale-95 transition-all">
             {passo === 0 ? 'Começar' : 'Continuar'}<i className="fa-solid fa-arrow-right ml-2"></i>
           </button>

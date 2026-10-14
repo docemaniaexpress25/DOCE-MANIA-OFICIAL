@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/serverSupabase';
 import { sessionFromRequest } from '@/lib/session';
 import { comissaoPvDeItens } from '@/lib/comissaoPv';
+import { hasModoVendaColumn, hasEstoquesNotaColumns } from '@/lib/serverSchema';
 
 /**
  * POST /api/pre-venda/venda
@@ -108,10 +109,19 @@ export async function POST(req: NextRequest) {
     if (clientErr) throw clientErr;
     if (!client) return NextResponse.json({ ok: false, error: 'Cliente nao encontrado.' }, { status: 404 });
 
+    // ---------- BLOCO 29 (ROTA 2): modo do atendimento ----------
+    // NFE | NFCE -> pedido usa o ESTOQUE COM NF | CUPOM -> ESTOQUE SEM NF.
+    // Gravado em sales.modo_nota (quando o SQL do bloco 29 ja rodou) e a baixa
+    // da entrega cai na coluna certa (baixar_estoque_principal v2).
+    const modoRaw = String((body as any).modo || '').toUpperCase();
+    const modo = ['NFE', 'NFCE', 'CUPOM'].includes(modoRaw) ? modoRaw : null;
+    const [temModoVenda, temEstoquesNota] = await Promise.all([hasModoVendaColumn(), hasEstoquesNotaColumns()]);
+
     const etiquetaCond = condicao === 'APRAZO' ? 'A PRAZO' : 'A VISTA';
 
-    // BLOCO 27: intencao de nota gravada no detalhe (escritorio enxerga)
-    const notaIntencaoRaw = String((body as any).notaIntencao || '').toUpperCase();
+    // BLOCO 27/29: intencao de nota gravada no detalhe (escritorio enxerga).
+    // Com modo do atendimento (rota 2), o modo manda; sem modo, notaIntencao legada.
+    const notaIntencaoRaw = modo ?? String((body as any).notaIntencao || '').toUpperCase();
     const notaTxt = notaIntencaoRaw === 'NFE'
       ? ' | COM NOTA: NF-e'
       : notaIntencaoRaw === 'NFCE'
@@ -146,8 +156,10 @@ export async function POST(req: NextRequest) {
           tipo_venda: 'PRE_VENDA',
           entrega_status: 'PENDENTE',
         };
-    // Bloco 13 (colunas podem nao existir antes do SQL rodar)
+    // Bloco 13 (colunas podem nao existir antes do SQL rodado)
     const bloco13 = { trocas };
+    // BLOCO 29: modo do atendimento na venda (quando a coluna existe)
+    if (modo && temModoVenda) (basePayload as any).modo_nota = modo;
     let payload = { ...basePayload, ...bloco13 };
 
     let { data: sale, error: saleErr } = await supabase
@@ -156,11 +168,12 @@ export async function POST(req: NextRequest) {
       .select('id, valor_total, valor_pago, metodo_pagamento, detalhe_pagamento, status_pagamento, data_venda, data_vencimento, tipo_venda, entrega_status, trocas')
       .single();
 
-    if (saleErr && /trocas/i.test(saleErr.message || '')) {
-      payload = { ...basePayload };
+    if (saleErr && /trocas|modo_nota/i.test(saleErr.message || '')) {
+      const semColunas: any = { ...basePayload };
+      if (/modo_nota/i.test(saleErr.message || '')) delete (semColunas as any).modo_nota; else delete (semColunas as any).trocas;
       ({ data: sale, error: saleErr } = await supabase
         .from('sales')
-        .insert(payload)
+        .insert(semColunas)
         .select('id, valor_total, valor_pago, metodo_pagamento, detalhe_pagamento, status_pagamento, data_venda, data_vencimento, tipo_venda, entrega_status')
         .single());
     }
@@ -197,17 +210,21 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: 'Erro ao gravar os itens do pedido.', detalhe: itemsErr.message }, { status: 500 });
     }
 
-    // ---------- AVISO de estoque principal (nao bloqueia o pedido) ----------
+    // ---------- AVISO de estoque (nao bloqueia o pedido) ----------
+    // BLOCO 29: rota 2 com modo compara a coluna do modo (estoque_nota/semnf);
+    // sem modo/SQL = regra legada (estoque_principal).
     const avisos: { produto: string; solicitado: number; disponivel: number }[] = [];
     try {
       const prodIds = [...new Set(itens.map(i => i.produtoId))];
+      const usaModo = !!(modo && temEstoquesNota);
+      const colAviso = usaModo ? (modo === 'CUPOM' ? 'estoque_semnf' : 'estoque_nota') : 'estoque_principal';
       const { data: prods } = await supabase
-        .from('products').select('id, nome, estoque_principal').in('id', prodIds);
+        .from('products').select(`id, nome, ${colAviso}`).in('id', prodIds);
       const map: Record<string, any> = {};
       (prods || []).forEach((p: any) => { map[p.id] = p; });
       for (const i of itens) {
         const p = map[i.produtoId];
-        const disp = Number(p?.estoque_principal ?? 0);
+        const disp = Number(p?.[colAviso] ?? 0);
         if (p && i.quantidade > disp) {
           avisos.push({ produto: p.nome || 'Produto', solicitado: i.quantidade, disponivel: disp });
         }

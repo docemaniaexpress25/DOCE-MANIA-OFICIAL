@@ -36,6 +36,12 @@ interface PDVProps {
   processPreVenda?: (data: any) => Promise<{ pedido: Sale | null; erro?: string; comissaoPrevista?: number }>;
   /** BLOCO 27 (ROTA 2): usa o wizard guiado de pagamento em vez da tela antiga */
   wizardPagamento?: boolean;
+  /** BLOCO 29 (ROTA 2): vendedor no teste (produtos teste visíveis + catálogo por modo) */
+  rota2?: boolean;
+  /** BLOCO 29 (ROTA 2): modo fixado na PERGUNTA DO ATENDIMENTO — NFE/NFCE = estoque COM NF; CUPOM = SEM NF */
+  modoAtendimento?: 'NFE' | 'NFCE' | 'CUPOM' | null;
+  /** BLOCO 29: CPF capturado no atendimento para o NFC-e (opcional) */
+  nfcCpfInicial?: string;
 }
 
 type PDVView = 'CART' | 'RECEIPT_PREVIEW' | 'PAYMENT' | 'PRE_PEDIDO_PREVIEW';
@@ -43,7 +49,7 @@ type PDVView = 'CART' | 'RECEIPT_PREVIEW' | 'PAYMENT' | 'PRE_PEDIDO_PREVIEW';
 // Tipo do item do carrinho
 type CartItem = { quantidade: number; precoVenda: string };
 
-const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onCancel, onFinish, processSale, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, sales, onNavigateToCredit, categories, subcategories, modoVenda, processPreVenda, wizardPagamento }) => {
+const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onCancel, onFinish, processSale, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, sales, onNavigateToCredit, categories, subcategories, modoVenda, processPreVenda, wizardPagamento, rota2, modoAtendimento, nfcCpfInicial }) => {
   const [view, setView] = useState<PDVView>('CART');
   const [isPrePedido, setIsPrePedido] = useState(false);
   const isPreVenda = modoVenda === 'PRE_VENDA' && !!processPreVenda;
@@ -100,6 +106,27 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
 
   // Pre-venda e pre-pedido vendem do ESTOQUE CENTRAL (nao da carga da van)
   const sellFromCentral = isPrePedido || isPreVenda;
+
+  // ============================================================
+  // BLOCO 29 (ROTA 2) — DOIS ESTOQUES EM CASA + MODO DO ATENDIMENTO
+  // NFE/NFCE -> ESTOQUE COM NF (estoque_nota) | CUPOM -> SEM NF (estoque_semnf).
+  // undefined nas colunas = SQL do bloco 29 ainda nao rodou -> fallback legado.
+  // ============================================================
+  const rota2Ativo = !!rota2;
+  const temDualEstoque = React.useMemo(() => products.some(p => p.estoqueNota !== undefined), [products]);
+  const modoAtivo = rota2Ativo && temDualEstoque ? (modoAtendimento || null) : null;
+
+  /** Saldo que o PDV usa para o produto, conforme o modo do atendimento */
+  const saldoFonte = React.useCallback((p: Product): number => {
+    if (!sellFromCentral) {
+      return minhaCarga.find(c => c.produtoId === p.id)?.quantidade || 0;
+    }
+    if (modoAtivo) {
+      if (modoAtivo === 'CUPOM') return p.estoqueSemnf ?? p.estoquePrincipal ?? 0;
+      return p.estoqueNota ?? p.estoquePrincipal ?? 0;
+    }
+    return p.estoquePrincipal || 0;
+  }, [sellFromCentral, minhaCarga, modoAtivo]);
 
   // Wake Lock: mantem tela acordada durante o PDV
   useEffect(() => {
@@ -346,9 +373,10 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const updateCart = (pId: string, delta: number, basePrice: number) => {
     setCart(prev => {
       const current = prev[pId] || { quantidade: 0, precoVenda: basePrice.toString() };
-      // Pre-venda trabalha com o estoque central (nao com a carga da van)
+      // Pre-venda trabalha com o estoque central (nao com a carga da van).
+      // BLOCO 29: rota 2 com modo = saldo do ESTOQUE DO MODO (nao do principal).
       const maxLimit = sellFromCentral 
-        ? (products.find(p => p.id === pId)?.estoquePrincipal || 0)
+        ? (saldoFonte(products.find(p => p.id === pId) ?? ({} as Product)) || 0)
         : (minhaCarga.find(c => c.produtoId === pId)?.quantidade || 0);
       const novaQtd = Math.max(0, Math.min(maxLimit, (current.quantidade ?? 0) + delta)); 
       if (novaQtd === 0 && delta < 0) {
@@ -611,6 +639,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         pagoNaVisita: w.condicao === 'AVISTA',
         notaIntencao: w.notaIntencao,
         nfcCpf: w.notaIntencao === 'NFCE' ? w.nfcCpf : undefined,
+        // BLOCO 29 (ROTA 2): modo do atendimento fixado no início (baixa na coluna certa)
+        modo: rota2Ativo ? (w.notaIntencao === 'NFE' ? 'NFE' : w.notaIntencao === 'NFCE' ? 'NFCE' : 'CUPOM') : undefined,
       });
       if (r.pedido) {
         const pedido = r.pedido;
@@ -673,6 +703,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       detalhePagamento: finalDetalhe,
       itens,
       data: new Date(),
+      // BLOCO 29 (ROTA 2): modo do atendimento — grava sales.modo_nota (baixa da pré-venda/margem real)
+      modoNota: rota2Ativo && modoAtivo ? (w.notaIntencao === 'NFE' ? 'NFE' : w.notaIntencao === 'NFCE' ? 'NFCE' : 'CUPOM') : undefined,
     };
     if (metodo === 'A_PRAZO') {
       salePayload.statusPagamento = 'PENDENTE';
@@ -722,16 +754,33 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const productIdsInCarga = useMemo(() => new Set(minhaCarga.map(c => c.produtoId)), [minhaCarga]);
   
   const filteredProducts = useMemo(() => {
-    // Pre-venda e pre-pedido vendem do estoque principal: catálogo completo
+    let base: Product[];
     if (sellFromCentral) {
-      const activeProds = products.filter(p => p.ativo);
-      if (!activeCategoryId) return activeProds;
-      return activeProds.filter(p => p.categoryId === activeCategoryId);
+      if (modoAtivo) {
+        // BLOCO 29 (ROTA 2): catálogo = SÓ o que tem saldo no estoque do modo.
+        // Estoque 0/negativo NÃO aparece (regra do dono).
+        const fonte = (p: Product) => (modoAtivo === 'CUPOM' ? (p.estoqueSemnf ?? p.estoquePrincipal ?? 0) : (p.estoqueNota ?? p.estoquePrincipal ?? 0));
+        base = products.filter(p => p.ativo && fonte(p) > 0);
+      } else {
+        // Pré-venda/pre-pedido (legado): catálogo completo do estoque principal
+        base = products.filter(p => p.ativo);
+      }
+      // BLOCO 29: produtos TESTE só aparecem para quem está no teste (rota 2)
+      if (!rota2Ativo) base = base.filter(p => !p.produtoTeste);
+    } else {
+      // PRONTA ENTREGA: só o que está NA CARGA da van.
+      // BLOCO 29 (rota 2): carga com quantidade 0 NÃO aparece (regra do dono).
+      let productsInCarga = products.filter(p => productIdsInCarga.has(p.id));
+      if (rota2Ativo) {
+        productsInCarga = productsInCarga.filter(p => (minhaCarga.find(c => c.produtoId === p.id)?.quantidade ?? 0) > 0);
+      } else {
+        productsInCarga = productsInCarga.filter(p => !p.produtoTeste);
+      }
+      base = productsInCarga;
     }
-    const productsInCarga = products.filter(p => productIdsInCarga.has(p.id));
-    if (!activeCategoryId) return productsInCarga;
-    return productsInCarga.filter(p => p.categoryId === activeCategoryId);
-  }, [products, productIdsInCarga, activeCategoryId, sellFromCentral]);
+    if (!activeCategoryId) return base;
+    return base.filter(p => p.categoryId === activeCategoryId);
+  }, [products, productIdsInCarga, activeCategoryId, sellFromCentral, modoAtivo, rota2Ativo, minhaCarga]);
 
   const generatePrePedidoText = (width: '56MM' | '80MM') => {
     const totalWidth = width === '80MM' ? 48 : 32; 
@@ -943,6 +992,19 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         </div>
       </header>
 
+      {/* ===== BLOCO 29 (ROTA 2): SELO FIXO DO MODO DO ATENDIMENTO ===== */}
+      {modoAtivo && (
+        <div className={`w-full px-3 py-2 flex items-center gap-2.5 border-b ${modoAtivo === 'CUPOM' ? 'bg-gray-100 border-gray-200' : 'bg-violet-50 border-violet-200'}`}>
+          <i className={`fa-solid ${modoAtivo === 'CUPOM' ? 'fa-receipt text-gray-500' : modoAtivo === 'NFE' ? 'fa-file-invoice-dollar text-violet-600' : 'fa-file-lines text-violet-600'} text-sm`}></i>
+          <div className="flex-1 min-w-0">
+            <p className={`text-[10px] font-black uppercase tracking-wide ${modoAtivo === 'CUPOM' ? 'text-gray-600' : 'text-violet-700'}`}>
+              {modoAtivo === 'CUPOM' ? 'CUPOM — ESTOQUE 2 (SEM NF)' : modoAtivo === 'NFE' ? 'NF-e — ESTOQUE 1 (COM NF)' : 'NFC-e — ESTOQUE 1 (COM NF)'}
+            </p>
+            <p className={`text-[8px] font-bold ${modoAtivo === 'CUPOM' ? 'text-gray-400' : 'text-violet-400'}`}>Modo fixado no atendimento — sem mistura de estoque</p>
+          </div>
+        </div>
+      )}
+
       {clientDebt > 0 && !isPrePedido && (
         <button onClick={() => { onCancel(); onNavigateToCredit(); }} className="w-full bg-rose-600 text-white p-3 flex items-center justify-center gap-3 shadow-md text-left">
           <i className="fa-solid fa-triangle-exclamation text-base shrink-0"></i>
@@ -956,7 +1018,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       <div className="flex-1 overflow-y-auto p-2 space-y-1.5" style={{ paddingBottom: '280px' }}>
         {filteredProducts.map(p => { 
           const item = cart[p.id];
-          const cargaOriginal = sellFromCentral ? (p.estoquePrincipal || 0) : (minhaCarga.find(c => c.produtoId === p.id)?.quantidade || 0);
+          const cargaOriginal = saldoFonte(p);
           const minPrice = p.precoMinimo || 0;
           // BLOCO 24: com PREÇO TABELA ligado, produto com mínimo cadastrado entra/continua no mínimo
           const precoBase = precoTabelaAtivo && minPrice > 0 ? minPrice : (p.precoVenda ?? 0);
@@ -1173,6 +1235,9 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                   erro={wizardErro}
                   onConfirm={handleConfirmWizard}
                   onVoltar={() => setView('RECEIPT_PREVIEW')}
+                  /* BLOCO 29 (ROTA 2): modo fixado no atendimento — pula o passo NOTA */
+                  modoInicial={modoAtivo}
+                  nfcCpfInicial={nfcCpfInicial}
                 />
               ) : isPreVenda ? (
                 <div className="mb-6 animate-in fade-in duration-300">

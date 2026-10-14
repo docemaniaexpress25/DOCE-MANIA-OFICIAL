@@ -15,6 +15,15 @@ import { supabase } from '@/lib/supabaseClient';
  * fetchAllPages percorre a tabela em blocos de 1000 (.range) com ordenacao
  * estavel (id unico como desempate) ate a pagina vir incompleta.
  * Leitura pura — nao altera escritas nem o formato dos dados.
+ *
+ * BLOCO 30 — CORRECAO CRITICA (vendas do dia/semana/mes/total + dividas zeradas):
+ * antes este helper ENGOLEVA o erro (console.error + break) e devolvia o que
+ * tinha — em erro de coluna inexistente (ex.: sales.modo_nota do Bloco 29 antes
+ * do SQL), a 1a pagina ja falhava e ele devolvia ARRAY VAZIO como se fosse
+ * dado. Os fallbacks dos services (try/catch) NUNCA disparavam porque nenhuma
+ * excecao era lancada: o app exibia vendas/dividas zeradas em silencio.
+ * Agora o erro e LANCADO — os services chamadores ja tem try/catch com
+ * fallback dedicado e passam a funcionar de verdade.
  */
 
 const PAGE_SIZE = 1000; // limite do servidor PostgREST
@@ -34,8 +43,10 @@ export async function fetchAllPages<T = any>(
     if (tiebreak) q = q.order('id', { ascending: true });
     const { data, error } = await q.range(from, from + PAGE_SIZE - 1);
     if (error) {
+      // BLOCO 30: LANCA — engolir aqui escondia falhas de coluna/RLS/rede e
+      // devolvia [] (ou parcial) como se fosse dado real, matando os fallbacks.
       console.error(`[fetchAllPages] erro em ${table} (pagina ${page}):`, error.message);
-      break;
+      throw new Error(error.message || `Erro ao ler ${table}`);
     }
     const rows = (data || []) as T[];
     out.push(...rows);

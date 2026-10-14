@@ -4,6 +4,11 @@ import { Sale } from '@/lib/types';
 
 const safeNumber = (value: any): number => Number(value || 0);
 
+// BLOCO 30: lembra se a coluna sales.modo_nota existe (true = sim, false = nao)
+// para nao pagar um request falho a CADA recarga enquanto o SQL do bloco 29
+// nao for rodado no SQL Editor. null = ainda nao sondado.
+let modoColCache: boolean | null = null;
+
 export const saleService = {
   async getAllSales(): Promise<Sale[]> {
     // BLOCO 20: paginado — o servidor corta em 1000 linhas e as vendas novas
@@ -17,13 +22,26 @@ export const saleService = {
     const COLS = 'id, vendedor_id, client_id, valor_total, valor_pago, metodo_pagamento, detalhe_pagamento, status_pagamento, data_vencimento, data_venda, nota_status, nota_numero, nota_pdf_url, nota_erro, tipo_venda, entrega_status, trocas, prioridade, separado, entregador_id, modo_nota, sale_items(produto_id, quantidade, preco_venda)';
     const COLS_SEM_MODO = 'id, vendedor_id, client_id, valor_total, valor_pago, metodo_pagamento, detalhe_pagamento, status_pagamento, data_vencimento, data_venda, nota_status, nota_numero, nota_pdf_url, nota_erro, tipo_venda, entrega_status, trocas, prioridade, separado, entregador_id, sale_items(produto_id, quantidade, preco_venda)';
     let data: any[];
-    try {
+    if (modoColCache === true) {
       data = await fetchAllPages<any>('sales', COLS);
-    } catch (e: any) {
-      if (e && /modo_nota/i.test(e?.message || '')) {
-        data = await fetchAllPages<any>('sales', COLS_SEM_MODO);
-      } else {
-        data = await fetchAllPages<any>('sales', '*, sale_items(*)');
+    } else if (modoColCache === false) {
+      data = await fetchAllPages<any>('sales', COLS_SEM_MODO);
+    } else {
+      try {
+        data = await fetchAllPages<any>('sales', COLS);
+        modoColCache = true;
+      } catch (e: any) {
+        // BLOCO 30: qualquer falha (modo_nota inexistente antes do SQL, rede, RLS)
+        // cai no COLS_SEM_MODO — colunas antigas garantidas, SEM comprovante_foto
+        // (protege egress). '*' so como ultimo recurso absoluto.
+        console.error('[sales] leitura enriquecida falhou, usando fallback sem modo_nota:', e?.message);
+        try {
+          data = await fetchAllPages<any>('sales', COLS_SEM_MODO);
+          if (e && /modo_nota/i.test(e?.message || '')) modoColCache = false;
+        } catch (e2: any) {
+          console.error('[sales] fallback final com *:', e2?.message);
+          data = await fetchAllPages<any>('sales', '*, sale_items(*)');
+        }
       }
     }
     return data.map(s => ({

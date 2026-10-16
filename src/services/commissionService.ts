@@ -5,6 +5,17 @@ import { Commission, CommissionPaymentLog } from '@/lib/types';
 // Helper function to safely convert database numeric values (which might be null or string) to number
 const safeNumber = (value: any): number => Number(value || 0);
 
+// BLOCO 33b — sonda da coluna aceitado (mesmo padrao do modoColCache do
+// saleService, Bloco 30). O SQL do Bloco 15 (aceitado/aceite_em) NUNCA rodou
+// no banco: commission_payment_logs so tem id, commission_id, seller_id,
+// valor_pago, metodo_pagamento, observacao, created_at. Sem a sonda, TODA
+// carga do app tentava 'aceitado, aceite_em' -> erro 42703 ruidoso no console
+// ("column commission_payment_logs.aceitado does not exist") + 1 request falho
+// + fallback '*' (egress desperdicado). Probe leve (limit 1, 1 coluna, erro
+// tratado em silencio) com cache no modulo; quando o SQL do Bloco 15 for
+// rodado no SQL Editor, a leitura com aceite volta sozinha.
+let payoutAceiteColCache: boolean | null = null;
+
 export const commissionService = {
   async getAllCommissions(): Promise<Commission[]> {
     // BLOCO 20: paginado — tabela chegou a 999/1000; sem isso comissoes sumiriam do acerto
@@ -72,13 +83,24 @@ export const commissionService = {
 
   async getAllPayouts(): Promise<CommissionPaymentLog[]> {
     // BLOCO 20: paginado (mesmo padrao de vendas/comissoes)
-    // EGRESS: colunas explicitas (fallback '*' se SQL pendente)
-    let data: any[];
-    try {
-      data = await fetchAllPages<any>('commission_payment_logs', 'id, seller_id, valor_pago, created_at, aceitado, aceite_em');
-    } catch {
-      data = await fetchAllPages<any>('commission_payment_logs', '*');
+    // BLOCO 33b: colunas conforme a sonda — sem tentativa que falha sempre e
+    // sem fallback '*' (protege egress). Colunas que existem no banco:
+    // id, seller_id, valor_pago, created_at.
+    let comAceite = payoutAceiteColCache === true;
+    if (payoutAceiteColCache === null) {
+      const { error: probeErr } = await supabase
+        .from('commission_payment_logs')
+        .select('aceitado')
+        .limit(1);
+      payoutAceiteColCache = !probeErr;
+      comAceite = payoutAceiteColCache;
     }
+    const data = await fetchAllPages<any>(
+      'commission_payment_logs',
+      comAceite
+        ? 'id, seller_id, valor_pago, created_at, aceitado, aceite_em'
+        : 'id, seller_id, valor_pago, created_at'
+    );
     return data.map(l => ({
       id: l.id,
       vendedorId: l.seller_id,

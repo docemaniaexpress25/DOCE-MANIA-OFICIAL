@@ -1,8 +1,9 @@
 "use client";
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { User, Product, MelhoriasFlags, MELHORIAS_DEFAULT } from '@/lib/types';
 import { authHeaders } from '@/services/userService';
 import Cupom from '@/components/doce/Cupom';
+import EditorPedido from '@/components/doce/EditorPedido';
 
 /**
  * BLOCO 13 — FILA CONTINUA DE ENTREGA (estilo "fila viva").
@@ -39,6 +40,8 @@ interface FilaItem {
   condicao: string;
   trocas: string | null;
   prioridade: number;
+  // BLOCO 31: posicao da rota definida pelo admin com setas (undefined = sem ordem manual)
+  ordemEntrega?: number;
   separado: boolean;
   temFoto: boolean;
   dataVencimento: string | null;
@@ -176,6 +179,8 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
   const [caixaDinheiro, setCaixaDinheiro] = useState('');
   const [caixaObs, setCaixaObs] = useState('');
   const [mostrarLista, setMostrarLista] = useState(false);
+  // BLOCO 31: edicao do pedido pelo admin (antes da entrega) + busy por sale
+  const [editPedido, setEditPedido] = useState<FilaItem | null>(null);
   const mounted = useRef(true);
 
   const podeEntregar = modo === 'ENTREGADOR' || modo === 'ADMIN';
@@ -324,6 +329,32 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
     const novo = p.prioridade === prioridade ? 0 : prioridade;
     await acao({ acao: 'PRIORIDADE', saleId: p.saleId, prioridade: novo },
       novo === 1 ? 'Prioridade 1 definida — vai para o topo!' : novo === 2 ? 'Prioridade 2 definida.' : 'Prioridade normal.');
+  }
+
+  // BLOCO 31: setas do admin — move a parada na fila, GRAVA a ordem e muda
+  // a impressao. Otimista: reordena na tela na hora e reverte se falhar.
+  const listaOrdenada = useMemo(() => {
+    if (!data) return [];
+    const f = data.fila || [];
+    const temManual = f.some(p => typeof p.ordemEntrega === 'number' && p.ordemEntrega > 0);
+    if (temManual) return f;
+    return [...f.filter(p => p.prioridade === 1), ...f.filter(p => p.prioridade === 2), ...f.filter(p => p.prioridade === 0 || p.prioridade == null)];
+  }, [data]);
+  const ordemManualAtiva = (data?.fila || []).some(p => typeof p.ordemEntrega === 'number' && p.ordemEntrega > 0);
+
+  async function moverOrdem(saleId: string, dir: 'UP' | 'DOWN') {
+    const lista = listaOrdenada;
+    const idx = lista.findIndex(p => p.saleId === saleId);
+    if (idx < 0) return;
+    const j = dir === 'UP' ? idx - 1 : idx + 1;
+    if (j < 0 || j >= lista.length) return;
+    const nova = [...lista];
+    [nova[idx], nova[j]] = [nova[j], nova[idx]];
+    const ordens = nova.map((p, i) => ({ saleId: p.saleId, ordem: i + 1 }));
+    // atualizacao otimista da tela (a API re-confirma com load)
+    setData(d => d ? { ...d, fila: d.fila.map(f => { const o = ordens.find(x => x.saleId === f.saleId); return o ? { ...f, ordemEntrega: o.ordem } : f; }) } : d);
+    const ok = await acao({ acao: 'ORDEM_ENTREGA', ordens }, 'Ordem da rota atualizada — grava no sistema e na impressão!');
+    if (!ok) load(true);
   }
 
   // products fake a partir dos itens (o Cupom so precisa de id->nome)
@@ -483,6 +514,28 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                   P2
                 </button>
               </>
+            )}
+            {/* BLOCO 31: setas do admin — ordem da rota gravada + impressao */}
+            {modo === 'ADMIN' && pend && (
+              <>
+                <button onClick={() => moverOrdem(p.saleId, 'UP')} disabled={!!busy || listaOrdenada.findIndex(x => x.saleId === p.saleId) <= 0}
+                  title="Mover para cima na rota"
+                  className="w-10 py-2.5 rounded-xl bg-slate-50 text-slate-600 text-[9px] font-black active:scale-95 transition-transform disabled:opacity-40">
+                  <i className="fa-solid fa-chevron-up"></i>
+                </button>
+                <button onClick={() => moverOrdem(p.saleId, 'DOWN')} disabled={!!busy || listaOrdenada.findIndex(x => x.saleId === p.saleId) >= listaOrdenada.length - 1}
+                  title="Mover para baixo na rota"
+                  className="w-10 py-2.5 rounded-xl bg-slate-50 text-slate-600 text-[9px] font-black active:scale-95 transition-transform disabled:opacity-40">
+                  <i className="fa-solid fa-chevron-down"></i>
+                </button>
+              </>
+            )}
+            {/* BLOCO 31: editar o pedido antes da entrega (admin) */}
+            {modo === 'ADMIN' && pend && (
+              <button onClick={() => setEditPedido(p)} disabled={!!busy}
+                className="flex-1 min-w-[58px] py-2.5 rounded-xl bg-violet-50 text-violet-600 text-[9px] font-black uppercase active:scale-95 transition-transform disabled:opacity-60">
+                <i className="fa-solid fa-pen-to-square mr-1"></i>Editar
+              </button>
             )}
           </div>
 
@@ -688,7 +741,22 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
       </div>
 
       {/* ===== P1 ===== */}
-      {p1.length > 0 && (
+      {ordemManualAtiva ? (
+        /* ===== BLOCO 31: ordem manual do admin — UMA lista unica (a impressao segue esta ordem) ===== */
+        <div className="space-y-3">
+          <p className="text-[10px] font-black text-slate-700 uppercase px-1 flex items-center gap-1.5">
+            <i className="fa-solid fa-arrows-up-down"></i>Ordem da rota — definida pelo admin (setas)
+          </p>
+          {listaOrdenada.map((p, i) => (
+            <div key={p.saleId} className="relative">
+              <span className="absolute -left-0.5 top-1/2 -translate-y-1/2 -translate-x-1/2 z-10 w-6 h-6 rounded-full bg-slate-800 text-white text-[9px] font-black flex items-center justify-center shadow">{i + 1}</span>
+              <Card p={p} acento={p.prioridade === 1 ? 'p1' : p.prioridade === 2 ? 'p2' : 'normal'} />
+            </div>
+          ))}
+        </div>
+      ) : (
+        <>
+        {p1.length > 0 && (
         <div className="space-y-3">
           <p className="text-[10px] font-black text-rose-600 uppercase px-1 flex items-center gap-1.5">
             <i className="fa-solid fa-triangle-exclamation"></i>Prioridade 1 — entregar primeiro
@@ -713,6 +781,8 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
           {fila.length > 0 && <p className="text-[10px] font-black text-gray-500 uppercase px-1">Fila — mais antigo primeiro</p>}
           {normais.map(p => <Card key={p.saleId} p={p} acento="normal" />)}
         </div>
+      )}
+        </>
       )}
 
       {fila.length === 0 && (
@@ -1235,6 +1305,16 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
         />
       )}
 
+      {/* ===== BLOCO 31: MODAL EDITAR PEDIDO (admin, antes da entrega) ===== */}
+      {editPedido && (
+        <EditorPedido
+          pedido={editPedido}
+          onClose={() => setEditPedido(null)}
+          onSalvo={(msg) => { setEditPedido(null); showToast(msg, 'success'); load(true); }}
+          showToast={showToast}
+        />
+      )}
+
       {/* ===== LISTA IMPRIMIVEL (ordem de entrega) ===== */}
       {mostrarLista && data && (
         <div className="fixed inset-0 bg-white z-[400] p-8 overflow-auto print:static print:overflow-visible">
@@ -1253,7 +1333,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                 </tr>
               </thead>
               <tbody>
-                {[...p1, ...p2, ...normais].map((p, i) => (
+                {listaOrdenada.map((p, i) => (
                   <tr key={p.saleId} className="border-b border-gray-300">
                     <td className="py-1.5 font-black">{i + 1}</td>
                     <td className="py-1.5 font-bold">{p.prioridade === 1 ? 'P1 ' : p.prioridade === 2 ? 'P2 ' : ''}{p.cliente.nome}</td>
@@ -1264,7 +1344,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                 ))}
               </tbody>
             </table>
-            <p className="text-[9px] text-gray-400 text-center mt-4">Regra: P1 primeiro, depois P2, depois mais antigo. Assinatura do entregador: ____________________</p>
+            <p className="text-[9px] text-gray-400 text-center mt-4">{ordemManualAtiva ? 'Ordem definida pelo admin (setas na fila).' : 'Regra: P1 primeiro, depois P2, depois mais antigo.'} Assinatura do entregador: ____________________</p>
           </div>
           <div className="max-w-xl mx-auto mt-4 print:hidden">
             <button onClick={() => setMostrarLista(false)} className="w-full bg-slate-800 text-white font-black py-3 rounded-2xl uppercase text-[10px]">Fechar</button>

@@ -6,11 +6,19 @@ import { hashSync } from 'bcryptjs';
  * Ativa apenas com NEXT_PUBLIC_E2E_MOCK=1 no .env.local (nunca na Vercel).
  * O dev aponta NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:3000/api/e2e-supabase
  * e este handler responde como o PostgREST responderia.
+ *
+ * BLOCO 31: filtros PostgREST basicos (eq/in/gte/lte/is/not/order), PATCH e
+ * DELETE PERSISTENTES, usuario ADMIN fake e 2 pre-vendas pendentes — para
+ * testar a fila de entrega do admin (setas de ordem + editor de pedido).
  */
 
 const CATCH_TABLES = ['app_users', 'clients', 'products', 'app_settings', 'product_categories', 'product_subcategories', 'cargas', 'cargas_pendentes', 'system_messages', 'commissions', 'commission_payment_logs', 'sales', 'seller_expenses', 'push_tokens', 'daily_routes', 'entrega_rotas', 'entrega_eventos', 'sale_items', 'payment_comprovantes', 'caixa_fechamentos', 'pre_vendas', 'pedidos'];
 
 const users = [{
+  id: 'adminuser', nome: 'Admin Teste', email: '', perfil: 'ADMIN', ativo: true,
+  telefone: '', whatsapp: '', foto: null, placa_veiculo: '', rota: '',
+  pre_venda: false, rota2: false, pin_hash: hashSync('123456', 10),
+}, {
   id: 'rota2user', nome: 'Rota 2 Teste', email: '', perfil: 'VENDEDOR', ativo: true,
   telefone: '', whatsapp: '', foto: null, placa_veiculo: '', rota: 'ROTA_02',
   pre_venda: false, rota2: true, pin_hash: hashSync('123456', 10),
@@ -22,6 +30,13 @@ const clients = [{
   localizacao: null, dia_roteiro: 3, ordem: 1, observacoes: null,
   pin_localizacao: '-29.166037, -51.210285',
   rota: 'ROTA_02', portal_code: 'TEST1234', razao_social: null, inscricao_estadual: null,
+  endereco_numero: null, endereco_cep: null, endereco_municipio: null, endereco_uf: null, email: null,
+}, {
+  id: 'cli-2', nome_fantasia: 'Padaria Dois', nome: null, ativar_cnpj: false, cnpj: null,
+  telefone: '(54) 98888-8888', endereco: 'Av Segunda 456', bairro: 'Sao Pelegrino', ativo: true,
+  localizacao: null, dia_roteiro: 3, ordem: 2, observacoes: null,
+  pin_localizacao: null,
+  rota: 'ROTA_02', portal_code: 'TEST5678', razao_social: null, inscricao_estadual: null,
   endereco_numero: null, endereco_cep: null, endereco_municipio: null, endereco_uf: null, email: null,
 }];
 
@@ -42,6 +57,36 @@ const settings = [{
   company_name: 'Doce Mania', company_cnpj: '00.000.000/0001-00',
 }];
 
+const agora = new Date();
+const iso = (minAtras: number) => new Date(agora.getTime() - minAtras * 60000).toISOString();
+
+// BLOCO 31: 2 pre-vendas pendentes para a fila do admin (setas + editor)
+const salesSeed = [
+  {
+    id: 'sale-fila-001', vendedor_id: 'rota2user', client_id: 'cli-1',
+    valor_total: 7.17, valor_pago: 0, metodo_pagamento: 'A_PRAZO',
+    detalhe_pagamento: 'PRE-VENDA — cobrar DINHEIRO na entrega (A VISTA)',
+    status_pagamento: 'PENDENTE', data_venda: iso(120), data_vencimento: null,
+    tipo_venda: 'PRE_VENDA', entrega_status: 'PENDENTE', trocas: null,
+    prioridade: 0, separado: false, separado_em: null, entregador_id: null,
+    comprovante_foto: null, modo_nota: null, route_id: null, entrega_seq: null, ordem_entrega: null,
+  },
+  {
+    id: 'sale-fila-002', vendedor_id: 'rota2user', client_id: 'cli-2',
+    valor_total: 12.87, valor_pago: 0, metodo_pagamento: 'A_PRAZO',
+    detalhe_pagamento: 'PRE-VENDA — cobrar PIX na entrega (A PRAZO)',
+    status_pagamento: 'PENDENTE', data_venda: iso(60), data_vencimento: iso(-10080),
+    tipo_venda: 'PRE_VENDA', entrega_status: 'PENDENTE', trocas: null,
+    prioridade: 0, separado: false, separado_em: null, entregador_id: null,
+    comprovante_foto: null, modo_nota: null, route_id: null, entrega_seq: null, ordem_entrega: null,
+  },
+];
+
+const saleItemsSeed = [
+  { id: 'si-1', sale_id: 'sale-fila-001', produto_id: 'prod-1', product_id: 'prod-1', quantidade: 3, preco_venda: 2.39 },
+  { id: 'si-2', sale_id: 'sale-fila-002', produto_id: 'prod-2', product_id: 'prod-2', quantidade: 3, preco_venda: 4.29 },
+];
+
 const tables: Record<string, any[]> = {
   app_users: users,
   clients,
@@ -54,13 +99,13 @@ const tables: Record<string, any[]> = {
   system_messages: [],
   commissions: [],
   commission_payment_logs: [],
-  sales: [],
+  sales: salesSeed,
   seller_expenses: [],
   push_tokens: [],
   daily_routes: [],
   entrega_rotas: [],
   entrega_eventos: [],
-  sale_items: [],
+  sale_items: saleItemsSeed,
   payment_comprovantes: [],
   caixa_fechamentos: [],
   pre_vendas: [],
@@ -69,6 +114,65 @@ const tables: Record<string, any[]> = {
 
 function json(data: any, status = 200) {
   return NextResponse.json(data, { status });
+}
+
+// ---------- BLOCO 31: filtros PostgREST basicos ----------
+function aplicarFiltros(rows: any[], params: URLSearchParams): any[] {
+  let out = [...rows];
+  for (const [key, raw] of params.entries()) {
+    if (['select', 'order', 'limit', 'offset', 'on_conflict', 'apikey', 'columns'].includes(key)) continue;
+    if (key === 'or' || key === 'and' || key === 'or=( Foto' ) continue;
+    let val = raw;
+    let negar = false;
+    const m = val.match(/^(not\.)?(eq|neq|gt|gte|lt|lte|is|in|like|ilike)\.([\s\S]*)$/);
+    let op = 'eq';
+    if (m) { negar = !!m[1]; op = m[2]; val = m[3]; }
+    out = out.filter(r => {
+      let v = r[key];
+      let ok = false;
+      switch (op) {
+        case 'is':
+          ok = val === 'null' ? (v === null || v === undefined) : String(v) === val;
+          break;
+        case 'in': {
+          const lista = val.replace(/^\(/, '').replace(/\)$/, '').split(',').map(s => s.replace(/^"|"$/g, '').trim());
+          ok = lista.includes(String(v));
+          break;
+        }
+        case 'gte': ok = String(v) >= val; break;
+        case 'lte': ok = String(v) <= val; break;
+        case 'gt': ok = String(v) > val; break;
+        case 'lt': ok = String(v) < val; break;
+        case 'neq': ok = String(v) !== val; break;
+        default: ok = String(v) === val;
+      }
+      return negar ? !ok : ok;
+    });
+  }
+  const order = params.get('order');
+  if (order) {
+    const [col, dir] = order.split('.');
+    out.sort((a, b) => {
+      const av = String(a[col] ?? ''), bv = String(b[col] ?? '');
+      const cmp = av < bv ? -1 : av > bv ? 1 : 0;
+      return dir === 'desc' ? -cmp : cmp;
+    });
+  }
+  return out;
+}
+
+// BLOCO 31: matcher generico col=eq.valor (DELETE usa sale_id, por exemplo)
+function linhasQueBatem(rows: any[], params: URLSearchParams): number[] {
+  const eqs: [string, string][] = [];
+  for (const [key, val] of params.entries()) {
+    const m = val.match(/^eq\.([\s\S]*)$/);
+    if (m) eqs.push([key, m[1]]);
+  }
+  const idx: number[] = [];
+  rows.forEach((r, i) => {
+    if (eqs.every(([k, v]) => String(r[k]) === v)) idx.push(i);
+  });
+  return idx;
 }
 
 async function handle(req: NextRequest, segments: string[]) {
@@ -98,10 +202,11 @@ async function handle(req: NextRequest, segments: string[]) {
   if (segments[0] === 'rest' && segments[1] === 'v1') {
     const table = segments[2] || '';
     if (!CATCH_TABLES.includes(table)) return json([], 200);
+    const url = new URL(req.url);
+    const params = url.searchParams;
 
     if (req.method === 'GET') {
-      const rows = tables[table];
-      // .single() do supabase-js pede Accept: application/vnd.pgrst.object+json -> retorna OBJETO
+      let rows = aplicarFiltros(tables[table], params);
       const wantsObject = (req.headers.get('accept') || '').includes('vnd.pgrst.object');
       if (wantsObject) {
         return new NextResponse(JSON.stringify(rows[0] ?? null), {
@@ -147,10 +252,22 @@ async function handle(req: NextRequest, segments: string[]) {
       return NextResponse.json(arr, { status: 201 });
     }
 
+    // BLOCO 31: PATCH persistente com filtro col=eq.valor (ordem_entrega, editor...)
     if (req.method === 'PATCH') {
       let body: any = {};
       try { body = await req.json(); } catch {}
-      return NextResponse.json([body]);
+      const rows = tables[table];
+      const alvos = linhasQueBatem(rows, params);
+      alvos.forEach(i => { rows[i] = { ...rows[i], ...body }; });
+      return NextResponse.json(alvos.length > 0 ? [body] : [], { status: 200 });
+    }
+
+    // BLOCO 31: DELETE persistente com filtro col=eq.valor (itens do editor)
+    if (req.method === 'DELETE') {
+      const rows = tables[table];
+      const alvos = new Set(linhasQueBatem(rows, params));
+      tables[table] = rows.filter((_, i) => !alvos.has(i));
+      return json([], 200);
     }
 
     return json('ok');
@@ -166,6 +283,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ path: stri
   return handle(req, (await ctx.params).path || []);
 }
 export async function PATCH(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
+  return handle(req, (await ctx.params).path || []);
+}
+export async function DELETE(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
   return handle(req, (await ctx.params).path || []);
 }
 export async function OPTIONS() {

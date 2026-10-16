@@ -110,6 +110,18 @@ async function resolveEntregadorUuid(supabase: any, userId: string): Promise<str
 // BLOCO 13: colunas novas da fila continua (podem nao existir antes do SQL)
 const FILA_COLS_13 = `${SALE_COLS}, tipo_venda, trocas, prioridade, separado, separado_em, entregador_id, data_vencimento`;
 
+// BLOCO 31: ordem_entrega (posicao da parada definida pelo admin com setas).
+// Sonda 1x por processo — pre-SQL a fila segue no formato antigo (sem ordem).
+let _temOrdemEntrega: boolean | null = null;
+async function hasOrdemEntregaColumn(): Promise<boolean> {
+  if (_temOrdemEntrega !== null) return _temOrdemEntrega;
+  try {
+    const { error } = await getServiceClient().from('sales').select('ordem_entrega').limit(1);
+    _temOrdemEntrega = !error;
+  } catch { _temOrdemEntrega = false; }
+  return _temOrdemEntrega;
+}
+
 /** Carimbo pt-BR (America/Sao_Paulo) compativel com o parser do portal do cliente:
  *  "12/02/2025 14:33" -> o portal le " | 12/02/2025 14:33: R$ 50.00 (DINHEIRO)" */
 function carimboAgora(): string {
@@ -518,6 +530,8 @@ async function enrichFila(supabase: any, salesRows: any[]) {
       condicao,
       trocas: s.trocas ?? null,
       prioridade: typeof s.prioridade === 'number' ? s.prioridade : 0,
+      // BLOCO 31: posicao manual da rota (definida pelo admin com setas)
+      ordemEntrega: typeof s.ordem_entrega === 'number' ? s.ordem_entrega : undefined,
       separado: !!s.separado,
       separadoEm: s.separado_em ?? null,
       vendedorId: s.vendedor_id,
@@ -541,11 +555,14 @@ async function enrichFila(supabase: any, salesRows: any[]) {
 async function getFila(supabase: any, userId: string, perfil: string) {
   const { start, end } = dayRangeIso();
   const proprio = perfil === 'VENDEDOR';
+  // BLOCO 31: ordem_entrega entra nas colunas SO se o SQL ja rodou (sonda)
+  const temOrdem = await hasOrdemEntregaColumn();
+  const filaCols = `${FILA_COLS_13}${temOrdem ? ', ordem_entrega' : ''}`;
 
   // ---- Fila ativa: PENDENTE/EM_ROTA (inclui legado) — qualquer dia (fila viva) ----
   let qAtiva = supabase
     .from('sales')
-    .select(FILA_COLS_13)
+    .select(filaCols)
     .eq('tipo_venda', 'PRE_VENDA')
     .in('entrega_status', ['PENDENTE', 'EM_ROTA'])
     .order('data_venda', { ascending: true });
@@ -574,7 +591,7 @@ async function getFila(supabase: any, userId: string, perfil: string) {
   const dias7 = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
   let qFal = supabase
     .from('sales')
-    .select(FILA_COLS_13)
+    .select(filaCols)
     .eq('tipo_venda', 'PRE_VENDA')
     .eq('entrega_status', 'FALHOU')
     .gte('data_venda', dias7)
@@ -585,7 +602,7 @@ async function getFila(supabase: any, userId: string, perfil: string) {
   // ---- Entregues HOJE (para o resumo/transparencia) ----
   let qEnt = supabase
     .from('sales')
-    .select(FILA_COLS_13)
+    .select(filaCols)
     .eq('tipo_venda', 'PRE_VENDA')
     .eq('entrega_status', 'ENTREGUE')
     .gte('data_venda', dias7)
@@ -602,8 +619,16 @@ async function getFila(supabase: any, userId: string, perfil: string) {
   const entreguesHojeIds = new Set((evHoje || []).map((e: any) => e.sale_id));
   const entreguesHoje = (entreguesRows || []).filter((s: any) => entreguesHojeIds.has(s.id));
 
-  const fila = (await enrichFila(supabase, ativasRows || []))
-    .sort((a: any, b: any) => (a.prioridade - b.prioridade) || (new Date(a.dataVenda).getTime() - new Date(b.dataVenda).getTime()));
+  const fila = await enrichFila(supabase, ativasRows || []);
+  // BLOCO 31: se o admin ja definiu ordem manual (setas), ela MANDA —
+  // pedidos novos (sem ordem) entram no fim da fila, por antiguidade.
+  if (fila.some((f: any) => typeof f.ordemEntrega === 'number' && f.ordemEntrega > 0)) {
+    fila.sort((a: any, b: any) =>
+      ((typeof a.ordemEntrega === 'number' ? a.ordemEntrega : 1e9) - (typeof b.ordemEntrega === 'number' ? b.ordemEntrega : 1e9)) ||
+      (new Date(a.dataVenda).getTime() - new Date(b.dataVenda).getTime()));
+  } else {
+    fila.sort((a: any, b: any) => (a.prioridade - b.prioridade) || (new Date(a.dataVenda).getTime() - new Date(b.dataVenda).getTime()));
+  }
 
   // Extrai valor do recebimento do motivo ("R$ 12,34" ou "R$ 12.34")
   const valorDeMotivo = (m: string | null): number => {
@@ -842,6 +867,19 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ comissaoPct: COMISSAO_PV_DEFAULT });
     }
 
+    // ---------- BLOCO 31: produtos para o editor de pedido (admin) ----------
+    // Leve: colunas explicitas, so ativos — 1 request quando o modal abre.
+    if (url.searchParams.get('produtos') === '1') {
+      if (!isAdminSession(req)) return NextResponse.json({ error: 'Acesso restrito ao admin.' }, { status: 403 });
+      const { data, error } = await supabase
+        .from('products')
+        .select('id, nome, preco_venda, preco_minimo')
+        .eq('ativo', true)
+        .order('nome', { ascending: true });
+      if (error) return NextResponse.json({ error: 'Erro ao carregar produtos.' }, { status: 500 });
+      return NextResponse.json({ ok: true, produtos: (data || []).map((p: any) => ({ id: p.id, nome: p.nome || 'Produto', precoVenda: Number(p.preco_venda || 0), precoMinimo: Number(p.preco_minimo || 0) })) });
+    }
+
     // Bloco 5 ainda nao rodou: responde vazio + flag para a UI avisar,
     // em vez de 500 (a aba Entregas nao pode derrubar o resto do app).
     if (!(await hasEntregaTables())) {
@@ -999,6 +1037,34 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, comissaoPct: COMISSAO_PV_DEFAULT, aviso: 'Padrao fixo a partir do Bloco 23 — comissao por produto manda.' });
     }
 
+    // ---------- ORDEM_ENTREGA (BLOCO 31: admin define a ordem da rota com setas) ----------
+    // Recebe a fila inteira reordenada [{ saleId, ordem }] (1..N). A ordem fica
+    // gravada em sales.ordem_entrega e manda na fila e na impressao da lista.
+    // (ANTES do guard de saleId: a acao manda a fila inteira, nao uma venda)
+    if (acao === 'ORDEM_ENTREGA') {
+      if (!admin) return NextResponse.json({ ok: false, error: 'Somente o admin define a ordem da rota.' }, { status: 403 });
+      if (!(await hasOrdemEntregaColumn())) {
+        return NextResponse.json({ ok: false, error: 'Banco desatualizado: rode o Bloco 31 do SQL (ordem_entrega).' }, { status: 503 });
+      }
+      const ordens = Array.isArray(body.ordens) ? body.ordens : [];
+      if (ordens.length === 0 || ordens.length > 500) {
+        return NextResponse.json({ ok: false, error: 'Lista de ordem invalida.' }, { status: 400 });
+      }
+      const ids = ordens.map((o: any) => String(o.saleId || '')).filter(Boolean);
+      const { data: entregues } = await supabase.from('sales').select('id').in('id', ids).eq('entrega_status', 'ENTREGUE');
+      if (entregues && entregues.length > 0) {
+        return NextResponse.json({ ok: false, error: 'Ha pedido ja entregue na lista — recarregue a fila.' }, { status: 409 });
+      }
+      for (const o of ordens) {
+        const ordem = Math.max(1, Math.min(9999, Number(o.ordem || 0)));
+        if (!o.saleId) continue;
+        const { error } = await supabase.from('sales').update({ ordem_entrega: ordem }).eq('id', String(o.saleId));
+        if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+      }
+      await logEventoSeguro(supabase, null, null, userId, 'ORDEM_ENTREGA', `Ordem da rota definida pelo admin (${ordens.length} paradas)`);
+      return NextResponse.json({ ok: true });
+    }
+
     // ---------- Acoes por parada ----------
     const saleId = String(body.saleId || '');
     if (!saleId) return NextResponse.json({ ok: false, error: 'saleId obrigatoria.' }, { status: 400 });
@@ -1067,6 +1133,97 @@ export async function POST(req: NextRequest) {
       const label = prioridade === 1 ? 'PRIORIDADE 1' : prioridade === 2 ? 'PRIORIDADE 2' : 'prioridade normal';
       await logEventoSeguro(supabase, saleRow.route_id || null, saleId, userId, 'PRIORIDADE', `Definido: ${label}`);
       return NextResponse.json({ ok: true, prioridade });
+    }
+
+    // ---------- EDITAR_PEDIDO (BLOCO 31: admin edita o pedido antes da entrega) ----------
+    // Itens (qtd/preco/adicionar/remover), condicao e forma de pagamento.
+    // Somente PRE_VENDA nao entregue — o estoque da pre-venda baixa na
+    // entrega, entao editar antes nao mexe no estoque (trigger inofensivo).
+    // Comissao: nasce na entrega com o valor do pedido editado (sem ajuste aqui).
+    if (acao === 'EDITAR_PEDIDO') {
+      if (!admin) return NextResponse.json({ ok: false, error: 'Somente o admin edita pedidos.' }, { status: 403 });
+      if (saleRow.entrega_status === 'ENTREGUE') {
+        return NextResponse.json({ ok: false, error: 'Pedido ja entregue — nao pode mais ser editado.' }, { status: 409 });
+      }
+      if (saleRow.tipo_venda !== 'PRE_VENDA') {
+        return NextResponse.json({ ok: false, error: 'Edicao disponivel apenas para pre-venda.' }, { status: 400 });
+      }
+      const rawItens = Array.isArray(body.itens) ? body.itens : [];
+      const itens = rawItens
+        .map((i: any) => ({ produtoId: String(i.produtoId || ''), quantidade: Number(i.quantidade || 0), precoVenda: Number(i.precoVenda ?? 0) }))
+        .filter((i: any) => i.produtoId && i.quantidade > 0 && i.precoVenda >= 0);
+      if (itens.length === 0) return NextResponse.json({ ok: false, error: 'Pedido precisa de pelo menos 1 item.' }, { status: 400 });
+
+      // Produtos existem?
+      const pids = [...new Set(itens.map((i: any) => i.produtoId))];
+      const { data: prods, error: perr } = await supabase.from('products').select('id, nome, preco_venda').in('id', pids);
+      if (perr) return NextResponse.json({ ok: false, error: perr.message }, { status: 500 });
+      if (!prods || prods.length !== pids.length) {
+        return NextResponse.json({ ok: false, error: 'Produto invalido no pedido.' }, { status: 400 });
+      }
+
+      const valorTotal = round2(itens.reduce((a: number, i: any) => a + i.quantidade * i.precoVenda, 0));
+
+      // Pagamento no MESMO formato da API de venda (a fila parseia do detalhe)
+      const condicao = String(body.condicao || '').toUpperCase() === 'APRAZO' ? 'APRAZO' : 'AVISTA';
+      const pagoNaVisita = body.pagoNaVisita === true && condicao === 'AVISTA';
+      const formasValidas = condicao === 'APRAZO' ? ['DINHEIRO', 'PIX', 'BOLETO', 'CHEQUE'] : ['DINHEIRO', 'PIX'];
+      const formaRaw = String(body.formaPagamento || '').toUpperCase();
+      const forma = (formasValidas.includes(formaRaw) ? formaRaw : 'DINHEIRO') as string;
+      const formaLabel = forma === 'PIX' ? 'PIX' : forma === 'BOLETO' ? 'BOLETO' : forma === 'CHEQUE' ? 'CHEQUE' : 'DINHEIRO';
+      // Preserva a intencao de nota gravada no detalhe (" | COM NOTA: ...")
+      const notaM = String(saleRow.detalhe_pagamento || '').match(/ \| COM NOTA:[\s\S]*/);
+      const notaTxt = notaM ? notaM[0] : '';
+      const etiquetaCond = condicao === 'APRAZO' ? 'A PRAZO' : 'A VISTA';
+      let vencimentoIso: string | null = null;
+      if (condicao === 'APRAZO') {
+        const vRaw = String(body.vencimento || '');
+        const vDate = vRaw ? new Date(`${vRaw}T23:59:59${OFF}`) : null;
+        if (vDate && isFinite(vDate.getTime())) {
+          vencimentoIso = vDate.toISOString();
+        } else {
+          const d = new Date();
+          d.setDate(d.getDate() + 7);
+          const dStr = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+          vencimentoIso = new Date(`${dStr}T23:59:59${OFF}`).toISOString();
+        }
+      }
+      const upd: Record<string, unknown> = pagoNaVisita
+        ? {
+            valor_total: valorTotal, valor_pago: valorTotal,
+            metodo_pagamento: forma === 'PIX' ? 'PIX' : 'DINHEIRO',
+            detalhe_pagamento: `PAGO NA VISITA pelo vendedor (${formaLabel}) — entrega sem cobranca${notaTxt}`,
+            status_pagamento: 'PAGO', data_vencimento: null,
+          }
+        : {
+            valor_total: valorTotal, valor_pago: 0,
+            metodo_pagamento: 'A_PRAZO',
+            detalhe_pagamento: `PRE-VENDA — cobrar ${forma} na entrega (${etiquetaCond})${notaTxt}`,
+            status_pagamento: 'PENDENTE', data_vencimento: vencimentoIso,
+          };
+
+      // 1) atualiza a venda (itens intactos se falhar)
+      const r = await updateSaleFlex(supabase, saleId, upd);
+      if (!r.ok) return NextResponse.json({ ok: false, error: r.erro || 'Erro ao atualizar o pedido.' }, { status: 500 });
+
+      // 2) substitui os itens (rollback manual: re-insere os antigos se falhar)
+      const { data: antigos } = await supabase.from('sale_items').select('produto_id, product_id, quantidade, preco_venda').eq('sale_id', saleId);
+      const { error: delErr } = await supabase.from('sale_items').delete().eq('sale_id', saleId);
+      if (delErr) return NextResponse.json({ ok: false, error: 'Falha ao substituir itens: ' + delErr.message }, { status: 500 });
+      const { error: insErr } = await supabase.from('sale_items').insert(
+        itens.map((i: any) => ({ sale_id: saleId, produto_id: i.produtoId, product_id: i.produtoId, quantidade: i.quantidade, preco_venda: i.precoVenda }))
+      );
+      if (insErr) {
+        if (antigos && antigos.length > 0) {
+          await supabase.from('sale_items').insert(
+            antigos.map((a: any) => ({ sale_id: saleId, produto_id: a.produto_id, product_id: a.product_id || a.produto_id, quantidade: a.quantidade, preco_venda: a.preco_venda }))
+          );
+        }
+        return NextResponse.json({ ok: false, error: 'Falha ao gravar itens — pedido anterior restaurado.' }, { status: 500 });
+      }
+
+      await logEventoSeguro(supabase, saleRow.route_id || null, saleId, userId, 'PEDIDO_EDITADO', `Pedido editado pelo admin: ${itens.length} itens, total R$ ${valorTotal.toFixed(2)}`);
+      return NextResponse.json({ ok: true, valorTotal });
     }
 
     // ---------- EXCLUIR_VENDA ----------

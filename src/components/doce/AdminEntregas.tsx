@@ -1,5 +1,5 @@
 "use client";
-import React, { useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { User } from '@/lib/types';
 import FilaEntregas from '@/components/doce/FilaEntregas';
 
@@ -14,12 +14,18 @@ import FilaEntregas from '@/components/doce/FilaEntregas';
 const AdminEntregas: React.FC<{ user?: User; showToast?: (m: string, t?: 'success' | 'error') => void }> = ({ user, showToast }) => {
   const [msg, setMsg] = useState<{ t: 'success' | 'error'; m: string } | null>(null);
 
-  const aviso = (m: string, t: 'success' | 'error' = 'success') => {
+  // BLOCO 32: aviso usa ref para o setTimeout — a funcao NUNCA muda de
+  // identidade. Antes, `aviso`/`toastFn` eram recriados a cada render (cada
+  // toast mudava a prop showToast do FilaEntregas -> recriava o load ->
+  // re-rodava o useEffect -> RECARREGAVA A FILA INTEIRA a cada clique).
+  const msgTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const aviso = useCallback((m: string, t: 'success' | 'error' = 'success') => {
     setMsg({ t, m });
-    setTimeout(() => setMsg(null), 4000);
-  };
+    if (msgTimer.current) clearTimeout(msgTimer.current);
+    msgTimer.current = setTimeout(() => setMsg(null), 4000);
+  }, []);
 
-  const toastFn = showToast || ((m: string, t?: 'success' | 'error') => aviso(m, t || 'success'));
+  const toastFn = showToast || aviso;
 
   return (
     <div className="space-y-4">

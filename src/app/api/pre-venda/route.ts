@@ -1055,11 +1055,22 @@ export async function POST(req: NextRequest) {
       if (entregues && entregues.length > 0) {
         return NextResponse.json({ ok: false, error: 'Ha pedido ja entregue na lista — recarregue a fila.' }, { status: 409 });
       }
-      for (const o of ordens) {
-        const ordem = Math.max(1, Math.min(9999, Number(o.ordem || 0)));
-        if (!o.saleId) continue;
-        const { error } = await supabase.from('sales').update({ ordem_entrega: ordem }).eq('id', String(o.saleId));
-        if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+      // BLOCO 32 (velocidade): antes gravava UM update POR VEZ em sequencia —
+      // com 30 paradas eram 30 round-trips (5-15s) e as setas travavam.
+      // Agora: updates EM PARALELO (Promise.allSettled) + o cliente manda so
+      // o DELTA (pares que mudaram) -> 1-2 round-trips, resposta em ~200ms.
+      // Egress igual de baixo: payload de 1 int por venda.
+      const resultados = await Promise.allSettled(
+        ordens.map((o: any) => {
+          const ordem = Math.max(1, Math.min(9999, Number(o.ordem || 0)));
+          if (!o.saleId) return Promise.resolve({ error: null });
+          return supabase.from('sales').update({ ordem_entrega: ordem }).eq('id', String(o.saleId));
+        })
+      );
+      const falha = resultados.find(r => r.status === 'rejected' || (r.status === 'fulfilled' && (r.value as any)?.error));
+      if (falha) {
+        const msg = falha.status === 'rejected' ? String(falha.reason || '') : String((falha.value as any)?.error?.message || '');
+        return NextResponse.json({ ok: false, error: msg || 'Erro ao gravar a ordem.' }, { status: 500 });
       }
       await logEventoSeguro(supabase, null, null, userId, 'ORDEM_ENTREGA', `Ordem da rota definida pelo admin (${ordens.length} paradas)`);
       return NextResponse.json({ ok: true });

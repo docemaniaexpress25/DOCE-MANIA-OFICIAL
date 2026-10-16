@@ -202,20 +202,32 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
     }
   }, [showToast, modo]);
 
+  // BLOCO 32 (velocidade + egress): o efeito de montagem/polling NAO pode
+  // depender do `load` — a identidade do showToast muda a cada toast (toda
+  // acao dispara toast), o load era recriado e o useEffect RE-RODAVA,
+  // recarregando a fila INTEIRA (4 SELECTs) a cada clique de seta/acao.
+  // Com a ref, o efeito roda 1x e o polling usa a funcao mais recente.
+  const loadRef = useRef(load);
+  useEffect(() => { loadRef.current = load; }, [load]);
+
   useEffect(() => {
     mounted.current = true;
-    const t0 = setTimeout(() => load(), 0);
+    const t0 = setTimeout(() => loadRef.current(), 0);
     // EGRESS: 45s → 120s + pula quando o app esta em background
-    const t = setInterval(() => { if (typeof document !== 'undefined' && !document.hidden) load(true); }, 120_000);
-    const onFocus = () => load(true);
+    const t = setInterval(() => { if (typeof document !== 'undefined' && !document.hidden) loadRef.current(true); }, 120_000);
+    const onFocus = () => loadRef.current(true);
     window.addEventListener('focus', onFocus);
     return () => { mounted.current = false; clearTimeout(t0); clearInterval(t); window.removeEventListener('focus', onFocus); };
-  }, [load]);
+  }, []);
 
-  async function acao(body: any, okMsg: string) {
+  // BLOCO 32 (velocidade): recarregar=false para acoes que a tela ja reflete
+  // (ordem das setas) — evita recarregar a fila INTEIRA (4 SELECTs no Supabase)
+  // a cada clique: menos espera e menos egress. Se falhar, o chamador recarrega.
+  // semGps=true: acao administrativa (setas) nao precisa esperar o GPS (ate 6s).
+  async function acao(body: any, okMsg: string, recarregar = true, semGps = false) {
     setBusy(body.saleId || body.acao);
     try {
-      const gps = await pegaGps();
+      const gps = semGps ? null : await pegaGps();
       const res = await fetch('/api/pre-venda', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
@@ -227,7 +239,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
         return false;
       }
       showToast(okMsg, 'success');
-      await load(true);
+      if (recarregar) await load(true);
       return true;
     } catch {
       showToast('Sem conexao. Tente novamente.', 'error');
@@ -351,10 +363,21 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
     const nova = [...lista];
     [nova[idx], nova[j]] = [nova[j], nova[idx]];
     const ordens = nova.map((p, i) => ({ saleId: p.saleId, ordem: i + 1 }));
-    // atualizacao otimista da tela (a API re-confirma com load)
+    // atualizacao otimista da tela — o card move NA HORA, sem esperar rede
     setData(d => d ? { ...d, fila: d.fila.map(f => { const o = ordens.find(x => x.saleId === f.saleId); return o ? { ...f, ordemEntrega: o.ordem } : f; }) } : d);
-    const ok = await acao({ acao: 'ORDEM_ENTREGA', ordens }, 'Ordem da rota atualizada — grava no sistema e na impressão!');
-    if (!ok) load(true);
+    // BLOCO 32 (velocidade + egress): se TODOS ja tem ordem gravada, manda so
+    // o DELTA (1-2 pares que mudaram no swap). Se algum pedido esta sem ordem
+    // (entrou novo), manda a fila inteira 1..N para nao deixar NULL colidindo.
+    const todosTemOrdem = (data?.fila || []).every(f => typeof f.ordemEntrega === 'number' && f.ordemEntrega > 0);
+    const ordensPayload = todosTemOrdem && data
+      ? ordens.filter(o => { const atual = data.fila.find(f => f.saleId === o.saleId); return !atual || atual.ordemEntrega !== o.ordem; })
+      : ordens;
+    if (ordensPayload.length === 0) return;
+    // recarregar=false: a tela ja esta certa (otimista) — o servidor so grava.
+    // Sem o load da fila inteira a cada clique: rapido e economiza egress.
+    // semGps=true: mudar ordem nao precisa de localizacao (GPS esperava ate 6s).
+    const ok = await acao({ acao: 'ORDEM_ENTREGA', ordens: ordensPayload }, 'Ordem da rota atualizada — grava no sistema e na impressão!', false, true);
+    if (!ok) load(true); // falhou: reverte buscando a ordem real do banco
   }
 
   // products fake a partir dos itens (o Cupom so precisa de id->nome)

@@ -158,13 +158,20 @@ const EntregasView: React.FC<{ user: User; showToast: (m: string, t?: 'success' 
     }
   }, [showToast]);
 
+  // BLOCO 32 (velocidade + egress): o efeito NAO pode depender do `load` —
+  // a identidade do showToast muda a cada toast (toda acao dispara toast),
+  // o load era recriado e o useEffect RE-RODAVA (recarregava tudo + recriava
+  // o polling). Com a ref, o efeito roda 1x e usa a funcao mais recente.
+  const loadRef = useRef(load);
+  useEffect(() => { loadRef.current = load; }, [load]);
+
   useEffect(() => {
     mounted.current = true;
     // defer: evita setState sincrono dentro do effect (lint)
-    const t0 = setTimeout(() => load(), 0);
-    const t = setInterval(() => load(true), 60_000);
+    const t0 = setTimeout(() => loadRef.current(), 0);
+    const t = setInterval(() => loadRef.current(true), 60_000);
     return () => { mounted.current = false; clearTimeout(t0); clearInterval(t); };
-  }, [load]);
+  }, []);
 
   async function acao(body: any, okMsg: string) {
     setBusy(body.saleId || body.acao);

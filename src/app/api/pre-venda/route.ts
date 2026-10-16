@@ -103,6 +103,10 @@ async function resolveEntregadorUuid(supabase: any, userId: string): Promise<str
       // mantem o UUID do acesso fixo (sem quebrar; o nominal volta quando
       // entrarem com o login real de um deles).
     }
+    // BLOCO 33: ids NAO-uuid (ex. mock E2E 'adminuser') — o toUpperCase do id
+    // nao e perfil. Tenta localizar o usuario pelo proprio id.
+    const alt = await supabase.from('app_users').select('id, ativo').eq('id', userId).eq('ativo', true).limit(1);
+    if (!alt.error && Array.isArray(alt.data) && alt.data.length === 1) return alt.data[0].id as string;
   } catch { /* app_users inacessivel: segue com o UUID fixo */ }
   return UUID_ACESSO_FIXO[perfil] || null;
 }
@@ -1076,6 +1080,63 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true });
     }
 
+    // ---------- FECHAR_CAIXA (BLOCO 33: SOMENTE O ADMIN fecha o caixa) ----------
+    // ANTES do guard de saleId: esta acao nao tem venda associada. Antes o
+    // entregador fechava e o guard "saleId obrigatoria" engolia o POST (bug
+    // reportado pelo dono) — e a regra mudou: quem fecha e o ADMIN.
+    // O fechamento do admin ja NASCE CONFIRMADO (quem digitou o dinheiro e o admin).
+    if (acao === 'FECHAR_CAIXA') {
+      if (!admin) return NextResponse.json({ ok: false, error: 'Somente o admin fecha o caixa.' }, { status: 403 });
+      const valorDinheiro = round2(Number(body.valorDinheiro) || 0);
+      const valorPix = round2(Number(body.valorPix) || 0);
+      const qtdEntregas = Math.max(0, Math.floor(Number(body.qtdEntregas) || 0));
+      const obs = String(body.obs || '').slice(0, 300) || null;
+      // entregador alvo: uuid do seletor (grupos da conferencia). Sem uuid
+      // (legado), tenta resolver pelo proprio usuario e depois pelo perfil.
+      let entUuid = await resolveEntregadorUuid(supabase, String(body.entregadorId || ''));
+      if (!entUuid) entUuid = await resolveEntregadorUuid(supabase, userId);
+      if (!entUuid) {
+        return NextResponse.json({ ok: false, error: 'Nao foi possivel identificar o entregador do caixa. Crie um usuario Entregador real no menu Usuarios.' }, { status: 400 });
+      }
+      const { error: caixaErr } = await supabase
+        .from('caixa_fechamentos')
+        .upsert({
+          entregador_id: entUuid,
+          data: todayStr(),
+          valor_dinheiro: valorDinheiro,
+          valor_pix: valorPix,
+          qtd_entregas: qtdEntregas,
+          obs,
+          confirmado: true,
+          confirmado_por: userId,
+          confirmado_em: new Date().toISOString(),
+        }, { onConflict: 'entregador_id,data' });
+      const code = (caixaErr as any)?.code || '';
+      if (caixaErr && (code === '42P01' || code === '42501' || code === 'PGRST204' || code === '42703')) {
+        return NextResponse.json({ ok: false, error: 'Banco desatualizado: rode o Bloco 13 do SQL (caixa_fechamentos).' }, { status: 503 });
+      }
+      if (caixaErr) throw caixaErr;
+      await logEventoSeguro(supabase, null, null, userId, 'CAIXA_FECHADO', `Admin fechou o caixa — Dinheiro: R$ ${valorDinheiro.toFixed(2)} · Pix: R$ ${valorPix.toFixed(2)} · ${qtdEntregas} entregas`);
+      return NextResponse.json({ ok: true });
+    }
+
+    // ---------- CONFIRMAR_CAIXA (fechamentos antigos que nasceram nao confirmados) ----------
+    if (acao === 'CONFIRMAR_CAIXA') {
+      if (!admin) return NextResponse.json({ ok: false, error: 'Acesso restrito ao admin.' }, { status: 403 });
+      const caixaId = String(body.caixaId || '');
+      if (!caixaId) return NextResponse.json({ ok: false, error: 'caixaId obrigatorio.' }, { status: 400 });
+      const { error: confErr } = await supabase
+        .from('caixa_fechamentos')
+        .update({ confirmado: true, confirmado_por: userId, confirmado_em: new Date().toISOString() })
+        .eq('id', caixaId);
+      const code = (confErr as any)?.code || '';
+      if (confErr && (code === '42P01' || code === '42501' || code === 'PGRST204' || code === '42703')) {
+        return NextResponse.json({ ok: false, error: 'Banco desatualizado: rode o Bloco 13 do SQL (caixa_fechamentos).' }, { status: 503 });
+      }
+      if (confErr) throw confErr;
+      return NextResponse.json({ ok: true });
+    }
+
     // ---------- Acoes por parada ----------
     const saleId = String(body.saleId || '');
     if (!saleId) return NextResponse.json({ ok: false, error: 'saleId obrigatoria.' }, { status: 400 });
@@ -1524,57 +1585,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, ...pix, qrDataUrl, valor: qrValor });
     }
 
-    // ---------- FECHAR_CAIXA (entregador informa o dinheiro em especie) ----------
-    if (acao === 'FECHAR_CAIXA') {
-      if (session.perfil !== 'ENTREGADOR') {
-        return NextResponse.json({ ok: false, error: 'Somente o entregador fecha o caixa.' }, { status: 403 });
-      }
-      const valorDinheiro = round2(Number(body.valorDinheiro) || 0);
-      const valorPix = round2(Number(body.valorPix) || 0);
-      const qtdEntregas = Math.max(0, Math.floor(Number(body.qtdEntregas) || 0));
-      const obs = String(body.obs || '').slice(0, 300) || null;
-      const entUuid = await resolveEntregadorUuid(supabase, userId);
-      if (!entUuid) {
-        return NextResponse.json({ ok: false, error: 'Nao foi possivel identificar o entregador. Crie um usuario Entregador real no menu Usuarios.' }, { status: 400 });
-      }
-      const { error: caixaErr } = await supabase
-        .from('caixa_fechamentos')
-        .upsert({
-          entregador_id: entUuid,
-          data: todayStr(),
-          valor_dinheiro: valorDinheiro,
-          valor_pix: valorPix,
-          qtd_entregas: qtdEntregas,
-          obs,
-          confirmado: false,
-          confirmado_por: null,
-          confirmado_em: null,
-        }, { onConflict: 'entregador_id,data' });
-      const code = (caixaErr as any)?.code || '';
-      if (caixaErr && (code === '42P01' || code === '42501' || code === 'PGRST204' || code === '42703')) {
-        return NextResponse.json({ ok: false, error: 'Banco desatualizado: rode o Bloco 13 do SQL (caixa_fechamentos).' }, { status: 503 });
-      }
-      if (caixaErr) throw caixaErr;
-      await logEventoSeguro(supabase, null, null, userId, 'CAIXA_FECHADO', `Dinheiro: R$ ${valorDinheiro.toFixed(2)} · Pix: R$ ${valorPix.toFixed(2)} · ${qtdEntregas} entregas`);
-      return NextResponse.json({ ok: true });
-    }
-
-    // ---------- CONFIRMAR_CAIXA (admin confirma o dinheiro fisico) ----------
-    if (acao === 'CONFIRMAR_CAIXA') {
-      if (!admin) return NextResponse.json({ ok: false, error: 'Acesso restrito ao admin.' }, { status: 403 });
-      const caixaId = String(body.caixaId || '');
-      if (!caixaId) return NextResponse.json({ ok: false, error: 'caixaId obrigatorio.' }, { status: 400 });
-      const { error: confErr } = await supabase
-        .from('caixa_fechamentos')
-        .update({ confirmado: true, confirmado_por: userId, confirmado_em: new Date().toISOString() })
-        .eq('id', caixaId);
-      const code = (confErr as any)?.code || '';
-      if (confErr && (code === '42P01' || code === '42501' || code === 'PGRST204' || code === '42703')) {
-        return NextResponse.json({ ok: false, error: 'Banco desatualizado: rode o Bloco 13 do SQL (caixa_fechamentos).' }, { status: 503 });
-      }
-      if (confErr) throw confErr;
-      return NextResponse.json({ ok: true });
-    }
+    // BLOCO 33: FECHAR_CAIXA e CONFIRMAR_CAIXA foram movidos para ANTES do
+    // guard de saleId (nao sao acoes por venda) e agora o caixa e fechado
+    // SOMENTE pelo admin (regra do dono).
 
     return NextResponse.json({ ok: false, error: 'Acao desconhecida.' }, { status: 400 });
   } catch (e: any) {

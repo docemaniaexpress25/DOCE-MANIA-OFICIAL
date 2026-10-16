@@ -247,6 +247,16 @@ async function handle(req: NextRequest, segments: string[]) {
           clone.status = clone.status ?? 'PENDENTE';
           clone.modo_nota = clone.modo_nota ?? null; // BLOCO 29 (ROTA 2)
         }
+        // Defaults tipo PostgREST (colunas com DEFAULT now()/today no SQL real):
+        // a conferencia do admin filtra entrega_eventos por criado_em de hoje —
+        // sem o default, o evento ficava invisivel e a conferencia vazia.
+        if (table === 'entrega_eventos') {
+          clone.criado_em = clone.criado_em ?? new Date().toISOString();
+        }
+        if (table === 'caixa_fechamentos') {
+          clone.data = clone.data ?? new Date().toISOString().slice(0, 10);
+          clone.confirmado = clone.confirmado ?? false;
+        }
         tables[table].push(clone);
       });
       return NextResponse.json(arr, { status: 201 });

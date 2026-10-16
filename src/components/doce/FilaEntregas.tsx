@@ -178,6 +178,9 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
   const [sheetCaixa, setSheetCaixa] = useState(false);
   const [caixaDinheiro, setCaixaDinheiro] = useState('');
   const [caixaObs, setCaixaObs] = useState('');
+  // BLOCO 33: quem fecha o caixa e o ADMIN (regra do dono). O admin escolhe
+  // o entregador alvo quando ha mais de um com entregas no dia.
+  const [caixaEntId, setCaixaEntId] = useState('');
   const [mostrarLista, setMostrarLista] = useState(false);
   // BLOCO 31: edicao do pedido pelo admin (antes da entrega) + busy por sale
   const [editPedido, setEditPedido] = useState<FilaItem | null>(null);
@@ -411,11 +414,28 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
     setTimeout(() => { window.print(); setMostrarLista(false); }, 150);
   }
 
+  // BLOCO 33: caixa e fechado pelo ADMIN — abre o sheet pre-preenchido com o
+  // dinheiro estimado do entregador selecionado (grupos da conferencia).
+  function abrirCaixaAdmin() {
+    const grupos = data?.conferencia?.porEntregador || [];
+    if (grupos.length === 0) { showToast('Nenhuma entrega hoje — nada para fechar no caixa.', 'error'); return; }
+    const primeiro = grupos[0];
+    setCaixaEntId(primeiro.entregadorId);
+    setCaixaDinheiro(primeiro.dinheiro ? String(Number(primeiro.dinheiro).toFixed(2)) : '');
+    setSheetCaixa(true);
+  }
+
+  function trocarEntCaixa(id: string) {
+    setCaixaEntId(id);
+    const g = (data?.conferencia?.porEntregador || []).find((x: any) => x.entregadorId === id);
+    setCaixaDinheiro(g && g.dinheiro ? String(Number(g.dinheiro).toFixed(2)) : '');
+  }
+
   async function fecharCaixa() {
     const v = parseFloat(caixaDinheiro) || 0;
     if (v < 0) { showToast('Valor invalido.', 'error'); return; }
-    const ok = await acao({ acao: 'FECHAR_CAIXA', valorDinheiro: v, valorPix: data?.caixa?.pixHoje || 0, qtdEntregas: data?.resumo?.entreguesHoje || 0, obs: caixaObs }, 'Caixa fechado! O admin confirma o recebimento.');
-    if (ok) { setSheetCaixa(false); setCaixaDinheiro(''); setCaixaObs(''); }
+    const ok = await acao({ acao: 'FECHAR_CAIXA', entregadorId: caixaEntId, valorDinheiro: v, valorPix: data?.caixa?.pixHoje || 0, qtdEntregas: data?.resumo?.entreguesHoje || 0, obs: caixaObs }, 'Caixa fechado e confirmado!');
+    if (ok) { setSheetCaixa(false); setCaixaDinheiro(''); setCaixaObs(''); setCaixaEntId(''); }
   }
 
   if (loading && !data) {
@@ -640,41 +660,41 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                   <p className="text-[8px] font-black text-orange-500 uppercase mt-1"><i className="fa-solid fa-hand-holding-dollar mr-1"></i>A prazo entregue hoje (NAO cobrar): {fmt(prazoEntregueHoje)}</p>
                 )}
               </div>
-              {modo === 'ENTREGADOR' ? (
-                <button onClick={() => { setCaixaDinheiro(caixaEst.dinheiroHoje ? String(caixaEst.dinheiroHoje.toFixed(2)) : ''); setSheetCaixa(true); }}
-                  className="px-4 py-2.5 rounded-xl bg-slate-800 text-white text-[9px] font-black uppercase active:scale-95 shadow">
-                  <i className="fa-solid fa-cash-register mr-1"></i>{data.meuFechamento ? 'Corrigir' : 'Fechar caixa'}
-                </button>
+              {/* BLOCO 33: SOMENTE O ADMIN fecha o caixa (regra do dono). O
+                  entregador so ve o estimado — sem botao de fechar. */}
+              {modo === 'ADMIN' ? (
+                <div className="text-right shrink-0">
+                  <button onClick={abrirCaixaAdmin} disabled={!!busy}
+                    className="px-4 py-2.5 rounded-xl bg-slate-800 text-white text-[9px] font-black uppercase active:scale-95 shadow disabled:opacity-60">
+                    <i className="fa-solid fa-cash-register mr-1"></i>{(data.fechamentosHoje || []).length > 0 ? 'Corrigir' : 'Fechar caixa'}
+                  </button>
+                  {(data.fechamentosHoje || []).length > 0 && (
+                    <div className="mt-1.5 space-y-1">
+                      {(data.fechamentosHoje || []).map((f: any) => (
+                        <div key={f.id} className="flex items-center gap-2 justify-end">
+                          <span className="text-[9px] font-black text-slate-600">Dinheiro: {fmt(Number(f.valor_dinheiro))}</span>
+                          {f.confirmado ? (
+                            <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">Confirmado</span>
+                          ) : (
+                            <button onClick={() => acao({ acao: 'CONFIRMAR_CAIXA', caixaId: f.id }, 'Recebimento do dinheiro confirmado!')}
+                              className="text-[8px] font-black uppercase px-2 py-1 rounded bg-emerald-600 text-white active:scale-95">
+                              Confirmar
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               ) : (
-                data.fechamentosHoje && data.fechamentosHoje.length > 0 && (
-                  <div className="text-right">
-                    {data.fechamentosHoje.map((f: any) => (
-                      <div key={f.id} className="flex items-center gap-2 justify-end mb-1">
-                        <span className="text-[9px] font-black text-slate-600">Dinheiro: {fmt(Number(f.valor_dinheiro))}</span>
-                        {f.confirmado ? (
-                          <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">Confirmado</span>
-                        ) : (
-                          <button onClick={() => acao({ acao: 'CONFIRMAR_CAIXA', caixaId: f.id }, 'Recebimento do dinheiro confirmado!')}
-                            className="text-[8px] font-black uppercase px-2 py-1 rounded bg-emerald-600 text-white active:scale-95">
-                            Confirmar
-                          </button>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )
+                <p className="text-[8px] font-bold text-slate-400 uppercase text-right leading-snug max-w-[130px]">
+                  <i className="fa-solid fa-user-shield mr-1"></i>O caixa e fechado pelo admin no fim do dia
+                </p>
               )}
             </div>
-            {modo === 'ENTREGADOR' && data.meuFechamento && (
-              <p className="text-[8px] font-bold text-slate-400 uppercase mt-1.5">
-                {data.meuFechamento.confirmado
-                  ? <span className="text-emerald-600"><i className="fa-solid fa-circle-check mr-1"></i>Admin confirmou o recebimento</span>
-                  : 'Aguardando o admin confirmar o dinheiro na base'}
-              </p>
-            )}
 
-            {/* CONFERENCIA DO DIA (admin): o que o sistema registrou vs o que o
-                entregador informou — entrega por entrega, para bater o dinheiro */}
+            {/* CONFERENCIA DO DIA (admin): o que o sistema registrou vs o que
+                foi fechado no caixa — entrega por entrega, para bater o dinheiro */}
             {modo === 'ADMIN' && data.conferencia && data.conferencia.porEntregador.length > 0 && (
               <div className="mt-2 pt-2 border-t border-slate-200">
                 <button onClick={() => setVerConferencia(v => !v)} className="w-full flex items-center justify-between">
@@ -708,7 +728,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                           {fech ? (
                             <div className="mt-2 bg-slate-50 rounded-lg p-2.5">
                               <div className="flex items-center justify-between gap-2">
-                                <p className="text-[8px] font-black text-slate-500 uppercase leading-snug">Entregador informou:<br />{fmt(Number(fech.valor_dinheiro))} din · {fmt(Number(fech.valor_pix))} pix</p>
+                                <p className="text-[8px] font-black text-slate-500 uppercase leading-snug">Caixa fechado:<br />{fmt(Number(fech.valor_dinheiro))} din · {fmt(Number(fech.valor_pix))} pix</p>
                                 {fech.confirmado ? (
                                   <span className="text-[7px] font-black uppercase px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 shrink-0">Confirmado</span>
                                 ) : (
@@ -726,7 +746,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                               </div>
                             </div>
                           ) : (
-                            <p className="text-[8px] font-black text-amber-500 uppercase mt-2"><i className="fa-solid fa-hourglass-half mr-1"></i>Aguardando o entregador fechar o caixa</p>
+                            <p className="text-[8px] font-black text-amber-500 uppercase mt-2"><i className="fa-solid fa-hourglass-half mr-1"></i>Caixa nao fechado — use o botao Fechar caixa</p>
                           )}
                           <button onClick={() => setConfDetalhe(aberto ? null : g.entregadorId)} className="w-full mt-2 py-1.5 text-[8px] font-black text-slate-400 uppercase">
                             <i className={`fa-solid ${aberto ? 'fa-chevron-up' : 'fa-chevron-down'} mr-1`}></i>Bater com as entregas ({g.vendas.length})
@@ -1283,12 +1303,31 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
         </div>
       )}
 
-      {sheetCaixa && modo === 'ENTREGADOR' && (
+      {/* ===== SHEET: FECHAR CAIXA (BLOCO 33 — SOMENTE O ADMIN) ===== */}
+      {sheetCaixa && modo === 'ADMIN' && (
         <div className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-sm flex items-end justify-center" onClick={() => setSheetCaixa(false)}>
           <div className="bg-white w-full max-w-md rounded-t-3xl p-6 animate-in slide-in-from-bottom duration-300" onClick={e => e.stopPropagation()}>
             <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-4"></div>
-            <h3 className="text-sm font-black text-gray-800 uppercase text-center">Fechamento de caixa</h3>
-            <p className="text-[10px] text-gray-400 font-semibold text-center mt-1">Conte o dinheiro e informe o valor que vai entregar na base</p>
+            <h3 className="text-sm font-black text-gray-800 uppercase text-center"><i className="fa-solid fa-cash-register text-emerald-600 mr-1"></i>Fechamento de caixa</h3>
+            <p className="text-[10px] text-gray-400 font-semibold text-center mt-1">Conte o dinheiro em especie e feche o caixa do dia</p>
+            {(data?.conferencia?.porEntregador || []).length > 1 && (
+              <div className="mt-3">
+                <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Entregador do caixa</label>
+                <div className="flex gap-1.5 flex-wrap mt-1">
+                  {(data?.conferencia?.porEntregador || []).map((g: any) => (
+                    <button key={g.entregadorId} onClick={() => trocarEntCaixa(g.entregadorId)}
+                      className={`px-3 py-2 rounded-xl text-[9px] font-black uppercase border-2 transition-colors ${caixaEntId === g.entregadorId ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white border-gray-100 text-gray-500'}`}>
+                      {g.nome || 'Entregador'} ({g.qtdEntregas})
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {(data?.conferencia?.porEntregador || []).length === 1 && (
+              <p className="text-[9px] font-black text-emerald-600 uppercase text-center mt-2">
+                <i className="fa-solid fa-motorcycle mr-1"></i>{(data!.conferencia!.porEntregador[0] as any).nome || 'Entregador'}
+              </p>
+            )}
             <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 text-center mt-4">
               <p className="text-[9px] font-black text-emerald-500 uppercase">Dinheiro recebido hoje (estimado)</p>
               <p className="text-2xl font-black text-emerald-700">{fmt(caixaEst.dinheiroHoje)}</p>
@@ -1309,7 +1348,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
             </div>
             <button onClick={fecharCaixa} disabled={!!busy}
               className="w-full mt-4 py-4 bg-slate-800 text-white rounded-2xl text-xs font-black uppercase tracking-wider shadow-lg active:scale-[0.98] transition-transform disabled:opacity-60">
-              <i className="fa-solid fa-cash-register mr-1"></i>Fechar caixa do dia
+              <i className="fa-solid fa-check mr-1"></i>Fechar caixa do dia (ja confirmado)
             </button>
             <button onClick={() => setSheetCaixa(false)} className="w-full mt-2 py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Cancelar</button>
           </div>

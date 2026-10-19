@@ -167,6 +167,12 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const [reopenedClientIds, setReopenedClientIds] = useState<string[]>(() =>
     loadLocalState<string[]>(`v_reopened_${user.id}_${todayStr}`, [])
   );
+  // BLOCO 35: clientes atendidos hoje (venda registrada) — o card da rota fica
+  // cinza NA HORA, inclusive para PRE-VENDA (que so entra em "sales" apos a
+  // entrega confirmada — Bloco 13). Persistido no dia, sobrevive a refresh.
+  const [atendidosHoje, setAtendidosHoje] = useState<string[]>(() =>
+    loadLocalState<string[]>(`v_atendidos_${user.id}_${todayStr}`, [])
+  );
 
   useEffect(() => { saveLocalState('v_activeTab', activeTab); }, [activeTab]);
   useEffect(() => { saveLocalState('v_selectedClient', selectedClient); }, [selectedClient]);
@@ -177,6 +183,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   // Persistir optimisticSkipped e reopenedClientIds no localStorage
   useEffect(() => { saveLocalState(`v_optSkipped_${user.id}_${todayStr}`, optimisticSkipped); }, [optimisticSkipped, user.id, todayStr]);
   useEffect(() => { saveLocalState(`v_reopened_${user.id}_${todayStr}`, reopenedClientIds); }, [reopenedClientIds, user.id, todayStr]);
+  useEffect(() => { saveLocalState(`v_atendidos_${user.id}_${todayStr}`, atendidosHoje); }, [atendidosHoje, user.id, todayStr]);
 
   // Se o cliente selecionado nao existe mais na lista, limpa a selecao
   useEffect(() => {
@@ -347,14 +354,24 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
   const handleSaveClientInfo = async () => {
     if (!clientInfoModal) return;
-    const updates: any = {};
-    if (gpsPinStr && gpsPinStr.length >= 5) updates.pinLocalizacao = gpsPinStr;
+    // BLOCO 35 (regra do dono): preenchimento OBRIGATORIO — sem GPS/WhatsApp
+    // o botao nao salva e nao segue (pede ate completar).
+    const faltaGps = !gpsPinStr || gpsPinStr.length < 5;
+    const faltaTel = !modalWhatsapp || modalWhatsapp.trim().replace(/\D/g, '').length < 10;
+    if (faltaGps || faltaTel) {
+      showToast(
+        faltaGps && faltaTel ? 'Capture a localização e informe o WhatsApp antes de salvar.'
+          : faltaGps ? 'Capture a localização do cliente antes de salvar.'
+          : 'Informe o WhatsApp do cliente antes de salvar.',
+        'error'
+      );
+      return;
+    }
+    const updates: any = { pinLocalizacao: gpsPinStr };
     if (gpsEndereco) updates.endereco = gpsEndereco;
     if (gpsBairro) updates.bairro = gpsBairro;
-    if (modalWhatsapp && modalWhatsapp.trim().length >= 10) updates.telefone = modalWhatsapp.trim();
-    if (Object.keys(updates).length > 0) {
-      updateClient(clientInfoModal.id, updates);
-    }
+    updates.telefone = modalWhatsapp.trim();
+    updateClient(clientInfoModal.id, updates);
     setClientInfoModal(null);
     setModoSheet(clientInfoModal);
   };
@@ -577,6 +594,8 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       // Atualiza estado local imediatamente
       setOptimisticSkipped(prev => prev.filter(id => id !== clientId));
       setReopenedClientIds(prev => [...prev, clientId]);
+      // BLOCO 35: reabrir tira o cliente da lista de atendidos de hoje
+      setAtendidosHoje(prev => prev.filter(id => id !== clientId));
       showToast("Visita reaberta.");
 
       // Persiste no Supabase em background
@@ -590,6 +609,23 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     } catch (err) {
       console.error('[REABRIR] Erro inesperado:', err);
       showToast("Erro ao reabrir visita.", "error");
+    }
+  };
+
+  /** BLOCO 35: venda registrada hoje — marca o cliente como ATENDIDO na hora
+   * (card cinza na rota), mesmo para PRE-VENDA que ainda nao entrou em "sales".
+   * Tambem desfaz pulo anterior: quem foi atendido nao esta "pulado". */
+  const markClienteAtendido = (clientId: string) => {
+    if (!clientId) return;
+    setAtendidosHoje(prev => [...new Set([...prev, clientId])]);
+    setOptimisticSkipped(prev => prev.filter(id => id !== clientId));
+    setReopenedClientIds(prev => prev.filter(id => id !== clientId));
+    const baseSkipped = dailyRouteState?.skippedClientIds || [];
+    if (baseSkipped.includes(clientId)) {
+      // Promise.resolve: a prop e tipada como void, mas a implementacao real e
+      // async — garante catch de rejeicao sem violar o tipo (baseline tsc).
+      void Promise.resolve(updateDailyRoute(dailyRouteState?.clientIds || [], baseSkipped.filter(id => id !== clientId)))
+        .catch((err: any) => console.error('[ATENDIDO] Erro ao remover pulo no Supabase:', err));
     }
   };
 
@@ -1039,10 +1075,12 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   return (
       <PDV
         client={pdvClient} products={products} minhaCarga={minhaCarga} vendedorId={user.id} onCancel={() => setSelectedClient(null)}
-        onFinish={() => { 
-          setSelectedClient(null); 
-          setActiveTab('ROTEIRO'); 
-          showToast(modoAtendimento === 'PRE_VENDA' ? "Pedido de pre-venda registrado!" : "Venda realizada com sucesso!", 'success'); 
+        onFinish={(finishedSale) => {
+          // BLOCO 35: cliente ATENDIDO — card cinza na rota na hora (inclusive pre-venda)
+          markClienteAtendido(finishedSale?.clientId || selectedClient.id);
+          setSelectedClient(null);
+          setActiveTab('ROTEIRO');
+          showToast(modoAtendimento === 'PRE_VENDA' ? "Pedido de pre-venda registrado!" : "Venda realizada com sucesso!", 'success');
         }}
         processSale={processSale} processPreVenda={processPreVenda} modoVenda={modoAtendimento} margemMinima={margemMinima} margemMinimaAtiva={margemMinimaAtiva} pix1Name={pix1Name} pix1Code={pix1Code} pix2Name={pix2Name} pix2Code={pix2Code}
         wizardPagamento={user.rota2 === true}
@@ -1169,7 +1207,8 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
           {rotaDeHoje.map(c => {
             const isSold = (sales || []).some(s => s.clientId === c.id && isSameDay(s.data));
             const isSkipped = (dailyRouteState?.skippedClientIds || []).includes(c.id) || optimisticSkipped.includes(c.id);
-            const isVisited = (isSold || isSkipped) && !reopenedClientIds.includes(c.id);
+            // BLOCO 35: atendidosHoje cobre PRE-VENDA (que nao entra em sales ate a entrega)
+            const isVisited = (isSold || isSkipped || atendidosHoje.includes(c.id)) && !reopenedClientIds.includes(c.id);
             const lastSale = (sales || []).filter(s => s.clientId === c.id).sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime())[0];
             const isExpanded = expandedRouteClientId === c.id;
             return (
@@ -1692,14 +1731,20 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                   <i className={`fa-solid ${gpsStatus === 'done' ? 'fa-check text-emerald-600' : gpsStatus === 'loading' ? 'fa-spinner fa-spin text-blue-600' : 'fa-location-crosshairs text-amber-500'}`}></i>
                 </div>
                 <div className="flex-1">
-                  <p className="text-[10px] font-black text-gray-800 uppercase">Localizacao GPS</p>
-                  <p className="text-[9px] text-gray-400 mt-0.5">
-                    {gpsStatus === 'done' && gpsPinStr ? gpsPinStr : gpsStatus === 'loading' ? 'Obtendo localizacao...' : 'Nao capturada'}
-                  </p>
-                  {gpsStatus === 'done' && (gpsEndereco || gpsBairro) && (
-                    <p className="text-[8px] text-emerald-600 font-bold mt-0.5">
-                      {gpsEndereco}{gpsEndereco && gpsBairro ? ' - ' : ''}{gpsBairro}
-                    </p>
+                  <p className="text-[10px] font-black text-gray-800 uppercase">Localizacao</p>
+                  {gpsStatus === 'done' ? (
+                    /* BLOCO 35 (regra do dono): mostrar RUA e BAIRRO — nunca lat/lng */
+                    gpsEndereco || gpsBairro ? (
+                      <p className="text-[10px] font-black text-emerald-700 mt-0.5 leading-snug">
+                        {gpsEndereco}{gpsEndereco && gpsBairro ? ' — ' : ''}{gpsBairro}
+                      </p>
+                    ) : (
+                      <p className="text-[9px] text-gray-400 mt-0.5">Localização capturada</p>
+                    )
+                  ) : gpsStatus === 'loading' ? (
+                    <p className="text-[9px] text-gray-400 mt-0.5">Obtendo localizacao...</p>
+                  ) : (
+                    <p className="text-[9px] text-gray-400 mt-0.5">Nao capturada</p>
                   )}
                 </div>
                 {gpsStatus !== 'done' && (
@@ -1913,14 +1958,53 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       )}
 
       {/* ===== SHEET: ESCOLHER MODO (PRE-VENDEDOR) ===== */}
-      {modoSheet && (
+      {modoSheet && (() => {
+        // BLOCO 35: dados do cadastro nesta tela — rua/bairro/telefone (sem lat/lng).
+        // Completo = mostra e pergunta se estao corretos; incompleto = pede obrigatorio.
+        const faltaGps = !modoSheet.pinLocalizacao || modoSheet.pinLocalizacao.length < 5;
+        const faltaTel = isEmptyField(modoSheet.telefone);
+        const cadastroOk = !faltaGps && !faltaTel;
+        return (
         <div className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-sm flex items-end justify-center" onClick={() => setModoSheet(null)}>
-          <div className="bg-white w-full max-w-md rounded-t-3xl p-6 animate-in slide-in-from-bottom duration-300" onClick={e => e.stopPropagation()}>
+          <div className="bg-white w-full max-w-md rounded-t-3xl p-6 animate-in slide-in-from-bottom duration-300 max-h-[92vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-4"></div>
             <p className="text-[9px] font-black text-gray-400 uppercase text-center tracking-widest">Atender cliente</p>
             <h3 className="text-sm font-black text-gray-800 uppercase text-center mt-1 capitalize">{modoSheet.nomeFantasia}</h3>
-            <p className="text-[10px] text-gray-400 font-semibold text-center mt-1">Como voce vai vender agora?</p>
-            <div className="grid grid-cols-2 gap-2.5 mt-5">
+
+            {cadastroOk ? (
+              <div className="mt-4 rounded-2xl bg-gray-50 border border-gray-100 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex-1 min-w-0 space-y-1.5">
+                    <p className="text-[11px] font-black text-gray-700 leading-snug">
+                      <i className="fa-solid fa-location-dot text-amber-500 mr-1.5"></i>
+                      {modoSheet.endereco || '—'}{modoSheet.endereco && modoSheet.bairro ? ' — ' : ''}{modoSheet.bairro || ''}
+                    </p>
+                    <p className="text-[11px] font-bold text-emerald-600 truncate">
+                      <i className="fa-brands fa-whatsapp mr-1.5"></i>{modoSheet.telefone}
+                    </p>
+                  </div>
+                  <button onClick={() => { setModoSheet(null); handleOpenEditClient(modoSheet); }}
+                    className="flex-shrink-0 bg-white border border-gray-200 text-gray-500 text-[8px] font-black uppercase px-3 py-2.5 rounded-xl active:scale-95 transition-transform">
+                    <i className="fa-solid fa-pen mr-1"></i>Atualizar
+                  </button>
+                </div>
+                <p className="text-[8px] font-bold text-gray-400 uppercase text-center mt-3">Esses dados estão corretos? Se não, toque em Atualizar.</p>
+              </div>
+            ) : (
+              <div className="mt-4 rounded-2xl bg-amber-50 border-2 border-dashed border-amber-300 p-4">
+                <p className="text-[10px] font-black text-amber-700 uppercase"><i className="fa-solid fa-triangle-exclamation mr-1.5"></i>Cadastro incompleto</p>
+                <p className="text-[9px] font-bold text-amber-600 mt-1">
+                  Falta: {faltaGps ? 'localização do estabelecimento' : ''}{faltaGps && faltaTel ? ' e ' : ''}{faltaTel ? 'WhatsApp' : ''}.
+                </p>
+                <button onClick={() => handleAtenderClient(modoSheet)}
+                  className="w-full mt-3 bg-amber-500 text-white text-[9px] font-black uppercase py-3 rounded-xl active:scale-95 transition-transform">
+                  <i className="fa-solid fa-circle-plus mr-1.5"></i>Completar cadastro agora
+                </button>
+              </div>
+            )}
+
+            <p className="text-[10px] text-gray-400 font-semibold text-center mt-4">Como voce vai vender agora?</p>
+            <div className="grid grid-cols-2 gap-2.5 mt-3">
               <button onClick={() => escolherModoVenda(modoSheet, 'PRONTA')}
                 className="py-5 rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-600 text-white shadow-md active:scale-95 transition-transform">
                 <i className="fa-solid fa-truck-fast text-lg block mb-1.5"></i>
@@ -1937,7 +2021,8 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
             <button onClick={() => setModoSheet(null)} className="w-full mt-3 py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Cancelar</button>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* ===== BLOCO 29 (ROTA 2): PERGUNTA DO ATENDIMENTO — DESEJA EMITIR NOTA? ===== */}
       {notaSheet && (
@@ -1953,25 +2038,26 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
             {!nfcCpfModoPanel ? (
               <>
                 <div className="space-y-2.5 mt-5">
-                  {/* NÃO = CUPOM -> ESTOQUE 2 (SEM NF) */}
+                  {/* BLOCO 35 (regra do dono): CUPOM = botao principal — grande e destacado */}
                   <button onClick={() => confirmarNotaSheet('CUPOM')}
-                    className="w-full p-4 rounded-2xl border-2 border-gray-200 bg-gray-50 text-left active:scale-[0.98] transition-transform">
-                    <p className="text-[11px] font-black uppercase text-gray-600"><i className="fa-solid fa-receipt mr-1.5"></i>NÃO — só cupom</p>
-                    <p className="text-[8px] font-bold text-gray-400 mt-0.5">Vende do ESTOQUE 2 (sem NF) — cupom não fiscal</p>
+                    className="w-full py-6 rounded-2xl bg-gradient-to-br from-gray-900 to-gray-600 text-white shadow-lg active:scale-[0.98] transition-transform text-center">
+                    <i className="fa-solid fa-receipt text-2xl block mb-2"></i>
+                    <span className="text-sm font-black uppercase tracking-widest block">Só cupom</span>
+                    <span className="block text-[8px] font-bold text-gray-300 mt-1">Vende do ESTOQUE 2 (sem NF) — cupom não fiscal</span>
                   </button>
-                  {/* SIM -> NF-e ou NFC-e -> ESTOQUE 1 (COM NF) */}
-                  <div className="rounded-2xl border-2 border-violet-200 bg-violet-50 p-3">
-                    <p className="text-[11px] font-black uppercase text-violet-700 text-center mb-2"><i className="fa-solid fa-file-invoice mr-1.5"></i>SIM, com nota — vende do ESTOQUE 1</p>
+                  {/* BLOCO 35: NF-e / NFC-e = secundárias — discretas, menos destaque */}
+                  <div className="rounded-2xl bg-gray-50 border border-gray-100 p-3">
+                    <p className="text-[8px] font-bold text-gray-400 uppercase text-center mb-2">Cliente pediu nota? (vende do ESTOQUE 1)</p>
                     <div className="grid grid-cols-2 gap-2">
                       <button onClick={() => confirmarNotaSheet('NFE')}
-                        className={`py-3.5 rounded-xl text-[9px] font-black uppercase transition-all ${clienteAptoNfe(notaSheet.client) ? 'bg-violet-600 text-white shadow-md active:scale-95' : 'bg-gray-100 text-gray-300'}`}>
-                        <i className="fa-solid fa-file-invoice-dollar block mb-1 text-sm"></i>NF-e
-                        <span className="block text-[7px] font-bold mt-0.5 opacity-80">{clienteAptoNfe(notaSheet.client) ? 'CNPJ do cadastro' : 'sem CNPJ completo'}</span>
+                        className={`py-2.5 rounded-xl text-[8px] font-bold uppercase transition-all active:scale-95 border ${clienteAptoNfe(notaSheet.client) ? 'bg-white border-gray-200 text-gray-600' : 'bg-gray-100 border-gray-100 text-gray-300'}`}>
+                        <i className="fa-solid fa-file-invoice-dollar block mb-0.5 text-[11px]"></i>NF-e
+                        <span className="block text-[7px] font-bold mt-0.5">{clienteAptoNfe(notaSheet.client) ? 'usa o CNPJ do cadastro' : 'sem CNPJ completo'}</span>
                       </button>
                       <button onClick={() => confirmarNotaSheet('NFCE')}
-                        className="py-3.5 rounded-xl text-[9px] font-black uppercase bg-slate-700 text-white shadow-md active:scale-95 transition-transform">
-                        <i className="fa-solid fa-file-lines block mb-1 text-sm"></i>NFC-e
-                        <span className="block text-[7px] font-bold mt-0.5 opacity-80">CPF opcional</span>
+                        className="py-2.5 rounded-xl text-[8px] font-bold uppercase bg-white border border-gray-200 text-gray-600 active:scale-95 transition-transform">
+                        <i className="fa-solid fa-file-lines block mb-0.5 text-[11px]"></i>NFC-e
+                        <span className="block text-[7px] font-bold mt-0.5">CPF opcional</span>
                       </button>
                     </div>
                   </div>

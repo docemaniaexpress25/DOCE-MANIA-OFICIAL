@@ -216,21 +216,47 @@ export function gerarCupomTexto({ sale, client, products, width }: CupomTextoInp
     }
   }
 
-  // BLOCO 36/37 (regra do dono): parte de baixo do cupom —
-  // (a) BLOCO DESTACADO com o tipo de documento (CUPOM / NF-e / NFC-e) e a
-  //     forma de pagamento consolidada (DINHEIRO / PIX / MISTO / BOLETO /
-  //     CHEQUE / PIX NA DATA + A VISTA/A PRAZO);
-  // (b) DADOS DO CLIENTE (endereco — rua/bairro, NUNCA lat/lng, WhatsApp,
-  //     CNPJ, razao, CPF da nota) SOMENTE quando o cliente pediu NF-e ou
-  //     NFC-e — e o que o dono usa para bater a nota no outro sistema.
-  //     No cupom (nao fiscal) os dados do cliente NAO saem no rodape.
+  // BLOCO 38 (regra do dono): a parte de baixo do cupom e a BASE DA
+  // SEPARACAO dos itens — imprime SOMENTE:
+  //  - o tipo do documento destacado (CUPOM / NF-e / NFC-e);
+  //  - NF-e: o CNPJ do cliente ("NF-e: 12.345.678/0001-99");
+  //  - NFC-e: o CPF se identificado na nota ("CPF: ...");
+  //  - a forma de pagamento entre todas as opcoes + quantos dias (a prazo).
+  // NAO imprime nome, endereco nem WhatsApp nessa parte (o nome ja aparece
+  // no topo do cupom; quem separa nao precisa do resto).
   const tipoDoc = tipoDocumentoDeSale(sale as any);
   const { forma: formaPg, condicao: condicaoPg } = formaPagamentoDeSale(sale as any);
 
   t += '='.repeat(totalWidth) + '\n';
   t += center(`>>> ${tipoDoc} <<<`, totalWidth) + '\n';
+
+  // Documento fiscal do cliente — so no documento que vai ter nota
+  if (tipoDoc === 'NF-e') {
+    const cnpjDigits = String((client as any).cnpj || '').replace(/\D/g, '');
+    if (cnpjDigits.length === 14) {
+      const cnpjFmt = `${cnpjDigits.slice(0, 2)}.${cnpjDigits.slice(2, 5)}.${cnpjDigits.slice(5, 8)}/${cnpjDigits.slice(8, 12)}-${cnpjDigits.slice(12)}`;
+      t += center(`NF-e: ${cnpjFmt}`, totalWidth) + '\n';
+    }
+  } else if (tipoDoc === 'NFC-e') {
+    // CPF identificado na NFC-e — gravado no detalhePagamento ("COM NOTA: NFC-e (CPF ...)")
+    const cpfNaNota = (String(sale.detalhePagamento || '').match(/CPF\s*([\d.\-\/]+)/) || [])[1] || '';
+    if (cpfNaNota) t += center(`CPF: ${cpfNaNota}`, totalWidth) + '\n';
+  }
+
+  // Forma de pagamento + quantos dias (a prazo = dias ate o vencimento)
+  let payValor: string;
+  if (condicaoPg === 'A PRAZO') {
+    let dias = 0;
+    if (sale.dataVencimento) {
+      const vendaMs = new Date(sale.data).setHours(12, 0, 0, 0);
+      const vencMs = new Date(sale.dataVencimento).setHours(12, 0, 0, 0);
+      dias = Math.round((vencMs - vendaMs) / 86400000);
+    }
+    payValor = `${formaPg} (A PRAZO${dias > 0 ? ` - ${dias} DIAS` : ''})`;
+  } else {
+    payValor = `${formaPg} (A VISTA)`;
+  }
   const payLabel = 'PAGAMENTO:';
-  const payValor = `${formaPg} (${condicaoPg})`;
   if ((payLabel + ' ' + payValor).length <= totalWidth) {
     t += center(`${payLabel} ${payValor}`, totalWidth) + '\n';
   } else {
@@ -239,41 +265,6 @@ export function gerarCupomTexto({ sale, client, products, width }: CupomTextoInp
     t += ' '.repeat(spaces) + payValor + '\n';
   }
   t += '='.repeat(totalWidth) + '\n';
-
-  const blocoEndereco = [String(client.endereco || '').trim(), String(client.bairro || '').trim()]
-    .map(s => (s && s !== '0' ? s : ''))
-    .filter(Boolean);
-  // numero da rua (cadastro fiscal) — so anexa se ainda nao estiver no endereco
-  const numeroRua = String((client as any).enderecoNumero || '').trim();
-  if (numeroRua && blocoEndereco[0] && !blocoEndereco[0].includes(numeroRua)) {
-    blocoEndereco[0] = `${blocoEndereco[0]}, ${numeroRua}`;
-  }
-  const telDigits = String(client.telefone || '').replace(/\D/g, '');
-  const telFmt = telDigits.length === 11
-    ? `(${telDigits.slice(0, 2)}) ${telDigits.slice(2, 7)}-${telDigits.slice(7)}`
-    : telDigits.length === 10
-      ? `(${telDigits.slice(0, 2)}) ${telDigits.slice(2, 6)}-${telDigits.slice(6)}`
-      : String(client.telefone || '').trim();
-  const cnpjDigits = String((client as any).cnpj || '').replace(/\D/g, '');
-  const cnpjFmt = cnpjDigits.length === 14
-    ? `${cnpjDigits.slice(0, 2)}.${cnpjDigits.slice(2, 5)}.${cnpjDigits.slice(5, 8)}/${cnpjDigits.slice(8, 12)}-${cnpjDigits.slice(12)}`
-    : '';
-  const razaoSocialFmt = String((client as any).razaoSocial || '').trim();
-  // CPF da NFC-e (opcional) — gravado no detalhePagamento ("COM NOTA: NFC-e (CPF ...)")
-  const cpfNaNota = (String(sale.detalhePagamento || '').match(/CPF\s*([\d.\-]+)/) || [])[1] || '';
-
-  // BLOCO 37: no CUPOM (nao fiscal) o rodape NAO imprime dados do cliente;
-  // em NF-e/NFC-e imprime sempre (nome + o que houver) para bater a nota.
-  if (tipoDoc !== 'CUPOM') {
-    t += '-'.repeat(totalWidth) + '\n';
-    t += 'DADOS DO CLIENTE\n';
-    quebra(`Nome: ${clientName}`);
-    if (blocoEndereco.length > 0) quebra(`End: ${blocoEndereco.join(' — ')}`);
-    if (telFmt) quebra(`WhatsApp: ${telFmt}`);
-    if (cnpjFmt) quebra(`CNPJ: ${cnpjFmt}`);
-    if (razaoSocialFmt && cnpjFmt) quebra(`Razao: ${razaoSocialFmt}`);
-    if (cpfNaNota) quebra(`CPF: ${cpfNaNota}`);
-  }
 
   t += '-'.repeat(totalWidth) + '\n';
   t += center('OBRIGADO PELA PREFERENCIA!', totalWidth) + '\n';

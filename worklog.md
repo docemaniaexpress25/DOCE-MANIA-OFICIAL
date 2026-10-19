@@ -79,3 +79,22 @@ Stage Summary:
 - Dados do cliente no rodapé só saem em NF-e/NFC-e (bater nota); cupom fica limpo.
 - Zero estouros de coluna (Info quebra linhas agora).
 - Deploy em produção via Vercel (66a9eb3).
+
+---
+Task ID: 38
+Agent: Z.ai Code (sessão principal)
+Task: BLOCO 38 — rodapé do cupom ENXUTO (nova regra do dono: o cupom é a base da SEPARAÇÃO dos itens) + auditoria do deploy.
+
+Work Log:
+- cupomTexto.ts: a parte de baixo imprime SOMENTE (1) tipo destacado (>>> CUPOM <<< / >>> NF-e <<< / >>> NFC-e <<<); (2) NF-e → linha "NF-e: <CNPJ do cliente>" (só se o cadastro tiver CNPJ 14 dígitos); (3) NFC-e → linha "CPF: <cpf>" se identificado na nota (detalhePagamento); (4) forma de pagamento destacada (DINHEIRO/PIX/MISTO/BOLETO/CHEQUE/PIX NA DATA) + QUANTOS DIAS no a prazo — "(A PRAZO - 7 DIAS)" (dias = vencimento - data da venda; "(A VISTA)" não mostra dias; prazo sem vencimento mostra só "(A PRAZO)"). REMOVIDO do rodapé: nome, endereço, WhatsApp, razão social e a seção DADOS DO CLIENTE inteira (nome continua no topo do cupom).
+- QA: lint 0 erros/11 warnings (baseline exata); tsc 7 (baseline, zero novos).
+- Teste funcional (bun, temporários removidos): 10 cenários × 56mm/80mm, zero estouros — NF-e à vista com CNPJ, NF-e prazo 7 dias, NF-e sem CNPJ (sem linha), NFC-e com CPF, NFC-e sem CPF, CUPOM à vista, CUPOM cheque 15 dias, pré-venda prazo 7 dias, pré-venda pago na visita, prazo sem vencimento.
+- E2E Agent Browser (iPhone14, rota2user, mock): cupom pré-venda = ">>> CUPOM <<<" + "PAGAMENTO: DINHEIRO (A VISTA)" sem dados do cliente; cupom NF-e = ">>> NF-e <<<" + pagamento, sem dados do cliente; cupom pré-venda a prazo = "PAGAMENTO: PIX (A PRAZO - 7 DIAS)" com quebra correta em 56mm; cards REABRIR (cinza); zero erros no console. .env.local removido; dev server reiniciado limpo.
+- Commit bbabf42 + push e830a02..bbabf42; token removido do .git/config.
+- AUDITORIA DE DEPLOY (importante p/ próximas sessões): (a) o commit do Bloco 37 (66a9eb3) FALHOU em TODOS os 4 projetos Vercel da conta — nunca chegou à produção; o last-modified 21:48 que eu tinha confirmado era o deploy do Bloco 36. Sem impacto: o Bloco 38 substitui o rodapé do 37 (regra final do dono) e buildou com sucesso. Falha provável: concorrência de fila no plano free (4 projetos buildando o mesmo commit). (b) A conta tem 4 projetos Vercel conectados ao repo: doce-mania-oficial-zpac (SEMPRE falha — config antiga quebrada), doce-mania-teste, doce-mania-oficial e doce-mania-oficial2. (c) O domínio doce-mania-oficial.vercel.app NÃO serve o app Next — serve um app Vite antigo (BASE OPERACIONAL V1.0, assets/index-*.js, /api/login dá 404). O app Next REAL está no doce-mania-oficial2.vercel.app (verificado: /api/login responde {"ok":false,"error":"PIN incorreto..."} = endpoint nosso; resposta fresca age:8). (d) Status do commit bbabf42: doce-mania-oficial2 SUCCESS, doce-mania-teste SUCCESS, doce-mania-oficial SUCCESS, zpac failure → o Bloco 38 está em produção no app Next.
+- Commit/push do worklog separado (e830a02..).
+
+Stage Summary:
+- Rodapé de TODO cupom: bloco destacado com tipo do documento + documento fiscal (CNPJ na NF-e, CPF na NFC-e) + forma de pagamento com quantos dias. Nada mais — sem nome, endereço ou WhatsApp (cupom = base da separação).
+- Deploy: código em produção no doce-mania-oficial2.vercel.app (app Next real). zpac sempre falha (projeto antigo); doce-mania-oficial.vercel.app é o app Vite V1 antigo, NÃO usar para verificar deploy.
+- Padrão de verificação de deploy a partir de agora: commit status no GitHub (API) + testar /api/login no domínio — NÃO confiar em last-modified do doce-mania-oficial.vercel.app.

@@ -144,6 +144,15 @@ class BluetoothPrinterService {
   private printer: BluetoothPrinter | null = null;
   private lastPrinterId: string | null = null;
   private statusListeners = new Set<(job: PrintJob) => void>();
+  // BLOCO 34 — ESTABILIDADE DA CONEXAO: impressoras térmicas BLE derrubam o
+  // GATT sozinhas (economia de energia do firmware) e antes o app só limpava
+  // o estado — o vendedor tinha que reconectar na mão "toda hora". Agora o
+  // próprio app reconecta em background com o device em memória (sem seletor,
+  // sem gesto, invisível para quem está trabalhando) e o envio sobrevive a
+  // queda no meio do cupom (retry que RECONECTA e continua do chunk atual).
+  private manualDisconnect = false;
+  private autoReconnecting = false;
+  private printing = false;
 
   constructor() {
     // Recover last printer ID from localStorage
@@ -283,16 +292,58 @@ class BluetoothPrinterService {
     this.lastPrinterId = printer.device.id;
     localStorage.setItem('bt_printer_id', printer.device.id);
     localStorage.setItem('bt_printer_name', printer.name);
+    this.manualDisconnect = false;
 
-    printer.device.addEventListener('gattserverdisconnected', () => {
-      // So limpa se a impressora desconectada for a ativa
-      if (this.printer?.device.id === printer.device.id) {
-        this.printer = null;
-        this.emitStatus({ status: 'idle' });
-      }
-    });
+    // BLOCO 34: UM handler de desconexao por device — remove o anterior antes
+    // de adicionar. Antes, reconectar a mesma impressora N vezes acumulava N
+    // ouvintes que disparavam N auto-reconexoes em paralelo.
+    const device = printer.device;
+    const anterior = (device as any).__dmDiscHandler as ((e: Event) => void) | undefined;
+    if (anterior) device.removeEventListener('gattserverdisconnected', anterior);
+    const handler = () => {
+      if (this.printer?.device.id !== device.id) return; // desconexao de impressora antiga
+      this.printer = null;
+      if (this.manualDisconnect) { this.emitStatus({ status: 'idle' }); return; }
+      // Se caiu no MEIO de uma impressao, o retry do sendBytes que reconecta
+      // (evita duas reconexoes brigando pelo mesmo device).
+      if (this.printing) return;
+      this.autoReconnect(device);
+    };
+    (device as any).__dmDiscHandler = handler;
+    device.addEventListener('gattserverdisconnected', handler);
 
     this.emitStatus({ status: 'connected', printerName: printer.name });
+  }
+
+  /**
+   * BLOCO 34 — AUTO-RECONEXAO: tenta religar o GATT com a MESMA impressora
+   * (device em memória) em até 3 tentativas com espera crescente (1s, 2s, 3s —
+   * o módulo BLE da impressora às vezes está renes em religar o radio).
+   * NÃO usa requestDevice/getDevices: nao precisa de gesto nem abre seletor.
+   * Se esgotar, fica 'idle' silencioso — a proxima impressão oferece reconectar.
+   */
+  async autoReconnect(device: BluetoothDevice, tentativas: number = 3): Promise<boolean> {
+    if (this.printer) return true;
+    if (this.autoReconnecting || this.manualDisconnect) return false;
+    this.autoReconnecting = true;
+    try {
+      for (let i = 0; i < tentativas; i++) {
+        await new Promise(r => setTimeout(r, 1000 * (i + 1)));
+        if (this.printer) return true;                    // outra via conectou antes
+        if (this.manualDisconnect) return false;
+        this.emitStatus({ status: 'connecting', printerName: device.name || 'Impressora' });
+        try {
+          const printer = await this.openDevice(device, 6000);
+          if (this.printer) return true;
+          this.installPrinter(printer);
+          return true;
+        } catch { /* impressora fora de alcance/ligando — proxima tentativa */ }
+      }
+    } finally {
+      this.autoReconnecting = false;
+    }
+    if (!this.printer) this.emitStatus({ status: 'idle' });
+    return false;
   }
 
   /**
@@ -424,9 +475,11 @@ class BluetoothPrinterService {
   }
 
   /**
-   * Disconnect from the current printer
+   * Disconnect from the current printer (manual — o auto-reconnect NAO luta
+   * contra a vontade do usuario: flag manualDisconnect).
    */
   disconnect(): void {
+    this.manualDisconnect = true;
     if (this.printer) {
       this.printer.device.gatt?.disconnect();
       this.printer = null;
@@ -440,33 +493,45 @@ class BluetoothPrinterService {
   private async sendBytes(data: Uint8Array, onProgress?: (pct: number) => void): Promise<void> {
     if (!this.printer) throw new Error('IMPRESSORA_NAO_CONECTADA');
 
-    const char = this.printer.characteristic;
-    const CHUNK = 100; // bytes per chunk for stability
-    const DELAY = 30;  // ms between chunks
+    const device = this.printer.device;
+    const CHUNK = 100; // bytes per chunk
+    const DELAY = 40;  // BLOCO 34: 30 -> 40ms — buffer do modulo BLE dos
+                       // chineses com write sem resposta estoura e o firmware
+                       // se defende DERRUBANDO o GATT (causa da queda no meio
+                       // do cupom). 40ms mantem o mesmo ritmo com folga.
 
     for (let i = 0; i < data.length; i += CHUNK) {
       const chunk = data.slice(i, i + CHUNK);
+      let ok = false;
 
-      try {
-        if (char.properties.writeWithoutResponse) {
-          await char.writeValueWithoutResponse(chunk);
-        } else if (char.properties.write) {
-          await char.writeValue(chunk);
-        } else {
-          throw new Error('CARACTERISTICA_SEM_ESCRITA');
+      // BLOCO 34: 3 tentativas por chunk. Na 2a/3a o app RECONECTA o GATT
+      // (device em memoria) e CONTINUA do chunk atual — o cupom nao se perde
+      // e nao recomeça do zero quando o BLE cai no meio da impressao.
+      for (let t = 0; t < 3 && !ok; t++) {
+        if (t > 0) {
+          try {
+            const printer = await this.openDevice(device, 6000);
+            this.installPrinter(printer);
+          } catch {
+            await new Promise(r => setTimeout(r, 800));
+            continue;
+          }
         }
-      } catch (err) {
-        // Retry once
         try {
+          const char = this.printer!.characteristic;
           if (char.properties.writeWithoutResponse) {
             await char.writeValueWithoutResponse(chunk);
-          } else {
+          } else if (char.properties.write) {
             await char.writeValue(chunk);
+          } else {
+            throw new Error('CARACTERISTICA_SEM_ESCRITA');
           }
-        } catch (retryErr) {
-          throw new Error('ERRO_ENVIO_DADOS');
+          ok = true;
+        } catch {
+          await new Promise(r => setTimeout(r, 300));
         }
       }
+      if (!ok) throw new Error('ERRO_ENVIO_DADOS');
 
       onProgress?.(Math.min(100, Math.round(((i + CHUNK) / data.length) * 100)));
 
@@ -595,8 +660,15 @@ class BluetoothPrinterService {
 
     // Step 3: Build ESC/POS buffer and send
     const printerName = this.printer?.name || 'Impressora';
+    // BLOCO 34: referencia do device ANTES do envio — se o GATT morrer no
+    // meio, this.printer vira null e so este device permite reconectar.
+    const deviceDaImpressao = this.printer?.device || null;
     this.emitStatus({ status: 'printing', printerName, progress: 0 });
 
+    // BLOCO 34: flag printing — o listener de desconexao NAO dispara a
+    // auto-reconexao em paralelo durante o envio; quem reconecta aqui e o
+    // retry do sendBytes (que retoma do chunk atual).
+    this.printing = true;
     try {
       const buffer = this.buildEscposBuffer(rawText, width);
       await this.sendBytes(buffer, (pct) => {
@@ -612,6 +684,13 @@ class BluetoothPrinterService {
         error: `Erro na impressao: ${error.message || 'Falha desconhecida'}`,
       });
       throw error;
+    } finally {
+      this.printing = false;
+      // Se o GATT morreu durante o envio e o retry esgotou, deixa a
+      // auto-reconexao cuidar para a impressora voltar sozinha.
+      if (deviceDaImpressao && !this.isConnected()) {
+        try { await this.autoReconnect(deviceDaImpressao); } catch { /* silencioso */ }
+      }
     }
   }
 

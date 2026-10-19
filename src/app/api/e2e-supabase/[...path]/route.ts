@@ -27,16 +27,40 @@ const users = [{
 const clients = [{
   id: 'cli-1', nome_fantasia: 'Emporio Teste', nome: null, ativar_cnpj: false, cnpj: null,
   telefone: '(54) 99999-9999', endereco: 'Rua Teste 123', bairro: 'Centro', ativo: true,
-  localizacao: null, dia_roteiro: 3, ordem: 1, observacoes: null,
+  localizacao: null, dia_roteiro: new Date().getDay(), ordem: 1, observacoes: null,
   pin_localizacao: '-29.166037, -51.210285',
   rota: 'ROTA_02', portal_code: 'TEST1234', razao_social: null, inscricao_estadual: null,
   endereco_numero: null, endereco_cep: null, endereco_municipio: null, endereco_uf: null, email: null,
 }, {
   id: 'cli-2', nome_fantasia: 'Padaria Dois', nome: null, ativar_cnpj: false, cnpj: null,
   telefone: '(54) 98888-8888', endereco: 'Av Segunda 456', bairro: 'Sao Pelegrino', ativo: true,
-  localizacao: null, dia_roteiro: 3, ordem: 2, observacoes: null,
+  localizacao: null, dia_roteiro: new Date().getDay(), ordem: 2, observacoes: null,
   pin_localizacao: null,
   rota: 'ROTA_02', portal_code: 'TEST5678', razao_social: null, inscricao_estadual: null,
+  endereco_numero: null, endereco_cep: null, endereco_municipio: null, endereco_uf: null, email: null,
+}, {
+  // BLOCO 36: cliente com CNPJ APTO a NF-e (painel CNPJ nota -> Confirmar NF-e)
+  id: 'cli-3', nome_fantasia: 'Mercado CNPJ', nome: null, ativar_cnpj: true, cnpj: '12.345.678/0001-99',
+  telefone: '(54) 97777-7777', endereco: 'Av Brasil', bairro: 'Centro', ativo: true,
+  localizacao: null, dia_roteiro: new Date().getDay(), ordem: 3, observacoes: null,
+  pin_localizacao: '-29.167000, -51.180000',
+  rota: 'ROTA_02', portal_code: 'TEST9012', razao_social: 'MERCADO TESTE LTDA', inscricao_estadual: null,
+  endereco_numero: '500', endereco_cep: '95000-000', endereco_municipio: 'Caxias do Sul', endereco_uf: 'RS', email: 'fiscal@teste.com',
+}, {
+  // BLOCO 36: cliente com CNPJ mas cadastro fiscal INCOMPLETO (painel mostra o que falta)
+  id: 'cli-4', nome_fantasia: 'Lanchonete CNPJ2', nome: null, ativar_cnpj: true, cnpj: '98.765.432/0001-55',
+  telefone: '(54) 96666-6666', endereco: 'Rua Terceira 789', bairro: 'Marechal', ativo: true,
+  localizacao: null, dia_roteiro: new Date().getDay(), ordem: 4, observacoes: null,
+  pin_localizacao: '-29.168000, -51.190000',
+  rota: 'ROTA_02', portal_code: 'TEST3456', razao_social: null, inscricao_estadual: null,
+  endereco_numero: null, endereco_cep: null, endereco_municipio: null, endereco_uf: null, email: null,
+}, {
+  // BLOCO 36: GPS capturado mas SEM telefone (modal abre com Localização ok / WhatsApp pendente)
+  id: 'cli-5', nome_fantasia: 'Acougue Sem Tel', nome: null, ativar_cnpj: false, cnpj: null,
+  telefone: '0', endereco: 'Rua Quarta 101', bairro: 'Fiorita', ativo: true,
+  localizacao: null, dia_roteiro: new Date().getDay(), ordem: 5, observacoes: null,
+  pin_localizacao: '-29.169000, -51.200000',
+  rota: 'ROTA_02', portal_code: 'TEST7890', razao_social: null, inscricao_estadual: null,
   endereco_numero: null, endereco_cep: null, endereco_municipio: null, endereco_uf: null, email: null,
 }];
 

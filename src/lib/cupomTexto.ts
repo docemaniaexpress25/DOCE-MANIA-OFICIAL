@@ -143,6 +143,49 @@ export function gerarCupomTexto({ sale, client, products, width }: CupomTextoInp
     }
   }
 
+  // BLOCO 36 (regra do dono): DADOS DO CLIENTE organizados na parte de baixo —
+  // endereco (rua — bairro, NUNCA lat/lng), WhatsApp, CNPJ do cadastro e CPF
+  // da nota (NFC-e). So imprime se houver pelo menos um dado.
+  const blocoEndereco = [String(client.endereco || '').trim(), String(client.bairro || '').trim()]
+    .map(s => (s && s !== '0' ? s : ''))
+    .filter(Boolean);
+  // numero da rua (cadastro fiscal) — so anexa se ainda nao estiver no endereco
+  const numeroRua = String((client as any).enderecoNumero || '').trim();
+  if (numeroRua && blocoEndereco[0] && !blocoEndereco[0].includes(numeroRua)) {
+    blocoEndereco[0] = `${blocoEndereco[0]}, ${numeroRua}`;
+  }
+  const telDigits = String(client.telefone || '').replace(/\D/g, '');
+  const telFmt = telDigits.length === 11
+    ? `(${telDigits.slice(0, 2)}) ${telDigits.slice(2, 7)}-${telDigits.slice(7)}`
+    : telDigits.length === 10
+      ? `(${telDigits.slice(0, 2)}) ${telDigits.slice(2, 6)}-${telDigits.slice(6)}`
+      : String(client.telefone || '').trim();
+  const cnpjDigits = String((client as any).cnpj || '').replace(/\D/g, '');
+  const cnpjFmt = cnpjDigits.length === 14
+    ? `${cnpjDigits.slice(0, 2)}.${cnpjDigits.slice(2, 5)}.${cnpjDigits.slice(5, 8)}/${cnpjDigits.slice(8, 12)}-${cnpjDigits.slice(12)}`
+    : '';
+  const razaoSocialFmt = String((client as any).razaoSocial || '').trim();
+  // CPF da NFC-e (opcional) — gravado no detalhePagamento ("COM NOTA: NFC-e (CPF ...)")
+  const cpfNaNota = (String(sale.detalhePagamento || '').match(/CPF\s*([\d.\-]+)/) || [])[1] || '';
+
+  if (blocoEndereco.length > 0 || telFmt || cnpjFmt || cpfNaNota) {
+    const linhaLarga = (txt: string) => {
+      let rest = txt;
+      while (rest.length > 0) {
+        t += padR(rest.substring(0, totalWidth), totalWidth) + '\n';
+        rest = rest.substring(totalWidth);
+      }
+    };
+    t += '-'.repeat(totalWidth) + '\n';
+    t += 'DADOS DO CLIENTE\n';
+    linhaLarga(`Nome: ${clientName}`);
+    if (blocoEndereco.length > 0) linhaLarga(`End: ${blocoEndereco.join(' — ')}`);
+    if (telFmt) linhaLarga(`WhatsApp: ${telFmt}`);
+    if (cnpjFmt) linhaLarga(`CNPJ: ${cnpjFmt}`);
+    if (razaoSocialFmt && cnpjFmt) linhaLarga(`Razao: ${razaoSocialFmt}`);
+    if (cpfNaNota) linhaLarga(`CPF: ${cpfNaNota}`);
+  }
+
   t += '-'.repeat(totalWidth) + '\n';
   t += center('OBRIGADO PELA PREFERENCIA!', totalWidth) + '\n';
   t += '*'.repeat(totalWidth) + '\n';

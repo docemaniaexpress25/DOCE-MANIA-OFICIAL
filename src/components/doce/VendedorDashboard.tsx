@@ -105,6 +105,9 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const [notaModo, setNotaModo] = useState<'NFE' | 'NFCE' | 'CUPOM' | null>(null);
   const [nfcCpfModo, setNfcCpfModo] = useState('');
   const [nfcCpfModoPanel, setNfcCpfModoPanel] = useState(false);
+  // BLOCO 36 (regra do dono): cliente com CNPJ -> ABRE o painel de CNPJ nota
+  // (dados fiscais do cadastro, como o painel de CPF da NFC-e)
+  const [nfeCnpjPanel, setNfeCnpjPanel] = useState(false);
   const [viewingSale, setViewingSale] = useState<Sale | null>(() => loadLocalState('v_viewingSale', null));
 
   const [viewingClientHistory, setViewingClientHistory] = useState<Client | null>(null);
@@ -215,6 +218,8 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   // MODAL: Cliente incompleto (GPS + WhatsApp)
   // ============================================================
   const [clientInfoModal, setClientInfoModal] = useState<Client | null>(null);
+  // BLOCO 36: origem do modal (rota ou tela do modo) — a seta Voltar devolve pro lugar certo
+  const clientInfoFromModoRef = useRef(false);
   const [gpsStatus, setGpsStatus] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
   const [gpsCoords, setGpsCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [gpsPinStr, setGpsPinStr] = useState<string>('');
@@ -238,7 +243,9 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     return needsGPS || needsWhatsapp;
   };
 
-  const handleAtenderClient = (client: Client) => {
+  // BLOCO 36: fromModo = aberto pelo botao 'Completar cadastro agora' da tela do modo
+  const handleAtenderClient = (client: Client, fromModo: boolean = false) => {
+    clientInfoFromModoRef.current = fromModo;
     if (clientNeedsInfo(client)) {
       setModalWhatsapp(client.telefone || '');
       setGpsCoords(null);
@@ -267,6 +274,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     setModoSheet(null);
     setNotaSheet(null);
     setNfcCpfModoPanel(false);
+    setNfeCnpjPanel(false);
     setNotaModo(nota ?? null);
     setNfcCpfModo(nfcCpf || '');
     setSelectedClient(client);
@@ -309,8 +317,15 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const confirmarNotaSheet = (doc: 'NFE' | 'NFCE' | 'CUPOM') => {
     if (!notaSheet) return;
     const { client, vendaModo } = notaSheet;
-    if (doc === 'NFE' && !clienteAptoNfe(client)) {
-      showToast('NF-e exige CNPJ completo no cadastro. Use NFC-e ou cupom.', 'error');
+    // BLOCO 36 (regra do dono): cliente com CNPJ -> ABRE a opcao de CNPJ nota
+    // (painel com os dados fiscais do cadastro). Sem CNPJ -> NFC-e ou cupom.
+    if (doc === 'NFE') {
+      const temCnpj = (client.cnpj || '').replace(/\D/g, '').length === 14;
+      if (!temCnpj) {
+        showToast('Cliente sem CNPJ no cadastro — use NFC-e ou cupom.', 'error');
+        return;
+      }
+      setNfeCnpjPanel(true); // abre o painel de CNPJ nota
       return;
     }
     if (doc === 'NFCE' && !nfcCpfModoPanel) {
@@ -352,17 +367,28 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     );
   };
 
+  /** BLOCO 36: mascara progressiva de telefone BR — 54999999999 -> (54) 99999-9999 */
+  const formatarWhatsapp = (v: string): string => {
+    const d = (v || '').replace(/\D/g, '').slice(0, 11);
+    if (d.length <= 2) return d;
+    if (d.length <= 6) return `(${d.slice(0, 2)}) ${d.slice(2)}`;
+    if (d.length <= 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
+    return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
+  };
+  // WhatsApp digitado tem DDD + numero (10+ digitos)? — feedback em tempo real no modal
+  const whatsappOk = modalWhatsapp.replace(/\D/g, '').length >= 10;
+
   const handleSaveClientInfo = async () => {
     if (!clientInfoModal) return;
     // BLOCO 35 (regra do dono): preenchimento OBRIGATORIO — sem GPS/WhatsApp
     // o botao nao salva e nao segue (pede ate completar).
     const faltaGps = !gpsPinStr || gpsPinStr.length < 5;
-    const faltaTel = !modalWhatsapp || modalWhatsapp.trim().replace(/\D/g, '').length < 10;
+    const faltaTel = !modalWhatsapp || modalWhatsapp.replace(/\D/g, '').length < 10;
     if (faltaGps || faltaTel) {
       showToast(
-        faltaGps && faltaTel ? 'Capture a localização e informe o WhatsApp antes de salvar.'
+        faltaGps && faltaTel ? 'Falta a localização e o WhatsApp — capture o GPS e digite DDD + número (ex: 54 99999-9999).'
           : faltaGps ? 'Capture a localização do cliente antes de salvar.'
-          : 'Informe o WhatsApp do cliente antes de salvar.',
+          : 'WhatsApp incompleto — digite DDD + número (ex: 54 99999-9999).',
         'error'
       );
       return;
@@ -371,9 +397,21 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     if (gpsEndereco) updates.endereco = gpsEndereco;
     if (gpsBairro) updates.bairro = gpsBairro;
     updates.telefone = modalWhatsapp.trim();
+    // BLOCO 36 FIX (bug do dono): snapshot do cliente JA ATUALIZADO na tela do
+    // modo — antes passava o objeto ANTIGO e a tela voltava dizendo 'cadastro
+    // incompleto' mesmo com o WhatsApp recem-salvo.
+    const atualizado = { ...clientInfoModal, ...updates } as Client;
     updateClient(clientInfoModal.id, updates);
     setClientInfoModal(null);
-    setModoSheet(clientInfoModal);
+    setModoSheet(atualizado);
+  };
+
+  // BLOCO 36: seta Voltar do modal de informações — devolve para a tela do modo
+  // (quando aberto por ela) ou simplesmente fecha sem salvar (rota).
+  const voltarClientInfoModal = () => {
+    const c = clientInfoModal;
+    setClientInfoModal(null);
+    if (c && clientInfoFromModoRef.current) setModoSheet(clients.find(x => x.id === c.id) || c);
   };
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
@@ -1717,7 +1755,12 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       {clientInfoModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[320] flex items-center justify-center p-4">
           <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
-            <div className="bg-gradient-to-br from-amber-400 to-orange-500 p-6 text-center">
+            <div className="bg-gradient-to-br from-amber-400 to-orange-500 p-6 text-center relative">
+              {/* BLOCO 36: seta Voltar — o vendedor nao fica mais preso na tela */}
+              <button onClick={voltarClientInfoModal} aria-label="Voltar"
+                className="absolute top-5 left-5 w-9 h-9 bg-white/25 rounded-xl flex items-center justify-center text-white active:scale-90 transition-transform">
+                <i className="fa-solid fa-arrow-left"></i>
+              </button>
               <div className="w-14 h-14 bg-white/20 rounded-2xl flex items-center justify-center mx-auto mb-3">
                 <i className="fa-solid fa-circle-exclamation text-white text-2xl"></i>
               </div>
@@ -1726,6 +1769,18 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
             </div>
 
             <div className="p-6 space-y-4">
+              {/* BLOCO 36: o que falta EM TEMPO REAL — insere o WhatsApp e o chip fica verde na hora */}
+              <div className="flex items-center justify-center gap-2">
+                <span className={`text-[8px] font-black uppercase px-2.5 py-1.5 rounded-lg border ${gpsStatus === 'done' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
+                  <i className={`fa-solid ${gpsStatus === 'done' ? 'fa-check' : 'fa-location-dot'} mr-1`}></i>
+                  Localização {gpsStatus === 'done' ? 'ok' : 'pendente'}
+                </span>
+                <span className={`text-[8px] font-black uppercase px-2.5 py-1.5 rounded-lg border ${whatsappOk ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
+                  {whatsappOk ? <i className="fa-solid fa-check mr-1"></i> : <i className="fa-brands fa-whatsapp mr-1"></i>}
+                  WhatsApp {whatsappOk ? 'ok' : 'pendente'}
+                </span>
+              </div>
+
               <div className={`p-4 rounded-2xl border-2 border-dashed flex items-center gap-3 transition-all ${gpsStatus === 'done' ? 'bg-emerald-50 border-emerald-300' : gpsStatus === 'loading' ? 'bg-blue-50 border-blue-300 animate-pulse' : 'bg-amber-50 border-amber-200'}`}>
                 <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${gpsStatus === 'done' ? 'bg-emerald-100' : 'bg-amber-100'}`}>
                   <i className={`fa-solid ${gpsStatus === 'done' ? 'fa-check text-emerald-600' : gpsStatus === 'loading' ? 'fa-spinner fa-spin text-blue-600' : 'fa-location-crosshairs text-amber-500'}`}></i>
@@ -1761,11 +1816,18 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                   <input
                     type="tel"
                     value={modalWhatsapp}
-                    onChange={e => setModalWhatsapp(e.target.value)}
-                    placeholder="Ex: 11999999999"
-                    className="w-full pl-12 pr-4 py-4 bg-gray-50 rounded-2xl font-black text-sm outline-none focus:ring-2 focus:ring-emerald-100 border-2 border-transparent focus:border-emerald-200 transition-all"
+                    onChange={e => setModalWhatsapp(formatarWhatsapp(e.target.value))}
+                    placeholder="(54) 99999-9999"
+                    inputMode="tel"
+                    className={`w-full pl-12 pr-10 py-4 rounded-2xl font-black text-sm outline-none border-2 transition-all ${whatsappOk ? 'bg-emerald-50/60 border-emerald-300 focus:border-emerald-400' : 'bg-gray-50 border-transparent focus:border-emerald-200'}`}
                   />
+                  {whatsappOk && (
+                    <i className="fa-solid fa-circle-check absolute right-4 top-1/2 -translate-y-1/2 text-emerald-500"></i>
+                  )}
                 </div>
+                <p className={`text-[8px] font-bold ml-1 ${whatsappOk ? 'text-emerald-600' : 'text-gray-400'}`}>
+                  {whatsappOk ? 'WhatsApp completo (DDD + número)' : 'Digite com DDD — ex: 54 99999-9999'}
+                </p>
               </div>
             </div>
 
@@ -1781,6 +1843,12 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest text-center"
               >
                 Atender sem preencher
+              </button>
+              <button
+                onClick={voltarClientInfoModal}
+                className="w-full py-2 text-gray-400 font-bold uppercase text-[10px] tracking-widest text-center"
+              >
+                <i className="fa-solid fa-arrow-left mr-1.5"></i>Voltar
               </button>
             </div>
           </div>
@@ -1961,15 +2029,18 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       {modoSheet && (() => {
         // BLOCO 35: dados do cadastro nesta tela — rua/bairro/telefone (sem lat/lng).
         // Completo = mostra e pergunta se estao corretos; incompleto = pede obrigatorio.
-        const faltaGps = !modoSheet.pinLocalizacao || modoSheet.pinLocalizacao.length < 5;
-        const faltaTel = isEmptyField(modoSheet.telefone);
+        // BLOCO 36 FIX: usa o client MAIS RECENTE (depois de salvar GPS/WhatsApp no
+        // modal, o snapshot antigo dizia 'incompleto' com o WhatsApp ja preenchido).
+        const modoClient = clients.find(c => c.id === modoSheet.id) || modoSheet;
+        const faltaGps = !modoClient.pinLocalizacao || modoClient.pinLocalizacao.length < 5;
+        const faltaTel = isEmptyField(modoClient.telefone);
         const cadastroOk = !faltaGps && !faltaTel;
         return (
         <div className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-sm flex items-end justify-center" onClick={() => setModoSheet(null)}>
           <div className="bg-white w-full max-w-md rounded-t-3xl p-6 animate-in slide-in-from-bottom duration-300 max-h-[92vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-4"></div>
             <p className="text-[9px] font-black text-gray-400 uppercase text-center tracking-widest">Atender cliente</p>
-            <h3 className="text-sm font-black text-gray-800 uppercase text-center mt-1 capitalize">{modoSheet.nomeFantasia}</h3>
+            <h3 className="text-sm font-black text-gray-800 uppercase text-center mt-1 capitalize">{modoClient.nomeFantasia}</h3>
 
             {cadastroOk ? (
               <div className="mt-4 rounded-2xl bg-gray-50 border border-gray-100 p-4">
@@ -1977,13 +2048,13 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                   <div className="flex-1 min-w-0 space-y-1.5">
                     <p className="text-[11px] font-black text-gray-700 leading-snug">
                       <i className="fa-solid fa-location-dot text-amber-500 mr-1.5"></i>
-                      {modoSheet.endereco || '—'}{modoSheet.endereco && modoSheet.bairro ? ' — ' : ''}{modoSheet.bairro || ''}
+                      {modoClient.endereco || '—'}{modoClient.endereco && modoClient.bairro ? ' — ' : ''}{modoClient.bairro || ''}
                     </p>
                     <p className="text-[11px] font-bold text-emerald-600 truncate">
-                      <i className="fa-brands fa-whatsapp mr-1.5"></i>{modoSheet.telefone}
+                      <i className="fa-brands fa-whatsapp mr-1.5"></i>{modoClient.telefone}
                     </p>
                   </div>
-                  <button onClick={() => { setModoSheet(null); handleOpenEditClient(modoSheet); }}
+                  <button onClick={() => { setModoSheet(null); handleOpenEditClient(modoClient); }}
                     className="flex-shrink-0 bg-white border border-gray-200 text-gray-500 text-[8px] font-black uppercase px-3 py-2.5 rounded-xl active:scale-95 transition-transform">
                     <i className="fa-solid fa-pen mr-1"></i>Atualizar
                   </button>
@@ -1996,7 +2067,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 <p className="text-[9px] font-bold text-amber-600 mt-1">
                   Falta: {faltaGps ? 'localização do estabelecimento' : ''}{faltaGps && faltaTel ? ' e ' : ''}{faltaTel ? 'WhatsApp' : ''}.
                 </p>
-                <button onClick={() => handleAtenderClient(modoSheet)}
+                <button onClick={() => handleAtenderClient(modoClient, true)}
                   className="w-full mt-3 bg-amber-500 text-white text-[9px] font-black uppercase py-3 rounded-xl active:scale-95 transition-transform">
                   <i className="fa-solid fa-circle-plus mr-1.5"></i>Completar cadastro agora
                 </button>
@@ -2005,13 +2076,13 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
             <p className="text-[10px] text-gray-400 font-semibold text-center mt-4">Como voce vai vender agora?</p>
             <div className="grid grid-cols-2 gap-2.5 mt-3">
-              <button onClick={() => escolherModoVenda(modoSheet, 'PRONTA')}
+              <button onClick={() => escolherModoVenda(modoClient, 'PRONTA')}
                 className="py-5 rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-600 text-white shadow-md active:scale-95 transition-transform">
                 <i className="fa-solid fa-truck-fast text-lg block mb-1.5"></i>
                 <span className="text-[10px] font-black uppercase">Pronta entrega</span>
                 <span className="block text-[8px] font-bold text-blue-100 mt-0.5">Vende da carga da van</span>
               </button>
-              <button onClick={() => escolherModoVenda(modoSheet, 'PRE_VENDA')}
+              <button onClick={() => escolherModoVenda(modoClient, 'PRE_VENDA')}
                 className="py-5 rounded-2xl bg-gradient-to-br from-emerald-600 to-teal-600 text-white shadow-md active:scale-95 transition-transform">
                 <i className="fa-solid fa-clipboard-list text-lg block mb-1.5"></i>
                 <span className="text-[10px] font-black uppercase">Pre-venda</span>
@@ -2025,17 +2096,29 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       })()}
 
       {/* ===== BLOCO 29 (ROTA 2): PERGUNTA DO ATENDIMENTO — DESEJA EMITIR NOTA? ===== */}
-      {notaSheet && (
-        <div className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-sm flex items-end justify-center" onClick={() => { setNotaSheet(null); setNfcCpfModoPanel(false); }}>
+      {notaSheet && (() => {
+        // BLOCO 36: client MAIS RECENTE (editou o cadastro -> painel CNPJ nota reflete na hora)
+        const notaClient = clients.find(c => c.id === notaSheet.client.id) || notaSheet.client;
+        const temCnpj = (notaClient.cnpj || '').replace(/\D/g, '').length === 14;
+        const aptoNfe = clienteAptoNfe(notaClient);
+        // o que falta no cadastro fiscal para a NF-e
+        const faltantes: string[] = [];
+        if (!notaClient.razaoSocial?.trim()) faltantes.push('razão social');
+        if (!notaClient.endereco?.trim()) faltantes.push('endereço');
+        if (!notaClient.bairro?.trim()) faltantes.push('bairro');
+        if (!notaClient.enderecoMunicipio?.trim()) faltantes.push('município');
+        if (!notaClient.enderecoUf?.trim()) faltantes.push('UF');
+        return (
+        <div className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-sm flex items-end justify-center" onClick={() => { setNotaSheet(null); setNfcCpfModoPanel(false); setNfeCnpjPanel(false); }}>
           <div className="bg-white w-full max-w-md rounded-t-3xl p-6 animate-in slide-in-from-bottom duration-300" onClick={e => e.stopPropagation()}>
             <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-4"></div>
             <p className="text-[9px] font-black text-violet-500 uppercase text-center tracking-widest">
               {notaSheet.vendaModo === 'PRONTA' ? 'Pronta entrega' : 'Pré-venda'} — Iniciando atendimento
             </p>
-            <h3 className="text-sm font-black text-gray-800 uppercase text-center mt-1 capitalize">{notaSheet.client.nomeFantasia}</h3>
+            <h3 className="text-sm font-black text-gray-800 uppercase text-center mt-1 capitalize">{notaClient.nomeFantasia}</h3>
             <p className="text-[11px] text-gray-600 font-black text-center mt-2">Deseja emitir nota para este cliente?</p>
 
-            {!nfcCpfModoPanel ? (
+            {!nfcCpfModoPanel && !nfeCnpjPanel ? (
               <>
                 <div className="space-y-2.5 mt-5">
                   {/* BLOCO 35 (regra do dono): CUPOM = botao principal — grande e destacado */}
@@ -2046,13 +2129,14 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                     <span className="block text-[8px] font-bold text-gray-300 mt-1">Vende do ESTOQUE 2 (sem NF) — cupom não fiscal</span>
                   </button>
                   {/* BLOCO 35: NF-e / NFC-e = secundárias — discretas, menos destaque */}
+                  {/* BLOCO 36: cliente COM CNPJ -> NF-e vira 'CNPJ nota' habilitada e ABRE o painel com os dados do cadastro */}
                   <div className="rounded-2xl bg-gray-50 border border-gray-100 p-3">
                     <p className="text-[8px] font-bold text-gray-400 uppercase text-center mb-2">Cliente pediu nota? (vende do ESTOQUE 1)</p>
                     <div className="grid grid-cols-2 gap-2">
                       <button onClick={() => confirmarNotaSheet('NFE')}
-                        className={`py-2.5 rounded-xl text-[8px] font-bold uppercase transition-all active:scale-95 border ${clienteAptoNfe(notaSheet.client) ? 'bg-white border-gray-200 text-gray-600' : 'bg-gray-100 border-gray-100 text-gray-300'}`}>
-                        <i className="fa-solid fa-file-invoice-dollar block mb-0.5 text-[11px]"></i>NF-e
-                        <span className="block text-[7px] font-bold mt-0.5">{clienteAptoNfe(notaSheet.client) ? 'usa o CNPJ do cadastro' : 'sem CNPJ completo'}</span>
+                        className={`py-2.5 rounded-xl text-[8px] font-bold uppercase transition-all active:scale-95 border ${temCnpj ? 'bg-white border-violet-300 text-violet-700' : 'bg-gray-100 border-gray-100 text-gray-300'}`}>
+                        <i className="fa-solid fa-file-invoice-dollar block mb-0.5 text-[11px]"></i>{temCnpj ? 'CNPJ nota' : 'NF-e'}
+                        <span className="block text-[7px] font-bold mt-0.5">{temCnpj ? 'abre os dados do cadastro' : 'sem CNPJ no cadastro'}</span>
                       </button>
                       <button onClick={() => confirmarNotaSheet('NFCE')}
                         className="py-2.5 rounded-xl text-[8px] font-bold uppercase bg-white border border-gray-200 text-gray-600 active:scale-95 transition-transform">
@@ -2062,8 +2146,51 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                     </div>
                   </div>
                 </div>
-                <button onClick={() => { setNotaSheet(null); setNfcCpfModoPanel(false); }} className="w-full mt-3 py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Cancelar</button>
+                <button onClick={() => { setNotaSheet(null); setNfcCpfModoPanel(false); setNfeCnpjPanel(false); }} className="w-full mt-3 py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Cancelar</button>
               </>
+            ) : nfeCnpjPanel ? (
+              /* BLOCO 36: PAINEL CNPJ NOTA — dados fiscais do cadastro do cliente */
+              <div className="mt-4 space-y-2.5 animate-in fade-in duration-200">
+                <p className="text-[9px] font-black text-slate-500 uppercase text-center">CNPJ nota — dados do cadastro</p>
+                <div className="rounded-2xl bg-gray-50 border border-gray-100 p-4 text-center">
+                  <p className="text-sm font-black text-gray-800 tracking-tight">{mascararCnpj(notaClient.cnpj || '')}</p>
+                  {notaClient.razaoSocial ? (
+                    <p className="text-[10px] font-bold text-gray-500 mt-1 leading-snug">{notaClient.razaoSocial}</p>
+                  ) : null}
+                  {(notaClient.endereco || notaClient.bairro || notaClient.enderecoMunicipio) ? (
+                    <p className="text-[9px] font-bold text-gray-400 mt-1 leading-snug">
+                      {[notaClient.endereco, notaClient.enderecoNumero].filter(s => !!s?.trim()).join(', ')}
+                      {notaClient.bairro ? ` — ${notaClient.bairro}` : ''}
+                      {notaClient.enderecoMunicipio ? ` — ${notaClient.enderecoMunicipio}${notaClient.enderecoUf ? '/' + notaClient.enderecoUf : ''}` : ''}
+                    </p>
+                  ) : null}
+                </div>
+                {aptoNfe ? (
+                  <button onClick={() => abrirNoModo(notaClient, notaSheet.vendaModo, 'NFE')}
+                    className="w-full py-4 rounded-2xl bg-emerald-600 text-white text-[11px] font-black uppercase shadow-md active:scale-95">
+                    <i className="fa-solid fa-circle-check mr-1.5"></i>Confirmar NF-e
+                  </button>
+                ) : (
+                  <div className="rounded-2xl bg-amber-50 border-2 border-dashed border-amber-300 p-3">
+                    <p className="text-[9px] font-black text-amber-700 uppercase"><i className="fa-solid fa-triangle-exclamation mr-1"></i>Dados fiscais incompletos</p>
+                    <p className="text-[9px] font-bold text-amber-600 mt-1">Falta: {faltantes.join(', ')}.</p>
+                    <button onClick={() => { setNotaSheet(null); setNfeCnpjPanel(false); handleOpenEditClient(notaClient); }}
+                      className="w-full mt-2 bg-amber-500 text-white text-[9px] font-black uppercase py-3 rounded-xl active:scale-95">
+                      <i className="fa-solid fa-circle-plus mr-1.5"></i>Completar dados fiscais
+                    </button>
+                  </div>
+                )}
+                <div className="grid grid-cols-2 gap-2">
+                  <button onClick={() => setNfeCnpjPanel(false)}
+                    className="py-3.5 rounded-2xl bg-gray-100 text-gray-500 text-[10px] font-black uppercase active:scale-95">
+                    <i className="fa-solid fa-arrow-left mr-1"></i>Voltar
+                  </button>
+                  <button onClick={() => abrirNoModo(notaClient, notaSheet.vendaModo, 'CUPOM')}
+                    className="py-3.5 rounded-2xl bg-gray-900 text-white text-[10px] font-black uppercase active:scale-95">
+                    <i className="fa-solid fa-receipt mr-1"></i>Só cupom
+                  </button>
+                </div>
+              </div>
             ) : (
               /* NFC-e: CPF do consumidor OPCIONAL */
               <div className="mt-4 space-y-2.5 animate-in fade-in duration-200">
@@ -2071,20 +2198,22 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 <input value={nfcCpfModo} onChange={e => setNfcCpfModo(mascararCpf(e.target.value))} placeholder="000.000.000-00" inputMode="numeric"
                   className="w-full p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-black text-center outline-none" />
                 <div className="grid grid-cols-2 gap-2">
-                  <button onClick={() => abrirNoModo(notaSheet.client, notaSheet.vendaModo, 'NFCE', nfcCpfModo)}
+                  <button onClick={() => abrirNoModo(notaClient, notaSheet.vendaModo, 'NFCE', nfcCpfModo)}
                     className="py-3.5 rounded-2xl bg-slate-700 text-white text-[10px] font-black uppercase shadow-md active:scale-95">
                     Confirmar NFC-e
                   </button>
-                  <button onClick={() => abrirNoModo(notaSheet.client, notaSheet.vendaModo, 'NFCE', '')}
+                  <button onClick={() => abrirNoModo(notaClient, notaSheet.vendaModo, 'NFCE', '')}
                     className="py-3.5 rounded-2xl bg-gray-100 text-gray-500 text-[10px] font-black uppercase active:scale-95">
                     Sem CPF
                   </button>
                 </div>
+                <button onClick={() => setNfcCpfModoPanel(false)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase tracking-widest"><i className="fa-solid fa-arrow-left mr-1"></i>Voltar</button>
               </div>
             )}
           </div>
         </div>
-      )}
+        );
+      })()}
 </div>
   );
 };

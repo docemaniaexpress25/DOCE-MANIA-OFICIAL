@@ -3,9 +3,16 @@ import React, { useMemo, useState } from 'react';
 
 /**
  * BLOCO 27 — ROTA 2: wizard guiado de fechamento da venda (teste).
- * Regra do dono: DINHEIRO na entrega e SOMENTE A VISTA (a vista = cliente ja
- * pagou na visita); A PRAZO NAO tem dinheiro na entrega — quem cobra e o
- * VENDEDOR na hora da venda (para ter capital e fazer nova venda).
+ * Regra do dono (PRONTA ENTREGA): DINHEIRO na entrega e SOMENTE A VISTA
+ * (a vista = cliente ja pagou na visita); A PRAZO NAO tem dinheiro na
+ * entrega — quem cobra e o VENDEDOR na hora da venda (capital p/ nova venda).
+ *
+ * BLOCO 39 (regra do dono, PRÉ-VENDA): pré-venda SO ANOTA O PEDIDO — nada
+ * de recebimento na visita (sem valor recebido, sem troco, sem QR de Pix).
+ *  - A VISTA (Dinheiro/Pix): quem recebe e o ENTREGADOR na entrega
+ *    (pedido nasce PENDENTE "cobrar X na entrega (A VISTA)").
+ *  - A PRAZO (Boleto/Cheque/Pix na data): quem cobra e o VENDEDOR na
+ *    proxima visita ou na data combinada.
  * So aparece para vendedores com a flag rota2 ligada; demais perfis usam a
  * tela de pagamento antiga intocada.
  */
@@ -96,11 +103,20 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
     ? (forma === 'DINHEIRO' ? 'Dinheiro' : forma === 'PIX' ? 'Pix' : 'Misto (dinheiro + Pix)')
     : (forma === 'BOLETO' ? 'Boleto' : forma === 'CHEQUE' ? 'Cheque' : 'Pix na data');
 
+  // BLOCO 39: na pré-venda NINGUÉM recebe na visita — a vista é o ENTREGADOR
+  // que recebe na entrega; a prazo é o VENDEDOR que cobra na data/visita.
   const avisoChave = condicao === 'AVISTA'
     ? (isPreVenda
-      ? { icon: 'fa-circle-check', cor: 'emerald', titulo: 'CLIENTE JÁ PAGOU NA VISITA', texto: `Recebeu ${formaLabel} agora. O entregador SÓ ENTREGA — nada a cobrar na entrega.` }
+      ? { icon: 'fa-truck-fast', cor: 'emerald', titulo: 'ENTREGADOR QUE RECEBE NA ENTREGA', texto: `Você só anota o pedido. Na entrega, o entregador cobra ${formaLabel} — nada a receber agora.` }
       : { icon: 'fa-money-bill-wave', cor: 'emerald', titulo: 'RECEBIMENTO NA VISITA', texto: `Dinheiro na entrega é somente À VISTA — o cliente paga agora, com você.` })
-    : { icon: 'fa-user-clock', cor: 'amber', titulo: 'QUEM COBRA É VOCÊ, VENDEDOR', texto: `Sem dinheiro na entrega. Você cobra ${formaLabel} no vencimento ${dataBr(vencimento)} para ter capital e fazer nova venda.` };
+    : (isPreVenda
+      ? { icon: 'fa-user-clock', cor: 'amber', titulo: 'QUEM COBRA É VOCÊ, VENDEDOR', texto: `Você cobra ${formaLabel} na próxima visita ou no vencimento ${dataBr(vencimento)}.` }
+      : { icon: 'fa-user-clock', cor: 'amber', titulo: 'QUEM COBRA É VOCÊ, VENDEDOR', texto: `Sem dinheiro na entrega. Você cobra ${formaLabel} no vencimento ${dataBr(vencimento)} para ter capital e fazer nova venda.` });
+
+  // BLOCO 39: na pré-venda o MISTO não existe (ninguém recebe na visita)
+  const formasAvista: ReadonlyArray<'DINHEIRO' | 'PIX' | 'MISTO'> = isPreVenda
+    ? (['DINHEIRO', 'PIX'] as const)
+    : (['DINHEIRO', 'PIX', 'MISTO'] as const);
 
   const proximo = () => {
     setErroLocal(null);
@@ -109,7 +125,8 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
       return;
     }
     if (passo === 1) {
-      if (condicao === 'AVISTA') {
+      // BLOCO 39: pré-venda não recebe nada agora — sem validação de valor
+      if (condicao === 'AVISTA' && !isPreVenda) {
         if (forma === 'DINHEIRO') {
           const rec = parseFloat(valorRecebido) || 0;
           if (rec <= 0) return setErroLocal('Digite o valor recebido do cliente.');
@@ -140,9 +157,10 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
       notaIntencao,
     };
     if (condicao === 'AVISTA') {
-      if (forma === 'DINHEIRO') payload.valorRecebido = parseFloat(valorRecebido) || 0;
+      // BLOCO 39: pré-venda não tem recebimento — nada de valor recebido
+      if (forma === 'DINHEIRO' && !isPreVenda) payload.valorRecebido = parseFloat(valorRecebido) || 0;
       if (forma === 'PIX') payload.pixSlot = pixSlot;
-      if (forma === 'MISTO') { payload.mistoDinheiro = md; payload.mistoPix = mp; payload.valorRecebido = md; }
+      if (forma === 'MISTO' && !isPreVenda) { payload.mistoDinheiro = md; payload.mistoPix = mp; payload.valorRecebido = md; }
     } else {
       payload.vencimento = vencimento;
       if (forma === 'CHEQUE') {
@@ -185,22 +203,24 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
               className={`p-4 rounded-2xl border-2 text-left transition-all ${condicao === 'AVISTA' ? 'border-emerald-500 bg-emerald-50 shadow-md' : 'border-gray-100 bg-gray-50'}`}>
               <i className={`fa-solid fa-money-bill-wave text-lg ${condicao === 'AVISTA' ? 'text-emerald-600' : 'text-gray-300'}`}></i>
               <p className={`text-[11px] font-black uppercase mt-1 ${condicao === 'AVISTA' ? 'text-emerald-700' : 'text-gray-400'}`}>À vista</p>
-              <p className="text-[8px] font-bold text-gray-400 leading-snug mt-0.5">Cliente paga AGORA com você</p>
+              <p className="text-[8px] font-bold text-gray-400 leading-snug mt-0.5">{isPreVenda ? 'Entregador recebe na entrega' : 'Cliente paga AGORA com você'}</p>
             </button>
             <button onClick={() => { setCondicao('APRAZO'); setForma('BOLETO'); }}
               className={`p-4 rounded-2xl border-2 text-left transition-all ${condicao === 'APRAZO' ? 'border-amber-500 bg-amber-50 shadow-md' : 'border-gray-100 bg-gray-50'}`}>
               <i className={`fa-regular fa-calendar text-lg ${condicao === 'APRAZO' ? 'text-amber-600' : 'text-gray-300'}`}></i>
               <p className={`text-[11px] font-black uppercase mt-1 ${condicao === 'APRAZO' ? 'text-amber-700' : 'text-gray-400'}`}>A prazo</p>
-              <p className="text-[8px] font-bold text-gray-400 leading-snug mt-0.5">Você cobra na data combinada</p>
+              <p className="text-[8px] font-bold text-gray-400 leading-snug mt-0.5">{isPreVenda ? 'Você cobra na data ou próxima visita' : 'Você cobra na data combinada'}</p>
             </button>
           </div>
           <div className={`rounded-2xl p-3.5 text-center border ${condicao === 'APRAZO' ? 'bg-amber-50 border-amber-100' : 'bg-emerald-50 border-emerald-100'}`}>
             <p className={`text-[9px] font-black uppercase ${condicao === 'APRAZO' ? 'text-amber-700' : 'text-emerald-700'}`}>
-              <i className={`fa-solid ${condicao === 'APRAZO' ? 'fa-user-clock' : 'fa-circle-check'} mr-1`}></i>
-              {condicao === 'APRAZO' ? 'SEM DINHEIRO NA ENTREGA' : 'DINHEIRO SÓ NA VISITA'}
+              <i className={`fa-solid ${condicao === 'APRAZO' ? 'fa-user-clock' : isPreVenda ? 'fa-truck-fast' : 'fa-circle-check'} mr-1`}></i>
+              {condicao === 'APRAZO' ? 'SEM DINHEIRO NA ENTREGA' : isPreVenda ? 'SEM DINHEIRO NA VISITA' : 'DINHEIRO SÓ NA VISITA'}
             </p>
             <p className={`text-[8px] font-semibold mt-0.5 ${condicao === 'APRAZO' ? 'text-amber-600/80' : 'text-emerald-600/70'}`}>
-              {condicao === 'APRAZO' ? 'Regra: quem cobra é o VENDEDOR na hora — para ter capital e fazer nova venda.' : 'Na entrega não há cobrança: cliente já pagou (ou paga) na visita.'}
+              {condicao === 'APRAZO'
+                ? (isPreVenda ? 'Pré-venda não recebe na visita: você cobra na próxima visita ou na data combinada.' : 'Regra: quem cobra é o VENDEDOR na hora — para ter capital e fazer nova venda.')
+                : (isPreVenda ? 'Pré-venda só anota o pedido — quem recebe é o ENTREGADOR na entrega.' : 'Na entrega não há cobrança: cliente já pagou (ou paga) na visita.')}
             </p>
           </div>
         </div>
@@ -209,9 +229,9 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
       {/* ===== PASSO 2: FORMA ===== */}
       {passo === 1 && condicao === 'AVISTA' && (
         <div className="space-y-3 mb-5">
-          <p className="text-[9px] font-black text-gray-400 uppercase text-center">2. Forma do pagamento agora</p>
-          <div className="grid grid-cols-3 gap-2">
-            {(['DINHEIRO', 'PIX', 'MISTO'] as const).map(f => (
+          <p className="text-[9px] font-black text-gray-400 uppercase text-center">{isPreVenda ? '2. Como o entregador vai cobrar na entrega?' : '2. Forma do pagamento agora'}</p>
+          <div className={`grid gap-2 ${formasAvista.length === 2 ? 'grid-cols-2' : 'grid-cols-3'}`}>
+            {formasAvista.map(f => (
               <button key={f} onClick={() => setForma(f)}
                 className={`py-3 rounded-xl text-[9px] font-black uppercase transition-all border-2 ${forma === f ? 'bg-emerald-600 text-white border-emerald-600 shadow-md' : 'bg-gray-50 text-gray-400 border-gray-100'}`}>
                 {f === 'DINHEIRO' ? 'Dinheiro' : f === 'PIX' ? 'Pix' : 'Misto'}
@@ -219,7 +239,13 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
             ))}
           </div>
 
-          {forma === 'DINHEIRO' && (
+          {forma === 'DINHEIRO' && isPreVenda && (
+            <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-3 text-center animate-in fade-in duration-200">
+              <p className="text-[9px] font-black text-emerald-700 uppercase"><i className="fa-solid fa-truck-fast mr-1"></i>Entregador recebe o dinheiro na entrega</p>
+              <p className="text-[8px] font-semibold text-emerald-600/80 mt-0.5">Você não recebe nada na visita — só anota o pedido.</p>
+            </div>
+          )}
+          {forma === 'DINHEIRO' && !isPreVenda && (
             <div className="space-y-2 animate-in fade-in duration-200">
               <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Valor recebido</label>
               <input type="number" inputMode="decimal" value={valorRecebido} onChange={e => setValorRecebido(e.target.value)} placeholder="0.00" className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-2xl font-black text-center outline-none" autoFocus />
@@ -232,7 +258,13 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
             </div>
           )}
 
-          {forma === 'PIX' && (
+          {forma === 'PIX' && isPreVenda && (
+            <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-3 text-center animate-in fade-in duration-200">
+              <p className="text-[9px] font-black text-emerald-700 uppercase"><i className="fa-solid fa-truck-fast mr-1"></i>Entregador recebe o Pix na entrega</p>
+              <p className="text-[8px] font-semibold text-emerald-600/80 mt-0.5">O Pix da empresa vai com o entregador — nada a receber agora.</p>
+            </div>
+          )}
+          {forma === 'PIX' && !isPreVenda && (
             <div className="space-y-2 animate-in fade-in duration-200">
               <p className="text-[9px] font-black text-gray-400 uppercase text-center">Chave Pix que recebe</p>
               <div className="grid grid-cols-2 gap-2">
@@ -247,7 +279,7 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
             </div>
           )}
 
-          {forma === 'MISTO' && (
+          {forma === 'MISTO' && !isPreVenda && (
             <div className="space-y-2 animate-in fade-in duration-200">
               <p className="text-[9px] font-black text-gray-400 uppercase text-center">Parte em dinheiro + parte em Pix (soma = total)</p>
               <div className="grid grid-cols-2 gap-2">
@@ -356,13 +388,13 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
               <span className="text-[9px] font-black text-gray-400 uppercase">Forma</span>
               <span className="text-[11px] font-black text-gray-700 uppercase">{formaLabel}</span>
             </div>
-            {condicao === 'AVISTA' && forma === 'DINHEIRO' && (
+            {!isPreVenda && condicao === 'AVISTA' && forma === 'DINHEIRO' && (
               <div className="p-3.5 flex items-center justify-between">
                 <span className="text-[9px] font-black text-gray-400 uppercase">Recebido / troco</span>
                 <span className="text-[11px] font-black text-gray-700">{fmt(parseFloat(valorRecebido) || 0)} {troco > 0 ? <span className="text-emerald-600">(troco {fmt(troco)})</span> : null}</span>
               </div>
             )}
-            {condicao === 'AVISTA' && forma === 'MISTO' && (
+            {!isPreVenda && condicao === 'AVISTA' && forma === 'MISTO' && (
               <div className="p-3.5 flex items-center justify-between">
                 <span className="text-[9px] font-black text-gray-400 uppercase">Misto</span>
                 <span className="text-[11px] font-black text-gray-700">{fmt(md)} + Pix {fmt(mp)}</span>

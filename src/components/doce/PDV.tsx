@@ -599,9 +599,12 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   // BLOCO 27 (ROTA 2): fechamento da venda pelo wizard guiado.
   // Mesmos canais do fluxo antigo (RPC processar_venda_v2 /
   // processPreVenda), mesmas travas (duplo clique, margem minima).
-  // Regra do dono: a prazo NAO tem dinheiro na entrega — quem cobra
-  // e o vendedor; a vista = cliente ja pagou na visita (pre-venda
-  // nasce PAGO na visita via pagoNaVisita).
+  // Regra do dono: na PRONTA ENTREGA a prazo NAO tem dinheiro na entrega —
+  // quem cobra e o vendedor; a vista = cliente ja pagou na visita.
+  // BLOCO 39 (regra do dono): na PRÉ-VENDA NINGUÉM recebe na visita — a
+  // vista = ENTREGADOR recebe na entrega (pedido nasce PENDENTE "cobrar X
+  // na entrega (A VISTA)"); a prazo = VENDEDOR cobra na proxima visita ou
+  // data. SEM pagoNaVisita pelo wizard (toggle manual do EditorPedido segue).
   // ============================================================
   const handleConfirmWizard = async (w: WizardPayload) => {
     setWizardErro(null);
@@ -635,8 +638,9 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         formaPagamento: formaApi, condicao: w.condicao,
         vencimento: w.condicao === 'APRAZO' ? w.vencimento : undefined,
         trocas: trocasTexto.trim(),
-        // a vista no wizard = cliente ja pagou na visita (regra do dono)
-        pagoNaVisita: w.condicao === 'AVISTA',
+        // BLOCO 39 (regra do dono): pré-venda NUNCA recebe na visita —
+        // a vista = ENTREGADOR cobra na entrega (pedido PENDENTE);
+        // a prazo = VENDEDOR cobra na data/visita. Sem pagoNaVisita.
         notaIntencao: w.notaIntencao,
         nfcCpf: w.notaIntencao === 'NFCE' ? w.nfcCpf : undefined,
         // BLOCO 29 (ROTA 2): modo do atendimento fixado no início (baixa na coluna certa)

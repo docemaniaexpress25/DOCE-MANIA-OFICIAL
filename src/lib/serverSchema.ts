@@ -92,3 +92,8 @@ export function hasCargaPendenteModoColumn(): Promise<boolean> {
 export function hasModoVendaColumn(): Promise<boolean> {
   return probeColumn('sales', 'modo_nota', 'modoVenda');
 }
+
+/** sales.carga_confirmada_em existe? (Bloco 58 — check do admin: pedido carregado no veiculo) */
+export function hasCargaCheckColumns(): Promise<boolean> {
+  return probeColumn('sales', 'carga_confirmada_em', 'cargaCheck');
+}

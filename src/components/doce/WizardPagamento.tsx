@@ -114,9 +114,7 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
     ? (isPreVenda
       ? { icon: 'fa-truck-fast', cor: 'emerald', titulo: 'ENTREGADOR QUE RECEBE NA ENTREGA', texto: `Você só anota o pedido. Na entrega, o entregador cobra ${formaLabel} — nada a receber agora.` }
       : { icon: 'fa-money-bill-wave', cor: 'emerald', titulo: 'RECEBIMENTO NA VISITA', texto: `Dinheiro na entrega é somente À VISTA — o cliente paga agora, com você.` })
-    : (isPreVenda
-      ? { icon: 'fa-user-clock', cor: 'amber', titulo: 'QUEM COBRA É VOCÊ, VENDEDOR', texto: `Você cobra ${formaLabel} na próxima visita ou no vencimento ${dataBr(vencimento)}.` }
-      : { icon: 'fa-user-clock', cor: 'amber', titulo: 'QUEM COBRA É VOCÊ, VENDEDOR', texto: `Sem dinheiro na entrega. Você cobra ${formaLabel} no vencimento ${dataBr(vencimento)} para ter capital e fazer nova venda.` });
+    : { icon: 'fa-user-clock', cor: 'amber', titulo: 'QUEM COBRA É VOCÊ, VENDEDOR', texto: `Você cobra ${formaLabel} no vencimento ${dataBr(vencimento)}.` };
 
   // BLOCO 39: na pré-venda o MISTO não existe (ninguém recebe na visita)
   const formasAvista: ReadonlyArray<'DINHEIRO' | 'PIX' | 'MISTO'> = isPreVenda
@@ -234,17 +232,9 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
               <p className="text-[8px] font-bold text-gray-400 leading-snug mt-0.5">{isPreVenda ? 'Você cobra na data ou próxima visita' : 'Você cobra na data combinada'}</p>
             </button>
           </div>
-          <div className={`rounded-2xl p-3.5 text-center border ${condicao === 'APRAZO' ? 'bg-amber-50 border-amber-100' : 'bg-emerald-50 border-emerald-100'}`}>
-            <p className={`text-[9px] font-black uppercase ${condicao === 'APRAZO' ? 'text-amber-700' : 'text-emerald-700'}`}>
-              <i className={`fa-solid ${condicao === 'APRAZO' ? 'fa-user-clock' : isPreVenda ? 'fa-truck-fast' : 'fa-circle-check'} mr-1`}></i>
-              {condicao === 'APRAZO' ? 'SEM DINHEIRO NA ENTREGA' : isPreVenda ? 'SEM DINHEIRO NA VISITA' : 'DINHEIRO SÓ NA VISITA'}
-            </p>
-            <p className={`text-[8px] font-semibold mt-0.5 ${condicao === 'APRAZO' ? 'text-amber-600/80' : 'text-emerald-600/70'}`}>
-              {condicao === 'APRAZO'
-                ? (isPreVenda ? 'Pré-venda não recebe na visita: você cobra na próxima visita ou na data combinada.' : 'Regra: quem cobra é o VENDEDOR na hora — para ter capital e fazer nova venda.')
-                : (isPreVenda ? 'Pré-venda só anota o pedido — quem recebe é o ENTREGADOR na entrega.' : 'Na entrega não há cobrança: cliente já pagou (ou paga) na visita.')}
-            </p>
-          </div>
+          {/* BLOCO 57 (regra do dono): os avisos "sem dinheiro na entrega/visita"
+              e "dinheiro só na visita" SAÍRAM — o vendedor ja sabe a regra de
+              cor e o card só ocupava espaço no passo da condição. */}
         </div>
       )}
 
@@ -334,21 +324,16 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
               </button>
             ))}
           </div>
-          <div className="bg-rose-50 border border-rose-100 rounded-2xl p-3 text-center">
-            <p className="text-[9px] font-black text-rose-700 uppercase"><i className="fa-solid fa-ban mr-1"></i>Sem dinheiro no a prazo</p>
-            <p className="text-[8px] text-rose-500 font-semibold mt-0.5">Regra do dono: o dinheiro do prazo você cobra na data — nunca na entrega.</p>
-          </div>
+          {/* BLOCO 57 (regra do dono): card "Sem dinheiro no a prazo" saiu —
+              o vendedor ja sabe que a prazo o dinheiro vem na data. */}
 
           {forma === 'CHEQUE' && (
             <div className="space-y-2 animate-in fade-in duration-200">
-              {/* BLOCO 49 (regra do dono): na pré-venda com NF-e o cheque é
-                  coletado NA ENTREGA — o número é anotado lá, não aqui. */}
-              {chequeNumeroNaEntrega ? (
-                <div className="bg-violet-50 border border-violet-100 rounded-2xl p-3 text-center">
-                  <p className="text-[9px] font-black text-violet-700 uppercase"><i className="fa-solid fa-truck-fast mr-1"></i>Cheque será coletado na entrega</p>
-                  <p className="text-[8px] font-semibold text-violet-500 mt-0.5">O número do cheque é anotado na entrega — não aqui.</p>
-                </div>
-              ) : (
+              {/* BLOCO 49: na pré-venda com NF-e o número do cheque é anotado
+                  NA ENTREGA — aqui só o Bom para.
+                  BLOCO 57 (regra do dono): o aviso "Cheque será coletado na
+                  entrega" SAIU — o vendedor ja sabe; ficou a tela limpa. */}
+              {!chequeNumeroNaEntrega && (
                 <>
                   <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Número do cheque (opcional)</label>
                   <input value={chequeNumero} onChange={e => setChequeNumero(e.target.value)} placeholder="Ex: 000123" inputMode="numeric" className="w-full p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-black text-center outline-none" />

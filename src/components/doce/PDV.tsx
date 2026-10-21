@@ -1489,10 +1489,21 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               </div>
             )}
 
+            {/* BLOCO 54 (regra do dono): nada de "Aguardando Pagamento" — a
+                mensagem diz QUEM recebe e QUANDO. A VISTA: o ENTREGADOR recebe
+                na entrega. A PRAZO: o proprio VENDEDOR recebe no dia da visita
+                ou na data de recebimento (na pronta entrega, so a data). */}
+            {saleResultModal.isPreVenda && !saleResultModal.isPrazo && (
+              <div className="bg-emerald-50 p-3 rounded-2xl flex items-center gap-3 border border-emerald-100">
+                <i className="fa-solid fa-truck-fast text-emerald-500"></i>
+                <span className="text-[10px] font-black text-emerald-700 uppercase leading-snug">Entregador recebe na entrega</span>
+              </div>
+            )}
+
             {saleResultModal.isPrazo && (
               <div className="bg-amber-50 p-3 rounded-2xl flex items-center gap-3 border border-amber-100">
-                <i className="fa-solid fa-clock text-amber-500"></i>
-                <span className="text-[10px] font-black text-amber-700 uppercase">Aguardando Pagamento</span>
+                <i className="fa-solid fa-user-clock text-amber-500"></i>
+                <span className="text-[10px] font-black text-amber-700 uppercase leading-snug">{saleResultModal.isPreVenda ? 'Você recebe na próxima visita ou na data de recebimento' : 'Você recebe na data de recebimento'}</span>
               </div>
             )}
 

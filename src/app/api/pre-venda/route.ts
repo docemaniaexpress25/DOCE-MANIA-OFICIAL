@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/serverSupabase';
 import { sessionFromRequest, isAdminSession } from '@/lib/session';
-import { hasEntregaTables, hasBoletoFotoColumn, hasModoVendaColumn } from '@/lib/serverSchema';
+import { hasEntregaTables, hasBoletoFotoColumn, hasModoVendaColumn, hasCargaCheckColumns } from '@/lib/serverSchema';
 import { sendPushToUser } from '@/lib/pushSender';
 import QRCode from 'qrcode';
 import { buildPixPayload, generateTxid } from '@/lib/pix';
@@ -568,6 +568,10 @@ async function enrichFila(supabase: any, salesRows: any[]) {
       ordemEntrega: typeof s.ordem_entrega === 'number' ? s.ordem_entrega : undefined,
       separado: !!s.separado,
       separadoEm: s.separado_em ?? null,
+      // BLOCO 58: check de carga do admin — timestamp de quando o pedido foi
+      // carregado no veiculo (null = ainda nao carregado). Bancos sem a
+      // coluna (SQL 58 pendente) vêm undefined = null = nao carregado.
+      carregadoEm: s.carga_confirmada_em ?? null,
       vendedorId: s.vendedor_id,
       vendedorNome: userMap[s.vendedor_id] || '',
       temFoto: !!temFotoSet[s.id],
@@ -597,7 +601,9 @@ async function getFila(supabase: any, userId: string, perfil: string) {
   const temOrdem = await hasOrdemEntregaColumn();
   // BLOCO 40: modo_nota idem (tipo do documento no cupom da fila/pedidos)
   const modoCol = await salesColsComModo();
-  const filaCols = `${FILA_COLS_13}${temOrdem ? ', ordem_entrega' : ''}${modoCol ? `, ${modoCol}` : ''}`;
+  // BLOCO 58: check de carga (pedido carregado no veiculo) — entra SO quando o SQL rodou
+  const temCarga = await hasCargaCheckColumns();
+  const filaCols = `${FILA_COLS_13}${temOrdem ? ', ordem_entrega' : ''}${modoCol ? `, ${modoCol}` : ''}${temCarga ? ', carga_confirmada_em' : ''}`;
 
   // ---- Fila ativa: PENDENTE/EM_ROTA (inclui legado) — qualquer dia (fila viva) ----
   let qAtiva = supabase
@@ -678,31 +684,55 @@ async function getFila(supabase: any, userId: string, perfil: string) {
     return Number(mm[0].replace(/[R$\s]/g, '').replace(',', '.'));
   };
 
-  // Caixa do dia (dinheiro/pix recebidos hoje nas entregas) — estimativa a partir dos eventos
-  let dinheiroHoje = 0, pixHoje = 0;
-  for (const e of evHoje || []) {
-    const m = String(e.motivo || '');
-    if (!/R\$/.test(m)) continue;
-    // PAGAMENTO MISTO: "Pagamento misto: dinheiro R$ 50.00 + pix R$ 50.00" —
-    // separa as duas partes (o parser generico so pegaria a primeira)
-    if (/\bmisto\b/i.test(m)) {
-      const low = m.toLowerCase();
+  // Parte um motivo de entrega em {dinheiro, pix} — cobre o pagamento MISTO
+  // ("Pagamento misto: dinheiro R$ 50.00 + pix R$ 50.00") e as formas simples.
+  const partesDeMotivo = (m: string | null): { din: number; pix: number } => {
+    const s = String(m || '');
+    if (!/R\$/.test(s)) return { din: 0, pix: 0 };
+    if (/\bmisto\b/i.test(s)) {
+      const low = s.toLowerCase();
       const iDin = low.indexOf('dinheiro');
       const iPix = low.indexOf('pix');
-      if (iDin >= 0) {
-        const seg = iPix > iDin ? m.slice(iDin, iPix) : m.slice(iDin);
-        dinheiroHoje = round2(dinheiroHoje + valorDeMotivo(seg));
-      }
-      if (iPix >= 0) {
-        const seg = iDin >= 0 && iDin > iPix ? m.slice(iPix, iDin) : m.slice(iPix);
-        pixHoje = round2(pixHoje + valorDeMotivo(seg));
-      }
-      continue;
+      let din = 0, pix = 0;
+      if (iDin >= 0) { const seg = iPix > iDin ? s.slice(iDin, iPix) : s.slice(iDin); din = valorDeMotivo(seg); }
+      if (iPix >= 0) { const seg = iDin >= 0 && iDin > iPix ? s.slice(iPix, iDin) : s.slice(iPix); pix = valorDeMotivo(seg); }
+      return { din, pix };
     }
-    const v = valorDeMotivo(m);
-    if (!v) continue;
-    if (/pix/i.test(m)) pixHoje = round2(pixHoje + v);
-    else if (/dinheiro/i.test(m)) dinheiroHoje = round2(dinheiroHoje + v);
+    const v = valorDeMotivo(s);
+    if (!v) return { din: 0, pix: 0 };
+    if (/pix/i.test(s)) return { din: 0, pix: v };
+    if (/dinheiro/i.test(s)) return { din: v, pix: 0 };
+    return { din: 0, pix: 0 };
+  };
+
+  // BLOCO 58 (regra do dono): o caixa de entregas NAO zera sozinho a
+  // meia-noite — o valor em aberto ACUMULA desde o ULTIMO fechamento de caixa
+  // e so recomeca quando o admin clica no botao "Fechar caixa". Sem nenhum
+  // fechamento anterior, considera os ultimos 60 dias (teto de egress — nunca
+  // escaneia o historico inteiro).
+  let desdeCaixaIso: string | null = null;
+  try {
+    const { data: ultimoFech } = await supabase
+      .from('caixa_fechamentos')
+      .select('criado_em')
+      .order('criado_em', { ascending: false })
+      .limit(1);
+    desdeCaixaIso = ultimoFech && ultimoFech[0]?.criado_em ? String(ultimoFech[0].criado_em) : null;
+  } catch { /* tabela antiga: segue sem limite de fechamento */ }
+  const desdeCaixa = desdeCaixaIso || new Date(Date.now() - 60 * 24 * 3600 * 1000).toISOString();
+  const { data: evCaixa } = await supabase
+    .from('entrega_eventos')
+    .select('sale_id, status, motivo, criado_em')
+    .eq('status', 'ENTREGUE')
+    .gte('criado_em', desdeCaixa);
+
+  // Caixa EM ABERTO (dinheiro/pix recebidos desde o ultimo fechamento) —
+  // estimativa a partir dos eventos de entrega
+  let dinheiroHoje = 0, pixHoje = 0;
+  for (const e of evCaixa || []) {
+    const { din, pix } = partesDeMotivo(e.motivo);
+    dinheiroHoje = round2(dinheiroHoje + din);
+    pixHoje = round2(pixHoje + pix);
   }
 
   // Resumo legivel do recebimento de uma entrega (para a conferencia do admin)
@@ -741,19 +771,9 @@ async function getFila(supabase: any, userId: string, perfil: string) {
       const motivos = evMotivosPorSale[String(s.id)] || [];
       let din = 0, pix = 0;
       for (const m of motivos) {
-        if (!/R\$/.test(m)) continue;
-        if (/\bmisto\b/i.test(m)) {
-          const low = m.toLowerCase();
-          const iDin = low.indexOf('dinheiro');
-          const iPix = low.indexOf('pix');
-          if (iDin >= 0) { const seg = iPix > iDin ? m.slice(iDin, iPix) : m.slice(iDin); din = round2(din + valorDeMotivo(seg)); }
-          if (iPix >= 0) { const seg = iDin >= 0 && iDin > iPix ? m.slice(iPix, iDin) : m.slice(iPix); pix = round2(pix + valorDeMotivo(seg)); }
-          continue;
-        }
-        const v = valorDeMotivo(m);
-        if (!v) continue;
-        if (/pix/i.test(m)) pix = round2(pix + v);
-        else if (/dinheiro/i.test(m)) din = round2(din + v);
+        const p = partesDeMotivo(m);
+        din = round2(din + p.din);
+        pix = round2(pix + p.pix);
       }
       const entKey = String(s.entregador_id || 'SEM_ENTREGADOR');
       const g = (grupos[entKey] ||= { entregadorId: entKey, nome: '', dinheiro: 0, pix: 0, qtdEntregas: 0, vendas: [] });
@@ -791,7 +811,7 @@ async function getFila(supabase: any, userId: string, perfil: string) {
       valorEntregueHoje: round2(entreguesHoje.reduce((a: number, s: any) => a + Number(s.valor_total || 0), 0)),
       falhados: (falhados || []).length,
     },
-    caixa: { dinheiroHoje, pixHoje },
+    caixa: { dinheiroHoje, pixHoje, desde: desdeCaixaIso },
     ...(conferencia ? { conferencia } : {}),
     sem13,
   };
@@ -1114,6 +1134,33 @@ export async function POST(req: NextRequest) {
       }
       await logEventoSeguro(supabase, null, null, userId, 'ORDEM_ENTREGA', `Ordem da rota definida pelo admin (${ordens.length} paradas)`);
       return NextResponse.json({ ok: true });
+    }
+
+    // ---------- CHECK_CARGA (BLOCO 58: admin marca o pedido CARREGADO no veiculo) ----------
+    // Na fila podera haver pedidos carregados e outros ainda nao — o check
+    // mostra quantos estao no veiculo e qual esta carregado.
+    if (acao === 'CHECK_CARGA') {
+      if (!admin) return NextResponse.json({ ok: false, error: 'Somente o admin marca a carga.' }, { status: 403 });
+      const saleIdCarga = String(body.saleId || '');
+      if (!saleIdCarga) return NextResponse.json({ ok: false, error: 'saleId obrigatoria.' }, { status: 400 });
+      if (!(await hasCargaCheckColumns())) {
+        return NextResponse.json({ ok: false, error: 'Banco desatualizado: rode o Bloco 58 do SQL (check de carga).' }, { status: 503 });
+      }
+      const carregado = !!body.carregado;
+      // carga_confirmada_por e uuid: resolve pseudo-usuarios (login fixo) para
+      // um uuid real/fixo — senao o update inteiro quebraria com 22P02.
+      const porUuid = carregado ? await resolveEntregadorUuid(supabase, userId) : null;
+      const payload: Record<string, unknown> = carregado
+        ? { carga_confirmada_em: new Date().toISOString(), ...(porUuid ? { carga_confirmada_por: porUuid } : {}) }
+        : { carga_confirmada_em: null, carga_confirmada_por: null };
+      const { error: cargaErr } = await supabase.from('sales').update(payload).eq('id', saleIdCarga);
+      const codeCarga = (cargaErr as any)?.code || '';
+      if (cargaErr && (codeCarga === '42P01' || codeCarga === '42501' || codeCarga === 'PGRST204' || codeCarga === '42703' || codeCarga === '22P02')) {
+        return NextResponse.json({ ok: false, error: 'Banco desatualizado: rode o Bloco 58 do SQL (check de carga).' }, { status: 503 });
+      }
+      if (cargaErr) throw cargaErr;
+      await logEventoSeguro(supabase, null, saleIdCarga, userId, carregado ? 'CARGA_OK' : 'CARGA_REMOVIDA', carregado ? 'Pedido carregado no veiculo (check do admin)' : 'Check de carga removido pelo admin');
+      return NextResponse.json({ ok: true, carregado });
     }
 
     // ---------- FECHAR_CAIXA (BLOCO 33: SOMENTE O ADMIN fecha o caixa) ----------

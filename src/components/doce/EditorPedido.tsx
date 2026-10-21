@@ -272,13 +272,14 @@ const EditorPedido: React.FC<{
             ) : (
               <div className="mt-2">
                 <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Vencimento</label>
+                {/* BLOCO 57 (regra do dono): aviso "Sem dinheiro na entrega" saiu —
+                    o vendedor ja sabe que a prazo quem cobra e ele na visita. */}
                 <input
                   type="date"
                   value={vencimento}
                   onChange={e => setVencimento(e.target.value)}
                   className="w-full mt-1 p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-xs font-black outline-none focus:ring-2 focus:ring-amber-100"
                 />
-                <p className="text-[8px] font-semibold text-amber-600 mt-1 uppercase ml-1"><i className="fa-solid fa-user-clock mr-1"></i>Sem dinheiro na entrega — vendedor cobra na visita</p>
               </div>
             )}
           </div>

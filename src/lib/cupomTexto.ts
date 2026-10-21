@@ -295,7 +295,12 @@ export function gerarCupomTexto({ sale, client, products, width }: CupomTextoInp
   }
 
   // Forma de pagamento + quantos dias (a prazo = dias ate o vencimento)
+  // BLOCO 56 (regra do dono): "pagamento cheque a prazo 7 dias" tem que sair
+  // na MESMA LINHA (56mm compacta o texto: sem parenteses/hifen) ou, quando
+  // nem assim cabe, em DUAS linhas alinhadas (forma em cima, condicao embaixo)
+  // — nunca um label solto com a segunda linha fora de alinho.
   let payValor: string;
+  let payValorCurto: string;
   if (condicaoPg === 'A PRAZO') {
     let dias = 0;
     if (sale.dataVencimento) {
@@ -306,16 +311,24 @@ export function gerarCupomTexto({ sale, client, products, width }: CupomTextoInp
       dias = Math.round((d2 - d1) / 86400000);
     }
     payValor = `${formaPg} (A PRAZO${dias > 0 ? ` - ${dias} DIAS` : ''})`;
+    payValorCurto = `${formaPg} A PRAZO${dias > 0 ? ` ${dias} DIAS` : ''}`;
   } else {
     payValor = `${formaPg} (A VISTA)`;
+    payValorCurto = `${formaPg} A VISTA`;
   }
   const payLabel = 'PAGAMENTO:';
   if ((payLabel + ' ' + payValor).length <= totalWidth) {
+    // 80mm (e 56mm com formas curtas): linha completa com parenteses
     t += center(`${payLabel} ${payValor}`, totalWidth) + '\n';
+  } else if ((payLabel + ' ' + payValorCurto).length <= totalWidth) {
+    // 56mm: mesma linha, texto compacto ("PAGAMENTO: CHEQUE A PRAZO 7 DIAS")
+    t += center(`${payLabel} ${payValorCurto}`, totalWidth) + '\n';
   } else {
-    t += payLabel + '\n';
-    const spaces = Math.max(0, Math.floor((totalWidth - payValor.length) / 2));
-    t += ' '.repeat(spaces) + payValor + '\n';
+    // Nao coube em nenhuma: duas linhas ALINHADAS (ambas centralizadas) —
+    // "PAGAMENTO: DINHEIRO + PIX" / "A VISTA", "PAGAMENTO: CHEQUE" / "A PRAZO - 14 DIAS"
+    t += center(`${payLabel} ${formaPg}`, totalWidth) + '\n';
+    const resto = payValorCurto.substring(formaPg.length).trim();
+    if (resto) t += center(resto, totalWidth) + '\n';
   }
   t += '='.repeat(totalWidth) + '\n';
 

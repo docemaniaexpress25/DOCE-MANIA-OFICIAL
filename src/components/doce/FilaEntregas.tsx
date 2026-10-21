@@ -51,6 +51,9 @@ interface FilaItem {
   separado: boolean;
   temFoto: boolean;
   dataVencimento: string | null;
+  // BLOCO 58: check de carga — timestamp de quando o pedido foi carregado no
+  // veiculo (null/undefined = ainda nao carregado). Quem marca e o ADMIN.
+  carregadoEm?: string | null;
   vendedorId: string;
   vendedorNome: string;
   cliente: { id: string; nome: string; endereco: string; bairro: string; telefone: string; cnpj?: string | null; email?: string | null; lat: number | null; lng: number | null };
@@ -63,7 +66,9 @@ interface ApiResp {
   falhados: FilaItem[];
   entreguesHoje: FilaItem[];
   resumo?: { naFila: number; valorFila: number; atrasados: number; separados: number; entreguesHoje: number; valorEntregueHoje: number; falhados: number };
-  caixa?: { dinheiroHoje: number; pixHoje: number };
+  // BLOCO 58 (regra do dono): o caixa NAO zera por dia — e o valor EM ABERTO
+  // desde o ULTIMO fechamento de caixa do admin (desde = quando comeca a conta).
+  caixa?: { dinheiroHoje: number; pixHoje: number; desde?: string | null };
   meuFechamento?: { id: string; valor_dinheiro: number; valor_pix: number; qtd_entregas: number; confirmado: boolean; obs: string | null } | null;
   fechamentosHoje?: any[];
   conferencia?: { porEntregador: { entregadorId: string; nome: string; dinheiro: number; pix: number; qtdEntregas: number; vendas: { saleId: string; cliente: string; valorTotal: number; valorPago: number; recebimento: string }[] }[] };
@@ -450,8 +455,21 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
   async function fecharCaixa() {
     const v = parseFloat(caixaDinheiro) || 0;
     if (v < 0) { showToast('Valor invalido.', 'error'); return; }
-    const ok = await acao({ acao: 'FECHAR_CAIXA', entregadorId: caixaEntId, valorDinheiro: v, valorPix: data?.caixa?.pixHoje || 0, qtdEntregas: data?.resumo?.entreguesHoje || 0, obs: caixaObs }, 'Caixa fechado e confirmado!');
+    const ok = await acao({ acao: 'FECHAR_CAIXA', entregadorId: caixaEntId, valorDinheiro: v, valorPix: data?.caixa?.pixHoje || 0, qtdEntregas: data?.resumo?.entreguesHoje || 0, obs: caixaObs }, 'Caixa fechado — a partir de agora a conta recomeca!');
     if (ok) { setSheetCaixa(false); setCaixaDinheiro(''); setCaixaObs(''); setCaixaEntId(''); }
+  }
+
+  // BLOCO 58: check de carga do admin — atualiza a tela NA HORA (otimista,
+  // sem recarregar a fila inteira: economiza egress) e reverte se falhar.
+  async function toggleCarga(p: FilaItem) {
+    const novo = !p.carregadoEm;
+    setData(d => d ? {
+      ...d,
+      fila: d.fila.map(f => f.saleId === p.saleId ? { ...f, carregadoEm: novo ? new Date().toISOString() : null } : f),
+    } : d);
+    const ok = await acao({ acao: 'CHECK_CARGA', saleId: p.saleId, carregado: novo },
+      novo ? 'Pedido CARREGADO no veiculo!' : 'Check de carga removido!', false, true);
+    if (!ok) load(true);
   }
 
   if (loading && !data) {
@@ -484,6 +502,10 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
     .reduce((a: number, p: FilaItem) => Math.round((a + (p.valorTotal - p.valorPago)) * 100) / 100, 0);
   const resumo = data.resumo;
   const caixaEst = data.caixa || { dinheiroHoje: 0, pixHoje: 0 };
+  const desdeCaixa = caixaEst.desde ? new Date(caixaEst.desde) : null;
+  const desdeCaixaOk = desdeCaixa && !isNaN(desdeCaixa.getTime());
+  // BLOCO 58: contagem da carga — quantos pedidos da fila ja estao no veiculo
+  const carregadosCount = fila.filter(p => p.carregadoEm).length;
 
   const sp = sheetEntregue;
   const spMetodo = sp ? (PGTO_META[sp.formaPgto] ? sp.formaPgto : 'DINHEIRO') : 'DINHEIRO';
@@ -520,6 +542,10 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                 )}
                 {p.separado && pend && (
                   <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded-md bg-gray-300 text-gray-600"><i className="fa-solid fa-boxes-stacked mr-0.5"></i>Separado</span>
+                )}
+                {/* BLOCO 58: pedido carregado no veiculo (check do admin) */}
+                {p.carregadoEm && pend && (
+                  <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded-md bg-emerald-600 text-white shrink-0"><i className="fa-solid fa-truck-fast mr-0.5"></i>No veículo</span>
                 )}
                 {pend && <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded-md shrink-0 ${idade.cls}`}><i className="fa-regular fa-clock mr-0.5"></i>{idade.txt}</span>}
                 <span className="text-[8px] font-bold text-gray-300 uppercase shrink-0">{p.numero}</span>
@@ -588,6 +614,16 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                   <i className="fa-solid fa-chevron-down"></i>
                 </button>
               </>
+            )}
+            {/* BLOCO 58: check de carga — o admin marca o pedido que entrou no
+                veiculo; a fila mistura carregados e nao carregados e o contador
+                do resumo mostra quantos estao no veiculo. */}
+            {modo === 'ADMIN' && pend && (
+              <button onClick={() => toggleCarga(p)} disabled={!!busy}
+                title={p.carregadoEm ? 'Já carregado — clique para remover o check' : 'Marcar como carregado no veículo'}
+                className={`flex-1 min-w-[58px] py-2.5 rounded-xl text-[9px] font-black uppercase active:scale-95 transition-transform disabled:opacity-60 ${p.carregadoEm ? 'bg-emerald-600 text-white shadow' : 'bg-slate-100 text-slate-500'}`}>
+                <i className={`fa-solid ${p.carregadoEm ? 'fa-clipboard-check' : 'fa-truck-fast'} mr-1`}></i>{p.carregadoEm ? 'Carregado' : 'Carregar'}
+              </button>
             )}
             {/* BLOCO 31: editar o pedido antes da entrega (admin) */}
             {modo === 'ADMIN' && pend && (
@@ -659,6 +695,10 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
         <div className="flex gap-2 mt-2 text-[9px] font-bold flex-wrap">
           <span className="text-gray-600"><i className="fa-solid fa-wallet mr-1"></i>Fila: {fmt(resumo?.valorFila ?? 0)}</span>
           <span className="text-emerald-600"><i className="fa-solid fa-circle-check mr-1"></i>Entregue hoje: {fmt(resumo?.valorEntregueHoje ?? 0)}</span>
+          {/* BLOCO 58: quantos pedidos da fila já estão no veiculo (check do admin) */}
+          {modo !== 'VENDEDOR' && (
+            <span className="text-slate-700"><i className="fa-solid fa-truck-fast mr-1"></i>No veículo: {carregadosCount}/{fila.length}</span>
+          )}
         </div>
 
         {/* CAIXA DO DIA (entregador e admin) */}
@@ -666,7 +706,12 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
           <div className="mt-3 bg-slate-50 border border-slate-100 rounded-2xl p-3">
             <div className="flex items-center justify-between gap-2">
               <div>
-                <p className="text-[8px] font-black text-slate-400 uppercase">Caixa de hoje (estimado)</p>
+                <p className="text-[8px] font-black text-slate-400 uppercase">Caixa em aberto (estimado)</p>
+                <p className="text-[8px] font-bold text-slate-400 uppercase">
+                  {desdeCaixaOk
+                    ? <>desde {desdeCaixa!.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })} {desdeCaixa!.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</>
+                    : 'sem fechamento anterior'}
+                </p>
                 <p className="text-[11px] font-black text-slate-700">
                   <i className="fa-solid fa-money-bill-wave text-emerald-500 mr-1"></i>{fmt(caixaEst.dinheiroHoje)}
                   <span className="mx-2 text-slate-300">·</span>
@@ -704,7 +749,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                 </div>
               ) : (
                 <p className="text-[8px] font-bold text-slate-400 uppercase text-right leading-snug max-w-[130px]">
-                  <i className="fa-solid fa-user-shield mr-1"></i>O caixa e fechado pelo admin no fim do dia
+                  <i className="fa-solid fa-user-shield mr-1"></i>O caixa só zera quando o admin fecha
                 </p>
               )}
             </div>
@@ -1325,7 +1370,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
           <div className="bg-white w-full max-w-md rounded-t-3xl p-6 animate-in slide-in-from-bottom duration-300" onClick={e => e.stopPropagation()}>
             <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-4"></div>
             <h3 className="text-sm font-black text-gray-800 uppercase text-center"><i className="fa-solid fa-cash-register text-emerald-600 mr-1"></i>Fechamento de caixa</h3>
-            <p className="text-[10px] text-gray-400 font-semibold text-center mt-1">Conte o dinheiro em especie e feche o caixa do dia</p>
+            <p className="text-[10px] text-gray-400 font-semibold text-center mt-1">Conte o dinheiro em especie e feche — a conta recomeca do zero</p>
             {(data?.conferencia?.porEntregador || []).length > 1 && (
               <div className="mt-3">
                 <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Entregador do caixa</label>
@@ -1345,9 +1390,10 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
               </p>
             )}
             <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 text-center mt-4">
-              <p className="text-[9px] font-black text-emerald-500 uppercase">Dinheiro recebido hoje (estimado)</p>
+              <p className="text-[9px] font-black text-emerald-500 uppercase">Dinheiro em espécie em aberto (estimado)</p>
+              <p className="text-[8px] font-bold text-emerald-400 uppercase">{desdeCaixaOk ? `desde ${desdeCaixa!.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })} ${desdeCaixa!.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}` : 'sem fechamento anterior'}</p>
               <p className="text-2xl font-black text-emerald-700">{fmt(caixaEst.dinheiroHoje)}</p>
-              <p className="text-[9px] font-bold text-teal-600 uppercase mt-1">Pix: {fmt(caixaEst.pixHoje)} (nao vem em especie)</p>
+              <p className="text-[9px] font-bold text-teal-600 uppercase mt-1">Pix em aberto: {fmt(caixaEst.pixHoje)} (nao vem em especie)</p>
               {prazoEntregueHoje > 0 && (
                 <p className="text-[9px] font-black text-orange-500 uppercase mt-2 leading-snug">A prazo entregue hoje: {fmt(prazoEntregueHoje)} — NAO entra aqui (vendedor recebe depois)</p>
               )}
@@ -1364,7 +1410,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
             </div>
             <button onClick={fecharCaixa} disabled={!!busy}
               className="w-full mt-4 py-4 bg-slate-800 text-white rounded-2xl text-xs font-black uppercase tracking-wider shadow-lg active:scale-[0.98] transition-transform disabled:opacity-60">
-              <i className="fa-solid fa-check mr-1"></i>Fechar caixa do dia (ja confirmado)
+              <i className="fa-solid fa-check mr-1"></i>Fechar caixa (a conta recomeca do zero)
             </button>
             <button onClick={() => setSheetCaixa(false)} className="w-full mt-2 py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Cancelar</button>
           </div>
@@ -1414,7 +1460,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                 {listaOrdenada.map((p, i) => (
                   <tr key={p.saleId} className="border-b border-gray-300">
                     <td className="py-1.5 font-black">{i + 1}</td>
-                    <td className="py-1.5 font-bold">{p.prioridade === 1 ? 'P1 ' : p.prioridade === 2 ? 'P2 ' : ''}{p.cliente.nome}</td>
+                    <td className="py-1.5 font-bold">{p.prioridade === 1 ? 'P1 ' : p.prioridade === 2 ? 'P2 ' : ''}{p.cliente.nome}{p.carregadoEm ? ' ✓' : ''}</td>
                     <td className="py-1.5 text-gray-600">{p.cliente.endereco}{p.cliente.bairro ? ` — ${p.cliente.bairro}` : ''}</td>
                     <td className="py-1.5 text-right font-bold">{fmt(p.valorTotal)}</td>
                     <td className="py-1.5 text-center uppercase text-[9px] font-black">{p.formaPgto}</td>

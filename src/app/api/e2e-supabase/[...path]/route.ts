@@ -283,6 +283,16 @@ async function handle(req: NextRequest, segments: string[]) {
         }
         tables[table].push(clone);
       });
+      // BLOCO 40: supabase-js .single() pede OBJETO (Accept vnd.pgrst.object).
+      // O insert da pre-venda usa .select(...).single() — sem isso o client
+      // recebia array e o pedido mapeava vazio (cupom com R$ 0.00).
+      const wantsObject = (req.headers.get('accept') || '').includes('vnd.pgrst.object');
+      if (wantsObject) {
+        return new NextResponse(JSON.stringify(arr[0] ?? null), {
+          status: 201,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
       return NextResponse.json(arr, { status: 201 });
     }
 

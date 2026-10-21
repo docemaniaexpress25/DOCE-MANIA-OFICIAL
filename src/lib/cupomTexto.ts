@@ -101,6 +101,12 @@ export function formaPagamentoDeSale(s: { metodoPagamento?: string; detalhePagam
 export function gerarCupomTexto({ sale, client, products, width }: CupomTextoInput): string {
   const totalWidth = width === '80MM' ? 48 : 32;
 
+  // BLOCO 40: datas do cupom em America/Sao_Paulo — o cupom e UNICO (mesmo
+  // texto em qualquer aparelho); em TZ diferente (servidor/UTC) o vencimento
+  // e os DIAS do prazo saiam com +1 dia.
+  const fmtDia = (d: Date | string) => new Date(d).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+  const diaSP = (d: Date | string) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(d));
+
   const padR = (str: string, len: number) => str.substring(0, len).padEnd(len);
   const padL = (str: string, len: number) => str.substring(0, len).padStart(len);
   const center = (str: string, len: number) => {
@@ -127,7 +133,7 @@ export function gerarCupomTexto({ sale, client, products, width }: CupomTextoInp
 
   const clientName = client.nomeFantasia || 'Consumidor';
   t += `Cliente: ${clientName}\n`;
-  t += `Data: ${new Date(sale.data).toLocaleDateString()} ${new Date(sale.data).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}\n`;
+  t += `Data: ${fmtDia(sale.data)} ${new Date(sale.data).toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' })}\n`;
   t += '-'.repeat(totalWidth) + '\n';
 
   const qtyW = 4;
@@ -202,7 +208,7 @@ export function gerarCupomTexto({ sale, client, products, width }: CupomTextoInp
       }
     }
     if (sale.dataVencimento && prazo) {
-      t += `Vencimento: ${new Date(sale.dataVencimento).toLocaleDateString()}\n`;
+      t += `Vencimento: ${fmtDia(sale.dataVencimento)}\n`;
     }
   } else {
     t += `Metodo: ${FORMA_LABEL[String(sale.metodoPagamento)] || sale.metodoPagamento}\n`;
@@ -212,7 +218,7 @@ export function gerarCupomTexto({ sale, client, products, width }: CupomTextoInp
     }
 
     if (sale.statusPagamento === 'PENDENTE' && sale.dataVencimento) {
-      t += `Vencimento: ${new Date(sale.dataVencimento).toLocaleDateString()}\n`;
+      t += `Vencimento: ${fmtDia(sale.dataVencimento)}\n`;
     }
   }
 
@@ -248,9 +254,11 @@ export function gerarCupomTexto({ sale, client, products, width }: CupomTextoInp
   if (condicaoPg === 'A PRAZO') {
     let dias = 0;
     if (sale.dataVencimento) {
-      const vendaMs = new Date(sale.data).setHours(12, 0, 0, 0);
-      const vencMs = new Date(sale.dataVencimento).setHours(12, 0, 0, 0);
-      dias = Math.round((vencMs - vendaMs) / 86400000);
+      // BLOCO 40: dias de CALENDARIO em America/Sao_Paulo (meio-dia UTC das
+      // duas datas) — nunca pega +1 por fuso do aparelho
+      const d1 = new Date(`${diaSP(sale.data)}T12:00:00Z`).getTime();
+      const d2 = new Date(`${diaSP(sale.dataVencimento)}T12:00:00Z`).getTime();
+      dias = Math.round((d2 - d1) / 86400000);
     }
     payValor = `${formaPg} (A PRAZO${dias > 0 ? ` - ${dias} DIAS` : ''})`;
   } else {

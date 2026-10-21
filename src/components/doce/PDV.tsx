@@ -180,6 +180,13 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const isFinalizingRef = useRef(false);
   const lastFinishedSaleRef = useRef<Sale | null>(null);
 
+  // BLOCO 40 (regra do dono): o cupom é a BASE DA SEPARACAO — depois de
+  // registrar o pedido, o OK abre o cupom REAL (com o tipo de documento
+  // NF-e/NFC-e, a forma de pagamento e o prazo escolhidos no wizard). Antes o
+  // cupom so existia ANTES do wizard (com defaults DINHEIRO A VISTA) e depois
+  // do registro o vendedor teria que reabrir pela fila para imprimir certo.
+  const [cupomPosRegistro, setCupomPosRegistro] = useState<Sale | null>(null);
+
   const [showComprovanteModal, setShowComprovanteModal] = useState(false);
   const [comprovanteSaleId, setComprovanteSaleId] = useState<string | null>(null);
   const [comprovanteFoto, setComprovanteFoto] = useState<string | null>(null);
@@ -882,6 +889,27 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     setAppModal({ title: 'Copiado!', message: 'Texto do pré-pedido copiado para a área de transferência.', icon: 'fa-solid fa-clipboard-check', iconColor: 'text-emerald-500', type: 'success' });
   };
 
+  // BLOCO 40: cupom REAL apos registrar (pre-venda OU pronta entrega) —
+  // imprime o documento escolhido (NF-e/NFC-e/CUPOM), a forma de pagamento e
+  // o prazo. allowNota so na pronta entrega (pre-venda emite nota na entrega).
+  if (cupomPosRegistro) {
+    return (
+      <div className="fixed inset-0 bg-gray-900 z-[100] flex flex-col">
+        <div className="flex-1 overflow-y-auto">
+          <Cupom
+            sale={cupomPosRegistro}
+            client={client}
+            products={products}
+            onClose={() => { const s = cupomPosRegistro; setCupomPosRegistro(null); onFinish(s); }}
+            allowDelete={false}
+            allowNota={cupomPosRegistro.tipoVenda !== 'PRE_VENDA'}
+            closeLabel="FECHAR"
+          />
+        </div>
+      </div>
+    );
+  }
+
   if (view === 'RECEIPT_PREVIEW') {
     return (
       <div className="fixed inset-0 bg-gray-900 z-[100] flex flex-col">
@@ -1193,18 +1221,25 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
             </p>
             <p className="text-xl font-black text-gray-800">R$ {total.toFixed(2)}</p>
           </div>
-          <button 
+          <button
             onClick={() => {
               if (isPrePedido) {
                 setView('PRE_PEDIDO_PREVIEW');
+              } else if (isPreVenda && wizardPagamento) {
+                // BLOCO 40 (regra do dono): na PRE-VENDA o cupom que vale é o
+                // POS-registro (com tipo de doc + forma de pagamento reais).
+                // O preview antes do wizard mostrava defaults (DINHEIRO A VISTA
+                // / CUPOM) e o vendedor imprimia o cupom errado — agora vai
+                // direto ao wizard e o cupom certo aparece no final.
+                setView('PAYMENT');
               } else {
                 setView('RECEIPT_PREVIEW');
               }
-            }} 
-            disabled={(total <= 0 && getOrderedItems().length === 0) || hasMarginViolation || (!allCategoriesVisited && !sellFromCentral)} 
+            }}
+            disabled={(total <= 0 && getOrderedItems().length === 0) || hasMarginViolation || (!allCategoriesVisited && !sellFromCentral)}
             className={`px-6 py-4 rounded-2xl font-black uppercase text-xs ${(total > 0 || getOrderedItems().length > 0) && !hasMarginViolation && (allCategoriesVisited || sellFromCentral) ? (isPreVenda ? 'bg-emerald-600 text-white shadow-lg' : isPrePedido ? 'bg-indigo-600 text-white shadow-lg' : 'bg-blue-600 text-white shadow-lg') : 'bg-gray-200 text-gray-400'}`}
           >
-            {isPrePedido ? 'Gerar Rascunho' : 'Gerar Cupom'}
+            {isPrePedido ? 'Gerar Rascunho' : isPreVenda && wizardPagamento ? 'Ir para pagamento' : 'Gerar Cupom'}
           </button>
         </div>
       </footer>
@@ -1509,7 +1544,12 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               />
             )}
 
-            {saleResultModal.isPrazo && !saleResultModal.sale.comprovanteFoto && (
+            {/* BLOCO 40 (regra do dono): foto do comprovante SO na PRONTA ENTREGA
+                a prazo (cliente levou a mercadoria agora e assinou o cupom — a foto
+                e a prova). Na PRE-VENDA ninguem recebe nada e nada e assinado na
+                visita (pedido so anota) — NAO pode pedir foto: travava o vendedor
+                na tela da camera sem nem deixar fechar o modal. */}
+            {saleResultModal.isPrazo && !saleResultModal.isPreVenda && !saleResultModal.sale.comprovanteFoto && (
               <button
                 onClick={() => { const s = saleResultModal!.sale; setSaleResultModal(null); openComprovanteFlow(s); }}
                 className="w-full bg-amber-500 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest"
@@ -1517,8 +1557,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                 <i className="fa-solid fa-camera mr-2"></i>Tirar Foto do Comprovante
               </button>
             )}
-            {!(saleResultModal.isPrazo && !saleResultModal.sale.comprovanteFoto) && (
-              <button onClick={() => { const s = saleResultModal.sale; setSaleResultModal(null); onFinish(s); }} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest"><i className="fa-solid fa-check mr-2"></i>{saleResultModal.isPreVenda ? 'OK' : 'OK — Cupom Nao Fiscal'}</button>
+            {!(saleResultModal.isPrazo && !saleResultModal.isPreVenda && !saleResultModal.sale.comprovanteFoto) && (
+              <button onClick={() => { const s = saleResultModal.sale; setSaleResultModal(null); setView('CART'); setCupomPosRegistro(s); }} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest"><i className="fa-solid fa-check mr-2"></i>{saleResultModal.isPreVenda ? 'Ver cupom do pedido' : 'OK — Ver cupom da venda'}</button>
             )}
           </div>
         </div>

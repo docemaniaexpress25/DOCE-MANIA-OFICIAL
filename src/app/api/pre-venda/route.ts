@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/serverSupabase';
 import { sessionFromRequest, isAdminSession } from '@/lib/session';
-import { hasEntregaTables, hasBoletoFotoColumn } from '@/lib/serverSchema';
+import { hasEntregaTables, hasBoletoFotoColumn, hasModoVendaColumn } from '@/lib/serverSchema';
 import { sendPushToUser } from '@/lib/pushSender';
 import QRCode from 'qrcode';
 import { buildPixPayload, generateTxid } from '@/lib/pix';
@@ -53,7 +53,7 @@ function dayRangeIso(): { start: string; end: string } {
 }
 
 const SALE_COLS = 'id, vendedor_id, client_id, valor_total, valor_pago, metodo_pagamento, detalhe_pagamento, status_pagamento, entrega_status, entrega_seq, route_id, data_venda';
-const CLIENT_COLS_BASE = 'id, nome_fantasia, endereco, bairro, telefone';
+const CLIENT_COLS_BASE = 'id, nome_fantasia, endereco, bairro, telefone, cnpj';
 const CLIENT_COLS_GPS = `${CLIENT_COLS_BASE}, localizacao, pin_localizacao`;
 
 /**
@@ -251,10 +251,19 @@ function formaPgtoDeSale(s: any): string {
   return 'DINHEIRO';
 }
 
+/** BLOCO 40: sales.modo_nota entra no select SO quando a coluna existe
+ *  (sonda em cache — pre-SQL o select inteiro quebraria 42703 e a fila sumiria). */
+async function salesColsComModo(): Promise<string> {
+  const temModo = await hasModoVendaColumn();
+  return temModo ? 'modo_nota' : '';
+}
+
 async function fetchParadas(supabase: any, routeId: string) {
+  // BLOCO 40: modo_nota entra quando a coluna existe (tipo de documento no cupom)
+  const modoCol = await salesColsComModo();
   const { data: salesRows, error } = await supabase
     .from('sales')
-    .select(SALE_COLS)
+    .select(`${SALE_COLS}${modoCol ? `, ${modoCol}` : ''}`)
     .eq('route_id', routeId)
     .order('entrega_seq', { ascending: true });
   if (error) throw error;
@@ -322,6 +331,12 @@ async function enrichParadas(supabase: any, salesRows: any[]) {
       statusPagamento: s.status_pagamento,
       formaPgto: formaPgtoDeSale(s),
       condicao: /A PRAZO/i.test(String(s.detalhe_pagamento || '')) ? 'APRAZO' : 'AVISTA',
+      // BLOCO 40 (regra do dono): dados REAIS da venda para o cupom — tipo do
+      // documento (NF-e/NFC-e) e forma de pagamento. Sem isso o Cupom.tsx
+      // reconstruia o detalhe do zero e a escolha "COM NOTA" se perdia.
+      detalhePagamento: s.detalhe_pagamento || null,
+      metodoPagamento: s.metodo_pagamento || null,
+      modoNota: s.modo_nota || null,
       temFoto: !!temFotoSet[s.id],
       motivo: null as string | null,
       cliente: {
@@ -330,6 +345,8 @@ async function enrichParadas(supabase: any, salesRows: any[]) {
         endereco: c.endereco || '',
         bairro: c.bairro || '',
         telefone: c.telefone || '',
+        // BLOCO 40: CNPJ para o rodape do cupom NF-e ("NF-e: <cnpj>")
+        cnpj: c.cnpj || null,
         lat, lng,
       },
       itens: itemsBySale[s.id] || [],
@@ -532,6 +549,12 @@ async function enrichFila(supabase: any, salesRows: any[]) {
       statusPagamento: s.status_pagamento,
       formaPgto: formaPgtoDeSale(s),
       condicao,
+      // BLOCO 40 (regra do dono): dados REAIS da venda para o cupom — o Cupom
+      // mostra o tipo do documento escolhido (NF-e/NFC-e + CPF) e a forma de
+      // pagamento real. Antes o front reconstruia o detalhe sem a nota.
+      detalhePagamento: det || null,
+      metodoPagamento: s.metodo_pagamento || null,
+      modoNota: s.modo_nota || null,
       trocas: s.trocas ?? null,
       prioridade: typeof s.prioridade === 'number' ? s.prioridade : 0,
       // BLOCO 31: posicao manual da rota (definida pelo admin com setas)
@@ -548,6 +571,8 @@ async function enrichFila(supabase: any, salesRows: any[]) {
         endereco: c.endereco || '',
         bairro: c.bairro || '',
         telefone: c.telefone || '',
+        // BLOCO 40: CNPJ para o rodape do cupom NF-e ("NF-e: <cnpj>")
+        cnpj: c.cnpj || null,
         lat, lng,
       },
       itens: itemsBySale[s.id] || [],
@@ -561,7 +586,9 @@ async function getFila(supabase: any, userId: string, perfil: string) {
   const proprio = perfil === 'VENDEDOR';
   // BLOCO 31: ordem_entrega entra nas colunas SO se o SQL ja rodou (sonda)
   const temOrdem = await hasOrdemEntregaColumn();
-  const filaCols = `${FILA_COLS_13}${temOrdem ? ', ordem_entrega' : ''}`;
+  // BLOCO 40: modo_nota idem (tipo do documento no cupom da fila/pedidos)
+  const modoCol = await salesColsComModo();
+  const filaCols = `${FILA_COLS_13}${temOrdem ? ', ordem_entrega' : ''}${modoCol ? `, ${modoCol}` : ''}`;
 
   // ---- Fila ativa: PENDENTE/EM_ROTA (inclui legado) — qualquer dia (fila viva) ----
   let qAtiva = supabase

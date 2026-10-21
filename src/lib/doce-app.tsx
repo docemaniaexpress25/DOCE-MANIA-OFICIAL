@@ -758,9 +758,11 @@ const App: React.FC = () => {
         vendedorId: currentUser?.id || '',
         clientId: data.clientId,
         data: new Date(s.data_venda || Date.now()),
-        valorTotal: Number(s.valor_total),
+        valorTotal: Number(s.valor_total || 0),
         valorPago: Number(s.valor_pago || 0),
-        metodoPagamento: 'A_PRAZO',
+        // BLOCO 40: metodo real quando vier na resposta (fallback A_PRAZO =
+        // padrao do pedido pendente gravado pela API)
+        metodoPagamento: s.metodo_pagamento || 'A_PRAZO',
         detalhePagamento: s.detalhe_pagamento || 'PRE-VENDA',
         statusPagamento: 'PENDENTE',
         itens: (data.itens || []).map((i: any) => ({ produtoId: i.produtoId, quantidade: i.quantidade, precoVenda: i.precoVenda })),
@@ -768,6 +770,9 @@ const App: React.FC = () => {
         trocas: s.trocas || undefined,
         tipoVenda: 'PRE_VENDA',
         entregaStatus: 'PENDENTE',
+        // BLOCO 40: modo do atendimento (NFE|NFCE|CUPOM) — o cupom mostra o
+        // documento certo (">>> NF-e <<<") direto no "Pedido Registrado!"
+        modoNota: s.modo_nota || undefined,
       };
       // BLOCO 13: pedido pendente — exclusao dele usa a API da fila
       pvPendentesRef.current.add(mapped.id);

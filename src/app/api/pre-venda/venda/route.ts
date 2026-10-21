@@ -162,11 +162,18 @@ export async function POST(req: NextRequest) {
     if (modo && temModoVenda) (basePayload as any).modo_nota = modo;
     let payload = { ...basePayload, ...bloco13 };
 
-    let { data: sale, error: saleErr } = await supabase
+    // BLOCO 40: devolve modo_nota junto (o cupom do "Pedido Registrado!" mostra
+    // o documento certo sem depender so do fallback do detalhe)
+    const SEL_COLS = `id, valor_total, valor_pago, metodo_pagamento, detalhe_pagamento, status_pagamento, data_venda, data_vencimento, tipo_venda, entrega_status, trocas${temModoVenda ? ', modo_nota' : ''}`;
+
+    // BLOCO 40: 'as unknown as Promise<any>' — select dinamico (modo_nota so
+    // quando a coluna existe); o parser de tipos do supabase-js so infere com
+    // string literal e cairia em GenericStringError
+    let { data: sale, error: saleErr } = await (supabase
       .from('sales')
       .insert(payload)
-      .select('id, valor_total, valor_pago, metodo_pagamento, detalhe_pagamento, status_pagamento, data_venda, data_vencimento, tipo_venda, entrega_status, trocas')
-      .single();
+      .select(SEL_COLS)
+      .single() as unknown as Promise<any>);
 
     if (saleErr && /trocas|modo_nota/i.test(saleErr.message || '')) {
       const semColunas: any = { ...basePayload };

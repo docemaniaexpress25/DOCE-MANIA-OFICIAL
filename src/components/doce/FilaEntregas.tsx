@@ -38,6 +38,12 @@ interface FilaItem {
   statusPagamento: string;
   formaPgto: string;
   condicao: string;
+  // BLOCO 40: dados REAIS da venda para o cupom (tipo do documento NF-e/NFC-e,
+  // CPF, forma de pagamento e prazo) — antes o cupom reconstruia o detalhe e
+  // a escolha "COM NOTA" da rota 2 se perdia (saiava sempre CUPOM).
+  detalhePagamento?: string | null;
+  metodoPagamento?: string | null;
+  modoNota?: string | null;
   trocas: string | null;
   prioridade: number;
   // BLOCO 31: posicao da rota definida pelo admin com setas (undefined = sem ordem manual)
@@ -47,7 +53,7 @@ interface FilaItem {
   dataVencimento: string | null;
   vendedorId: string;
   vendedorNome: string;
-  cliente: { id: string; nome: string; endereco: string; bairro: string; telefone: string; lat: number | null; lng: number | null };
+  cliente: { id: string; nome: string; endereco: string; bairro: string; telefone: string; cnpj?: string | null; lat: number | null; lng: number | null };
   itens: { nome: string; produtoId: string; quantidade: number; precoVenda: number }[];
 }
 
@@ -390,14 +396,20 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
     data: new Date(p.dataVenda),
     valorTotal: p.valorTotal,
     valorPago: p.valorPago,
-    metodoPagamento: p.formaPgto === 'PIX' ? 'A_PRAZO' : 'A_PRAZO',
-    detalhePagamento: `PRE-VENDA — cobrar ${p.formaPgto} na entrega (${p.condicao === 'APRAZO' ? 'A PRAZO' : 'A VISTA'})`,
+    // BLOCO 40 (regra do dono): o cupom precisa dos dados REAIS da venda —
+    // detalhe gravado pelo pedido (com "COM NOTA: NF-e/NFC-e"), modo do
+    // atendimento, metodo real e status da entrega. O formato antigo
+    // reconstruia "cobrar X na entrega" sem a nota e o cupom saia sempre
+    // CUPOM, com pagamento errado (A_PRAZO hardcode virava BOLETO).
+    metodoPagamento: p.metodoPagamento || 'A_PRAZO',
+    detalhePagamento: p.detalhePagamento || `PRE-VENDA — cobrar ${p.formaPgto} na entrega (${p.condicao === 'APRAZO' ? 'A PRAZO' : 'A VISTA'})`,
+    modoNota: p.modoNota || undefined,
+    tipoVenda: 'PRE_VENDA',
+    entregaStatus: p.entregaStatus,
     statusPagamento: p.statusPagamento,
     itens: p.itens.map(i => ({ produtoId: i.produtoId, quantidade: i.quantidade, precoVenda: i.precoVenda })),
     dataVencimento: p.dataVencimento ? new Date(p.dataVencimento) : undefined,
     trocas: p.trocas || undefined,
-    tipoVenda: 'PRE_VENDA',
-    entregaStatus: p.entregaStatus,
   });
   const clientOf = (p: FilaItem): any => ({
     id: p.cliente.id,
@@ -405,6 +417,8 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
     telefone: p.cliente.telefone || '',
     endereco: p.cliente.endereco || '',
     bairro: p.cliente.bairro || '',
+    // BLOCO 40: CNPJ do cliente — rodape do cupom NF-e ("NF-e: <cnpj>")
+    cnpj: p.cliente.cnpj || '',
   });
 
   /** Lista imprimivel (ordem de entrega) — imprime via navegador */

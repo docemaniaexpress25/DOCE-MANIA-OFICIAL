@@ -160,24 +160,41 @@ export function gerarCupomTexto({ sale, client, products, width }: CupomTextoInp
   });
 
   // BLOCO 13: trocas anotadas pelo vendedor (ex.: "1 Lays sour cream 62g")
-  const trocas = String((sale as any).trocas || '').trim();
-  if (trocas) {
+  // BLOCO 41: OBSERVACAO do pedido — o vendedor anota no PDV (switch "Obs.")
+  // e ela grava como linha "OBS: ..." na coluna trocas (mesmo padrao do
+  // portal). O cupom separa: linhas "OBS:" imprimem no bloco OBSERVACAO e o
+  // resto continua no bloco TROCAS (pedidos antigos ficam iguais).
+  const rawAnot = String((sale as any).trocas || '').trim();
+  const linhasTrocas: string[] = [];
+  const linhasObs: string[] = [];
+  rawAnot.split(/[\n;]+/).map(s => s.trim()).filter(Boolean).forEach(l => {
+    if (/^obs[:\-]/i.test(l)) linhasObs.push(l.replace(/^obs[:\-]\s*/i, ''));
+    else linhasTrocas.push(l);
+  });
+  // Campo proprio de observacoes (futuro/legado) tambem imprime como observacao
+  const obsDireta = String((sale as any).observacoes || '').trim();
+  if (obsDireta) linhasObs.unshift(obsDireta);
+
+  if (linhasTrocas.length > 0) {
     t += '-'.repeat(totalWidth) + '\n';
     t += 'TROCAS:\n';
-    const linhas = trocas.split(/[\n;]+/).map(s => s.trim()).filter(Boolean);
-    if (linhas.length === 0) {
-      let rest = `1x ${trocas}`;
+    for (const linha of linhasTrocas) {
+      let rest = linha;
       while (rest.length > 0) {
         t += padR(rest.substring(0, descW), descW) + '\n';
         rest = rest.substring(descW);
       }
-    } else {
-      for (const linha of linhas) {
-        let rest = linha;
-        while (rest.length > 0) {
-          t += padR(rest.substring(0, descW), descW) + '\n';
-          rest = rest.substring(descW);
-        }
+    }
+  }
+
+  if (linhasObs.length > 0) {
+    t += '-'.repeat(totalWidth) + '\n';
+    t += 'OBSERVACAO:\n';
+    for (const linha of linhasObs) {
+      let rest = linha;
+      while (rest.length > 0) {
+        t += padR(rest.substring(0, totalWidth), totalWidth) + '\n';
+        rest = rest.substring(totalWidth);
       }
     }
   }

@@ -49,6 +49,19 @@ type PDVView = 'CART' | 'RECEIPT_PREVIEW' | 'PAYMENT' | 'PRE_PEDIDO_PREVIEW';
 // Tipo do item do carrinho
 type CartItem = { quantidade: number; precoVenda: string };
 
+// BLOCO 41: chip-switch compacto do rodapé do PDV (tabela/troca/obs/pré-pedido)
+// — uma linha só, para não comer o espaço da grade de produtos.
+const CHIP_ON: Record<string, string> = { violet: 'bg-violet-600', orange: 'bg-orange-500', teal: 'bg-teal-600', indigo: 'bg-indigo-600' };
+const CHIP_TXT: Record<string, string> = { violet: 'text-violet-600', orange: 'text-orange-500', teal: 'text-teal-600', indigo: 'text-indigo-600' };
+const SwitchChip: React.FC<{ ligado: boolean; onClick: () => void; cor: 'violet' | 'orange' | 'teal' | 'indigo'; label: string; title: string }> = ({ ligado, onClick, cor, label, title }) => (
+  <button onClick={onClick} aria-pressed={ligado} title={title} className="flex items-center gap-1.5 active:scale-95 transition-transform">
+    <span className={`w-8 h-5 rounded-full relative transition-colors ${ligado ? CHIP_ON[cor] : 'bg-gray-300'}`}>
+      <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all ${ligado ? 'left-4' : 'left-0.5'}`}></span>
+    </span>
+    <span className={`text-[8px] font-black uppercase tracking-wide ${ligado ? CHIP_TXT[cor] : 'text-gray-400'}`}>{label}</span>
+  </button>
+);
+
 const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onCancel, onFinish, processSale, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, sales, onNavigateToCredit, categories, subcategories, modoVenda, processPreVenda, wizardPagamento, rota2, modoAtendimento, nfcCpfInicial }) => {
   const [view, setView] = useState<PDVView>('CART');
   const [isPrePedido, setIsPrePedido] = useState(false);
@@ -64,6 +77,13 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   // BLOCO 13: trocas anotadas pelo vendedor (sai no cupom) com autocomplete de produto
   const [trocasTexto, setTrocasTexto] = useState('');
   const [trocasSugestao, setTrocasSugestao] = useState(false);
+  // BLOCO 41: OBSERVAÇÃO do pedido — switch novo (mesmo sistema do de trocas);
+  // o texto sai impresso no cupom no bloco OBSERVACAO (grava como linha "OBS: ...").
+  const [isObsActive, setIsObsActive] = useState(false);
+  const [obsTexto, setObsTexto] = useState('');
+  // BLOCO 44: UI de envio — trava os botões e mostra o spinner enquanto a API
+  // registra (o vendedor vê que está indo e não clica de novo achando que travou).
+  const [finalizando, setFinalizando] = useState(false);
   // BLOCO 24: PREÇO TABELA — switch que joga TODOS os itens do carrinho no
   // PREÇO MÍNIMO cadastrado no estoque central de uma vez (em vez de um por um).
   // Desligar volta tudo para o PREÇO PADRÃO do estoque central.
@@ -103,6 +123,13 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     setTrocasTexto(partes.join(', '));
     setTrocasSugestao(false);
   };
+
+  // BLOCO 41: trocas + OBSERVAÇÃO vão no mesmo campo do banco (coluna trocas,
+  // mesmo padrão do portal) — a observação entra como linha "OBS: ..." e o
+  // gerador de cupom imprime no bloco OBSERVACAO, separado das TROCAS.
+  const obsLimpa = obsTexto.trim().replace(/\s*\n\s*/g, ' / ');
+  const trocasComObs = [trocasTexto.trim(), obsLimpa ? `OBS: ${obsLimpa}` : ''].filter(Boolean).join('\n');
+  const limparAnotacoes = () => { setTrocasTexto(''); setObsTexto(''); setIsObsActive(false); };
 
   // Pre-venda e pre-pedido vendem do ESTOQUE CENTRAL (nao da carga da van)
   const sellFromCentral = isPrePedido || isPreVenda;
@@ -491,20 +518,27 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     }
 
     isFinalizingRef.current = true;
+    setFinalizando(true);
 
     const itens = getOrderedItems();
     const vt = parseFloat(valorTroca) || 0;
     const descontoInfo = isTrocaActive && vt > 0 ? ` (Troca: R$ ${vt.toFixed(2)})` : '';
 
+    // BLOCO 44 (anti-duplicação): o carrinho sai da tela ANTES do envio — se o
+    // vendedor recarregar/desistir durante a demora, o pedido não se repete.
+    // Em falha, o carrinho volta para a tela.
+    const carrinhoPrev = cart;
+    localStorage.removeItem(cartKey);
+    setCart({});
+
     // ===== PRE-VENDA: registra o PEDIDO (sem cobranca, sem baixa de carga) =====
     if (isPreVenda) {
       const formaFinal = condicaoPv === 'AVISTA' && (metodoEntrega === 'BOLETO' || metodoEntrega === 'CHEQUE') ? 'DINHEIRO' : metodoEntrega;
-      const r = await processPreVenda!({ clientId: client.id, valorTotal: total, itens, formaPagamento: formaFinal, condicao: condicaoPv, vencimento: condicaoPv === 'APRAZO' ? vencimentoPv : undefined, trocas: trocasTexto.trim() });
+      const r = await processPreVenda!({ clientId: client.id, valorTotal: total, itens, formaPagamento: formaFinal, condicao: condicaoPv, vencimento: condicaoPv === 'APRAZO' ? vencimentoPv : undefined, trocas: trocasComObs });
       if (r.pedido) {
         const pedido = r.pedido;
-        localStorage.removeItem(cartKey);
-        setCart({});
-        setTrocasTexto('');
+        limparAnotacoes();
+        setFinalizando(false);
         lastFinishedSaleRef.current = pedido;
         // BLOCO 21: comissão de PRÉ-VENDA — o valor OFICIAL vem do SERVIDOR
         // (mesma regra que gera a comissão na entrega: % de PRÉ-VENDA do
@@ -527,6 +561,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         setSaleResultModal({ total, comissao: comissaoTotal, troca: isTrocaActive ? vt : 0, isPrazo: false, isPreVenda: true, clientName: client.nomeFantasia, sale: pedido });
       } else {
         isFinalizingRef.current = false;
+        setCart(carrinhoPrev);
+        setFinalizando(false);
         // Falha SEM silencio: mostra o motivo REAL vindo da API (sessao expirada, banco desatualizado, etc.)
         setAppModal({ title: 'Falha ao Registrar', message: r.erro || 'Nao foi possivel registrar o pedido.\nVerifique sua conexao e tente novamente.', icon: 'fa-solid fa-circle-exclamation', iconColor: 'text-rose-500', type: 'error' });
       }
@@ -564,9 +600,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     
     const newSale = await processSale(salePayload);
     if (newSale) { 
-      localStorage.removeItem(cartKey); 
-      setCart({}); // Esvazia o carrinho imediatamente para evitar re-venda
       lastFinishedSaleRef.current = newSale;
+      setFinalizando(false);
 
       // Calcula comissao e abre modal bonito
       let comissaoTotal = 0;
@@ -583,22 +618,24 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         troca: isTrocaActive ? vt : 0,
         isPrazo: metodo === 'A_PRAZO',
         clientName: client.nomeFantasia,
-        sale: { ...newSale, trocas: trocasTexto.trim() || undefined },
+        sale: { ...newSale, trocas: trocasComObs || undefined },
       });
-      // BLOCO 13: persiste as trocas da venda de pronta entrega (best-effort)
-      if (trocasTexto.trim()) {
+      // BLOCO 13/41: persiste as TROCAS + OBSERVAÇÃO da pronta entrega (best-effort)
+      if (trocasComObs) {
         try {
           const { authHeaders } = await import('@/services/userService');
           fetch('/api/sales/trocas', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...authHeaders() },
-            body: JSON.stringify({ saleId: newSale.id, trocas: trocasTexto.trim() }),
+            body: JSON.stringify({ saleId: newSale.id, trocas: trocasComObs }),
           }).catch(() => {});
         } catch {}
-        setTrocasTexto('');
+        limparAnotacoes();
       }
     } else {
       isFinalizingRef.current = false; // Libera se falhou
+      setCart(carrinhoPrev);
+      setFinalizando(false);
     }
   };
 
@@ -626,6 +663,12 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     }
 
     isFinalizingRef.current = true;
+    setFinalizando(true);
+    // BLOCO 44 (anti-duplicação): o carrinho sai da tela ANTES do envio —
+    // recarregou/desistiu durante a demora = pedido não se repete. Falha volta.
+    const carrinhoPrev = cart;
+    localStorage.removeItem(cartKey);
+    setCart({});
     const itens = getOrderedItems();
     const vt = parseFloat(valorTroca) || 0;
     const descontoInfo = isTrocaActive && vt > 0 ? ` (Troca: R$ ${vt.toFixed(2)})` : '';
@@ -644,7 +687,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         clientId: client.id, valorTotal: total, itens,
         formaPagamento: formaApi, condicao: w.condicao,
         vencimento: w.condicao === 'APRAZO' ? w.vencimento : undefined,
-        trocas: trocasTexto.trim(),
+        trocas: trocasComObs,
         // BLOCO 39 (regra do dono): pré-venda NUNCA recebe na visita —
         // a vista = ENTREGADOR cobra na entrega (pedido PENDENTE);
         // a prazo = VENDEDOR cobra na data/visita. Sem pagoNaVisita.
@@ -655,9 +698,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       });
       if (r.pedido) {
         const pedido = r.pedido;
-        localStorage.removeItem(cartKey);
-        setCart({});
-        setTrocasTexto('');
+        limparAnotacoes();
+        setFinalizando(false);
         lastFinishedSaleRef.current = pedido;
         let comissaoTotal = Number(r.comissaoPrevista);
         if (!isFinite(comissaoTotal) || comissaoTotal <= 0) {
@@ -676,6 +718,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         setSaleResultModal({ total, comissao: comissaoTotal, troca: isTrocaActive ? vt : 0, isPrazo: w.condicao === 'APRAZO', isPreVenda: true, clientName: client.nomeFantasia, sale: pedido });
       } else {
         isFinalizingRef.current = false;
+        setCart(carrinhoPrev);
+        setFinalizando(false);
         setWizardErro(r.erro || 'Nao foi possivel registrar o pedido. Verifique sua conexao e tente novamente.');
       }
       return;
@@ -727,9 +771,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
 
     const newSale = await processSale(salePayload);
     if (newSale) {
-      localStorage.removeItem(cartKey);
-      setCart({});
       lastFinishedSaleRef.current = newSale;
+      setFinalizando(false);
       let comissaoTotal = 0;
       itens.forEach(item => {
         const prod = products.find(p => p.id === item.produtoId);
@@ -743,21 +786,24 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         troca: isTrocaActive ? vt : 0,
         isPrazo: metodo === 'A_PRAZO',
         clientName: client.nomeFantasia,
-        sale: { ...newSale, trocas: trocasTexto.trim() || undefined },
+        sale: { ...newSale, trocas: trocasComObs || undefined },
       });
-      if (trocasTexto.trim()) {
+      // BLOCO 13/41: persiste as TROCAS + OBSERVAÇÃO da pronta entrega (best-effort)
+      if (trocasComObs) {
         try {
           const { authHeaders } = await import('@/services/userService');
           fetch('/api/sales/trocas', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...authHeaders() },
-            body: JSON.stringify({ saleId: newSale.id, trocas: trocasTexto.trim() }),
+            body: JSON.stringify({ saleId: newSale.id, trocas: trocasComObs }),
           }).catch(() => {});
         } catch {}
-        setTrocasTexto('');
+        limparAnotacoes();
       }
     } else {
       isFinalizingRef.current = false; // Libera se falhou
+      setCart(carrinhoPrev);
+      setFinalizando(false);
       setWizardErro('Nao foi possivel concluir a venda. Verifique sua conexao e tente novamente.');
     }
   };
@@ -925,8 +971,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               metodoPagamento: (isPreVenda ? metodoEntrega : metodo) as any, 
               statusPagamento: metodo === 'A_PRAZO' ? 'PENDENTE' : 'PAGO', 
               itens: getOrderedItems(),
-              // BLOCO 13: o preview ja mostra o cupom FINAL (trocas + forma combinada)
-              trocas: trocasTexto.trim() || undefined,
+              // BLOCO 13/41: o preview ja mostra o cupom FINAL (trocas + observação + forma combinada)
+              trocas: trocasComObs || undefined,
               tipoVenda: isPreVenda ? 'PRE_VENDA' : 'PRONTA',
               entregaStatus: isPreVenda ? 'PENDENTE' : undefined,
               detalhePagamento: isPreVenda ? `PRE-VENDA — cobrar ${condicaoPv === 'AVISTA' && (metodoEntrega === 'BOLETO' || metodoEntrega === 'CHEQUE') ? 'DINHEIRO' : metodoEntrega} na entrega (${condicaoPv === 'APRAZO' ? 'A PRAZO' : 'A VISTA'})` : undefined,
@@ -1047,7 +1093,9 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         </button>
       )}
 
-      <div className="flex-1 overflow-y-auto p-2 space-y-1.5" style={{ paddingBottom: '280px' }}>
+      {/* BLOCO 41: o padding acompanha o rodapé compacto (cresce só quando os
+          campos de troca/observação estão abertos) — a grade mostra mais produtos */}
+      <div className="flex-1 overflow-y-auto p-2 space-y-1.5" style={{ paddingBottom: `${(isTrocaActive ? 100 : 0) + (isObsActive ? 70 : 0) + 205}px` }}>
         {filteredProducts.map(p => { 
           const item = cart[p.id];
           const cargaOriginal = saldoFonte(p);
@@ -1142,77 +1190,64 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           </div>
         )}
 
-        {/* BLOCO 24: PREÇO TABELA — liga/desliga os PREÇOS MÍNIMOS em TODO o carrinho */}
-        <div className="flex items-center justify-between px-1 py-2 bg-gray-50/50 rounded-xl mb-1">
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => aplicarPrecoTabela(!precoTabelaAtivo)}
-              aria-pressed={precoTabelaAtivo}
-              aria-label="Preço tabela: aplica o preço mínimo cadastrado em todos os produtos do carrinho"
-              className={`w-10 h-6 rounded-full relative transition-colors ${precoTabelaAtivo ? 'bg-violet-600' : 'bg-gray-300'}`}
-            >
-              <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${precoTabelaAtivo ? 'left-5' : 'left-1'}`}></div>
-            </button>
-            <span className="text-[9px] font-black text-gray-400 uppercase">Preço Tabela <span className="text-gray-300">(mínimos)</span></span>
-          </div>
+        {/* BLOCO 41 (regra do dono): switches em UMA linha compacta — não comem
+            o espaço da grade de produtos. Os campos (desconto/trocas/observação)
+            só aparecem quando o switch deles está ligado. */}
+        <div className="flex items-center gap-x-4 gap-y-1 flex-wrap px-1 py-1.5 bg-gray-50/60 rounded-xl">
+          <SwitchChip ligado={precoTabelaAtivo} onClick={() => aplicarPrecoTabela(!precoTabelaAtivo)} cor="violet" label="Tabela" title="Preço tabela: aplica o preço mínimo cadastrado em todos os produtos do carrinho" />
           {precoTabelaAtivo && (
-            <span className="text-[8px] font-black text-violet-600 uppercase tracking-widest animate-pulse">
-              <i className="fa-solid fa-tag mr-1"></i>Todos no mínimo
-            </span>
+            <span className="text-[8px] font-black text-violet-600 uppercase tracking-widest animate-pulse"><i className="fa-solid fa-tag mr-1"></i>todos no mínimo</span>
+          )}
+          <SwitchChip ligado={isTrocaActive} onClick={() => setIsTrocaActive(!isTrocaActive)} cor="orange" label="Troca/Desc." title="Desconto por troca + anotação de trocas que sai no cupom" />
+          <SwitchChip ligado={isObsActive} onClick={() => setIsObsActive(!isObsActive)} cor="teal" label="Obs." title="Observação do pedido — sai impressa no cupom (bloco OBSERVACAO)" />
+          {!isPreVenda && (
+            <SwitchChip ligado={isPrePedido} onClick={() => { setIsPrePedido(!isPrePedido); setCart({}); }} cor="indigo" label="Pré-Pedido" title="Rascunho de pré-pedido (vende do estoque central)" />
           )}
         </div>
 
-        <div className="flex items-center justify-between gap-4 px-1 mb-1 bg-gray-50/50 p-2 rounded-xl">
-          <div className="flex items-center gap-2">
-            <button onClick={() => setIsTrocaActive(!isTrocaActive)} className={`w-10 h-6 rounded-full relative transition-colors ${isTrocaActive ? 'bg-orange-500' : 'bg-gray-300'}`}>
-              <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${isTrocaActive ? 'left-5' : 'left-1'}`}></div>
-            </button>
-            <span className="text-[9px] font-black text-gray-400 uppercase">Troca/Desc.</span>
+        {/* BLOCO 41: campos abrem SÓ quando o switch correspondente está ligado */}
+        {isTrocaActive && (
+          <div className="px-1 relative space-y-1.5">
+            <div className="flex items-center gap-2">
+              <span className="text-[8px] font-black text-gray-400 uppercase shrink-0">Desconto</span>
+              <input type="number" value={valorTroca} onChange={e => setValorTroca(e.target.value)} placeholder="R$ 0.00" className="flex-1 bg-white border border-orange-100 rounded-lg text-[11px] font-black text-orange-600 p-2 text-right outline-none" />
+            </div>
+            <div className="relative">
+              <div className="flex items-center gap-2">
+                <i className="fa-solid fa-right-left text-orange-400 text-[10px]"></i>
+                <input
+                  value={trocasTexto}
+                  onChange={e => { setTrocasTexto(e.target.value); setTrocasSugestao(true); }}
+                  onFocus={() => setTrocasSugestao(true)}
+                  placeholder="Trocas: ex. 1 Lays sour cream 62g"
+                  className="flex-1 bg-white border border-orange-100 rounded-xl text-[11px] font-bold text-orange-700 px-3 py-2 outline-none focus:ring-2 focus:ring-orange-100"
+                />
+              </div>
+              {trocasSugestao && trocasSugestoes.length > 0 && (
+                <div className="absolute bottom-full left-1 right-4 mb-1 bg-white border border-gray-100 rounded-xl shadow-lg overflow-hidden z-20">
+                  {trocasSugestoes.map(p => (
+                    <button key={p.id} onClick={() => addSugestaoTroca(p.nome)} className="w-full text-left px-3 py-2.5 text-[11px] font-bold text-gray-700 hover:bg-orange-50 active:bg-orange-100 flex items-center gap-2">
+                      <i className="fa-solid fa-plus text-orange-400 text-[9px]"></i>{p.nome}
+                    </button>
+                  ))}
+                  <p className="px-3 py-1.5 text-[8px] font-bold text-gray-300 uppercase bg-gray-50">Toque para adicionar — separe por vírgula</p>
+                </div>
+              )}
+            </div>
           </div>
+        )}
 
-          <div className="flex items-center gap-2">
-            {!isPreVenda && (
-              <>
-                <button 
-              onClick={() => {
-                setIsPrePedido(!isPrePedido);
-                setCart({});
-              }} 
-              className={`w-10 h-6 rounded-full relative transition-colors ${isPrePedido ? 'bg-indigo-600' : 'bg-gray-300'}`}
-            >
-              <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${isPrePedido ? 'left-5' : 'left-1'}`}></div>
-            </button>
-            <span className="text-[9px] font-black text-gray-400 uppercase">Pré-Pedido</span>
-              </>
-            )}
-          </div>
-
-          {isTrocaActive && <input type="number" value={valorTroca} onChange={e => setValorTroca(e.target.value)} placeholder="R$ 0.00" className="w-24 bg-white border border-orange-100 rounded-lg text-[11px] font-black text-orange-600 p-2 text-right outline-none" />}
-        </div>
-
-        {/* BLOCO 13: TROCAS — anotacao que sai impressa no cupom (PE e PV) */}
-        <div className="px-1 pb-1 relative">
-          <div className="flex items-center gap-2">
-            <i className="fa-solid fa-right-left text-orange-400 text-[10px]"></i>
-            <input
-              value={trocasTexto}
-              onChange={e => { setTrocasTexto(e.target.value); setTrocasSugestao(true); }}
-              onFocus={() => setTrocasSugestao(true)}
-              placeholder="Trocas: ex. 1 Lays sour cream 62g"
-              className="flex-1 bg-white border border-orange-100 rounded-xl text-[11px] font-bold text-orange-700 px-3 py-2 outline-none focus:ring-2 focus:ring-orange-100"
+        {isObsActive && (
+          <div className="px-1">
+            <textarea
+              value={obsTexto}
+              onChange={e => setObsTexto(e.target.value)}
+              rows={2}
+              placeholder="Observação do pedido (sai impressa no cupom): ex. entregar na porta dos fundos"
+              className="w-full bg-white border border-teal-100 rounded-xl text-[11px] font-bold text-teal-700 px-3 py-2 outline-none focus:ring-2 focus:ring-teal-100 resize-none"
             />
           </div>
-          {trocasSugestao && trocasSugestoes.length > 0 && (
-            <div className="absolute bottom-full left-1 right-4 mb-1 bg-white border border-gray-100 rounded-xl shadow-lg overflow-hidden z-20">
-              {trocasSugestoes.map(p => (
-                <button key={p.id} onClick={() => addSugestaoTroca(p.nome)} className="w-full text-left px-3 py-2.5 text-[11px] font-bold text-gray-700 hover:bg-orange-50 active:bg-orange-100 flex items-center gap-2">
-                  <i className="fa-solid fa-plus text-orange-400 text-[9px]"></i>{p.nome}
-                </button>
-              ))}
-              <p className="px-3 py-1.5 text-[8px] font-bold text-gray-300 uppercase bg-gray-50">Toque para adicionar — separe por vírgula</p>
-            </div>
-          )}
-        </div>
+        )}
 
         <div className="flex justify-between items-end px-1">
           <div>
@@ -1272,6 +1307,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                   pix2Name={pix2Name} pix2Code={pix2Code}
                   mascararCpf={mascararCpf}
                   erro={wizardErro}
+                  enviando={finalizando}
                   onConfirm={handleConfirmWizard}
                   onVoltar={() => setView('RECEIPT_PREVIEW')}
                   /* BLOCO 29 (ROTA 2): modo fixado no atendimento — pula o passo NOTA */
@@ -1400,10 +1436,12 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                 <>
               <button 
                 onClick={handleConfirmFinalize} 
-                disabled={hasMarginViolation}
-                className={`w-full bg-emerald-600 text-white py-5 rounded-2xl font-black uppercase text-xs shadow-xl active:scale-95 transition-all mb-2 tracking-widest ${hasMarginViolation ? 'opacity-50 cursor-not-allowed' : ''}`}
+                disabled={hasMarginViolation || finalizando}
+                className={`w-full bg-emerald-600 text-white py-5 rounded-2xl font-black uppercase text-xs shadow-xl active:scale-95 transition-all mb-2 tracking-widest ${(hasMarginViolation || finalizando) ? 'opacity-60 cursor-not-allowed' : ''}`}
               >
-                {isPreVenda ? 'Registrar Pedido (Pre-Venda)' : 'Concluir Venda'}
+                {finalizando
+                  ? <><i className="fa-solid fa-spinner fa-spin mr-2"></i>{isPreVenda ? 'Registrando pedido...' : 'Finalizando...'}</>
+                  : (isPreVenda ? 'Registrar Pedido (Pre-Venda)' : 'Concluir Venda')}
               </button>
               <button onClick={() => setView('RECEIPT_PREVIEW')} className="w-full py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Voltar ao Cupom</button>
                 </>
@@ -1530,8 +1568,11 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                  sem precisar reabrir o cupom pelo historico. Aparece tambem no
                  PEDIDO REGISTRADO (pre-venda) — boleto a prazo na entrega.
                  BLOCO 27: so quando ha SALDO em aberto (a vista pago na visita
-                 nao tem boleto para gerar). ===== */}
-            {saleResultModal.sale?.id && (Number(saleResultModal.sale.valorTotal ?? 0) - Number(saleResultModal.sale.valorPago ?? 0) > 0) && (
+                 nao tem boleto para gerar).
+                 BLOCO 41 (regra do dono): na PRE-VENDA A VISTA NAO TEM BOLETO —
+                 o saldo ali é a cobrança do ENTREGADOR na entrega (dinheiro/pix);
+                 boleto nesse lugar só confundia o vendedor. ===== */}
+            {saleResultModal.sale?.id && (Number(saleResultModal.sale.valorTotal ?? 0) - Number(saleResultModal.sale.valorPago ?? 0) > 0) && !(saleResultModal.isPreVenda && !saleResultModal.isPrazo) && (
               <BoletoCard
                 saleId={String(saleResultModal.sale.id)}
                 valorTotal={Number(saleResultModal.total) || 0}

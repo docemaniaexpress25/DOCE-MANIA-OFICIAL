@@ -47,6 +47,9 @@ interface WizardPagamentoProps {
   onVoltar: () => void;
   /** Mensagem de erro vinda do PDV (falha ao salvar etc.) — mostra no resumo */
   erro?: string | null;
+  /** BLOCO 44: submit em andamento — trava TODOS os botões e mostra spinner
+   *  (o vendedor vê que está registrando e não clica de novo nem volta). */
+  enviando?: boolean;
   /** BLOCO 29 (ROTA 2): modo fixado na PERGUNTA DO ATENDIMENTO — pula o passo NOTA */
   modoInicial?: 'NFE' | 'NFCE' | 'CUPOM' | null;
   /** BLOCO 29: CPF do NFC-e capturado no atendimento (opcional) */
@@ -71,7 +74,7 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
   total, isPreVenda, clienteAptoNfe,
   pix1Name, pix1Code, pix2Name, pix2Code,
   mascararCpf,
-  onConfirm, onVoltar, erro,
+  onConfirm, onVoltar, erro, enviando,
   modoInicial, nfcCpfInicial,
 }) => {
   const [passo, setPasso] = useState(0);
@@ -443,21 +446,23 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
       {/* ===== NAVEGACAO ===== */}
       <div className="flex gap-2">
         {passo > 0 && (
-          <button onClick={() => { setErroLocal(null); setPasso(p => p - 1); }} className="px-5 py-4 rounded-2xl bg-gray-100 text-gray-500 font-black uppercase text-[10px] tracking-widest active:scale-95 transition-all">
+          <button onClick={() => { setErroLocal(null); setPasso(p => p - 1); }} disabled={enviando} className="px-5 py-4 rounded-2xl bg-gray-100 text-gray-500 font-black uppercase text-[10px] tracking-widest active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed">
             <i className="fa-solid fa-arrow-left mr-1"></i>Voltar
           </button>
         )}
         {passo < passoResumo ? (
-          <button onClick={proximo} className="flex-1 py-4 rounded-2xl bg-violet-600 text-white font-black uppercase text-xs tracking-widest shadow-lg active:scale-95 transition-all">
+          <button onClick={proximo} disabled={enviando} className="flex-1 py-4 rounded-2xl bg-violet-600 text-white font-black uppercase text-xs tracking-widest shadow-lg active:scale-95 transition-all disabled:opacity-60 disabled:cursor-not-allowed">
             {passo === 0 ? 'Começar' : 'Continuar'}<i className="fa-solid fa-arrow-right ml-2"></i>
           </button>
         ) : (
-          <button onClick={confirmar} className="flex-1 py-4 rounded-2xl bg-emerald-600 text-white font-black uppercase text-xs tracking-widest shadow-lg active:scale-95 transition-all">
-            {isPreVenda ? 'Registrar Pedido' : 'Concluir Venda'}<i className="fa-solid fa-check ml-2"></i>
+          <button onClick={confirmar} disabled={enviando} className="flex-1 py-4 rounded-2xl bg-emerald-600 text-white font-black uppercase text-xs tracking-widest shadow-lg active:scale-95 transition-all disabled:opacity-70 disabled:cursor-not-allowed">
+            {enviando
+              ? <><i className="fa-solid fa-spinner fa-spin mr-2"></i>{isPreVenda ? 'Registrando pedido...' : 'Finalizando...'}</>
+              : <>{isPreVenda ? 'Registrar Pedido' : 'Concluir Venda'}<i className="fa-solid fa-check ml-2"></i></>}
           </button>
         )}
       </div>
-      <button onClick={onVoltar} className="w-full py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Voltar ao Cupom</button>
+      <button onClick={onVoltar} disabled={enviando} className="w-full py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest disabled:opacity-50">Voltar ao Cupom</button>
     </div>
   );
 };

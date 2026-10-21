@@ -103,11 +103,41 @@ export async function POST(req: NextRequest) {
 
     const supabase = getServiceClient();
 
-    // Cliente existe?
-    const { data: client, error: clientErr } = await supabase
-      .from('clients').select('id').eq('id', clientId).limit(1).maybeSingle();
-    if (clientErr) throw clientErr;
+    // ---------- BLOCO 44: validação + ANTI-DUPLICAÇÃO em UMA onda paralela ----------
+    // A demora para finalizar era a cascata de roundtrips ao Supabase (cliente ->
+    // 2 sondas -> insert -> itens -> aviso -> comissão, tudo SEQUENCIAL). Agora a
+    // validação do cliente, as sondas de schema e a checagem de pedido duplicado
+    // saem juntas — uma única latência de rede.
+    const sessentaAtras = new Date(Date.now() - 60_000).toISOString();
+    const [clientRes, sondas, dedupRes] = await Promise.all([
+      supabase.from('clients').select('id').eq('id', clientId).limit(1).maybeSingle(),
+      Promise.all([hasModoVendaColumn(), hasEstoquesNotaColumns()]),
+      // ANTI-DUPLICAÇÃO: pedido idêntico do MESMO vendedor para o MESMO cliente
+      // com o MESMO valor registrado há menos de 60s = duplo clique / retry depois
+      // da demora / recarregou a tela achando que travou. Devolve o existente
+      // em vez de criar outro (o vendedor NUNCA grava o mesmo pedido 2x).
+      supabase.from('sales')
+        .select('id, valor_total, valor_pago, metodo_pagamento, detalhe_pagamento, status_pagamento, data_venda, data_vencimento, tipo_venda, entrega_status, trocas')
+        .eq('vendedor_id', session.sub)
+        .eq('client_id', clientId)
+        .eq('valor_total', valorTotal)
+        .eq('tipo_venda', 'PRE_VENDA')
+        .eq('entrega_status', 'PENDENTE')
+        .gte('data_venda', sessentaAtras)
+        .order('data_venda', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ]);
+    const client = clientRes.data;
+    if (clientRes.error) throw clientRes.error;
     if (!client) return NextResponse.json({ ok: false, error: 'Cliente nao encontrado.' }, { status: 404 });
+    const [temModoVenda, temEstoquesNota] = sondas;
+    if (dedupRes.data) {
+      console.log('[api/pre-venda/venda] dedup: pedido identico de menos de 60s — devolvendo o existente', dedupRes.data.id);
+      return NextResponse.json({ ok: true, sale: dedupRes.data, dedup: true });
+    }
+
+    const etiquetaCond = condicao === 'APRAZO' ? 'A PRAZO' : 'A VISTA';
 
     // ---------- BLOCO 29 (ROTA 2): modo do atendimento ----------
     // NFE | NFCE -> pedido usa o ESTOQUE COM NF | CUPOM -> ESTOQUE SEM NF.
@@ -115,9 +145,6 @@ export async function POST(req: NextRequest) {
     // da entrega cai na coluna certa (baixar_estoque_principal v2).
     const modoRaw = String((body as any).modo || '').toUpperCase();
     const modo = ['NFE', 'NFCE', 'CUPOM'].includes(modoRaw) ? modoRaw : null;
-    const [temModoVenda, temEstoquesNota] = await Promise.all([hasModoVendaColumn(), hasEstoquesNotaColumns()]);
-
-    const etiquetaCond = condicao === 'APRAZO' ? 'A PRAZO' : 'A VISTA';
 
     // BLOCO 27/29: intencao de nota gravada no detalhe (escritorio enxerga).
     // Com modo do atendimento (rota 2), o modo manda; sem modo, notaIntencao legada.
@@ -217,18 +244,26 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: 'Erro ao gravar os itens do pedido.', detalhe: itemsErr.message }, { status: 500 });
     }
 
-    // ---------- AVISO de estoque (nao bloqueia o pedido) ----------
+    // ---------- AVISO de estoque (nao bloqueia) + PREVISAO de comissao ----------
+    // BLOCO 44: as duas consultas saem em PARALELO (eram sequenciais e somavam
+    // ~1s na finalização do pedido).
     // BLOCO 29: rota 2 com modo compara a coluna do modo (estoque_nota/semnf);
     // sem modo/SQL = regra legada (estoque_principal).
+    // BLOCO 21: previsão da comissão de PRÉ-VENDA — mesma regra que GERA a
+    // comissão na entrega (lib/comissaoPv); a tela "Pedido Registrado!" mostra
+    // ESTE valor (o browser recalculava com a % de PRONTA ENTREGA — errado).
     const avisos: { produto: string; solicitado: number; disponivel: number }[] = [];
+    let comissaoPrevista: number | undefined;
     try {
       const prodIds = [...new Set(itens.map(i => i.produtoId))];
       const usaModo = !!(modo && temEstoquesNota);
       const colAviso = usaModo ? (modo === 'CUPOM' ? 'estoque_semnf' : 'estoque_nota') : 'estoque_principal';
-      const { data: prods } = await supabase
-        .from('products').select(`id, nome, ${colAviso}`).in('id', prodIds);
+      const [prodsRes, prev] = await Promise.all([
+        supabase.from('products').select(`id, nome, ${colAviso}`).in('id', prodIds),
+        comissaoPvDeItens(supabase, itens.map(i => ({ produto_id: i.produtoId, quantidade: i.quantidade, preco_venda: i.precoVenda }))).catch(() => 0),
+      ]);
       const map: Record<string, any> = {};
-      (prods || []).forEach((p: any) => { map[p.id] = p; });
+      (prodsRes.data || []).forEach((p: any) => { map[p.id] = p; });
       for (const i of itens) {
         const p = map[i.produtoId];
         const disp = Number(p?.[colAviso] ?? 0);
@@ -236,18 +271,8 @@ export async function POST(req: NextRequest) {
           avisos.push({ produto: p.nome || 'Produto', solicitado: i.quantidade, disponivel: disp });
         }
       }
-    } catch { /* aviso e best-effort */ }
-
-    // ---------- BLOCO 21: PREVISAO da comissao de PRE-VENDA ----------
-    // Mesma regra que GERA a comissao na entrega (lib/comissaoPv): % de
-    // PRE-VENDA do produto; sem o campo, % pronta entrega x taxa padrao.
-    // A tela "Pedido Registrado!" mostra ESTE valor (antes o browser
-    // recalculava com a % de PRONTA ENTREGA — errado).
-    let comissaoPrevista: number | undefined;
-    try {
-      const prev = await comissaoPvDeItens(supabase, itens.map(i => ({ produto_id: i.produtoId, quantidade: i.quantidade, preco_venda: i.precoVenda })));
       if (isFinite(prev) && prev > 0) comissaoPrevista = prev;
-    } catch { /* previsao e best-effort: nunca bloqueia o pedido */ }
+    } catch { /* aviso/previsao sao best-effort: nunca bloqueiam o pedido */ }
 
     return NextResponse.json({ ok: true, sale, comissaoPrevista, avisos: avisos.length > 0 ? avisos : undefined });
   } catch (e: any) {

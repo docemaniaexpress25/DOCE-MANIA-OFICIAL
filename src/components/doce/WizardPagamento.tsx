@@ -86,7 +86,8 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
   const [mistoPix, setMistoPix] = useState('');
   const [vencimento, setVencimento] = useState(somaDias(7));
   const [vencAtalho, setVencAtalho] = useState<number | null>(7);
-  const [chequeNumero, setChequeNumero] = useState('');
+  // BLOCO 60: o numero do cheque NAO e mais pedido na tela do vendedor —
+  // anota na entrega. Fica so o chequeBomPara (que e o vencimento).
   const [chequeBomPara, setChequeBomPara] = useState(somaDias(7));
   // BLOCO 49: atalho clicado no cheque (7/14/21/30 dias) para o destaque
   const [chequeAtalho, setChequeAtalho] = useState<number | null>(7);
@@ -106,7 +107,7 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
 
   const formaLabel = condicao === 'AVISTA'
     ? (forma === 'DINHEIRO' ? 'Dinheiro' : forma === 'PIX' ? 'Pix' : 'Misto (dinheiro + Pix)')
-    : (forma === 'BOLETO' ? 'Boleto' : forma === 'CHEQUE' ? 'Cheque' : 'Pix na data');
+    : (forma === 'BOLETO' ? 'Boleto' : forma === 'CHEQUE' ? 'Cheque' : forma === 'DINHEIRO' ? 'Dinheiro na data' : 'Pix na data');
 
   // BLOCO 39: na pré-venda NINGUÉM recebe na visita — a vista é o ENTREGADOR
   // que recebe na entrega; a prazo é o VENDEDOR que cobra na data/visita.
@@ -114,21 +115,24 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
     ? (isPreVenda
       ? { icon: 'fa-truck-fast', cor: 'emerald', titulo: 'ENTREGADOR QUE RECEBE NA ENTREGA', texto: `Você só anota o pedido. Na entrega, o entregador cobra ${formaLabel} — nada a receber agora.` }
       : { icon: 'fa-money-bill-wave', cor: 'emerald', titulo: 'RECEBIMENTO NA VISITA', texto: `Dinheiro na entrega é somente À VISTA — o cliente paga agora, com você.` })
-    : { icon: 'fa-user-clock', cor: 'amber', titulo: 'QUEM COBRA É VOCÊ, VENDEDOR', texto: `Você cobra ${formaLabel} no vencimento ${dataBr(vencimento)}.` };
+    : { icon: 'fa-user-clock', cor: 'amber', titulo: 'QUEM COBRA É VOCÊ, VENDEDOR', texto: forma === 'DINHEIRO' ? `Você recebe o dinheiro do cliente na data combinada (${dataBr(vencimento)}).` : `Você cobra ${formaLabel} no vencimento ${dataBr(vencimento)}.` };
 
   // BLOCO 39: na pré-venda o MISTO não existe (ninguém recebe na visita)
   const formasAvista: ReadonlyArray<'DINHEIRO' | 'PIX' | 'MISTO'> = isPreVenda
     ? (['DINHEIRO', 'PIX'] as const)
     : (['DINHEIRO', 'PIX', 'MISTO'] as const);
 
-  // BLOCO 48 (regra do dono): NF-e A PRAZO NÃO tem Pix na data — só Boleto
-  // ou Cheque. (Cupom/NFC-e mantém as três opções.)
-  const formasAprazo: ReadonlyArray<'BOLETO' | 'CHEQUE' | 'PIX'> = notaIntencao === 'NFE'
+  // BLOCO 48 (regra do dono): NF-e A PRAZO NÃO tem Pix na data nem Dinheiro
+  // na data — só Boleto ou Cheque. BLOCO 60 (regra do dono): cupom/NFC-e a
+  // prazo tem as QUATRO opções — Boleto, Cheque, Pix na data e Dinheiro na
+  // data (vendedor cobra o dinheiro na data combinada).
+  const formasAprazo: ReadonlyArray<'BOLETO' | 'CHEQUE' | 'PIX' | 'DINHEIRO'> = notaIntencao === 'NFE'
     ? (['BOLETO', 'CHEQUE'] as const)
-    : (['BOLETO', 'CHEQUE', 'PIX'] as const);
-  // BLOCO 49 (regra do dono): na pré-venda com NF-e o cheque é entregue/
-  // coletado NA ENTREGA — o número é anotado lá, não aqui.
-  const chequeNumeroNaEntrega = isPreVenda && notaIntencao === 'NFE';
+    : (['BOLETO', 'CHEQUE', 'PIX', 'DINHEIRO'] as const);
+  // BLOCO 49/60 (regra do dono): a tela do vendedor NUNCA pede o numero do
+  // cheque (em nenhum modo de nota) — fica so o BOM PARA; o numero e anotado
+  // na entrega pelo entregador (pre-venda) ou fica com o escritorio.
+  const chequeNumeroNaEntrega = isPreVenda;
 
   const proximo = () => {
     setErroLocal(null);
@@ -163,9 +167,10 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
 
   const confirmar = () => {
     setErroLocal(null);
-    // BLOCO 48 (regra do dono): trava de segurança — NF-e a prazo só boleto/cheque
-    if (condicao === 'APRAZO' && notaIntencao === 'NFE' && forma === 'PIX') {
-      setErroLocal('NF-e a prazo: escolha Boleto ou Cheque (sem Pix na data).');
+    // BLOCO 48/60 (regra do dono): trava de segurança — NF-e a prazo só
+    // Boleto ou Cheque (sem Pix na data e sem Dinheiro na data).
+    if (condicao === 'APRAZO' && notaIntencao === 'NFE' && (forma === 'PIX' || forma === 'DINHEIRO')) {
+      setErroLocal('NF-e a prazo: escolha Boleto ou Cheque.');
       return;
     }
     const payload: WizardPayload = {
@@ -183,7 +188,7 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
         // BLOCO 49: o cheque tem UMA data só — o BOM PARA (que é o vencimento)
         payload.vencimento = chequeBomPara;
         payload.chequeBomPara = chequeBomPara;
-        payload.chequeNumero = chequeNumero.trim();
+        // BLOCO 60: sem numero do cheque na tela do vendedor — anota na entrega
       } else {
         payload.vencimento = vencimento;
       }
@@ -315,12 +320,14 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
       {passo === 1 && condicao === 'APRAZO' && (
         <div className="space-y-3 mb-5">
           <p className="text-[9px] font-black text-gray-400 uppercase text-center">2. Como você vai cobrar depois?</p>
-          {/* BLOCO 48: NFe a prazo = só Boleto/Cheque (sem Pix na data) */}
-          <div className={`grid gap-2 ${formasAprazo.length === 2 ? 'grid-cols-2' : 'grid-cols-3'}`}>
+          {/* BLOCO 48: NFe a prazo = so Boleto/Cheque. BLOCO 60 (regra do
+              dono): cupom a prazo tem as QUATRO formas — 2x2 para caber o
+              texto no celular. */}
+          <div className="grid grid-cols-2 gap-2">
             {formasAprazo.map(f => (
               <button key={f} onClick={() => setForma(f)}
                 className={`py-3 rounded-xl text-[9px] font-black uppercase transition-all border-2 ${forma === f ? 'bg-amber-500 text-white border-amber-500 shadow-md' : 'bg-gray-50 text-gray-400 border-gray-100'}`}>
-                {f === 'BOLETO' ? 'Boleto' : f === 'CHEQUE' ? 'Cheque' : 'Pix na data'}
+                {f === 'BOLETO' ? 'Boleto' : f === 'CHEQUE' ? 'Cheque' : f === 'PIX' ? 'Pix na data' : 'Dinheiro na data'}
               </button>
             ))}
           </div>
@@ -329,18 +336,9 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
 
           {forma === 'CHEQUE' && (
             <div className="space-y-2 animate-in fade-in duration-200">
-              {/* BLOCO 49: na pré-venda com NF-e o número do cheque é anotado
-                  NA ENTREGA — aqui só o Bom para.
-                  BLOCO 57 (regra do dono): o aviso "Cheque será coletado na
-                  entrega" SAIU — o vendedor ja sabe; ficou a tela limpa. */}
-              {!chequeNumeroNaEntrega && (
-                <>
-                  <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Número do cheque (opcional)</label>
-                  <input value={chequeNumero} onChange={e => setChequeNumero(e.target.value)} placeholder="Ex: 000123" inputMode="numeric" className="w-full p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-black text-center outline-none" />
-                </>
-              )}
-              {/* BLOCO 49: o cheque tem UMA data só — o BOM PARA (que é o
-                  vencimento). Sem campo duplicado de vencimento. Atalhos de
+              {/* BLOCO 60 (regra do dono): a tela do vendedor NUNCA pede o
+                  numero do cheque — fica so o BOM PARA (que e o vencimento).
+                  O numero e anotado na entrega pelo entregador. Atalhos de
                   clicagem iguais aos do boleto (7/14/21/30 dias). */}
               <p className="text-[9px] font-black text-gray-400 uppercase text-center">Bom para</p>
               <div className="grid grid-cols-4 gap-2">
@@ -440,8 +438,8 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
             {condicao === 'APRAZO' && forma === 'CHEQUE' && (
               <div className="p-3.5 flex items-center justify-between">
                 <span className="text-[9px] font-black text-gray-400 uppercase">Cheque nº</span>
-                {/* BLOCO 49: na pré-venda NF-e o número é anotado na entrega */}
-                <span className="text-[11px] font-black text-gray-700">{chequeNumeroNaEntrega ? 'anota na entrega' : (chequeNumero.trim() || '—')}</span>
+                {/* BLOCO 60: sem numero na tela do vendedor — anota na entrega */}
+                <span className="text-[11px] font-black text-gray-700">{chequeNumeroNaEntrega ? 'anota na entrega' : '—'}</span>
               </div>
             )}
             <div className="p-3.5 flex items-center justify-between">

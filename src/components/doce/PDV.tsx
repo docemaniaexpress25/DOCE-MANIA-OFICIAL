@@ -749,7 +749,15 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       }
     } else {
       metodo = 'A_PRAZO';
-      finalDetalhe = w.forma === 'BOLETO' ? 'Boleto' : w.forma === 'CHEQUE' ? `Cheque${w.chequeNumero ? ` nº ${w.chequeNumero}` : ''}${w.chequeBomPara ? ` (bom para ${w.chequeBomPara.split('-').reverse().join('/')})` : ''}` : 'Pix na data';
+      // BLOCO 60 (regra do dono): a prazo pode ser Boleto, Cheque (sem nº na
+      // tela — anota na entrega), Pix na data ou DINHEIRO na data.
+      finalDetalhe = w.forma === 'BOLETO'
+        ? 'Boleto'
+        : w.forma === 'CHEQUE'
+          ? `Cheque${w.chequeBomPara ? ` (bom para ${w.chequeBomPara.split('-').reverse().join('/')})` : ''}`
+          : w.forma === 'DINHEIRO'
+            ? 'Dinheiro na data'
+            : 'Pix na data';
     }
     finalDetalhe += descontoInfo + notaTxt;
 

@@ -237,3 +237,25 @@ Stage Summary:
 - Egress por clique de seta caiu de ~5 SELECTs (fila inteira) para 0-2 UPDATEs de delta (e 0 request se o estado volta ao original antes do debounce).
 - Arquivos: src/components/doce/FilaEntregas.tsx (comparador + listaOrdenada sort + moverOrdem/agendarGravacaoOrdem/gravarOrdemAgora + setPrioridade otimista), src/app/api/pre-venda/route.ts (log não bloqueia resposta).
 - Nada a fazer pelo dono (sem SQL neste bloco). Pendências antigas mantidas: Bluetooth da impressora; NF de entrada XML (aguardando autorização).
+
+---
+Task ID: bloco60-rota2-aprazo-overlay
+Agent: Z.ai Code (principal)
+Task: "continuamos o fluxo!! na pre venda rota2... na venda com cupom venda a prazo teremos boleto, cheque (na tela do vendedor nao deve pedir numero do cheque) pix na data, ou dinheiro na data! quando confirma uma entrega tbm precisamos daquele gif de carregando nao fechar tela etc"
+
+Work Log:
+- WizardPagamento.tsx (ROTA 2, a prazo): cupom/NFC-e agora tem QUATRO formas — Boleto, Cheque, Pix na data e DINHEIRO NA DATA (grid 2x2). NF-e a prazo continua só Boleto/Cheque (Bloco 48) e a trava de segurança do confirmar() também barra Dinheiro na data na NF-e.
+- BLOCO 60 (regra do dono): o campo "Número do cheque" SAIU da tela do vendedor em TODOS os modos — só o "Bom para" (com atalhos 7/14/21/30D). Estado chequeNumero removido; resumo mostra "anota na entrega" (pré-venda) / "—".
+- avisoChave do Dinheiro na data: "Você recebe o dinheiro do cliente na data combinada (dd/mm)".
+- PDV.tsx: pronta entrega a prazo ganhou "Dinheiro na data" no detalhe (era "Pix na data" no fallback); cheque sem nº no detalhe.
+- API /api/pre-venda/venda já aceitava DINHEIRO a prazo (formasValidas) — sem mudança de backend; cupom (cupomTexto.ts) já imprime "DINHEIRO (A PRAZO - X DIAS)" pelo parse do detalhe.
+- FilaEntregas.tsx: overlay "NÃO FECHE A TELA" na confirmação de entrega (mesmo padrão do Bloco 51 do wizard): spinner + fa-truck-fast + "Confirmando a entrega no sistema..." + aviso. BUG CORRIGIDO NO CAMINHO: `busy` na ENTREGUE guarda o saleId (não 'ENTREGUE'), então o overlay usa estado NOVO `confirmandoEntrega` (true no início de confirmarEntrega, false no finally — cobre todos os caminhos: dinheiro, pix, misto, já pago, a prazo/boleto/sem cobrança).
+- QA: lint 0 erros/11 warnings e tsc 7 erros pré-existentes (baselines exatas).
+- E2E (Agent Browser + mock; .env.local removido): F1 wizard: 4 formas presentes ["Boleto","Cheque","Pix na data","Dinheiro na data"]; cheque SEM campo número + com "Bom para"; resumo "Dinheiro na data"/a prazo/só cupom; modal "próxima visita"; cupom com PAGAMENTO/DINHEIRO/A PRAZO/7 DIAS. F2 pedido à vista ok. F3 admin: overlay visível em 200/500/900ms com toast de confirmação em ~1.4s, overlay some sozinho, entrega gravada (Entregues: 1 pos-reload).
+- Lições E2E: menu vendedor = "Rota do Dia" (não ROTA DO DIA); botões grandes têm subtítulo dentro do <button> (usar includes, não igualdade); mock de cliente: rota ROTA_02 ok; GPS em headless falha rápido (override para simular GPS lento no teste do overlay).
+- Commit + push; Vercel oficial/oficial2/teste = SUCCESS (-zpac preview failure pré-existente).
+
+Stage Summary:
+- ROTA 2 a prazo (cupom/NFC-e): Boleto, Cheque (sem nº na tela), Pix na data e Dinheiro na data — todos gravam, entram na fila (badge "A prazo") e imprimem no cupom.
+- Confirmação de entrega com GIF "NÃO FECHE A TELA" (mesmo visual do pedido) — evita sair/duplo clique durante GPS+gravação.
+- Nada a fazer pelo dono (sem SQL). Pendências antigas: Bluetooth impressora; NF entrada XML.

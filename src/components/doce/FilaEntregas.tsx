@@ -200,6 +200,10 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
   const [sheetCaixa, setSheetCaixa] = useState(false);
   const [caixaDinheiro, setCaixaDinheiro] = useState('');
   const [caixaObs, setCaixaObs] = useState('');
+  // BLOCO 60 (regra do dono): a confirmacao de entrega mostra o GIF "NAO FECHE
+  // A TELA" na tela inteira. Estado proprio (o `busy` guarda o saleId na
+  // entrega, nao serve para o overlay).
+  const [confirmandoEntrega, setConfirmandoEntrega] = useState(false);
   // BLOCO 33: quem fecha o caixa e o ADMIN (regra do dono). O admin escolhe
   // o entregador alvo quando ha mais de um com entregas no dia.
   const [caixaEntId, setCaixaEntId] = useState('');
@@ -290,25 +294,30 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
   }
 
   async function confirmarEntrega(p: FilaItem, pagamento: string, extra: Record<string, any> = {}) {
-    const ok = await acao({ acao: 'ENTREGUE', saleId: p.saleId, pagamento, ...extra },
-      pagamento === 'BOLETO' ? 'Entrega confirmada — boleto com foto!' :
-      pagamento === 'DINHEIRO' ? 'Entrega confirmada — dinheiro!' :
-      pagamento === 'PIX' ? 'Entrega confirmada — Pix com comprovante!' :
-      pagamento === 'JA_PAGO' ? 'Entrega confirmada — ja pago!' :
-      'Entrega confirmada — a receber!');
-    if (ok) {
-      setSheetEntregue(null);
-      setValorRecebido('');
-      setValorPix('');
-      setValorDinMisto('');
-      setValorPixMisto('');
-      setQrPix(null);
-      setQrErro('');
-      setCopiado(false);
-      setPgtoAgora('DINHEIRO');
-      setFotoBoleto(null);
-      setFotoPix(null);
-      setFotoEntrega(null);
+    setConfirmandoEntrega(true);
+    try {
+      const ok = await acao({ acao: 'ENTREGUE', saleId: p.saleId, pagamento, ...extra },
+        pagamento === 'BOLETO' ? 'Entrega confirmada — boleto com foto!' :
+        pagamento === 'DINHEIRO' ? 'Entrega confirmada — dinheiro!' :
+        pagamento === 'PIX' ? 'Entrega confirmada — Pix com comprovante!' :
+        pagamento === 'JA_PAGO' ? 'Entrega confirmada — ja pago!' :
+        'Entrega confirmada — a receber!');
+      if (ok) {
+        setSheetEntregue(null);
+        setValorRecebido('');
+        setValorPix('');
+        setValorDinMisto('');
+        setValorPixMisto('');
+        setQrPix(null);
+        setQrErro('');
+        setCopiado(false);
+        setPgtoAgora('DINHEIRO');
+        setFotoBoleto(null);
+        setFotoPix(null);
+        setFotoEntrega(null);
+      }
+    } finally {
+      setConfirmandoEntrega(false);
     }
   }
 
@@ -1487,6 +1496,27 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
               <i className="fa-solid fa-check mr-1"></i>Fechar caixa (a conta recomeca do zero)
             </button>
             <button onClick={() => setSheetCaixa(false)} className="w-full mt-2 py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Cancelar</button>
+          </div>
+        </div>
+      )}
+
+      {/* ===== BLOCO 60 (regra do dono): GIF de processamento enquanto a
+          entrega esta sendo confirmada — a tela inteira mostra "NAO FECHE A
+          TELA" (mesmo padrao do wizard do pedido). Evita o entregador sair
+          ou clicar de novo achando que travou (o GPS pode esperar alguns
+          segundos e a gravacao tbm). ===== */}
+      {confirmandoEntrega && (
+        <div className="fixed inset-0 z-[250] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 print:hidden" role="alert" aria-live="assertive">
+          <div className="bg-white w-full max-w-xs rounded-3xl shadow-2xl p-8 text-center animate-in zoom-in-95 duration-200">
+            <div className="relative w-24 h-24 mx-auto mb-5">
+              <i className="fa-solid fa-spinner fa-spin text-[64px] text-emerald-500 leading-none"></i>
+              <i className="fa-solid fa-truck-fast text-lg text-emerald-400 absolute inset-0 flex items-center justify-center animate-pulse"></i>
+            </div>
+            <h3 className="text-base font-black text-gray-800 uppercase tracking-widest animate-pulse">
+              <i className="fa-solid fa-hand mr-1.5 text-emerald-600"></i>Não feche a tela
+            </h3>
+            <p className="text-[10px] font-bold text-gray-500 mt-2 leading-snug">Confirmando a entrega no sistema...</p>
+            <p className="text-[9px] font-bold text-gray-400 mt-3 leading-snug">Pode demorar alguns segundos. Aguarde a confirmação — sair agora pode perder o registro.</p>
           </div>
         </div>
       )}

@@ -213,3 +213,27 @@ Stage Summary:
 - CAIXA DE ENTREGAS acumula desde o ULTIMO fechamento do admin (nao zera a meia-noite); so recomeca quando o admin clica em Fechar caixa.
 - NOVO: check de carga — o admin marca o pedido CARREGADO no veiculo (botao no card da fila); badge "No veículo", contador "No veículo: X/Y" e ✓ na lista impressa. Depende do SQL do Bloco 58 (sql/bloco58_check_carga.sql).
 - Pendentes mantidos: Bluetooth da impressora (nunca investigado); plano NF de entrada XML (aguardando autorizacao).
+
+---
+Task ID: bloco59-ordem-rapida
+Agent: Z.ai Code (principal)
+Task: "o sistema de ordem de entrega para impressao é lento e nao atualiza na hora, tem que recarregar a pagina para ver a mudança. então otimize para que funcione de verdade e rapidamente"
+
+Work Log:
+- Diagnóstico (causa raiz): em FilaEntregas.tsx, quando a ordem manual está ativa, `listaOrdenada` devolvia a fila na ordem BRUTA do banco (não ordenava por ordemEntrega). O update otimista do moverOrdem só trocava o NÚMERO de ordem de cada item — o array continuava na mesma posição — então o card NÃO andava na tela; a ordem nova só aparecia no próximo load()/F5 (que busca a fila já ordenada da API). Exatamente o sintoma relatado ("tem que recarregar a página").
+- FIX PRINCIPAL (FilaEntregas.tsx): `listaOrdenada` agora ordena por `ordemEntrega` (desempate por antiguidade — mesma regra do servidor) via novo comparador module-scope `compararOrdemEntrega()` (usado pela fila na tela, pela impressão e pela gravação — as três seguem sempre a mesma lista).
+- Gravação DEBOUNCED (350ms) + coalescida: `agendarGravacaoOrdem()` + `gravarOrdemAgora()`; cliques rápidos de seta saem em UM request; seta nunca mais fica travada esperando rede (antes ficava desabilitada durante o POST). Serialização via `gravandoOrdemRef` + regravar pendente se clicar durante o save.
+- Delta agora é baseado em `ordemSalvaRef` (Map do que JÁ está gravado no servidor, sincronizado a cada load()) — manda só os pares que mudaram (egress mínimo); delta vazio = nenhum request.
+- `setPrioridade` (P1/P2): virou otimista + semGps=true + sem reload da fila. Antes: esperava GPS (até 6s) e recarregava a fila INTEIRA (4 SELECTs). Se falhar, load(true) reverte.
+- Servidor (api/pre-venda/route.ts): ORDEM_ENTREGA não espera mais o logEventoSeguro para responder (log fire-and-forget com .catch) — resposta mais rápida.
+- Limpeza: clearTimeout do timer de ordem no unmount; checks `mounted.current` após awaits.
+- QA: lint 0 erros/11 warnings (baseline exata); tsc 7 erros pré-existentes (baseline exata).
+- E2E (Agent Browser, mock E2E, script único server+browser por limitação da sandbox; .env.local removido depois):
+  T0 ordem inicial [Emporio, Padaria]; T1 DOWN → ordem troca em 60ms SEM reload (probe window 42 vivo; leitura in-page pós-flush do React); T2 toast de gravação; T3 F5 → persistiu [Padaria, Emporio]; T4 lista de impressão segue a ordem nova; T5 UP → volta na hora + persiste após F5; T6 P1 → badge na hora + toast; T7 cliques rápidos DOWN+UP coalescidos → estado íntegro e persistido. dev.log sem erros.
+- Commit f457488 pushed; Vercel: doce-mania-oficial / oficial2 / teste = SUCCESS; -zpac (preview) failure PRÉ-EXISTENTE (idêntico no commit anterior 0666db9, sem domínio ativo). Healthcheck produção: oficial2 site 200 + API pre-venda respondendo com guard de sessão.
+
+Stage Summary:
+- Ordem de entrega agora funciona de verdade e rápido: card anda NA HORA (~0ms, otimista), gravação coalescida em 1 request (~350ms após o último clique), sem GPS, sem reload da fila; impressão segue sempre a mesma lista ordenada; P1/P2 instantâneo.
+- Egress por clique de seta caiu de ~5 SELECTs (fila inteira) para 0-2 UPDATEs de delta (e 0 request se o estado volta ao original antes do debounce).
+- Arquivos: src/components/doce/FilaEntregas.tsx (comparador + listaOrdenada sort + moverOrdem/agendarGravacaoOrdem/gravarOrdemAgora + setPrioridade otimista), src/app/api/pre-venda/route.ts (log não bloqueia resposta).
+- Nada a fazer pelo dono (sem SQL neste bloco). Pendências antigas mantidas: Bluetooth da impressora; NF de entrada XML (aguardando autorização).

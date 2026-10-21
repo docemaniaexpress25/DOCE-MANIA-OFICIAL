@@ -154,6 +154,17 @@ function zapUrl(p: FilaItem): string | null {
   return `https://wa.me/${digits.length <= 11 ? '55' + digits : digits}?text=${msg}`;
 }
 
+// BLOCO 59 (velocidade): comparador unico da ordem de entrega — ordem manual
+// do admin (1..N) primeiro; sem ordem vai pro fim por antiguidade. MESMA
+// regra do servidor (GET /api/pre-venda). Usado pela fila na tela, pela
+// impressao e pela gravacao das setas — as tres seguem sempre a mesma lista.
+function compararOrdemEntrega(a: FilaItem, b: FilaItem): number {
+  const oa = typeof a.ordemEntrega === 'number' && a.ordemEntrega > 0 ? a.ordemEntrega : 1e9;
+  const ob = typeof b.ordemEntrega === 'number' && b.ordemEntrega > 0 ? b.ordemEntrega : 1e9;
+  if (oa !== ob) return oa - ob;
+  return new Date(a.dataVenda).getTime() - new Date(b.dataVenda).getTime();
+}
+
 export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'success' | 'error') => void; modo: 'ENTREGADOR' | 'ADMIN' | 'VENDEDOR'; melhorias?: MelhoriasFlags }> = ({ user, showToast, modo, melhorias: melhoriasProp }) => {
   // BLOCO 14: interruptores (admin liga/desliga em Configuracoes)
   const melhorias = melhoriasProp || MELHORIAS_DEFAULT;
@@ -196,6 +207,16 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
   // BLOCO 31: edicao do pedido pelo admin (antes da entrega) + busy por sale
   const [editPedido, setEditPedido] = useState<FilaItem | null>(null);
   const mounted = useRef(true);
+  // BLOCO 59 (ordem de entrega rapida): estado da gravacao das setas.
+  // - dataRef: ultima fila conhecida (a gravacao debounced le daqui, fora do render)
+  // - ordemSalvaRef: o que JA esta gravado no servidor (base do delta — manda
+  //   so os pares que mudaram, economiza payload e egress)
+  const dataRef = useRef<ApiResp | null>(null);
+  const ordemSalvaRef = useRef<Map<string, number>>(new Map());
+  const ordemTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const gravandoOrdemRef = useRef(false);
+  const ordemRegravarRef = useRef(false);
+  useEffect(() => { dataRef.current = data; }, [data]);
 
   const podeEntregar = modo === 'ENTREGADOR' || modo === 'ADMIN';
   const podePrioridade = modo === 'ENTREGADOR' || modo === 'ADMIN';
@@ -208,7 +229,12 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
       const d: ApiResp = await res.json();
       if (!mounted.current) return;
       if (!res.ok) { if (!silencioso) showToast(d.error || 'Erro ao carregar a fila.', 'error'); }
-      else setData(d);
+      else {
+        setData(d);
+        // BLOCO 59: sincroniza o "ja gravado no servidor" — base do delta das
+        // setas (so regravamos o par cuja ordem realmente mudou).
+        ordemSalvaRef.current = new Map((d.fila || []).map((p: FilaItem) => [p.saleId, typeof p.ordemEntrega === 'number' && p.ordemEntrega > 0 ? p.ordemEntrega : 0]));
+      }
     } catch {
       if (mounted.current && !silencioso) showToast('Sem conexao. Tente novamente.', 'error');
     } finally {
@@ -231,7 +257,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
     const t = setInterval(() => { if (typeof document !== 'undefined' && !document.hidden) loadRef.current(true); }, 120_000);
     const onFocus = () => loadRef.current(true);
     window.addEventListener('focus', onFocus);
-    return () => { mounted.current = false; clearTimeout(t0); clearInterval(t); window.removeEventListener('focus', onFocus); };
+    return () => { mounted.current = false; clearTimeout(t0); clearInterval(t); if (ordemTimerRef.current) clearTimeout(ordemTimerRef.current); window.removeEventListener('focus', onFocus); };
   }, []);
 
   // BLOCO 32 (velocidade): recarregar=false para acoes que a tela ja reflete
@@ -353,17 +379,28 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
 
   async function setPrioridade(p: FilaItem, prioridade: number) {
     const novo = p.prioridade === prioridade ? 0 : prioridade;
-    await acao({ acao: 'PRIORIDADE', saleId: p.saleId, prioridade: novo },
-      novo === 1 ? 'Prioridade 1 definida — vai para o topo!' : novo === 2 ? 'Prioridade 2 definida.' : 'Prioridade normal.');
+    // BLOCO 59: otimista + sem GPS + sem recarregar a fila. Antes esperava o
+    // GPS (ate 6s) e recarregava a fila INTEIRA (4 SELECTs) — lento demais.
+    // A tela reordena na hora (P1 sobe pro topo); se falhar, reverte.
+    setData(d => d ? { ...d, fila: d.fila.map(f => f.saleId === p.saleId ? { ...f, prioridade: novo } : f) } : d);
+    const ok = await acao({ acao: 'PRIORIDADE', saleId: p.saleId, prioridade: novo },
+      novo === 1 ? 'Prioridade 1 definida — vai para o topo!' : novo === 2 ? 'Prioridade 2 definida.' : 'Prioridade normal.',
+      false, true);
+    if (!ok) load(true);
   }
 
-  // BLOCO 31: setas do admin — move a parada na fila, GRAVA a ordem e muda
-  // a impressao. Otimista: reordena na tela na hora e reverte se falhar.
+  // BLOCO 31/59: setas do admin — move a parada na fila, GRAVA a ordem e muda
+  // a impressao. FIX (Bloco 59): quando a ordem manual esta ativa a lista
+  // ANTES usava a fila na ordem bruta do banco — o update otimista so trocava
+  // o NUMERO de ordem e o array continuava na mesma posicao, entao o card NAO
+  // andava na tela (so aparecia depois do F5, que busca a fila ja ordenada da
+  // API). Agora a lista ordena por ordemEntrega: o card anda NA HORA e a
+  // impressao segue a mesma lista.
   const listaOrdenada = useMemo(() => {
     if (!data) return [];
     const f = data.fila || [];
     const temManual = f.some(p => typeof p.ordemEntrega === 'number' && p.ordemEntrega > 0);
-    if (temManual) return f;
+    if (temManual) return [...f].sort(compararOrdemEntrega);
     return [...f.filter(p => p.prioridade === 1), ...f.filter(p => p.prioridade === 2), ...f.filter(p => p.prioridade === 0 || p.prioridade == null)];
   }, [data]);
   const ordemManualAtiva = (data?.fila || []).some(p => typeof p.ordemEntrega === 'number' && p.ordemEntrega > 0);
@@ -379,19 +416,56 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
     const ordens = nova.map((p, i) => ({ saleId: p.saleId, ordem: i + 1 }));
     // atualizacao otimista da tela — o card move NA HORA, sem esperar rede
     setData(d => d ? { ...d, fila: d.fila.map(f => { const o = ordens.find(x => x.saleId === f.saleId); return o ? { ...f, ordemEntrega: o.ordem } : f; }) } : d);
-    // BLOCO 32 (velocidade + egress): se TODOS ja tem ordem gravada, manda so
-    // o DELTA (1-2 pares que mudaram no swap). Se algum pedido esta sem ordem
-    // (entrou novo), manda a fila inteira 1..N para nao deixar NULL colidindo.
-    const todosTemOrdem = (data?.fila || []).every(f => typeof f.ordemEntrega === 'number' && f.ordemEntrega > 0);
-    const ordensPayload = todosTemOrdem && data
-      ? ordens.filter(o => { const atual = data.fila.find(f => f.saleId === o.saleId); return !atual || atual.ordemEntrega !== o.ordem; })
-      : ordens;
-    if (ordensPayload.length === 0) return;
-    // recarregar=false: a tela ja esta certa (otimista) — o servidor so grava.
-    // Sem o load da fila inteira a cada clique: rapido e economiza egress.
-    // semGps=true: mudar ordem nao precisa de localizacao (GPS esperava ate 6s).
-    const ok = await acao({ acao: 'ORDEM_ENTREGA', ordens: ordensPayload }, 'Ordem da rota atualizada — grava no sistema e na impressão!', false, true);
-    if (!ok) load(true); // falhou: reverte buscando a ordem real do banco
+    // BLOCO 59: gravacao DEBOUNCED (350ms) — cliques rapidos acumulam e saem
+    // em UM request. Setas nunca travam esperando rede/GPS (antes o botao
+    // ficava desabilitado durante o POST e parecia lento).
+    agendarGravacaoOrdem();
+  }
+
+  function agendarGravacaoOrdem() {
+    if (ordemTimerRef.current) clearTimeout(ordemTimerRef.current);
+    ordemTimerRef.current = setTimeout(() => { void gravarOrdemAgora(); }, 350);
+  }
+
+  // BLOCO 59: grava a ordem 1..N do estado atual mandando so o DELTA (pares
+  // cuja ordem difere do que ja esta no servidor — 1-2 updates por clique).
+  // Sem GPS (acao administrativa) e sem recarregar a fila (a tela ja esta
+  // certa — economiza egress). Se falhar, recarrega e reverte.
+  async function gravarOrdemAgora() {
+    if (gravandoOrdemRef.current) { ordemRegravarRef.current = true; return; }
+    gravandoOrdemRef.current = true;
+    try {
+      const filaAtual = dataRef.current?.fila || [];
+      const ordens = [...filaAtual].sort(compararOrdemEntrega).map((p, i) => ({ saleId: p.saleId, ordem: i + 1 }));
+      const delta = ordens.filter(o => (ordemSalvaRef.current.get(o.saleId) ?? 0) !== o.ordem);
+      if (delta.length === 0) return;
+      const res = await fetch('/api/pre-venda', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ acao: 'ORDEM_ENTREGA', ordens: delta }),
+      });
+      const d = await res.json();
+      if (!mounted.current) return;
+      if (!res.ok || !d.ok) {
+        showToast(d.error || 'Nao foi possivel gravar a ordem.', 'error');
+        await load(true); // reverte buscando a ordem real do banco
+        return;
+      }
+      for (const o of delta) ordemSalvaRef.current.set(o.saleId, o.ordem);
+      showToast('Ordem da rota atualizada — grava no sistema e na impressão!', 'success');
+    } catch {
+      if (mounted.current) {
+        showToast('Sem conexao. Tente novamente.', 'error');
+        await load(true);
+      }
+    } finally {
+      gravandoOrdemRef.current = false;
+      // clicou de novo enquanto gravava: regrava o delta que ficou pendente
+      if (mounted.current && ordemRegravarRef.current) {
+        ordemRegravarRef.current = false;
+        agendarGravacaoOrdem();
+      }
+    }
   }
 
   // products fake a partir dos itens (o Cupom so precisa de id->nome)

@@ -1132,7 +1132,9 @@ export async function POST(req: NextRequest) {
         const msg = falha.status === 'rejected' ? String(falha.reason || '') : String((falha.value as any)?.error?.message || '');
         return NextResponse.json({ ok: false, error: msg || 'Erro ao gravar a ordem.' }, { status: 500 });
       }
-      await logEventoSeguro(supabase, null, null, userId, 'ORDEM_ENTREGA', `Ordem da rota definida pelo admin (${ordens.length} paradas)`);
+      // BLOCO 59: log de auditoria NAO bloqueia a resposta (o admin ve o toast
+      // na hora; se o log falhar, nao afeta a ordem gravada).
+      logEventoSeguro(supabase, null, null, userId, 'ORDEM_ENTREGA', `Ordem da rota definida pelo admin (${ordens.length} paradas)`).catch(() => {});
       return NextResponse.json({ ok: true });
     }
 

@@ -88,6 +88,8 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
   const [vencAtalho, setVencAtalho] = useState<number | null>(7);
   const [chequeNumero, setChequeNumero] = useState('');
   const [chequeBomPara, setChequeBomPara] = useState(somaDias(7));
+  // BLOCO 49: atalho clicado no cheque (7/14/21/30 dias) para o destaque
+  const [chequeAtalho, setChequeAtalho] = useState<number | null>(7);
   // BLOCO 29: com modo fixado no atendimento, o passo NOTA NEM EXISTE (3 passos)
   const temPassoNota = !modoInicial;
   const PASSOS = temPassoNota ? PASSOS_PADRAO : PASSOS_MODO_FIXO;
@@ -120,6 +122,15 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
   const formasAvista: ReadonlyArray<'DINHEIRO' | 'PIX' | 'MISTO'> = isPreVenda
     ? (['DINHEIRO', 'PIX'] as const)
     : (['DINHEIRO', 'PIX', 'MISTO'] as const);
+
+  // BLOCO 48 (regra do dono): NF-e A PRAZO NÃO tem Pix na data — só Boleto
+  // ou Cheque. (Cupom/NFC-e mantém as três opções.)
+  const formasAprazo: ReadonlyArray<'BOLETO' | 'CHEQUE' | 'PIX'> = notaIntencao === 'NFE'
+    ? (['BOLETO', 'CHEQUE'] as const)
+    : (['BOLETO', 'CHEQUE', 'PIX'] as const);
+  // BLOCO 49 (regra do dono): na pré-venda com NF-e o cheque é entregue/
+  // coletado NA ENTREGA — o número é anotado lá, não aqui.
+  const chequeNumeroNaEntrega = isPreVenda && notaIntencao === 'NFE';
 
   const proximo = () => {
     setErroLocal(null);
@@ -154,6 +165,11 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
 
   const confirmar = () => {
     setErroLocal(null);
+    // BLOCO 48 (regra do dono): trava de segurança — NF-e a prazo só boleto/cheque
+    if (condicao === 'APRAZO' && notaIntencao === 'NFE' && forma === 'PIX') {
+      setErroLocal('NF-e a prazo: escolha Boleto ou Cheque (sem Pix na data).');
+      return;
+    }
     const payload: WizardPayload = {
       condicao,
       forma: condicao === 'AVISTA' ? forma : (forma === 'PIX' ? 'PIX_DATA' : forma),
@@ -165,10 +181,13 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
       if (forma === 'PIX') payload.pixSlot = pixSlot;
       if (forma === 'MISTO' && !isPreVenda) { payload.mistoDinheiro = md; payload.mistoPix = mp; payload.valorRecebido = md; }
     } else {
-      payload.vencimento = vencimento;
       if (forma === 'CHEQUE') {
-        payload.chequeNumero = chequeNumero.trim();
+        // BLOCO 49: o cheque tem UMA data só — o BOM PARA (que é o vencimento)
+        payload.vencimento = chequeBomPara;
         payload.chequeBomPara = chequeBomPara;
+        payload.chequeNumero = chequeNumero.trim();
+      } else {
+        payload.vencimento = vencimento;
       }
     }
     if (notaIntencao === 'NFCE' && nfcCpf.trim()) {
@@ -306,8 +325,9 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
       {passo === 1 && condicao === 'APRAZO' && (
         <div className="space-y-3 mb-5">
           <p className="text-[9px] font-black text-gray-400 uppercase text-center">2. Como você vai cobrar depois?</p>
-          <div className="grid grid-cols-3 gap-2">
-            {(['BOLETO', 'CHEQUE', 'PIX'] as const).map(f => (
+          {/* BLOCO 48: NFe a prazo = só Boleto/Cheque (sem Pix na data) */}
+          <div className={`grid gap-2 ${formasAprazo.length === 2 ? 'grid-cols-2' : 'grid-cols-3'}`}>
+            {formasAprazo.map(f => (
               <button key={f} onClick={() => setForma(f)}
                 className={`py-3 rounded-xl text-[9px] font-black uppercase transition-all border-2 ${forma === f ? 'bg-amber-500 text-white border-amber-500 shadow-md' : 'bg-gray-50 text-gray-400 border-gray-100'}`}>
                 {f === 'BOLETO' ? 'Boleto' : f === 'CHEQUE' ? 'Cheque' : 'Pix na data'}
@@ -321,10 +341,29 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
 
           {forma === 'CHEQUE' && (
             <div className="space-y-2 animate-in fade-in duration-200">
-              <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Número do cheque</label>
-              <input value={chequeNumero} onChange={e => setChequeNumero(e.target.value)} placeholder="Ex: 000123" inputMode="numeric" className="w-full p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-black text-center outline-none" />
-              <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Bom para</label>
-              <input type="date" value={chequeBomPara} onChange={e => { setChequeBomPara(e.target.value); setVencimento(e.target.value); setVencAtalho(null); }} className="w-full p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-bold text-center outline-none" />
+              {/* BLOCO 49 (regra do dono): na pré-venda com NF-e o cheque é
+                  coletado NA ENTREGA — o número é anotado lá, não aqui. */}
+              {chequeNumeroNaEntrega ? (
+                <div className="bg-violet-50 border border-violet-100 rounded-2xl p-3 text-center">
+                  <p className="text-[9px] font-black text-violet-700 uppercase"><i className="fa-solid fa-truck-fast mr-1"></i>Cheque será coletado na entrega</p>
+                  <p className="text-[8px] font-semibold text-violet-500 mt-0.5">O número do cheque é anotado na entrega — não aqui.</p>
+                </div>
+              ) : (
+                <>
+                  <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Número do cheque (opcional)</label>
+                  <input value={chequeNumero} onChange={e => setChequeNumero(e.target.value)} placeholder="Ex: 000123" inputMode="numeric" className="w-full p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-black text-center outline-none" />
+                </>
+              )}
+              {/* BLOCO 49: o cheque tem UMA data só — o BOM PARA (que é o
+                  vencimento). Sem campo duplicado de vencimento. Atalhos de
+                  clicagem iguais aos do boleto (7/14/21/30 dias). */}
+              <p className="text-[9px] font-black text-gray-400 uppercase text-center">Bom para</p>
+              <div className="grid grid-cols-4 gap-2">
+                {[7, 14, 21, 30].map(d => (
+                  <button key={d} onClick={() => { setChequeAtalho(d); const iso = somaDias(d); setChequeBomPara(iso); setVencimento(iso); }} className={`py-2.5 rounded-xl text-[10px] font-black transition-all ${chequeAtalho === d ? 'bg-amber-500 text-white shadow-md scale-105' : 'bg-gray-50 border-2 border-gray-100 text-gray-500'}`}>{d}D</button>
+                ))}
+              </div>
+              <input type="date" value={chequeBomPara} onChange={e => { setChequeBomPara(e.target.value); setVencimento(e.target.value); setChequeAtalho(null); }} className="w-full p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-bold text-center outline-none" />
             </div>
           )}
 
@@ -339,10 +378,14 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
             </div>
           )}
 
-          <div className="space-y-1">
-            <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Data de vencimento</label>
-            <input type="date" value={vencimento} onChange={e => { setVencimento(e.target.value); setVencAtalho(null); }} className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-black text-center outline-none" />
-          </div>
+          {/* BLOCO 49: no CHEQUE a data única é o BOM PARA (acima) — sem
+              campo duplicado de vencimento aqui */}
+          {forma !== 'CHEQUE' && (
+            <div className="space-y-1">
+              <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Data de vencimento</label>
+              <input type="date" value={vencimento} onChange={e => { setVencimento(e.target.value); setVencAtalho(null); }} className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-black text-center outline-none" />
+            </div>
+          )}
         </div>
       )}
 
@@ -356,7 +399,7 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
               <p className={`text-[11px] font-black uppercase ${notaIntencao === 'NENHUMA' ? 'text-violet-700' : 'text-gray-400'}`}><i className="fa-solid fa-receipt mr-1"></i>Só cupom (sem nota)</p>
               <p className="text-[8px] font-bold text-gray-400 mt-0.5">Fluxo comum — cupom não fiscal</p>
             </button>
-            <button onClick={() => setNotaIntencao(clienteAptoNfe ? 'NFE' : notaIntencao)}
+            <button onClick={() => { setNotaIntencao('NFE'); if (condicao === 'APRAZO' && forma === 'PIX') { setForma('BOLETO'); } }}
               className={`w-full p-4 rounded-2xl border-2 text-left transition-all ${notaIntencao === 'NFE' ? 'border-slate-700 bg-slate-50 shadow-md' : 'border-gray-100 bg-gray-50'} ${!clienteAptoNfe ? 'opacity-50' : ''}`}
               disabled={!clienteAptoNfe}>
               <p className={`text-[11px] font-black uppercase ${notaIntencao === 'NFE' ? 'text-slate-800' : 'text-gray-400'}`}><i className="fa-solid fa-file-invoice-dollar mr-1"></i>Com NF-e {clienteAptoNfe ? '' : '(cliente sem CNPJ completo)'}</p>
@@ -412,7 +455,8 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
             {condicao === 'APRAZO' && forma === 'CHEQUE' && (
               <div className="p-3.5 flex items-center justify-between">
                 <span className="text-[9px] font-black text-gray-400 uppercase">Cheque nº</span>
-                <span className="text-[11px] font-black text-gray-700">{chequeNumero.trim() || '—'}</span>
+                {/* BLOCO 49: na pré-venda NF-e o número é anotado na entrega */}
+                <span className="text-[11px] font-black text-gray-700">{chequeNumeroNaEntrega ? 'anota na entrega' : (chequeNumero.trim() || '—')}</span>
               </div>
             )}
             <div className="p-3.5 flex items-center justify-between">
@@ -463,6 +507,28 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
         )}
       </div>
       <button onClick={onVoltar} disabled={enviando} className="w-full py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest disabled:opacity-50">Voltar ao Cupom</button>
+
+      {/* ===== BLOCO 51 (regra do dono): enquanto o pedido/venda esta sendo
+          gravado, a tela inteira mostra o GIF de processamento + "NAO FECHE A
+          TELA" — o vendedor espera em vez de sair/clicar de novo (que era o
+          que duplicava pedido). Todos os botoes ja estao travados (enviando). ===== */}
+      {enviando && (
+        <div className="fixed inset-0 z-[300] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" role="alert" aria-live="assertive">
+          <div className="bg-white w-full max-w-xs rounded-3xl shadow-2xl p-8 text-center animate-in zoom-in-95 duration-200">
+            <div className="relative w-24 h-24 mx-auto mb-5">
+              <i className="fa-solid fa-spinner fa-spin text-[64px] text-violet-500 leading-none"></i>
+              <i className={`fa-solid ${isPreVenda ? 'fa-clipboard-list' : 'fa-money-bill-wave'} text-lg text-violet-400 absolute inset-0 flex items-center justify-center animate-pulse`}></i>
+            </div>
+            <h3 className="text-base font-black text-gray-800 uppercase tracking-widest animate-pulse">
+              <i className="fa-solid fa-hand mr-1.5 text-violet-600"></i>Não feche a tela
+            </h3>
+            <p className="text-[10px] font-bold text-gray-500 mt-2 leading-snug">
+              {isPreVenda ? 'Registrando seu pedido no sistema...' : 'Concluindo sua venda no sistema...'}
+            </p>
+            <p className="text-[9px] font-bold text-gray-400 mt-3 leading-snug">Pode demorar alguns segundos. Aguarde a confirmação — sair agora pode perder o registro.</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

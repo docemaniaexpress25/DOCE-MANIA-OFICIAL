@@ -53,7 +53,7 @@ interface FilaItem {
   dataVencimento: string | null;
   vendedorId: string;
   vendedorNome: string;
-  cliente: { id: string; nome: string; endereco: string; bairro: string; telefone: string; cnpj?: string | null; lat: number | null; lng: number | null };
+  cliente: { id: string; nome: string; endereco: string; bairro: string; telefone: string; cnpj?: string | null; email?: string | null; lat: number | null; lng: number | null };
   itens: { nome: string; produtoId: string; quantidade: number; precoVenda: number }[];
 }
 
@@ -419,6 +419,8 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
     bairro: p.cliente.bairro || '',
     // BLOCO 40: CNPJ do cliente — rodape do cupom NF-e ("NF-e: <cnpj>")
     cnpj: p.cliente.cnpj || '',
+    // BLOCO 46: e-mail do cliente — rodape do cupom (envio do XML)
+    email: p.cliente.email || '',
   });
 
   /** Lista imprimivel (ordem de entrega) — imprime via navegador */

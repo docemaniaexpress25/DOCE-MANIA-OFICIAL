@@ -31,7 +31,7 @@ interface FilaItem {
   separado: boolean;
   vendedorNome: string;
   dataVencimento: string | null;
-  cliente: { id: string; nome: string; endereco: string; bairro: string; telefone: string };
+  cliente: { id: string; nome: string; endereco: string; bairro: string; telefone: string; cnpj?: string | null; email?: string | null };
   itens: { nome: string; produtoId: string; quantidade: number; precoVenda: number }[];
 }
 
@@ -155,6 +155,8 @@ const SecretarioView: React.FC<{ user: User; showToast: (m: string, t?: 'success
     telefone: p.cliente.telefone || '',
     endereco: p.cliente.endereco || '',
     bairro: p.cliente.bairro || '',
+    // BLOCO 46: e-mail do cliente — rodape do cupom (envio do XML)
+    email: p.cliente.email || '',
   });
 
   if (loading && !data) {

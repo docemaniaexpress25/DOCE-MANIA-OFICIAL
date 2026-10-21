@@ -168,7 +168,11 @@ export function gerarCupomTexto({ sale, client, products, width }: CupomTextoInp
   const linhasTrocas: string[] = [];
   const linhasObs: string[] = [];
   rawAnot.split(/[\n;]+/).map(s => s.trim()).filter(Boolean).forEach(l => {
-    if (/^obs[:\-]/i.test(l)) linhasObs.push(l.replace(/^obs[:\-]\s*/i, ''));
+    const semPrefixo = l.replace(/^obs[:\-]\s*/i, '');
+    // BLOCO 45 (regra do dono): linha SEM letra/numero (ex. "-", "—", "...")
+    // nao imprime bloco nenhum — o cupom nao mostra TROCAS/OBSERVACAO vazio.
+    if (!/[a-z0-9]/i.test(semPrefixo)) return;
+    if (/^obs[:\-]/i.test(l)) linhasObs.push(semPrefixo);
     else linhasTrocas.push(l);
   });
   // Campo proprio de observacoes (futuro/legado) tambem imprime como observacao
@@ -262,8 +266,32 @@ export function gerarCupomTexto({ sale, client, products, width }: CupomTextoInp
     }
   } else if (tipoDoc === 'NFC-e') {
     // CPF identificado na NFC-e — gravado no detalhePagamento ("COM NOTA: NFC-e (CPF ...)")
-    const cpfNaNota = (String(sale.detalhePagamento || '').match(/CPF\s*([\d.\-\/]+)/) || [])[1] || '';
+    let cpfNaNota = (String(sale.detalhePagamento || '').match(/CPF\s*([\d.\-\/]+)/) || [])[1] || '';
+    // BLOCO 52: o CPF pode chegar sem pontuação (payload do wizard grava só
+    // digitos) — imprime mascarado 000.000.000-00 (legivel e fiscal)
+    const soDig = cpfNaNota.replace(/\D/g, '');
+    if (soDig.length === 11 && cpfNaNota.length !== 14) {
+      cpfNaNota = `${soDig.slice(0, 3)}.${soDig.slice(3, 6)}.${soDig.slice(6, 9)}-${soDig.slice(9)}`;
+    }
     if (cpfNaNota) t += center(`CPF: ${cpfNaNota}`, totalWidth) + '\n';
+  }
+
+  // BLOCO 46 (regra do dono): E-MAIL do cliente abaixo dos dados da nota
+  // (ex.: logo abaixo do CNPJ na NF-e) — facilita o envio do XML. So imprime
+  // quando o cadastro tem e-mail.
+  const emailFmt = String((client as any).email || '').trim();
+  if (emailFmt) {
+    const emailLabel = 'EMAIL:';
+    if ((emailLabel + ' ' + emailFmt).length <= totalWidth) {
+      t += center(`${emailLabel} ${emailFmt}`, totalWidth) + '\n';
+    } else {
+      t += emailLabel + '\n';
+      let restE = emailFmt;
+      while (restE.length > 0) {
+        t += padR(restE.substring(0, totalWidth), totalWidth) + '\n';
+        restE = restE.substring(totalWidth);
+      }
+    }
   }
 
   // Forma de pagamento + quantos dias (a prazo = dias ate o vencimento)

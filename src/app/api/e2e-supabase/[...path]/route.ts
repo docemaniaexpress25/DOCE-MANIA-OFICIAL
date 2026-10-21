@@ -30,14 +30,16 @@ const clients = [{
   localizacao: null, dia_roteiro: new Date().getDay(), ordem: 1, observacoes: null,
   pin_localizacao: '-29.166037, -51.210285',
   rota: 'ROTA_02', portal_code: 'TEST1234', razao_social: null, inscricao_estadual: null,
-  endereco_numero: null, endereco_cep: null, endereco_municipio: null, endereco_uf: null, email: null,
+  endereco_numero: null, endereco_cep: null, endereco_municipio: null, endereco_uf: null,
+  // BLOCO 46: clientes com email para o rodape do cupom (envio do XML)
+  email: 'emporio@teste.com',
 }, {
   id: 'cli-2', nome_fantasia: 'Padaria Dois', nome: null, ativar_cnpj: false, cnpj: null,
   telefone: '(54) 98888-8888', endereco: 'Av Segunda 456', bairro: 'Sao Pelegrino', ativo: true,
   localizacao: null, dia_roteiro: new Date().getDay(), ordem: 2, observacoes: null,
   pin_localizacao: null,
   rota: 'ROTA_02', portal_code: 'TEST5678', razao_social: null, inscricao_estadual: null,
-  endereco_numero: null, endereco_cep: null, endereco_municipio: null, endereco_uf: null, email: null,
+  endereco_numero: null, endereco_cep: null, endereco_municipio: null, endereco_uf: null, email: 'padaria@teste.com',
 }, {
   // BLOCO 36: cliente com CNPJ APTO a NF-e (painel CNPJ nota -> Confirmar NF-e)
   id: 'cli-3', nome_fantasia: 'Mercado CNPJ', nome: null, ativar_cnpj: true, cnpj: '12.345.678/0001-99',
@@ -53,7 +55,7 @@ const clients = [{
   localizacao: null, dia_roteiro: new Date().getDay(), ordem: 4, observacoes: null,
   pin_localizacao: '-29.168000, -51.190000',
   rota: 'ROTA_02', portal_code: 'TEST3456', razao_social: null, inscricao_estadual: null,
-  endereco_numero: null, endereco_cep: null, endereco_municipio: null, endereco_uf: null, email: null,
+  endereco_numero: null, endereco_cep: null, endereco_municipio: null, endereco_uf: null, email: 'lanchonete@teste.com',
 }, {
   // BLOCO 36: GPS capturado mas SEM telefone (modal abre com Localização ok / WhatsApp pendente)
   id: 'cli-5', nome_fantasia: 'Acougue Sem Tel', nome: null, ativar_cnpj: false, cnpj: null,

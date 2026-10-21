@@ -1125,7 +1125,11 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         /* BLOCO 29 (ROTA 2): produtos teste + catálogo pelo estoque do modo */
         rota2={user.rota2 === true}
         modoAtendimento={notaModo}
-        nfcCpfInicial={nfcCpfModoPanel ? nfcCpfModo : ''}
+        // BLOCO 52: CPF capturado no painel NFC-e do atendimento — vai na venda
+        // ("COM NOTA: NFC-e (CPF ...)") e sai impresso no rodapé do cupom.
+        // Antes passava SO com nfcCpfModoPanel=true, mas o painel fecha antes
+        // do PDV montar e o CPF se perdia — NFC-e com CPF saia sem CPF.
+        nfcCpfInicial={nfcCpfModo}
         sales={sales} 
         onNavigateToCredit={handleNavigateToCredit}
         categories={categories}
@@ -2180,16 +2184,14 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                     </button>
                   </div>
                 )}
-                <div className="grid grid-cols-2 gap-2">
-                  <button onClick={() => setNfeCnpjPanel(false)}
-                    className="py-3.5 rounded-2xl bg-gray-100 text-gray-500 text-[10px] font-black uppercase active:scale-95">
-                    <i className="fa-solid fa-arrow-left mr-1"></i>Voltar
-                  </button>
-                  <button onClick={() => abrirNoModo(notaClient, notaSheet.vendaModo, 'CUPOM')}
-                    className="py-3.5 rounded-2xl bg-gray-900 text-white text-[10px] font-black uppercase active:scale-95">
-                    <i className="fa-solid fa-receipt mr-1"></i>Só cupom
-                  </button>
-                </div>
+                {/* BLOCO 47 (regra do dono): no painel do CNPJ nota o vendedor
+                    JA decidiu que quer nota — o botao "So cupom" daqui so
+                    confundia (cancelava a escolha). Sobe pelo Voltar e, se
+                    mudar de ideia, escolhe cupom la na tela anterior. */}
+                <button onClick={() => setNfeCnpjPanel(false)}
+                  className="w-full py-3.5 rounded-2xl bg-gray-100 text-gray-500 text-[10px] font-black uppercase active:scale-95">
+                  <i className="fa-solid fa-arrow-left mr-1"></i>Voltar
+                </button>
               </div>
             ) : (
               /* NFC-e: CPF do consumidor OPCIONAL */

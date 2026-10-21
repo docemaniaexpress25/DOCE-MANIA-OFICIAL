@@ -54,7 +54,11 @@ function dayRangeIso(): { start: string; end: string } {
 
 const SALE_COLS = 'id, vendedor_id, client_id, valor_total, valor_pago, metodo_pagamento, detalhe_pagamento, status_pagamento, entrega_status, entrega_seq, route_id, data_venda';
 const CLIENT_COLS_BASE = 'id, nome_fantasia, endereco, bairro, telefone, cnpj';
-const CLIENT_COLS_GPS = `${CLIENT_COLS_BASE}, localizacao, pin_localizacao`;
+// BLOCO 46 (regra do dono): e-mail do cliente vai no rodapé do cupom (envio
+// do XML da NF-e). Alguns bancos antigos não têm clients.email — os tiers de
+// fetchClientsFlex tentam COM email e degradam para o tier sem email.
+const CLIENT_COLS_EMAIL = `${CLIENT_COLS_BASE}, email`;
+const CLIENT_COLS_GPS = `${CLIENT_COLS_EMAIL}, localizacao, pin_localizacao`;
 
 /**
  * clients com colunas de GPS flexíveis. Bancos SEM clients.localizacao
@@ -64,7 +68,8 @@ const CLIENT_COLS_GPS = `${CLIENT_COLS_BASE}, localizacao, pin_localizacao`;
  */
 async function fetchClientsFlex(supabase: any, ids: string[]) {
   if (!ids || ids.length === 0) return { data: [] as any[] };
-  for (const cols of [CLIENT_COLS_GPS, CLIENT_COLS_BASE + ', pin_localizacao', CLIENT_COLS_BASE]) {
+  // BLOCO 46: tiers COM email primeiro; sem email só no último (banco antigo)
+  for (const cols of [CLIENT_COLS_GPS, `${CLIENT_COLS_EMAIL}, pin_localizacao`, CLIENT_COLS_EMAIL, CLIENT_COLS_BASE]) {
     const r = await supabase.from('clients').select(cols).in('id', ids);
     if (!r.error) return r;
   }
@@ -347,6 +352,8 @@ async function enrichParadas(supabase: any, salesRows: any[]) {
         telefone: c.telefone || '',
         // BLOCO 40: CNPJ para o rodape do cupom NF-e ("NF-e: <cnpj>")
         cnpj: c.cnpj || null,
+        // BLOCO 46: e-mail para o rodape do cupom (envio do XML)
+        email: c.email || null,
         lat, lng,
       },
       itens: itemsBySale[s.id] || [],
@@ -573,6 +580,8 @@ async function enrichFila(supabase: any, salesRows: any[]) {
         telefone: c.telefone || '',
         // BLOCO 40: CNPJ para o rodape do cupom NF-e ("NF-e: <cnpj>")
         cnpj: c.cnpj || null,
+        // BLOCO 46: e-mail para o rodape do cupom (envio do XML)
+        email: c.email || null,
         lat, lng,
       },
       itens: itemsBySale[s.id] || [],

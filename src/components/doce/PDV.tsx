@@ -164,7 +164,9 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   // ============================================================
   // MODAL: Venda finalizada com comissao
   // ============================================================
-  const [saleResultModal, setSaleResultModal] = useState<{ total: number; comissao: number; troca: number; isPrazo: boolean; isPreVenda?: boolean; clientName: string; sale: Sale } | null>(null);
+  // BLOCO 50: formaAtraso = forma escolhida no A PRAZO ('CHEQUE' etc.) —
+  // pagamento confirmado em CHEQUE NAO gera botão de boleto no resultado.
+  const [saleResultModal, setSaleResultModal] = useState<{ total: number; comissao: number; troca: number; isPrazo: boolean; isPreVenda?: boolean; clientName: string; sale: Sale; formaAtraso?: string } | null>(null);
 
   // ============================================================
   // Bloco 10/12: emissao de NF-e/NFC-e direto no fechamento da venda.
@@ -558,7 +560,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           });
           comissaoTotal = Math.round(comissaoTotal * 100) / 100;
         }
-        setSaleResultModal({ total, comissao: comissaoTotal, troca: isTrocaActive ? vt : 0, isPrazo: false, isPreVenda: true, clientName: client.nomeFantasia, sale: pedido });
+        setSaleResultModal({ total, comissao: comissaoTotal, troca: isTrocaActive ? vt : 0, isPrazo: false, isPreVenda: true, clientName: client.nomeFantasia, sale: pedido, formaAtraso: condicaoPv === 'APRAZO' && metodoEntrega === 'CHEQUE' ? 'CHEQUE' : undefined });
       } else {
         isFinalizingRef.current = false;
         setCart(carrinhoPrev);
@@ -619,6 +621,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         isPrazo: metodo === 'A_PRAZO',
         clientName: client.nomeFantasia,
         sale: { ...newSale, trocas: trocasComObs || undefined },
+        // BLOCO 50: a prazo em CHEQUE não tem botão de boleto no resultado
+        formaAtraso: metodo === 'A_PRAZO' && tipoPrazo === 'CHEQUE' ? 'CHEQUE' : undefined,
       });
       // BLOCO 13/41: persiste as TROCAS + OBSERVAÇÃO da pronta entrega (best-effort)
       if (trocasComObs) {
@@ -715,7 +719,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           });
           comissaoTotal = Math.round(comissaoTotal * 100) / 100;
         }
-        setSaleResultModal({ total, comissao: comissaoTotal, troca: isTrocaActive ? vt : 0, isPrazo: w.condicao === 'APRAZO', isPreVenda: true, clientName: client.nomeFantasia, sale: pedido });
+        setSaleResultModal({ total, comissao: comissaoTotal, troca: isTrocaActive ? vt : 0, isPrazo: w.condicao === 'APRAZO', isPreVenda: true, clientName: client.nomeFantasia, sale: pedido, formaAtraso: w.condicao === 'APRAZO' && w.forma === 'CHEQUE' ? 'CHEQUE' : undefined });
       } else {
         isFinalizingRef.current = false;
         setCart(carrinhoPrev);
@@ -787,6 +791,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         isPrazo: metodo === 'A_PRAZO',
         clientName: client.nomeFantasia,
         sale: { ...newSale, trocas: trocasComObs || undefined },
+        // BLOCO 50: a prazo em CHEQUE não tem botão de boleto no resultado
+        formaAtraso: metodo === 'A_PRAZO' && w.forma === 'CHEQUE' ? 'CHEQUE' : undefined,
       });
       // BLOCO 13/41: persiste as TROCAS + OBSERVAÇÃO da pronta entrega (best-effort)
       if (trocasComObs) {
@@ -1571,8 +1577,10 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                  nao tem boleto para gerar).
                  BLOCO 41 (regra do dono): na PRE-VENDA A VISTA NAO TEM BOLETO —
                  o saldo ali é a cobrança do ENTREGADOR na entrega (dinheiro/pix);
-                 boleto nesse lugar só confundia o vendedor. ===== */}
-            {saleResultModal.sale?.id && (Number(saleResultModal.sale.valorTotal ?? 0) - Number(saleResultModal.sale.valorPago ?? 0) > 0) && !(saleResultModal.isPreVenda && !saleResultModal.isPrazo) && (
+                 boleto nesse lugar só confundia o vendedor.
+                 BLOCO 50 (regra do dono): pagamento confirmado em CHEQUE — sem
+                 botão de gerar boleto (o recebimento já é o cheque). ===== */}
+            {saleResultModal.sale?.id && (Number(saleResultModal.sale.valorTotal ?? 0) - Number(saleResultModal.sale.valorPago ?? 0) > 0) && !(saleResultModal.isPreVenda && !saleResultModal.isPrazo) && saleResultModal.formaAtraso !== 'CHEQUE' && (
               <BoletoCard
                 saleId={String(saleResultModal.sale.id)}
                 valorTotal={Number(saleResultModal.total) || 0}

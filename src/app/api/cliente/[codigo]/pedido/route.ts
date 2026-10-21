@@ -181,7 +181,10 @@ export async function POST(
       data_vencimento: d7.toISOString(),
       tipo_venda: 'PRE_VENDA',
       entrega_status: 'PENDENTE',
-      trocas: obs,
+      // BLOCO 45 (regra do dono): a observacao do PORTAL nao e troca — grava
+      // com prefixo "OBS: " para o cupom imprimir no bloco OBSERVACAO e a
+      // palavra TROCAS so aparecer quando o vendedor anotou troca de verdade.
+      trocas: obs ? `OBS: ${obs}` : null,
     };
 
     let { data: sale, error: saleErr } = await supabase

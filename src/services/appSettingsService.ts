@@ -11,6 +11,8 @@ export interface AppSettings {
   pix1Code: string | null;
   pix2Name: string | null;
   pix2Code: string | null;
+  /** BLOCO 62: chave Pix do RECEBIMENTO (QR gerado na entrega) — CPF/CNPJ/telefone/email/EVP */
+  pixChave: string | null;
   productOrder: string[];
   clientOrder: string[];
   /** Bloco 23: ORDEM DO PORTAL — independente da ordem do PDV (product_order) */
@@ -30,6 +32,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   pix1Code: null,
   pix2Name: "Pix Banco B",
   pix2Code: null,
+  pixChave: null,
   productOrder: [],
   clientOrder: [],
   catalogoOrder: [],
@@ -90,7 +93,7 @@ export const appSettingsService = {
   async getSettings(): Promise<AppSettings> {
     // EGRESS: leitura LEVE — logo/pix_code (base64 pesados) NAO vem mais aqui;
     // vem do cache localStorage com revalidacao de 12h (getMedia).
-    const COLS = 'margem_global_ativa, margem_global_valor, margem_minima_ativa, margem_minima, pix1_name, pix2_name, product_order, client_order, catalogo_order, company_name, company_cnpj, melhor_troca_separacao, melhor_push_entrega, melhor_whatsapp, melhor_bairro, melhor_foto_entrega, melhor_push_falha';
+    const COLS = 'margem_global_ativa, margem_global_valor, margem_minima_ativa, margem_minima, pix1_name, pix2_name, product_order, client_order, catalogo_order, company_name, company_cnpj, pix_chave_entrega, melhor_troca_separacao, melhor_push_entrega, melhor_whatsapp, melhor_bairro, melhor_foto_entrega, melhor_push_falha';
 
     let data: any = null;
     const { data: light, error: lightErr } = await supabase
@@ -135,6 +138,8 @@ export const appSettingsService = {
       pix1Code: media.pix1Code ?? DEFAULT_SETTINGS.pix1Code,
       pix2Name: data.pix2_name ?? DEFAULT_SETTINGS.pix2Name,
       pix2Code: media.pix2Code ?? DEFAULT_SETTINGS.pix2Code,
+      // BLOCO 62: chave do recebimento (QR na entrega) — null = usa o padrao (env/CPF do dono)
+      pixChave: data.pix_chave_entrega ?? DEFAULT_SETTINGS.pixChave,
       productOrder: Array.isArray(data.product_order) ? data.product_order : DEFAULT_SETTINGS.productOrder,
       clientOrder: Array.isArray(data.client_order) ? data.client_order : DEFAULT_SETTINGS.clientOrder,
       catalogoOrder: Array.isArray((data as any).catalogo_order) ? (data as any).catalogo_order : DEFAULT_SETTINGS.catalogoOrder,
@@ -163,6 +168,8 @@ export const appSettingsService = {
     if (settings.pix1Code !== undefined) payload.pix1_code = settings.pix1Code;
     if (settings.pix2Name !== undefined) payload.pix2_name = settings.pix2Name;
     if (settings.pix2Code !== undefined) payload.pix2_code = settings.pix2Code;
+    // BLOCO 62: chave do recebimento (QR gerado na entrega)
+    if (settings.pixChave !== undefined) payload.pix_chave_entrega = settings.pixChave;
 
     // EGRESS: mantém o cache local de mídia em sync quando logo/pix mudam
     if (settings.logo !== undefined || settings.pix1Code !== undefined || settings.pix2Code !== undefined) {
@@ -200,15 +207,17 @@ export const appSettingsService = {
       .upsert(upsertPayload, { onConflict: 'id' });
 
     if (error) {
-      // BLOCO 23: coluna catalogo_order ainda nao existe (SQL pendente) —
-      // salva o restante sem perder as outras configurações.
-      if (/catalogo_order/i.test(error.message || '') && (payload as any).catalogo_order !== undefined) {
-        console.warn('[appSettingsService] catalogo_order ausente (Bloco 23 nao rodado). Salvando sem ela.');
-        const sem23 = { ...upsertPayload } as Record<string, unknown>;
-        delete sem23.catalogo_order;
+      // BLOCO 23/62: coluna ainda inexistente (SQL pendente) — salva o restante
+      // sem perder as outras configurações. Serve para catalogo_order e
+      // pix_chave_entrega (o erro do PostgREST cita o nome da coluna).
+      const mColuna = /(?:catalogo_order|pix_chave_entrega)/i.exec(error.message || '');
+      if (mColuna && (payload as any)[mColuna[0]] !== undefined) {
+        console.warn(`[appSettingsService] ${mColuna[0]} ausente (SQL pendente). Salvando sem ela.`);
+        const semCol = { ...upsertPayload } as Record<string, unknown>;
+        delete semCol[mColuna[0]];
         const { error: err2 } = await supabase
           .from('app_settings')
-          .upsert(sem23, { onConflict: 'id' });
+          .upsert(semCol, { onConflict: 'id' });
         if (err2) {
           console.error('[appSettingsService] Erro ao persistir configurações:', err2);
           return false;

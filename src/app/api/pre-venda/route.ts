@@ -4,7 +4,7 @@ import { sessionFromRequest, isAdminSession } from '@/lib/session';
 import { hasEntregaTables, hasBoletoFotoColumn, hasModoVendaColumn, hasCargaCheckColumns } from '@/lib/serverSchema';
 import { sendPushToUser } from '@/lib/pushSender';
 import QRCode from 'qrcode';
-import { buildPixPayload, generateTxid } from '@/lib/pix';
+import { buildPixPayload, generateTxid, lerChavePixEntrega } from '@/lib/pix';
 // BLOCO 21: regra ÚNICA da comissão de pré-venda (compartilhada com /api/pre-venda/venda)
 import { comissaoPvDeItens, COMISSAO_PV_DEFAULT, round2 } from '@/lib/comissaoPv';
 
@@ -1665,7 +1665,11 @@ export async function POST(req: NextRequest) {
       if (qrValor > qrRestante) {
         return NextResponse.json({ ok: false, error: `Valor maior que o saldo em aberto (R$ ${qrRestante.toFixed(2)}).` }, { status: 400 });
       }
-      const pix = buildPixPayload(qrValor, generateTxid('DM'));
+      // BLOCO 62: a chave Pix do recebimento pode ser trocada pelo admin em
+      // Configurações (app_settings.pix_chave_entrega). Sem chave válida
+      // configurada, cai no padrão (env PIX_KEY / CPF do dono).
+      const chaveEntrega = await lerChavePixEntrega(supabase);
+      const pix = buildPixPayload(qrValor, generateTxid('DM'), chaveEntrega);
       const qrDataUrl = await QRCode.toDataURL(pix.payload, { margin: 1, width: 360, errorCorrectionLevel: 'M' });
       return NextResponse.json({ ok: true, ...pix, qrDataUrl, valor: qrValor });
     }

@@ -9,6 +9,8 @@ import { buscarCnpjReceita, mascararCnpj, mensagemCnpj, clienteAptoNfe, CnpjBusc
 import { buscarEanProduto, soDigitosEan, eanCompleto, mensagemEan, EanBusca } from '@/lib/eanAutocomplete';
 import Cupom from '@/components/doce/Cupom';
 import ClientHistory from '@/components/doce/ClientHistory';
+// BLOCO 62: validação da chave Pix do recebimento (CPF/CNPJ/telefone/email/EVP)
+import { normalizarChavePix, formatPixKey } from '@/lib/pix';
 import { loadLocalState, saveLocalState } from '@/utils/persistence';
 import { locationService, notificationService, NOTIFICATION_TYPES, AppNotification, NotificationType } from '@/services/locationService';
 import { authHeaders } from '@/services/userService';
@@ -75,6 +77,9 @@ interface AdminDashboardProps {
   setPix2Name: (val: string) => void;
   pix2Code: string | null;
   setPix2Code: (val: string | null) => void;
+  /** BLOCO 62: chave Pix do recebimento — QR gerado na entrega (CPF/CNPJ/telefone/email/EVP) */
+  pixChave: string;
+  setPixChave: (val: string) => void;
   adminNotification?: string | null;
   clearAdminNotification?: () => void;
   orderedProductIds: string[]; 
@@ -2759,6 +2764,28 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             </div>
             <input ref={pix1InputRef} type="file" accept="image/*" className="hidden" onChange={e => handlePixUpload(e, 1)} />
             <input ref={pix2InputRef} type="file" accept="image/*" className="hidden" onChange={e => handlePixUpload(e, 2)} />
+
+            {/* BLOCO 62: chave do RECEBIMENTO — o QR do Pix a vista cobrado na entrega usa essa chave */}
+            <div className="border-t border-gray-100 pt-4 space-y-2">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <label className="text-[9px] font-black text-gray-400 uppercase">Chave do recebimento (QR gerado na entrega)</label>
+                {(() => {
+                  const v = (props.pixChave || '').trim();
+                  if (!v) return <span className="text-[8px] font-black uppercase px-2 py-0.5 rounded-md bg-gray-100 text-gray-500">Padrão: CPF {formatPixKey('01735712043')}</span>;
+                  const n = normalizarChavePix(v);
+                  return n.valida
+                    ? <span className="text-[8px] font-black uppercase px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-600"><i className="fa-solid fa-check mr-1"></i>{n.tipo} válida</span>
+                    : <span className="text-[8px] font-black uppercase px-2 py-0.5 rounded-md bg-rose-50 text-rose-600"><i className="fa-solid fa-triangle-exclamation mr-1"></i>{n.erro || 'Chave inválida'}</span>;
+                })()}
+              </div>
+              <input
+                value={props.pixChave || ''}
+                onChange={e => props.setPixChave(e.target.value)}
+                placeholder="CPF, CNPJ, telefone, e-mail ou chave aleatória"
+                className="w-full p-3 bg-gray-50 border border-gray-100 rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-teal-100"
+              />
+              <p className="text-[8px] text-gray-400 font-semibold leading-snug">Usada no QR Code do Pix cobrado na entrega. Aceita CPF, CNPJ, telefone (com DDD), e-mail ou chave aleatória. Vazio = usa o padrão (CPF 017.357.120-43).</p>
+            </div>
           </div>
 
           <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm mx-2 space-y-4">

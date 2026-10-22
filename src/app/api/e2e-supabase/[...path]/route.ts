@@ -77,8 +77,8 @@ const products = [
 ];
 
 const settings = [{
-  id: 1, margem_global_ativa: false, margem_global_valor: 0, margem_minima_ativa: false, margem_minima: 0,
-  pix1_name: 'Pix A', pix1_code: null, pix2_name: 'Pix B', pix2_code: null,
+  id: 'global_settings', margem_global_ativa: false, margem_global_valor: 0, margem_minima_ativa: false, margem_minima: 0,
+  pix1_name: 'Pix A', pix1_code: null, pix2_name: 'Pix B', pix2_code: null, pix_chave_entrega: null,
   product_order: null, client_order: null, catalogo_order: null,
   company_name: 'Doce Mania', company_cnpj: '00.000.000/0001-00',
 }];
@@ -253,6 +253,18 @@ async function handle(req: NextRequest, segments: string[]) {
       let body: any = null;
       try { body = await req.json(); } catch {}
       const arr = Array.isArray(body) ? body : [body];
+      // BLOCO 62: supabase-js .upsert() manda POST com Prefer resolution=merge-duplicates —
+      // o save de Configuracoes usa isso; no mock, merge por id quando existir.
+      const pref = req.headers.get('prefer') || '';
+      if (pref.includes('resolution=merge-duplicates')) {
+        arr.forEach((row: any) => {
+          const rows = tables[table];
+          const idx = rows.findIndex(r => String(r.id) === String(row.id));
+          if (idx >= 0) rows[idx] = { ...rows[idx], ...row };
+          else rows.push({ ...row, id: row.id ?? `${table}-novo-${Math.random().toString(36).slice(2, 8)}` });
+        });
+        return NextResponse.json(arr, { status: 201 });
+      }
       arr.forEach((row: any) => {
         const clone = { ...row };
         if (!clone.id) clone.id = `${table}-novo-${Math.random().toString(36).slice(2, 8)}`;

@@ -116,6 +116,8 @@ const App: React.FC = () => {
   const [pix1Code, setPix1Code] = useState<string | null>(null);
   const [pix2Name, setPix2Name] = useState("Pix Banco B");
   const [pix2Code, setPix2Code] = useState<string | null>(null);
+  // BLOCO 62: chave Pix do RECEBIMENTO (QR gerado na entrega) — editavel em Configurações
+  const [pixChave, setPixChave] = useState<string>("");
   const [productOrder, setProductOrder] = useState<string[]>([]);
   const [clientOrder, setClientOrder] = useState<string[]>([]);
   // BLOCO 23: ordem do PORTAL (catálogo do cliente) — NÃO mexe na ordem do PDV
@@ -303,6 +305,8 @@ const App: React.FC = () => {
       setPix1Code(settings.pix1Code);
       setPix2Name(settings.pix2Name ?? "Pix Banco B");
       setPix2Code(settings.pix2Code);
+      // BLOCO 62: chave do recebimento (QR na entrega)
+      setPixChave(settings.pixChave ?? "");
       setProductOrder(settings.productOrder || []);
       setClientOrder(settings.clientOrder || []);
       setCatalogoOrder((settings as any).catalogoOrder || []);
@@ -466,6 +470,7 @@ const App: React.FC = () => {
     else if (key === 'pix1Code') setPix1Code(value);
     else if (key === 'pix2Name') setPix2Name(value);
     else if (key === 'pix2Code') setPix2Code(value);
+    else if (key === 'pixChave') setPixChave(value);
     else if (key === 'companyName') setCompanyName(value);
     else if (key === 'companyCnpj') setCompanyCnpj(value);
     else if (key === 'catalogoOrder') {
@@ -936,7 +941,7 @@ const App: React.FC = () => {
           <SecretarioShell user={currentUser} melhorias={melhorias} products={products} reloadCore={fetchCoreData} />
         ) : currentUser.role === 'ADMIN' ? (
           <AdminDashboard 
-            {...{ products, users, cargas, cargasLoaded, clients, sales, commissions, payoutLogs, expenses, logo, margemGlobalAtiva, margemGlobalValor, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, adminNotification, companyName, companyCnpj, orderedProductIds: productOrder, portalOrderIds: catalogoOrder, categories, subcategories, clientOrder, melhorias }}
+            {...{ products, users, cargas, cargasLoaded, clients, sales, commissions, payoutLogs, expenses, logo, margemGlobalAtiva, margemGlobalValor, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, pixChave, adminNotification, companyName, companyCnpj, orderedProductIds: productOrder, portalOrderIds: catalogoOrder, categories, subcategories, clientOrder, melhorias }}
             addProduct={addProduct} updateProduct={updateProduct} deleteProduct={deleteProduct} registerStockEntry={()=>{}} adjustStockManual={()=>{}}
             syncVendedorCarga={syncVendedorCarga} applyCargaDirectly={applyCargaDirectly}
             syncVendedorCargaRota2={syncVendedorCargaRota2} applyCargaDirectlyRota2={applyCargaDirectlyRota2}
@@ -945,6 +950,7 @@ const App: React.FC = () => {
             setLogo={(v)=>updateSetting('logo', v)} adminUser={currentUser} setMargemGlobalAtiva={(v)=>updateSetting('margemGlobalAtiva', v)} setMargemGlobalValor={(v)=>updateSetting('margemGlobalValor', v)}
             setMargemMinima={(v)=>updateSetting('margemMinima', v)} setMargemMinimaAtiva={(v)=>updateSetting('margemMinimaAtiva', v)} setPix1Name={(v)=>updateSetting('pix1Name', v)} setPix1Code={(v)=>updateSetting('pix1Code', v)}
             setPix2Name={(v)=>updateSetting('pix2Name', v)} setPix2Code={(v)=>updateSetting('pix2Code', v)} clearAdminNotification={() => setAdminNotification(null)} setOrderedProductIds={(v)=>updateSetting('productOrder', v)} setPortalOrderIds={(v)=>updateSetting('catalogoOrder', v as string[])}
+            setPixChave={(v)=>updateSetting('pixChave', v)}
             setCompanyName={(v)=>updateSetting('companyName', v)} setCompanyCnpj={(v)=>updateSetting('companyCnpj', v)}
             setMelhorias={(v: MelhoriasFlags)=>updateSetting('melhorias', v)}
             activateAllProducts={activateAllProducts} addCategory={addCategory} updateCategory={updateCategory} deleteCategory={deleteCategory}

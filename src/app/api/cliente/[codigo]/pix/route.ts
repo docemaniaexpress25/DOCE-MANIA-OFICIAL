@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import QRCode from 'qrcode';
 import { getServiceClient, isServerSupabaseConfigured } from '@/lib/serverSupabase';
-import { buildPixPayload, generateTxid, PIX_NAME, PIX_CITY } from '@/lib/pix';
+import { buildPixPayload, generateTxid, PIX_NAME, PIX_CITY, lerChavePixEntrega } from '@/lib/pix';
 
 /**
  * POST /api/cliente/[codigo]/pix
@@ -67,8 +67,11 @@ export async function POST(
     }
 
     // 3. BR Code com o valor exato da divida
+    // BLOCO 62: usa a chave Pix configurada pelo admin (app_settings.pix_chave_entrega)
+    // quando existir; sem ela, o padrao (env PIX_KEY / CPF do dono).
+    const chaveEntrega = await lerChavePixEntrega(supabase);
     const txid = generateTxid();
-    const pix = buildPixPayload(restante, txid);
+    const pix = buildPixPayload(restante, txid, chaveEntrega);
     const qrDataUrl = await QRCode.toDataURL(pix.payload, {
       margin: 1,
       width: 360,

@@ -36,8 +36,10 @@ interface PDVProps {
   processPreVenda?: (data: any) => Promise<{ pedido: Sale | null; erro?: string; comissaoPrevista?: number }>;
   /** BLOCO 27 (ROTA 2): usa o wizard guiado de pagamento em vez da tela antiga */
   wizardPagamento?: boolean;
-  /** BLOCO 29 (ROTA 2): vendedor no teste (produtos teste visíveis + catálogo por modo) */
+  /** BLOCO 29/64 (ROTA 2): catálogo por modo + wizard — agora GERAL (todos os vendedores) */
   rota2?: boolean;
+  /** BLOCO 64: produtos de TESTE continuam visíveis só para quem tem a flag rota2 (piloto) */
+  verProdutosTeste?: boolean;
   /** BLOCO 29 (ROTA 2): modo fixado na PERGUNTA DO ATENDIMENTO — NFE/NFCE = estoque COM NF; CUPOM = SEM NF */
   modoAtendimento?: 'NFE' | 'NFCE' | 'CUPOM' | null;
   /** BLOCO 29: CPF capturado no atendimento para o NFC-e (opcional) */
@@ -62,7 +64,7 @@ const SwitchChip: React.FC<{ ligado: boolean; onClick: () => void; cor: 'violet'
   </button>
 );
 
-const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onCancel, onFinish, processSale, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, sales, onNavigateToCredit, categories, subcategories, modoVenda, processPreVenda, wizardPagamento, rota2, modoAtendimento, nfcCpfInicial }) => {
+const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onCancel, onFinish, processSale, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, sales, onNavigateToCredit, categories, subcategories, modoVenda, processPreVenda, wizardPagamento, rota2, verProdutosTeste, modoAtendimento, nfcCpfInicial }) => {
   const [view, setView] = useState<PDVView>('CART');
   const [isPrePedido, setIsPrePedido] = useState(false);
   const isPreVenda = modoVenda === 'PRE_VENDA' && !!processPreVenda;
@@ -139,7 +141,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   // NFE/NFCE -> ESTOQUE COM NF (estoque_nota) | CUPOM -> SEM NF (estoque_semnf).
   // undefined nas colunas = SQL do bloco 29 ainda nao rodou -> fallback legado.
   // ============================================================
-  const rota2Ativo = !!rota2;
+  const rota2Ativo = !!rota2; // BLOCO 64: fluxo novo da ROTA 2 — geral (todos os vendedores)
   const temDualEstoque = React.useMemo(() => products.some(p => p.estoqueNota !== undefined), [products]);
   const modoAtivo = rota2Ativo && temDualEstoque ? (modoAtendimento || null) : null;
 
@@ -836,8 +838,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         // Pré-venda/pre-pedido (legado): catálogo completo do estoque principal
         base = products.filter(p => p.ativo);
       }
-      // BLOCO 29: produtos TESTE só aparecem para quem está no teste (rota 2)
-      if (!rota2Ativo) base = base.filter(p => !p.produtoTeste);
+      // BLOCO 29/64: produtos TESTE só aparecem para quem tem a flag rota2 (piloto)
+      if (!verProdutosTeste) base = base.filter(p => !p.produtoTeste);
     } else {
       // PRONTA ENTREGA: só o que está NA CARGA da van.
       // BLOCO 29 (rota 2): carga com quantidade 0 NÃO aparece (regra do dono).
@@ -851,7 +853,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     }
     if (!activeCategoryId) return base;
     return base.filter(p => p.categoryId === activeCategoryId);
-  }, [products, productIdsInCarga, activeCategoryId, sellFromCentral, modoAtivo, rota2Ativo, minhaCarga]);
+  }, [products, productIdsInCarga, activeCategoryId, sellFromCentral, modoAtivo, rota2Ativo, verProdutosTeste, minhaCarga]);
 
   const generatePrePedidoText = (width: '56MM' | '80MM') => {
     const totalWidth = width === '80MM' ? 48 : 32; 

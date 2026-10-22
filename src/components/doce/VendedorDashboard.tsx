@@ -265,7 +265,13 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   }, [cargas, user.id]);
   // Dois estoques em casa já rodaram no banco? (produtos com estoque_nota presente)
   const temDualEstoque = products.some(p => p.estoqueNota !== undefined);
-  const rota2FluxoNovo = user.rota2 === true && temDualEstoque;
+  // BLOCO 64 (decisão do chefe): o fluxo aprovado na ROTA 2 — pergunta de nota,
+  // wizard de pagamento (boleto/cheque/pix/dinheiro na data) e estoques COM NF/
+  // SEM NF — agora vale para TODOS os vendedores. NÃO depende mais da flag
+  // rota2 (que fica só para o piloto enxergar produtos de teste). A guarda
+  // temDualEstoque continua: se o SQL do bloco 29 não rodou no banco, degrada
+  // para o fluxo legado em vez de quebrar.
+  const fluxoNovoAtivo = temDualEstoque;
 
   // Abre o PDV no modo escolhido no sheet (so para pre-vendedor).
   // BLOCO 29: nota/nfcCpf = modo fixado na pergunta do atendimento (null = fluxo legado).
@@ -291,7 +297,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
    *    NÃO -> cupom -> ESTOQUE SEM NF
    */
   const escolherModoVenda = (client: Client, modo: 'PRONTA' | 'PRE_VENDA') => {
-    if (!rota2FluxoNovo) {
+    if (!fluxoNovoAtivo) {
       abrirNoModo(client, modo);
       return;
     }
@@ -1121,9 +1127,11 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
           showToast(modoAtendimento === 'PRE_VENDA' ? "Pedido de pre-venda registrado!" : "Venda realizada com sucesso!", 'success');
         }}
         processSale={processSale} processPreVenda={processPreVenda} modoVenda={modoAtendimento} margemMinima={margemMinima} margemMinimaAtiva={margemMinimaAtiva} pix1Name={pix1Name} pix1Code={pix1Code} pix2Name={pix2Name} pix2Code={pix2Code}
-        wizardPagamento={user.rota2 === true}
-        /* BLOCO 29 (ROTA 2): produtos teste + catálogo pelo estoque do modo */
-        rota2={user.rota2 === true}
+        wizardPagamento={fluxoNovoAtivo}
+        /* BLOCO 29/64: catálogo pelo estoque do modo — fluxo novo geral (todos os
+           vendedores). Produtos de TESTE continuam só para quem tem a flag rota2. */
+        rota2={fluxoNovoAtivo}
+        verProdutosTeste={user.rota2 === true}
         modoAtendimento={notaModo}
         // BLOCO 52: CPF capturado no painel NFC-e do atendimento — vai na venda
         // ("COM NOTA: NFC-e (CPF ...)") e sai impresso no rodapé do cupom.

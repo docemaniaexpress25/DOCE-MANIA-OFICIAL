@@ -304,3 +304,25 @@ Stage Summary:
 - O QR do Pix a vista na entrega (e o portal do cliente) usa a chave que o admin quiser — CPF, CNPJ, telefone, e-mail ou chave aleatoria — editada em Configuracoes > Pix / QR Code > "Chave do recebimento", com validacao de digito verificador na hora. Vazio = padrao atual (CPF 01735712043).
 - SQL unico pro dono: alter table app_settings add column if not exists pix_chave_entrega text; (sql/bloco62_pix_chave_entrega.sql) — ate rodar, o sistema usa o padrao sem quebrar.
 - Pendencias antigas mantidas: Bluetooth da impressora; NF entrada XML.
+---
+Task ID: bloco63-kanban-estoque-central
+Agent: Z.ai Code (principal)
+Task: "legal o sistema kamban! execute o mesmo para a ordem do estoque central, remova as setas e excute o sistema kamban"
+
+Work Log:
+- AdminDashboard.tsx (aba CATALOGO — Estoque Central): setas UP/DOWN dos cards de produto REMOVIDAS (moveProduct apagada) junto com o badge de 2 chevrons.
+- No lugar: kanban dnd-kit (mesmo padrao do Bloco 61) — imports DndContext/SortableContext/useSortable/arrayMove/CSS + sensors (PointerSensor distance 8px + KeyboardSensor sortableKeyboardCoordinates).
+- Grip de arraste (fa-grip-vertical) na esquerda do card, no lugar das setas: cursor-grab, touch-none, select-none, title "Arraste para mudar a ordem no PDV", self-stretch min-h-[52px]. O resto do card segue igual: clique abre o editor, botoes +entrada e lapis intactos.
+- DndContext (closestCenter, MeasuringStrategy.Always) + SortableContext (verticalListSortingStrategy) em volta da lista filteredProducts.
+- onDragEndProduto: arrayMove nos VISIVEIS; se a busca esta filtrando, a ordem nova dos visiveis e reaplicada na lista COMPLETA via merge (nth ocorrencia em props.products recebe o nth item do arrayMove) — produtos fora do filtro nao saem do lugar. Salva por props.setOrderedProductIds -> updateSetting('productOrder') -> upsert app_settings (fluxo ja existente) + toast "Ordem atualizada!".
+- SortableProduto componentiza o card (usaSortable interno, conecta setActivatorNodeRef/attributes/listeners no grip) — a 1a versao recebia handleProps de fora, corrigido antes de testar.
+- Dica na tela: "Dica: arraste o produto pelo grip para mudar a ordem no PDV." (só quando >=2 produtos).
+- Categorias (CATEGORIAS) e clientes (ROTEIRO) mantiveram as setas — o pedido era SO o Estoque Central.
+- QA: lint 0 erros/11 warnings (baseline exata); tsc 7 erros pre-existentes (baseline exata, nenhum novo).
+- E2E (Agent Browser, mock; e2e63.sh e .env.local removidos depois): T1 6 grips + 0 chevrons nos produtos, ordem inicial [Palitinho, Bacon, TESTE NF 01, TESTE NF 02, TESTE S/NF 01, TESTE ZERADO]; T2 drag REAL de mouse do grip 1 ao grip 2 (431,351 -> 431,445, moves graduais); T3 toast-ok; T4 ordem trocou NA HORA (Bacon 1o, Palitinho 2o); T5 F5 persistiu (product_order via upsert no mock); T6 zero erros de console. Licao: o toast tem classe uppercase — innerText retorna "ORDEM ATUALIZADA!", comparar em lowercase.
+- Commit 7a70caf pushed (docemaniaexpress25/DOCE-MANIA-OFICIAL); Vercel: doce-mania-oficial / oficial2 / teste = SUCCESS (zpac pre-existente).
+- Server de dev reiniciado limpo (sem mock), GET / 200, dev.log sem erros.
+
+Stage Summary:
+- A ordem do Estoque Central agora se arruma ARRASTANDO (kanban), igual a fila de entregas: pegou o grip, soltou no lugar, gravou — e a ordem nova vale para o PDV na hora. Funciona com mouse, toque e teclado; com busca ativa, os produtos fora do filtro nao se mexem.
+- Nada a fazer pelo dono (sem SQL). Pendencias antigas mantidas: Bluetooth da impressora; NF entrada XML.

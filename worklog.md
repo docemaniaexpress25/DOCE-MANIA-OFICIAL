@@ -363,7 +363,7 @@ Work Log:
 - QA: lint 0 erros/11 warnings (baseline exata); tsc 7 erros pre-existentes (baseline exata).
 - E2E (Agent Browser, mock; e2e65 script/.env.local removidos): T1 card da fila mostra ", SALA 5" (API->tela); T2 imprimir com 0 carregados NAO imprime (printed:0, data:null) + toast de aviso; T3 marcar Carregado -> "No veiculo: 1/2"; T4 impressao capturada DENTRO do window.print: SÓ o carregado (sem Padaria Dois), "Rua Teste 123, SALA 5 — Centro", "1 pedido carregado", sem "✓"; T4b window.print chamado exatamente 1x; T5 F5 numero persiste; T6 zero erros de pagina. Server limpo re-provado (GET / 200, dev.log ok).
 - Licoes E2E novas: (1) React 18 NAO faz flush sincrono dentro do mesmo eval — para capturar DOM efemero (overlay que fecha em 150ms), instalar armadilha no window.print e ler async; (2) TODA saida de eval precisa tr -d '"\' (aspas E backslash) antes de comparar; (3) toast do AdminEntregas e .fixed.bottom-6 (nao .fixed.top-20, que e do AdminDashboard home).
-- Commit/push: <PENDING>; Vercel: <PENDING>.
+- Commit eba2941 pushed (docemaniaexpress25/DOCE-MANIA-OFICIAL); Vercel: doce-mania-oficial / oficial2 / teste = SUCCESS (zpac failure pre-existente, sem dominio).
 
 Stage Summary:
 - A impressao da fila de entregas agora sai APENAS com os clientes marcados como CARREGADOS no veiculo, na mesma ordem da fila, com o endereco completo (rua + numero/sala + bairro). Sem nenhum carregado, o admin recebe um aviso em vez de folha vazia.

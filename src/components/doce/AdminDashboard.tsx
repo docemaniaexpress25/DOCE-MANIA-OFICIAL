@@ -11,6 +11,12 @@ import Cupom from '@/components/doce/Cupom';
 import ClientHistory from '@/components/doce/ClientHistory';
 // BLOCO 62: validação da chave Pix do recebimento (CPF/CNPJ/telefone/email/EVP)
 import { normalizarChavePix, formatPixKey } from '@/lib/pix';
+// BLOCO 63: arrastar-e-soltar estilo kanban na ordem do Estoque Central (dnd-kit) —
+// substitui as setas de cima/baixo. Mesmo padrão do Bloco 61 (fila de entregas):
+// mouse, TOQUE e teclado (espaço pega, setas movem, espaço solta).
+import { DndContext, closestCenter, PointerSensor, KeyboardSensor, useSensor, useSensors, MeasuringStrategy, type DragEndEvent } from '@dnd-kit/core';
+import { SortableContext, verticalListSortingStrategy, useSortable, sortableKeyboardCoordinates, arrayMove } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { loadLocalState, saveLocalState } from '@/utils/persistence';
 import { locationService, notificationService, NOTIFICATION_TYPES, AppNotification, NotificationType } from '@/services/locationService';
 import { authHeaders } from '@/services/userService';
@@ -133,6 +139,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
   const [search, setSearch] = useState('');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+
+  // BLOCO 63: sensores do arrastar-e-soltar do Estoque Central. Distancia de 8px
+  // antes de ativar para NAO roubar o toque do scroll nem o clique dos botoes.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
@@ -773,16 +786,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     }});
   };
 
-  const moveProduct = (id: string, dir: 'UP' | 'DOWN') => {
-    const currentOrder = props.orderedProductIds.length > 0 ? props.orderedProductIds : props.products.map(p => p.id);
-    const idx = currentOrder.indexOf(id);
-    if (idx === -1) return;
-    const newOrder = [...currentOrder];
-    if (dir === 'UP' && idx > 0) [newOrder[idx], newOrder[idx-1]] = [newOrder[idx-1], newOrder[idx]];
-    else if (dir === 'DOWN' && idx < newOrder.length - 1) [newOrder[idx], newOrder[idx+1]] = [newOrder[idx+1], newOrder[idx]];
-    props.setOrderedProductIds(newOrder); 
-    showToast("Ordem atualizada!");
-  };
+  // BLOCO 63: as setas do Estoque Central viraram kanban — a ordem nova chega
+  // pelo onDragEndProduto (arrastar-e-soltar) logo abaixo.
 
   const moveCategory = (id: string, dir: 'UP' | 'DOWN') => {
     const idx = props.categories.findIndex(c => c.id === id);
@@ -1189,6 +1194,56 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     return props.products.filter(p => (p.nome ?? '').toLowerCase().includes(search.toLowerCase()));
   }, [props.products, search]);
 
+  // BLOCO 63: fim do arrasto no Estoque Central — soltou, o produto encaixa na
+  // ordem certa (mesma ordem que o PDV usa). Se a busca esta filtrando a lista,
+  // a ordem nova dos visiveis e reaplicada na lista COMPLETA (os fora do filtro
+  // nao saem do lugar).
+  const onDragEndProduto = (e: DragEndEvent) => {
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    const visiveis = filteredProducts.map(p => p.id);
+    const from = visiveis.indexOf(String(active.id));
+    const to = visiveis.indexOf(String(over.id));
+    if (from < 0 || to < 0) return;
+    const movidos = arrayMove(visiveis, from, to);
+    let k = 0;
+    const nova = props.products.map(p => (movidos.indexOf(p.id) >= 0 ? movidos[k++] : p.id));
+    props.setOrderedProductIds(nova);
+    showToast('Ordem atualizada!');
+  };
+
+  // BLOCO 63: card de produto ordenavel (kanban). O handle de arrasto e o grip
+  // a esquerda (no lugar das antigas setas) — o resto do card continua clicavel
+  // (abre o editor) e os botoes de entrada/edicao continuam funcionando.
+  const SortableProduto = ({ p }: { p: Product }) => {
+    const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id: p.id });
+    return (
+      <div ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }} className={`relative ${isDragging ? 'z-50' : ''}`}>
+        <div className={`bg-white p-3 sm:p-4 rounded-3xl border shadow-sm flex items-center gap-2.5 min-w-0 transition-all hover:border-blue-200 ${!p.ativo ? 'opacity-50 grayscale' : ''}`}>
+          <div
+            ref={setActivatorNodeRef}
+            {...attributes}
+            {...listeners}
+            title="Arraste para mudar a ordem no PDV"
+            className={`w-7 self-stretch min-h-[52px] bg-gray-50 text-gray-400 rounded-lg flex items-center justify-center border border-gray-100 flex-shrink-0 cursor-grab active:cursor-grabbing touch-none select-none ${isDragging ? 'opacity-60' : ''}`}>
+            <i className="fa-solid fa-grip-vertical"></i>
+          </div>
+          <div className="flex-1 min-w-0 cursor-pointer" onClick={() => handleOpenProduct(p)}>
+            <h3 className="font-bold text-gray-800 text-[13px] leading-tight uppercase truncate">{p.nome}</h3>
+            <div className="flex items-center gap-1.5 mt-1 flex-wrap min-w-0">
+              <span className="text-[10px] font-black text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded-lg border border-blue-100 tracking-tighter whitespace-nowrap"><i className="fa-solid fa-boxes-stacked mr-1 text-[8px]"></i>{p.estoquePrincipal} un</span>
+              <span className="text-[10px] font-black text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-lg border border-emerald-100 tracking-tighter whitespace-nowrap">R$ {p.precoVenda.toFixed(2)}</span>
+            </div>
+          </div>
+          <div className="flex gap-1.5 flex-shrink-0">
+            <button onClick={() => setShowEntryModal(p)} className="bg-emerald-50 text-emerald-600 w-10 h-10 rounded-xl border border-emerald-100 flex items-center justify-center active:scale-90 shadow-sm"><i className="fa-solid fa-plus-circle text-lg"></i></button>
+            <button onClick={() => handleOpenProduct(p)} className="bg-blue-50 text-blue-600 w-10 h-10 rounded-xl border border-blue-100 flex items-center justify-center active:scale-90 shadow-sm"><i className="fa-solid fa-pencil-alt text-sm"></i></button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const filteredHistory = useMemo(() => {
     // BLOCO 22: "Vendas Realizadas" nao mostra pre-venda ainda na fila/rota —
     // ela CAI EM VENDAS NO DIA DA ENTREGA (data_venda vira a data da entrega,
@@ -1545,27 +1600,26 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         <div className="space-y-4">
           <div className="px-2 flex justify-between items-center gap-2 flex-wrap"><h2 className="text-xl sm:text-2xl font-black text-gray-800 tracking-tight">Estoque Central</h2><div className="flex gap-2"><button onClick={() => handleOpenProduct('NEW')} className="bg-blue-600 text-white w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg active:scale-90 transition-transform"><i className="fa-solid fa-plus text-lg"></i></button></div></div>
           <div className="px-1"><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar produto..." className="w-full p-4 bg-white border border-gray-100 rounded-2xl shadow-sm text-sm focus:ring-2 focus:ring-blue-100 outline-none" /></div>
-          <div className="space-y-2">
-            {filteredProducts.map(p => (
-              <div key={p.id} className={`bg-white p-3 sm:p-4 rounded-3xl border shadow-sm flex items-center gap-2.5 min-w-0 transition-all hover:border-blue-200 ${!p.ativo ? 'opacity-50 grayscale' : ''}`}>
-                <div className="flex flex-col gap-1 flex-shrink-0">
-                  <button onClick={() => moveProduct(p.id, 'UP')} className="w-7 h-7 bg-gray-50 text-gray-400 rounded-lg flex items-center justify-center active:scale-90 border border-gray-100"><i className="fa-solid fa-chevron-up text-[9px]"></i></button>
-                  <button onClick={() => moveProduct(p.id, 'DOWN')} className="w-7 h-7 bg-gray-50 text-gray-400 rounded-lg flex items-center justify-center active:scale-90 border border-gray-100"><i className="fa-solid fa-chevron-down text-[9px]"></i></button>
-                </div>
-                <div className="flex-1 min-w-0 cursor-pointer" onClick={() => handleOpenProduct(p)}>
-                  <h3 className="font-bold text-gray-800 text-[13px] leading-tight uppercase truncate">{p.nome}</h3>
-                  <div className="flex items-center gap-1.5 mt-1 flex-wrap min-w-0">
-                    <span className="text-[10px] font-black text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded-lg border border-blue-100 tracking-tighter whitespace-nowrap"><i className="fa-solid fa-boxes-stacked mr-1 text-[8px]"></i>{p.estoquePrincipal} un</span>
-                    <span className="text-[10px] font-black text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-lg border border-emerald-100 tracking-tighter whitespace-nowrap">R$ {p.precoVenda.toFixed(2)}</span>
-                  </div>
-                </div>
-                <div className="flex gap-1.5 flex-shrink-0">
-                  <button onClick={() => setShowEntryModal(p)} className="bg-emerald-50 text-emerald-600 w-10 h-10 rounded-xl border border-emerald-100 flex items-center justify-center active:scale-90 shadow-sm"><i className="fa-solid fa-plus-circle text-lg"></i></button>
-                  <button onClick={() => handleOpenProduct(p)} className="bg-blue-50 text-blue-600 w-10 h-10 rounded-xl border border-blue-100 flex items-center justify-center active:scale-90 shadow-sm"><i className="fa-solid fa-pencil-alt text-sm"></i></button>
-                </div>
+          {/* BLOCO 63: ordem do Estoque Central = kanban (arraste pelo grip a
+              esquerda do card). Solto, grava e vale pro PDV na hora. */}
+          {filteredProducts.length > 1 && (
+            <p className="text-[9px] font-bold text-slate-400 uppercase px-1 flex items-center gap-1.5">
+              <i className="fa-solid fa-hand-pointer"></i>Dica: arraste o produto pelo grip para mudar a ordem no PDV.
+            </p>
+          )}
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={onDragEndProduto}
+            measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}>
+            <SortableContext items={filteredProducts.map(p => p.id)} strategy={verticalListSortingStrategy}>
+              <div className="space-y-2">
+                {filteredProducts.map(p => (
+                  <SortableProduto key={p.id} p={p} />
+                ))}
               </div>
-            ))}
-          </div>
+            </SortableContext>
+          </DndContext>
         </div>
       )}
 

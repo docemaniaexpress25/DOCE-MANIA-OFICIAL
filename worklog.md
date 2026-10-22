@@ -326,3 +326,24 @@ Work Log:
 Stage Summary:
 - A ordem do Estoque Central agora se arruma ARRASTANDO (kanban), igual a fila de entregas: pegou o grip, soltou no lugar, gravou — e a ordem nova vale para o PDV na hora. Funciona com mouse, toque e teclado; com busca ativa, os produtos fora do filtro nao se mexem.
 - Nada a fazer pelo dono (sem SQL). Pendencias antigas mantidas: Bluetooth da impressora; NF entrada XML.
+---
+Task ID: bloco64-fluxo-rota2-todos-vendedores
+Agent: Z.ai Code (principal)
+Task: "terminei de revisar todo o fluxo que vc implementou na rota 2, agora quero que implemente esse fluxo para todos os logins de vendedores paras otimizar o proprio sistema e o fluxo, nao pode have flahas"
+
+Work Log:
+- Mapeada a bifurcacao completa: a flag app_users.rota2 (switch do piloto, Bloco 27) decidia TUDO — pergunta de nota (notaSheet), wizard de pagamento, estoques COM NF/SEM NF (modoAtivo), carga da van com modo (cargaUsaModo no admin) e visibilidade de produtos de teste (produtoTeste).
+- VendedorDashboard.tsx: fluxoNovoAtivo = temDualEstoque (so a guarda do SQL do bloco 29, como degradacao graciosa pre-SQL). Nao depende mais da flag. wizardPagamento/rota2 passam fluxoNovoAtivo.
+- PDV.tsx: NOVA prop verProdutosTeste — produtos de TESTE continuam visiveis SO para quem tem a flag rota2 (piloto); desacoplada do fluxo geral. rota2 prop = fluxo novo geral.
+- AdminDashboard.tsx: cargaUsaModo = temDualEstoque && applyCargaDirectlyRota2 (admin carrega a van de QUALQUER vendedor COM MODO COM_NF/SEM_NF); switch "ROTA 2 — Novo fluxo de venda (teste)" REMOVIDO do editor de usuario (condicao deixou de existir, o texto mentiria). userForm preserva a flag existente ao salvar (rota2: u.rota2 === true) — nada se perde no banco.
+- Backend NAO precisou mudar (nunca condicionou por flag: /api/pre-venda/venda grava vendedor_id da sessao + modo_nota; RPC de venda idem).
+- Mock E2E: vendedor vend01 "Rota 1 Teste" (ROTA_01, rota2:false), clientes cli-6 "Cliente Rota Um" + cli-7 "Mercado Rota Um" (ROTA_01, cadastro completo), carga-3 vend01 prod-1 25un SEM_NF, estoque_semnf 40/30 nos produtos normais.
+- QA: lint 0 erros/11 warnings (baseline exata); tsc 7 erros pre-existentes (baseline exata).
+- E2E (Agent Browser, mock; e2e64.sh/.env.local removidos): A) vend01 SEM flag: roteiro -> Atender -> Pre-venda -> PROVA CENTRAL notaSheet aparece ("Deseja emitir nota") -> So cupom -> PDV com Palitinho+Bacon do estoque SEM NF e SEM produtos TESTE -> wizard A PRAZO -> BOLETO 7D -> Registrar Pedido -> cupom "BOLETO 7 DIAS"; banco: {vend01, PRE_VENDA, A_PRAZO, modo CUPOM, "cobrar BOLETO na entrega (A PRAZO)", 4.78, PENDENTE, pago 0}. B) vend01: Atender -> Pronta entrega (van SEM_NF) -> PDV DIRETO sem pergunta de nota, catálogo = carga (sem TESTE) -> a vista DINHEIRO recebido 5 -> cupom DINHEIRO+TROCO; banco: {tipo PRONTA, DINHEIRO, modo CUPOM, PAGO 2.39/2.39} (vendedor sai rota2user por limitacao do mock de RPC). C) piloto rota2user: notaSheet continua igual (regressao). Zero erros de console.
+- Licoes E2E: mock GET so responde em /rest/v1/<tabela> (fetch direto /api/e2e-supabase/sales retorna []); innerText vem com text-transform uppercase do CSS (usar textContent ou toUpperCase); cliente com pedido pendente na fila perde o botao Atender no roteiro (usar outro cliente na regressao).
+- Commit 0e1f697 pushed (docemaniaexpress25/DOCE-MANIA-OFICIAL); Vercel: doce-mania-oficial / oficial2 / teste = SUCCESS (zpac pre-existente). Server limpo, dev.log ok.
+
+Stage Summary:
+- O fluxo aprovado na ROTA 2 agora e o padrao de TODOS os vendedores: pergunta de nota (NF-e/NFC-e/cupom), wizard de pagamento (boleto/cheque/pix na data/dinheiro na data), estoques COM NF/SEM NF e carga da van com modo. Sem SQL, sem ligar nada no painel — o vendedor entra e ja esta no fluxo novo.
+- Produtos de TESTE continuam invisiveis para quem nao tem a flag antiga (piloto); switch "ROTA 2" saiu do editor de usuarios.
+- Pendencias antigas mantidas: Bluetooth da impressora; NF entrada XML.

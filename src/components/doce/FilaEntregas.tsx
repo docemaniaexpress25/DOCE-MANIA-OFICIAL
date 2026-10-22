@@ -4,6 +4,12 @@ import { User, Product, MelhoriasFlags, MELHORIAS_DEFAULT } from '@/lib/types';
 import { authHeaders } from '@/services/userService';
 import Cupom from '@/components/doce/Cupom';
 import EditorPedido from '@/components/doce/EditorPedido';
+// BLOCO 61: arrastar-e-soltar estilo kanban para ordenar a rota (dnd-kit).
+// Funciona com mouse, TOQUE (celular do admin) e teclado (espaco pega, setas
+// movem, espaco solta) — substitui as setas de cima/baixo do Bloco 31.
+import { DndContext, closestCenter, PointerSensor, KeyboardSensor, useSensor, useSensors, MeasuringStrategy, type DragEndEvent } from '@dnd-kit/core';
+import { SortableContext, verticalListSortingStrategy, useSortable, sortableKeyboardCoordinates, arrayMove } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 
 /**
  * BLOCO 13 — FILA CONTINUA DE ENTREGA (estilo "fila viva").
@@ -46,7 +52,7 @@ interface FilaItem {
   modoNota?: string | null;
   trocas: string | null;
   prioridade: number;
-  // BLOCO 31: posicao da rota definida pelo admin com setas (undefined = sem ordem manual)
+  // BLOCO 31: posicao da rota definida pelo admin (arrastar-e-soltar — undefined = sem ordem manual)
   ordemEntrega?: number;
   separado: boolean;
   temFoto: boolean;
@@ -221,6 +227,12 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
   const gravandoOrdemRef = useRef(false);
   const ordemRegravarRef = useRef(false);
   useEffect(() => { dataRef.current = data; }, [data]);
+  // BLOCO 61: sensores do arrastar-e-soltar. Distancia de 8px antes de ativar
+  // para NAO roubar o toque do scroll nem o clique dos botoes do card.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
 
   const podeEntregar = modo === 'ENTREGADOR' || modo === 'ADMIN';
   const podePrioridade = modo === 'ENTREGADOR' || modo === 'ADMIN';
@@ -398,13 +410,31 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
     if (!ok) load(true);
   }
 
-  // BLOCO 31/59: setas do admin — move a parada na fila, GRAVA a ordem e muda
-  // a impressao. FIX (Bloco 59): quando a ordem manual esta ativa a lista
-  // ANTES usava a fila na ordem bruta do banco — o update otimista so trocava
-  // o NUMERO de ordem e o array continuava na mesma posicao, entao o card NAO
-  // andava na tela (so aparecia depois do F5, que busca a fila ja ordenada da
-  // API). Agora a lista ordena por ordemEntrega: o card anda NA HORA e a
-  // impressao segue a mesma lista.
+  // BLOCO 31/59/61: define a ordem da rota a partir da lista visual (cards
+  // arrastados kanban), GRAVA a ordem e muda a impressao. FIX (Bloco 59):
+  // quando a ordem manual esta ativa a lista ANTES usava a fila na ordem bruta
+  // do banco — o update otimista so trocava o NUMERO de ordem e o array
+  // continuava na mesma posicao, entao o card NAO andava na tela (so aparecia
+  // depois do F5). Agora a lista ordena por ordemEntrega: o card anda NA HORA
+  // e a impressao segue a mesma lista.
+  function aplicarOrdem(nova: FilaItem[]) {
+    const ordens = nova.map((p, i) => ({ saleId: p.saleId, ordem: i + 1 }));
+    // atualizacao otimista da tela — o card move NA HORA, sem esperar rede
+    setData(d => d ? { ...d, fila: d.fila.map(f => { const o = ordens.find(x => x.saleId === f.saleId); return o ? { ...f, ordemEntrega: o.ordem } : f; }) } : d);
+    // BLOCO 59: gravacao DEBOUNCED (350ms) — arrastos seguidos acumulam e saem
+    // em UM request. Nunca trava esperando rede/GPS.
+    agendarGravacaoOrdem();
+  }
+
+  // BLOCO 61: soltou o card — reordena a lista (kanban) e grava o delta.
+  function onDragEnd(e: DragEndEvent) {
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    const from = listaOrdenada.findIndex(p => p.saleId === active.id);
+    const to = listaOrdenada.findIndex(p => p.saleId === over.id);
+    if (from < 0 || to < 0) return;
+    aplicarOrdem(arrayMove(listaOrdenada, from, to));
+  }
   const listaOrdenada = useMemo(() => {
     if (!data) return [];
     const f = data.fila || [];
@@ -413,23 +443,6 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
     return [...f.filter(p => p.prioridade === 1), ...f.filter(p => p.prioridade === 2), ...f.filter(p => p.prioridade === 0 || p.prioridade == null)];
   }, [data]);
   const ordemManualAtiva = (data?.fila || []).some(p => typeof p.ordemEntrega === 'number' && p.ordemEntrega > 0);
-
-  async function moverOrdem(saleId: string, dir: 'UP' | 'DOWN') {
-    const lista = listaOrdenada;
-    const idx = lista.findIndex(p => p.saleId === saleId);
-    if (idx < 0) return;
-    const j = dir === 'UP' ? idx - 1 : idx + 1;
-    if (j < 0 || j >= lista.length) return;
-    const nova = [...lista];
-    [nova[idx], nova[j]] = [nova[j], nova[idx]];
-    const ordens = nova.map((p, i) => ({ saleId: p.saleId, ordem: i + 1 }));
-    // atualizacao otimista da tela — o card move NA HORA, sem esperar rede
-    setData(d => d ? { ...d, fila: d.fila.map(f => { const o = ordens.find(x => x.saleId === f.saleId); return o ? { ...f, ordemEntrega: o.ordem } : f; }) } : d);
-    // BLOCO 59: gravacao DEBOUNCED (350ms) — cliques rapidos acumulam e saem
-    // em UM request. Setas nunca travam esperando rede/GPS (antes o botao
-    // ficava desabilitado durante o POST e parecia lento).
-    agendarGravacaoOrdem();
-  }
 
   function agendarGravacaoOrdem() {
     if (ordemTimerRef.current) clearTimeout(ordemTimerRef.current);
@@ -558,6 +571,18 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
   if (loading && !data) {
     return <div className="py-14 flex justify-center"><div className="w-9 h-9 border-4 border-emerald-100 border-t-emerald-600 rounded-full animate-spin" /></div>;
   }
+  // BLOCO 61: card ordenavel (kanban). O handle de arrasto é o proprio badge
+  // da posicao (o antigo "#"). Fora do admin o card nao arrasta (so leitura).
+  const SortableCard = ({ p, acento, posicao, draggable }: { p: FilaItem; acento: 'p1' | 'p2' | 'normal'; posicao?: number; draggable: boolean }) => {
+    const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id: p.saleId, disabled: !draggable });
+    return (
+      <div ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }} className={`relative ${isDragging ? 'z-50' : ''}`}>
+        <Card p={p} acento={acento} posicao={posicao} dragging={isDragging}
+          handleProps={draggable ? { ref: setActivatorNodeRef, ...attributes, ...listeners } : undefined} />
+      </div>
+    );
+  };
+
   if (!data) return null;
 
   if (data.migracaoPendente) {
@@ -603,7 +628,10 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
   const pixMisto = parseFloat(valorPixMisto) || 0;
   const somaMisto = Math.round((dinMisto + pixMisto) * 100) / 100;
 
-  const Card = ({ p, acento }: { p: FilaItem; acento: 'p1' | 'p2' | 'normal' | 'falha' | 'ok' }) => {
+  // BLOCO 61: Card recebe a POSICAO da entrega (entra no lugar do antigo "#")
+  // e o handle de arrasto quando o admin pode reordenar.
+  const Card = ({ p, acento, posicao, dragging, handleProps }: { p: FilaItem; acento: 'p1' | 'p2' | 'normal' | 'falha' | 'ok'; posicao?: number; dragging?: boolean; handleProps?: Record<string, any> }) => {
+    const { ref: handleRef, ...handleAttrs } = handleProps || {};
     const pend = p.entregaStatus === 'PENDENTE' || p.entregaStatus === 'EM_ROTA';
     const idade = idadeLabel(p.dataVenda);
     const zap = zapUrl(p);
@@ -613,9 +641,14 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
       <div className={`rounded-2xl shadow-sm border overflow-hidden bg-white ${borda} ${p.separado && pend ? 'opacity-70 bg-gray-100' : ''} print:break-inside-avoid`}>
         <div className="p-4">
           <div className="flex items-start gap-2">
-            {/* prioridade / seq badge */}
-            <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 font-black text-[11px] ${acento === 'p1' ? 'bg-rose-600 text-white animate-pulse' : acento === 'p2' ? 'bg-amber-500 text-white' : acento === 'falha' ? 'bg-rose-500 text-white' : acento === 'ok' ? 'bg-emerald-500 text-white' : 'bg-gray-800 text-white'}`}>
-              {acento === 'p1' ? 'P1' : acento === 'p2' ? 'P2' : acento === 'falha' ? <i className="fa-solid fa-xmark"></i> : acento === 'ok' ? <i className="fa-solid fa-check"></i> : '#'}
+            {/* BLOCO 61: prioridade / POSICAO na rota (era "#") — e o handle do
+                arrastar-e-soltar quando o admin pode reordenar */}
+            <div
+              ref={handleRef}
+              {...handleAttrs}
+              title={handleProps ? 'Arraste para mudar a posição na rota' : undefined}
+              className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 font-black text-[11px] ${acento === 'p1' ? 'bg-rose-600 text-white animate-pulse' : acento === 'p2' ? 'bg-amber-500 text-white' : acento === 'falha' ? 'bg-rose-500 text-white' : acento === 'ok' ? 'bg-emerald-500 text-white' : 'bg-gray-800 text-white'} ${handleProps ? 'cursor-grab active:cursor-grabbing touch-none select-none' : ''} ${dragging ? 'opacity-60' : ''}`}>
+              {acento === 'p1' ? 'P1' : acento === 'p2' ? 'P2' : acento === 'falha' ? <i className="fa-solid fa-xmark"></i> : acento === 'ok' ? <i className="fa-solid fa-check"></i> : (posicao ?? '#')}
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-1.5 flex-wrap">
@@ -683,21 +716,8 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                 </button>
               </>
             )}
-            {/* BLOCO 31: setas do admin — ordem da rota gravada + impressao */}
-            {modo === 'ADMIN' && pend && (
-              <>
-                <button onClick={() => moverOrdem(p.saleId, 'UP')} disabled={!!busy || listaOrdenada.findIndex(x => x.saleId === p.saleId) <= 0}
-                  title="Mover para cima na rota"
-                  className="w-10 py-2.5 rounded-xl bg-slate-50 text-slate-600 text-[9px] font-black active:scale-95 transition-transform disabled:opacity-40">
-                  <i className="fa-solid fa-chevron-up"></i>
-                </button>
-                <button onClick={() => moverOrdem(p.saleId, 'DOWN')} disabled={!!busy || listaOrdenada.findIndex(x => x.saleId === p.saleId) >= listaOrdenada.length - 1}
-                  title="Mover para baixo na rota"
-                  className="w-10 py-2.5 rounded-xl bg-slate-50 text-slate-600 text-[9px] font-black active:scale-95 transition-transform disabled:opacity-40">
-                  <i className="fa-solid fa-chevron-down"></i>
-                </button>
-              </>
-            )}
+            {/* BLOCO 61: as setas do Bloco 31 viraram arrastar-e-soltar — o
+                admin pega o card pelo numero e solta na posicao desejada. */}
             {/* BLOCO 58: check de carga — o admin marca o pedido que entrou no
                 veiculo; a fila mistura carregados e nao carregados e o contador
                 do resumo mostra quantos estao no veiculo. */}
@@ -927,50 +947,60 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
         )}
       </div>
 
-      {/* ===== P1 ===== */}
-      {ordemManualAtiva ? (
-        /* ===== BLOCO 31: ordem manual do admin — UMA lista unica (a impressao segue esta ordem) ===== */
-        <div className="space-y-3">
-          <p className="text-[10px] font-black text-slate-700 uppercase px-1 flex items-center gap-1.5">
-            <i className="fa-solid fa-arrows-up-down"></i>Ordem da rota — definida pelo admin (setas)
-          </p>
-          {listaOrdenada.map((p, i) => (
-            <div key={p.saleId} className="relative">
-              <span className="absolute -left-0.5 top-1/2 -translate-y-1/2 -translate-x-1/2 z-10 w-6 h-6 rounded-full bg-slate-800 text-white text-[9px] font-black flex items-center justify-center shadow">{i + 1}</span>
-              <Card p={p} acento={p.prioridade === 1 ? 'p1' : p.prioridade === 2 ? 'p2' : 'normal'} />
+      {/* ===== FILA PENDENTE — BLOCO 61: kanban de arrastar-e-soltar ===== */}
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragEnd={onDragEnd}
+        measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}>
+        <SortableContext items={listaOrdenada.map(p => p.saleId)} strategy={verticalListSortingStrategy}>
+          {ordemManualAtiva ? (
+            /* ===== BLOCO 31/61: ordem manual — UMA lista unica (a impressao segue esta ordem) ===== */
+            <div className="space-y-3">
+              <p className="text-[10px] font-black text-slate-700 uppercase px-1 flex items-center gap-1.5">
+                <i className="fa-solid fa-hand-pointer"></i>Ordem da rota — arraste pelo número para ordenar
+              </p>
+              {listaOrdenada.map((p, i) => (
+                <SortableCard key={p.saleId} p={p} acento={p.prioridade === 1 ? 'p1' : p.prioridade === 2 ? 'p2' : 'normal'} posicao={i + 1} draggable={modo === 'ADMIN'} />
+              ))}
             </div>
-          ))}
-        </div>
-      ) : (
-        <>
-        {p1.length > 0 && (
-        <div className="space-y-3">
-          <p className="text-[10px] font-black text-rose-600 uppercase px-1 flex items-center gap-1.5">
-            <i className="fa-solid fa-triangle-exclamation"></i>Prioridade 1 — entregar primeiro
-          </p>
-          {p1.map(p => <Card key={p.saleId} p={p} acento="p1" />)}
-        </div>
-      )}
+          ) : (
+            <>
+            {modo === 'ADMIN' && fila.length > 1 && (
+              <p className="text-[9px] font-bold text-slate-400 uppercase px-1 flex items-center gap-1.5 print:hidden">
+                <i className="fa-solid fa-hand-pointer"></i>Dica: arraste um card pelo número para definir a ordem da rota (vale para a impressão).
+              </p>
+            )}
+            {p1.length > 0 && (
+            <div className="space-y-3">
+              <p className="text-[10px] font-black text-rose-600 uppercase px-1 flex items-center gap-1.5">
+                <i className="fa-solid fa-triangle-exclamation"></i>Prioridade 1 — entregar primeiro
+              </p>
+              {p1.map(p => <SortableCard key={p.saleId} p={p} acento="p1" posicao={listaOrdenada.findIndex(x => x.saleId === p.saleId) + 1} draggable={modo === 'ADMIN'} />)}
+            </div>
+          )}
 
-      {/* ===== P2 ===== */}
-      {p2.length > 0 && (
-        <div className="space-y-3">
-          <p className="text-[10px] font-black text-amber-600 uppercase px-1 flex items-center gap-1.5">
-            <i className="fa-solid fa-bolt"></i>Prioridade 2
-          </p>
-          {p2.map(p => <Card key={p.saleId} p={p} acento="p2" />)}
-        </div>
-      )}
+          {/* ===== P2 ===== */}
+          {p2.length > 0 && (
+            <div className="space-y-3">
+              <p className="text-[10px] font-black text-amber-600 uppercase px-1 flex items-center gap-1.5">
+                <i className="fa-solid fa-bolt"></i>Prioridade 2
+              </p>
+              {p2.map(p => <SortableCard key={p.saleId} p={p} acento="p2" posicao={listaOrdenada.findIndex(x => x.saleId === p.saleId) + 1} draggable={modo === 'ADMIN'} />)}
+            </div>
+          )}
 
-      {/* ===== FILA NORMAL (mais antigo primeiro) ===== */}
-      {normais.length > 0 && (
-        <div className="space-y-3">
-          {fila.length > 0 && <p className="text-[10px] font-black text-gray-500 uppercase px-1">Fila — mais antigo primeiro</p>}
-          {normais.map(p => <Card key={p.saleId} p={p} acento="normal" />)}
-        </div>
-      )}
-        </>
-      )}
+          {/* ===== FILA NORMAL (mais antigo primeiro) ===== */}
+          {normais.length > 0 && (
+            <div className="space-y-3">
+              {fila.length > 0 && <p className="text-[10px] font-black text-gray-500 uppercase px-1">Fila — mais antigo primeiro</p>}
+              {normais.map(p => <SortableCard key={p.saleId} p={p} acento="normal" posicao={listaOrdenada.findIndex(x => x.saleId === p.saleId) + 1} draggable={modo === 'ADMIN'} />)}
+            </div>
+          )}
+            </>
+          )}
+        </SortableContext>
+      </DndContext>
 
       {fila.length === 0 && (
         <div className="bg-white rounded-2xl p-8 text-center border border-gray-100 print:hidden">
@@ -1572,7 +1602,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                 ))}
               </tbody>
             </table>
-            <p className="text-[9px] text-gray-400 text-center mt-4">{ordemManualAtiva ? 'Ordem definida pelo admin (setas na fila).' : 'Regra: P1 primeiro, depois P2, depois mais antigo.'} Assinatura do entregador: ____________________</p>
+            <p className="text-[9px] text-gray-400 text-center mt-4">{ordemManualAtiva ? 'Ordem definida pelo admin (arrastar-e-soltar na fila).' : 'Regra: P1 primeiro, depois P2, depois mais antigo.'} Assinatura do entregador: ____________________</p>
           </div>
           <div className="max-w-xl mx-auto mt-4 print:hidden">
             <button onClick={() => setMostrarLista(false)} className="w-full bg-slate-800 text-white font-black py-3 rounded-2xl uppercase text-[10px]">Fechar</button>

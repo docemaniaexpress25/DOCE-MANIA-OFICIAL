@@ -18,17 +18,21 @@ import { sessionFromRequest, isAdminSession } from '@/lib/session';
  * anon/authenticated (RLS + REVOKE) — antes disto, o upsert do
  * vendedor falhava em silencio com 42501 e o admin nunca via
  * localizacao nenhuma.
+ *
+ * ORDEM DOS GUARDAS (fix 401 do preview): devBridge ANTES da sessao,
+ * igual as outras rotas — no preview o token e assinado pela producao,
+ * entao quem valida o Bearer tem que ser a producao (via ponte).
  */
 
 export async function POST(request: NextRequest) {
-  const session = sessionFromRequest(request);
-  if (!session) {
-    return NextResponse.json({ error: 'Nao autenticado.' }, { status: 401 });
-  }
   if (!isServerSupabaseConfigured()) {
     const bridged = await devBridge(request);
     if (bridged) return bridged;
     return NextResponse.json({ error: 'Servidor temporariamente indisponivel.' }, { status: 503 });
+  }
+  const session = sessionFromRequest(request);
+  if (!session) {
+    return NextResponse.json({ error: 'Nao autenticado.' }, { status: 401 });
   }
 
   try {
@@ -97,13 +101,13 @@ export async function POST(request: NextRequest) {
 }
 
 export async function GET(request: NextRequest) {
-  if (!isAdminSession(request)) {
-    return NextResponse.json({ error: 'Acesso restrito a administradores.' }, { status: 401 });
-  }
   if (!isServerSupabaseConfigured()) {
     const bridged = await devBridge(request);
     if (bridged) return bridged;
     return NextResponse.json({ error: 'Servidor temporariamente indisponivel.' }, { status: 503 });
+  }
+  if (!isAdminSession(request)) {
+    return NextResponse.json({ error: 'Acesso restrito a administradores.' }, { status: 401 });
   }
 
   try {

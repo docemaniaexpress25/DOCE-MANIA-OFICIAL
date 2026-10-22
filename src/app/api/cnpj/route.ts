@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { sessionFromRequest } from '@/lib/session';
 import { validaCpfCnpj } from '@/lib/focusNfe';
+import { isServerSupabaseConfigured, devBridge } from '@/lib/serverSupabase';
 
 /**
  * CNPJ AUTOCOMPLETE (Bloco 10.1) — consulta dados de cadastro na Receita
@@ -125,6 +126,13 @@ function normalizar(digitos: string, src: Record<string, unknown>): CnpjInfo {
 }
 
 export async function GET(req: NextRequest) {
+  // Preview/bridge primeiro (mesmo padrao das outras rotas): no sandbox o
+  // token e assinado pela producao — quem valida o Bearer e a producao.
+  if (!isServerSupabaseConfigured()) {
+    const bridged = await devBridge(req);
+    if (bridged) return bridged;
+    return BAD(503, 'Servidor temporariamente indisponivel.');
+  }
   const session = sessionFromRequest(req);
   if (!session) return BAD(401, 'Sessao expirada. Faca login novamente.');
 

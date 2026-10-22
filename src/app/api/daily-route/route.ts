@@ -16,6 +16,14 @@ import { sessionFromRequest } from '@/lib/session';
  * falhava com 42501 ("new row violates row-level security policy") em
  * silencio -> "Erro ao salvar rota diaria" no console.
  * Mesmo padrao do /api/location: tabela fechada + service_role aqui.
+ *
+ * ORDEM DOS GUARDAS (fix 401 do preview): o devBridge vem ANTES da sessao,
+ * igual a todas as outras rotas (boletos, users, pre-venda, cargas...).
+ * No preview (sandbox) o servidor nao tem a service key, entao o token
+ * emitido e assinado pela PRODUCAO — se a sessao fosse validada localmente
+ * (segredo local != segredo de producao), dava 401 garantido mesmo com
+ * login OK. Com o bridge primeiro, quem valida o Bearer e a producao.
+ * Em producao devBridge devolve null na hora e a sessao local segue igual.
  */
 
 const DATA_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -37,14 +45,16 @@ function limparIds(v: unknown): string[] {
 }
 
 export async function GET(request: NextRequest) {
-  const session = sessionFromRequest(request);
-  if (!session) {
-    return NextResponse.json({ error: 'Nao autenticado.' }, { status: 401 });
-  }
+  // Preview/bridge primeiro (producao valida o Bearer la); 503 so se a ponte
+  // estiver desligada/indisponivel E o servidor nao tiver as env vars.
   if (!isServerSupabaseConfigured()) {
     const bridged = await devBridge(request);
     if (bridged) return bridged;
     return NextResponse.json({ error: 'Servidor temporariamente indisponivel.' }, { status: 503 });
+  }
+  const session = sessionFromRequest(request);
+  if (!session) {
+    return NextResponse.json({ error: 'Nao autenticado.' }, { status: 401 });
   }
 
   try {
@@ -78,14 +88,15 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const session = sessionFromRequest(request);
-  if (!session) {
-    return NextResponse.json({ error: 'Nao autenticado.' }, { status: 401 });
-  }
+  // Mesma ordem do GET: bridge antes da sessao (fix 401 do preview).
   if (!isServerSupabaseConfigured()) {
     const bridged = await devBridge(request);
     if (bridged) return bridged;
     return NextResponse.json({ error: 'Servidor temporariamente indisponivel.' }, { status: 503 });
+  }
+  const session = sessionFromRequest(request);
+  if (!session) {
+    return NextResponse.json({ error: 'Nao autenticado.' }, { status: 401 });
   }
 
   try {

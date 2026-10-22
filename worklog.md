@@ -259,3 +259,24 @@ Stage Summary:
 - ROTA 2 a prazo (cupom/NFC-e): Boleto, Cheque (sem nº na tela), Pix na data e Dinheiro na data — todos gravam, entram na fila (badge "A prazo") e imprimem no cupom.
 - Confirmação de entrega com GIF "NÃO FECHE A TELA" (mesmo visual do pedido) — evita sair/duplo clique durante GPS+gravação.
 - Nada a fazer pelo dono (sem SQL). Pendências antigas: Bluetooth impressora; NF entrada XML.
+---
+Task ID: bloco61-posicao-kanban
+Agent: Z.ai Code (principal)
+Task: "na tela de entrega no card da entrega antes do nome do cliente vc coloca um #, poderiamos utilizar esse espaço pra colocar a posiçao de entrega. seria interessante ao inves de um sistema de setas pra cima e pra baixo algo estilo kambam de arrastar arrastou soltou fica na ordem correta! sera que rola isso."
+
+Work Log:
+- ROLA SIM: implementado com dnd-kit (ja estava no package.json — @dnd-kit/core 6.3.1 + sortable 10.0.0 + utilities, sem instalar nada novo).
+- Badge do card: o "#" vira a POSICAO da entrega na rota (1..N da listaOrdenada — mesma numeracao da lista impressa). P1/P2 mantem o badge de prioridade; falha/ok mantem os icones.
+- Setas UP/DOWN do Bloco 31 REMOVIDAS. No lugar: arrastar-e-soltar estilo kanban — DndContext + SortableContext (verticalListSortingStrategy) em volta de TODA a fila pendente (funciona na lista unica da ordem manual E nos grupos P1/P2/normal).
+- Handle de arrasto = o PROPRIO badge da posicao (cursor-grab + touch-none + title "Arraste para mudar a posição na rota"). So ADMIN pode arrastar (mesma regra das setas); vendedor/entregador veem o numero e nao arrastam.
+- PointerSensor com activationConstraint distance 8px (nao rouba scroll nem clique dos botoes) + KeyboardSensor com sortableKeyboardCoordinates (espaco pega, setas movem, espaco solta — acessibilidade). MeasuringStrategy.Always.
+- onDragEnd -> aplicarOrdem(arrayMove(listaOrdenada, from, to)): reuso INTEGRAL do mecanismo do Bloco 59 (setData otimista + agendarGravacaoOrdem: debounce 350ms, delta vs ordemSalvaRef, sem GPS, sem reload, toast de confirmacao, reverter com load(true) se falhar). Arrastar no modo agrupado ativa a ordem manual na hora.
+- Badge externo pequeno de numero (que existia a esquerda no modo manual) removido — a posicao agora vive dentro do card, no lugar do #.
+- Textos atualizados: "Ordem da rota — arraste pelo número para ordenar" (secao), dica para admin no modo agrupado, impressao "Ordem definida pelo admin (arrastar-e-soltar na fila)".
+- QA: lint 0 erros/11 warnings (baseline exata); tsc 7 erros pre-existentes (baseline exata, nenhum erro novo).
+- E2E (Agent Browser, mock, mouse REAL via mouse move/down/up — pointer events do dnd-kit; .env.local e script removidos): T1 badges mostram "Emporio Teste:1 | Padaria Dois:2" (sem #); T2 drag 1->2: ordem trocou NA HORA ("Padaria Dois:1 | Emporio Teste:2"); T3 toast de gravacao true; T4 F5 persistiu a ordem nova; T5 lista de impressao seguiu ("1:Padaria Dois | 2:Emporio Teste") com window.print chamado; T6 zero erros de console. Server reiniciado limpo (sem mock).
+- Commit 91c3a4c pushed (repo docemaniaexpress25/DOCE-MANIA-OFICIAL — ATENCAO: URL correta esta aqui no worklog, NAO e Aireszeta/docemania-app); Vercel: doce-mania-oficial / oficial2 / teste = SUCCESS (zpac pending/failure pre-existente).
+
+Stage Summary:
+- Card de entrega mostra a POSICAO na rota (1..N) no lugar do "#", e o admin ordena ARRASTANDO (kanban) pelo proprio numero — mouse, toque e teclado. Solto, o card encaixa na hora, grava coalescido (Bloco 59) e a impressao segue a mesma ordem.
+- Nada a fazer pelo dono (sem SQL). Pendencias antigas mantidas: Bluetooth da impressora; NF entrada XML.

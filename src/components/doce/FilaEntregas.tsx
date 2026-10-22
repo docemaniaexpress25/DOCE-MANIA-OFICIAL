@@ -62,7 +62,8 @@ interface FilaItem {
   carregadoEm?: string | null;
   vendedorId: string;
   vendedorNome: string;
-  cliente: { id: string; nome: string; endereco: string; bairro: string; telefone: string; cnpj?: string | null; email?: string | null; lat: number | null; lng: number | null };
+  // BLOCO 64: numero/sala do endereco — impressao da ordem mostra "Rua X, 123"
+  cliente: { id: string; nome: string; endereco: string; numero?: string | null; bairro: string; telefone: string; cnpj?: string | null; email?: string | null; lat: number | null; lng: number | null };
   itens: { nome: string; produtoId: string; quantidade: number; precoVenda: number }[];
 }
 
@@ -149,7 +150,8 @@ function mapaUrl(p: FilaItem): string {
   if (p.cliente.lat != null && p.cliente.lng != null) {
     return `https://www.google.com/maps/dir/?api=1&destination=${p.cliente.lat},${p.cliente.lng}`;
   }
-  const end = `${p.cliente.endereco || ''} ${p.cliente.bairro || ''}`.trim();
+  // BLOCO 64: numero/sala entra na busca do mapa (Rua X, 123 Bairro)
+  const end = [p.cliente.endereco || '', p.cliente.numero || '', p.cliente.bairro || ''].filter(s => !!String(s).trim()).join(' ');
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(end || p.cliente.nome)}`;
 }
 
@@ -443,6 +445,10 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
     return [...f.filter(p => p.prioridade === 1), ...f.filter(p => p.prioridade === 2), ...f.filter(p => p.prioridade === 0 || p.prioridade == null)];
   }, [data]);
   const ordemManualAtiva = (data?.fila || []).some(p => typeof p.ordemEntrega === 'number' && p.ordemEntrega > 0);
+  // BLOCO 64: a impressao da ordem de entrega sai APENAS com os pedidos que o
+  // admin ja marcou como carregados no veiculo — na MESMA ordem da fila.
+  const listaImprimir = useMemo(() => listaOrdenada.filter(p => p.carregadoEm), [listaOrdenada]);
+  const totalImprimir = listaImprimir.reduce((a, p) => Math.round((a + p.valorTotal) * 100) / 100, 0);
 
   function agendarGravacaoOrdem() {
     if (ordemTimerRef.current) clearTimeout(ordemTimerRef.current);
@@ -524,9 +530,13 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
     email: p.cliente.email || '',
   });
 
-  /** Lista imprimivel (ordem de entrega) — imprime via navegador */
+  /** Lista imprimivel (ordem de entrega) — imprime via navegador.
+   * BLOCO 64: sai SOMENTE quem o admin ja marcou como CARREGADO no veiculo.
+   * Nenhum carregado = folha vazia na mão do entregador — avisa e nao imprime. */
   function imprimirLista() {
     if (!data) return;
+    const prontos = listaOrdenada.filter(p => p.carregadoEm);
+    if (prontos.length === 0) { showToast('Nenhum pedido carregado ainda — marque os pedidos no veículo antes de imprimir.', 'error'); return; }
     setMostrarLista(true);
     setTimeout(() => { window.print(); setMostrarLista(false); }, 150);
   }
@@ -667,7 +677,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                 <span className="text-[8px] font-bold text-gray-300 uppercase shrink-0">{p.numero}</span>
               </div>
               <p className="text-[9px] text-gray-400 font-semibold mt-0.5 truncate">
-                <i className="fa-solid fa-location-dot mr-1"></i>{p.cliente.endereco || 'Sem endereco'}{p.cliente.bairro ? ` — ${p.cliente.bairro}` : ''}
+                <i className="fa-solid fa-location-dot mr-1"></i>{p.cliente.endereco || 'Sem endereco'}{p.cliente.numero ? `, ${p.cliente.numero}` : ''}{p.cliente.bairro ? ` — ${p.cliente.bairro}` : ''}
               </p>
               {p.trocas && (
                 <p className="text-[9px] font-black text-orange-600 mt-1 bg-orange-50 rounded-lg px-2 py-1 leading-snug">
@@ -1579,7 +1589,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
           <style>{`@media print { body * { visibility: hidden; } .lista-print, .lista-print * { visibility: visible; } .lista-print { position: absolute; left: 0; top: 0; width: 100%; } }`}</style>
           <div className="lista-print max-w-xl mx-auto">
             <h1 className="text-lg font-black text-center uppercase">Doce Mania — Ordem de Entrega</h1>
-            <p className="text-[10px] text-center text-gray-500 mb-4">{new Date().toLocaleDateString('pt-BR')} {new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })} · {fila.length} pedidos · {fmt(resumo?.valorFila ?? 0)}</p>
+            <p className="text-[10px] text-center text-gray-500 mb-4">{new Date().toLocaleDateString('pt-BR')} {new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })} · {listaImprimir.length === 1 ? '1 pedido carregado' : `${listaImprimir.length} pedidos carregados`} · {fmt(totalImprimir)}</p>
             <table className="w-full text-[11px] border-collapse">
               <thead>
                 <tr className="border-b-2 border-black">
@@ -1591,11 +1601,12 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                 </tr>
               </thead>
               <tbody>
-                {listaOrdenada.map((p, i) => (
+                {listaImprimir.map((p, i) => (
                   <tr key={p.saleId} className="border-b border-gray-300">
                     <td className="py-1.5 font-black">{i + 1}</td>
-                    <td className="py-1.5 font-bold">{p.prioridade === 1 ? 'P1 ' : p.prioridade === 2 ? 'P2 ' : ''}{p.cliente.nome}{p.carregadoEm ? ' ✓' : ''}</td>
-                    <td className="py-1.5 text-gray-600">{p.cliente.endereco}{p.cliente.bairro ? ` — ${p.cliente.bairro}` : ''}</td>
+                    <td className="py-1.5 font-bold">{p.prioridade === 1 ? 'P1 ' : p.prioridade === 2 ? 'P2 ' : ''}{p.cliente.nome}</td>
+                    {/* BLOCO 64: endereco completo — rua + numero/sala + bairro */}
+                    <td className="py-1.5 text-gray-600">{p.cliente.endereco}{p.cliente.numero ? `, ${p.cliente.numero}` : ''}{p.cliente.bairro ? ` — ${p.cliente.bairro}` : ''}</td>
                     <td className="py-1.5 text-right font-bold">{fmt(p.valorTotal)}</td>
                     <td className="py-1.5 text-center uppercase text-[9px] font-black">{p.formaPgto}</td>
                   </tr>

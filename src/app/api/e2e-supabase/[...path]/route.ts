@@ -36,7 +36,8 @@ const clients = [{
   localizacao: null, dia_roteiro: new Date().getDay(), ordem: 1, observacoes: null,
   pin_localizacao: '-29.166037, -51.210285',
   rota: 'ROTA_02', portal_code: 'TEST1234', razao_social: null, inscricao_estadual: null,
-  endereco_numero: null, endereco_cep: null, endereco_municipio: null, endereco_uf: null,
+  // BLOCO 64: numero/sala no cadastro — sai na fila e na impressao ("Rua X, SALA 5")
+  endereco_numero: 'SALA 5', endereco_cep: null, endereco_municipio: null, endereco_uf: null,
   // BLOCO 46: clientes com email para o rodape do cupom (envio do XML)
   email: 'emporio@teste.com',
 }, {

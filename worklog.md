@@ -347,3 +347,25 @@ Stage Summary:
 - O fluxo aprovado na ROTA 2 agora e o padrao de TODOS os vendedores: pergunta de nota (NF-e/NFC-e/cupom), wizard de pagamento (boleto/cheque/pix na data/dinheiro na data), estoques COM NF/SEM NF e carga da van com modo. Sem SQL, sem ligar nada no painel — o vendedor entra e ja esta no fluxo novo.
 - Produtos de TESTE continuam invisiveis para quem nao tem a flag antiga (piloto); switch "ROTA 2" saiu do editor de usuarios.
 - Pendencias antigas mantidas: Bluetooth da impressora; NF entrada XML.
+
+---
+Task ID: bloco65-impressao-carregados-numero-sala
+Agent: Z.ai Code (principal)
+Task: "na impressao da fila de entregas eu quero que saia apenas os clientes que foram marcados como carregados! tbm preciso que saia na impressao o numero da sala e nao apenas a rua! o sistema quando gravamos o endereço nao esta salvando o numero! por favor crie isso para ficarmos com esse endereço 100%"
+
+Work Log:
+- Diagnostico do numero perdido: (a) o formulario de cliente do VENDEDOR nao tinha campo Numero/Sala (cForm.enderecoNumero ia sempre vazio); (b) no ADMIN o campo ficava escondido no bloco fiscal NF-e, longe do Endereço de Visita; (c) a API da fila (/api/pre-venda) nao selecionava clients.endereco_numero nem devolvia cliente.numero; (d) a impressao imprimia so rua+bairro. Banco JA TEM a coluna endereco_numero (usada por boletos/notas) — sem SQL.
+- src/app/api/pre-venda/route.ts: novo tier CLIENT_COLS_NUM (endereco_numero primeiro na fetchClientsFlex, degrada graciosa p/ banco antigo); cliente numero: c.endereco_numero || '' nos DOIS builders (enrichParadas + enrichFila).
+- FilaEntregas.tsx: FilaItem.cliente ganhou numero; card da fila mostra "Rua X, SALA 5 — Bairro"; link de mapa leva o numero (sem GPS); IMPRESSAO agora usa listaImprimir = listaOrdenada.filter(p.carregadoEm) (MESMA ordem da fila); sem NENHUM carregado NAO imprime folha vazia — toast "Nenhum pedido carregado ainda..."; cabecalho conta so os impressos com plural correto ("1 pedido carregado"/"N pedidos carregados") + soma dos valores da folha; endereco da folha com numero/sala; check redundante "✓" removido (tudo impresso ja e carregado).
+- VendedorDashboard.tsx: campo "Número / Sala" no formulario de cliente (entre Endereço e Bairro; salva via enderecoNumero que o clientService ja gravava); GPS do vendedor agora preenche o campo com o house_number (antes so ia no texto do endereco).
+- AdminDashboard.tsx: campo "Número / Sala" tambem no Bloco Endereço de Visita (mesmo estado clientForm.enderecoNumero — sincroniza com o do bloco fiscal).
+- Mock E2E: cli-1 ganhou endereco_numero 'SALA 5' (prova o fluxo API->fila->impressao).
+- QA: lint 0 erros/11 warnings (baseline exata); tsc 7 erros pre-existentes (baseline exata).
+- E2E (Agent Browser, mock; e2e65 script/.env.local removidos): T1 card da fila mostra ", SALA 5" (API->tela); T2 imprimir com 0 carregados NAO imprime (printed:0, data:null) + toast de aviso; T3 marcar Carregado -> "No veiculo: 1/2"; T4 impressao capturada DENTRO do window.print: SÓ o carregado (sem Padaria Dois), "Rua Teste 123, SALA 5 — Centro", "1 pedido carregado", sem "✓"; T4b window.print chamado exatamente 1x; T5 F5 numero persiste; T6 zero erros de pagina. Server limpo re-provado (GET / 200, dev.log ok).
+- Licoes E2E novas: (1) React 18 NAO faz flush sincrono dentro do mesmo eval — para capturar DOM efemero (overlay que fecha em 150ms), instalar armadilha no window.print e ler async; (2) TODA saida de eval precisa tr -d '"\' (aspas E backslash) antes de comparar; (3) toast do AdminEntregas e .fixed.bottom-6 (nao .fixed.top-20, que e do AdminDashboard home).
+- Commit/push: <PENDING>; Vercel: <PENDING>.
+
+Stage Summary:
+- A impressao da fila de entregas agora sai APENAS com os clientes marcados como CARREGADOS no veiculo, na mesma ordem da fila, com o endereco completo (rua + numero/sala + bairro). Sem nenhum carregado, o admin recebe um aviso em vez de folha vazia.
+- O numero/sala agora e salvo 100%: campo no cadastro do vendedor, campo visivel no admin (bloco Endereço de Visita), GPS preenche, API da fila devolve, card e impressao mostram. Sem SQL (coluna ja existia).
+- Pendencias antigas mantidas: Bluetooth da impressora; NF entrada XML.

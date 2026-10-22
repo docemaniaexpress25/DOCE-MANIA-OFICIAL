@@ -59,6 +59,10 @@ const CLIENT_COLS_BASE = 'id, nome_fantasia, endereco, bairro, telefone, cnpj';
 // fetchClientsFlex tentam COM email e degradam para o tier sem email.
 const CLIENT_COLS_EMAIL = `${CLIENT_COLS_BASE}, email`;
 const CLIENT_COLS_GPS = `${CLIENT_COLS_EMAIL}, localizacao, pin_localizacao`;
+// BLOCO 64: endereco_numero (numero/sala do cliente) — a fila de entregas e a
+// impressao da ordem mostram "Rua X, 123 — Bairro". Em bancos antigos sem a
+// coluna, o tier decai para o GPS e o numero simplesmente vem vazio.
+const CLIENT_COLS_NUM = `${CLIENT_COLS_GPS}, endereco_numero`;
 
 /**
  * clients com colunas de GPS flexíveis. Bancos SEM clients.localizacao
@@ -69,7 +73,8 @@ const CLIENT_COLS_GPS = `${CLIENT_COLS_EMAIL}, localizacao, pin_localizacao`;
 async function fetchClientsFlex(supabase: any, ids: string[]) {
   if (!ids || ids.length === 0) return { data: [] as any[] };
   // BLOCO 46: tiers COM email primeiro; sem email só no último (banco antigo)
-  for (const cols of [CLIENT_COLS_GPS, `${CLIENT_COLS_EMAIL}, pin_localizacao`, CLIENT_COLS_EMAIL, CLIENT_COLS_BASE]) {
+  // BLOCO 64: primeiro tier busca tambem o endereco_numero (numero/sala)
+  for (const cols of [CLIENT_COLS_NUM, CLIENT_COLS_GPS, `${CLIENT_COLS_EMAIL}, pin_localizacao`, CLIENT_COLS_EMAIL, CLIENT_COLS_BASE]) {
     const r = await supabase.from('clients').select(cols).in('id', ids);
     if (!r.error) return r;
   }
@@ -348,6 +353,8 @@ async function enrichParadas(supabase: any, salesRows: any[]) {
         id: s.client_id,
         nome: c.nome_fantasia || 'Cliente',
         endereco: c.endereco || '',
+        // BLOCO 64: numero/sala do endereco (impressao da fila mostra "Rua X, 123")
+        numero: c.endereco_numero || '',
         bairro: c.bairro || '',
         telefone: c.telefone || '',
         // BLOCO 40: CNPJ para o rodape do cupom NF-e ("NF-e: <cnpj>")
@@ -580,6 +587,8 @@ async function enrichFila(supabase: any, salesRows: any[]) {
         id: s.client_id,
         nome: c.nome_fantasia || 'Cliente',
         endereco: c.endereco || '',
+        // BLOCO 64: numero/sala do endereco (impressao da fila mostra "Rua X, 123")
+        numero: c.endereco_numero || '',
         bairro: c.bairro || '',
         telefone: c.telefone || '',
         // BLOCO 40: CNPJ para o rodape do cupom NF-e ("NF-e: <cnpj>")

@@ -710,10 +710,13 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
             const numero = addr.house_number || '';
             const bairro = addr.suburb || addr.neighbourhood || addr.city_district || addr.village || '';
             const fullAddr = `${rua}${numero ? ', ' + numero : ''}`;
+            // BLOCO 64: o numero vindo do GPS tambem preenche o campo Número/Sala
+            // (antes so ia dentro do texto do endereco e o campo ficava vazio).
             setCForm(prev => ({
               ...prev,
               pinLocalizacao: pinStr,
               endereco: fullAddr || '',
+              enderecoNumero: numero || prev.enderecoNumero || '',
               bairro: bairro || ''
             }));
             if (fullAddr || bairro) showToast("Localização e endereço capturados!");
@@ -1920,6 +1923,9 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Nome do Cliente</label><input value={cForm.nome || ''} onChange={e => setCForm({...cForm, nome: e.target.value})} placeholder="Nome real para chamar o cliente" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100" /></div>
                 <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Telefone / WhatsApp</label><input value={cForm.telefone || ''} onChange={e => setCForm({...cForm, telefone: e.target.value})} placeholder="Telefone" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100" /></div>
                 <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Endereço</label><input value={cForm.endereco || ''} onChange={e => setCForm({...cForm, endereco: e.target.value})} placeholder="Endereço" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100 uppercase" /></div>
+                {/* BLOCO 64: numero/sala do endereco — salvava sempre vazio porque o
+                vendedor nao tinha o campo; agora sai na fila e na impressao. */}
+                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Número / Sala</label><input value={cForm.enderecoNumero || ''} onChange={e => setCForm({...cForm, enderecoNumero: e.target.value})} placeholder="Ex: 123 ou Sala 5" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100 uppercase" /></div>
                 <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Bairro</label><input value={cForm.bairro || ''} onChange={e => setCForm({...cForm, bairro: e.target.value})} placeholder="Bairro" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100 uppercase" /></div>
                 <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Dia de Atendimento</label><select value={cForm.diaRoteiro ?? 1} onChange={e => setCForm({...cForm, diaRoteiro: parseInt(e.target.value)})} className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100">{[1, 2, 3, 4, 5, 6].map(d => (<option key={d} value={d}>{DIAS_SEMANA[d] ?? 'N/D'}</option>))}</select></div> 
                 

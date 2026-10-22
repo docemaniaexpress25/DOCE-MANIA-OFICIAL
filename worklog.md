@@ -280,3 +280,27 @@ Work Log:
 Stage Summary:
 - Card de entrega mostra a POSICAO na rota (1..N) no lugar do "#", e o admin ordena ARRASTANDO (kanban) pelo proprio numero — mouse, toque e teclado. Solto, o card encaixa na hora, grava coalescido (Bloco 59) e a impressao segue a mesma ordem.
 - Nada a fazer pelo dono (sem SQL). Pendencias antigas mantidas: Bluetooth da impressora; NF entrada XML.
+---
+Task ID: bloco62-chave-pix-config
+Agent: Z.ai Code (principal)
+Task: "em entregas quando a venda for no pix a vista vc esta gerando um qr code com o valor da venda na chave cpf 01735712043! crie em configuraçoes a chance de editar essa chave podendo ser outra chave valida tipo cpf, cnpj, telefone etc! faça isso"
+
+Work Log:
+- src/lib/pix.ts: buildPixPayload(value, txid, chaveOverride?) — a chave pode vir das Configuracoes; sem override segue o padrao (env PIX_KEY / CPF 01735712043).
+- NOVO normalizarChavePix(): detecta e valida os 5 tipos do Bacen — CPF (DV real), CNPJ (DV real), TELEFONE (10-11 digitos com DDD -> +55...; 12-13 iniciando 55 -> +...), EMAIL, ALEATORIA/EVP (32 hex ou UUID). AMBIGUIDADE 11 DIGITOS resolvida: bate DV de CPF -> CPF; senao com DDD plausivel [1-9][1-9] -> TELEFONE. TESTE UNITARIO pego no bun (o CPF do dono 01735712043 foi detectado como TELEFONE na 1a versao — corrigido antes do deploy).
+- formatPixKey(): agora formata CPF, CNPJ e telefone ((54) 99976-5432) para exibicao.
+- lerChavePixEntrega(supabase): le app_settings.pix_chave_entrega (degradacao graciosa: coluna pendente/invalida/vazia -> undefined -> padrao).
+- PIX_QRCODE (api/pre-venda) e portal (api/cliente/[codigo]/pix) usam a chave configurada.
+- appSettingsService: campo pixChave (coluna pix_chave_entrega) no get (COLS leves + fallback select *) e no update; retry generalizado quando a coluna nao existe ainda (padrao Bloco 23 de catalogo_order).
+- doce-app.tsx: state pixChave + updateSetting('pixChave') + props no AdminDashboard.
+- AdminDashboard (Configuracoes > card Pix / QR Code): novo campo "Chave do recebimento (QR gerado na entrega)" com CHIP em tempo real ("CPF válida", "CNPJ válida", "TELEFONE válida", "EMAIL", "ALEATORIA", erro em vermelho, ou "Padrão: CPF 017.357.120-43" quando vazio). Salva automático por tecla (padrao da tela); backend normaliza (pontos/tracos ok) e valida no uso.
+- SQL: sql/bloco62_pix_chave_entrega.sql (alter table app_settings add column if not exists pix_chave_entrega text) — ENTREGAR AO DONO.
+- Mock E2E: settings com id 'global_settings' + pix_chave_entrega + suporte a upsert (Prefer resolution=merge-duplicates) no POST.
+- QA: lint 0 erros/11 warnings; tsc 7 erros pre-existentes (baseline exata).
+- E2E (Agent Browser, mock; .env.local/script removidos): T1 campo + chip padrao; T2 digitou 54999765432 -> chip "TELEFONE válida" + QR1 chave "+5554999765432"; T3 reload persistiu; T4 limpou -> chip padrao + QR2 chave "01735712043"; T5 CNPJ 11222333000181 -> chip "CNPJ válida" + QR3 chave "11222333000181"; zero erros console. Licao: "Configurações" tem CEDILHA — includes('configurac') nunca casa, usar 'configura'. Licao 2: browser daemon mantem localStorage — localStorage.clear() antes do login. Licao 3: aba ativa persiste — botao voltar (i.fa-arrow-left) antes de trocar de aba.
+- Commit ea9d98e pushed; Vercel doce-mania-oficial / oficial2 / teste = SUCCESS (zpac pre-existente).
+
+Stage Summary:
+- O QR do Pix a vista na entrega (e o portal do cliente) usa a chave que o admin quiser — CPF, CNPJ, telefone, e-mail ou chave aleatoria — editada em Configuracoes > Pix / QR Code > "Chave do recebimento", com validacao de digito verificador na hora. Vazio = padrao atual (CPF 01735712043).
+- SQL unico pro dono: alter table app_settings add column if not exists pix_chave_entrega text; (sql/bloco62_pix_chave_entrega.sql) — ate rodar, o sistema usa o padrao sem quebrar.
+- Pendencias antigas mantidas: Bluetooth da impressora; NF entrada XML.

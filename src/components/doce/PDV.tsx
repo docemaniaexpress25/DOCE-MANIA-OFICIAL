@@ -376,6 +376,13 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     [sales, client.id]
   );
 
+  // BLOCO 67: o banner de divida em 1 linha + minimizavel (X) — o banner antigo
+  // (2 linhas, p-3) empurrava a grade pra baixo e atrapalhava a digitacao de
+  // preco/quantidade. Minimizado vira uma pildora pequenina no topo direito;
+  // volta ao abrir outro cliente.
+  const [debtBannerMin, setDebtBannerMin] = useState(false);
+  useEffect(() => { setDebtBannerMin(false); }, [client.id]);
+
   // ============================================================
   // FUNÇÃO DE VALIDAÇÃO DIRETA - CHAMA EM QUALQUER LUGAR
   // ============================================================
@@ -1099,14 +1106,26 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         </div>
       )}
 
-      {clientDebt > 0 && !isPrePedido && (
-        <button onClick={() => { onCancel(); onNavigateToCredit(); }} className="w-full bg-rose-600 text-white p-3 flex items-center justify-center gap-3 shadow-md text-left">
-          <i className="fa-solid fa-triangle-exclamation text-base shrink-0"></i>
-          <span className="min-w-0">
-            <span className="block text-[10px] font-black uppercase tracking-widest">{client.nomeFantasia || 'Cliente'} tem R$ {clientDebt.toFixed(2)} em aberto</span>
-            <span className="block text-[8px] font-bold uppercase opacity-80 mt-0.5">{clientDebtQtd} venda(s) a receber — COBRE ANTES DE VENDER DE NOVO (toque para receber)</span>
-          </span>
-        </button>
+      {clientDebt > 0 && !isPrePedido && !debtBannerMin && (
+        <div className="w-full bg-rose-600 text-white py-1.5 px-2 flex items-center gap-1.5 shadow-md">
+          <button onClick={() => { onCancel(); onNavigateToCredit(); }} className="flex-1 min-w-0 flex items-center gap-2 text-left active:opacity-80">
+            <i className="fa-solid fa-triangle-exclamation text-[11px] shrink-0"></i>
+            <span className="text-[9px] font-black uppercase tracking-wide truncate">
+              {client.nomeFantasia || 'Cliente'}: R$ {clientDebt.toFixed(2)} em aberto ({clientDebtQtd}) — toque para receber
+            </span>
+          </button>
+          <button onClick={() => setDebtBannerMin(true)} title="Minimizar aviso" aria-label="Minimizar aviso de dívida" className="w-8 h-8 shrink-0 rounded-lg bg-white/15 flex items-center justify-center active:scale-90">
+            <i className="fa-solid fa-chevron-up text-[10px]"></i>
+          </button>
+        </div>
+      )}
+      {clientDebt > 0 && !isPrePedido && debtBannerMin && (
+        <div className="w-full flex justify-end px-2 pt-1.5">
+          <button onClick={() => setDebtBannerMin(false)} title="Abrir aviso de dívida" className="bg-rose-600 text-white text-[8px] font-black uppercase px-2 py-1 rounded-full shadow flex items-center gap-1 active:scale-95">
+            <i className="fa-solid fa-triangle-exclamation text-[8px]"></i>
+            R$ {clientDebt.toFixed(2)} em aberto
+          </button>
+        </div>
       )}
 
       {/* BLOCO 41: o padding acompanha o rodapé compacto (cresce só quando os
@@ -1611,6 +1630,10 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                 clienteDoc={client.cnpj}
                 clienteCep={client.enderecoCep}
                 clienteTelefone={client.telefone}
+                // BLOCO 67: no modal de venda finalizada o card JA ABRE expandido
+                // (regra do Bloco 25: o dono precisa achar o botao de gerar na
+                // hora). No cupom reaberto ele fica dobrado para nao cobrir a tela.
+                abertoInicial
               />
             )}
 

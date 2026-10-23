@@ -103,3 +103,24 @@
     -ms-overflow-style: none;
   }
 }
+
+/* BLOCO 67: barra de rolagem VISIVEL apenas onde o dono pediu (area do texto
+   do cupom) — o resto do app continua sem scrollbar nenhuma. Especificidade
+   de classe vence o `*` global do @layer base. */
+.cupom-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+  -ms-overflow-style: auto;
+}
+.cupom-scroll::-webkit-scrollbar {
+  display: block;
+  width: 6px;
+  height: 6px;
+}
+.cupom-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.cupom-scroll::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}

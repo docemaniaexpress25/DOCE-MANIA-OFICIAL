@@ -29,6 +29,9 @@ interface BoletoCardProps {
   clienteCep?: string;        // CEP do cliente no cadastro (Inter exige)
   clienteTelefone?: string;   // para o WhatsApp
   showToast?: (msg: string, type?: 'success' | 'error') => void;
+  /** BLOCO 67: abrir ja expandido (modal de venda finalizada). No cupom
+   *  reaberto o padrao e DOBRADO — o card nao pode cobrir a tela. */
+  abertoInicial?: boolean;
 }
 
 const dataBR = (iso?: string) => {
@@ -37,11 +40,14 @@ const dataBR = (iso?: string) => {
   return `${d}/${m}/${a}`;
 };
 
-const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, notaStatus, notaNumero, clienteDoc, clienteCep, clienteTelefone, showToast }) => {
+const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, notaStatus, notaNumero, clienteDoc, clienteCep, clienteTelefone, showToast, abertoInicial }) => {
   const [boleto, setBoleto] = useState<BoletoInfo | null>(null);
   const [indisponivel, setIndisponivel] = useState(false);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState(false);
+  // BLOCO 67: card DOBRAVEL — a linha de status e sempre visivel (1 linha),
+  // os botoes/form ficam atras do toque. Nao empurra mais o cupom pra fora.
+  const [expandido, setExpandido] = useState<boolean>(!!abertoInicial);
   const [valor, setValor] = useState('');
   const [venc, setVenc] = useState('');
   const [atrelar, setAtrelar] = useState(true);
@@ -172,7 +178,7 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
       case 'PROTESTO': return { cls: 'bg-rose-50 text-rose-700 border-rose-200', icon: 'fa-gavel', txt: 'Boleto em protesto' };
       case 'CANCELADO': case 'EXPIRADO': return { cls: 'bg-gray-100 text-gray-500 border-gray-200', icon: 'fa-ban', txt: 'Boleto cancelado' };
       case 'FALHA_EMISSAO': return { cls: 'bg-rose-50 text-rose-700 border-rose-200', icon: 'fa-circle-xmark', txt: 'Falha ao gerar — toque em tentar de novo' };
-      default: return { cls: 'bg-gray-50 text-gray-500 border-gray-200', icon: 'fa-file-invoice-dollar', txt: 'Sem boleto' };
+      default: return { cls: 'bg-gray-50 text-gray-500 border-gray-200', icon: 'fa-file-invoice-dollar', txt: 'Sem boleto — toque para gerar' };
     }
   };
 
@@ -182,100 +188,105 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
   const clienteTemCep = (clienteCep || '').replace(/\D/g, '').length === 8;
 
   return (
-    <div className={`rounded-2xl border p-3 space-y-2 ${bb.cls}`}>
-      <div className="flex items-center gap-2">
+    <div className={`rounded-2xl border ${bb.cls}`}>
+      <button onClick={() => setExpandido(!expandido)} className="w-full flex items-center gap-2 p-3 text-left" aria-expanded={expandido}>
         <i className={`fa-solid ${bb.icon}`}></i>
         <span className="text-[10px] font-black uppercase flex-1">{bb.txt}</span>
-        {(boleto.status === 'EM_PROCESSAMENTO' || ['A_RECEBER', 'ATRASADO'].includes(boleto.status)) && (
-          <button onClick={handleConsultar} disabled={busy} className="text-[9px] font-black underline disabled:opacity-50">
-            Atualizar
-          </button>
-        )}
-      </div>
-      {(erroLocal || (boleto.erro && boleto.status === 'FALHA_EMISSAO')) && (
-        <p className="text-[9px] leading-snug font-bold opacity-80 break-words">{erroLocal || boleto.erro}</p>
-      )}
-      {['A_RECEBER', 'ATRASADO'].includes(boleto.status) && boleto.linhaDigitavel && (
-        <div className="space-y-1.5">
-          <button onClick={() => handleCopiarTexto(boleto.linhaDigitavel!, 'Linha digitavel')}
-            className="w-full text-left font-mono text-[9px] font-bold bg-white/70 rounded-lg px-2 py-1.5 break-all active:scale-95">
-            {boleto.linhaDigitavel}
-          </button>
-          {boleto.pixCopiaECola && (
-            <button onClick={() => handleCopiarTexto(boleto.pixCopiaECola!, 'PIX copia e cola')}
-              className="w-full text-left text-[9px] font-black bg-white/70 rounded-lg px-2 py-1.5 break-all active:scale-95">
-              <i className="fa-solid fa-qrcode mr-1"></i>PIX COPIA E COLA — TOQUE PARA COPIAR
+        <i className={`fa-solid fa-chevron-${expandido ? 'up' : 'down'} text-[9px] opacity-60`}></i>
+      </button>
+      {expandido && (
+        <div className="px-3 pb-3 space-y-2">
+          {['A_RECEBER', 'ATRASADO'].includes(boleto.status) && (
+            <button onClick={handleConsultar} disabled={busy} className="text-[9px] font-black underline disabled:opacity-50">
+              Atualizar situação no Inter
             </button>
           )}
-        </div>
-      )}
-      {boleto.status === 'EM_PROCESSAMENTO' && (
-        <button onClick={handleGerar} disabled={busy}
-          className="block w-full bg-slate-800 text-white font-black py-3 rounded-xl text-[10px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
-          <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-arrows-rotate'} mr-1`}></i>
-          Gerar Novamente
-        </button>
-      )}
-      {['CANCELADO', 'EXPIRADO', 'FALHA_EMISSAO', 'NAO_GERADO'].includes(boleto.status) && !form && (
-        <button onClick={() => { setErroLocal(''); setForm(true); }} disabled={busy}
-          className="block w-full bg-slate-800 text-white font-black py-3 rounded-xl text-[10px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
-          <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-file-invoice-dollar'} mr-1`}></i>
-          {boleto.status === 'NAO_GERADO' ? 'Gerar Boleto' : 'Gerar Novamente'}
-        </button>
-      )}
-      {['A_RECEBER', 'ATRASADO', 'RECEBIDO', 'MARCADO_RECEBIDO'].includes(boleto.status) && (
-        <div className="grid grid-cols-2 gap-2">
-          <button onClick={handlePdf} disabled={busy}
-            className="bg-slate-800 text-white font-black py-2.5 rounded-xl text-[9px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
-            <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-file-pdf'} mr-1`}></i> PDF
-          </button>
-          <button onClick={handleWhats}
-            className="bg-green-600 text-white font-black py-2.5 rounded-xl text-[9px] uppercase tracking-widest active:scale-95">
-            <i className="fa-brands fa-whatsapp mr-1"></i> Enviar
-          </button>
-        </div>
-      )}
-      {form && (
-        <div className="space-y-2 bg-white/70 rounded-xl p-2.5">
-          <div className="grid grid-cols-2 gap-2">
-            <label className="block">
-              <span className="text-[8px] font-black uppercase text-gray-500">Valor (R$)</span>
-              <input type="number" step="0.01" min="2.5" value={valor} onChange={e => setValor(e.target.value)}
-                className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-[11px] font-bold text-gray-800 focus:outline-none focus:border-gray-400" />
-            </label>
-            <label className="block">
-              <span className="text-[8px] font-black uppercase text-gray-500">Vencimento</span>
-              <input type="date" value={venc} onChange={e => setVenc(e.target.value)}
-                className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-[11px] font-bold text-gray-800 focus:outline-none focus:border-gray-400" />
-            </label>
-          </div>
-          {!clienteTemDoc && (
-            <label className="block">
-              <span className="text-[8px] font-black uppercase text-gray-500">CPF/CNPJ do pagador (cliente sem documento no cadastro)</span>
-              <input type="text" inputMode="numeric" value={doc} onChange={e => setDoc(e.target.value)}
-                placeholder="000.000.000-00"
-                className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-[11px] font-bold text-gray-800 focus:outline-none focus:border-gray-400" />
-            </label>
+          {(erroLocal || (boleto.erro && boleto.status === 'FALHA_EMISSAO')) && (
+            <p className="text-[9px] leading-snug font-bold opacity-80 break-words">{erroLocal || boleto.erro}</p>
           )}
-          {!clienteTemCep && (
-            <label className="block">
-              <span className="text-[8px] font-black uppercase text-gray-500">CEP do pagador (obrigatório no Inter — cliente sem CEP no cadastro)</span>
-              <input type="text" inputMode="numeric" value={cep} onChange={e => setCep(e.target.value)}
-                placeholder="89500000"
-                className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-[11px] font-bold text-gray-800 focus:outline-none focus:border-gray-400" />
-            </label>
+          {['A_RECEBER', 'ATRASADO'].includes(boleto.status) && boleto.linhaDigitavel && (
+            <div className="space-y-1.5">
+              <button onClick={() => handleCopiarTexto(boleto.linhaDigitavel!, 'Linha digitavel')}
+                className="w-full text-left font-mono text-[9px] font-bold bg-white/70 rounded-lg px-2 py-1.5 break-all active:scale-95">
+                {boleto.linhaDigitavel}
+              </button>
+              {boleto.pixCopiaECola && (
+                <button onClick={() => handleCopiarTexto(boleto.pixCopiaECola!, 'PIX copia e cola')}
+                  className="w-full text-left text-[9px] font-black bg-white/70 rounded-lg px-2 py-1.5 break-all active:scale-95">
+                  <i className="fa-solid fa-qrcode mr-1"></i>PIX COPIA E COLA — TOQUE PARA COPIAR
+                </button>
+              )}
+            </div>
           )}
-          {notaStatus === 'AUTORIZADA' && (
-            <label className="flex items-center gap-2">
-              <input type="checkbox" checked={atrelar} onChange={e => setAtrelar(e.target.checked)} className="w-4 h-4 accent-emerald-600" />
-              <span className="text-[9px] font-black uppercase text-gray-600">Atrelar NF-e {notaNumero || ''} ao boleto</span>
-            </label>
+          {boleto.status === 'EM_PROCESSAMENTO' && (
+            <button onClick={handleGerar} disabled={busy}
+              className="block w-full bg-slate-800 text-white font-black py-3 rounded-xl text-[10px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
+              <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-arrows-rotate'} mr-1`}></i>
+              Gerar Novamente
+            </button>
           )}
-          <button onClick={handleGerar} disabled={busy || !venc}
-            className="block w-full bg-emerald-600 text-white font-black py-2.5 rounded-xl text-[10px] uppercase tracking-widest active:scale-95 disabled:opacity-50">
-            <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-check'} mr-1`}></i>
-            Confirmar boleto
-          </button>
+          {['CANCELADO', 'EXPIRADO', 'FALHA_EMISSAO', 'NAO_GERADO'].includes(boleto.status) && !form && (
+            <button onClick={() => { setErroLocal(''); setForm(true); }} disabled={busy}
+              className="block w-full bg-slate-800 text-white font-black py-3 rounded-xl text-[10px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
+              <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-file-invoice-dollar'} mr-1`}></i>
+              {boleto.status === 'NAO_GERADO' ? 'Gerar Boleto' : 'Gerar Novamente'}
+            </button>
+          )}
+          {['A_RECEBER', 'ATRASADO', 'RECEBIDO', 'MARCADO_RECEBIDO'].includes(boleto.status) && (
+            <div className="grid grid-cols-2 gap-2">
+              <button onClick={handlePdf} disabled={busy}
+                className="bg-slate-800 text-white font-black py-2.5 rounded-xl text-[9px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
+                <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-file-pdf'} mr-1`}></i> PDF
+              </button>
+              <button onClick={handleWhats}
+                className="bg-green-600 text-white font-black py-2.5 rounded-xl text-[9px] uppercase tracking-widest active:scale-95">
+                <i className="fa-brands fa-whatsapp mr-1"></i> Enviar
+              </button>
+            </div>
+          )}
+          {form && (
+            <div className="space-y-2 bg-white/70 rounded-xl p-2.5">
+              <div className="grid grid-cols-2 gap-2">
+                <label className="block">
+                  <span className="text-[8px] font-black uppercase text-gray-500">Valor (R$)</span>
+                  <input type="number" step="0.01" min="2.5" value={valor} onChange={e => setValor(e.target.value)}
+                    className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-[11px] font-bold text-gray-800 focus:outline-none focus:border-gray-400" />
+                </label>
+                <label className="block">
+                  <span className="text-[8px] font-black uppercase text-gray-500">Vencimento</span>
+                  <input type="date" value={venc} onChange={e => setVenc(e.target.value)}
+                    className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-[11px] font-bold text-gray-800 focus:outline-none focus:border-gray-400" />
+                </label>
+              </div>
+              {!clienteTemDoc && (
+                <label className="block">
+                  <span className="text-[8px] font-black uppercase text-gray-500">CPF/CNPJ do pagador (cliente sem documento no cadastro)</span>
+                  <input type="text" inputMode="numeric" value={doc} onChange={e => setDoc(e.target.value)}
+                    placeholder="000.000.000-00"
+                    className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-[11px] font-bold text-gray-800 focus:outline-none focus:border-gray-400" />
+                </label>
+              )}
+              {!clienteTemCep && (
+                <label className="block">
+                  <span className="text-[8px] font-black uppercase text-gray-500">CEP do pagador (obrigatório no Inter — cliente sem CEP no cadastro)</span>
+                  <input type="text" inputMode="numeric" value={cep} onChange={e => setCep(e.target.value)}
+                    placeholder="89500000"
+                    className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-[11px] font-bold text-gray-800 focus:outline-none focus:border-gray-400" />
+                </label>
+              )}
+              {notaStatus === 'AUTORIZADA' && (
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" checked={atrelar} onChange={e => setAtrelar(e.target.checked)} className="w-4 h-4 accent-emerald-600" />
+                  <span className="text-[9px] font-black uppercase text-gray-600">Atrelar NF-e {notaNumero || ''} ao boleto</span>
+                </label>
+              )}
+              <button onClick={handleGerar} disabled={busy || !venc}
+                className="block w-full bg-emerald-600 text-white font-black py-2.5 rounded-xl text-[10px] uppercase tracking-widest active:scale-95 disabled:opacity-50">
+                <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-check'} mr-1`}></i>
+                Confirmar boleto
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

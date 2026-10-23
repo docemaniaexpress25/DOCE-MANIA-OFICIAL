@@ -130,11 +130,24 @@ const salesSeed = [
     prioridade: 0, separado: false, separado_em: null, entregador_id: null,
     comprovante_foto: null, modo_nota: null, route_id: null, entrega_seq: null, ordem_entrega: null,
   },
+  // BLOCO 67: divida ANTIGA do cli-5 (3 dias, pronta entrega a prazo) —
+  // banner de divida no PDV sem tirar o botao Atender (nao e venda de hoje
+  // nem pre-venda pendente na fila)
+  {
+    id: 'sale-divida-001', vendedor_id: 'rota2user', client_id: 'cli-5',
+    valor_total: 25.0, valor_pago: 0, metodo_pagamento: 'A_PRAZO',
+    detalhe_pagamento: 'PRONTA — cobrar BOLETO na entrega (A PRAZO)',
+    status_pagamento: 'PENDENTE', data_venda: iso(4320), data_vencimento: iso(-720),
+    tipo_venda: 'PRONTA', entrega_status: null, trocas: null,
+    prioridade: 0, separado: false, separado_em: null, entregador_id: null,
+    comprovante_foto: null, modo_nota: null, route_id: null, entrega_seq: null, ordem_entrega: null,
+  },
 ];
 
 const saleItemsSeed = [
   { id: 'si-1', sale_id: 'sale-fila-001', produto_id: 'prod-1', product_id: 'prod-1', quantidade: 3, preco_venda: 2.39 },
   { id: 'si-2', sale_id: 'sale-fila-002', produto_id: 'prod-2', product_id: 'prod-2', quantidade: 3, preco_venda: 4.29 },
+  { id: 'si-3', sale_id: 'sale-divida-001', produto_id: 'prod-1', product_id: 'prod-1', quantidade: 10, preco_venda: 2.5 },
 ];
 
 const tables: Record<string, any[]> = {

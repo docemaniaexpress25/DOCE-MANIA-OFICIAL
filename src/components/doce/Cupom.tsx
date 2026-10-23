@@ -40,6 +40,10 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
     erro: sale.notaErro,
   }));
   const [notaBusy, setNotaBusy] = useState(false);
+  // BLOCO 67: bloco da NF-e DOBRAVEL (linha de status sempre visivel, acoes
+  // atras do toque) — junto com o boleto, empurrava o cupom pra fora da tela.
+  // Rejeitada abre expandido de cara (o erro precisa ser lido).
+  const [notaAberta, setNotaAberta] = useState<boolean>(() => sale.notaStatus === 'REJEITADA');
 
   const handleEmitirNota = async () => {
     if (notaBusy || !isVendaSalva) return;
@@ -207,8 +211,10 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
   const isPrinting = printJob.status === 'printing' || printJob.status === 'scanning' || printJob.status === 'connecting';
 
   return (
-    <div className="fixed inset-0 bg-black/90 z-[150] flex flex-col items-center justify-center p-4 overflow-y-auto backdrop-blur-sm">
-      <div className="bg-white w-full max-w-[340px] shadow-2xl flex flex-col animate-in zoom-in-95 duration-300 relative rounded-t-3xl overflow-hidden">
+    <div className="fixed inset-0 bg-black/90 z-[150] flex flex-col items-center p-4 overflow-y-auto backdrop-blur-sm">
+      {/* BLOCO 67: my-auto no lugar do justify-center — com cupom longo, o
+          justify-center cortava o TOPO do card e a rolagem nao subia. */}
+      <div className="bg-white w-full max-w-[340px] shadow-2xl flex flex-col animate-in zoom-in-95 duration-300 relative rounded-t-3xl overflow-hidden my-auto">
         
         <button 
           onClick={onBack || onClose} 
@@ -241,40 +247,53 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
           </div>
         )}
 
-        <div className="p-6 bg-white overflow-hidden">
-          <div className="font-mono text-[11px] leading-tight text-black bg-white whitespace-pre select-none border-l-2 border-gray-100 pl-4">
+        {/* BLOCO 67: o texto do cupom agora ROLA (max 38% da tela) com barra
+            de rolagem visivel (.cupom-scroll) — cupom com muitos itens nao
+            empurra mais os botoes para fora da tela. */}
+        <div className="px-4 pt-4 pb-3 bg-white">
+          <div className="font-mono text-[11px] leading-tight text-black bg-gray-50 rounded-xl border border-gray-100 pl-4 pr-3 py-2.5 whitespace-pre select-none max-h-[38vh] overflow-y-auto cupom-scroll">
             {generateText(printWidth)}
           </div>
+          {(sale.itens || []).length > 5 && (
+            <p className="text-[8px] text-gray-300 text-center mt-1.5 uppercase font-black tracking-widest">
+              <i className="fa-solid fa-arrows-up-down mr-1"></i>role para ver todos os itens
+            </p>
+          )}
         </div>
 
         <div className="bg-gray-100 p-5 flex flex-col gap-3 border-t border-gray-200">
-          {/* ===== Bloco 10: Nota Fiscal (NF-e / NFC-e) ===== */}
+          {/* ===== Bloco 10: Nota Fiscal (NF-e / NFC-e) — BLOCO 67: dobravel ===== */}
           {isVendaSalva && (
-            <div className={`rounded-2xl border p-3 space-y-2 ${nb.cls}`}>
-              <div className="flex items-center gap-2">
+            <div className={`rounded-2xl border ${nb.cls}`}>
+              <button onClick={() => setNotaAberta(!notaAberta)} className="w-full flex items-center gap-2 p-3 text-left" aria-expanded={notaAberta}>
                 <i className={`fa-solid ${nb.icon}`}></i>
                 <span className="text-[10px] font-black uppercase flex-1">{nb.txt}</span>
-                {nota.status === 'EMITINDO' && (
-                  <button onClick={handleConsultarNota} disabled={notaBusy} className="text-[9px] font-black underline disabled:opacity-50">
-                    Atualizar
-                  </button>
-                )}
-              </div>
-              {nota.status === 'REJEITADA' && nota.erro && (
-                <p className="text-[9px] leading-snug font-bold opacity-80 break-words">{nota.erro}</p>
-              )}
-              {nota.status === 'AUTORIZADA' && nota.pdfUrl && (
-                <a href={nota.pdfUrl} target="_blank" rel="noopener noreferrer"
-                  className="block w-full bg-emerald-600 text-white font-black py-3 rounded-xl text-center text-[10px] uppercase tracking-widest active:scale-95">
-                  <i className="fa-solid fa-file-pdf mr-1"></i> Abrir DANFE (PDF)
-                </a>
-              )}
-              {(nota.status === 'NAO_EMITIDA' || nota.status === 'REJEITADA' || nota.status === 'CANCELADA') && (
-                <button onClick={handleEmitirNota} disabled={notaBusy}
-                  className="block w-full bg-slate-800 text-white font-black py-3 rounded-xl text-[10px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
-                  <i className={`fa-solid ${notaBusy ? 'fa-spinner fa-spin' : 'fa-file-invoice-dollar'} mr-1`}></i>
-                  {notaBusy ? 'Emitindo...' : nota.status === 'REJEITADA' ? 'Emitir Novamente' : 'Emitir Nota Fiscal'}
-                </button>
+                <i className={`fa-solid fa-chevron-${notaAberta ? 'up' : 'down'} text-[9px] opacity-60`}></i>
+              </button>
+              {notaAberta && (
+                <div className="px-3 pb-3 space-y-2">
+                  {nota.status === 'EMITINDO' && (
+                    <button onClick={handleConsultarNota} disabled={notaBusy} className="text-[9px] font-black underline disabled:opacity-50">
+                      Atualizar situação na SEFAZ
+                    </button>
+                  )}
+                  {nota.status === 'REJEITADA' && nota.erro && (
+                    <p className="text-[9px] leading-snug font-bold opacity-80 break-words">{nota.erro}</p>
+                  )}
+                  {nota.status === 'AUTORIZADA' && nota.pdfUrl && (
+                    <a href={nota.pdfUrl} target="_blank" rel="noopener noreferrer"
+                      className="block w-full bg-emerald-600 text-white font-black py-3 rounded-xl text-center text-[10px] uppercase tracking-widest active:scale-95">
+                      <i className="fa-solid fa-file-pdf mr-1"></i> Abrir DANFE (PDF)
+                    </a>
+                  )}
+                  {(nota.status === 'NAO_EMITIDA' || nota.status === 'REJEITADA' || nota.status === 'CANCELADA') && (
+                    <button onClick={handleEmitirNota} disabled={notaBusy}
+                      className="block w-full bg-slate-800 text-white font-black py-3 rounded-xl text-[10px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
+                      <i className={`fa-solid ${notaBusy ? 'fa-spinner fa-spin' : 'fa-file-invoice-dollar'} mr-1`}></i>
+                      {notaBusy ? 'Emitindo...' : nota.status === 'REJEITADA' ? 'Emitir Novamente' : 'Emitir Nota Fiscal'}
+                    </button>
+                  )}
+                </div>
               )}
             </div>
           )}

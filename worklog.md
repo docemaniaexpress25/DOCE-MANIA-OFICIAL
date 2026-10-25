@@ -369,3 +369,62 @@ Stage Summary:
 - A impressao da fila de entregas agora sai APENAS com os clientes marcados como CARREGADOS no veiculo, na mesma ordem da fila, com o endereco completo (rua + numero/sala + bairro). Sem nenhum carregado, o admin recebe um aviso em vez de folha vazia.
 - O numero/sala agora e salvo 100%: campo no cadastro do vendedor, campo visivel no admin (bloco Endereço de Visita), GPS preenche, API da fila devolve, card e impressao mostram. Sem SQL (coluna ja existia).
 - Pendencias antigas mantidas: Bluetooth da impressora; NF entrada XML.
+
+---
+Task ID: bloco66-fix-401-preview-devbridge (REUPERADA — o checkpoint do sandbox restaurou um .git antigo e esta entrada se perdeu do arquivo; o commit 5228e78 esta no remoto e em producao)
+Agent: Z.ai Code (principal)
+Task: Erro reportado pelo chefe no preview: "Erro ao buscar rota diaria: 401 'Nao autenticado.'" (console, App.useEffect.loadRoute -> dailyRouteService.getRoute)
+
+Work Log:
+- Causa raiz: o sandbox nao tem SUPABASE_SERVICE_ROLE_KEY, entao o devBridge repassa para a PRODUCAO (token assinado com o segredo DE LA). /api/daily-route, /api/location e /api/cnpj validavam a sessao LOCALMENTE antes de bridgear — segredo local (fallback) nunca casa com o de producao -> 401 garantido no preview mesmo com login OK.
+- Fix: bridge/config ANTES da sessao nas 3 rotas (6 handlers), padrao do resto da codebase. Producao inalterada.
+- QA: lint 0/11, tsc 7. E2E bridge: login Entregador via producao -> GET /api/daily-route 200 {route:null} (era 401); location/cnpj alcancam a validacao de producao sem gravar nada; zero erros de console.
+- Commit 5228e78 pushed; Vercel oficial/oficial2/teste SUCCESS (zpac pre-existente).
+
+Stage Summary:
+- Preview 100% funcional para vendedor (rota do dia, GPS, CNPJ passam pela ponte). Token de sessao dura 7 dias; re-login automatico quando expira ficou PROPOSTO, sem autorizacao ainda.
+
+---
+Task ID: bloco67-pdv-banner-cupom-botoes
+Agent: Z.ai Code (principal)
+Task: "na tela do pdv logado como vendedor que quando o cliente tem uma divida aparece um banner de aviso, o problema e que esse banner atrapalha a digitacao de alguns produtos! arrume isso! outro problema e quando temos o preview na tela do cupom! ou seja o texto, as vezes nao conseguimos ler todos os itens entao poderia ter uma barra de rolagem! outro ponto e organizacao dos botoes de bater nfe ou gerar boleto dentro do card de vendas! esses botoes nao devem atrapalhar a visualizacao da tela! entao arrume isso, tbm traga uma lista de possiveis otimizacoes nesse sentido porem eu preciso autorizar antes de vc fazer qualquer mudanca"
+
+Work Log:
+- Banner de divida (PDV.tsx): 1 linha (~44px, era 2 linhas ~70px) com valor + qtd + "toque para receber" e BOTAO minimizar (chevron-up). Minimizado vira pildora pequenina no topo direito ("R$ X em aberto") que reabre com um toque. Estado debtBannerMin reseta ao trocar de cliente (useEffect client.id). Tap no texto continua indo para Contas a Receber.
+- Cupom (Cupom.tsx): (a) texto do cupom agora ROLA — caixa mono com max-h-[38vh] overflow-y-auto + classe .cupom-scroll (globals.css: scrollbar FINA e VISIVEL so nessa area, vencendo o hide global); dica "role para ver todos os itens" quando >5 itens; (b) container externo: justify-center trocado por my-auto no card — o justify-center cortava o TOPO do card quando o cupom era longo e a rolagem nao subia (bug classico de centralizacao + overflow).
+- NF-e e Boleto (Cupom.tsx + BoletoCard.tsx): DOBRAVEIS. Linha de status sempre visivel (badge + chevron); acoes atras do toque (Emitir Nota Fiscal, DANFE, Gerar Boleto, linha digitavel, PIX, PDF, WhatsApp, form). NF-e REJEITADA abre expandida (erro precisa ser lido). BoletoCard ganhou prop abertoInicial: no modal de venda finalizada (PDV) continua ABERTO de cara (regra do Bloco 25: dono acha o botao na hora); no cupom reaberto pelo historico fica DOBRADO. Badge "Sem boleto" virou "Sem boleto — toque para gerar" (descoberta mantida).
+- Mock E2E: venda antiga do cli-5 (sale-divida-001, pronta a prazo, 3 dias, saldo 25.00) — banner aparece sem tirar o botao Atender.
+- QA: lint 0 erros/11 warnings (baseline exata); tsc 7 erros src/ (baseline exata; +1 erro em skills/ fora do app).
+- E2E (Agent Browser, mock; script removido depois): T1 login->Rota do Dia->Acougue; T3 banner STRIP_H_44 com texto "Acougue Sem Tel: R$ 25.00 em aberto (1) — toque para receber"; T4 digitar preco 2.50 COM banner visivel = aceito; T5 minimizar->pildora->reabrir (STRIP_FOI/PILL_OK/STRIP_VOLTOU); T6 qty 2; T7 preview do cupom com .cupom-scroll (overflow auto + max-height setado); T8 wizard A PRAZO + BOLETO 7D -> "Venda Finalizada"; T9 boleto EXPANDIDO no modal (abertoInicial); T10 cupom da venda salva pelo historico: NF-e e boleto DOBRADOS (botoes ocultos), toque EXPANDE, .cupom-scroll presente; zero erros de pagina.
+- INCIDENTE GIT (importante): o sandbox restaurou um checkpoint ANTIGO do .git (era do Bloco 60) no meio da sessao — o push inicial do Bloco 67 (24ee0bf, base errada) foi BLOQUEADO pelo non-fast-forward e o rebase conflitou. NADA foi forcado: git reset --hard FETCH_HEAD alinhou o local ao remoto (5228e78, Blocos 1-66 completos) e as mudancas do Bloco 67 foram re-aplicadas (Cupom/BoletoCard/globals copiados — idempotentes; PDV e mock re-portados a mao porque o remoto tem as mudancas dos Blocos 64/65). Re-QA (0/11, tsc 7) + E2E completo REFEITO no tree correto = 100% aprovado. Commit final 22f203b pushed limpo (5228e78..22f203b).
+- Licoes E2E: (1) vendedor cai na aba ENTREGAS pos-login — "Rota do Dia" (card do HOME) abre o roteiro com Atender; o "Roteiro Semanal" e a grade de dias (expande o dia). (2) "Atender sem preencher" (cadastro incompleto) vai DIRETO ao PDV sem modo/nota sheet. (3) na pronta a prazo o modal finalizada troca "OK — ver cupom" pela foto do comprovante — o cupom da venda salva abre pelo historico (aba Vendas, botao w-10 h-10). (4) o app lembra a ultima aba (activeTab persistido) — ao reabrir, voltar ao HOME com a seta. (5) pkill -9 + AGUARDAR A PORTA 3000 LIBERAR (ss -tln) antes de subir o server de novo — o race do pkill fazia o server velho responder (login com usuarios REAIS da producao via bridge no meio do E2E!). (6) warm-up de /api/users com curl antes do browser.
+- Vercel: oficial / oficial2 / teste = SUCCESS (zpac failure pre-existente, sem dominio).
+
+Stage Summary:
+- O banner de divida nao atrapalha mais: 1 linha discreta, minimizavel, e a digitacao de preco/quantidade funciona com ele visivel (provado no E2E).
+- O cupom (preview e venda salva) tem o texto em caixa com ROLAGEM visivel — todos os itens legiveis sem empurrar os botoes pra fora da tela.
+- NF-e e Boleto agora sao linhas compactas e dobraveis no cupom da venda salva; no fechamento da venda o boleto continua aberto (regra do dono mantida).
+- LISTA DE OTIMIZACOES entregue ao dono na resposta — NADA implementado sem autorizacao (regra de ouro).
+- Pendencias antigas mantidas: Bluetooth da impressora; NF entrada XML.
+
+---
+Task ID: bloco68-impressora-conexao-permanente
+Agent: Z.ai Code (principal)
+Task: "Notei que a conexao com a impressora cai de um cupom para outro. E ai precisa ficar reconectando. Arrume uma solucao pra isso"
+
+Work Log:
+- Diagnostico (4 causas da queda entre cupons): (1) SEM keep-alive — impressoras térmicas BLE de entrada derrubam o GATT após segundos sem tráfego (economia de energia do firmware); entre um cupom e outro o vendedor fica minutos sem imprimir e a impressora "dorme". (2) Android/Chrome derruba o GATT com o app em background (tela apagada) e nada religava ao voltar. (3) A corrida de 2.5s no reconnect() perdia reconexões "justo depois" do timeout e abria o seletor nativo por cima. (4) Sem fila: impressões disparadas em sequência podiam disputar o mesmo GATT.
+- bluetoothPrinterService.ts — KEEP-ALIVE (coração do fix): a cada 5s enquanto conectada, o app manda DLE EOT (0x10 0x04 0x01) — comando ESC/POS de STATUS EM TEMPO REAL que NÃO imprime nada — mantendo o link ocupado e a impressora acordada entre cupons. O pulso também funciona como detector de link morto (2 falhas seguidas = caiu → auto-reconnect ANTES do próximo cupom). Pulso pausado durante impressão/reconexão/background (o visibilitychange cuida do retorno).
+- bluetoothPrinterService.ts — AUTO-RECONNECT mais paciente: 3 → 5 tentativas (esperas 1..5s, ~15s de paciência em background); para o heartbeat ao iniciar (installPrinter religa); handler de desconexão também para o heartbeat.
+- bluetoothPrinterService.ts — RECONEXÃO SILENCIOSA no print(): nova ordem de resgate SEM seletor: (a) heartbeat/auto-reconnect podem já ter religado; (b) device EM MEMÓRIA (reconnect() ganhou 1ª via com o lastDevice, sem depender de getDevices — funciona em qualquer WebView); (c) getDevices (corrida 2.5s); (d) tolerância à corrida (7×200ms) para reconexão que venceu justo depois; (e) SÓ ENTÃO seletor nativo (último recurso), com catch que degrada para "toque em Imprimir de novo" se o gesto do toque expirar (janela de ~5s do Chrome respeitada: caminho silencioso ≤ ~4s). Caminho silencioso não insiste 2x no mesmo device (getDevices devolve o MESMO objeto físico).
+- bluetoothPrinterService.ts — FILA DE IMPRESSÃO: print() agora serializa via printQueue (PDV, fila de entregas, relatório fiscal e cupom nunca disputam o GATT); sendBytes reconecta já na 1ª tentativa quando o link morreu no meio do cupom (antes desperdiçava uma rodada de escrita).
+- bluetoothPrinterService.ts — VISIBILITYCHANGE: voltou pro app (tela ligou/trocou de aba) com a impressora caída → auto-reconnect em background antes do próximo cupom. disconnect()/forgetPrinter() limpam heartbeat/lastDevice (desconexão manual continua sendo respeitada).
+- Beneficiados sem mudança de código: PDV.tsx, Cupom.tsx, VendedorDashboard.tsx (impressão da fila), RelatorioFiscal.tsx — todos usam bluetoothPrinter.print().
+- QA: lint 0 erros/11 warnings (baseline exata); tsc 7 erros src/ (baseline exata, nenhum novo).
+- E2E com impressora BLE FALSA (harness bun em /home/z, removido depois; fake que derruba GATT com 6s SEM tráfego, recusa conexão por 3s ao "desligar" e cai no meio de envio): 16/16 PASS — T0 pareamento; T1 link vivo após 13.5s com zero quedas (pulsos DLE EOT provados, bytes 16,4,1); T2 desligou → auto-reconnect religou sozinha em ~2 tentativas SEM abrir seletor (requestDevice não chamado); T3 cupom 1 e 2 seguidos sem reconectar na mão; T4 queda no meio do cupom → reconectou durante o envio e TERMINOU o cupom; T5 impressões concorrentes completas (fila); T6 desconexão manual não re-autoconecta. (1ª rodada: 2 FAILs eram BUGS DO HARNESS — requestDevice do pareamento inicial contava como "reconexão"; corrigido para comparar com a contagem pós-T0.)
+- INCIDENTE GIT (de novo): checkpoint do sandbox criou commit lixo c274da3 (mensagem UUID) EM CIMA do 22f203b — trazia de volta a entrada do Bloco 66 no worklog (que tinha se perdido) e um chmod +x no sql/bloco62. NADA forçado: git reset --mixed origin/main realinhou o HEAD ao remoto mantendo a working tree; a entrada do Bloco 66 restaurada foi commitada junto (era conteúdo legítimo perdido) e o modo do SQL foi revertido (conteúdo idêntico, 367 bytes).
+
+Stage Summary:
+- A conexão com a impressora NÃO CAI mais entre cupons: o app mantém o link vivo com heartbeat de 5s (comando de status que não imprime nada) e, se cair mesmo (impressora desligada/fora de alcance), religa sozinho em background — sem seletor, sem confirm, sem reconectar na mão. O seletor nativo virou último recurso.
+- Cupom 1 → cupom 2: o vendedor só imprime. Queda no meio do cupom: o envio reconecta e termina de onde parou. Impressões seguidas: fila organizada.
+- Nada a fazer pelo dono (sem SQL). Pendências antigas mantidas: NF entrada XML.

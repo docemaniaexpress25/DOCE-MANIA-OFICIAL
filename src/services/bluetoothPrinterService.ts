@@ -137,6 +137,22 @@ const PRINTER_WRITE_UUIDS = [
 ];
 
 // ============================================================
+// BLOCO 68 — KEEP-ALIVE DA CONEXAO (o link nao pode "dormir" entre cupons)
+// Impressoras térmicas BLE de entrada derrubam o GATT quando ficam SEM
+// tráfego por alguns segundos (economia de energia do firmware). É
+// exatamente a rotina do vendedor: cupom 1 sai, ele atende o proximo
+// cliente (1-5 min sem trafego), cupom 2 "cai" e pede reconexao na mao.
+// O heartbeat manda a cada 5s um DLE EOT (0x10 0x04 0x01) — comando
+// ESC/POS de STATUS EM TEMPO REAL, que NÃO imprime nada e existe
+// justamente para consultas — mantendo o link ocupado e a impressora
+// "acordada" entre um cupom e outro.
+// ============================================================
+const HEARTBEAT_INTERVAL_MS = 5000;
+const HEARTBEAT_CMD = new Uint8Array([0x10, 0x04, 0x01]); // DLE EOT 1 (status)
+/** Falhas CONSECUTIVAS do heartbeat antes de declarar o link morto */
+const HEARTBEAT_FAIL_LIMIT = 2;
+
+// ============================================================
 // Bluetooth Printer Service
 // ============================================================
 
@@ -153,11 +169,27 @@ class BluetoothPrinterService {
   private manualDisconnect = false;
   private autoReconnecting = false;
   private printing = false;
+  // BLOCO 68 — infraestrutura de conexão permanente:
+  private lastDevice: BluetoothDevice | null = null;   // device em memoria p/ reconexao silenciosa
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private pulsing = false;
+  private pulseFails = 0;
+  private printQueue: Promise<unknown> = Promise.resolve(); // serializa cupons
 
   constructor() {
     // Recover last printer ID from localStorage
     if (typeof window !== 'undefined') {
       this.lastPrinterId = localStorage.getItem('bt_printer_id');
+
+      // BLOCO 68: o Android/Chrome costuma derrubar o GATT com o app em
+      // segundo plano (tela apagada entre um atendimento e outro). Ao VOLTAR
+      // para o app, religa a impressora em background — ANTES do vendedor
+      // bater o proximo cupom — sem seletor, sem gesto, sem confirm.
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState !== 'visible') return;
+        if (this.isConnected() || this.manualDisconnect || this.printing || this.autoReconnecting) return;
+        if (this.lastDevice) void this.autoReconnect(this.lastDevice);
+      });
     }
   }
 
@@ -294,6 +326,12 @@ class BluetoothPrinterService {
     localStorage.setItem('bt_printer_name', printer.name);
     this.manualDisconnect = false;
 
+    // BLOCO 68: guarda o device da sessao para reconexões silenciosas e
+    // liga o heartbeat (mantém o link vivo entre cupons).
+    this.lastDevice = printer.device;
+    this.pulseFails = 0;
+    this.startHeartbeat();
+
     // BLOCO 34: UM handler de desconexao por device — remove o anterior antes
     // de adicionar. Antes, reconectar a mesma impressora N vezes acumulava N
     // ouvintes que disparavam N auto-reconexoes em paralelo.
@@ -302,6 +340,7 @@ class BluetoothPrinterService {
     if (anterior) device.removeEventListener('gattserverdisconnected', anterior);
     const handler = () => {
       if (this.printer?.device.id !== device.id) return; // desconexao de impressora antiga
+      this.stopHeartbeat();
       this.printer = null;
       if (this.manualDisconnect) { this.emitStatus({ status: 'idle' }); return; }
       // Se caiu no MEIO de uma impressao, o retry do sendBytes que reconecta
@@ -316,16 +355,18 @@ class BluetoothPrinterService {
   }
 
   /**
-   * BLOCO 34 — AUTO-RECONEXAO: tenta religar o GATT com a MESMA impressora
-   * (device em memória) em até 3 tentativas com espera crescente (1s, 2s, 3s —
-   * o módulo BLE da impressora às vezes está renes em religar o radio).
+   * BLOCO 34/68 — AUTO-RECONEXAO: tenta religar o GATT com a MESMA impressora
+   * (device em memória) em até 5 tentativas com espera crescente (1s, 2s, 3s,
+   * 4s, 5s — o módulo BLE da impressora às vezes está renes em religar o
+   * rádio; acontece em background, então quanto mais paciente, melhor).
    * NÃO usa requestDevice/getDevices: nao precisa de gesto nem abre seletor.
    * Se esgotar, fica 'idle' silencioso — a proxima impressão oferece reconectar.
    */
-  async autoReconnect(device: BluetoothDevice, tentativas: number = 3): Promise<boolean> {
+  async autoReconnect(device: BluetoothDevice, tentativas: number = 5): Promise<boolean> {
     if (this.printer) return true;
     if (this.autoReconnecting || this.manualDisconnect) return false;
     this.autoReconnecting = true;
+    this.stopHeartbeat();
     try {
       for (let i = 0; i < tentativas; i++) {
         await new Promise(r => setTimeout(r, 1000 * (i + 1)));
@@ -400,9 +441,26 @@ class BluetoothPrinterService {
    */
   async reconnect(timeoutMs: number = 2500): Promise<boolean> {
     if (this.isConnected()) return true;
-    if (!this.lastPrinterId || !this.isAvailable()) return false;
+    if (this.manualDisconnect || !this.isAvailable()) return false;
+
+    // BLOCO 68 (1ª via): o DEVICE EM MEMÓRIA desta sessão — não depende de
+    // getDevices nem de seletor; é a via mais rápida e mais compatível.
+    if (this.lastDevice?.gatt) {
+      this.emitStatus({ status: 'connecting', printerName: this.lastDevice.name || 'Impressora' });
+      try {
+        const printer = await this.openDevice(this.lastDevice, timeoutMs);
+        if (this.printer) return true;
+        this.installPrinter(printer);
+        return true;
+      } catch { /* impressora fora de alcance */ }
+      if (this.isConnected()) return true;
+      // getDevices devolve o MESMO device físico — insistir de novo só
+      // queimaria a janela de gesto do toque em Imprimir. Falhou, falhou.
+      return false;
+    }
+
     // API getDevices() nao existe em todos os navegadores/WebView
-    if (typeof navigator.bluetooth?.getDevices !== 'function') return false;
+    if (!this.lastPrinterId || typeof navigator.bluetooth?.getDevices !== 'function') return false;
 
     const run = async (): Promise<boolean> => {
       try {
@@ -480,6 +538,7 @@ class BluetoothPrinterService {
    */
   disconnect(): void {
     this.manualDisconnect = true;
+    this.stopHeartbeat();
     if (this.printer) {
       this.printer.device.gatt?.disconnect();
       this.printer = null;
@@ -508,7 +567,9 @@ class BluetoothPrinterService {
       // (device em memoria) e CONTINUA do chunk atual — o cupom nao se perde
       // e nao recomeça do zero quando o BLE cai no meio da impressao.
       for (let t = 0; t < 3 && !ok; t++) {
-        if (t > 0) {
+        // BLOCO 68: se o link morreu no meio do cupom (printer null), a 1ª
+        // tentativa JÁ reconecta — não desperdiça uma rodada de escrita.
+        if (!this.printer || t > 0) {
           try {
             const printer = await this.openDevice(device, 6000);
             this.installPrinter(printer);
@@ -617,17 +678,35 @@ class BluetoothPrinterService {
   }
 
   /**
-   * Main print method: connects (or reconnects), confirms, and prints.
+   * Main print method. BLOCO 68: cupons entram numa FILA (nunca dois GATT
+   * writes disputando o mesmo link) e a conexão é restaurada SILENCIOSAMENTE
+   * antes do seletor nativo — o vendedor não precisa mais "reconectar" na mão.
    */
   async print(rawText: string, width: PrinterWidth = '56MM', options?: { skipConfirm?: boolean }): Promise<boolean> {
+    const job = this.printQueue.then(() => this._print(rawText, width, options));
+    this.printQueue = job.then(() => undefined, () => undefined);
+    return job;
+  }
+
+  private async _print(rawText: string, width: PrinterWidth = '56MM', options?: { skipConfirm?: boolean }): Promise<boolean> {
     if (!this.isAvailable()) {
       throw new Error('BLUETOOTH_NAO_SUPORTADO');
     }
 
-    // Step 1: Check if connected, try reconnect (com timeout curto), or scan
+    // Step 1: garantir conexão. BLOCO 68 — ordem de resgate SEM mostrar seletor:
+    //   a) heartbeat/auto-reconnect podem já ter religado sozinhos;
+    //   b) device em memória (mesma sessão, via reconnect);
+    //   c) getDevices (pareamento autorizado, via reconnect);
+    //   d) tolerância à corrida (reconexao que venceu "justo depois" do timeout);
+    //   e) SÓ ENTÃO o seletor nativo (último recurso, usa o gesto do toque).
     if (!this.isConnected()) {
-      const reconnected = await this.reconnect(2500);
-      if (!reconnected) {
+      await this.reconnect(2500);
+      if (!this.isConnected()) {
+        for (let i = 0; i < 7 && !this.isConnected(); i++) {
+          await new Promise(r => setTimeout(r, 200));
+        }
+      }
+      if (!this.isConnected()) {
         if (!options?.skipConfirm) {
           const wantsToScan = window.confirm(
             'Nenhuma impressora Bluetooth conectada.\n\nDeseja buscar uma impressora agora?'
@@ -637,9 +716,15 @@ class BluetoothPrinterService {
             return false;
           }
         }
-
-        const connected = await this.scanAndConnect();
-        if (!connected) {
+        try {
+          const connected = await this.scanAndConnect();
+          if (!connected) {
+            this.emitStatus({ status: 'idle' });
+            return false;
+          }
+        } catch {
+          // Gesto expirado ou seletor falhou — o vendedor toca em Imprimir
+          // de novo e a reconexão silenciosa provavelmente já religou.
           this.emitStatus({ status: 'idle' });
           return false;
         }
@@ -699,9 +784,68 @@ class BluetoothPrinterService {
    */
   forgetPrinter(): void {
     this.disconnect();
+    this.lastDevice = null;
     this.lastPrinterId = null;
     localStorage.removeItem('bt_printer_id');
     localStorage.removeItem('bt_printer_name');
+  }
+
+  // ============================================================
+  // BLOCO 68 — HEARTBEAT (mantém o link vivo entre um cupom e outro)
+  // ============================================================
+
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    if (typeof window === 'undefined') return;
+    this.heartbeatTimer = setInterval(() => { void this.pulse(); }, HEARTBEAT_INTERVAL_MS);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+  }
+
+  /**
+   * Um "pulso": manda DLE EOT (status em tempo real — NÃO imprime nada).
+   * Mantém o firmware da impressora acordado e, de quebra, funciona como
+   * detector de link morto: se 2 pulsos seguidos falharem, o GATT já caiu
+   * e a auto-reconexao religa ANTES do vendedor bater o proximo cupom.
+   */
+  private async pulse(): Promise<void> {
+    if (this.pulsing || this.printing || this.autoReconnecting || this.manualDisconnect) return;
+    // Em background o BLE fica suspenso (escritas falham sem significar queda);
+    // o visibilitychange religa quando o app volta para a frente.
+    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+    const printer = this.printer;
+    if (!printer) return;
+    this.pulsing = true;
+    try {
+      const char = printer.characteristic;
+      if (char.properties.writeWithoutResponse) {
+        await char.writeValueWithoutResponse(HEARTBEAT_CMD);
+      } else if (char.properties.write) {
+        await char.writeValue(HEARTBEAT_CMD);
+      } else {
+        return; // sem escrita disponível — não há o que manter vivo
+      }
+      this.pulseFails = 0;
+    } catch {
+      this.pulseFails++;
+      if (
+        this.pulseFails >= HEARTBEAT_FAIL_LIMIT &&
+        this.printer === printer &&
+        !this.printing && !this.autoReconnecting && !this.manualDisconnect
+      ) {
+        this.printer = null;
+        this.stopHeartbeat();
+        try { printer.device.gatt?.disconnect(); } catch { /* ignora */ }
+        void this.autoReconnect(printer.device);
+      }
+    } finally {
+      this.pulsing = false;
+    }
   }
 }
 

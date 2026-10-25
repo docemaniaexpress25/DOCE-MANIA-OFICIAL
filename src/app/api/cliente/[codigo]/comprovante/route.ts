@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServiceClient, isServerSupabaseConfigured } from '@/lib/serverSupabase';
 import { sendPushToAll } from '@/lib/pushSender';
+import { salvarFotoSupabase } from '@/lib/fotoStorage';
 
 /**
  * POST /api/cliente/[codigo]/comprovante
@@ -79,6 +80,9 @@ export async function POST(
     }
 
     // 3. Registra o comprovante para conferencia
+    // ECONOMIA DE BANCO: foto vai para o Storage (bucket privado) e a coluna
+    // guarda so o caminho; se o Storage falhar, grava o base64 como antes.
+    const fotoPath = await salvarFotoSupabase(supabase, 'comprovantes', foto);
     const { data: inserted, error: insErr } = await supabase
       .from('payment_comprovantes')
       .insert({
@@ -86,7 +90,7 @@ export async function POST(
         client_id: client.id,
         valor,
         txid,
-        foto,
+        foto: fotoPath ?? foto,
         observacao,
         status: 'PENDENTE',
       })

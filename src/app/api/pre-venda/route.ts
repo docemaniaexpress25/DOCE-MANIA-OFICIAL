@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/serverSupabase';
 import { sessionFromRequest, isAdminSession } from '@/lib/session';
 import { hasEntregaTables, hasBoletoFotoColumn, hasModoVendaColumn, hasCargaCheckColumns } from '@/lib/serverSchema';
+import { salvarFotoSupabase } from '@/lib/fotoStorage';
 import { sendPushToUser } from '@/lib/pushSender';
 import QRCode from 'qrcode';
 import { buildPixPayload, generateTxid, lerChavePixEntrega } from '@/lib/pix';
@@ -1529,7 +1530,13 @@ export async function POST(req: NextRequest) {
         if (entUuid) updates.entregador_id = entUuid;
       }
       let eventoMotivo = '';
-      const eventoFoto: string | null = foto;
+      // ECONOMIA DE BANCO: a foto vai para o Storage (bucket privado
+      // 'fotos-pedidos') e a coluna entrega_eventos.foto guarda so o caminho
+      // (~40 bytes em vez de ~300KB de base64 por entrega). Se o Storage
+      // falhar, salva o base64 na coluna como antes — a foto nunca se perde.
+      const eventoFoto: string | null = foto
+        ? ((await salvarFotoSupabase(supabase, 'entregas', foto)) ?? foto)
+        : null;
       const stamp = carimboAgora();
       const detAtual = String(saleRow.detalhe_pagamento || 'PRE-VENDA');
       // BLOCO 22: a comissao so e gerada DEPOIS que o update da venda CONFIRMA

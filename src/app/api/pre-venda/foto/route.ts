@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/serverSupabase';
 import { sessionFromRequest } from '@/lib/session';
 import { hasBoletoFotoColumn } from '@/lib/serverSchema';
+import { resolverFotoSupabase } from '@/lib/fotoStorage';
 
 /**
  * GET /api/pre-venda/foto
@@ -105,7 +106,8 @@ export async function GET(req: NextRequest) {
       .maybeSingle();
 
     if (!ev?.foto) return NextResponse.json({ error: 'Sem foto anexada.' }, { status: 404 });
-    return NextResponse.json({ foto: ev.foto });
+    // Caminho no Storage -> URL assinada (1h); dataURL (linhas antigas) passa igual.
+    return NextResponse.json({ foto: await resolverFotoSupabase(supabase, ev.foto) });
   } catch (e: any) {
     console.error('[api/pre-venda/foto] erro:', e?.message);
     return NextResponse.json({ error: 'Erro ao buscar foto.' }, { status: 500 });

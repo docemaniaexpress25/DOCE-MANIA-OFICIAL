@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/serverSupabase';
 import { isAdminSession } from '@/lib/session';
+import { resolverFotoSupabase } from '@/lib/fotoStorage';
 
 /**
  * GET /api/comprovantes/foto?id=...   [ADMIN]
@@ -30,7 +31,8 @@ export async function GET(req: NextRequest) {
     if (error) throw error;
     if (!data) return NextResponse.json({ error: 'Comprovante nao encontrado.' }, { status: 404 });
 
-    return NextResponse.json({ id: data.id, foto: data.foto });
+    // Caminho no Storage -> URL assinada (1h); dataURL (linhas antigas) passa igual.
+    return NextResponse.json({ id: data.id, foto: await resolverFotoSupabase(getServiceClient(), data.foto) });
   } catch (e: any) {
     console.error('[api/comprovantes/foto] erro:', e?.message);
     return NextResponse.json({ error: 'Erro ao carregar foto.' }, { status: 500 });

@@ -55,9 +55,13 @@ export async function POST(request: NextRequest) {
     }
 
     const path = `produtos/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${mime === 'jpeg' ? 'jpg' : mime}`;
+    // CACHE DE 1 ANO: o nome do arquivo e unico (timestamp) — o conteudo
+    // nunca muda. O default do Storage (1h) fazia TODO aparelho baixar o
+    // catalogo inteiro de novo a cada hora (egress); com cache longo, a foto
+    // so baixa uma vez por aparelho. Economia de GBs/mes no plano gratuito.
     const { error: upErr } = await supabase.storage
       .from(BUCKET)
-      .upload(path, buffer, { contentType: `image/${mime}`, upsert: false });
+      .upload(path, buffer, { contentType: `image/${mime}`, upsert: false, cacheControl: '31536000' });
     if (upErr) throw upErr;
 
     const { data: pub } = supabase.storage.from(BUCKET).getPublicUrl(path);

@@ -428,3 +428,24 @@ Stage Summary:
 - A conexão com a impressora NÃO CAI mais entre cupons: o app mantém o link vivo com heartbeat de 5s (comando de status que não imprime nada) e, se cair mesmo (impressora desligada/fora de alcance), religa sozinho em background — sem seletor, sem confirm, sem reconectar na mão. O seletor nativo virou último recurso.
 - Cupom 1 → cupom 2: o vendedor só imprime. Queda no meio do cupom: o envio reconecta e termina de onde parou. Impressões seguidas: fila organizada.
 - Nada a fazer pelo dono (sem SQL). Pendências antigas mantidas: NF entrada XML.
+
+---
+Task ID: bloco69-supabase-gratuito-otimizacao
+Agent: Z.ai Code (principal)
+Task: "Como que está o uso dos dados do supabase conta gratuita? Me fale, não podemos estourar o limite, otimize isso"
+
+Work Log:
+- AUDITORIA COMPLETA do consumo (56 arquivos usam Supabase; app NÃO usa Prisma para negócio): limites do plano gratuito = 500MB banco / 1GB Storage / 5GB egress-mês.
+- JÁ OTIMIZADO (blocos anteriores, auditado e confirmado): realtime filtrado (só INSERT em sales + debounce 2s — era o maior egress); GPS em UPSERT (1 linha/usuário, não acumula); checkDate de 30s é LOCAL (rede zero); getAllSales com colunas explícitas SEM comprovante_foto + fetchAllPages paginado (Bloco 20/29/30); fotos fora das listagens (sob demanda); capturas comprimidas no aparelho (PDV 0.6, EntregasView ~900px/0.7, VendedorDashboard 0.6, portal catálogo 640px/0.7); comprovante do portal com guarda de 1.5M chars; guarda de 3.5M chars na foto de entrega.
+- VULNERABILIDADE ESTRUTURAL encontrada: fotos de ENTREGA (entrega_eventos.foto) e COMPROVANTE Pix do portal (payment_comprovantes.foto) eram gravadas como BASE64 EM LINHAS DO POSTGRES (~150-350KB/foto → ~110MB/mês de banco no ritmo das rotas; 500MB estouraria em poucos meses).
+- FIX (src/lib/fotoStorage.ts NOVO): bucket PRIVADO 'fotos-pedidos' (2MB/file) criado sob demanda; salvarFotoSupabase() manda o dataURL pro Storage e devolve o CAMINHO (~40 bytes) pra gravar na coluna; resolverFotoSupabase() converte caminho → URL ASSINADA de 1h na leitura (a permissão continua no servidor: quem valida a sessão é a API, o cliente só recebe a URL de 1h); dataURLs de linhas antigas passam igual (compatibilidade); SE O STORAGE FALHAR grava o base64 na coluna como antes — a foto NUNCA se perde, só deixa de economizar naquele caso raro.
+- Integração em 5 pontos: confirmação de entrega (pre-venda/route.ts eventoFoto → Storage), GET da foto de entrega (pre-venda/foto), comprovante do portal do cliente (cliente/[codigo]/comprovante), GET da foto de comprovante (comprovantes/foto). Listagens continuam SEM foto (lote usa not-null ✓; portal do cliente lista 15 sem foto ✓).
+- BANDWIDTH (2ª frente): fotos de produto (bucket público product-images, ~60+ imagens carregadas por TODO aparelho no PDV) tinham cache de 1h (default do Storage) = catálogo inteiro re-baixado a cada hora por aparelho. Agora upload com cacheControl '31536000' (1 ano — nome do arquivo é único/imutável). Fotos antigas mantêm 1h até serem re-enviadas (opção: reenviar no admin quando editar produto).
+- QA: lint 0 erros/11 warnings (baseline); tsc 7 src/ (baseline); harness do helper (client Supabase falso) 9/9 PASS — bucket criado privado, upload decodifica bytes, falha→null (fallback), foto patologica rejeitada, dataURL passa igual, caminho→URL assinada ttl 3600, inexistente não lança, null seguro. (MultiEdit parcialmente aplicado em pre-venda/route.ts causou import duplicado — detectado na auditoria pós-edit e corrigido.)
+- Commit local 3ac9102 (Bloco 68) + este commit AGUARDANDO PUSH: credencial GitHub segue perdida no sandbox (checkpoint) — push pendente.
+- RESTANTE reportado ao dono (precisa autorização/prioridade): (1) sales.comprovante_foto LEGADO ainda guarda base64 de vendas antigas (única cópia — precisa migração pra Storage antes de purgar); (2) curva de crescimento do getAllSales (contas a receber exige vendas antigas — proposta: split "a receber" vs "histórico 90d"); (3) como ver consumo: Supabase Dashboard → Settings → Usage (Database Size / Storage / Egress).
+
+Stage Summary:
+- O banco para de inflar: foto de entrega e comprovante agora ocupam ~40 BYTES na linha (caminho) em vez de ~300KB (base64) — o maior consumidor do limite de 500MB cortado na raiz, com retrocompatibilidade total e fallback seguro.
+- O egress do catálogo cai de "catálogo inteiro por hora por aparelho" para "uma vez por aparelho" (cache de 1 ano).
+- O que já estava otimizado foi auditado e confirmado (realtime, GPS, colunas, paginação, compressão). Pendências de longo prazo documentadas para o dono decidir.

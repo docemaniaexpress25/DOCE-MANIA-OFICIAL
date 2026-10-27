@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Teste overflow estoque</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<style>body{font-family:system-ui,sans-serif;}</style>
+</head>
+<body class="bg-gray-100">
+<div class="space-y-6 pb-10">
+  <div class="space-y-4 py-4">
+    <div class="px-2 flex justify-between items-center gap-2 flex-wrap"><h2 class="text-xl sm:text-2xl font-black text-gray-800 tracking-tight">Estoque Central</h2><div class="flex gap-2"><button class="bg-blue-600 text-white w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg"><i class="fa-solid fa-plus text-lg"></i></button></div></div>
+    <div class="px-1"><input placeholder="Buscar produto..." class="w-full p-4 bg-white border border-gray-100 rounded-2xl shadow-sm text-sm"></div>
+    <div class="grid gap-2">
+      <!-- NOVO CARD (corrigido) -->
+      <div class="bg-white p-3 sm:p-4 rounded-3xl border shadow-sm flex items-center gap-2.5 min-w-0 transition-all">
+        <div class="flex flex-col gap-1 flex-shrink-0">
+          <button class="w-7 h-7 bg-gray-50 text-gray-400 rounded-lg flex items-center justify-center border border-gray-100"><i class="fa-solid fa-chevron-up text-[9px]"></i></button>
+          <button class="w-7 h-7 bg-gray-50 text-gray-400 rounded-lg flex items-center justify-center border border-gray-100"><i class="fa-solid fa-chevron-down text-[9px]"></i></button>
+        </div>
+        <div class="flex-1 min-w-0 cursor-pointer">
+          <h3 class="font-bold text-gray-800 text-[13px] leading-tight uppercase truncate">BATATA WANFLO ONDULADA GRANDE 999G</h3>
+          <div class="flex items-center gap-1.5 mt-1 flex-wrap min-w-0">
+            <span class="text-[10px] font-black text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded-lg border border-blue-100 tracking-tighter whitespace-nowrap"><i class="fa-solid fa-boxes-stacked mr-1 text-[8px]"></i>1234 un</span>
+            <span class="text-[10px] font-black text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-lg border border-emerald-100 tracking-tighter whitespace-nowrap">R$ 173.99</span>
+          </div>
+        </div>
+        <div class="flex gap-1.5 flex-shrink-0">
+          <button class="bg-emerald-50 text-emerald-600 w-10 h-10 rounded-xl border border-emerald-100 flex items-center justify-center shadow-sm"><i class="fa-solid fa-plus-circle text-lg"></i></button>
+          <button class="bg-blue-50 text-blue-600 w-10 h-10 rounded-xl border border-blue-100 flex items-center justify-center shadow-sm"><i class="fa-solid fa-pencil-alt text-sm"></i></button>
+        </div>
+      </div>
+      <!-- CARD ANTIGO (antes da correção) para comparação -->
+      <div class="bg-white p-4 rounded-3xl border shadow-sm flex items-center gap-3 transition-all" id="old-card">
+        <div class="flex flex-col gap-1 flex-shrink-0">
+          <button class="w-7 h-7 bg-gray-50 text-gray-400 rounded-lg flex items-center justify-center border border-gray-100"><i class="fa-solid fa-chevron-up text-[9px]"></i></button>
+          <button class="w-7 h-7 bg-gray-50 text-gray-400 rounded-lg flex items-center justify-center border border-gray-100"><i class="fa-solid fa-chevron-down text-[9px]"></i></button>
+        </div>
+        <div class="flex-1 min-w-0 cursor-pointer">
+          <h3 class="font-bold text-gray-800 text-[13px] leading-tight uppercase truncate">PALITINHO 120G</h3>
+          <div class="flex items-center gap-2 mt-1 flex-wrap">
+            <span class="text-[10px] font-black text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg border border-blue-100 uppercase tracking-tighter">Estoque: 567 un</span>
+            <span class="text-[10px] font-black text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-lg border border-emerald-100 uppercase tracking-tighter">R$ 2.39</span>
+          </div>
+        </div>
+        <div class="flex gap-1.5 flex-shrink-0">
+          <button class="bg-emerald-50 text-emerald-600 w-10 h-10 rounded-xl border border-emerald-100 flex items-center justify-center shadow-sm"><i class="fa-solid fa-plus-circle text-lg"></i></button>
+          <button class="bg-blue-50 text-blue-600 w-10 h-10 rounded-xl border border-blue-100 flex items-center justify-center shadow-sm"><i class="fa-solid fa-pencil-alt text-sm"></i></button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

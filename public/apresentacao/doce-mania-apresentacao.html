@@ -1,0 +1,887 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>DoceMania — Apresentação de Negócio e Proposta de Sociedade</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Playfair+Display:ital,wght@0,700;0,800;0,900;1,700;1,900&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --canvas-w:1280px;
+    --canvas-h:720px;
+    --choco-950:#20110A;
+    --choco:#2B1A12;
+    --caramel:#A66B2A;
+    --caramel-deep:#8A5320;
+    --gold:#D9A441;
+    --cream:#FAF5EB;
+    --paper:#FFFFFF;
+    --ink-soft:rgba(43,26,18,.62);
+    --ink-line:rgba(43,26,18,.13);
+    --cream-soft:rgba(250,245,235,.66);
+    --cream-line:rgba(250,245,235,.17);
+  }
+  @page{ size:1280px 720px; margin:0; }
+  html,body{ margin:0; padding:0; width:1280px; background:#20110A; }
+  body{ font-family:'Inter','Helvetica Neue',Arial,sans-serif; -webkit-font-smoothing:antialiased; }
+  *{ box-sizing:border-box; }
+
+  .continuous-canvas{ width:var(--canvas-w); }
+  .page-section{
+    position:relative; width:1280px; height:720px;
+    break-after:page; page-break-after:always;
+  }
+  .page-section:last-child{ break-after:auto; page-break-after:auto; }
+
+  .page{ padding:52px 64px 92px; }
+  .page.light{ background:var(--cream); color:var(--choco); }
+  .page.dark{ background:linear-gradient(158deg,#2E1B11 0%,#20110A 78%); color:var(--cream); }
+
+  /* ---------- header / footer ---------- */
+  .page-head{ display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:26px; position:relative; z-index:3; }
+  .kicker{ font-size:11.5px; font-weight:800; letter-spacing:.26em; color:var(--caramel); text-transform:uppercase; margin-bottom:9px; }
+  .kicker .gold{ color:var(--caramel-deep); }
+  h2.title{ font-size:30px; font-weight:800; letter-spacing:-.015em; line-height:1.12; margin:0; }
+  .pagenum{ font-size:12px; font-weight:600; letter-spacing:.14em; color:var(--ink-soft); padding-top:6px; white-space:nowrap; }
+
+  .page-foot{
+    position:absolute; left:64px; right:64px; bottom:24px; z-index:3;
+    display:flex; justify-content:space-between;
+    font-size:10.5px; font-weight:600; letter-spacing:.2em; text-transform:uppercase;
+    color:rgba(43,26,18,.56); border-top:1px solid var(--ink-line); padding-top:12px;
+  }
+  .page.dark .page-foot{ color:rgba(250,245,235,.5); border-top-color:var(--cream-line); }
+
+  .ghost{
+    position:absolute; top:16px; right:30px; z-index:1;
+    font-size:190px; font-weight:900; line-height:1; letter-spacing:-.05em;
+    color:rgba(43,26,18,.05); pointer-events:none;
+  }
+  .page.dark .ghost{ color:rgba(250,245,235,.05); }
+
+  .deco-arc{
+    position:absolute; right:0; bottom:0; width:300px; height:300px; z-index:1; pointer-events:none;
+    border-left:1px solid rgba(166,107,42,.35); border-top:1px solid rgba(166,107,42,.35);
+    border-top-left-radius:100%;
+  }
+
+  /* ---------- components ---------- */
+  .stat-card{
+    background:var(--paper); border:1px solid var(--ink-line); border-radius:14px;
+    padding:20px 22px; box-shadow:0 1px 0 rgba(43,26,18,.04);
+  }
+  .stat-num{ font-size:42px; font-weight:900; letter-spacing:-.02em; line-height:1.02; }
+  .stat-num .unit{ font-size:22px; font-weight:800; color:var(--caramel); letter-spacing:0; }
+  .stat-lab{ font-size:12.8px; line-height:1.45; color:var(--ink-soft); margin-top:8px; font-weight:500; }
+  .stat-top{ font-size:11px; font-weight:800; letter-spacing:.18em; text-transform:uppercase; color:var(--caramel); margin-bottom:10px; }
+
+  .grid3{ display:grid; grid-template-columns:repeat(3,1fr); gap:18px; }
+  .grid2{ display:grid; grid-template-columns:repeat(2,1fr); gap:18px; }
+
+  .chart-card{
+    background:var(--paper); border:1px solid var(--ink-line); border-radius:16px;
+    padding:22px 26px;
+  }
+  .chart-title{ font-size:15px; font-weight:800; margin:0 0 2px; }
+  .chart-sub{ font-size:11.5px; color:var(--ink-soft); margin:0 0 14px; font-weight:500; }
+
+  .note{ font-size:11.5px; line-height:1.5; color:var(--ink-soft); font-weight:500; }
+  .chip{
+    display:inline-block; background:rgba(166,107,42,.1); border:1px solid rgba(166,107,42,.28);
+    color:var(--caramel-deep); border-radius:999px; padding:7px 14px;
+    font-size:12px; font-weight:700; letter-spacing:.01em;
+  }
+  .banner{
+    background:var(--choco); color:var(--cream); border-radius:16px;
+    padding:20px 28px; display:flex; align-items:center; justify-content:space-between; gap:24px;
+  }
+  .banner .b-title{ font-size:19px; font-weight:800; letter-spacing:-.01em; }
+  .banner .b-num{ font-size:30px; font-weight:900; color:var(--gold); white-space:nowrap; letter-spacing:-.01em; }
+
+  /* ---------- margin cascade ---------- */
+  .casc-label{ width:148px; font-size:13.5px; font-weight:700; flex-shrink:0; }
+  .casc-track{ flex:1; height:36px; background:rgba(43,26,18,.06); border-radius:7px; overflow:hidden; }
+  .casc-bar{ height:100%; border-radius:7px; display:flex; align-items:center; justify-content:flex-end; padding-right:12px; color:var(--cream); font-weight:800; font-size:13px; }
+  .casc-minus{ font-size:12px; color:var(--ink-soft); font-weight:600; padding-left:162px; margin:5px 0 7px; }
+
+  /* ---------- cost list ---------- */
+  .cost-row{ display:flex; justify-content:space-between; font-size:13px; font-weight:600; padding:7px 0; border-bottom:1px dashed rgba(43,26,18,.14); }
+  .cost-row:last-of-type{ border-bottom:none; }
+  .cost-row .v{ font-weight:800; }
+  .cost-total{ display:flex; justify-content:space-between; font-size:13.5px; font-weight:800; margin-top:8px; padding-top:10px; border-top:2px solid rgba(43,26,18,.2); }
+
+  /* ---------- cover ---------- */
+  .cover-meta{ position:absolute; top:44px; font-size:12.5px; font-weight:700; letter-spacing:.22em; text-transform:uppercase; color:rgba(250,245,235,.62); z-index:3; }
+  .cover-hero{ position:absolute; left:64px; top:158px; z-index:3; max-width:820px; }
+  .cover-hero .kicker{ color:var(--gold); }
+  .hero-title{
+    font-family:'Playfair Display',Georgia,serif; font-weight:900;
+    font-size:97px; line-height:1.0; letter-spacing:-.015em; margin:14px 0 0;
+  }
+  .hero-line{ display:block; }
+  .hero-line.it{ font-style:italic; color:var(--gold); }
+  .hero-sub{ font-size:21.5px; line-height:1.5; color:rgba(250,245,235,.82); font-weight:500; max-width:640px; margin-top:26px; }
+  .cover-bottom{ position:absolute; left:64px; right:64px; bottom:56px; display:flex; justify-content:space-between; align-items:flex-end; z-index:3; }
+  .cover-label{ font-size:11px; font-weight:800; letter-spacing:.22em; text-transform:uppercase; color:rgba(250,245,235,.55); margin-bottom:8px; }
+  .cover-name{ font-size:21px; font-weight:800; letter-spacing:-.01em; }
+  .cover-big{ font-size:34px; font-weight:900; color:var(--gold); letter-spacing:-.02em; text-align:right; }
+  .cover-big-lab{ font-size:12.5px; font-weight:600; color:rgba(250,245,235,.62); text-align:right; margin-top:6px; letter-spacing:.04em; }
+
+  /* ---------- back cover ---------- */
+  .quote{
+    font-family:'Playfair Display',Georgia,serif; font-weight:800; font-style:italic;
+    font-size:51px; line-height:1.16; letter-spacing:-.01em; max-width:980px; margin:0;
+  }
+  .quote .gold{ color:var(--gold); }
+  .contact-name{ font-size:22px; font-weight:800; }
+  .contact-role{ font-size:13px; color:var(--cream-soft); font-weight:600; margin-top:4px; letter-spacing:.06em; }
+  .echo-row{ display:flex; gap:18px; }
+  .echo{
+    flex:1; border:1px solid var(--cream-line); border-radius:14px; padding:16px 20px;
+    background:rgba(255,255,255,.04);
+  }
+  .echo .n{ font-size:25px; font-weight:900; color:var(--gold); letter-spacing:-.01em; }
+  .echo .l{ font-size:11.5px; font-weight:600; color:var(--cream-soft); margin-top:5px; line-height:1.4; }
+
+  /* ---------- columns ---------- */
+  .col-card{
+    background:var(--paper); border:1px solid var(--ink-line); border-radius:16px; padding:22px 24px;
+    display:flex; flex-direction:column;
+  }
+  .col-num{
+    width:34px; height:34px; border-radius:50%; background:var(--choco); color:var(--gold);
+    font-size:13px; font-weight:900; display:flex; align-items:center; justify-content:center; margin-bottom:14px;
+  }
+  .col-tag{ font-size:11px; font-weight:800; letter-spacing:.2em; text-transform:uppercase; color:var(--caramel); margin-bottom:6px; }
+  .col-title{ font-size:19px; font-weight:800; margin:0 0 10px; letter-spacing:-.01em; }
+  .col-body{ font-size:13.2px; line-height:1.55; color:var(--ink-soft); font-weight:500; }
+  .col-body b{ color:var(--choco); font-weight:700; }
+
+  .legend-row{ display:flex; align-items:center; gap:10px; padding:9px 0; border-bottom:1px dashed rgba(43,26,18,.12); }
+  .legend-row:last-child{ border-bottom:none; }
+  .dot{ width:11px; height:11px; border-radius:50%; flex-shrink:0; }
+  .legend-name{ font-size:13.5px; font-weight:700; flex:1; }
+  .legend-val{ font-size:13px; font-weight:800; }
+  .legend-pct{ font-size:12px; color:var(--ink-soft); font-weight:600; margin-left:8px; }
+
+  @media screen {
+    html{
+      height:auto; display:flex; justify-content:center; background:#20110A;
+    }
+    body{
+      transform-origin:top center;
+      scale:min(1, calc(100vw / 1280px));
+      margin:0 auto;
+      box-shadow:0 0 60px rgba(0,0,0,.45);
+    }
+  }
+</style>
+</head>
+<body>
+<span class="katex" style="display:none" aria-hidden="true"></span>
+<div class="continuous-canvas">
+
+<!-- ============ PÁGINA 1 — CAPA ============ -->
+<section class="page-section page dark">
+  <div class="cover-meta" style="left:64px;">DoceMania &bull; Distribui&ccedil;&atilde;o de Salgados, Doces e Bebidas</div>
+  <div class="cover-meta" style="right:64px;">Outubro 2025 &bull; Confidencial</div>
+
+  <svg style="position:absolute; right:0; top:0; z-index:1; opacity:.5;" width="420" height="720" viewBox="0 0 420 720" fill="none">
+    <circle cx="420" cy="360" r="150" stroke="rgba(217,164,65,.22)" stroke-width="1"/>
+    <circle cx="420" cy="360" r="230" stroke="rgba(217,164,65,.13)" stroke-width="1"/>
+    <circle cx="420" cy="360" r="310" stroke="rgba(217,164,65,.07)" stroke-width="1"/>
+    <circle cx="420" cy="360" r="6" fill="rgba(217,164,65,.5)"/>
+  </svg>
+
+  <div class="cover-hero">
+    <div class="kicker">Oportunidade de sociedade e investimento</div>
+    <h1 class="hero-title"><div class="hero-line">DOCEMANIA</div><div class="hero-line it">em n&uacute;meros.</div></h1>
+    <p class="hero-sub">Opera&ccedil;&atilde;o pr&oacute;pria de distribui&ccedil;&atilde;o, app de pedidos com hist&oacute;rico completo e lucro comprovado m&ecirc;s a m&ecirc;s. Sem hist&oacute;ria &mdash; s&oacute; o que os dados mostram.</p>
+  </div>
+
+  <div class="cover-bottom">
+    <div>
+      <div class="cover-label">S&oacute;cio fundador &bull; administrador majorit&aacute;rio</div>
+      <div class="cover-name">Albeneir Edipo Pena</div>
+    </div>
+    <div>
+      <div class="cover-big">R$ 906 mil</div>
+      <div class="cover-big-lab">faturados no hist&oacute;rico total do neg&oacute;cio</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ PÁGINA 2 — PANORAMA ============ -->
+<section class="page-section page light">
+  <div class="ghost">02</div>
+  <header class="page-head">
+    <div>
+      <div class="kicker">Panorama</div>
+      <h2 class="title">O tamanho do que j&aacute; foi constru&iacute;do</h2>
+    </div>
+    <div class="pagenum">02 &middot; 13</div>
+  </header>
+
+  <div class="grid3" style="position:relative; z-index:3;">
+    <div class="stat-card">
+      <div class="stat-num">R$ 906 <span class="unit">mil</span></div>
+      <div class="stat-lab">faturamento total do hist&oacute;rico do neg&oacute;cio &mdash; app + per&iacute;odo anterior</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-num">R$ 354 <span class="unit">mil</span></div>
+      <div class="stat-lab">faturados dentro do app em 5 meses de opera&ccedil;&atilde;o (mai&ndash;set / 2025)</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-num">R$ 552 <span class="unit">mil</span></div>
+      <div class="stat-lab">faturados antes do app &mdash; hist&oacute;rico anterior registrado &agrave; parte</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-num">1.869</div>
+      <div class="stat-lab">entregas realizadas: 1.012 anteriores ao app + 857 pedidos pelo sistema</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-num">172 <span class="unit">clientes</span></div>
+      <div class="stat-lab">cadastrados na carteira, sendo 160 ativos &mdash; 93% da base comprando</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-num">52.695</div>
+      <div class="stat-lab">unidades vendidas pelo app em 5 meses &mdash; com 2 Kangoo dedicadas &agrave; entrega</div>
+    </div>
+  </div>
+
+  <div style="margin-top:22px; display:flex; gap:12px; flex-wrap:wrap; position:relative; z-index:3;">
+    <span class="chip">Opera&ccedil;&atilde;o pr&oacute;pria, sem intermedi&aacute;rios</span>
+    <span class="chip">Carteira fiel com recompra mensal</span>
+    <span class="chip">Estoque girando</span>
+    <span class="chip">Zero d&iacute;vida com fornecedores</span>
+  </div>
+
+  <div style="margin-top:22px; position:relative; z-index:3;" class="banner">
+    <div class="b-title">R$ 906 mil de hist&oacute;rico comprovam uma opera&ccedil;&atilde;o real &mdash; o que falta agora &eacute; volume para girar mais r&aacute;pido.</div>
+    <div class="b-num">Base pronta para escalar</div>
+  </div>
+
+  <footer class="page-foot"><span>DoceMania &mdash; Apresenta&ccedil;&atilde;o de neg&oacute;cio</span><span>Outubro 2025</span></footer>
+</section>
+
+<!-- ============ PÁGINA 3 — FATURAMENTO MENSAL ============ -->
+<section class="page-section page light">
+  <div class="ghost">03</div>
+  <header class="page-head">
+    <div>
+      <div class="kicker">Desempenho</div>
+      <h2 class="title">Faturamento que sobe todo m&ecirc;s</h2>
+    </div>
+    <div class="pagenum">03 &middot; 13</div>
+  </header>
+
+  <div style="display:flex; gap:22px; position:relative; z-index:3;">
+    <div class="chart-card" style="flex:1.55;">
+      <p class="chart-title">Faturamento mensal no app (R$)</p>
+      <p class="chart-sub">Pedidos faturados por m&ecirc;s &middot; mai&ndash;set / 2025</p>
+      <svg width="100%" viewBox="0 0 560 340" style="display:block;">
+        <!-- bars -->
+        <path d="M 18 286 L 18 129.7 Q 18 125.7 22 125.7 L 90 125.7 Q 94 125.7 94 129.7 L 94 286 Z" fill="#A66B2A"/>
+        <path d="M 125 286 L 125 90.2 Q 125 86.2 129 86.2 L 197 86.2 Q 201 86.2 201 90.2 L 201 286 Z" fill="#A66B2A"/>
+        <path d="M 232 286 L 232 50 Q 232 46 236 46 L 300 46 Q 304 46 304 50 L 304 286 Z" fill="#D9A441"/>
+        <path d="M 339 286 L 339 99.9 Q 339 95.9 343 95.9 L 411 95.9 Q 415 95.9 415 99.9 L 415 286 Z" fill="#A66B2A"/>
+        <path d="M 446 286 L 446 212.9 Q 446 208.9 450 208.9 L 518 208.9 Q 522 208.9 522 212.9 L 522 286 Z" fill="#A66B2A"/>
+        <!-- projection ghost (september pace) -->
+        <rect x="446" y="55.8" width="76" height="153.1" rx="4" fill="rgba(166,107,42,.07)" stroke="#A66B2A" stroke-width="1.4" stroke-dasharray="5 5"/>
+        <line x1="10" y1="286" x2="550" y2="286" stroke="rgba(43,26,18,.3)" stroke-width="1"/>
+        <!-- value labels -->
+        <text x="56" y="115" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="15" font-weight="800" fill="#2B1A12">65.489</text>
+        <text x="163" y="75.5" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="15" font-weight="800" fill="#2B1A12">81.563</text>
+        <text x="268" y="35.5" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="15" font-weight="800" fill="#2B1A12">97.997</text>
+        <text x="377" y="85.4" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="15" font-weight="800" fill="#2B1A12">77.597</text>
+        <text x="484" y="198.4" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="15" font-weight="800" fill="#2B1A12">31.492</text>
+        <text x="484" y="48" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="12" font-weight="700" fill="#8A5320">ritmo: 94 mil</text>
+        <!-- month + order labels -->
+        <text x="56" y="308" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="13" font-weight="800" fill="#2B1A12">MAI</text>
+        <text x="163" y="308" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="13" font-weight="800" fill="#2B1A12">JUN</text>
+        <text x="268" y="308" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="13" font-weight="800" fill="#2B1A12">JUL</text>
+        <text x="377" y="308" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="13" font-weight="800" fill="#2B1A12">AGO</text>
+        <text x="484" y="308" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="13" font-weight="800" fill="#2B1A12">SET*</text>
+        <text x="56" y="326" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="11" font-weight="500" fill="rgba(43,26,18,.62)">166 pedidos</text>
+        <text x="163" y="326" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="11" font-weight="500" fill="rgba(43,26,18,.62)">188 pedidos</text>
+        <text x="268" y="326" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="11" font-weight="500" fill="rgba(43,26,18,.62)">223 &mdash; pico</text>
+        <text x="377" y="326" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="11" font-weight="500" fill="rgba(43,26,18,.62)">208 pedidos</text>
+        <text x="484" y="326" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="11" font-weight="500" fill="rgba(43,26,18,.62)">72 em 10 dias</text>
+      </svg>
+      <p class="note" style="margin-top:10px;">*Setembro: faturamento de apenas 10 dias (1&ordf; &agrave; 10&ordf;). Barra tracejada = ritmo projetado do m&ecirc;s completo. De maio ao pico de julho, o faturamento cresceu <b>+49,6%</b>.</p>
+    </div>
+
+    <div style="flex:1; display:flex; flex-direction:column; gap:16px;">
+      <div class="stat-card">
+        <div class="stat-top">M&eacute;dia mensal</div>
+        <div class="stat-num" style="font-size:36px;">R$ 80,6 <span class="unit">mil</span></div>
+        <div class="stat-lab">m&eacute;dia dos 4 meses completos no app</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-top">Ticket m&eacute;dio</div>
+        <div class="stat-num" style="font-size:36px;">R$ 413</div>
+        <div class="stat-lab">por pedido &mdash; volume de atacado por entrega</div>
+      </div>
+      <div class="stat-card" style="background:#2B1A12; border-color:#2B1A12; color:#FAF5EB;">
+        <div class="stat-top" style="color:#D9A441;">Setembro projetado</div>
+        <div class="stat-num" style="font-size:36px;">R$ 94 <span class="unit" style="color:#D9A441;">mil</span></div>
+        <div class="stat-lab" style="color:rgba(250,245,235,.66);">novo recorde no ritmo de 10 dias</div>
+      </div>
+    </div>
+  </div>
+
+  <footer class="page-foot"><span>DoceMania &mdash; Apresenta&ccedil;&atilde;o de neg&oacute;cio</span><span>Outubro 2025</span></footer>
+</section>
+
+<!-- ============ PÁGINA 4 — MÁQUINA DE LUCRO ============ -->
+<section class="page-section page light">
+  <div class="ghost">04</div>
+  <header class="page-head">
+    <div>
+      <div class="kicker">Rentabilidade</div>
+      <h2 class="title">A m&aacute;quina de lucro, aberta em n&uacute;meros</h2>
+    </div>
+    <div class="pagenum">04 &middot; 13</div>
+  </header>
+
+  <div style="display:flex; gap:24px; position:relative; z-index:3;">
+    <div class="chart-card" style="flex:1.35;">
+      <p class="chart-title">Para onde vai cada R$ 100 faturados</p>
+      <p class="chart-sub">Estrutura de margem sobre a receita m&eacute;dia mensal</p>
+
+      <div style="display:flex; align-items:center; gap:14px;">
+        <div class="casc-label">Faturamento</div>
+        <div class="casc-track"><div class="casc-bar" style="width:100%; background:#2B1A12;">100%</div></div>
+      </div>
+      <div class="casc-minus">&ndash; custo das mercadorias (CMV): 66,7%</div>
+      <div style="display:flex; align-items:center; gap:14px;">
+        <div class="casc-label">Lucro bruto</div>
+        <div class="casc-track"><div class="casc-bar" style="width:33.3%; background:#A66B2A;">33,3%</div></div>
+      </div>
+      <div class="casc-minus">&ndash; comissões e taxas: ~10% &nbsp;&nbsp;&middot;&nbsp;&nbsp; &ndash; despesas fixas: ~3,7%</div>
+      <div style="display:flex; align-items:center; gap:14px;">
+        <div class="casc-label" style="font-weight:800;">Lucro líquido</div>
+        <div class="casc-track"><div class="casc-bar" style="width:21%; background:#D9A441; color:#2B1A12;">20&ndash;22%</div></div>
+      </div>
+
+      <div style="margin-top:22px; padding-top:16px; border-top:1px solid rgba(43,26,18,.12); display:flex; gap:26px;">
+        <div style="flex:1;">
+          <div style="font-size:30px; font-weight:900; letter-spacing:-.02em;">~R$ 19 mil</div>
+          <div class="note" style="margin-top:3px;">lucro l&iacute;quido m&eacute;dio por m&ecirc;s, j&aacute; no ritmo atual</div>
+        </div>
+        <div style="flex:1; border-left:1px solid rgba(43,26,18,.14); padding-left:26px;">
+          <div style="font-size:30px; font-weight:900; letter-spacing:-.02em; color:#8A5320;">~R$ 21,5 mil</div>
+          <div class="note" style="margin-top:3px;">lucro l&iacute;quido no ritmo de setembro</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="chart-card" style="flex:1;">
+      <p class="chart-title">Despesas fixas &mdash; leves e previs&iacute;veis</p>
+      <p class="chart-sub">Total mensal de apenas R$ 2.990 (~3,7% da receita)</p>
+      <div class="cost-row"><span>Combust&iacute;vel e despesas de rota</span><span class="v">R$ 2.000</span></div>
+      <div class="cost-row"><span>Imposto</span><span class="v">R$ 300</span></div>
+      <div class="cost-row"><span>Seguro das Kangoo</span><span class="v">R$ 300</span></div>
+      <div class="cost-row"><span>Contador</span><span class="v">R$ 300</span></div>
+      <div class="cost-row"><span>Emiss&atilde;o de notas fiscais</span><span class="v">R$ 90</span></div>
+      <div class="cost-total"><span>Total fixo / m&ecirc;s</span><span>R$ 2.990</span></div>
+    </div>
+  </div>
+
+  <div style="margin-top:20px; position:relative; z-index:3;" class="banner">
+    <div class="b-title">A cada R$ 100 faturados, R$ 20&ndash;22 chegam de lucro l&iacute;quido no caixa.</div>
+    <div class="b-num">M&aacute;quina validada</div>
+  </div>
+
+  <footer class="page-foot"><span>DoceMania &mdash; Apresenta&ccedil;&atilde;o de neg&oacute;cio</span><span>Outubro 2025</span></footer>
+</section>
+
+<!-- ============ PÁGINA 5 — CLIENTES ============ -->
+<section class="page-section page light">
+  <div class="ghost">05</div>
+  <header class="page-head">
+    <div>
+      <div class="kicker">Carteira</div>
+      <h2 class="title">Clientes que recompram todo m&ecirc;s</h2>
+    </div>
+    <div class="pagenum">05 &middot; 13</div>
+  </header>
+
+  <div style="display:flex; gap:22px; position:relative; z-index:3;">
+    <div style="flex:1; display:flex; flex-direction:column; gap:16px;">
+      <div class="grid2">
+        <div class="stat-card">
+          <div class="stat-num" style="font-size:38px;">172</div>
+          <div class="stat-lab">clientes cadastrados na carteira</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-num" style="font-size:38px; color:#8A5320;">160</div>
+          <div class="stat-lab">ativos &mdash; <b>93% da base</b> compra com recorr&ecirc;ncia</div>
+        </div>
+      </div>
+      <div class="stat-card" style="background:#2B1A12; border-color:#2B1A12; color:#FAF5EB;">
+        <div class="stat-top" style="color:#D9A441;">Credi&aacute;rio pr&oacute;prio em opera&ccedil;&atilde;o</div>
+        <div class="stat-num" style="font-size:34px;">R$ 25,2 <span class="unit" style="color:#D9A441;">mil</span></div>
+        <div class="stat-lab" style="color:rgba(250,245,235,.66);">girando com 28 clientes &mdash; confian&ccedil;a instalada e recompra garantida</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-top">Frequ&ecirc;ncia</div>
+        <div class="stat-lab" style="margin-top:0; font-size:13.5px; color:var(--choco);">Os maiores clientes compram <b>2&ndash;3 vezes por m&ecirc;s</b>, h&aacute; meses seguidos. A recompra n&atilde;o &eacute; exce&ccedil;&atilde;o &mdash; &eacute; a regra da carteira.</div>
+      </div>
+    </div>
+
+    <div class="chart-card" style="flex:1.35;">
+      <p class="chart-title">Top 3 clientes por faturamento</p>
+      <p class="chart-sub">Valor acumulado e n&uacute;mero de pedidos no per&iacute;odo do app</p>
+      <svg width="100%" viewBox="0 0 560 226" style="display:block;">
+        <text x="0" y="24" font-family="Inter,Arial,sans-serif" font-size="14" font-weight="800" fill="#2B1A12">Point do Vale</text>
+        <rect x="0" y="34" width="340" height="20" rx="3" fill="#D9A441"/>
+        <text x="350" y="49" font-family="Inter,Arial,sans-serif" font-size="13" font-weight="800" fill="#2B1A12">R$ 23,0 mil <tspan font-weight="600" fill="rgba(43,26,18,.62)">&middot; 21 pedidos</tspan></text>
+
+        <text x="0" y="94" font-family="Inter,Arial,sans-serif" font-size="14" font-weight="800" fill="#2B1A12">M Charrua</text>
+        <rect x="0" y="104" width="279" height="20" rx="3" fill="#A66B2A" opacity=".9"/>
+        <text x="289" y="119" font-family="Inter,Arial,sans-serif" font-size="13" font-weight="800" fill="#2B1A12">R$ 18,9 mil <tspan font-weight="600" fill="rgba(43,26,18,.62)">&middot; 18 pedidos</tspan></text>
+
+        <text x="0" y="164" font-family="Inter,Arial,sans-serif" font-size="14" font-weight="800" fill="#2B1A12">M Toda Hora</text>
+        <rect x="0" y="174" width="262" height="20" rx="3" fill="#A66B2A" opacity=".78"/>
+        <text x="272" y="189" font-family="Inter,Arial,sans-serif" font-size="13" font-weight="800" fill="#2B1A12">R$ 17,7 mil <tspan font-weight="600" fill="rgba(43,26,18,.62)">&middot; 15 pedidos</tspan></text>
+      </svg>
+      <p class="note" style="margin-top:10px;">Carteira pulverizada: os 3 maiores clientes representam cerca de <b>17% do faturamento</b> &mdash; concentra&ccedil;&atilde;o baixa, risco controlado.</p>
+    </div>
+  </div>
+
+  <footer class="page-foot"><span>DoceMania &mdash; Apresenta&ccedil;&atilde;o de neg&oacute;cio</span><span>Outubro 2025</span></footer>
+</section>
+
+<!-- ============ PÁGINA 6 — OPERAÇÃO ============ -->
+<section class="page-section page light">
+  <div class="ghost">06</div>
+  <header class="page-head">
+    <div>
+      <div class="kicker">Opera&ccedil;&atilde;o</div>
+      <h2 class="title">Enxuta, pr&oacute;pria e mensur&aacute;vel</h2>
+    </div>
+    <div class="pagenum">06 &middot; 13</div>
+  </header>
+
+  <div class="grid2" style="position:relative; z-index:3;">
+    <div class="stat-card">
+      <div class="stat-top">Frota pr&oacute;pria</div>
+      <div class="stat-num" style="font-size:33px;">2 Kangoo <span class="unit">2025</span></div>
+      <div class="stat-lab">ve&iacute;culos adquiridos em outubro de 2025, dedicados exclusivamente &agrave; entrega &mdash; log&iacute;stica sob controle, sem terceiros</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-top">Hist&oacute;rico de entrega</div>
+      <div class="stat-num" style="font-size:33px;">1.012 <span class="unit">entregas</span></div>
+      <div class="stat-lab">realizadas e registradas antes mesmo do app &mdash; soma-se &agrave;s 857 entregas do sistema atual</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-top">Modelo de venda</div>
+      <div class="stat-num" style="font-size:33px;">Pronta entrega</div>
+      <div class="stat-lab">pedido fechado, produto sai do estoque e chega no mesmo dia &mdash; giro r&aacute;pido, sem capital parado em promessa</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-top">Log&iacute;stica inteligente</div>
+      <div class="stat-num" style="font-size:33px;">Rotas por GPS</div>
+      <div class="stat-lab">otimiza&ccedil;&atilde;o de rota por entrega: mais pedidos por quil&ocirc;metro rodado e menos custo de combust&iacute;vel por pedido</div>
+    </div>
+  </div>
+
+  <div style="margin-top:22px; position:relative; z-index:3;" class="banner">
+    <div class="b-title">Tudo registrado no sistema: pedido, cliente, rota, custo e resultado &mdash; auditoria &agrave; vontade.</div>
+    <div class="b-num">100% rastre&aacute;vel</div>
+  </div>
+
+  <footer class="page-foot"><span>DoceMania &mdash; Apresenta&ccedil;&atilde;o de neg&oacute;cio</span><span>Outubro 2025</span></footer>
+</section>
+
+<!-- ============ PÁGINA 7 — MARCAS ============ -->
+<section class="page-section page light">
+  <div class="ghost">07</div>
+  <header class="page-head">
+    <div>
+      <div class="kicker">O que vende</div>
+      <h2 class="title">Marcas por faturamento</h2>
+    </div>
+    <div class="pagenum">07 &middot; 13</div>
+  </header>
+
+  <div style="display:flex; gap:22px; position:relative; z-index:3;">
+    <div class="chart-card" style="flex:1.6;">
+      <p class="chart-title">Ranking de marcas &mdash; R$ faturados no app (mai&ndash;set / 2025)</p>
+      <svg width="100%" viewBox="0 0 700 452" style="display:block;">
+        <!-- row 1 -->
+        <text x="142" y="26" text-anchor="end" font-family="Inter,Arial,sans-serif" font-size="13" font-weight="700" fill="#2B1A12">Doritos</text>
+        <rect x="152" y="12" width="520" height="22" rx="3" fill="#D9A441"/>
+        <text x="664" y="27" text-anchor="end" font-family="Inter,Arial,sans-serif" font-size="12.5" font-weight="800" fill="#2B1A12">R$ 87.214 &middot; 24,6%</text>
+        <!-- row 2 -->
+        <text x="142" y="72" text-anchor="end" font-family="Inter,Arial,sans-serif" font-size="13" font-weight="700" fill="#2B1A12">Cheetos</text>
+        <rect x="152" y="58" width="400" height="22" rx="3" fill="#A66B2A" opacity=".95"/>
+        <text x="560" y="73" font-family="Inter,Arial,sans-serif" font-size="12.5" font-weight="800" fill="#2B1A12">R$ 67.063 &middot; 18,9%</text>
+        <!-- row 3 -->
+        <text x="142" y="118" text-anchor="end" font-family="Inter,Arial,sans-serif" font-size="13" font-weight="700" fill="#2B1A12">Ruffles</text>
+        <rect x="152" y="104" width="215" height="22" rx="3" fill="#A66B2A" opacity=".88"/>
+        <text x="375" y="119" font-family="Inter,Arial,sans-serif" font-size="12.5" font-weight="800" fill="#2B1A12">R$ 36.075 &middot; 10,2%</text>
+        <!-- row 4 -->
+        <text x="142" y="164" text-anchor="end" font-family="Inter,Arial,sans-serif" font-size="13" font-weight="700" fill="#2B1A12">Fandangos</text>
+        <rect x="152" y="150" width="208" height="22" rx="3" fill="#A66B2A" opacity=".82"/>
+        <text x="368" y="165" font-family="Inter,Arial,sans-serif" font-size="12.5" font-weight="800" fill="#2B1A12">R$ 34.885 &middot; 9,9%</text>
+        <!-- row 5 -->
+        <text x="142" y="210" text-anchor="end" font-family="Inter,Arial,sans-serif" font-size="13" font-weight="700" fill="#2B1A12">Outras marcas</text>
+        <rect x="152" y="196" width="187" height="22" rx="3" fill="#A66B2A" opacity=".74"/>
+        <text x="347" y="211" font-family="Inter,Arial,sans-serif" font-size="12.5" font-weight="800" fill="#2B1A12">R$ 31.293 &middot; 8,8%</text>
+        <!-- row 6 -->
+        <text x="142" y="256" text-anchor="end" font-family="Inter,Arial,sans-serif" font-size="13" font-weight="700" fill="#2B1A12">Outros salgados</text>
+        <rect x="152" y="242" width="168" height="22" rx="3" fill="#A66B2A" opacity=".66"/>
+        <text x="328" y="257" font-family="Inter,Arial,sans-serif" font-size="12.5" font-weight="800" fill="#2B1A12">R$ 28.108 &middot; 7,9%</text>
+        <!-- row 7 -->
+        <text x="142" y="302" text-anchor="end" font-family="Inter,Arial,sans-serif" font-size="13" font-weight="700" fill="#2B1A12">Pingo</text>
+        <rect x="152" y="288" width="151" height="22" rx="3" fill="#A66B2A" opacity=".58"/>
+        <text x="311" y="303" font-family="Inter,Arial,sans-serif" font-size="12.5" font-weight="800" fill="#2B1A12">R$ 25.275 &middot; 7,1%</text>
+        <!-- row 8 -->
+        <text x="142" y="348" text-anchor="end" font-family="Inter,Arial,sans-serif" font-size="13" font-weight="700" fill="#2B1A12">Lay&rsquo;s</text>
+        <rect x="152" y="334" width="142" height="22" rx="3" fill="#A66B2A" opacity=".5"/>
+        <text x="302" y="349" font-family="Inter,Arial,sans-serif" font-size="12.5" font-weight="800" fill="#2B1A12">R$ 23.885 &middot; 6,7%</text>
+        <!-- row 9 -->
+        <text x="142" y="394" text-anchor="end" font-family="Inter,Arial,sans-serif" font-size="13" font-weight="700" fill="#2B1A12">Wanflo</text>
+        <rect x="152" y="380" width="58" height="22" rx="3" fill="#A66B2A" opacity=".42"/>
+        <text x="218" y="395" font-family="Inter,Arial,sans-serif" font-size="12.5" font-weight="800" fill="#2B1A12">R$ 9.754 &middot; 2,8%</text>
+        <!-- row 10 -->
+        <text x="142" y="440" text-anchor="end" font-family="Inter,Arial,sans-serif" font-size="13" font-weight="700" fill="#2B1A12">Toddynho</text>
+        <rect x="152" y="426" width="50" height="22" rx="3" fill="#A66B2A" opacity=".35"/>
+        <text x="210" y="441" font-family="Inter,Arial,sans-serif" font-size="12.5" font-weight="800" fill="#2B1A12">R$ 8.304 &middot; 2,3%</text>
+      </svg>
+    </div>
+
+    <div style="flex:1; display:flex; flex-direction:column; gap:16px;">
+      <div class="stat-card">
+        <div class="stat-top">Concentra&ccedil;&atilde;o que escala</div>
+        <div class="stat-num" style="font-size:34px;">43,5%</div>
+        <div class="stat-lab">do faturamento vem de s&oacute; 2 marcas &mdash; <b>Doritos + Cheetos</b>. Comprar mais volume delas = desconto maior e margem maior.</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-top">Prateleira validada</div>
+        <div class="stat-num" style="font-size:34px;">70,3%</div>
+        <div class="stat-lab">do faturamento nas 5 principais marcas de salgados (Doritos, Cheetos, Ruffles, Fandangos e Lay&rsquo;s)</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-top">Leitura do investidor</div>
+        <div class="stat-lab" style="font-size:13px; color:var(--choco);">Mix j&aacute; validado pelo consumidor: o capital entra para <b>aumentar profundidade de estoque</b> do que j&aacute; vende, sem apostas cegas.</div>
+      </div>
+    </div>
+  </div>
+
+  <footer class="page-foot"><span>DoceMania &mdash; Apresenta&ccedil;&atilde;o de neg&oacute;cio</span><span>Outubro 2025</span></footer>
+</section>
+
+<!-- ============ PÁGINA 8 — CATEGORIAS + TOP PRODUTOS ============ -->
+<section class="page-section page light">
+  <div class="ghost">08</div>
+  <header class="page-head">
+    <div>
+      <div class="kicker">Mix de produtos</div>
+      <h2 class="title">Onde o faturamento est&aacute; concentrado</h2>
+    </div>
+    <div class="pagenum">08 &middot; 13</div>
+  </header>
+
+  <div style="display:flex; gap:22px; position:relative; z-index:3;">
+    <div class="chart-card" style="flex:1;">
+      <p class="chart-title">Categorias por participa&ccedil;&atilde;o no faturamento</p>
+      <p class="chart-sub">5 meses &middot; app &middot; mai&ndash;set / 2025</p>
+      <div style="display:flex; align-items:center; gap:22px;">
+        <svg width="230" height="230" viewBox="0 0 230 230" style="flex-shrink:0;">
+          <g transform="rotate(-90 115 115)">
+            <circle cx="115" cy="115" r="92" fill="none" stroke="#A66B2A" stroke-width="34" stroke-dasharray="545.7 578.1"/>
+            <circle cx="115" cy="115" r="92" fill="none" stroke="#D9A441" stroke-width="34" stroke-dasharray="17.3 578.1" transform="rotate(339.8 115 115)"/>
+            <circle cx="115" cy="115" r="92" fill="none" stroke="#2B1A12" stroke-width="34" stroke-dasharray="15 578.1" transform="rotate(350.6 115 115)"/>
+          </g>
+          <text x="115" y="112" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="30" font-weight="900" fill="#2B1A12">52.695</text>
+          <text x="115" y="132" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="11" font-weight="600" fill="rgba(43,26,18,.62)">unidades vendidas</text>
+        </svg>
+        <div style="flex:1;">
+          <div class="legend-row">
+            <span class="dot" style="background:#A66B2A;"></span>
+            <span class="legend-name">Salgados</span>
+            <span class="legend-val">R$ 334 mil</span>
+            <span class="legend-pct">94,4%</span>
+          </div>
+          <div class="legend-row">
+            <span class="dot" style="background:#D9A441;"></span>
+            <span class="legend-name">Bebidas</span>
+            <span class="legend-pct" style="margin-left:auto;">3,0%</span>
+          </div>
+          <div class="legend-row">
+            <span class="dot" style="background:#2B1A12;"></span>
+            <span class="legend-name">Doces</span>
+            <span class="legend-pct" style="margin-left:auto;">2,6%</span>
+          </div>
+          <p class="note" style="margin-top:14px;">O neg&oacute;cio &eacute; <b>especialista em salgados</b>, e &eacute; neles que o estoque do investimento vai girar.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="chart-card" style="flex:1.15;">
+      <p class="chart-title">Top 5 produtos por faturamento</p>
+      <p class="chart-sub">Campe&otilde;es absolutos de giro &middot; mai&ndash;set / 2025</p>
+      <svg width="100%" viewBox="0 0 560 250" style="display:block;">
+        <text x="0" y="14" font-family="Inter,Arial,sans-serif" font-size="12.5" font-weight="700" fill="#2B1A12">Doritos 183g</text>
+        <rect x="0" y="21" width="470" height="16" rx="3" fill="#D9A441"/>
+        <text x="460" y="34" text-anchor="end" font-family="Inter,Arial,sans-serif" font-size="12" font-weight="800" fill="#2B1A12">R$ 36.459</text>
+
+        <text x="0" y="62" font-family="Inter,Arial,sans-serif" font-size="12.5" font-weight="700" fill="#2B1A12">Doritos 75g</text>
+        <rect x="0" y="69" width="327" height="16" rx="3" fill="#A66B2A" opacity=".9"/>
+        <text x="337" y="82" font-family="Inter,Arial,sans-serif" font-size="12" font-weight="800" fill="#2B1A12">R$ 25.333</text>
+
+        <text x="0" y="110" font-family="Inter,Arial,sans-serif" font-size="12.5" font-weight="700" fill="#2B1A12">Lay&rsquo;s Sabores</text>
+        <rect x="0" y="117" width="253" height="16" rx="3" fill="#A66B2A" opacity=".8"/>
+        <text x="263" y="130" font-family="Inter,Arial,sans-serif" font-size="12" font-weight="800" fill="#2B1A12">R$ 19.615</text>
+
+        <text x="0" y="158" font-family="Inter,Arial,sans-serif" font-size="12.5" font-weight="700" fill="#2B1A12">Cheetos Requeij&atilde;o</text>
+        <rect x="0" y="165" width="216" height="16" rx="3" fill="#A66B2A" opacity=".7"/>
+        <text x="226" y="178" font-family="Inter,Arial,sans-serif" font-size="12" font-weight="800" fill="#2B1A12">R$ 16.742</text>
+
+        <text x="0" y="206" font-family="Inter,Arial,sans-serif" font-size="12.5" font-weight="700" fill="#2B1A12">Fandangos 160g</text>
+        <rect x="0" y="213" width="212" height="16" rx="3" fill="#A66B2A" opacity=".6"/>
+        <text x="222" y="226" font-family="Inter,Arial,sans-serif" font-size="12" font-weight="800" fill="#2B1A12">R$ 16.442</text>
+      </svg>
+      <p class="note" style="margin-top:8px;">S&oacute; o Doritos 183g vendeu mais de <b>R$ 36 mil</b> em 5 meses &mdash; m&eacute;dia de R$ 7,3 mil/m&ecirc;s em um &uacute;nico item.</p>
+    </div>
+  </div>
+
+  <div style="margin-top:18px; position:relative; z-index:3;" class="banner">
+    <div class="b-title">Concentra&ccedil;&atilde;o saud&aacute;vel: os 5 produtos campe&otilde;es fazem <b>32% do faturamento</b> &mdash; mix curto, estoque f&aacute;cil de gerir.</div>
+    <div class="b-num">Giro comprovado</div>
+  </div>
+
+  <footer class="page-foot"><span>DoceMania &mdash; Apresenta&ccedil;&atilde;o de neg&oacute;cio</span><span>Outubro 2025</span></footer>
+</section>
+
+<!-- ============ PÁGINA 9 — SAÚDE FINANCEIRA ============ -->
+<section class="page-section page light">
+  <div class="ghost">09</div>
+  <header class="page-head">
+    <div>
+      <div class="kicker">Financeiro</div>
+      <h2 class="title">Sa&uacute;de financeira sem surpresas</h2>
+    </div>
+    <div class="pagenum">09 &middot; 13</div>
+  </header>
+
+  <div class="grid3" style="position:relative; z-index:3;">
+    <div class="stat-card">
+      <div class="stat-top">Margem bruta</div>
+      <div class="stat-num" style="font-size:37px;">33,3%</div>
+      <div class="stat-lab">margem real, validada produto a produto nos 20 principais itens</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-top">Despesas fixas</div>
+      <div class="stat-num" style="font-size:37px;">R$ 2.990</div>
+      <div class="stat-lab">por m&ecirc;s &mdash; apenas ~3,7% da receita mensal</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-top">Fornecedores</div>
+      <div class="stat-num" style="font-size:37px;">Zero</div>
+      <div class="stat-lab">pend&ecirc;ncia &mdash; relacionamento ativo, compras à vista ou no prazo</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-top">Contas a pagar</div>
+      <div class="stat-num" style="font-size:37px;">R$ 3 mil</div>
+      <div class="stat-lab">apenas &mdash; simples saldo operacional com fornecedores do dia a dia</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-top">Estoque real</div>
+      <div class="stat-num" style="font-size:37px;">~R$ 50 mil</div>
+      <div class="stat-lab">avalia&ccedil;&atilde;o f&iacute;sica (o sistema registra acima do real &mdash; num&eacute;rico conservador)</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-top">Sobra no bolso</div>
+      <div class="stat-num" style="font-size:37px; color:#8A5320;">20&ndash;22%</div>
+      <div class="stat-lab">do faturamento vira lucro l&iacute;quido, m&ecirc;s ap&oacute;s m&ecirc;s</div>
+    </div>
+  </div>
+
+  <div style="margin-top:22px; position:relative; z-index:3;" class="banner">
+    <div class="b-title">Nenhuma d&iacute;vida escondida: o neg&oacute;cio se paga e ainda sobra &mdash; todos os meses.</div>
+    <div class="b-num">Caixa positivo</div>
+  </div>
+
+  <footer class="page-foot"><span>DoceMania &mdash; Apresenta&ccedil;&atilde;o de neg&oacute;cio</span><span>Outubro 2025</span></footer>
+</section>
+
+<!-- ============ PÁGINA 10 — ATIVOS ============ -->
+<section class="page-section page light">
+  <div class="ghost">10</div>
+  <header class="page-head">
+    <div>
+      <div class="kicker">Patrim&ocirc;nio da sociedade</div>
+      <h2 class="title">O que j&aacute; existe e entra na conta</h2>
+    </div>
+    <div class="pagenum">10 &middot; 13</div>
+  </header>
+
+  <div class="grid3" style="position:relative; z-index:3;">
+    <div class="stat-card">
+      <div class="stat-top">Frota</div>
+      <div class="stat-num" style="font-size:32px;">2 Kangoo</div>
+      <div class="stat-lab">Renault Kangoo, entregues em outubro/2025 &mdash; praticamente novas</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-top">Estoque</div>
+      <div class="stat-num" style="font-size:32px;">~R$ 50 mil</div>
+      <div class="stat-lab">em mercadorias dispon&iacute;veis, prontas para girar no dia 1</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-top">Tecnologia</div>
+      <div class="stat-num" style="font-size:32px;">App + sistema</div>
+      <div class="stat-lab">pr&oacute;prios, com hist&oacute;rico completo: clientes, pedidos, rotas e financeiro, com todos os detalhes</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-top">Carteira</div>
+      <div class="stat-num" style="font-size:32px;">172 clientes</div>
+      <div class="stat-lab">com recompra comprovada &mdash; 160 ativos no per&iacute;odo</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-top">Credi&aacute;rio</div>
+      <div class="stat-num" style="font-size:32px;">R$ 25,2 mil</div>
+      <div class="stat-lab">pr&oacute;prio, operando com 28 clientes &mdash; ferramenta de fideliza&ccedil;&atilde;o</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-top">Relacionamento</div>
+      <div class="stat-num" style="font-size:32px;">Fornecedores</div>
+      <div class="stat-lab">ativos e sem pend&ecirc;ncia &mdash; condi&ccedil;&otilde;es comerciais conquistadas</div>
+    </div>
+  </div>
+
+  <div style="margin-top:24px; display:flex; gap:12px; flex-wrap:wrap; position:relative; z-index:3;">
+    <span class="chip">O investidor entra num neg&oacute;cio pronto</span>
+    <span class="chip">N&atilde;o &eacute; ideia: &eacute; opera&ccedil;&atilde;o rodando</span>
+    <span class="chip">Ativos tang&iacute;veis + intang&iacute;veis</span>
+  </div>
+
+  <footer class="page-foot"><span>DoceMania &mdash; Apresenta&ccedil;&atilde;o de neg&oacute;cio</span><span>Outubro 2025</span></footer>
+</section>
+
+<!-- ============ PÁGINA 11 — EXPANSÃO ============ -->
+<section class="page-section page light">
+  <div class="ghost">11</div>
+  <header class="page-head">
+    <div>
+      <div class="kicker">Percep&ccedil;&atilde;o de futuro</div>
+      <h2 class="title">Onde o investimento nos leva</h2>
+    </div>
+    <div class="pagenum">11 &middot; 13</div>
+  </header>
+
+  <div class="grid3" style="position:relative; z-index:3;">
+    <div class="col-card">
+      <div class="col-num">01</div>
+      <div class="col-tag">Marketplaces</div>
+      <div class="col-title">Vitrine nacional</div>
+      <div class="col-body"><b>Shopee, Mercado Livre, Amazon e Magalu.</b> O mesmo estoque passa a vender para o Brasil inteiro, 24 horas por dia &mdash; sem aumentar custo fixo.</div>
+    </div>
+    <div class="col-card">
+      <div class="col-num">02</div>
+      <div class="col-tag">Varejo e redes</div>
+      <div class="col-title">Contrato recorrente</div>
+      <div class="col-body"><b>Redes de supermercados locais, redes de conveni&ecirc;ncia, mercearias e redes.</b> Venda institucional transforma entregas avulsas em volume garantido por contrato.</div>
+    </div>
+    <div class="col-card">
+      <div class="col-num">03</div>
+      <div class="col-tag">Pra&ccedil;as e modelo</div>
+      <div class="col-title">Cobertura nova</div>
+      <div class="col-body"><b>Flores da Cunha e Nova P&aacute;dua</b> no mapa, mais o estudo do <b>modelo h&iacute;brido</b>: pronta entrega + pr&eacute;-venda para grandes contas.</div>
+    </div>
+  </div>
+
+  <div style="margin-top:22px; position:relative; z-index:3;" class="banner">
+    <div class="b-title">Meta com o investimento: faturamento de</div>
+    <div class="b-num">R$ 200 mil / m&ecirc;s at&eacute; o fim do ano</div>
+  </div>
+
+  <div style="margin-top:18px; display:flex; gap:12px; flex-wrap:wrap; position:relative; z-index:3;">
+    <span class="chip">Mesmo estoque, vitrine nacional</span>
+    <span class="chip">Grande conta = pedido maior, mesma entrega</span>
+    <span class="chip">Nova pra&ccedil;a com a mesma frota</span>
+  </div>
+
+  <footer class="page-foot"><span>DoceMania &mdash; Apresenta&ccedil;&atilde;o de neg&oacute;cio</span><span>Outubro 2025</span></footer>
+</section>
+
+<!-- ============ PÁGINA 12 — PROPOSTA ============ -->
+<section class="page-section page light">
+  <div class="ghost">12</div>
+  <header class="page-head">
+    <div>
+      <div class="kicker">A proposta</div>
+      <h2 class="title">R$ 150 mil por 15% a 20% do neg&oacute;cio</h2>
+    </div>
+    <div class="pagenum">12 &middot; 13</div>
+  </header>
+
+  <div style="display:flex; gap:22px; position:relative; z-index:3;">
+    <div class="stat-card" style="flex:1.1; background:#2B1A12; border-color:#2B1A12; color:#FAF5EB; display:flex; flex-direction:column; justify-content:center;">
+      <div class="stat-top" style="color:#D9A441;">Investimento &uacute;nico &mdash; valor fixo</div>
+      <div style="font-size:74px; font-weight:900; letter-spacing:-.03em; line-height:1;">R$ 150 mil</div>
+      <div class="stat-lab" style="color:rgba(250,245,235,.66); margin-top:14px; font-size:13.5px;">capital de giro aplicado direto no que j&aacute; comprovadamente vende</div>
+    </div>
+
+    <div style="flex:1.2; display:flex; flex-direction:column; gap:14px;">
+      <div class="stat-card" style="display:flex; align-items:center; gap:18px;">
+        <div class="stat-num" style="font-size:34px; white-space:nowrap;">15&ndash;20%</div>
+        <div class="stat-lab" style="margin-top:0;">de participa&ccedil;&atilde;o societ&aacute;ria na DoceMania</div>
+      </div>
+      <div class="stat-card" style="display:flex; align-items:center; gap:18px;">
+        <div class="stat-num" style="font-size:34px; white-space:nowrap; color:#8A5320;">+ comiss&atilde;o</div>
+        <div class="stat-lab" style="margin-top:0;">sobre as vendas realizadas &mdash; remunera&ccedil;&atilde;o vari&aacute;vel atrelada ao resultado</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-top">Gest&atilde;o</div>
+        <div class="stat-lab" style="margin-top:0; font-size:13.5px; color:var(--choco);"><b>Albeneir Edipo Pena permanece s&oacute;cio majorit&aacute;rio</b> e segue &agrave; frente da opera&ccedil;&atilde;o, com acesso total aos n&uacute;meros do sistema.</div>
+      </div>
+    </div>
+  </div>
+
+  <div style="margin-top:20px; position:relative; z-index:3;" class="banner">
+    <div class="b-title">No ritmo de R$ 200 mil/m&ecirc;s, a margem de 20&ndash;22% gera</div>
+    <div class="b-num">R$ 40&ndash;44 mil de lucro / m&ecirc;s</div>
+  </div>
+
+  <div style="margin-top:18px; display:flex; gap:12px; flex-wrap:wrap; position:relative; z-index:3;">
+    <span class="chip">Capital aplicado em: estoque que j&aacute; vende</span>
+    <span class="chip">Marketplaces: novos canais</span>
+    <span class="chip">Pra&ccedil;as novas e refor&ccedil;o da frota</span>
+  </div>
+
+  <footer class="page-foot"><span>DoceMania &mdash; Apresenta&ccedil;&atilde;o de neg&oacute;cio</span><span>Outubro 2025</span></footer>
+</section>
+
+<!-- ============ PÁGINA 13 — FECHAMENTO ============ -->
+<section class="page-section page dark">
+  <div class="ghost">13</div>
+  <div style="position:absolute; left:64px; top:96px; z-index:3;">
+    <div class="kicker" style="color:#D9A441;">Fechamento</div>
+    <p class="quote" style="margin-top:18px;">&ldquo;Os n&uacute;meros j&aacute; est&atilde;o provados.<br>O que falta &eacute; <span class="gold">combust&iacute;vel</span><br>para escalar.&rdquo;</p>
+  </div>
+
+  <div style="position:absolute; left:64px; right:64px; bottom:170px; z-index:3;" class="echo-row">
+    <div class="echo"><div class="n">R$ 150 mil</div><div class="l">investimento fixo</div></div>
+    <div class="echo"><div class="n">15&ndash;20%</div><div class="l">de participa&ccedil;&atilde;o + comiss&atilde;o sobre vendas</div></div>
+    <div class="echo"><div class="n">R$ 200 mil/m&ecirc;s</div><div class="l">meta de faturamento at&eacute; o fim do ano</div></div>
+  </div>
+
+  <div style="position:absolute; left:64px; bottom:64px; z-index:3;">
+    <div class="contact-name">Albeneir Edipo Pena</div>
+    <div class="contact-role">S&Oacute;CIO FUNDADOR &bull; DOCEMANIA</div>
+    <div style="font-size:11px; color:rgba(250,245,235,.45); margin-top:14px; letter-spacing:.08em;">DOCUMENTO CONFIDENCIAL &mdash; PREPARADO PARA AVALIA&Ccedil;&Atilde;O DE S&Oacute;CIO INVESTIDOR &bull; OUTUBRO DE 2025</div>
+  </div>
+
+  <svg style="position:absolute; right:0; top:0; z-index:1; opacity:.5;" width="380" height="720" viewBox="0 0 380 720" fill="none">
+    <circle cx="380" cy="180" r="120" stroke="rgba(217,164,65,.2)" stroke-width="1"/>
+    <circle cx="380" cy="180" r="190" stroke="rgba(217,164,65,.11)" stroke-width="1"/>
+    <circle cx="380" cy="180" r="260" stroke="rgba(217,164,65,.06)" stroke-width="1"/>
+  </svg>
+</section>
+
+</div>
+</body>
+</html>

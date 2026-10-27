@@ -27,6 +27,8 @@ function mapClient(c: any): Client {
     enderecoMunicipio: c.endereco_municipio || undefined,
     enderecoUf: c.endereco_uf || undefined,
     email: c.email || undefined,
+    // BLOCO 70: cliente ESPECIAL GB — undefined = SQL ainda nao rodado (trata como normal)
+    clienteEspecialGb: c.cliente_especial_gb === true,
   } as Client;
 }
 
@@ -35,7 +37,7 @@ export const clientService = {
     // BLOCO 20: paginado — mantem ordem por 'ordem' com desempate estavel por id
     // EGRESS: colunas explicitas (206 clientes x colunas fiscais em toda recarga).
     // Fallback progressivo ao '*' caso alguma coluna ainda nao exista (SQL pendente).
-    const COLS = 'id, nome_fantasia, nome, ativar_cnpj, cnpj, telefone, endereco, bairro, ativo, localizacao, dia_roteiro, ordem, observacoes, pin_localizacao, rota, portal_code, razao_social, inscricao_estadual, endereco_numero, endereco_cep, endereco_municipio, endereco_uf, email';
+    const COLS = 'id, nome_fantasia, nome, ativar_cnpj, cnpj, telefone, endereco, bairro, ativo, localizacao, dia_roteiro, ordem, observacoes, pin_localizacao, rota, portal_code, razao_social, inscricao_estadual, endereco_numero, endereco_cep, endereco_municipio, endereco_uf, email, cliente_especial_gb';
     let data: any[];
     try {
       data = await fetchAllPages<any>('clients', COLS, { orderCol: 'ordem', ascending: true, tiebreak: true });
@@ -63,6 +65,8 @@ export const clientService = {
       pin_localizacao: pinLocalizacao,
       rota: rota || 'ROTA_01',
       portal_code: generatePortalCode(),
+      // BLOCO 70: tipo do cliente — normal (default) ou ESPECIAL GB
+      cliente_especial_gb: !!client.clienteEspecialGb,
     };
     // Fiscais (Bloco 10): envia com checagem suave — se a coluna ainda nao
     // existir o Supabase rejeita o insert, entao refaz sem elas (fallback).
@@ -85,6 +89,12 @@ export const clientService = {
     if (error && /localizacao/i.test(error.message || '')) {
       const semGps = { ...payload }; delete semGps.localizacao;
       ({ data, error } = await supabase.from('clients').insert(semGps).select().single());
+    }
+    // BLOCO 70: cliente_especial_gb pode nao existir (SQL pendente): refaz sem
+    if (error && /cliente_especial_gb/i.test(error.message || '')) {
+      console.warn('Coluna cliente_especial_gb ausente (Bloco 69 nao rodado). Salvando sem ela.');
+      const semGb = { ...payload }; delete semGb.cliente_especial_gb;
+      ({ data, error } = await supabase.from('clients').insert(semGb).select().single());
     }
     if (error) {
       console.error('Erro ao inserir cliente:', error);
@@ -126,6 +136,8 @@ export const clientService = {
     if ((updates as Record<string, unknown>).enderecoMunicipio !== undefined) payload.endereco_municipio = (updates as Record<string, unknown>).enderecoMunicipio;
     if ((updates as Record<string, unknown>).enderecoUf !== undefined) payload.endereco_uf = (updates as Record<string, unknown>).enderecoUf;
     if ((updates as Record<string, unknown>).email !== undefined) payload.email = (updates as Record<string, unknown>).email || null;
+    // BLOCO 70: tipo do cliente (normal | especial GB) — só grava quando o form envia
+    if (updates.clienteEspecialGb !== undefined) payload.cliente_especial_gb = !!updates.clienteEspecialGb;
 
     let { data, error } = await supabase.from('clients').update(payload).eq('id', id).select().single();
     // Colunas que podem nao existir (Bloco 10/12): refaz sem elas
@@ -136,6 +148,12 @@ export const clientService = {
     if (error && /localizacao/i.test(error.message || '')) {
       const fallback2 = { ...payload }; delete fallback2.localizacao;
       ({ data, error } = await supabase.from('clients').update(fallback2).eq('id', id).select().single());
+    }
+    // BLOCO 70: cliente_especial_gb pode nao existir (SQL pendente): refaz sem
+    if (error && /cliente_especial_gb/i.test(error.message || '')) {
+      console.warn('Coluna cliente_especial_gb ausente (Bloco 69 nao rodado). Salvando sem ela.');
+      const fallback3 = { ...payload }; delete fallback3.cliente_especial_gb;
+      ({ data, error } = await supabase.from('clients').update(fallback3).eq('id', id).select().single());
     }
     if (error) {
       console.error('Erro ao atualizar cliente:', error);

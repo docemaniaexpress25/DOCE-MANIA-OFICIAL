@@ -65,6 +65,9 @@ export interface Product {
   estoqueSemnf?: number;
   /** Bloco 29 (ROTA 2): produto de TESTE — aparece SOMENTE para vendedores rota2 */
   produtoTeste?: boolean;
+  /** BLOCO 70: PREÇO ESPECIAL GB — preço exclusivo para clientes ESPECIAL GB.
+   *  0/undefined/null = produto sem preço GB → cai no preço normal do PDV. */
+  precoEspecialGb?: number | null;
 }
 
 export interface Carga {
@@ -116,6 +119,9 @@ export interface Client {
   enderecoUf?: string;
   /** Email do cliente (NF-e envia para o financeiro; normalmente manual) */
   email?: string;
+  /** BLOCO 70: cliente ESPECIAL GB — no PDV os produtos com preco_especial_gb > 0
+   *  entram nesse preço (normal = preços de hoje, nada muda). */
+  clienteEspecialGb?: boolean;
 }
 
 export type NotaStatus = 'NAO_EMITIDA' | 'EMITINDO' | 'AUTORIZADA' | 'REJEITADA' | 'CANCELADA';

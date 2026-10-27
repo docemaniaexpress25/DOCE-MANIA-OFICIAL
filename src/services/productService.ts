@@ -39,6 +39,8 @@ export const productService = {
       estoqueNota: (p.estoque_nota === null || p.estoque_nota === undefined) ? undefined : (Number(p.estoque_nota) || 0),
       estoqueSemnf: (p.estoque_semnf === null || p.estoque_semnf === undefined) ? undefined : (Number(p.estoque_semnf) || 0),
       produtoTeste: !!p.produto_teste,
+      // BLOCO 70: preço especial GB — undefined = SQL ainda nao rodado (cai no preço normal)
+      precoEspecialGb: (p.preco_especial_gb === null || p.preco_especial_gb === undefined) ? undefined : (Number(p.preco_especial_gb) || 0),
     })) as Product[];
   },
 
@@ -90,8 +92,16 @@ export const productService = {
       extra14.comissao_pv_percentual = 5; /* COMISSAO_PV_DEFAULT */
     }
 
-    let { data, error } = await supabase.from('products').insert({ ...payload, ...fiscal, ...extra14, ...b15, ...b18, ...b23, ...b29 }).select().single();
-    if (error && /estoque_nota|estoque_semnf|produto_teste/i.test(error.message || '')) {
+    // BLOCO 70: preço especial GB (0 = produto sem preço GB → cai no normal)
+    const b69: Record<string, number> = {};
+    if (product.precoEspecialGb !== undefined) b69.preco_especial_gb = Number(product.precoEspecialGb) || 0;
+
+    let { data, error } = await supabase.from('products').insert({ ...payload, ...fiscal, ...extra14, ...b15, ...b18, ...b23, ...b29, ...b69 }).select().single();
+    if (error && /preco_especial_gb/i.test(error.message || '')) {
+      console.warn('Coluna preco_especial_gb ausente (Bloco 69 nao rodado). Salvando sem ela.');
+      const sem69: Record<string, unknown> = { ...payload, ...fiscal, ...extra14, ...b15, ...b18, ...b23, ...b29 };
+      ({ data, error } = await supabase.from('products').insert(sem69).select().single());
+    } else if (error && /estoque_nota|estoque_semnf|produto_teste/i.test(error.message || '')) {
       console.warn('Colunas do Bloco 29 ausentes (estoques COM NF/SEM NF). Salvando sem elas.');
       const sem29: Record<string, unknown> = { ...payload, ...fiscal, ...extra14, ...b15, ...b18, ...b23 };
       ({ data, error } = await supabase.from('products').insert(sem29).select().single());
@@ -144,6 +154,7 @@ export const productService = {
       estoqueNota: (data.estoque_nota === null || data.estoque_nota === undefined) ? undefined : (Number(data.estoque_nota) || 0),
       estoqueSemnf: (data.estoque_semnf === null || data.estoque_semnf === undefined) ? undefined : (Number(data.estoque_semnf) || 0),
       produtoTeste: !!data.produto_teste,
+      precoEspecialGb: (data.preco_especial_gb === null || data.preco_especial_gb === undefined) ? undefined : (Number(data.preco_especial_gb) || 0),
     } as Product;
   },
 
@@ -178,9 +189,15 @@ export const productService = {
     if (updates.estoqueNota !== undefined) payload.estoque_nota = Number(updates.estoqueNota) || 0;
     if (updates.estoqueSemnf !== undefined) payload.estoque_semnf = Number(updates.estoqueSemnf) || 0;
     if (updates.produtoTeste !== undefined) payload.produto_teste = !!updates.produtoTeste;
+    // BLOCO 70: preço especial GB — 0/vazio = sem preço GB (cai no normal)
+    if (updates.precoEspecialGb !== undefined) payload.preco_especial_gb = Number(updates.precoEspecialGb) || 0;
 
     let { data, error } = await supabase.from('products').update(payload).eq('id', id).select().single();
-    if (error && /estoque_nota|estoque_semnf|produto_teste/i.test(error.message || '')) {
+    if (error && /preco_especial_gb/i.test(error.message || '')) {
+      const fb69: Record<string, unknown> = { ...payload };
+      delete fb69.preco_especial_gb;
+      ({ data, error } = await supabase.from('products').update(fb69).eq('id', id).select().single());
+    } else if (error && /estoque_nota|estoque_semnf|produto_teste/i.test(error.message || '')) {
       const fb29: Record<string, unknown> = { ...payload };
       delete fb29.estoque_nota; delete fb29.estoque_semnf; delete fb29.produto_teste;
       ({ data, error } = await supabase.from('products').update(fb29).eq('id', id).select().single());
@@ -236,6 +253,7 @@ export const productService = {
       estoqueNota: (data.estoque_nota === null || data.estoque_nota === undefined) ? undefined : (Number(data.estoque_nota) || 0),
       estoqueSemnf: (data.estoque_semnf === null || data.estoque_semnf === undefined) ? undefined : (Number(data.estoque_semnf) || 0),
       produtoTeste: !!data.produto_teste,
+      precoEspecialGb: (data.preco_especial_gb === null || data.preco_especial_gb === undefined) ? undefined : (Number(data.preco_especial_gb) || 0),
     } as Product;
   },
 

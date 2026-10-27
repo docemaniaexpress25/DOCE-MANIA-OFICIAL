@@ -100,9 +100,11 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         const p = products.find(prod => prod.id === pId);
         if (!p) return;
         const min = p.precoMinimo ?? 0;
+        // BLOCO 70: cliente ESPECIAL GB com preço GB cadastrado = preço GB vence tudo
+        const gb = precoEspecialGbDe(p);
         // LIGAR: produto com mínimo cadastrado vai para o mínimo (sem mínimo = segue padrão)
         // DESLIGAR: volta para o preço padrão do estoque central
-        const preco = ligar ? (min > 0 ? min : (p.precoVenda ?? 0)) : (p.precoVenda ?? 0);
+        const preco = gb > 0 ? gb : (ligar ? (min > 0 ? min : (p.precoVenda ?? 0)) : (p.precoVenda ?? 0));
         next[pId] = { ...item, precoVenda: preco.toFixed(2) };
       });
       return next;
@@ -135,6 +137,16 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
 
   // Pre-venda e pre-pedido vendem do ESTOQUE CENTRAL (nao da carga da van)
   const sellFromCentral = isPrePedido || isPreVenda;
+
+  // ============================================================
+  // BLOCO 70 — CLIENTE ESPECIAL GB
+  // Cliente marcado como ESPECIAL GB no cadastro: todo produto do estoque
+  // principal com PREÇO ESPECIAL GB > 0 entra nesse preço (vence o preço
+  // normal E o switch Tabela). Produto sem preço GB segue o preço de hoje.
+  // Cliente normal: NADA muda — mesmos preços de sempre.
+  // ============================================================
+  const clienteGB = client?.clienteEspecialGb === true;
+  const precoEspecialGbDe = (p: Product): number => (clienteGB ? (Number(p.precoEspecialGb) || 0) : 0);
 
   // ============================================================
   // BLOCO 29 (ROTA 2) — DOIS ESTOQUES EM CASA + MODO DO ATENDIMENTO
@@ -398,13 +410,16 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       
       const price = parseFloat(item.precoVenda) || 0;
       const minPrice = p.precoMinimo || 0;
+      // BLOCO 70: cliente ESPECIAL GB — o piso do item é o PREÇO GB (quando cadastrado > 0)
+      const gb = precoEspecialGbDe(p);
+      const piso = gb > 0 ? gb : minPrice;
       
-      // Só valida se tem preço mínimo CADASTRADO (> 0)
-      if (minPrice > 0 && price < minPrice) {
+      // Só valida se tem piso CADASTRADO (> 0)
+      if (piso > 0 && price < piso) {
         violating.push({ 
           nome: p.nome, 
           preco: price, 
-          minimo: minPrice 
+          minimo: piso 
         });
       }
     });
@@ -439,13 +454,16 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     const sanitized = value.replace(',', '.');
     const p = products.find(prod => prod.id === pId);
     const minPrice = p?.precoMinimo || 0;
+    // BLOCO 70: cliente ESPECIAL GB — autocorreção vai para o PREÇO GB (quando > 0)
+    const gb = p ? precoEspecialGbDe(p) : 0;
+    const piso = gb > 0 ? gb : minPrice;
     
-    if (sanitized && minPrice > 0) {
+    if (sanitized && piso > 0) {
       const numValue = parseFloat(sanitized);
-      if (!isNaN(numValue) && numValue < minPrice) {
+      if (!isNaN(numValue) && numValue < piso) {
         setCart(prev => {
           if (!prev[pId]) return prev;
-          return { ...prev, [pId]: { ...prev[pId], precoVenda: minPrice.toFixed(2) } };
+          return { ...prev, [pId]: { ...prev[pId], precoVenda: piso.toFixed(2) } };
         });
       }
     }
@@ -1106,6 +1124,17 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         </div>
       )}
 
+      {/* ===== BLOCO 70: SELO DO CLIENTE ESPECIAL GB ===== */}
+      {clienteGB && (
+        <div className="w-full px-3 py-2 flex items-center gap-2.5 border-b bg-amber-50 border-amber-200">
+          <i className="fa-solid fa-star text-amber-500 text-sm"></i>
+          <div className="flex-1 min-w-0">
+            <p className="text-[10px] font-black uppercase tracking-wide text-amber-700">CLIENTE ESPECIAL GB — preço especial ativo</p>
+            <p className="text-[8px] font-bold text-amber-500">Produtos com preço GB entram no valor especial · sem GB segue o preço normal</p>
+          </div>
+        </div>
+      )}
+
       {clientDebt > 0 && !isPrePedido && !debtBannerMin && (
         <div className="w-full bg-rose-600 text-white py-1.5 px-2 flex items-center gap-1.5 shadow-md">
           <button onClick={() => { onCancel(); onNavigateToCredit(); }} className="flex-1 min-w-0 flex items-center gap-2 text-left active:opacity-80">
@@ -1135,13 +1164,19 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           const item = cart[p.id];
           const cargaOriginal = saldoFonte(p);
           const minPrice = p.precoMinimo || 0;
+          // BLOCO 70: preço especial GB do produto (0 = sem GB) e piso de edição
+          const precoGB = precoEspecialGbDe(p);
+          const pisoCard = precoGB > 0 ? precoGB : minPrice;
           // BLOCO 24: com PREÇO TABELA ligado, produto com mínimo cadastrado entra/continua no mínimo
-          const precoBase = precoTabelaAtivo && minPrice > 0 ? minPrice : (p.precoVenda ?? 0);
+          // BLOCO 70: cliente ESPECIAL GB com preço GB > 0 = preço base do item é o GB
+          const precoBase = precoGB > 0 ? precoGB : (precoTabelaAtivo && minPrice > 0 ? minPrice : (p.precoVenda ?? 0));
           const itemPrice = item ? parseFloat(item.precoVenda) || 0 : p.precoVenda;
-          // Só considera violação se tem preço mínimo cadastrado (> 0)
-          const isBelowMin = margemMinimaAtiva && item && item.quantidade > 0 && minPrice > 0 && itemPrice < minPrice && !isPrePedido;
+          // Só considera violação se tem piso cadastrado (> 0)
+          const isBelowMin = margemMinimaAtiva && item && item.quantidade > 0 && pisoCard > 0 && itemPrice < pisoCard && !isPrePedido;
           // BLOCO 24: preço no mínimo pela tabela = destaque violeta
           const isPrecoTabela = precoTabelaAtivo && item && item.quantidade > 0 && minPrice > 0 && itemPrice === minPrice;
+          // BLOCO 70: item no PREÇO ESPECIAL GB = destaque âmbar
+          const isPrecoGB = clienteGB && precoGB > 0 && item && item.quantidade > 0 && itemPrice === precoGB;
           const hasBeenSold = soldProductIds.has(p.id);
 
           return (
@@ -1165,12 +1200,18 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                           value={item?.precoVenda ?? precoBase.toFixed(2)} 
                           onChange={(e) => handlePriceChange(p.id, e.target.value)} 
                           onBlur={(e) => handlePriceBlur(p.id, e.target.value)}
-                          className={`w-14 bg-transparent border-none p-0 text-[11px] font-black outline-none ${isBelowMin ? 'text-rose-600' : (isPrecoTabela ? 'text-violet-600' : 'text-emerald-600')}`} 
+                          className={`w-14 bg-transparent border-none p-0 text-[11px] font-black outline-none ${isBelowMin ? 'text-rose-600' : (isPrecoGB ? 'text-amber-600' : (isPrecoTabela ? 'text-violet-600' : 'text-emerald-600'))}`} 
                         />
                         {/* SÓ mostra preço mínimo se cadastrado (> 0) - NUNCA mostra 0 */}
                         {p.precoMinimo && p.precoMinimo > 0 && (
                           <span className="text-[8px] font-bold text-rose-600 ml-1">
                             {p.precoMinimo.toFixed(2)}
+                          </span>
+                        )}
+                        {/* BLOCO 70: selo do PREÇO ESPECIAL GB — só para cliente ESPECIAL GB com preço GB cadastrado */}
+                        {clienteGB && precoGB > 0 && (
+                          <span className="text-[8px] font-black text-amber-600 bg-amber-100 border border-amber-200 rounded px-1 py-0.5 ml-1" title="Preço especial GB deste cliente">
+                            GB {precoGB.toFixed(2)}
                           </span>
                         )}
                      </div>
@@ -1196,7 +1237,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               </div>
               {isBelowMin && (
                 <p className="text-[8px] text-rose-600 font-black uppercase mt-1 animate-pulse">
-                  <i className="fa-solid fa-circle-exclamation mr-1"></i> Mínimo: R$ {minPrice.toFixed(2)}
+                  <i className="fa-solid fa-circle-exclamation mr-1"></i> Mínimo: R$ {pisoCard.toFixed(2)}{clienteGB && precoGB > 0 ? ' (GB)' : ''}
                 </p>
               )}
             </div>

@@ -1808,9 +1808,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                 <div key={c.id} className={`bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex items-center gap-3 transition-all ${!c.ativo ? 'opacity-50' : ''}`}>
                   <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setViewingClientHistory(c)}>
                     <h4 className="font-bold text-gray-800 text-[13px] leading-tight uppercase truncate">{c.nomeFantasia}</h4>
-                    <div className="flex items-center gap-2 mt-1">
+                    <div className="flex items-center gap-2 mt-1 flex-wrap">
                       <span className="text-[10px] font-black text-green-600 bg-green-50 px-2 py-0.5 rounded-lg border border-green-100 uppercase">{DIAS_SEMANA[c.diaRoteiro ?? 1]}</span>
                       <span className="text-[10px] font-black text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg border border-blue-100 uppercase">{formatRouteName(c.rota)}</span>
+                      {/* BLOCO 70B: selo do cliente ESPECIAL GB na lista */}
+                      {c.clienteEspecialGb && <span className="text-[10px] font-black text-amber-700 bg-amber-50 px-2 py-0.5 rounded-lg border border-amber-200 uppercase"><i className="fa-solid fa-star mr-1"></i>GB</span>}
                       {totalDivida > 0 && <span className="text-[10px] font-black text-rose-600 bg-rose-50 px-2 py-0.5 rounded-lg border border-rose-100">R$ {totalDivida.toFixed(2)}</span>}
                     </div>
                     {c.telefone && <p className="text-[9px] text-gray-400 font-semibold mt-1">{c.telefone}</p>}

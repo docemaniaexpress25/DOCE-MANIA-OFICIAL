@@ -683,7 +683,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   };
 
   const handleOpenEditClient = (c: Client | 'NEW') => {
-    if (c === 'NEW') setCForm({ nomeFantasia: '', nome: '', telefone: '', endereco: '', bairro: '', diaRoteiro: diaAtual, ativo: true, ativarCnpj: false, cnpj: '', pinLocalizacao: '', ordem: 0, rota: user.rota, razaoSocial: '', inscricaoEstadual: '', enderecoNumero: '', enderecoCep: '', enderecoMunicipio: '', enderecoUf: '' });
+    if (c === 'NEW') setCForm({ nomeFantasia: '', nome: '', telefone: '', endereco: '', bairro: '', diaRoteiro: diaAtual, ativo: true, ativarCnpj: false, cnpj: '', pinLocalizacao: '', ordem: 0, rota: user.rota, razaoSocial: '', inscricaoEstadual: '', enderecoNumero: '', enderecoCep: '', enderecoMunicipio: '', enderecoUf: '', clienteEspecialGb: false });
     else setCForm({ ...c, endereco: (c.endereco && c.endereco !== '0') ? c.endereco : '', bairro: (c.bairro && c.bairro !== '0') ? c.bairro : '' });
     setCnpjBusca({ loading: false, msg: '', ok: false });
     cnpjBuscadoRef.current = '';
@@ -805,7 +805,10 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       enderecoCep: cForm.enderecoCep,
       enderecoMunicipio: cForm.enderecoMunicipio,
       enderecoUf: cForm.enderecoUf,
-      email: cForm.email
+      email: cForm.email,
+      // BLOCO 70B: tipo do cliente agora também no app do vendedor —
+      // no EDIT o setCForm({...c}) já carrega o flag atual (preserva).
+      clienteEspecialGb: cForm.clienteEspecialGb ?? false
     };
 
     if (editingClient === 'NEW') addClient(clientData);
@@ -1348,6 +1351,8 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 <div className="flex-1 cursor-pointer" onClick={() => setViewingClientHistory(c)}>
                   <div className="flex items-center gap-2">
                     <h4 className="font-bold text-gray-800 text-sm leading-tight uppercase">{c.nomeFantasia ?? 'Cliente'}</h4>
+                    {/* BLOCO 70B: selo do cliente ESPECIAL GB na lista */}
+                    {c.clienteEspecialGb && <span className="text-[8px] font-black text-amber-700 bg-amber-100 border border-amber-200 px-1.5 py-0.5 rounded-md uppercase whitespace-nowrap flex-shrink-0"><i className="fa-solid fa-star mr-0.5"></i>GB</span>}
                     {c.telefone && (
                       <a 
                         href={`https://wa.me/55${c.telefone.replace(/\D/g, '')}`} 
@@ -1922,6 +1927,8 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Nome Fantasia (Estabelecimento)</label><input value={cForm.nomeFantasia || ''} onChange={e => setCForm({...cForm, nomeFantasia: e.target.value})} placeholder="Ex: Doce da Maria" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100 uppercase" /></div>
                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Nome do Cliente</label><input value={cForm.nome || ''} onChange={e => setCForm({...cForm, nome: e.target.value})} placeholder="Nome real para chamar o cliente" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100" /></div>
                 <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Telefone / WhatsApp</label><input value={cForm.telefone || ''} onChange={e => setCForm({...cForm, telefone: e.target.value})} placeholder="Telefone" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100" /></div>
+                {/* BLOCO 70B: TIPO DO CLIENTE — NORMAL x ESPECIAL GB (igual ao Admin) */}
+                <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 space-y-2"><p className="text-[9px] font-black text-amber-600 uppercase tracking-widest flex items-center gap-1"><i className="fa-solid fa-star"></i> Tipo do Cliente — Preços do PDV</p><div className="grid grid-cols-2 gap-2"><button type="button" onClick={() => setCForm({...cForm, clienteEspecialGb: false})} className={`py-3 rounded-2xl font-black text-[10px] uppercase tracking-wide border transition-all ${!cForm.clienteEspecialGb ? 'bg-white border-blue-500 text-blue-600 shadow-sm' : 'bg-white border-gray-200 text-gray-400'}`}>Normal</button><button type="button" onClick={() => setCForm({...cForm, clienteEspecialGb: true})} className={`py-3 rounded-2xl font-black text-[10px] uppercase tracking-wide border transition-all flex items-center justify-center gap-1 ${cForm.clienteEspecialGb ? 'bg-amber-500 border-amber-500 text-white shadow-md' : 'bg-white border-gray-200 text-gray-400'}`}><i className="fa-solid fa-star text-[9px]"></i> Especial GB</button></div><p className="text-[8px] font-bold text-amber-500 leading-snug">NORMAL: usa os preços de hoje do PDV. ESPECIAL GB: recebe o PREÇO ESPECIAL GB de cada produto do estoque principal — produto sem preço GB segue o preço normal.</p></div>
                 <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Endereço</label><input value={cForm.endereco || ''} onChange={e => setCForm({...cForm, endereco: e.target.value})} placeholder="Endereço" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100 uppercase" /></div>
                 {/* BLOCO 64: numero/sala do endereco — salvava sempre vazio porque o
                 vendedor nao tinha o campo; agora sai na fila e na impressao. */}

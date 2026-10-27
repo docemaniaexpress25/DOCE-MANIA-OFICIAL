@@ -473,3 +473,23 @@ Stage Summary:
 - Cadastro/edição de cliente (admin) tem o botão NORMAL x ESPECIAL GB; form de produto tem o campo Preço Especial GB.
 - SQL entregue ao dono (sql/bloco70_cliente_especial_gb.sql) para rodar no SQL Editor do Supabase; enquanto o SQL não rodar, o app salva/tudo cai no preço normal (fallback sem quebra).
 - Análise do estoque negativo entregue com proposta do Bloco 71 (trava nas baixas) aguardando autorização do dono.
+
+---
+Task ID: bloco70b-vendedor-cria-cliente-gb
+Agent: Z.ai Code (principal)
+Task: Dono: "ainda nao esta me dando a oportunidade de criar um cliente especial para que para ele seja efetivo o preço especial GB! arrume isso"
+
+Work Log:
+- DIAGNÓSTICO (3 causas encadeadas): (1) O Bloco 70 inteiro estava PRESO NO SANDBOX — o push do commit 7ee4a1f estava bloqueado desde o Bloco 68 por falta de credencial GitHub, então a PRODUÇÃO (Vercel) nunca recebeu nem o seletor do Admin, nem a lógica do PDV. (2) O formulário do app do VENDEDOR (VendedorDashboard, onde o dono cadastra cliente na rua) NUNCA ganhou a opção — o Bloco 70 adicionou o seletor só no AdminDashboard (decisão "só admin define" que não bate com o fluxo real do dono). (3) O SQL do Bloco 70 talvez ainda não tenha rodado no Supabase (fallback silencioso grava sem o flag).
+- PUSH LIBERADO: dono mandou token GitHub novo → commit lixo 78dea65 (checkpoint, mensagem UUID) removido com git reset --mixed HEAD~1; credencial configurada (credential-store); Blocos 68+69+70 empurrados (22f203b..09146dd main -> main) — Vercel publica sozinha.
+- VendedorDashboard: handleOpenEditClient('NEW') inicializa clienteEspecialGb: false; handleSaveClientBasic inclui clienteEspecialGb no payload (no EDIT o setCForm({...c}) já carrega o flag mapeado — preserva e permite alternar); modal do cliente ganhou o bloco âmbar "Tipo do Cliente — Preços do PDV" com botões NORMAL x ESPECIAL GB (mesmo visual do Admin); lista MEUS CLIENTES mostra selo "★ GB" no card do cliente especial.
+- AdminDashboard: lista de clientes também mostra o selo "★ GB" (linha de badges dia/rota).
+- QA: lint 0 erros/11 warnings (baseline exata); tsc 7 erros src/ (baseline, nenhum novo).
+- E2E Agent Browser em MODO MOCK COMPLETO (0 toques na produção): .env.local com NEXT_PUBLIC_E2E_MOCK=1 + NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:3000/api/e2e-supabase + SUPABASE_SERVICE_ROLE_KEY fake (desliga o devBridge — descoberto que /api/users e /api/login iam pra PRODUÇÃO via ponte; com a key fake o servidor inteiro fica no mock). Detalhe crítico: o browser tem que abrir em http://127.0.0.1:3000 (mesma origem do mock) — em localhost:3000 os fetches do supabase-js viram cross-origin sem CORS e quebram ("Failed to fetch" + login eterno em CARREGANDO USUÁRIOS).
+- E2E (16/16 na prática): login vendedor Rota 2 Teste (PIN 123456 do mock); aba CLIENTES; NOVO CLIENTE mostra o bloco TIPO DO CLIENTE com NORMAL x ESPECIAL GB; criado "Cliente GB Teste" marcado ESPECIAL GB → salvo → cliente_especial_gb=true no mock e selo ★ GB no card; EDIT do Emporio Teste → NORMAL vinha selecionado (flag carregado do banco) → alternado para ESPECIAL GB → salvo → true no mock + badge na lista; PDV pronta entrega do Emporio → SELO âmbar "CLIENTE ESPECIAL GB — PREÇO ESPECIAL ATIVO" no topo; produtos sem preço GB (mock) seguem preço normal (2.39/1.00) conforme a regra; zero erros de console. Limpeza: .env.local removido e server reiniciado limpo (usuários reais voltam a aparecer no login do preview).
+
+Stage Summary:
+- O VENDEDOR agora cria e edita cliente NORMAL x ESPECIAL GB direto no app dele (mesma regra do Admin), com selo ★ GB na lista — o buraco que impedia o dono de cadastrar o especial GB na rua está fechado.
+- A produção recebeu TUDO do Bloco 70 hoje (push destravado com o token novo) — após o deploy da Vercel, o seletor do Admin e a lógica do PDV aparecem no app real.
+- DEPENDÊNCIA CRÍTICA mantida: o SQL sql/bloco70_cliente_especial_gb.sql precisa rodar no SQL Editor do Supabase de produção; enquanto não rodar, o app salva o cliente SEM o flag (fallback silencioso) e o selo não aparece.
+- Ambiente de E2E documentado: mock completo local exige key fake no .env.local e browser na origem 127.0.0.1.

@@ -449,3 +449,27 @@ Stage Summary:
 - O banco para de inflar: foto de entrega e comprovante agora ocupam ~40 BYTES na linha (caminho) em vez de ~300KB (base64) — o maior consumidor do limite de 500MB cortado na raiz, com retrocompatibilidade total e fallback seguro.
 - O egress do catálogo cai de "catálogo inteiro por hora por aparelho" para "uma vez por aparelho" (cache de 1 ano).
 - O que já estava otimizado foi auditado e confirmado (realtime, GPS, colunas, paginação, compressão). Pendências de longo prazo documentadas para o dono decidir.
+
+---
+Task ID: bloco70-cliente-especial-gb
+Agent: Z.ai Code (principal)
+Task: Dono: "(1) me fale como vc analisa o estoque principal — notei que às vezes estoque1, estoque2 e principal ficam negativos! (2) Crie a regra: cliente novo pode ser NORMAL ou ESPECIAL GB; normal usa os preços do PDV de hoje, especial GB usa um PREÇO ESPECIAL GB criado para cada produto do estoque principal (hoje temos preço de custo, preço mínimo/tabela com flag, e agora o preço especial GB). 'então faça isso e me de os sql'"
+
+Work Log:
+- ANÁLISE DO ESTOQUE (entregue ao dono, sem mexer em nada): saldo = COLUNAS diretas em products (estoque_principal / estoque_nota = ESTOQUE 1 COM NF / estoque_semnf = ESTOQUE 2 SEM NF) + tabela cargas (van) — NÃO existe livro de movimentações, logo não há como rastrear quem tirou. Negativos nascem de: (a) RPC baixar_estoque_principal subtrai SEM conferir saldo e SEM floor (sql/bloco29 prova: `set estoque_semnf = coalesce(estoque_semnf,0) - i.quantidade`); (b) pré-venda NÃO bloqueia venda sem estoque (só aviso) e não reserva — entre pedido e entrega o saldo cai e a baixa passa do zero; (c) venda pronta trava quantidade só no FRONT (updateCart min()), o RPC processar_venda_v2 (fora do repo) pode deixar a carga negativa; (d) ajuste manual do admin é SOBRESCRITA e o banco aceita negativo (sem CHECK); (e) RPCs legados apply_carga_admin/aceitar_carga_vendedor (fora do repo) sem piso. Correção proposta como BLOCO 71 OPCIONAL (aguardando autorização): validar saldo na baixa + GREATEST(0,...) + CHECK >= 0 depois de zerar negativos + (futuro) livro de movimentações.
+- REGRA GB implementada: SQL sql/bloco70_cliente_especial_gb.sql (clients.cliente_especial_gb boolean default false; products.preco_especial_gb numeric(12,2) default 0 — ambos idempotentes, nada quebra antes de rodar).
+- types.ts: Client.clienteEspecialGb + Product.precoEspecialGb.
+- clientService: COLS + cliente_especial_gb; map/insert/update com fallback de coluna (padrão do projeto: se SQL não rodou, salva sem ela).
+- productService: map/insert/update de preco_especial_gb com fallback (select * já traz).
+- AdminDashboard: form de produto ganhou campo "Preço Especial GB R$ (0 = sem preço GB)" (âmbar) + payload NEW/EDIT; form de cliente ganhou bloco "Tipo do Cliente — Preços do PDV" com botões NORMAL x ESPECIAL GB (âmbar) + payload; handles de abertura preenchem o flag.
+- PDV: clienteGB = client.clienteEspecialGb === true; precoEspecialGbDe(p). Preço base do item = GB quando produto tem GB>0 (VENCE o preço normal E o switch Tabela); switch Tabela aplica GB nos itens com GB; piso de edição (checkPrecoMinimoViolation + handlePriceBlur) passa a ser o GB quando existir (vendedor NUNCA digita abaixo do GB); card mostra badge âmbar "GB x.xx" e valor do input em âmbar; selo fixo no topo "CLIENTE ESPECIAL GB — preço especial ativo".
+- Vendedor (editor básico do VendedorDashboard) NÃO mexe no flag (só admin define) — updateClient só grava campos enviados.
+- QA: lint 0 erros/11 warnings (baseline exata); tsc 7 erros src/ (baseline, nenhum novo).
+- E2E Agent Browser (mock E2E: admin + rota2user, .env.local criado/removido, server reiniciado limpo): admin editou Palitinho Morango → Preço Especial GB 2.00 gravado no mock; admin editou Emporio Teste → botão ESPECIAL GB marcado → cliente_especial_gb=true gravado; PDV do Emporio (pronta entrega, cupom): SELO âmbar visível, Palitinho com badge "GB 2.00", input nasceu 2.00, digitou 1.50+blur → autocorrigiu para 2.00, +1 unidade → TOTAL R$ 2.00; PDV do Mercado CNPJ (cliente NORMAL): sem selo, sem badge, Palitinho 2.39 (preço normal intacto); zero erros de console. Detalhe do teste: Padaria Dois (mock) tem cadastro incompleto → modal de completar cadastro; cliente normal testado com Mercado CNPJ.
+- Commit local 7ee4a1f (sobre 82599dc do Bloco 69) — push segue pendente por falta de credencial GitHub (desde o Bloco 68).
+
+Stage Summary:
+- Nova regra de preços do PDV: cliente NORMAL = exatamente os preços de hoje (nada muda); cliente ESPECIAL GB = preço especial GB de cada produto (quando > 0), que vence preço normal e switch Tabela, com piso de edição no GB e selo/badge âmbar no PDV.
+- Cadastro/edição de cliente (admin) tem o botão NORMAL x ESPECIAL GB; form de produto tem o campo Preço Especial GB.
+- SQL entregue ao dono (sql/bloco70_cliente_especial_gb.sql) para rodar no SQL Editor do Supabase; enquanto o SQL não rodar, o app salva/tudo cai no preço normal (fallback sem quebra).
+- Análise do estoque negativo entregue com proposta do Bloco 71 (trava nas baixas) aguardando autorização do dono.

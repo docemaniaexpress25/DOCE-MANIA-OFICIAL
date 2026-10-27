@@ -8,6 +8,8 @@ import { locationService } from '@/services/locationService';
 import { DIAS_SEMANA } from '@/lib/constants';
 import { ehContaAReceber, saldoAberto, preVendaNaFila } from '@/lib/contaAReceber';
 import { buscarCnpjReceita, mascararCnpj, mensagemCnpj, clienteAptoNfe, mascararCpf, CnpjBusca } from '@/lib/cnpjAutocomplete';
+// BLOCO 71: cliente ESPECIAL GB só existe nas rotas liberadas (Rota 03 Edipo Pena / Rota 04 Gil Pantoja)
+import { podeClienteEspecialGB } from '@/lib/regraClienteGB';
 import PDV from '@/components/doce/PDV';
 import Cupom from '@/components/doce/Cupom';
 import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
@@ -806,9 +808,12 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       enderecoMunicipio: cForm.enderecoMunicipio,
       enderecoUf: cForm.enderecoUf,
       email: cForm.email,
-      // BLOCO 70B: tipo do cliente agora também no app do vendedor —
-      // no EDIT o setCForm({...c}) já carrega o flag atual (preserva).
-      clienteEspecialGb: cForm.clienteEspecialGb ?? false
+      // BLOCO 70B/71: tipo do cliente também no app do vendedor — no EDIT o
+      // setCForm({...c}) já carrega o flag atual (preserva).
+      // BLOCO 71 (regra do dono): o flag só vale nas rotas liberadas (Rota 03
+      // Edipo Pena / Rota 04 Gil Pantoja) — a rota gravada é sempre a do
+      // vendedor (acima), então a guarda usa user.rota. Fora delas: NORMAL.
+      clienteEspecialGb: podeClienteEspecialGB(user.rota) ? (cForm.clienteEspecialGb ?? false) : false
     };
 
     if (editingClient === 'NEW') addClient(clientData);
@@ -1927,8 +1932,12 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Nome Fantasia (Estabelecimento)</label><input value={cForm.nomeFantasia || ''} onChange={e => setCForm({...cForm, nomeFantasia: e.target.value})} placeholder="Ex: Doce da Maria" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100 uppercase" /></div>
                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Nome do Cliente</label><input value={cForm.nome || ''} onChange={e => setCForm({...cForm, nome: e.target.value})} placeholder="Nome real para chamar o cliente" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100" /></div>
                 <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Telefone / WhatsApp</label><input value={cForm.telefone || ''} onChange={e => setCForm({...cForm, telefone: e.target.value})} placeholder="Telefone" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100" /></div>
-                {/* BLOCO 70B: TIPO DO CLIENTE — NORMAL x ESPECIAL GB (igual ao Admin) */}
-                <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 space-y-2"><p className="text-[9px] font-black text-amber-600 uppercase tracking-widest flex items-center gap-1"><i className="fa-solid fa-star"></i> Tipo do Cliente — Preços do PDV</p><div className="grid grid-cols-2 gap-2"><button type="button" onClick={() => setCForm({...cForm, clienteEspecialGb: false})} className={`py-3 rounded-2xl font-black text-[10px] uppercase tracking-wide border transition-all ${!cForm.clienteEspecialGb ? 'bg-white border-blue-500 text-blue-600 shadow-sm' : 'bg-white border-gray-200 text-gray-400'}`}>Normal</button><button type="button" onClick={() => setCForm({...cForm, clienteEspecialGb: true})} className={`py-3 rounded-2xl font-black text-[10px] uppercase tracking-wide border transition-all flex items-center justify-center gap-1 ${cForm.clienteEspecialGb ? 'bg-amber-500 border-amber-500 text-white shadow-md' : 'bg-white border-gray-200 text-gray-400'}`}><i className="fa-solid fa-star text-[9px]"></i> Especial GB</button></div><p className="text-[8px] font-bold text-amber-500 leading-snug">NORMAL: usa os preços de hoje do PDV. ESPECIAL GB: recebe o PREÇO ESPECIAL GB de cada produto do estoque principal — produto sem preço GB segue o preço normal.</p></div>
+                {/* BLOCO 71: TIPO DO CLIENTE — SÓ dentro da Rota 03 (Edipo Pena) e Rota 04 (Gil Pantoja). Outras rotas: a opção nem aparece e o cliente é sempre NORMAL. */}
+                {podeClienteEspecialGB(user.rota) ? (
+                <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 space-y-2"><p className="text-[9px] font-black text-amber-600 uppercase tracking-widest flex items-center gap-1"><i className="fa-solid fa-star"></i> Tipo do Cliente — Preços do PDV</p><div className="grid grid-cols-2 gap-2"><button type="button" onClick={() => setCForm({...cForm, clienteEspecialGb: false})} className={`py-3 rounded-2xl font-black text-[10px] uppercase tracking-wide border transition-all ${!cForm.clienteEspecialGb ? 'bg-white border-blue-500 text-blue-600 shadow-sm' : 'bg-white border-gray-200 text-gray-400'}`}>Normal</button><button type="button" onClick={() => setCForm({...cForm, clienteEspecialGb: true})} className={`py-3 rounded-2xl font-black text-[10px] uppercase tracking-wide border transition-all flex items-center justify-center gap-1 ${cForm.clienteEspecialGb ? 'bg-amber-500 border-amber-500 text-white shadow-md' : 'bg-white border-gray-200 text-gray-400'}`}><i className="fa-solid fa-star text-[9px]"></i> Especial GB</button></div><p className="text-[8px] font-bold text-amber-500 leading-snug">NORMAL: usa os preços de hoje do PDV. ESPECIAL GB: recebe o PREÇO ESPECIAL GB de cada produto do estoque principal — produto sem preço GB segue o preço normal. Opção disponível apenas nas rotas 03 (Edipo Pena) e 04 (Gil Pantoja).</p></div>
+                ) : cForm.clienteEspecialGb ? (
+                <p className="text-[8px] font-bold text-amber-600 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 leading-snug"><i className="fa-solid fa-circle-info mr-1"></i>Este cliente estava como ESPECIAL GB, mas esta rota não tem preço GB — ao salvar ele volta a NORMAL.</p>
+                ) : null}
                 <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Endereço</label><input value={cForm.endereco || ''} onChange={e => setCForm({...cForm, endereco: e.target.value})} placeholder="Endereço" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100 uppercase" /></div>
                 {/* BLOCO 64: numero/sala do endereco — salvava sempre vazio porque o
                 vendedor nao tinha o campo; agora sai na fila e na impressao. */}

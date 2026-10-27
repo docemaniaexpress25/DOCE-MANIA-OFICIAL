@@ -28,6 +28,12 @@ const users = [{
   id: 'vend01', nome: 'Rota 1 Teste', email: '', perfil: 'VENDEDOR', ativo: true,
   telefone: '', whatsapp: '', foto: null, placa_veiculo: '', rota: 'ROTA_01',
   pre_venda: false, rota2: false, pin_hash: hashSync('123456', 10),
+}, {
+  // BLOCO 71: vendedor da ROTA_04 (Gil Pantoja) — rota LIBERADA pro cliente
+  // ESPECIAL GB. Prova o toggle no form do vendedor + rota nova no select do admin.
+  id: 'vend04', nome: 'Gil Pantoja', email: '', perfil: 'VENDEDOR', ativo: true,
+  telefone: '', whatsapp: '', foto: null, placa_veiculo: '', rota: 'ROTA_04',
+  pre_venda: false, rota2: false, pin_hash: hashSync('123456', 10),
 }];
 
 const clients = [{
@@ -88,6 +94,26 @@ const clients = [{
   pin_localizacao: '-29.171000, -51.211000',
   rota: 'ROTA_01', portal_code: 'TESTROTA2', razao_social: null, inscricao_estadual: null,
   endereco_numero: '20', endereco_cep: null, endereco_municipio: null, endereco_uf: null, email: null,
+}, {
+  // BLOCO 71: cliente LEGADO marcado ESPECIAL GB numa rota NAO liberada (Rota 02)
+  // — o form do admin deve mostrar o aviso (sem toggle) e ao salvar volta a NORMAL.
+  id: 'cli-8', nome_fantasia: 'Doceria GB Legado', nome: null, ativar_cnpj: false, cnpj: null,
+  telefone: '(54) 93333-3333', endereco: 'Rua Legado 30', bairro: 'Centro', ativo: true,
+  localizacao: null, dia_roteiro: new Date().getDay(), ordem: 8, observacoes: null,
+  pin_localizacao: '-29.172000, -51.212000',
+  rota: 'ROTA_02', portal_code: 'TESTGBLEG', razao_social: null, inscricao_estadual: null,
+  endereco_numero: '30', endereco_cep: null, endereco_municipio: null, endereco_uf: null, email: null,
+  cliente_especial_gb: true,
+}, {
+  // BLOCO 71: cliente da ROTA_04 (Gil Pantoja) — cadastro COMPLETO para o
+  // vendedor vend04 atender direto; rota liberada pro cliente ESPECIAL GB.
+  id: 'cli-9', nome_fantasia: 'Mercado Gil', nome: null, ativar_cnpj: false, cnpj: null,
+  telefone: '(54) 92222-2222', endereco: 'Rua Gil 40', bairro: 'Sao Pelegrino', ativo: true,
+  localizacao: null, dia_roteiro: new Date().getDay(), ordem: 9, observacoes: null,
+  pin_localizacao: '-29.173000, -51.213000',
+  rota: 'ROTA_04', portal_code: 'TESTGIL04', razao_social: null, inscricao_estadual: null,
+  endereco_numero: '40', endereco_cep: null, endereco_municipio: null, endereco_uf: null, email: null,
+  cliente_especial_gb: false,
 }];
 
 const products = [

@@ -1,6 +1,8 @@
 import { supabase } from '@/lib/supabaseClient';
 import { fetchAllPages } from '@/lib/supabaseAll';
 import { Client } from '@/lib/types';
+// BLOCO 71: cliente ESPECIAL GB só vale nas rotas liberadas (Rota 03 Edipo Pena / Rota 04 Gil Pantoja)
+import { podeClienteEspecialGB } from '@/lib/regraClienteGB';
 
 /** Codigo aleatorio do portal (12 chars) para clientes novos */
 function generatePortalCode(): string {
@@ -65,8 +67,10 @@ export const clientService = {
       pin_localizacao: pinLocalizacao,
       rota: rota || 'ROTA_01',
       portal_code: generatePortalCode(),
-      // BLOCO 70: tipo do cliente — normal (default) ou ESPECIAL GB
-      cliente_especial_gb: !!client.clienteEspecialGb,
+      // BLOCO 70/71: tipo do cliente — normal (default) ou ESPECIAL GB.
+      // BLOCO 71 (regra do dono): o flag só vale nas rotas liberadas — fora
+      // delas o cliente nasce/grava sempre NORMAL, independente do form.
+      cliente_especial_gb: podeClienteEspecialGB(rota || 'ROTA_01') ? !!client.clienteEspecialGb : false,
     };
     // Fiscais (Bloco 10): envia com checagem suave — se a coluna ainda nao
     // existir o Supabase rejeita o insert, entao refaz sem elas (fallback).
@@ -136,8 +140,13 @@ export const clientService = {
     if ((updates as Record<string, unknown>).enderecoMunicipio !== undefined) payload.endereco_municipio = (updates as Record<string, unknown>).enderecoMunicipio;
     if ((updates as Record<string, unknown>).enderecoUf !== undefined) payload.endereco_uf = (updates as Record<string, unknown>).enderecoUf;
     if ((updates as Record<string, unknown>).email !== undefined) payload.email = (updates as Record<string, unknown>).email || null;
-    // BLOCO 70: tipo do cliente (normal | especial GB) — só grava quando o form envia
-    if (updates.clienteEspecialGb !== undefined) payload.cliente_especial_gb = !!updates.clienteEspecialGb;
+    // BLOCO 70: tipo do cliente (normal | especial GB) — só grava quando o form envia.
+    // BLOCO 71 (regra do dono): guarda pela rota — o Admin e o Vendedor mandam
+    // sempre a rota junto com o flag. Se a rota não veio no update, o flag
+    // NÃO é alterado aqui (comportamento neutro: não quebra updates fiscais/GPS).
+    if (updates.clienteEspecialGb !== undefined && updates.rota !== undefined) {
+      payload.cliente_especial_gb = podeClienteEspecialGB(updates.rota) ? !!updates.clienteEspecialGb : false;
+    }
 
     let { data, error } = await supabase.from('clients').update(payload).eq('id', id).select().single();
     // Colunas que podem nao existir (Bloco 10/12): refaz sem elas

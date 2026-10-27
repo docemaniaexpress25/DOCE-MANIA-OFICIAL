@@ -493,3 +493,27 @@ Stage Summary:
 - A produção recebeu TUDO do Bloco 70 hoje (push destravado com o token novo) — após o deploy da Vercel, o seletor do Admin e a lógica do PDV aparecem no app real.
 - DEPENDÊNCIA CRÍTICA mantida: o SQL sql/bloco70_cliente_especial_gb.sql precisa rodar no SQL Editor do Supabase de produção; enquanto não rodar, o app salva o cliente SEM o flag (fallback silencioso) e o selo não aparece.
 - Ambiente de E2E documentado: mock completo local exige key fake no .env.local e browser na origem 127.0.0.1.
+
+---
+Task ID: bloco71-gb-so-rotas-3-4
+Agent: Z.ai Code (principal)
+Task: Dono: "só será possível escolher entre preço normal ou preço especial GB, dentro da rota 4 - Gil Pantoja, e dentro da Rota 3 Edipo Pena. outras rotas nem aparecerá a chance de criar clientes com esses preços. execute isso"
+
+Work Log:
+- REGRA implementada em 4 camadas (todas falham para NORMAL se a rota não for liberada):
+  (1) src/lib/regraClienteGB.ts (NOVO): ROTAS_CLIENTE_GB = ['ROTA_03','ROTA_04'] (Rota 3 = Edipo Pena, Rota 4 = Gil Pantoja) + podeClienteEspecialGB(rota). Ponto ÚNICO de manutenção — para liberar/alterar rotas no futuro, mexe só aqui.
+  (2) clientService.ts (camada de dados): insertClient grava cliente_especial_gb=false fora das rotas liberadas (independe do form); updateClient só aplica o flag quando a rota vem junto (Admin/Vendedor mandam sempre) — updates fiscais/GPS (que não mandam rota nem flag) ficam neutros, nada quebra.
+  (3) AdminDashboard: no form do cliente o bloco "Tipo do Cliente — Preços do PDV" foi MOVIDO para logo abaixo do select de ROTA e agora só renderiza quando a rota selecionada é 03/04; mudou a rota para fora das liberadas → o flag limpa na hora (sem surpresa ao salvar); cliente LEGADO marcado GB em rota não liberada mostra aviso âmbar "estava como ESPECIAL GB... ao salvar volta a NORMAL"; payload do save guarda pela rota efetiva.
+  (4) VendedorDashboard: mesmo seletor do form do cliente, condicionado à rota do VENDEDOR logado (a rota gravada é sempre user.rota); fora das rotas liberadas o bloco some e o payload força NORMAL; mesmo aviso legado.
+- OBS: o campo "Preço Especial GB" no cadastro de PRODUTO (admin) NÃO foi restringido — a regra do dono é sobre o TIPO DO CLIENTE; o preço por produto continua podendo ser cadastrado para uso futuro.
+- Mock E2E: vendedor vend04 "Gil Pantoja" (ROTA_04), cliente cli-8 "Doceria GB Legado" (ROTA_02, cliente_especial_gb=true — legado) e cli-9 "Mercado Gil" (ROTA_04).
+- QA: lint 0 erros/11 warnings (baseline exata); tsc intocado (os 2 dashboards têm @ts-nocheck).
+- E2E Agent Browser em MODO MOCK (127.0.0.1:3000, .env.local criado/removido): T1 admin NOVO CLIENTE rota default ROTA_01 → bloco AUSENTE; mudou rota p/ Rota 04 → bloco APARECE (NORMAL x ESPECIAL GB) → marcou ESPECIAL GB → salvou → cliente "Doceria GB Rota 04" na lista com badge GB na Rota 04. T2 admin EDIT Emporio Teste (Rota 02) → bloco AUSENTE. T3 admin EDIT "Doceria GB Legado" (Rota 02, GB=true) → sem toggle + aviso âmbar presente → salvou → mock confirma cliente_especial_gb=false (normalizado). T4 login Gil Pantoja (Rota 04) → NOVO CLIENTE → toggle PRESENTE. T5 login Rota 2 Teste (Rota 02) → NOVO CLIENTE → toggle AUSENTE. Zero erros de página.
+- SANITY em produção (server limpo, sem mock): a tela de login REAL lista "Edipo Pena - R3" e "Gil pantoja - R4" — confirma que ROTA_03/ROTA_04 são exatamente as rotas do dono.
+- INFRA (descoberta desta sessão): o sandbox mata processos em background quando a chamada Bash termina (nohup/setsid não bastam). FIX: launcher /home/z/.devtools/daemon-dev.js com spawn detached+unref (mesmo padrão do daemon do agent-browser) — sobrevive entre chamadas. Usado para o dev server nos testes; server limpo restabelecido no fim.
+- Commit/push deste bloco segue no log (main -> origin/main, credencial já configurada).
+
+Stage Summary:
+- Cliente ESPECIAL GB agora só existe dentro da Rota 3 (Edipo Pena) e Rota 4 (Gil Pantoja): nessas rotas o cadastro/edição (admin E vendedor) mostra NORMAL x ESPECIAL GB; em qualquer outra rota a opção nem aparece e o cliente é sempre NORMAL — com guarda também na gravação (service), não só na tela.
+- Cliente legado que já estava GB fora dessas rotas: o form avisa e volta a NORMAL ao salvar (provado no E2E via mock).
+- Sem SQL novo (usa as colunas do Bloco 70). Para liberar outra rota no futuro: mudar UMA linha em src/lib/regraClienteGB.ts.

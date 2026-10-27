@@ -64,3 +64,12 @@ prisma/*.db
 package-lock.json
 bun.lock
 .env
+
+# Artefatos do sandbox (checkpoints os commitavam — BLOCO 70B)
+/.zscripts/
+/overflow-test/
+/public/apresentacao/
+/Caddyfile
+/DOCE-MANIA-Investimento.pdf
+/DOCE-MANIA-Preview-Todas-Paginas.png
+/*.png

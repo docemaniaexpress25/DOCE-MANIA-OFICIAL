@@ -876,9 +876,15 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       }
       base = productsInCarga;
     }
+    // BLOCO 73 (regra do dono): cliente ESPECIAL GB -> o PDV mostra SOMENTE os
+    // produtos com PREÇO ESPECIAL GB cadastrado (> 0). Produto com GB 0.00 (sem
+    // valor) NÃO aparece — no especial só entra item com preço GB ativo (vale
+    // para pronta entrega da carga e pré-venda do estoque), fica mais fácil
+    // vender e não roda risco de sair preço normal no cliente GB.
+    if (clienteGB) base = base.filter(p => (Number(p.precoEspecialGb) || 0) > 0);
     if (!activeCategoryId) return base;
     return base.filter(p => p.categoryId === activeCategoryId);
-  }, [products, productIdsInCarga, activeCategoryId, sellFromCentral, modoAtivo, rota2Ativo, verProdutosTeste, minhaCarga]);
+  }, [products, productIdsInCarga, activeCategoryId, sellFromCentral, modoAtivo, rota2Ativo, verProdutosTeste, minhaCarga, clienteGB]);
 
   const generatePrePedidoText = (width: '56MM' | '80MM') => {
     const totalWidth = width === '80MM' ? 48 : 32; 
@@ -1244,9 +1250,16 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           );
         })}
         {filteredProducts.length === 0 && (
-          <div className="py-20 text-center opacity-30 flex flex-col items-center gap-4">
+          <div className="py-20 text-center opacity-40 flex flex-col items-center gap-4">
             <i className="fa-solid fa-box-open text-5xl"></i>
-            <p className="font-black uppercase tracking-widest text-[10px]">Nenhum produto desta categoria.</p>
+            {clienteGB ? (
+              <>
+                <p className="font-black uppercase tracking-widest text-[10px]">Nenhum produto com Preço Especial GB aqui.</p>
+                <p className="text-[9px] font-bold text-gray-400 uppercase leading-snug px-6">No cliente especial só aparece o que tem preço GB cadastrado — peça ao admin para atualizar.</p>
+              </>
+            ) : (
+              <p className="font-black uppercase tracking-widest text-[10px]">Nenhum produto desta categoria.</p>
+            )}
           </div>
         )}
       </div>

@@ -113,12 +113,13 @@ const clients = [{
   pin_localizacao: '-29.173000, -51.213000',
   rota: 'ROTA_04', portal_code: 'TESTGIL04', razao_social: null, inscricao_estadual: null,
   endereco_numero: '40', endereco_cep: null, endereco_municipio: null, endereco_uf: null, email: null,
-  cliente_especial_gb: false,
+  // BLOCO 73: cliente ESPECIAL GB da Rota 4 — PDV mostra só produto com preço GB
+  cliente_especial_gb: true,
 }];
 
 const products = [
-  { id: 'prod-1', nome: 'Palitinho Morango', preco_custo: 1.0, preco_venda: 2.39, preco_minimo: 2.39, comissao_percentual: 10, comissao_pv_percentual: 5, estoque_principal: 100, estoque_van: 0, estoque_nota: 0, estoque_semnf: 40, produto_teste: false, ativo: true, unidade: 'UN', origem: '0', ncm: null, cest: null, cfop: null, ean: null, imagem: null, unidades_por_caixa: null, obs: null, familia_catalogo: null, category_id: null, subcategory_id: null, display_order: null },
-  { id: 'prod-2', nome: 'Bacon Wanflo 110g', preco_custo: 3.0, preco_venda: 4.29, preco_minimo: 3.99, comissao_percentual: 10, comissao_pv_percentual: 5, estoque_principal: 80, estoque_van: 0, estoque_nota: 0, estoque_semnf: 30, produto_teste: false, ativo: true, unidade: 'UN', origem: '0', ncm: null, cest: null, cfop: null, ean: null, imagem: null, unidades_por_caixa: null, obs: null, familia_catalogo: null, category_id: null, subcategory_id: null, display_order: null },
+  { id: 'prod-1', nome: 'Palitinho Morango', preco_custo: 1.0, preco_venda: 2.39, preco_minimo: 2.39, comissao_percentual: 10, comissao_pv_percentual: 5, estoque_principal: 100, estoque_van: 0, estoque_nota: 0, estoque_semnf: 40, produto_teste: false, ativo: true, unidade: 'UN', origem: '0', ncm: null, cest: null, cfop: null, ean: null, imagem: null, unidades_por_caixa: null, obs: null, familia_catalogo: null, category_id: null, subcategory_id: null, display_order: null, preco_especial_gb: 2.0 },
+  { id: 'prod-2', nome: 'Bacon Wanflo 110g', preco_custo: 3.0, preco_venda: 4.29, preco_minimo: 3.99, comissao_percentual: 10, comissao_pv_percentual: 5, estoque_principal: 80, estoque_van: 0, estoque_nota: 0, estoque_semnf: 30, produto_teste: false, ativo: true, unidade: 'UN', origem: '0', ncm: null, cest: null, cfop: null, ean: null, imagem: null, unidades_por_caixa: null, obs: null, familia_catalogo: null, category_id: null, subcategory_id: null, display_order: null, preco_especial_gb: 0 },
   // BLOCO 29 (ROTA 2): produtos de TESTE — 3 do estoque COM NF + 3 do SEM NF
   { id: 'prod-t1', nome: 'TESTE NF 01 — Doce A', preco_custo: 0.5, preco_venda: 1.0, preco_minimo: 1.0, comissao_percentual: 10, comissao_pv_percentual: 5, estoque_principal: 0, estoque_van: 0, estoque_nota: 50, estoque_semnf: 0, produto_teste: true, ativo: true, unidade: 'UN', origem: '0', ncm: null, cest: null, cfop: null, ean: null, imagem: null, unidades_por_caixa: null, obs: null, familia_catalogo: null, category_id: null, subcategory_id: null, display_order: null },
   { id: 'prod-t2', nome: 'TESTE NF 02 — Doce B', preco_custo: 1.0, preco_venda: 2.0, preco_minimo: 2.0, comissao_percentual: 10, comissao_pv_percentual: 5, estoque_principal: 0, estoque_van: 0, estoque_nota: 50, estoque_semnf: 0, produto_teste: true, ativo: true, unidade: 'UN', origem: '0', ncm: null, cest: null, cfop: null, ean: null, imagem: null, unidades_por_caixa: null, obs: null, familia_catalogo: null, category_id: null, subcategory_id: null, display_order: null },
@@ -183,7 +184,7 @@ const tables: Record<string, any[]> = {
   app_settings: settings,
   product_categories: [],
   product_subcategories: [],
-  cargas: [{ id: 'carga-1', vendedor_id: 'rota2user', produto_id: 'prod-t1', quantidade: 30, modo_nota: 'COM_NF', data: new Date().toISOString() }, { id: 'carga-2', vendedor_id: 'rota2user', produto_id: 'prod-1', quantidade: 20, data: new Date().toISOString() }, { id: 'carga-3', vendedor_id: 'vend01', produto_id: 'prod-1', quantidade: 25, modo_nota: 'SEM_NF', data: new Date().toISOString() }],
+  cargas: [{ id: 'carga-1', vendedor_id: 'rota2user', produto_id: 'prod-t1', quantidade: 30, modo_nota: 'COM_NF', data: new Date().toISOString() }, { id: 'carga-2', vendedor_id: 'rota2user', produto_id: 'prod-1', quantidade: 20, data: new Date().toISOString() }, { id: 'carga-3', vendedor_id: 'vend01', produto_id: 'prod-1', quantidade: 25, modo_nota: 'SEM_NF', data: new Date().toISOString() }, { id: 'carga-4', vendedor_id: 'vend04', produto_id: 'prod-1', quantidade: 25, data: new Date().toISOString() }, { id: 'carga-5', vendedor_id: 'vend04', produto_id: 'prod-2', quantidade: 15, data: new Date().toISOString() }],
   cargas_pendentes: [],
   system_messages: [],
   commissions: [],

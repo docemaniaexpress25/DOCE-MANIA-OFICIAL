@@ -560,3 +560,23 @@ Stage Summary:
 - O fluxo que o dono descreveu está IMPLEMENTADO e PROVADO: "ATENDER CLIENTE" é a primeira tela (com endereço+WhatsApp do banco e ATUALIZAR opcional), e depois da venda vai direto pro cupom/NF-e/NFC-e.
 - FALTA APENAS O PUSH: dono precisa mandar token GitHub novo (e REVOGAR o antigo que foi exposto no chat e nunca foi rotado). Com o token: git push origin main → Vercel publica → produção para de forçar o modal em cliente incompleto.
 - Nenhum código novo neste bloco (nenhuma mudança era necessária — o Bloco 72 já entregava o comportamento confirmado pelo dono).
+
+---
+Task ID: bloco73-pdv-gb-so-precos-gb
+Agent: Z.ai Code (principal)
+Task: Dono (com token GitHub novo): "quero tbm que todos os produtos do estoque principal que tiverem o preço especial GB de 0,00 ou seja zerado sem valor nao apareçam ... no pdv do cliente especial vai aparecer apenas os itens que tem o preço especial GB atualizado."
+
+Work Log:
+- PUSH LIBERADO: token novo salvo no credential-store → Bloco 72 EMPURRADO (12e947d..70346f0) — produção Vercel recebeu o atendimento sem tela travando + persistência provada.
+- ANTES do push: mais um commit lixo do checkpoint (731b5cb, UUID) sobre o Bloco 72 — removido com git reset --mixed (a entrada bloco72b do worklog que ele carregava era legítima, fundida no commit 70346f0 via amend); 5 arquivos chmodados pelo checkpoint voltaram a 644. daemon-dev.js também apagado pelo sandbox — recriado (agora mata pelo PID da porta 3000 ANTES do ps, cobre o "next-server" renomeado).
+- REGRA BLOCO 73 (src/components/doce/PDV.tsx): no filteredProducts, quando clienteGB → base = base.filter(p => (Number(p.precoEspecialGb) || 0) > 0) — vale para TODAS as fontes do catálogo (pronta entrega da carga da van, pré-venda central, fluxo novo COM NF/SEM NF). Produto com preço GB 0.00 (sem valor) NÃO aparece no PDV do cliente especial; cliente NORMAL mantém catálogo completo (filtro só existe quando o flag está ativo). Deps do memo atualizadas (clienteGB).
+- Estado vazio explicativo: quando cliente GB não tem produtos, em vez de "Nenhum produto desta categoria" mostra "Nenhum produto com Preço Especial GB aqui. / No cliente especial só aparece o que tem preço GB cadastrado — peça ao admin para atualizar."
+- Mock E2E: prod-1 Palitinho preco_especial_gb 2.0 / prod-2 Bacon preco_especial_gb 0 / cli-9 Mercado Gil (ROTA_04) cliente_especial_gb true / cargas 4-5 do vend04 com prod-1 (25) e prod-2 (15).
+- QA: lint 0 erros/11 warnings (baseline exata).
+- E2E Agent Browser (mock completo 127.0.0.1:3000): T1 login Gil Pantoja → Rota do Dia → Mercado GB → Atender → Pronta entrega (mock: vanModo null → PDV direto, sem pergunta de nota) → selo "CLIENTE ESPECIAL GB — PREÇO ESPECIAL ATIVO" ✓, PALITINHO visível ✓, BACON AUSENTE apesar de 15 UN na carga ✓. T2 +1 Palitinho → input nasceu "2", TOTAL R$ 2.00, badge "GB 2.00" ✓. T3 controle: login Rota 2 Teste → Emporio (normal) → Pre-venda → Só cupom → PALITINHO **E** BACON visíveis, sem selo, sem badge, preço normal 2.39 presente ✓. Zero erros de página.
+- Server restabelecido limpo (.env.local removido).
+
+Stage Summary:
+- No PDV de cliente ESPECIAL GB só entra produto com Preço Especial GB > 0 (pronta e pré-venda) — vendedor não roda mais risco de sair preço normal no especial; cliente normal não muda NADA.
+- Bloco 72 no ar na produção; Bloco 73 aguardando push (comitando agora com a credencial salva).
+- Dependência: os preços GB são cadastrados no admin (campo Preço Especial GB R$). Produto sem preço GB continua existindo para clientes normais.

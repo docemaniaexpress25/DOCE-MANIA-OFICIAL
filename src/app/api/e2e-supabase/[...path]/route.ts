@@ -128,7 +128,7 @@ const products = [
 ];
 
 const settings = [{
-  id: 'global_settings', margem_global_ativa: false, margem_global_valor: 0, margem_minima_ativa: false, margem_minima: 0,
+  id: 'global_settings', margem_global_ativa: false, margem_global_valor: 0, margem_minima_ativa: true, margem_minima: 0,
   pix1_name: 'Pix A', pix1_code: null, pix2_name: 'Pix B', pix2_code: null, pix_chave_entrega: null,
   product_order: null, client_order: null, catalogo_order: null,
   company_name: 'Doce Mania', company_cnpj: '00.000.000/0001-00',

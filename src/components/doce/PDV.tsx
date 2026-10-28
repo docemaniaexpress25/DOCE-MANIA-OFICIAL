@@ -399,7 +399,11 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   // FUNÇÃO DE VALIDAÇÃO DIRETA - CHAMA EM QUALQUER LUGAR
   // ============================================================
   const checkPrecoMinimoViolation = (): { hasViolation: boolean; violatingProducts: Array<{ nome: string; preco: number; minimo: number }> } => {
-    if (!margemMinimaAtiva || isPrePedido) return { hasViolation: false, violatingProducts: [] };
+    // BLOCO 73 (regra do dono): cliente ESPECIAL GB — o PREÇO MÍNIMO não faz
+    // parte da regra GB. Nada de banner 'Venda Bloqueada', nada de travar o
+    // cupom por mínimo: a regra do especial é o PREÇO GB (piso de edição do
+    // Bloco 70 continua — blur devolve pro GB se digitarem abaixo).
+    if (!margemMinimaAtiva || isPrePedido || clienteGB) return { hasViolation: false, violatingProducts: [] };
     
     const violating: Array<{ nome: string; preco: number; minimo: number }> = [];
     
@@ -1178,9 +1182,12 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           const precoBase = precoGB > 0 ? precoGB : (precoTabelaAtivo && minPrice > 0 ? minPrice : (p.precoVenda ?? 0));
           const itemPrice = item ? parseFloat(item.precoVenda) || 0 : p.precoVenda;
           // Só considera violação se tem piso cadastrado (> 0)
-          const isBelowMin = margemMinimaAtiva && item && item.quantidade > 0 && pisoCard > 0 && itemPrice < pisoCard && !isPrePedido;
-          // BLOCO 24: preço no mínimo pela tabela = destaque violeta
-          const isPrecoTabela = precoTabelaAtivo && item && item.quantidade > 0 && minPrice > 0 && itemPrice === minPrice;
+          // BLOCO 73: cliente ESPECIAL GB NÃO tem preço mínimo — nem destaque
+          // vermelho, nem hint 'Mínimo: R$' (o mínimo não faz parte da regra;
+          // o piso que vale é o PREÇO GB, garantido no blur pelo Bloco 70)
+          const isBelowMin = margemMinimaAtiva && !clienteGB && item && item.quantidade > 0 && pisoCard > 0 && itemPrice < pisoCard && !isPrePedido;
+          // BLOCO 24: preço no mínimo pela tabela = destaque violeta (fora da regra GB — mínimo não se aplica ao especial)
+          const isPrecoTabela = !clienteGB && precoTabelaAtivo && item && item.quantidade > 0 && minPrice > 0 && itemPrice === minPrice;
           // BLOCO 70: item no PREÇO ESPECIAL GB = destaque âmbar
           const isPrecoGB = clienteGB && precoGB > 0 && item && item.quantidade > 0 && itemPrice === precoGB;
           const hasBeenSold = soldProductIds.has(p.id);
@@ -1209,7 +1216,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                           className={`w-14 bg-transparent border-none p-0 text-[11px] font-black outline-none ${isBelowMin ? 'text-rose-600' : (isPrecoGB ? 'text-amber-600' : (isPrecoTabela ? 'text-violet-600' : 'text-emerald-600'))}`} 
                         />
                         {/* SÓ mostra preço mínimo se cadastrado (> 0) - NUNCA mostra 0 */}
-                        {p.precoMinimo && p.precoMinimo > 0 && (
+                        {/* BLOCO 73: cliente ESPECIAL GB não mostra mínimo — não faz parte da regra */}
+                        {!clienteGB && p.precoMinimo && p.precoMinimo > 0 && (
                           <span className="text-[8px] font-bold text-rose-600 ml-1">
                             {p.precoMinimo.toFixed(2)}
                           </span>

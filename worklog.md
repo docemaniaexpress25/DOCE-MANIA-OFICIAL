@@ -580,3 +580,25 @@ Stage Summary:
 - No PDV de cliente ESPECIAL GB só entra produto com Preço Especial GB > 0 (pronta e pré-venda) — vendedor não roda mais risco de sair preço normal no especial; cliente normal não muda NADA.
 - Bloco 72 no ar na produção; Bloco 73 aguardando push (comitando agora com a credencial salva).
 - Dependência: os preços GB são cadastrados no admin (campo Preço Especial GB R$). Produto sem preço GB continua existindo para clientes normais.
+
+---
+Task ID: bloco73b-pdv-gb-sem-preco-minimo
+Agent: Z.ai Code (principal)
+Task: Dono: "para esses dois vendedores r3 e r4! quero que quando atender cliente especial GB nao precisa mostrar no pdv preço minimo pois ele nao faz parte da regra!"
+
+Work Log:
+- Regra: no PDV de cliente ESPECIAL GB o PREÇO MÍNIMO não participa — nem mostra, nem bloqueia (a regra do especial é o PREÇO GB; o piso de edição do Bloco 70 — blur devolve pro GB — continua).
+- PDV.tsx, 4 pontos, todos com guarda `!clienteGB`/`clienteGB` (cliente NORMAL não muda NADA):
+  (1) checkPrecoMinimoViolation: early return quando clienteGB — mata hasMarginViolation → banner "Venda Bloqueada: Preço abaixo do mínimo!" some e GERAR CUPOM/botão de confirmação deixam de travar por mínimo;
+  (2) isBelowMin do card: false quando clienteGB — sem destaque vermelho no preço e sem hint "Mínimo: R$ ... (GB)";
+  (3) número vermelho do precoMinimo ao lado do input: não renderiza para clienteGB;
+  (4) isPrecoTabela (destaque violeta "preço no mínimo pela tabela"): suprimido para clienteGB.
+- Mock: margem_minima_ativa=true (pra provar que o mínimo segue valendo pro normal — antes o mock desligado mascararia o teste). daemon-dev.js apagado PELO SANDBOX de novo — recriado (agora mata quem ocupa a 3000 antes do ps).
+- QA: lint 0 erros/11 warnings (baseline exata).
+- E2E Agent Browser (mock 127.0.0.1:3000): T1 Mercado GB (Gil Pantoja, pronta): card do Palitinho SEM o mínimo vermelho 2.39, badge GB 2.00 presente; digitou 1 → blur → corrigiu pra 2.00 (piso GB do Bloco 70 vivo); sem banner, sem hint "Mínimo:", +1 item → GERAR CUPOM HABILITADO com total 2.00. T2 controle (Rota 2, Emporio normal, pré-venda): mínimo vermelho 2.39 VISÍVEL no card; digitou 1 → blur → corrigiu pra 2.39 (piso do mínimo); Bacon presente (catálogo completo); zero erros de página.
+- Sandbox recarregou a página várias vezes durante os testes (comportamento conhecido) — fluxos refeitos em eval único quando necessário.
+
+Stage Summary:
+- Cliente ESPECIAL GB: PDV limpo — só o preço GB (badge âmbar), sem NENHUM elemento de preço mínimo e sem bloqueio por mínimo/margem; o piso que vale continua sendo o próprio preço GB.
+- Cliente NORMAL: todo o sistema de preço mínimo/margem intacto (provo no E2E com margem mínima ativa).
+- Vendedores R3/R4 atendendo cliente normal continuam com mínimos — a isenção é do CLIENTE ESPECIAL GB, não do vendedor.

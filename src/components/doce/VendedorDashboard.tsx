@@ -39,7 +39,8 @@ interface VendedorDashboardProps {
   processSale: (data: any) => Promise<Sale | null>;
   processPreVenda: (data: any) => Promise<{ pedido: Sale | null; erro?: string }>;
   addClient: (data: Omit<Client, 'id'>) => Promise<void>; 
-  updateClient: (id: string, data: Partial<Client>) => void;
+  // BLOCO 72: devolve true quando GRAVOU no banco (persistência provada)
+  updateClient: (id: string, data: Partial<Client>) => Promise<boolean>;
   deleteClient: (id: string) => void; 
   receivePayment: (id: string, method: PaymentMethod, amount?: number) => void;
   deleteSale: (id: string) => void;
@@ -228,6 +229,8 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const [gpsEndereco, setGpsEndereco] = useState<string>('');
   const [gpsBairro, setGpsBairro] = useState<string>('');
   const [modalWhatsapp, setModalWhatsapp] = useState('');
+  // BLOCO 72: salvando contato no banco (trava o botão e mostra spinner)
+  const [savingContato, setSavingContato] = useState(false);
 
   const isEmptyField = (val: any): boolean => {
     if (val === null || val === undefined) return true;
@@ -239,25 +242,31 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     return false;
   };
 
-  const clientNeedsInfo = (c: Client) => {
-    const needsGPS = !c.pinLocalizacao || c.pinLocalizacao.length < 5;
-    const needsWhatsapp = isEmptyField(c.telefone);
-    return needsGPS || needsWhatsapp;
+  // ============================================================
+  // BLOCO 72 (regra nova do dono): A TELA DE WHATSAPP/LOCALIZACAO NAO TRAVA
+  // MAIS O ATENDIMENTO. Antes: cliente 'incompleto' abria o modal obrigatorio
+  // mesmo com os dados ja salvos (GPS faltando reabria o campo do WhatsApp).
+  // Agora: clicou no cliente -> direto pro modo de venda (cupom/NF-e/NFC-e).
+  // Atualizar contato virou OPCIONAL, pelo botao da tela do modo.
+  // ============================================================
+  const handleAtenderClient = (client: Client) => {
+    // BLOCO 13: TODOS os vendedores escolhem pronta entrega x pre-venda
+    setModoSheet(client);
   };
 
-  // BLOCO 36: fromModo = aberto pelo botao 'Completar cadastro agora' da tela do modo
-  const handleAtenderClient = (client: Client, fromModo: boolean = false) => {
+  // BLOCO 72: abre o modal de WhatsApp/Localizacao de forma VOLUNTARIA (botao
+  // 'Atualizar' / 'Completar cadastro agora' da tela do modo). Vem pre-
+  // preenchido com o que ja esta no banco — pode salvar so um campo.
+  const abrirClientInfoModal = (client: Client, fromModo: boolean = false) => {
     clientInfoFromModoRef.current = fromModo;
-    if (clientNeedsInfo(client)) {
-      setModalWhatsapp(client.telefone || '');
-      setGpsCoords(null);
-      setGpsPinStr(client.pinLocalizacao || '');
-      setGpsStatus(client.pinLocalizacao && client.pinLocalizacao.length >= 5 ? 'done' : 'idle');
-      setClientInfoModal(client);
-    } else {
-      // BLOCO 13: TODOS os vendedores escolhem pronta entrega x pre-venda
-      setModoSheet(client);
-    }
+    // telefone lixo ('0', '-', vazio) NAO preenche — campo nasce limpo pra digitar
+    setModalWhatsapp(isEmptyField(client.telefone) ? '' : (client.telefone || ''));
+    setGpsCoords(null);
+    setGpsPinStr(client.pinLocalizacao || '');
+    setGpsStatus(client.pinLocalizacao && client.pinLocalizacao.length >= 5 ? 'done' : 'idle');
+    setGpsEndereco('');
+    setGpsBairro('');
+    setClientInfoModal(client);
   };
 
   // BLOCO 29 (ROTA 2): modo da VAN do vendedor — definido na CARGA pelo admin (1 ou outro)
@@ -387,29 +396,41 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const whatsappOk = modalWhatsapp.replace(/\D/g, '').length >= 10;
 
   const handleSaveClientInfo = async () => {
-    if (!clientInfoModal) return;
-    // BLOCO 35 (regra do dono): preenchimento OBRIGATORIO — sem GPS/WhatsApp
-    // o botao nao salva e nao segue (pede ate completar).
-    const faltaGps = !gpsPinStr || gpsPinStr.length < 5;
-    const faltaTel = !modalWhatsapp || modalWhatsapp.replace(/\D/g, '').length < 10;
-    if (faltaGps || faltaTel) {
-      showToast(
-        faltaGps && faltaTel ? 'Falta a localização e o WhatsApp — capture o GPS e digite DDD + número (ex: 54 99999-9999).'
-          : faltaGps ? 'Capture a localização do cliente antes de salvar.'
-          : 'WhatsApp incompleto — digite DDD + número (ex: 54 99999-9999).',
-        'error'
-      );
+    if (!clientInfoModal || savingContato) return;
+    // BLOCO 72 (regra nova do dono): os dois campos viraram OPCIONAIS — pode
+    // salvar so o WhatsApp, so a localizacao ou os dois. O que NAO pode e
+    // gravar lixo: WhatsApp digitado exige DDD + numero (10+ digitos).
+    const zapDigitado = !!modalWhatsapp.trim();
+    const zapInvalido = zapDigitado && modalWhatsapp.replace(/\D/g, '').length < 10;
+    if (zapInvalido) {
+      showToast('WhatsApp incompleto — digite DDD + número (ex: 54 99999-9999) ou apague para não alterar.', 'error');
       return;
     }
-    const updates: any = { pinLocalizacao: gpsPinStr };
-    if (gpsEndereco) updates.endereco = gpsEndereco;
-    if (gpsBairro) updates.bairro = gpsBairro;
-    updates.telefone = modalWhatsapp.trim();
+    if (!zapDigitado && (!gpsPinStr || gpsPinStr.length < 5)) {
+      showToast('Nada para salvar — capture a localização ou digite o WhatsApp.', 'error');
+      return;
+    }
+    setSavingContato(true);
+    const updates: any = {};
+    if (zapDigitado) updates.telefone = modalWhatsapp.trim();
+    if (gpsPinStr && gpsPinStr.length >= 5) {
+      updates.pinLocalizacao = gpsPinStr;
+      if (gpsEndereco) updates.endereco = gpsEndereco;
+      if (gpsBairro) updates.bairro = gpsBairro;
+    }
+    // BLOCO 72: persistencia PROVADA — espera o banco gravar e checa o resultado
+    // (updateClient devolve true só quando o Supabase devolve a linha salva).
+    const ok = await updateClient(clientInfoModal.id, updates);
+    setSavingContato(false);
+    if (!ok) {
+      showToast('Não gravou no banco — verifique a conexão e tente de novo.', 'error');
+      return;
+    }
+    showToast('Gravado no banco ✓', 'success');
     // BLOCO 36 FIX (bug do dono): snapshot do cliente JA ATUALIZADO na tela do
     // modo — antes passava o objeto ANTIGO e a tela voltava dizendo 'cadastro
     // incompleto' mesmo com o WhatsApp recem-salvo.
     const atualizado = { ...clientInfoModal, ...updates } as Client;
-    updateClient(clientInfoModal.id, updates);
     setClientInfoModal(null);
     setModoSheet(atualizado);
   };
@@ -1787,9 +1808,10 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 <i className="fa-solid fa-arrow-left"></i>
               </button>
               <div className="w-14 h-14 bg-white/20 rounded-2xl flex items-center justify-center mx-auto mb-3">
-                <i className="fa-solid fa-circle-exclamation text-white text-2xl"></i>
+                <i className="fa-brands fa-whatsapp text-white text-2xl"></i>
               </div>
-              <h3 className="font-black text-white text-base uppercase tracking-tight">Cadastro Incompleto</h3>
+              {/* BLOCO 72: tela virou opcional — o título não assusta mais */}
+              <h3 className="font-black text-white text-base uppercase tracking-tight">WhatsApp e Localização</h3>
               <p className="text-white/80 text-[10px] font-bold uppercase mt-1">{clientInfoModal.nomeFantasia}</p>
             </div>
 
@@ -1805,6 +1827,8 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                   WhatsApp {whatsappOk ? 'ok' : 'pendente'}
                 </span>
               </div>
+              {/* BLOCO 72: deixa claro que agora é opcional */}
+              <p className="text-[9px] font-bold text-gray-400 text-center -mt-1 leading-snug">Opcional — preencha só o que precisa. Salva direto no banco.</p>
 
               <div className={`p-4 rounded-2xl border-2 border-dashed flex items-center gap-3 transition-all ${gpsStatus === 'done' ? 'bg-emerald-50 border-emerald-300' : gpsStatus === 'loading' ? 'bg-blue-50 border-blue-300 animate-pulse' : 'bg-amber-50 border-amber-200'}`}>
                 <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${gpsStatus === 'done' ? 'bg-emerald-100' : 'bg-amber-100'}`}>
@@ -1859,21 +1883,19 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
             <div className="p-5 pt-0 flex flex-col gap-2">
               <button
                 onClick={handleSaveClientInfo}
-                className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest flex items-center justify-center gap-2"
+                disabled={savingContato}
+                className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest flex items-center justify-center gap-2 disabled:opacity-60"
               >
-                <i className="fa-solid fa-floppy-disk"></i> Salvar e Atender
+                <i className={`fa-solid ${savingContato ? 'fa-spinner fa-spin' : 'fa-floppy-disk'}`}></i>
+                {savingContato ? 'Gravando no banco...' : 'Salvar dados'}
               </button>
-              <button
-                onClick={() => { setClientInfoModal(null); setSelectedClient(clientInfoModal); }}
-                className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest text-center"
-              >
-                Atender sem preencher
-              </button>
+              {/* BLOCO 72: o modal é voluntário — Voltar devolve pra tela do modo
+                  sem salvar nada (era 'Atender sem preencher' do fluxo antigo) */}
               <button
                 onClick={voltarClientInfoModal}
-                className="w-full py-2 text-gray-400 font-bold uppercase text-[10px] tracking-widest text-center"
+                className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest text-center"
               >
-                <i className="fa-solid fa-arrow-left mr-1.5"></i>Voltar
+                <i className="fa-solid fa-arrow-left mr-1.5"></i>Voltar sem salvar
               </button>
             </div>
           </div>
@@ -2088,12 +2110,14 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                       <i className="fa-brands fa-whatsapp mr-1.5"></i>{modoClient.telefone}
                     </p>
                   </div>
-                  <button onClick={() => { setModoSheet(null); handleOpenEditClient(modoClient); }}
+                  {/* BLOCO 72: Atualizar abre o modal rápido de WhatsApp/Localização
+                      (opcional) — o cadastro completo continua na aba CLIENTES */}
+                  <button onClick={() => abrirClientInfoModal(modoClient, true)} title="Atualizar WhatsApp e Localização"
                     className="flex-shrink-0 bg-white border border-gray-200 text-gray-500 text-[8px] font-black uppercase px-3 py-2.5 rounded-xl active:scale-95 transition-transform">
                     <i className="fa-solid fa-pen mr-1"></i>Atualizar
                   </button>
                 </div>
-                <p className="text-[8px] font-bold text-gray-400 uppercase text-center mt-3">Esses dados estão corretos? Se não, toque em Atualizar.</p>
+                <p className="text-[8px] font-bold text-gray-400 uppercase text-center mt-3">Dados corretos? Se não, toque em Atualizar (WhatsApp/GPS).</p>
               </div>
             ) : (
               <div className="mt-4 rounded-2xl bg-amber-50 border-2 border-dashed border-amber-300 p-4">
@@ -2101,7 +2125,9 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 <p className="text-[9px] font-bold text-amber-600 mt-1">
                   Falta: {faltaGps ? 'localização do estabelecimento' : ''}{faltaGps && faltaTel ? ' e ' : ''}{faltaTel ? 'WhatsApp' : ''}.
                 </p>
-                <button onClick={() => handleAtenderClient(modoClient, true)}
+                {/* BLOCO 72: NÃO trava — pode vender direto; completar é opcional */}
+                <p className="text-[8px] font-bold text-amber-500 mt-1 leading-snug">Pode vender mesmo assim — complete quando der.</p>
+                <button onClick={() => abrirClientInfoModal(modoClient, true)}
                   className="w-full mt-3 bg-amber-500 text-white text-[9px] font-black uppercase py-3 rounded-xl active:scale-95 transition-transform">
                   <i className="fa-solid fa-circle-plus mr-1.5"></i>Completar cadastro agora
                 </button>

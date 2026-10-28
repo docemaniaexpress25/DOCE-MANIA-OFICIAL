@@ -374,12 +374,21 @@ async function handle(req: NextRequest, segments: string[]) {
     }
 
     // BLOCO 31: PATCH persistente com filtro col=eq.valor (ordem_entrega, editor...)
+    // BLOCO 72: honra .single() (Accept vnd.pgrst.object) — o save de contato do
+    // cliente usa update().select().single() e precisa da LINHA de volta.
     if (req.method === 'PATCH') {
       let body: any = {};
       try { body = await req.json(); } catch {}
       const rows = tables[table];
       const alvos = linhasQueBatem(rows, params);
       alvos.forEach(i => { rows[i] = { ...rows[i], ...body }; });
+      const wantsObject = (req.headers.get('accept') || '').includes('vnd.pgrst.object');
+      if (wantsObject) {
+        return new NextResponse(JSON.stringify(alvos.length > 0 ? rows[alvos[0]] : null), {
+          status: alvos.length > 0 ? 200 : 406,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
       return NextResponse.json(alvos.length > 0 ? [body] : [], { status: 200 });
     }
 

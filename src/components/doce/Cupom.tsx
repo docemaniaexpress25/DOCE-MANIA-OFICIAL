@@ -8,6 +8,8 @@ import { notaService, NotaInfo } from '@/services/notaService';
 import BoletoCard from '@/components/doce/BoletoCard';
 import ConfirmModal from '@/components/doce/ConfirmModal';
 import PrinterSelector from '@/components/doce/PrinterSelector';
+// BLOCO 72: grava o contato via API server-side (service_role) — persistência garantida
+import { authHeaders } from '@/services/userService';
 
 type PrinterWidth = '56MM' | '80MM';
 
@@ -96,12 +98,128 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
     }
   }, [isBluetoothAvailable]);
 
+  // ============================================================
+  // BLOCO 72: ATUALIZAR WHATSAPP / LOCALIZAÇÃO DO CLIENTE NO CUPOM
+  // Regra nova do dono: a tela de dados NÃO trava mais a venda — e na tela do
+  // cupom (NF-e/NFC-e/cupom) dá pra corrigir o número e o GPS quando precisar.
+  // Gravação GARANTIDA: /api/clientes/contato roda no servidor com service_role
+  // e devolve a linha gravada — o vendedor vê 'Gravado no banco ✓'.
+  // ============================================================
+  const [clientLocal, setClientLocal] = useState<Client>(client);
+  useEffect(() => { setClientLocal(client); }, [client]);
+
+  const [contatoAberto, setContatoAberto] = useState(false);
+  const [zapStr, setZapStr] = useState('');
+  const [gpsSt, setGpsSt] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
+  const [gpsPin, setGpsPin] = useState('');
+  const [gpsEnd, setGpsEnd] = useState('');
+  const [gpsBai, setGpsBai] = useState('');
+  const [zapSaving, setZapSaving] = useState(false);
+
+  // mascara progressiva de telefone BR — igual ao modal do vendedor
+  const formatarZapCupom = (v: string): string => {
+    const d = (v || '').replace(/\D/g, '').slice(0, 11);
+    if (d.length <= 2) return d;
+    if (d.length <= 6) return `(${d.slice(0, 2)}) ${d.slice(2)}`;
+    if (d.length <= 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
+    return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
+  };
+  // telefone lixo ('0', '-', vazio) = campo nasce limpo pra digitar
+  const zapVazio = (val: any): boolean => {
+    const s = String(val ?? '').trim();
+    if (!s) return true;
+    return s.replace(/[^a-zA-Z0-9]/g, '').length < 3;
+  };
+
+  const presetContato = () => {
+    setZapStr(zapVazio(clientLocal.telefone) ? '' : (clientLocal.telefone || ''));
+    const pin = clientLocal.pinLocalizacao || '';
+    setGpsPin(pin);
+    setGpsSt(pin.length >= 5 ? 'done' : 'idle');
+    setGpsEnd('');
+    setGpsBai('');
+  };
+
+  const capturarGPSCupom = () => {
+    if (!('geolocation' in navigator)) { avisar('GPS não suportado neste aparelho.'); return; }
+    setGpsSt('loading');
+    navigator.geolocation.getCurrentPosition(async (pos) => {
+      const lat = pos.coords.latitude;
+      const lng = pos.coords.longitude;
+      setGpsPin(`${lat.toFixed(6)}, ${lng.toFixed(6)}`);
+      setGpsEnd('');
+      setGpsBai('');
+      try {
+        const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}`, { headers: { 'Accept-Language': 'pt-BR' } });
+        const d = await r.json();
+        if (d?.address) {
+          const a = d.address;
+          const rua = a.road || a.pedestrian || a.street || '';
+          const num = a.house_number || '';
+          setGpsEnd(`${rua}${num ? ', ' + num : ''}`);
+          setGpsBai(a.suburb || a.neighbourhood || a.city_district || a.village || '');
+        }
+      } catch { /* salva só as coordenadas */ }
+      setGpsSt('done');
+    }, () => setGpsSt('error'), { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
+  };
+
+  // BLOCO 72: o Cupom de preview nem sempre recebe showToast — quando falta,
+  // usa o modal interno (a validação NUNCA fica muda).
+  const avisar = (msg: string, tipo: 'success' | 'error' = 'error') => {
+    if (showToast) { showToast(msg, tipo); return; }
+    setModal({ title: tipo === 'error' ? 'Atenção' : 'Pronto!', message: msg, icon: tipo === 'error' ? 'fa-solid fa-triangle-exclamation' : 'fa-solid fa-circle-check', type: 'alert', onConfirm: () => setModal(null) });
+  };
+
+  const salvarContatoCupom = async () => {
+    if (zapSaving || !clientLocal?.id) return;
+    const zapDigitado = !!zapStr.trim();
+    if (zapDigitado && zapStr.replace(/\D/g, '').length < 10) {
+      avisar('WhatsApp incompleto — digite DDD + número (ex: 54 99999-9999).');
+      return;
+    }
+    const body: any = { clientId: clientLocal.id };
+    if (zapDigitado) body.telefone = zapStr.trim();
+    if (gpsPin && gpsPin.length >= 5) {
+      body.pinLocalizacao = gpsPin;
+      if (gpsEnd) body.endereco = gpsEnd;
+      if (gpsBai) body.bairro = gpsBai;
+    }
+    if (!body.telefone && !body.pinLocalizacao) {
+      avisar('Nada para salvar — capture a localização ou digite o WhatsApp.');
+      return;
+    }
+    setZapSaving(true);
+    try {
+      const res = await fetch('/api/clientes/contato', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify(body) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        avisar(data.erro || 'Não gravou no banco — tente de novo.');
+      } else {
+        // o servidor devolveu a LINHA gravada — persistência provada
+        const row = data.cliente || {};
+        setClientLocal((c: Client) => ({
+          ...c,
+          telefone: row.telefone ?? (body.telefone || c.telefone),
+          pinLocalizacao: row.pin_localizacao ?? body.pinLocalizacao ?? c.pinLocalizacao,
+          endereco: body.endereco ? (row.endereco ?? body.endereco) : c.endereco,
+          bairro: body.bairro ? (row.bairro ?? body.bairro) : c.bairro,
+        }));
+        avisar('Gravado no banco ✓', 'success');
+        setContatoAberto(false);
+      }
+    } catch {
+      avisar('Falha de conexão ao gravar.');
+    }
+    setZapSaving(false);
+  };
+
   // BLOCO 13: texto do cupom vem do gerador COMPARTILHADO (cupomTexto.ts) —
   // vendedor, secretario, entregador e admin imprimem EXATAMENTE o mesmo cupom.
   const generateText = (width: PrinterWidth): string => {
     return gerarCupomTexto({
       sale: sale as any,
-      client: client as any,
+      client: clientLocal as any,
       products: products as any,
       width,
     });
@@ -171,7 +289,7 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
 
   const handleWhatsApp = () => {
     const rawText = generateText(printWidth);
-    const phone = (client.telefone || '').replace(/\D/g, '');
+    const phone = (clientLocal.telefone || '').replace(/\D/g, '');
     window.open(`https://wa.me/55${phone}?text=${encodeURIComponent('*CUPOM DOCE MANIA*\n' + rawText)}`, '_blank');
   };
 
@@ -306,9 +424,9 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
               valorPago={Number(sale.valorPago) || 0}
               notaStatus={nota.status}
               notaNumero={nota.numero}
-              clienteDoc={client.cnpj}
-              clienteCep={client.enderecoCep}
-              clienteTelefone={client.telefone}
+              clienteDoc={clientLocal.cnpj}
+              clienteCep={clientLocal.enderecoCep}
+              clienteTelefone={clientLocal.telefone}
               showToast={showToast}
             />
           )}
@@ -352,6 +470,43 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
           <button onClick={() => { setModal({title:'Enviar WhatsApp', message:'Deseja enviar este cupom pelo WhatsApp para o cliente?', icon:'fa-brands fa-whatsapp', iconColor:'text-white', onConfirm:()=>{setModal(null); handleWhatsApp();}}) }} className="w-full bg-green-50 text-green-600 border border-green-100 font-black py-2.5 rounded-2xl flex items-center justify-center gap-2 active:scale-95 text-[9px] uppercase transition-colors hover:bg-green-100">
             <i className="fa-brands fa-whatsapp text-sm"></i> Enviar pelo WhatsApp
           </button>
+
+          {/* ===== BLOCO 72: atualizar WhatsApp/Localização do cliente (opcional) ===== */}
+          {clientLocal?.id && (
+            <div className="rounded-2xl border border-gray-200 bg-white overflow-hidden">
+              <button onClick={() => { if (!contatoAberto) presetContato(); setContatoAberto(!contatoAberto); }} className="w-full flex items-center gap-2 p-3 text-left" aria-expanded={contatoAberto}>
+                <i className="fa-solid fa-user-pen text-gray-400 text-xs"></i>
+                <span className="text-[9px] font-black uppercase text-gray-500 flex-1">Atualizar WhatsApp / Localização</span>
+                <i className={`fa-solid fa-chevron-${contatoAberto ? 'up' : 'down'} text-[9px] text-gray-300`}></i>
+              </button>
+              {contatoAberto && (
+                <div className="px-3 pb-3 space-y-2.5">
+                  <div className="space-y-1">
+                    <label className="text-[8px] font-black text-gray-400 uppercase ml-1">WhatsApp do cliente</label>
+                    <div className="relative">
+                      <i className="fa-brands fa-whatsapp absolute left-3 top-1/2 -translate-y-1/2 text-emerald-500"></i>
+                      <input type="tel" value={zapStr} onChange={e => setZapStr(formatarZapCupom(e.target.value))} placeholder="(54) 99999-9999" inputMode="tel" className="w-full pl-9 pr-3 py-3 bg-gray-50 rounded-xl font-black text-xs outline-none border-2 border-transparent focus:border-emerald-200" />
+                    </div>
+                  </div>
+                  <div className={`p-3 rounded-xl border-2 border-dashed flex items-center gap-2 ${gpsSt === 'done' ? 'bg-emerald-50 border-emerald-200' : gpsSt === 'loading' ? 'bg-blue-50 border-blue-200 animate-pulse' : 'bg-amber-50 border-amber-200'}`}>
+                    <i className={`fa-solid ${gpsSt === 'done' ? 'fa-check text-emerald-600' : gpsSt === 'loading' ? 'fa-spinner fa-spin text-blue-500' : 'fa-location-crosshairs text-amber-500'}`}></i>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[9px] font-black text-gray-700 uppercase leading-tight">Localização</p>
+                      <p className="text-[8px] text-gray-400 leading-snug">
+                        {gpsSt === 'done' ? ((gpsEnd || gpsBai) ? `${gpsEnd}${gpsEnd && gpsBai ? ' — ' : ''}${gpsBai}` : 'Capturada') : gpsSt === 'loading' ? 'Obtendo...' : gpsSt === 'error' ? 'GPS negado — tente de novo' : 'Toque em capturar'}
+                      </p>
+                    </div>
+                    {gpsSt !== 'done' && (
+                      <button onClick={capturarGPSCupom} disabled={gpsSt === 'loading'} className="bg-amber-500 text-white text-[8px] font-black uppercase px-2.5 py-2 rounded-lg active:scale-95 disabled:opacity-50 flex-shrink-0">Capturar</button>
+                    )}
+                  </div>
+                  <button onClick={salvarContatoCupom} disabled={zapSaving} className="w-full bg-emerald-600 text-white font-black py-3 rounded-xl text-[9px] uppercase tracking-widest active:scale-95 disabled:opacity-60 flex items-center justify-center gap-1.5">
+                    <i className={`fa-solid ${zapSaving ? 'fa-spinner fa-spin' : 'fa-floppy-disk'}`}></i>{zapSaving ? 'Gravando...' : 'Salvar no banco'}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
 
           {allowDelete && onDeleteSale && (
             <button onClick={handleDelete} className="w-full bg-white text-rose-600 border border-rose-100 font-black py-4 rounded-2xl active:scale-95 text-[10px] uppercase flex items-center justify-center gap-2 hover:bg-rose-50 transition-colors">

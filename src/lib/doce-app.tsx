@@ -568,9 +568,12 @@ const App: React.FC = () => {
     fetchCoreData();
   };
 
-  const updateClient = async (id: string, data: Partial<Client>) => {
-    await clientService.updateClient(id, data);
+  // BLOCO 72: devolve SE GRAVOU no banco (clientService retorna a linha ou null)
+  // — o modal de WhatsApp/Localizacao usa isso para provar a persistencia.
+  const updateClient = async (id: string, data: Partial<Client>): Promise<boolean> => {
+    const r = await clientService.updateClient(id, data);
     fetchCoreData();
+    return !!r;
   };
 
   const deleteClient = async (id: string) => {

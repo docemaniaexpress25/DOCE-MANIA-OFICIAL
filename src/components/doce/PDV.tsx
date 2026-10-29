@@ -149,25 +149,24 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const precoEspecialGbDe = (p: Product): number => (clienteGB ? (Number(p.precoEspecialGb) || 0) : 0);
 
   // ============================================================
-  // BLOCO 29 (ROTA 2) — DOIS ESTOQUES EM CASA + MODO DO ATENDIMENTO
-  // NFE/NFCE -> ESTOQUE COM NF (estoque_nota) | CUPOM -> SEM NF (estoque_semnf).
-  // undefined nas colunas = SQL do bloco 29 ainda nao rodou -> fallback legado.
+  // BLOCO 75 (ESTOQUE TOTAL) — DOIS ESTOQUES VIRARAM CONTADORES
+  // Pre-venda consulta SEMPRE o ESTOQUE TOTAL (estoque_principal).
+  // O documento do atendimento (CUPOM / NFE / NFCE) nao escolhe mais cofre:
+  // so alimenta o CONTADOR de saida (estoque 2 sem NF / estoque 1 com NF)
+  // na baixa. undefined nas colunas = fallback legado (tudo no principal).
   // ============================================================
   const rota2Ativo = !!rota2; // BLOCO 64: fluxo novo da ROTA 2 — geral (todos os vendedores)
   const temDualEstoque = React.useMemo(() => products.some(p => p.estoqueNota !== undefined), [products]);
   const modoAtivo = rota2Ativo && temDualEstoque ? (modoAtendimento || null) : null;
 
-  /** Saldo que o PDV usa para o produto, conforme o modo do atendimento */
+  /** Saldo que o PDV usa para o produto — BLOCO 75: pre-venda consulta o
+   *  ESTOQUE TOTAL unico; o modo do atendimento so alimenta o contador. */
   const saldoFonte = React.useCallback((p: Product): number => {
     if (!sellFromCentral) {
       return minhaCarga.find(c => c.produtoId === p.id)?.quantidade || 0;
     }
-    if (modoAtivo) {
-      if (modoAtivo === 'CUPOM') return p.estoqueSemnf ?? p.estoquePrincipal ?? 0;
-      return p.estoqueNota ?? p.estoquePrincipal ?? 0;
-    }
     return p.estoquePrincipal || 0;
-  }, [sellFromCentral, minhaCarga, modoAtivo]);
+  }, [sellFromCentral, minhaCarga]);
 
   // Wake Lock: mantem tela acordada durante o PDV
   useEffect(() => {
@@ -858,15 +857,10 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const filteredProducts = useMemo(() => {
     let base: Product[];
     if (sellFromCentral) {
-      if (modoAtivo) {
-        // BLOCO 29 (ROTA 2): catálogo = SÓ o que tem saldo no estoque do modo.
-        // Estoque 0/negativo NÃO aparece (regra do dono).
-        const fonte = (p: Product) => (modoAtivo === 'CUPOM' ? (p.estoqueSemnf ?? p.estoquePrincipal ?? 0) : (p.estoqueNota ?? p.estoquePrincipal ?? 0));
-        base = products.filter(p => p.ativo && fonte(p) > 0);
-      } else {
-        // Pré-venda/pre-pedido (legado): catálogo completo do estoque principal
-        base = products.filter(p => p.ativo);
-      }
+      // BLOCO 75 (ESTOQUE TOTAL): catalogo da pre-venda = o que tem saldo no
+      // TOTAL unico (estoque 0 NAO aparece — regra do dono). O modo do
+      // atendimento nao filtra mais cofre; so alimenta o contador na baixa.
+      base = products.filter(p => p.ativo && (p.estoquePrincipal || 0) > 0);
       // BLOCO 29/64: produtos TESTE só aparecem para quem tem a flag rota2 (piloto)
       if (!verProdutosTeste) base = base.filter(p => !p.produtoTeste);
     } else {
@@ -1127,9 +1121,9 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           <i className={`fa-solid ${modoAtivo === 'CUPOM' ? 'fa-receipt text-gray-500' : modoAtivo === 'NFE' ? 'fa-file-invoice-dollar text-violet-600' : 'fa-file-lines text-violet-600'} text-sm`}></i>
           <div className="flex-1 min-w-0">
             <p className={`text-[10px] font-black uppercase tracking-wide ${modoAtivo === 'CUPOM' ? 'text-gray-600' : 'text-violet-700'}`}>
-              {modoAtivo === 'CUPOM' ? 'CUPOM — ESTOQUE 2 (SEM NF)' : modoAtivo === 'NFE' ? 'NF-e — ESTOQUE 1 (COM NF)' : 'NFC-e — ESTOQUE 1 (COM NF)'}
+              {modoAtivo === 'CUPOM' ? 'CUPOM — sai do TOTAL, conta no ESTOQUE 2 (SEM NF)' : modoAtivo === 'NFE' ? 'NF-e — sai do TOTAL, conta no ESTOQUE 1 (COM NF)' : 'NFC-e — sai do TOTAL, conta no ESTOQUE 1 (COM NF)'}
             </p>
-            <p className={`text-[8px] font-bold ${modoAtivo === 'CUPOM' ? 'text-gray-400' : 'text-violet-400'}`}>Modo fixado no atendimento — sem mistura de estoque</p>
+            <p className={`text-[8px] font-bold ${modoAtivo === 'CUPOM' ? 'text-gray-400' : 'text-violet-400'}`}>Modo fixado no atendimento — baixa o Estoque Total e alimenta o contador</p>
           </div>
         </div>
       )}

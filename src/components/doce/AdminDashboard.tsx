@@ -234,10 +234,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   };
 
   const [showProductModal, setShowProductModal] = useState<Product | 'NEW' | null>(null);
+  // BLOCO 75 (ESTOQUE TOTAL): entrada deixa de perguntar destino — tudo entra no Estoque Total
   const [showEntryModal, setShowEntryModal] = useState<Product | null>(null);
   const [entryForm, setEntryForm] = useState({ qtd: '', custo: '' });
-  // BLOCO 29 (ROTA 2): destino da entrada — casa COM NF, SEM NF ou estoque central (legado)
-  const [entryDestino, setEntryDestino] = useState<'PRINCIPAL' | 'NOTA' | 'SEMNF'>('NOTA');
   const [showClientModal, setShowClientModal] = useState<Client | 'NEW' | null>(null);
   const [showConfirmSync, setShowConfirmSync] = useState(false);
   const [showConfirmApply, setShowConfirmApply] = useState(false);
@@ -1115,8 +1114,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     const p = props.products.find(prod => prod.id === pId);
     if (!p) return;
     const noV = props.cargas.find(c => c.vendedorId === selectedVendedorId && c.produtoId === pId)?.quantidade ?? 0; 
-    // BLOCO 29 (ROTA 2): carga com modo limita pela coluna do modo (casa do modo + van)
-    const casaDisp = cargaUsaModo ? (cargaModo === 'COM_NF' ? (p.estoqueNota ?? 0) : (p.estoqueSemnf ?? 0)) : (p.estoquePrincipal ?? 0);
+    // BLOCO 75 (ESTOQUE TOTAL): casa unica — a carga sai do Estoque Total
+    const casaDisp = p.estoquePrincipal ?? 0;
     const totalDisp = casaDisp + noV; 
     const novaQ = Math.max(0, Math.min(totalDisp, (stagingCarga[pId] ?? noV) + delta));
     setStagingCarga(prev => ({ ...prev, [pId]: novaQ }));
@@ -1126,7 +1125,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     const p = props.products.find(prod => prod.id === pId);
     if (!p) return;
     const noV = props.cargas.find(c => c.vendedorId === selectedVendedorId && c.produtoId === pId)?.quantidade ?? 0;
-    const casaDisp = cargaUsaModo ? (cargaModo === 'COM_NF' ? (p.estoqueNota ?? 0) : (p.estoqueSemnf ?? 0)) : (p.estoquePrincipal ?? 0);
+    // BLOCO 75 (ESTOQUE TOTAL): casa unica
+    const casaDisp = p.estoquePrincipal ?? 0;
     const totalDisp = casaDisp + noV;
     let novaQ = parseInt(value) || 0;
     if (novaQ < 0) novaQ = 0;
@@ -1238,7 +1238,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           <div className="flex-1 min-w-0 cursor-pointer" onClick={() => handleOpenProduct(p)}>
             <h3 className="font-bold text-gray-800 text-[13px] leading-tight uppercase truncate">{p.nome}</h3>
             <div className="flex items-center gap-1.5 mt-1 flex-wrap min-w-0">
-              <span className="text-[10px] font-black text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded-lg border border-blue-100 tracking-tighter whitespace-nowrap"><i className="fa-solid fa-boxes-stacked mr-1 text-[8px]"></i>{p.estoquePrincipal} un</span>
+              {/* BLOCO 75 (ESTOQUE TOTAL): os 3 numeros — Total + contadores de saida (NF / cupom) */}
+              <span className="text-[10px] font-black text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded-lg border border-blue-100 tracking-tighter whitespace-nowrap" title="Estoque Total"><i className="fa-solid fa-boxes-stacked mr-1 text-[8px]"></i>{p.estoquePrincipal} un</span>
+              {p.estoqueNota !== undefined && (
+                <>
+                  <span className="text-[9px] font-black text-violet-600 bg-violet-50 px-1.5 py-0.5 rounded-lg border border-violet-100 tracking-tighter whitespace-nowrap" title="Contador: unidades que ja sairam COM NF (estoque 1)">NF: {p.estoqueNota || 0}</span>
+                  <span className="text-[9px] font-black text-gray-500 bg-gray-50 px-1.5 py-0.5 rounded-lg border border-gray-100 tracking-tighter whitespace-nowrap" title="Contador: unidades que ja sairam SEM NF / cupom (estoque 2)">cupom: {p.estoqueSemnf || 0}</span>
+                </>
+              )}
               <span className="text-[10px] font-black text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-lg border border-emerald-100 tracking-tighter whitespace-nowrap">R$ {p.precoVenda.toFixed(2)}</span>
             </div>
           </div>
@@ -1748,7 +1755,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                 {props.products.filter(p => p.ativo).filter(p => {
                   if (!cargaUsaModo) return true;
                   const noV = props.cargas.find(c => c.vendedorId === selectedVendedorId && c.produtoId === p.id)?.quantidade ?? 0;
-                  const casaDisp = cargaModo === 'COM_NF' ? (p.estoqueNota ?? 0) : (p.estoqueSemnf ?? 0);
+                  // BLOCO 75: casa unica = Estoque Total
+                  const casaDisp = p.estoquePrincipal ?? 0;
                   return (casaDisp + noV) > 0; // BLOCO 29: sem saldo no modo = nem aparece
                 }).map(p => {
                   const atual = props.cargas.find(c => c.vendedorId === selectedVendedorId && c.produtoId === p.id)?.quantidade ?? 0;
@@ -1758,7 +1766,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                       <div className="flex-1 min-w-0">
                         <h4 className="font-bold text-gray-800 text-[11px] uppercase truncate">{p.nome}</h4>
                         {cargaUsaModo ? (
-                          <p className="text-[9px] text-gray-400 font-bold mt-0.5">Casa {cargaModo === 'COM_NF' ? 'COM NF' : 'SEM NF'}: {cargaModo === 'COM_NF' ? (p.estoqueNota ?? 0) : (p.estoqueSemnf ?? 0)} | Na van: {atual}</p>
+                          <p className="text-[9px] text-gray-400 font-bold mt-0.5">Estoque Total: {p.estoquePrincipal ?? 0} | Na van: {atual}</p>
                         ) : (
                           <p className="text-[9px] text-gray-400 font-bold mt-0.5">Estoque: {p.estoquePrincipal} | No vendedor: {atual}</p>
                         )}
@@ -2602,7 +2610,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       )}
 
       {showClientModal && (() => {
-        const aptoNfe = clienteAptoNfe({ cnpj: clientForm.cnpj, razaoSocial: clientForm.razaoSocial, endereco: clientForm.endereco, bairro: clientForm.bairro, enderecoMunicipio: clientForm.enderecoMunicipio, enderecoUf: clientForm.enderecoUf });
+        const aptoNfe = clienteAptoNfe({ cnpj: clientForm.cnpj, email: clientForm.email });
         return (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-w-md rounded-[2rem] p-6 shadow-2xl overflow-y-auto max-h-[90vh]"><h3 className="font-black text-gray-800 uppercase text-sm mb-6 text-center">{showClientModal === 'NEW' ? 'Novo Cliente' : 'Editar Cliente'}</h3><div className="space-y-4">
         {/* ===== BLOCO 1: DADOS FISCAIS (NO TOPO — define se o cliente apto a NF-e) ===== */}
@@ -2642,27 +2650,17 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         {pForm.categoryId && props.subcategories.filter(s => s.categoryId === pForm.categoryId).length > 0 && (
           <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Subcategoria</label><select value={pForm.subcategoryId} onChange={e => setPForm({...pForm, subcategoryId: e.target.value})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase"><option value="">Nenhuma</option>{props.subcategories.filter(s => s.categoryId === pForm.categoryId).map(sub => (<option key={sub.id} value={sub.id}>{sub.name}</option>))}</select></div>
         )}
-        <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Custo R$</label><input type="number" value={pForm.custo} onChange={e => { const val = parseFloat(e.target.value) || 0; const venda = props.margemGlobalAtiva ? updatePriceFromMargin(val, props.margemGlobalValor) : parseFloat(pForm.venda) || 0; const margem = props.margemGlobalAtiva ? props.margemGlobalValor : updateMarginFromPrice(val, venda); setPForm({...pForm, custo: e.target.value, venda: venda.toFixed(2), margem: margem.toFixed(2)}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Venda R$</label><input type="number" value={pForm.venda} onChange={e => { const val = parseFloat(e.target.value) || 0; const margem = updateMarginFromPrice(parseFloat(pForm.custo) || 0, val); setPForm({...pForm, margem: margem.toFixed(2), venda: e.target.value}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Margem %</label><input type="number" value={pForm.margem} onChange={e => { const val = parseFloat(e.target.value) || 0; const venda = updatePriceFromMargin(parseFloat(pForm.custo) || 0, val); setPForm({...pForm, margem: e.target.value, venda: venda.toFixed(2)}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Preço Mínimo R$</label><input type="number" value={pForm.precoMinimo} onChange={e => setPForm({...pForm, precoMinimo: e.target.value})} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-amber-600 uppercase ml-1">Preço Especial GB R$ (0 = sem preço GB — cai no normal)</label><input type="number" value={pForm.precoEspecialGb} onChange={e => setPForm({...pForm, precoEspecialGb: e.target.value})} placeholder="0.00" className="w-full p-4 bg-amber-50 border border-amber-100 rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Comissão Pronta Entrega % (vazio = 10%)</label><input type="number" value={pForm.comissao} onChange={e => setPForm({...pForm, comissao: e.target.value})} placeholder="10" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Comissão Pré-Venda % (vazio = 5%)</label><input type="number" value={pForm.comissaoPv} onChange={e => setPForm({...pForm, comissaoPv: e.target.value})} placeholder="5" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Estoque Central</label><input type="number" value={pForm.estoquePrincipal} onChange={e => setPForm({...pForm, estoquePrincipal: e.target.value})} placeholder="0" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="grid grid-cols-2 gap-2"><div className="space-y-1"><label className="text-[9px] font-black text-violet-500 uppercase ml-1">Estoque COM NF (casa)</label><input type="number" value={pForm.estoqueNota} onChange={e => setPForm({...pForm, estoqueNota: e.target.value})} placeholder="0" className="w-full p-4 bg-violet-50 border border-violet-100 rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Estoque SEM NF (casa)</label><input type="number" value={pForm.estoqueSemnf} onChange={e => setPForm({...pForm, estoqueSemnf: e.target.value})} placeholder="0" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div></div>
+        <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Custo R$</label><input type="number" value={pForm.custo} onChange={e => { const val = parseFloat(e.target.value) || 0; const venda = props.margemGlobalAtiva ? updatePriceFromMargin(val, props.margemGlobalValor) : parseFloat(pForm.venda) || 0; const margem = props.margemGlobalAtiva ? props.margemGlobalValor : updateMarginFromPrice(val, venda); setPForm({...pForm, custo: e.target.value, venda: venda.toFixed(2), margem: margem.toFixed(2)}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Venda R$</label><input type="number" value={pForm.venda} onChange={e => { const val = parseFloat(e.target.value) || 0; const margem = updateMarginFromPrice(parseFloat(pForm.custo) || 0, val); setPForm({...pForm, margem: margem.toFixed(2), venda: e.target.value}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Margem %</label><input type="number" value={pForm.margem} onChange={e => { const val = parseFloat(e.target.value) || 0; const venda = updatePriceFromMargin(parseFloat(pForm.custo) || 0, val); setPForm({...pForm, margem: e.target.value, venda: venda.toFixed(2)}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Preço Mínimo R$</label><input type="number" value={pForm.precoMinimo} onChange={e => setPForm({...pForm, precoMinimo: e.target.value})} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-amber-600 uppercase ml-1">Preço Especial GB R$ (0 = sem preço GB — cai no normal)</label><input type="number" value={pForm.precoEspecialGb} onChange={e => setPForm({...pForm, precoEspecialGb: e.target.value})} placeholder="0.00" className="w-full p-4 bg-amber-50 border border-amber-100 rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Comissão Pronta Entrega % (vazio = 10%)</label><input type="number" value={pForm.comissao} onChange={e => setPForm({...pForm, comissao: e.target.value})} placeholder="10" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Comissão Pré-Venda % (vazio = 5%)</label><input type="number" value={pForm.comissaoPv} onChange={e => setPForm({...pForm, comissaoPv: e.target.value})} placeholder="5" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-blue-600 uppercase ml-1">Estoque Total</label><input type="number" value={pForm.estoquePrincipal} onChange={e => setPForm({...pForm, estoquePrincipal: e.target.value})} placeholder="0" className="w-full p-4 bg-blue-50 border border-blue-100 rounded-2xl font-bold" /></div><div className="grid grid-cols-2 gap-2"><div className="space-y-1"><label className="text-[9px] font-black text-violet-500 uppercase ml-1">Saiu COM NF (estoque 1)</label><input type="number" value={pForm.estoqueNota} onChange={e => setPForm({...pForm, estoqueNota: e.target.value})} placeholder="0" title="Contador automático de saídas com NF — editável para correção" className="w-full p-4 bg-violet-50 border border-violet-100 rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Saiu SEM NF (cupom — estoque 2)</label><input type="number" value={pForm.estoqueSemnf} onChange={e => setPForm({...pForm, estoqueSemnf: e.target.value})} placeholder="0" title="Contador automático de saídas com cupom — editável para correção" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div></div><p className="text-[8px] font-bold text-blue-400 leading-snug">BLOCO 75: toda entrada entra no ESTOQUE TOTAL. Os contadores 1 (NF) e 2 (cupom) somam as saídas automaticamente — edite só para corrigir. A conta fecha: Total = entradas − 1 − 2.</p>
         <div className="flex items-center gap-2 py-2"><input type="checkbox" id="prod_ativo" checked={pForm.ativo} onChange={e => setPForm({...pForm, ativo: e.target.checked})} className="w-5 h-5" /><label htmlFor="prod_ativo" className="text-xs font-bold text-gray-700 uppercase">Produto Ativo</label></div><button onClick={handleSaveProduct} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 uppercase text-xs mt-4 tracking-widest">Salvar Produto</button><button onClick={() => setShowProductModal(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button></div></div></div>
       )}
 
       {showEntryModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-w-xs rounded-3xl p-8 shadow-2xl text-center"><h3 className="font-black text-gray-800 uppercase text-sm mb-4">Entrada de Estoque</h3><p className="text-xs text-gray-400 font-bold uppercase mb-4">{showEntryModal.nome}</p><div className="space-y-4 text-left">
-          {/* BLOCO 29 (ROTA 2): destino da entrada — onde a mercadoria entra em casa */}
-          {props.products.some(p => p.estoqueNota !== undefined) && (
-            <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Entrar em qual estoque?</label>
-              <div className="grid grid-cols-3 gap-1.5">
-                <button onClick={() => setEntryDestino('NOTA')} className={`py-2.5 rounded-xl text-[8px] font-black uppercase border-2 ${entryDestino === 'NOTA' ? 'bg-violet-600 text-white border-violet-600' : 'bg-white text-gray-400 border-gray-100'}`}>COM NF</button>
-                <button onClick={() => setEntryDestino('SEMNF')} className={`py-2.5 rounded-xl text-[8px] font-black uppercase border-2 ${entryDestino === 'SEMNF' ? 'bg-gray-700 text-white border-gray-700' : 'bg-white text-gray-400 border-gray-100'}`}>SEM NF</button>
-                <button onClick={() => setEntryDestino('PRINCIPAL')} className={`py-2.5 rounded-xl text-[8px] font-black uppercase border-2 ${entryDestino === 'PRINCIPAL' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-400 border-gray-100'}`}>Central</button>
-              </div>
-            </div>
-          )}
+          {/* BLOCO 75 (ESTOQUE TOTAL): acabou a pergunta COM NF / SEM NF — toda entrada entra no Estoque Total; o sistema conta as saidas por tipo de documento na venda */}
+          <div className="rounded-2xl bg-blue-50 border border-blue-100 px-3 py-2 text-[8px] font-bold text-blue-500 leading-snug uppercase text-center">Estoque Total — a mercadoria entra toda aqui; na venda, cupom conta no estoque 2 e NF conta no estoque 1</div>
           <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Quantidade</label><input type="number" value={entryForm.qtd} onChange={e => setEntryForm({...entryForm, qtd: e.target.value})} placeholder="0" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-center" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Custo Unitário R$</label><input type="number" value={entryForm.custo} onChange={e => setEntryForm({...entryForm, custo: e.target.value})} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-center" /></div><button onClick={() => { const q = parseInt(entryForm.qtd) || 0; const c = parseFloat(entryForm.custo) || 0; if (q <= 0 || c <= 0) { showToast("Valores inválidos", "error"); return; } const estA = showEntryModal.estoquePrincipal || 0; const cusA = showEntryModal.precoCusto || 0; const nEst = estA + q; const nCus = ((estA * cusA) + (q * c)) / nEst; const nVen = props.margemGlobalAtiva ? updatePriceFromMargin(nCus, props.margemGlobalValor) : showEntryModal.precoVenda;
-          // BLOCO 29: destino da entrada — estoque do modo (casa) ou central legado
-          if (entryDestino === 'NOTA') { props.updateProduct(showEntryModal.id, { estoqueNota: (showEntryModal.estoqueNota ?? 0) + q, precoCusto: Number(nCus.toFixed(2)), precoVenda: Number(nVen.toFixed(2)) }); }
-          else if (entryDestino === 'SEMNF') { props.updateProduct(showEntryModal.id, { estoqueSemnf: (showEntryModal.estoqueSemnf ?? 0) + q, precoCusto: Number(nCus.toFixed(2)), precoVenda: Number(nVen.toFixed(2)) }); }
-          else { props.updateProduct(showEntryModal.id, { estoquePrincipal: nEst, precoCusto: Number(nCus.toFixed(2)), precoVenda: Number(nVen.toFixed(2)) }); }
+          // BLOCO 75 (ESTOQUE TOTAL): entrada unica — soma no Estoque Total
+          props.updateProduct(showEntryModal.id, { estoquePrincipal: nEst, precoCusto: Number(nCus.toFixed(2)), precoVenda: Number(nVen.toFixed(2)) });
           setShowEntryModal(null); setEntryForm({ qtd: '', custo: '' }); showToast("Entrada registrada!"); }} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest">Confirmar Entrada</button><button onClick={() => { setShowEntryModal(null); setEntryForm({ qtd: '', custo: '' }); }} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button></div></div></div>
       )}
 

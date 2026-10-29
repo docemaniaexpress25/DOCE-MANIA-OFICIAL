@@ -215,26 +215,28 @@ export async function POST(req: NextRequest) {
 
   let clientePayload: Record<string, unknown> | undefined;
   if (doc === 'nfe') {
+    // BLOCO 77 (regra do dono): a NF-e NAO e batida por este app (o dono
+    // emite no sistema externo dele) — aqui o app so CONTROLA a venda como
+    // NF. Exigencia minima: CNPJ valido (+ razao, que cai no nome fantasia).
+    // Endereco/bairro/municipio/UF seguem do cadastro best-effort e NAO
+    // bloqueiam mais o registro da venda como NF.
     const faltando: string[] = [];
     if (!cpfCnpj) faltando.push('CNPJ valido');
     if (!razao) faltando.push('Razao social / nome fantasia');
-    if (!logradouro) faltando.push('Endereco (logradouro)');
-    if (!bairro) faltando.push('Bairro');
-    if (!municipio) faltando.push('Municipio');
-    if (!uf) faltando.push('UF');
     if (faltando.length > 0) {
-      return BAD(422, `Cadastro fiscal incompleto para NF-e. Complete no Admin > Clientes: ${faltando.join(', ')}.`);
+      return BAD(422, `Cadastro incompleto para NF-e. Complete no cadastro do cliente: ${faltando.join(', ')}.`);
     }
     const ie = String(client.inscricao_estadual || '').trim();
+    const numeroEndereco = numeroDoEndereco(client.endereco_numero as string, logradouro);
     clientePayload = {
       cpf_cnpj: String(client.cnpj).replace(/\D/g, ''),
       razao_social: razao,
       inscricao_estadual: ie || 'ISENTO',
-      endereco_uf: uf,
-      endereco_municipio: municipio,
-      endereco_logradouro: logradouro,
-      endereco_numero: numeroDoEndereco(client.endereco_numero as string, logradouro),
-      endereco_bairro: bairro,
+      endereco_uf: uf || undefined,
+      endereco_municipio: municipio || undefined,
+      endereco_logradouro: logradouro || undefined,
+      endereco_numero: numeroEndereco || undefined,
+      endereco_bairro: bairro || undefined,
       endereco_cep: String(client.endereco_cep || '').replace(/\D/g, '') || undefined,
       telefone: String(client.telefone || '').replace(/\D/g, '') || undefined,
       email: String((client as Record<string, unknown>).email || '').trim() || undefined,

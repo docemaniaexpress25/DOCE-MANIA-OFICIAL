@@ -81,9 +81,11 @@ export function validaCpf(valor: string): boolean {
 }
 
 /**
- * Apto a NF-e: cliente com CNPJ valido + cadastro fiscal completo
- * (razao social, endereco, bairro, municipio, UF). Usado para habilitar
- * o botao "Emitir NF-e" e sinalizar a aptidao no cadastro.
+ * Apto a NF-e — BLOCO 77 (regra do dono): a NF-e NÃO é batida por este app
+ * (o dono emite no sistema externo dele); o app só CONTROLA a venda como NF.
+ * Por enquanto a exigência do cadastro é SOMENTE: CNPJ válido + email.
+ * Os demais dados fiscais (razão social, endereço, bairro, município, UF)
+ * continuam sendo usados se existirem, mas NÃO bloqueiam mais.
  */
 export function clienteAptoNfe(c: {
   cnpj?: string;
@@ -92,14 +94,10 @@ export function clienteAptoNfe(c: {
   bairro?: string;
   enderecoMunicipio?: string;
   enderecoUf?: string;
+  email?: string;
 }): boolean {
   const digitos = (c.cnpj || '').replace(/\D/g, '');
-  return digitos.length === 14
-    && !!c.razaoSocial?.trim()
-    && !!c.endereco?.trim()
-    && !!c.bairro?.trim()
-    && !!c.enderecoMunicipio?.trim()
-    && !!c.enderecoUf?.trim();
+  return digitos.length === 14 && !!c.email?.trim();
 }
 
 /** Monta a mensagem de feedback (banner do formulario) a partir da busca. */

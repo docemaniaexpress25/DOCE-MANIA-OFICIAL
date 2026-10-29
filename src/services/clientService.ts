@@ -149,7 +149,22 @@ export const clientService = {
     }
 
     let { data, error } = await supabase.from('clients').update(payload).eq('id', id).select().single();
-    // Colunas que podem nao existir (Bloco 10/12): refaz sem elas
+    // BLOCO 76 (bug do dono): CNPJ/edicao do cliente nao salvava no app do
+    // vendedor. Causa: UPDATE cai no erro de coluna fiscal ausente (SQL do
+    // Bloco 12 nao rodado) e so havia retry para email — razao_social,
+    // inscricao_estadual, endereco_numero/cep/municipio/uf abortavam o update
+    // INTEIRO (e o form fechava como se tivesse salvo). Agora: qualquer
+    // falha dessas refaz o update SEM todas as fiscais (cnpj/telefone/
+    // endereco etc. continuam indo — sao colunas base, nunca descartadas).
+    if (error && /razao_social|inscricao_estadual|endereco_numero|endereco_cep|endereco_municipio|endereco_uf|\bemail\b/i.test(error.message || '')) {
+      console.warn('BLOCO 76: colunas fiscais ausentes — refazendo update sem elas.');
+      const semFiscais = { ...payload };
+      delete semFiscais.razao_social; delete semFiscais.inscricao_estadual;
+      delete semFiscais.endereco_numero; delete semFiscais.endereco_cep;
+      delete semFiscais.endereco_municipio; delete semFiscais.endereco_uf;
+      delete semFiscais.email;
+      ({ data, error } = await supabase.from('clients').update(semFiscais).eq('id', id).select().single());
+    }
     if (error && /\bemail\b/i.test(error.message || '')) {
       const fallback = { ...payload }; delete fallback.email;
       ({ data, error } = await supabase.from('clients').update(fallback).eq('id', id).select().single());

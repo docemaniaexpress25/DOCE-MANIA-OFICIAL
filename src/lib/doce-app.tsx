@@ -563,9 +563,13 @@ const App: React.FC = () => {
     fetchCoreData();
   };
 
-  const addClient = async (data: Omit<Client, 'id'>) => {
-    await clientService.insertClient(data);
+  // BLOCO 76: devolve a linha gravada (ou null) — o form de cliente do
+  // vendedor usa isso para provar a persistencia e avisar quando falhou
+  // (antes o modal fechava como se tivesse salvo mesmo com erro no banco).
+  const addClient = async (data: Omit<Client, 'id'>): Promise<Client | null> => {
+    const r = await clientService.insertClient(data);
     fetchCoreData();
+    return r;
   };
 
   // BLOCO 72: devolve SE GRAVOU no banco (clientService retorna a linha ou null)

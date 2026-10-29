@@ -79,7 +79,9 @@ export async function POST(req: NextRequest) {
       if (!temEstoqueNota) {
         return NextResponse.json({ ok: false, erro: 'Banco desatualizado: rode o SQL do Bloco 29 (estoques COM NF / SEM NF).' }, { status: 503 });
       }
-      const colCasa = modoPendente === 'COM_NF' ? 'estoque_nota' : 'estoque_semnf';
+      // BLOCO 75 (ESTOQUE TOTAL): casa unica — carga sai do estoque_principal
+      // (o modo continua no rastreio da carga, mas nao escolhe mais cofre)
+      const colCasa = 'estoque_principal';
 
       // Van nunca mistura: se ja ha carga com outro modo, recusa
       const { data: modosVan } = await supabase
@@ -105,7 +107,7 @@ export async function POST(req: NextRequest) {
 
       const ids = [...new Set([...desejadoMap.keys(), ...atualMap.keys()])];
       const { data: prods, error: prodErr } = await supabase
-        .from('products').select('id, nome, estoque_nota, estoque_semnf').in('id', ids);
+        .from('products').select('id, nome, estoque_principal').in('id', ids);
       if (prodErr) throw prodErr;
       const prodMap = new Map<string, any>((prods || []).map((p: any) => [p.id, p]));
 
@@ -125,7 +127,7 @@ export async function POST(req: NextRequest) {
         if (!desejadoMap.has(pid) && atual > 0) deltas.push({ produtoId: pid, delta: -atual });
       }
       if (faltas.length > 0) {
-        return NextResponse.json({ ok: false, erro: `ESTOQUE DE CASA ${modoPendente === 'COM_NF' ? 'COM NF' : 'SEM NF'} INSUFICIENTE: ${faltas.join(', ')}. Peca ao admin a entrada.` }, { status: 409 });
+        return NextResponse.json({ ok: false, erro: `ESTOQUE TOTAL INSUFICIENTE: ${faltas.join(', ')}. Peca ao admin a entrada.` }, { status: 409 });
       }
 
       for (const d of deltas) {

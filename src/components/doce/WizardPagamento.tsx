@@ -158,7 +158,8 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
     }
     if (passo === 2 && temPassoNota) {
       if (notaIntencao === 'NFE' && !clienteAptoNfe) {
-        return setErroLocal('NF-e exige CNPJ completo no cadastro do cliente. Escolha SÓ CUPOM ou NFC-e.');
+        // BLOCO 77 (regra do dono): por enquanto a NF-e so exige CNPJ + email
+        return setErroLocal('NF-e exige CNPJ + email no cadastro do cliente. Complete o cadastro ou escolha SÓ CUPOM / NFC-e.');
       }
       setPasso(3);
       return;
@@ -385,7 +386,7 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
             <button onClick={() => { setNotaIntencao('NFE'); if (condicao === 'APRAZO' && forma === 'PIX') { setForma('BOLETO'); } }}
               className={`w-full p-4 rounded-2xl border-2 text-left transition-all ${notaIntencao === 'NFE' ? 'border-slate-700 bg-slate-50 shadow-md' : 'border-gray-100 bg-gray-50'} ${!clienteAptoNfe ? 'opacity-50' : ''}`}
               disabled={!clienteAptoNfe}>
-              <p className={`text-[11px] font-black uppercase ${notaIntencao === 'NFE' ? 'text-slate-800' : 'text-gray-400'}`}><i className="fa-solid fa-file-invoice-dollar mr-1"></i>Com NF-e {clienteAptoNfe ? '' : '(cliente sem CNPJ completo)'}</p>
+              <p className={`text-[11px] font-black uppercase ${notaIntencao === 'NFE' ? 'text-slate-800' : 'text-gray-400'}`}><i className="fa-solid fa-file-invoice-dollar mr-1"></i>Com NF-e {clienteAptoNfe ? '' : '(cliente sem CNPJ + email no cadastro)'}</p>
               <p className="text-[8px] font-bold text-gray-400 mt-0.5">Nota eletrônica para o CNPJ do cadastro</p>
             </button>
             <button onClick={() => setNotaIntencao('NFCE')}

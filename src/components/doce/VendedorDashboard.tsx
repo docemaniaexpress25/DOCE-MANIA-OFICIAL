@@ -334,14 +334,12 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const confirmarNotaSheet = (doc: 'NFE' | 'NFCE' | 'CUPOM') => {
     if (!notaSheet) return;
     const { client, vendaModo } = notaSheet;
-    // BLOCO 36 (regra do dono): cliente com CNPJ -> ABRE a opcao de CNPJ nota
-    // (painel com os dados fiscais do cadastro). Sem CNPJ -> NFC-e ou cupom.
+    // BLOCO 77 (regra do dono): a NF-e NAO e batida por este app (sistema
+    // externo) — por enquanto o cadastro so precisa de CNPJ + email. A
+    // barreira antiga ('Cliente sem CNPJ no cadastro — use NFC-e ou cupom')
+    // saiu: abrir o painel agora SEMPRE guia — mostra o que falta (CNPJ e/
+    // ou email) e o botao 'Completar' abre o cadastro na hora.
     if (doc === 'NFE') {
-      const temCnpj = (client.cnpj || '').replace(/\D/g, '').length === 14;
-      if (!temCnpj) {
-        showToast('Cliente sem CNPJ no cadastro — use NFC-e ou cupom.', 'error');
-        return;
-      }
       setNfeCnpjPanel(true); // abre o painel de CNPJ nota
       return;
     }
@@ -803,23 +801,23 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     void executarBuscaCnpj(digitos);
   };
 
-  const handleSaveClientBasic = () => {
+  const handleSaveClientBasic = async () => {
     if (!cForm.nomeFantasia || !cForm.telefone) { showToast("Preencha ao menos Nome e Telefone.", 'error'); return; }
     const cnpjDigitos = (cForm.cnpj || '').replace(/\D/g, '');
     if (cnpjDigitos.length > 0 && cnpjDigitos.length < 14) { showToast("CNPJ incompleto — complete os 14 dígitos ou apague o campo.", 'error'); return; }
 
-    const clientData: Omit<Client, 'id'> = { 
-      nomeFantasia: cForm.nomeFantasia!, 
-      telefone: cForm.telefone!, 
-      endereco: cForm.endereco || '', 
-      bairro: cForm.bairro || '', 
-      diaRoteiro: cForm.diaRoteiro ?? diaAtual, 
-      ordem: cForm.ordem ?? 0, 
-      ativo: cForm.ativo ?? true, 
-      ativarCnpj: cForm.ativarCnpj ?? false, 
-      cnpj: cForm.cnpj, 
-      pinLocalizacao: cForm.pinLocalizacao, 
-      nome: cForm.nome, 
+    const clientData: Omit<Client, 'id'> = {
+      nomeFantasia: cForm.nomeFantasia!,
+      telefone: cForm.telefone!,
+      endereco: cForm.endereco || '',
+      bairro: cForm.bairro || '',
+      diaRoteiro: cForm.diaRoteiro ?? diaAtual,
+      ordem: cForm.ordem ?? 0,
+      ativo: cForm.ativo ?? true,
+      ativarCnpj: cForm.ativarCnpj ?? false,
+      cnpj: cForm.cnpj,
+      pinLocalizacao: cForm.pinLocalizacao,
+      nome: cForm.nome,
       observacoes: cForm.observacoes,
       rota: user.rota,
       razaoSocial: cForm.razaoSocial,
@@ -837,8 +835,19 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       clienteEspecialGb: podeClienteEspecialGB(user.rota) ? (cForm.clienteEspecialGb ?? false) : false
     };
 
-    if (editingClient === 'NEW') addClient(clientData);
-    else if (typeof editingClient === 'object') updateClient(editingClient.id, clientData); 
+    // BLOCO 76 (bug do dono): "coloca o cnpj e nao esta salvando" — o form
+    // fechava SEM esperar o banco e sem avisar quando o update falhava.
+    // Agora: persistencia PROVADA (igual Bloco 72) — só fecha com o banco
+    // confirmando; falhou, o modal fica aberto e o vendedor sabe.
+    if (editingClient === 'NEW') {
+      const gravado = await addClient(clientData);
+      if (!gravado) { showToast('Não gravou no banco — verifique a conexão e tente de novo.', 'error'); return; }
+      showToast('Cliente salvo no banco ✓', 'success');
+    } else if (typeof editingClient === 'object') {
+      const ok = await updateClient(editingClient.id, clientData);
+      if (!ok) { showToast('Não gravou no banco — verifique a conexão e tente de novo.', 'error'); return; }
+      showToast('Cliente salvo no banco ✓', 'success');
+    }
     setEditingClient(null);
   };
 
@@ -1948,7 +1957,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
              <div className="flex justify-between items-center mb-6"><h3 className="font-black text-gray-800 uppercase text-sm tracking-tight">{editingClient === 'NEW' ? 'Novo Cliente' : 'Editar Cliente'}</h3></div>
              <div className="space-y-4 pb-6">
                 {/* BLOCO 12: Dados fiscais no topo — com NF-e + Email */}
-                {(() => { const aptoNfe = clienteAptoNfe({ cnpj: cForm.cnpj, razaoSocial: cForm.razaoSocial, endereco: cForm.endereco, bairro: cForm.bairro, enderecoMunicipio: cForm.enderecoMunicipio, enderecoUf: cForm.enderecoUf }); return (
+                {(() => { const aptoNfe = clienteAptoNfe({ cnpj: cForm.cnpj, email: cForm.email }); return (
                 <div className="space-y-1 rounded-2xl bg-blue-50 border border-blue-100 p-4"><div className="flex items-center justify-between gap-2"><label className="text-[10px] font-black text-blue-600 uppercase ml-1 flex items-center gap-1"><i className="fa-solid fa-file-invoice"></i> CNPJ (Nota Fiscal — opcional)</label>{aptoNfe ? <span className="text-[8px] font-black text-emerald-700 bg-emerald-100 border border-emerald-200 px-2 py-1 rounded-lg uppercase whitespace-nowrap"><i className="fa-solid fa-circle-check mr-1"></i>Apto a NF-e</span> : null}</div><input value={cForm.cnpj || ''} onChange={e => handleCnpjChange(e.target.value)} placeholder="00.000.000/0000-00" inputMode="numeric" className="w-full p-4 bg-white border rounded-2xl font-semibold" />{cnpjBusca.msg && <p className={`text-[9px] font-bold leading-snug ${cnpjBusca.loading ? 'text-gray-500' : cnpjBusca.ok ? 'text-green-600' : 'text-amber-600'}`}>{cnpjBusca.msg}</p>}{cnpjBusca.ok && cnpjBusca.endereco && <p className="text-[9px] font-bold text-blue-700 bg-blue-100/60 border border-blue-200 rounded-xl px-3 py-2 leading-snug"><i className="fa-solid fa-map-location-dot mr-1"></i>{cnpjBusca.endereco}</p>}<div className="space-y-1 mt-2"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Email (NF-e)</label><input type="email" value={cForm.email || ''} onChange={e => setCForm({...cForm, email: e.target.value})} placeholder="financeiro@empresa.com" className="w-full p-4 bg-white border rounded-2xl font-semibold" /></div><p className="text-[8px] font-bold text-blue-400 leading-snug">Com CNPJ → a nota sai NF-e para a empresa. Sem CNPJ → NFC-e de consumidor.</p></div>
                 ); })()}
                 <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Nome Fantasia (Estabelecimento)</label><input value={cForm.nomeFantasia || ''} onChange={e => setCForm({...cForm, nomeFantasia: e.target.value})} placeholder="Ex: Doce da Maria" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100 uppercase" /></div>
@@ -2160,14 +2169,13 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         // BLOCO 36: client MAIS RECENTE (editou o cadastro -> painel CNPJ nota reflete na hora)
         const notaClient = clients.find(c => c.id === notaSheet.client.id) || notaSheet.client;
         const temCnpj = (notaClient.cnpj || '').replace(/\D/g, '').length === 14;
+        // BLOCO 77 (regra do dono): por enquanto a NF-e so precisa de CNPJ +
+        // email do cadastro (a nota e batida no sistema externo). O que falta
+        // disso e mostrado aqui com botao para completar na hora.
         const aptoNfe = clienteAptoNfe(notaClient);
-        // o que falta no cadastro fiscal para a NF-e
         const faltantes: string[] = [];
-        if (!notaClient.razaoSocial?.trim()) faltantes.push('razão social');
-        if (!notaClient.endereco?.trim()) faltantes.push('endereço');
-        if (!notaClient.bairro?.trim()) faltantes.push('bairro');
-        if (!notaClient.enderecoMunicipio?.trim()) faltantes.push('município');
-        if (!notaClient.enderecoUf?.trim()) faltantes.push('UF');
+        if (!temCnpj) faltantes.push('CNPJ');
+        if (!notaClient.email?.trim()) faltantes.push('email');
         return (
         <div className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-sm flex items-end justify-center" onClick={() => { setNotaSheet(null); setNfcCpfModoPanel(false); setNfeCnpjPanel(false); }}>
           <div className="bg-white w-full max-w-md rounded-t-3xl p-6 animate-in slide-in-from-bottom duration-300" onClick={e => e.stopPropagation()}>
@@ -2194,9 +2202,9 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                     <p className="text-[8px] font-bold text-gray-400 uppercase text-center mb-2">Cliente pediu nota? (vende do ESTOQUE 1)</p>
                     <div className="grid grid-cols-2 gap-2">
                       <button onClick={() => confirmarNotaSheet('NFE')}
-                        className={`py-2.5 rounded-xl text-[8px] font-bold uppercase transition-all active:scale-95 border ${temCnpj ? 'bg-white border-violet-300 text-violet-700' : 'bg-gray-100 border-gray-100 text-gray-300'}`}>
+                        className={`py-2.5 rounded-xl text-[8px] font-bold uppercase transition-all active:scale-95 border bg-white border-violet-300 text-violet-700`}>
                         <i className="fa-solid fa-file-invoice-dollar block mb-0.5 text-[11px]"></i>{temCnpj ? 'CNPJ nota' : 'NF-e'}
-                        <span className="block text-[7px] font-bold mt-0.5">{temCnpj ? 'abre os dados do cadastro' : 'sem CNPJ no cadastro'}</span>
+                        <span className="block text-[7px] font-bold mt-0.5">{temCnpj ? 'abre os dados do cadastro' : 'pede CNPJ + email'}</span>
                       </button>
                       <button onClick={() => confirmarNotaSheet('NFCE')}
                         className="py-2.5 rounded-xl text-[8px] font-bold uppercase bg-white border border-gray-200 text-gray-600 active:scale-95 transition-transform">
@@ -2232,11 +2240,11 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                   </button>
                 ) : (
                   <div className="rounded-2xl bg-amber-50 border-2 border-dashed border-amber-300 p-3">
-                    <p className="text-[9px] font-black text-amber-700 uppercase"><i className="fa-solid fa-triangle-exclamation mr-1"></i>Dados fiscais incompletos</p>
-                    <p className="text-[9px] font-bold text-amber-600 mt-1">Falta: {faltantes.join(', ')}.</p>
+                    <p className="text-[9px] font-black text-amber-700 uppercase"><i className="fa-solid fa-triangle-exclamation mr-1"></i>Falta completar o cadastro</p>
+                    <p className="text-[9px] font-bold text-amber-600 mt-1">Falta: {faltantes.join(', ')}. Por enquanto só precisa de CNPJ + email (a nota é batida no sistema externo).</p>
                     <button onClick={() => { setNotaSheet(null); setNfeCnpjPanel(false); handleOpenEditClient(notaClient); }}
                       className="w-full mt-2 bg-amber-500 text-white text-[9px] font-black uppercase py-3 rounded-xl active:scale-95">
-                      <i className="fa-solid fa-circle-plus mr-1.5"></i>Completar dados fiscais
+                      <i className="fa-solid fa-circle-plus mr-1.5"></i>Completar cadastro agora
                     </button>
                   </div>
                 )}

@@ -131,7 +131,8 @@ export async function POST(req: NextRequest) {
     const client = clientRes.data;
     if (clientRes.error) throw clientRes.error;
     if (!client) return NextResponse.json({ ok: false, error: 'Cliente nao encontrado.' }, { status: 404 });
-    const [temModoVenda, temEstoquesNota] = sondas;
+    // BLOCO 75: temEstoquesNota saiu — o aviso consulta sempre o Estoque Total
+    const [temModoVenda] = sondas;
     if (dedupRes.data) {
       console.log('[api/pre-venda/venda] dedup: pedido identico de menos de 60s — devolvendo o existente', dedupRes.data.id);
       return NextResponse.json({ ok: true, sale: dedupRes.data, dedup: true });
@@ -247,8 +248,9 @@ export async function POST(req: NextRequest) {
     // ---------- AVISO de estoque (nao bloqueia) + PREVISAO de comissao ----------
     // BLOCO 44: as duas consultas saem em PARALELO (eram sequenciais e somavam
     // ~1s na finalização do pedido).
-    // BLOCO 29: rota 2 com modo compara a coluna do modo (estoque_nota/semnf);
-    // sem modo/SQL = regra legada (estoque_principal).
+    // BLOCO 75 (ESTOQUE TOTAL): o aviso consulta SEMPRE o Estoque Total — o
+    // documento (CUPOM/NF-e/NFC-e) nao escolhe mais cofre; so alimenta o
+    // contador na baixa.
     // BLOCO 21: previsão da comissão de PRÉ-VENDA — mesma regra que GERA a
     // comissão na entrega (lib/comissaoPv); a tela "Pedido Registrado!" mostra
     // ESTE valor (o browser recalculava com a % de PRONTA ENTREGA — errado).
@@ -256,8 +258,7 @@ export async function POST(req: NextRequest) {
     let comissaoPrevista: number | undefined;
     try {
       const prodIds = [...new Set(itens.map(i => i.produtoId))];
-      const usaModo = !!(modo && temEstoquesNota);
-      const colAviso = usaModo ? (modo === 'CUPOM' ? 'estoque_semnf' : 'estoque_nota') : 'estoque_principal';
+      const colAviso = 'estoque_principal';
       const [prodsRes, prev] = await Promise.all([
         supabase.from('products').select(`id, nome, ${colAviso}`).in('id', prodIds),
         comissaoPvDeItens(supabase, itens.map(i => ({ produto_id: i.produtoId, quantidade: i.quantidade, preco_venda: i.precoVenda }))).catch(() => 0),

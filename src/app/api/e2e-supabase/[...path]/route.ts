@@ -275,15 +275,37 @@ async function handle(req: NextRequest, segments: string[]) {
   if (segments[0] === 'rest' && segments[1] === 'v1' && segments[2] === 'rpc') {
     const fn = segments[3] || '';
     if (fn === 'processar_venda_v2') {
-      const sale = {
-        id: 'sale-wiz-001', vendedor_id: 'rota2user', client_id: 'cli-1',
-        valor_total: 2.39, valor_pago: 2.39, metodo_pagamento: 'DINHEIRO',
-        detalhe_pagamento: 'TESTE WIZARD E2E', status_pagamento: 'PAGO',
-        data_venda: new Date().toISOString(), data_vencimento: null,
+      // BLOCO 75: usa o BODY real — grava sale + sale_items e BAIXA A VAN
+      // (tabela cargas), simulando o RPC de producao (pronta entrega).
+      let b: any = {};
+      try { b = await req.json(); } catch {}
+      const saleId = `sale-${Date.now()}`;
+      const venda = {
+        id: saleId, vendedor_id: b?.p_vendedor_id ?? 'rota2user', client_id: b?.p_client_id ?? 'cli-1',
+        valor_total: Number(b?.p_valor_total) || 0, valor_pago: Number(b?.p_valor_pago) || 0,
+        metodo_pagamento: b?.p_metodo_pagamento ?? 'DINHEIRO',
+        detalhe_pagamento: b?.p_detalhe_pagamento ?? '',
+        status_pagamento: b?.p_status_pagamento ?? 'PAGO',
+        data_venda: b?.p_data_venda ?? new Date().toISOString(),
+        data_vencimento: b?.p_data_vencimento ?? null,
         tipo_venda: 'PRONTA', entrega_status: null, trocas: null, comprovante_foto: null,
+        modo_nota: null,
       };
-      tables.sales.push(sale);
-      return json('sale-wiz-001');
+      tables.sales.push(venda);
+      const itensRpc: any[] = Array.isArray(b?.p_itens) ? b.p_itens : [];
+      for (const it of itensRpc) {
+        const pid = String(it.produtoid ?? it.produtoId ?? '');
+        const qtd = Number(it.quantidade) || 0;
+        if (!pid || qtd <= 0) continue;
+        tables.sale_items.push({
+          id: `si-${saleId}-${pid}`, sale_id: saleId, produto_id: pid, product_id: pid,
+          quantidade: qtd, preco_venda: Number(it.precovenda ?? it.precoVenda) || 0,
+        });
+        // Baixa da carga da van (pronta entrega — igual o RPC real)
+        const rowVan = tables.cargas.find((c: any) => c.vendedor_id === venda.vendedor_id && c.produto_id === pid);
+        if (rowVan) rowVan.quantidade = Math.max(0, (Number(rowVan.quantidade) || 0) - qtd);
+      }
+      return json(saleId);
     }
     return json(null);
   }

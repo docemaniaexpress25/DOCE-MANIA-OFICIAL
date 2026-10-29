@@ -87,7 +87,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, erro: `Ja existe carga PENDENTE com outro modo para este vendedor. Cancele-a primeiro.` }, { status: 409 });
     }
 
-    const colCasa = modo === 'COM_NF' ? 'estoque_nota' : 'estoque_semnf';
+    // BLOCO 75 (ESTOQUE TOTAL): a casa é UNICA — toda a mercadoria entra no
+    // estoque_principal (Estoque Total) e a carga sai dele. O modo do vendedor
+    // continua gravado na carga para rastreio, mas nao escolhe mais cofre.
+    const colCasa = 'estoque_principal';
 
     // ---------- ACAO PENDENTE: grava a pendente com modo (casa move no aceite) ----------
     if (acao === 'PENDENTE') {
@@ -111,8 +114,9 @@ export async function POST(req: NextRequest) {
     const atualMap = new Map<string, number>((cargaAtual || []).map((c: any) => [c.produto_id, Number(c.quantidade) || 0]));
 
     const ids = [...new Set(itens.map(i => i.produtoId))];
+    // BLOCO 75: casa unica = Estoque Total
     const { data: prods, error: prodErr } = await supabase
-      .from('products').select(`id, nome, estoque_nota, estoque_semnf`).in('id', ids);
+      .from('products').select(`id, nome, estoque_principal`).in('id', ids);
     if (prodErr) throw prodErr;
     const prodMap = new Map<string, any>((prods || []).map((p: any) => [p.id, p]));
 
@@ -135,10 +139,10 @@ export async function POST(req: NextRequest) {
     }
     if (faltas.length > 0) {
       const lista = faltas.map(f => `${f.produto} (falta ${f.falta})`).join(', ');
-      return NextResponse.json({ ok: false, erro: `ESTOQUE DE CASA ${modo === 'COM_NF' ? 'COM NF' : 'SEM NF'} INSUFICIENTE: ${lista}. D a entrada primeiro.` }, { status: 409 });
+      return NextResponse.json({ ok: false, erro: `ESTOQUE TOTAL INSUFICIENTE: ${lista}. Fa a entrada primeiro.` }, { status: 409 });
     }
 
-    // Move casa (coluna do modo) — update direto server-side (1 admin, janela de corrida irrelevante)
+    // Move casa (Estoque Total) — update direto server-side (1 admin, janela de corrida irrelevante)
     for (const d of deltas) {
       if (d.delta === 0) continue;
       const p = prodMap.get(d.produtoId);

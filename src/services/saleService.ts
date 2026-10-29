@@ -129,9 +129,73 @@ export const saleService = {
           console.warn('modo_nota nao gravado:', modoErr.message);
         }
       } catch { /* modo e best-effort: nunca quebra a venda */ }
+      // BLOCO 75 (ESTOQUE TOTAL): alimenta o CONTADOR de saida do documento
+      // (CUPOM -> estoque 2 / NFE|NFCE -> estoque 1). Best-effort.
+      try { await saleService.registrarContadoresSaida(String(saleId), modo); } catch { /* nunca quebra */ }
     }
 
     return { ...sale, id: saleId };
+  },
+
+  /**
+   * BLOCO 75 (ESTOQUE TOTAL): alimenta os CONTADORES de saida por produto da
+   * venda — estoque_nota (estoque 1 = saidas COM NF-e/NFC-e) ou estoque_semnf
+   * (estoque 2 = saidas com CUPOM). O saldo real (Total/van) baixa em outro
+   * fluxo (RPC). Best-effort: falha nunca quebra a venda.
+   */
+  async registrarContadoresSaida(saleId: string, modo: string | null | undefined): Promise<boolean> {
+    if (!modo) return false;
+    const colContador = modo === 'CUPOM' ? 'estoque_semnf' : 'estoque_nota';
+    try {
+      const { data: itens, error: itensErr } = await supabase
+        .from('sale_items').select('produto_id, quantidade').eq('sale_id', saleId);
+      if (itensErr || !itens || itens.length === 0) return false;
+      const totais = new Map<string, number>();
+      for (const i of itens as any[]) {
+        const pid = String(i.produto_id);
+        totais.set(pid, (totais.get(pid) ?? 0) + (Number(i.quantidade) || 0));
+      }
+      const ids = [...totais.keys()];
+      const { data: prods, error: prodsErr } = await supabase
+        .from('products').select(`id, ${colContador}`).in('id', ids);
+      if (prodsErr || !prods) return false;
+      for (const p of prods as any[]) {
+        const q = totais.get(String(p.id)) || 0;
+        if (q <= 0) continue;
+        const novo = (Number(p[colContador]) || 0) + q;
+        const { error: upErr } = await supabase.from('products').update({ [colContador]: novo }).eq('id', p.id);
+        if (upErr) return false;
+      }
+      return true;
+    } catch { return false; }
+  },
+
+  /** BLOCO 75: estorno — a saida foi desfeita, o contador ABATE (lendo o modo
+   *  gravado na venda). Best-effort. */
+  async abaterContadoresSaida(saleId: string): Promise<boolean> {
+    try {
+      const { data: sale } = await supabase.from('sales').select('modo_nota').eq('id', saleId).maybeSingle();
+      const modo = String((sale as any)?.modo_nota || '').toUpperCase();
+      if (!modo) return false;
+      const colContador = modo === 'CUPOM' ? 'estoque_semnf' : 'estoque_nota';
+      const { data: itens } = await supabase.from('sale_items').select('produto_id, quantidade').eq('sale_id', saleId);
+      if (!itens || itens.length === 0) return false;
+      const totais = new Map<string, number>();
+      for (const i of itens as any[]) {
+        const pid = String(i.produto_id);
+        totais.set(pid, (totais.get(pid) ?? 0) + (Number(i.quantidade) || 0));
+      }
+      const ids = [...totais.keys()];
+      const { data: prods } = await supabase.from('products').select(`id, ${colContador}`).in('id', ids);
+      if (!prods) return false;
+      for (const p of prods as any[]) {
+        const q = totais.get(String(p.id)) || 0;
+        if (q <= 0) continue;
+        const novo = Math.max(0, (Number(p[colContador]) || 0) - q);
+        await supabase.from('products').update({ [colContador]: novo }).eq('id', p.id);
+      }
+      return true;
+    } catch { return false; }
   },
 
   async updateSale(id: string, updates: Partial<Sale>): Promise<boolean> {
@@ -151,6 +215,11 @@ export const saleService = {
       p_sale_id: id
     });
     if (error) console.error('Erro RPC excluir_venda_estornar_estoque:', error);
+    // BLOCO 75 (ESTOQUE TOTAL): estorno ABATE o contador de saida (estoque 1/2)
+    // do documento da venda. Best-effort: nunca bloqueia a exclusao.
+    if (!error) {
+      try { await saleService.abaterContadoresSaida(id); } catch { /* nunca bloqueia */ }
+    }
     return !error;
   }
 };

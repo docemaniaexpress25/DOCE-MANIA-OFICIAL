@@ -22,7 +22,7 @@ interface LucroData {
   ok: boolean; mes: string; geradoEm: string;
   rotas: RotaLucro[];
   totais: { nVendas: number; faturamento: number; custo: number; lucro: number; margem: number };
-  avisos: { produtosSemCusto: number; detalhe: string };
+  avisos: { produtosSemCusto: number; detalhe: string; custoCongelado?: boolean };
 }
 
 const brl = (v: number) => (Number.isFinite(v) ? v : 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -129,7 +129,7 @@ export default function LucroRotas() {
             <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-4">
               <p className="text-[9px] font-black uppercase text-gray-400 tracking-wider">Custo dos produtos</p>
               <p className="text-lg font-black text-rose-500 tracking-tight mt-1">{brl(T.custo)}</p>
-              <p className="text-[10px] font-bold text-gray-400 mt-0.5">mercadoria vendida</p>
+              <p className="text-[10px] font-bold text-gray-400 mt-0.5">preço médio × unidades vendidas</p>
             </div>
           </div>
           <div className="bg-gradient-to-br from-emerald-500 to-emerald-600 rounded-3xl shadow-sm p-5 text-white">
@@ -224,6 +224,9 @@ export default function LucroRotas() {
           <div className="bg-amber-50 border border-amber-100 rounded-2xl p-4">
             <p className="text-[10px] font-black uppercase text-amber-700 tracking-wider mb-1"><i className="fa-solid fa-circle-info mr-1"></i>Como essa conta é feita</p>
             <p className="text-[11px] font-semibold text-amber-800 leading-relaxed">{data.avisos?.detalhe}</p>
+            {data.avisos?.custoCongelado && (
+              <p className="text-[10px] font-black text-emerald-700 mt-2"><i className="fa-solid fa-lock mr-1"></i>Custo de cada venda congelado no momento da venda — mês fechado não muda mais.</p>
+            )}
             {data.avisos?.produtosSemCusto > 0 && (
               <p className="text-[10px] font-black text-rose-600 mt-2"><i className="fa-solid fa-triangle-exclamation mr-1"></i>{data.avisos.produtosSemCusto} produto(s) vendido(s) sem custo cadastrado — lucro desses itens aparece cheio (cadastre o custo para corrigir).</p>
             )}

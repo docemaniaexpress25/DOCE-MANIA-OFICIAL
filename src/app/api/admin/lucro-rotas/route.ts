@@ -18,8 +18,9 @@ import { isAdminSession } from '@/lib/session';
  *   vai do dia 1 as 03:00Z ate o dia 1 do mes seguinte as 03:00Z.
  * - Venda a prazo (PENDENTE) entra no faturamento do mes da VENDA — o painel
  *   separa PAGO x PENDENTE para o dono ver o que ainda nao caiu na conta.
- * - Custo = preco_custo CADASTRADO HOJE (o sistema nao guarda custo historico
- *   por item; se o custo mudou no meio do mes, a leitura usa o de agora).
+ * - Custo = preço de custo MÉDIO cadastrado × unidades vendidas. Com o SQL do
+ *   bloco 80 rodado, cada venda congela o custo do momento (custo_unitario) e
+ *   o mês fechado vira número permanente; sem o SQL, usa o cadastrado hoje.
  * - Vendas excluidas nao existem mais no banco (estorno fisico) — nao contam.
  * - Agrupamento pela ROTA do vendedor (app_users.rota). Vendedor sem rota
  *   cai em ROTA_01 (mesma regra do login). Vendedor apagado do banco cai em
@@ -27,6 +28,22 @@ import { isAdminSession } from '@/lib/session';
  */
 
 const RE_MES = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+// BLOCO 80: custo congelado por venda (sale_items.custo_unitario — preço médio
+// cadastrado NO MOMENTO da venda, gravado por gatilho no banco). Se o dono
+// ainda nao rodou o SQL do bloco 80, cai no plano B sem quebrar: custo =
+// preco_custo cadastrado hoje. Cache por instancia do servidor.
+let temCustoCongelado: boolean | null = null;
+async function colunaCustoCongelado(client: any): Promise<boolean> {
+  if (temCustoCongelado !== null) return temCustoCongelado;
+  try {
+    const { error } = await client.from('sale_items').select('custo_unitario').limit(1);
+    temCustoCongelado = !error;
+  } catch {
+    temCustoCongelado = false;
+  }
+  return temCustoCongelado;
+}
 
 /** Mes corrente no fuso de Sao Paulo (UTC-3), como YYYY-MM */
 function mesCorrenteSP(): string {
@@ -91,6 +108,7 @@ export async function GET(req: NextRequest) {
     const pMes = url.searchParams.get('mes') || '';
     const mes = RE_MES.test(pMes) ? pMes : mesCorrenteSP();
     const { ini, fim } = janelaUTC(mes);
+    const usaCongelado = await colunaCustoCongelado(getServiceClient());
 
     // 1) Vendedores (rota de cada um) — service role le app_users direto
     const users = await todos('app_users', (r) =>
@@ -113,7 +131,7 @@ export async function GET(req: NextRequest) {
     for (let i = 0; i < vendas.length; i += 40) {
       const lote = vendas.slice(i, i + 40).map((v: any) => String(v.id));
       const parte = await todos('sale_items', (r) =>
-        r.from('sale_items').select('sale_id, produto_id, quantidade').in('sale_id', lote)
+        r.from('sale_items').select(`sale_id, produto_id, quantidade${usaCongelado ? ', custo_unitario' : ''}`).in('sale_id', lote)
       );
       itens.push(...parte);
     }
@@ -144,11 +162,16 @@ export async function GET(req: NextRequest) {
       e.acc.fat += fat;
       if (pago) { e.acc.pagoN += 1; e.acc.pagoFat += fat; } else { e.acc.pendN += 1; e.acc.pendFat += fat; }
     }
-    // custo por venda (itens)
+    // custo por venda (itens): custo congelado na venda (bloco 80) ou,
+    // como fallback, o preço de custo médio cadastrado hoje
     const custoPorVenda = new Map<string, number>();
     for (const it of itens) {
       const sid = String(it.sale_id);
-      const c = (Number(it.quantidade) || 0) * (custoPorProduto.get(String(it.produto_id)) ?? 0);
+      const congelado = usaCongelado && it.custo_unitario != null ? Number(it.custo_unitario) : null;
+      const custoUnit = congelado != null && Number.isFinite(congelado)
+        ? congelado
+        : (custoPorProduto.get(String(it.produto_id)) ?? 0);
+      const c = (Number(it.quantidade) || 0) * custoUnit;
       custoPorVenda.set(sid, (custoPorVenda.get(sid) || 0) + c);
     }
     for (const v of vendas) {
@@ -229,7 +252,8 @@ export async function GET(req: NextRequest) {
       totais,
       avisos: {
         produtosSemCusto: semCadastro.size,
-        detalhe: 'Lucro BRUTO = faturamento - custo dos produtos vendidos (preco de custo cadastrado hoje). Comissoes, taxas e despesas NAO estao descontadas. Vendas a prazo (pendente) entram no faturamento do mes da venda.',
+        custoCongelado: usaCongelado,
+        detalhe: 'Lucro BRUTO = faturamento − custo dos produtos vendidos. Custo = unidades vendidas × preço de custo MÉDIO cadastrado no produto. Comissões, taxas e despesas NÃO estão descontadas (o líquido é por fora). Vendas a prazo (pendente) entram no faturamento do mês da venda.',
       },
     });
   } catch (e: any) {

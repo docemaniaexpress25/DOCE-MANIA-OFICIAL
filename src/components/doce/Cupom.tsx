@@ -329,10 +329,18 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
   const isPrinting = printJob.status === 'printing' || printJob.status === 'scanning' || printJob.status === 'connecting';
 
   return (
-    <div className="fixed inset-0 bg-black/90 z-[150] flex flex-col items-center p-4 overflow-y-auto backdrop-blur-sm">
+    // BLOCO 78 (responsividade): o container rola SEMPRE que o card for maior
+    // que a tela. pb com env(safe-area-inset-bottom) para o iPhone (borda
+    // inferior) — o FECHAR nunca fica colado na barra do aparelho.
+    <div className="fixed inset-0 bg-black/90 z-[150] flex flex-col items-center p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] overflow-y-auto backdrop-blur-sm">
       {/* BLOCO 67: my-auto no lugar do justify-center — com cupom longo, o
-          justify-center cortava o TOPO do card e a rolagem nao subia. */}
-      <div className="bg-white w-full max-w-[340px] shadow-2xl flex flex-col animate-in zoom-in-95 duration-300 relative rounded-t-3xl overflow-hidden my-auto">
+          justify-center cortava o TOPO do card e a rolagem nao subia.
+          BLOCO 78: shrink-0 OBRIGATORIO — sem ele o flex esmagava o card para
+          caber na tela e o overflow-hidden cortava IMPRIMIR/COPIAR/FECHAR
+          (invisiveis e intocaveis quando os paineis NF/Boleto/contato estavam
+          abertos); com shrink-0 o container passa a rolar de verdade.
+          Papel 80MM = card mais largo (420px), papel de verdade mais largo. */}
+      <div className={`bg-white w-full shadow-2xl flex flex-col shrink-0 animate-in zoom-in-95 duration-300 relative rounded-t-3xl overflow-hidden my-auto ${printWidth === '80MM' ? 'max-w-[420px]' : 'max-w-[340px]'}`}>
         
         <button 
           onClick={onBack || onClose} 
@@ -367,9 +375,11 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
 
         {/* BLOCO 67: o texto do cupom agora ROLA (max 38% da tela) com barra
             de rolagem visivel (.cupom-scroll) — cupom com muitos itens nao
-            empurra mais os botoes para fora da tela. */}
+            empurra mais os botoes para fora da tela.
+            BLOCO 78: overflow-auto (y E x) — em aparelho pequeno (320px) o
+            papel 80mm (48 colunas) nao cabe e passa a rolar em vez de cortar. */}
         <div className="px-4 pt-4 pb-3 bg-white">
-          <div className="font-mono text-[11px] leading-tight text-black bg-gray-50 rounded-xl border border-gray-100 pl-4 pr-3 py-2.5 whitespace-pre select-none max-h-[38vh] overflow-y-auto cupom-scroll">
+          <div className="font-mono text-[11px] leading-tight text-black bg-gray-50 rounded-xl border border-gray-100 pl-4 pr-3 py-2.5 whitespace-pre select-none max-h-[38vh] overflow-auto cupom-scroll">
             {generateText(printWidth)}
           </div>
           {(sale.itens || []).length > 5 && (

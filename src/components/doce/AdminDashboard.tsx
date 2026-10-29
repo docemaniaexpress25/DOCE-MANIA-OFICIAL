@@ -2905,7 +2905,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       )}
 
       {selectedSale && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[250] flex items-center justify-center p-4"><div className="bg-white w-full max-sm rounded-[2rem] overflow-hidden flex flex-col shadow-2xl animate-in zoom-in-95 duration-300 max-h-[90vh]"><div className="flex-1 overflow-y-auto p-2"><Cupom sale={selectedSale} client={props.clients.find(c => c.id === selectedSale.clientId) || {} as Client} products={props.products} onClose={() => setSelectedSale(null)} onDeleteSale={props.deleteSale} allowDelete={true} allowNota /></div><div className="p-6 bg-gray-50 border-t border-gray-100 flex flex-col gap-2"><button onClick={() => setSelectedSale(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Voltar</button></div></div></div>
+        /* BLOCO 78: cupom DIRETO (mesmo padrao do Vendedor/Historico) — o modal
+           antigo embrulhava o Cupom numa caixa max-h-[90vh] + overflow-hidden +
+           animacao com transform, que prendia o Cupom (fixed) dentro da caixa:
+           IMPRIMIR/COPIAR/FECHAR ficavam fora da vista ("botoes nao aparecem").
+           O Cupom ja e tela cheia com rolagem propria e botao FECHAR. */
+        <Cupom sale={selectedSale} client={props.clients.find(c => c.id === selectedSale.clientId) || {} as Client} products={props.products} onClose={() => setSelectedSale(null)} onDeleteSale={props.deleteSale} allowDelete={true} allowNota />
       )}
 
       {viewingClientHistory && <ClientHistory client={viewingClientHistory} sales={props.sales} products={props.products} onClose={() => setViewingClientHistory(null)} />}

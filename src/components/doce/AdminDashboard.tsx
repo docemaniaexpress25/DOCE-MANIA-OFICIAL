@@ -11,6 +11,8 @@ import { podeClienteEspecialGB } from '@/lib/regraClienteGB';
 import { buscarEanProduto, soDigitosEan, eanCompleto, mensagemEan, EanBusca } from '@/lib/eanAutocomplete';
 import Cupom from '@/components/doce/Cupom';
 import ClientHistory from '@/components/doce/ClientHistory';
+// BLOCO 79: Lucro por Rota — faturamento x custo dos produtos vendidos, rota por rota, ao vivo
+import LucroRotas from '@/components/doce/LucroRotas';
 // BLOCO 62: validação da chave Pix do recebimento (CPF/CNPJ/telefone/email/EVP)
 import { normalizarChavePix, formatPixKey } from '@/lib/pix';
 // BLOCO 63: arrastar-e-soltar estilo kanban na ordem do Estoque Central (dnd-kit) —
@@ -107,7 +109,7 @@ interface AdminDashboardProps {
   setMelhorias?: (v: MelhoriasFlags) => void;
 }
 
-type TabType = 'HOME' | 'CATALOGO' | 'CATALOGO_PORTAL' | 'CATEGORIAS' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'COMPROVANTES' | 'ENTREGAS' | 'BACKUP' | 'SETTINGS';
+type TabType = 'HOME' | 'CATALOGO' | 'CATALOGO_PORTAL' | 'CATEGORIAS' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'COMPROVANTES' | 'ENTREGAS' | 'LUCRO' | 'BACKUP' | 'SETTINGS';
 
 type ReportType = 'RESUMO' | 'TOP_CLIENTES' | 'TOP_PRODUTOS' | 'CLIENTES_RISCO' | 'VENDAS_CATEGORIAS' | 'PRODUTOS_RENTAVEIS' | null;
 type ReportFilterType = 'RESUMO' | 'TOP_PRODUTOS' | 'TOP_CLIENTES' | 'CATEGORIAS' | 'VENDEDORES' | 'DIVIDAS' | 'PRODUTOS_RENTAVEIS';
@@ -1601,6 +1603,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             <MenuCard icon="fa-receipt" title="Vendas Realizadas" tab="HISTORY" color="bg-red-50 text-red-600" />
             <MenuCard icon="fa-calendar-days" title="Roteiro" tab="ROTEIRO" color="bg-indigo-50 text-indigo-600" />
             <MenuCard icon="fa-chart-line" title="Relatórios" tab="REPORTS" color="bg-emerald-50 text-emerald-600" />
+            {/* BLOCO 79: Lucro por Rota — a conta do dono ao vivo */}
+            <MenuCard icon="fa-sack-dollar" title="Lucro por Rota" tab="LUCRO" color="bg-amber-50 text-amber-600" />
             <MenuCard icon="fa-file-invoice-dollar" title="Contas a Receber" tab="CONTAS_RECEBER" color="bg-rose-50 text-rose-600" />
             <MenuCard icon="fa-clipboard-check" title="Comprovantes Pix" tab="COMPROVANTES" color="bg-teal-50 text-teal-600" badge={comprovantesBadge} />
             <MenuCard icon="fa-truck" title="Entregas" tab="ENTREGAS" color="bg-emerald-50 text-emerald-600" />
@@ -2476,6 +2480,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       )}
 
       {activeTab === 'ENTREGAS' && <AdminEntregas />}
+      {/* BLOCO 79: Lucro por Rota — faturamento x custo dos produtos vendidos, rota por rota */}
+      {activeTab === 'LUCRO' && <LucroRotas />}
 
       {activeTab === 'BACKUP' && (
         <div className="space-y-4">

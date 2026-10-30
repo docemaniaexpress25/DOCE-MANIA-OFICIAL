@@ -9,6 +9,8 @@ import PrinterSelector from '@/components/doce/PrinterSelector';
 import { loadLocalState, saveLocalState } from '@/utils/persistence';
 import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
 import { wakeLockManager } from '@/utils/wakeLock';
+// BLOCO 82: impressão no iPhone — instruções do Bluefy quando a Apple bloqueia o Bluetooth
+import { isIOSDevice, TEXTO_IMPRESSAO_IOS, TITULO_IMPRESSAO_IOS } from '@/lib/iosPrint';
 import { saleService } from '@/services/saleService';
 import { notaService } from '@/services/notaService';
 import { clienteAptoNfe, mascararCpf, validaCpf } from '@/lib/cnpjAutocomplete';
@@ -965,7 +967,12 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         } catch (error: any) {
           const msg = error?.message || 'Erro desconhecido';
           if (msg === 'BLUETOOTH_NAO_SUPORTADO') {
-            setAppModal({ title: 'Bluetooth Indisponível', message: 'Para impressão via Bluetooth:\n1. Use o Chrome no Android\n2. Ative o Bluetooth do dispositivo', icon: 'fa-brands fa-bluetooth-b', iconColor: 'text-gray-400', type: 'error' });
+            // BLOCO 82: no iPhone, ensina o caminho que funciona (app Bluefy) em vez de mandar pro Android
+            if (isIOSDevice()) {
+              setAppModal({ title: TITULO_IMPRESSAO_IOS, message: TEXTO_IMPRESSAO_IOS, icon: 'fa-brands fa-apple', iconColor: 'text-gray-400', type: 'error' });
+            } else {
+              setAppModal({ title: 'Bluetooth Indisponível', message: 'Para impressão via Bluetooth:\n1. Use o Chrome no Android\n2. Ative o Bluetooth do dispositivo', icon: 'fa-brands fa-bluetooth-b', iconColor: 'text-gray-400', type: 'error' });
+            }
           } else {
             setAppModal({ title: 'Erro na Impressão', message: `Falha ao imprimir pré-pedido: ${msg}`, icon: 'fa-solid fa-triangle-exclamation', iconColor: 'text-rose-500', type: 'error' });
           }

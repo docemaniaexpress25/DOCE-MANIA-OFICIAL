@@ -3,6 +3,8 @@ import React, { useState } from 'react';
 import { User, Product, Carga } from '@/lib/types';
 import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
 import PrinterSelector from '@/components/doce/PrinterSelector';
+// BLOCO 82: impressão no iPhone — instruções do Bluefy quando a Apple bloqueia o Bluetooth
+import { isIOSDevice, TEXTO_IMPRESSAO_IOS, TITULO_IMPRESSAO_IOS } from '@/lib/iosPrint';
 
 interface RelatorioFiscalProps {
   user: User;
@@ -99,7 +101,12 @@ const RelatorioFiscal: React.FC<RelatorioFiscalProps> = ({ user, carga, products
         } catch (err: any) {
           const msg = err?.message || 'Erro desconhecido';
           if (msg === 'BLUETOOTH_NAO_SUPORTADO') {
-            setModal({ title: 'Bluetooth Indisponivel', message: 'Para impressao via Bluetooth:\n1. Use o Chrome no Android\n2. Ative o Bluetooth do dispositivo', icon: 'fa-brands fa-bluetooth-b', iconColor: 'text-gray-400', type: 'error', onConfirm: () => setModal(null) });
+            // BLOCO 82: no iPhone, ensina o caminho que funciona (app Bluefy)
+            if (isIOSDevice()) {
+              setModal({ title: TITULO_IMPRESSAO_IOS, message: TEXTO_IMPRESSAO_IOS, icon: 'fa-brands fa-apple', iconColor: 'text-gray-400', type: 'error', onConfirm: () => setModal(null) });
+            } else {
+              setModal({ title: 'Bluetooth Indisponivel', message: 'Para impressao via Bluetooth:\n1. Use o Chrome no Android\n2. Ative o Bluetooth do dispositivo', icon: 'fa-brands fa-bluetooth-b', iconColor: 'text-gray-400', type: 'error', onConfirm: () => setModal(null) });
+            }
           } else {
             setModal({ title: 'Erro na Impressao', message: `Falha ao imprimir relatorio: ${msg}`, icon: 'fa-solid fa-triangle-exclamation', iconColor: 'text-rose-500', type: 'error', onConfirm: () => setModal(null) });
           }

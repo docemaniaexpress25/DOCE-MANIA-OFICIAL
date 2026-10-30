@@ -10,6 +10,9 @@ import ConfirmModal from '@/components/doce/ConfirmModal';
 import PrinterSelector from '@/components/doce/PrinterSelector';
 // BLOCO 72: grava o contato via API server-side (service_role) — persistência garantida
 import { authHeaders } from '@/services/userService';
+// BLOCO 82: impressão no iPhone — Apple bloqueia Web Bluetooth no Safari/Chrome iOS;
+// caminho que funciona: navegador Bluefy (App Store) com instruções passo a passo
+import { isIOSDevice, TEXTO_IMPRESSAO_IOS, TITULO_IMPRESSAO_IOS } from '@/lib/iosPrint';
 
 type PrinterWidth = '56MM' | '80MM';
 
@@ -253,7 +256,13 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
             const msg = error?.message || 'Erro desconhecido';
       
             if (msg === 'BLUETOOTH_NAO_SUPORTADO') {
-              setModal({title:'Bluetooth Indisponivel', message:'Para impressao via Bluetooth, use o Chrome do Android com Bluetooth ativado.', icon:'fa-solid fa-bluetooth-b', type:'alert', onConfirm:()=>setModal(null)});
+              // BLOCO 82: no iPhone a Apple bloqueia Web Bluetooth — em vez do "use o Chrome do
+              // Android" (que não ajuda quem está no iPhone), mostra o caminho que funciona: app Bluefy.
+              if (isIOSDevice()) {
+                setModal({title:TITULO_IMPRESSAO_IOS, message:TEXTO_IMPRESSAO_IOS, icon:'fa-brands fa-apple', type:'alert', onConfirm:()=>setModal(null)});
+              } else {
+                setModal({title:'Bluetooth Indisponivel', message:'Para impressao via Bluetooth, use o Chrome do Android com Bluetooth ativado.', icon:'fa-solid fa-bluetooth-b', type:'alert', onConfirm:()=>setModal(null)});
+              }
             } else if (msg.includes('SERVICO_NAO_ENCONTRADO') || msg.includes('CARACTERISTICA')) {
               setModal({title:'Erro de Impressora', message:'Servico de impressao nao encontrado. Verifique se a impressora esta ligada e pareada.', icon:'fa-solid fa-triangle-exclamation', type:'alert', onConfirm:()=>setModal(null)});
               bluetoothPrinter.forgetPrinter();
@@ -321,7 +330,8 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
         if (isConnected) {
           return { color: 'bg-emerald-100 text-emerald-700', icon: 'fa-bluetooth-b', text: printerName || 'Conectado' };
         }
-        return { color: 'bg-gray-100 text-gray-500', icon: 'fa-bluetooth-b', text: isBluetoothAvailable ? 'Nenhuma impressora conectada' : 'Bluetooth indisponivel' };
+        // BLOCO 82: no iPhone sem suporte, o badge já ensina o caminho (Bluefy)
+        return { color: 'bg-gray-100 text-gray-500', icon: 'fa-bluetooth-b', text: isBluetoothAvailable ? 'Nenhuma impressora conectada' : (isIOSDevice() ? 'No iPhone: use o app Bluefy' : 'Bluetooth indisponivel') };
     }
   };
 

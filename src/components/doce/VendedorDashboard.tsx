@@ -14,6 +14,8 @@ import PDV from '@/components/doce/PDV';
 import Cupom from '@/components/doce/Cupom';
 import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
 import ConfirmModal from '@/components/doce/ConfirmModal';
+// BLOCO 82: impressão no iPhone — instruções do Bluefy quando a Apple bloqueia o Bluetooth
+import { isIOSDevice, TEXTO_IMPRESSAO_IOS, TITULO_IMPRESSAO_IOS } from '@/lib/iosPrint';
 import FilaEntregas from '@/components/doce/FilaEntregas';
 
 
@@ -1144,7 +1146,12 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
           }
         } catch (err: any) {
           const msg = err?.message || 'Erro desconhecido';
-          setConfirmAction({ title: 'Erro na Impressao', message: msg.includes('BLUETOOTH_NAO_SUPORTADO') ? 'Bluetooth nao disponivel neste dispositivo.' : 'Falha: ' + msg, icon: 'fa-solid fa-triangle-exclamation', type: 'alert', onConfirm: () => setConfirmAction(null) });
+          // BLOCO 82: no iPhone, ensina o caminho que funciona (app Bluefy) em vez de "não disponível" seco
+          if (msg.includes('BLUETOOTH_NAO_SUPORTADO')) {
+            setConfirmAction({ title: isIOSDevice() ? TITULO_IMPRESSAO_IOS : 'Erro na Impressao', message: isIOSDevice() ? TEXTO_IMPRESSAO_IOS : 'Bluetooth nao disponivel neste dispositivo.', icon: isIOSDevice() ? 'fa-brands fa-apple' : 'fa-solid fa-triangle-exclamation', type: 'alert', onConfirm: () => setConfirmAction(null) });
+          } else {
+            setConfirmAction({ title: 'Erro na Impressao', message: 'Falha: ' + msg, icon: 'fa-solid fa-triangle-exclamation', type: 'alert', onConfirm: () => setConfirmAction(null) });
+          }
         }
       }
     });

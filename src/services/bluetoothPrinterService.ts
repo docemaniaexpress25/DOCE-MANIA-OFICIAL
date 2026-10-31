@@ -86,6 +86,59 @@ const escpos = {
   doubleLine(cols: number): Uint8Array {
     return encodeToCP860('='.repeat(cols) + '\n');
   },
+
+  /** Concatena segmentos de bytes num unico buffer */
+  _concat(parts: Uint8Array[]): Uint8Array {
+    const total = parts.reduce((s, p) => s + p.length, 0);
+    const out = new Uint8Array(total);
+    let off = 0;
+    for (const p of parts) { out.set(p, off); off += p.length; }
+    return out;
+  },
+
+  // ==========================================================
+  // BLOCO 82: QR CODE (model 2, nivel M) — GS ( k
+  // Usado no mini DANFE NFC-e (consulta SEFAZ) e no PIX do boleto.
+  // ==========================================================
+  qr(data: string): Uint8Array {
+    // conteudo de QR e sempre ASCII (URL da SEFAZ / chave / copia-e-cola)
+    const bytes = new TextEncoder().encode(data.slice(0, 512));
+    const parts: Uint8Array[] = [
+      // function 165: seleciona modelo 2
+      new Uint8Array([GS, 0x28, 0x6B, 0x04, 0x00, 0x31, 0x41, 0x32, 0x00]),
+      // function 167: tamanho do modulo (6 dots — legivel em 80mm)
+      new Uint8Array([GS, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x43, 0x06]),
+      // function 169: correcao de erro nivel M
+      new Uint8Array([GS, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x45, 0x31]),
+    ];
+    // function 180: armazena os dados (pL pH = len(data)+3)
+    const len = bytes.length + 3;
+    parts.push(new Uint8Array([GS, 0x28, 0x6B, len & 0xFF, (len >> 8) & 0xFF, 0x31, 0x50, 0x30]));
+    parts.push(bytes);
+    // function 181: imprime
+    parts.push(new Uint8Array([GS, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x51, 0x30]));
+    return this._concat(parts);
+  },
+
+  // ==========================================================
+  // BLOCO 82: CODIGO DE BARRAS CODE128 — GS k m=73
+  // Usado na chave de acesso de 44 digitos do DANFE e no
+  // codigo de barras do boleto. Largura 1 dot (44 digitos
+  // subset B cabem nos 72mm do papel 80mm).
+  // ==========================================================
+  barcode128(data: string): Uint8Array {
+    const payload = '{B' + data.replace(/[^0-9A-Za-z]/g, '');
+    const bytes = new TextEncoder().encode(payload);
+    // GS w 1 (largura) + GS h 80 (altura) + GS H 0 (sem HRI) + GS k 73 dados NUL
+    return this._concat([
+      new Uint8Array([GS, 0x77, 0x01]),
+      new Uint8Array([GS, 0x68, 0x50]),
+      new Uint8Array([GS, 0x48, 0x00]),
+      new Uint8Array([GS, 0x6B, 0x49]),
+      bytes,
+      new Uint8Array([0x00]),
+    ]);
+  },
 };
 
 // ============================================================
@@ -620,6 +673,21 @@ class BluetoothPrinterService {
     const lines = text.split('\n');
     for (const line of lines) {
       const trimmed = line.trimEnd();
+
+      // ------------------------------------------------------------
+      // BLOCO 82: marcadores [[QR:...]] / [[BARCODE:...]] viram comandos
+      // ESC/POS reais (QR Code model 2 / CODE128) — usados pelo mini DANFE
+      // (chave de acesso + consulta SEFAZ) e pelo comprovante de boleto
+      // (codigo de barras + PIX). Centralizados no papel.
+      // ------------------------------------------------------------
+      const mQr = trimmed.match(/^\[\[QR:(.+)\]\]$/);
+      const mBc = trimmed.match(/^\[\[BARCODE:(.+)\]\]$/);
+      if (mQr || mBc) {
+        push(escpos.align(1));
+        push(mQr ? escpos.qr(mQr[1].trim()) : escpos.barcode128(mBc![1].trim()));
+        push(encodeToCP860('\n'));
+        continue;
+      }
 
       if (width !== '80MM') {
         // ------------------------------------------------------------

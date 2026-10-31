@@ -19,8 +19,8 @@ export const saleService = {
     // alguma coluna ainda nao exista (SQL pendente).
     // BLOCO 29: modo_nota entra no COLS com fallback dedicado (nao cai no '*',
     // que traria comprovante_foto de volta e gastaria egress).
-    const COLS = 'id, vendedor_id, client_id, valor_total, valor_pago, metodo_pagamento, detalhe_pagamento, status_pagamento, data_vencimento, data_venda, nota_status, nota_numero, nota_pdf_url, nota_erro, tipo_venda, entrega_status, trocas, prioridade, separado, entregador_id, modo_nota, sale_items(produto_id, quantidade, preco_venda)';
-    const COLS_SEM_MODO = 'id, vendedor_id, client_id, valor_total, valor_pago, metodo_pagamento, detalhe_pagamento, status_pagamento, data_vencimento, data_venda, nota_status, nota_numero, nota_pdf_url, nota_erro, tipo_venda, entrega_status, trocas, prioridade, separado, entregador_id, sale_items(produto_id, quantidade, preco_venda)';
+    const COLS = 'id, vendedor_id, client_id, valor_total, valor_pago, metodo_pagamento, detalhe_pagamento, status_pagamento, data_vencimento, data_venda, nota_status, nota_numero, nota_pdf_url, nota_erro, nota_chave, tipo_venda, entrega_status, trocas, prioridade, separado, entregador_id, modo_nota, sale_items(produto_id, quantidade, preco_venda)';
+    const COLS_SEM_MODO = 'id, vendedor_id, client_id, valor_total, valor_pago, metodo_pagamento, detalhe_pagamento, status_pagamento, data_vencimento, data_venda, nota_status, nota_numero, nota_pdf_url, nota_erro, nota_chave, tipo_venda, entrega_status, trocas, prioridade, separado, entregador_id, sale_items(produto_id, quantidade, preco_venda)';
     let data: any[];
     if (modoColCache === true) {
       data = await fetchAllPages<any>('sales', COLS);
@@ -67,6 +67,8 @@ export const saleService = {
       notaNumero: s.nota_numero || undefined,
       notaPdfUrl: s.nota_pdf_url || undefined,
       notaErro: s.nota_erro || undefined,
+      // BLOCO 82: chave de acesso p/ o mini DANFE 80mm
+      notaChave: s.nota_chave || undefined,
       // Bloco 13: fila continua de pre-venda (colunas podem nao existir antes do SQL)
       tipoVenda: s.tipo_venda || undefined,
       entregaStatus: s.entrega_status || undefined,

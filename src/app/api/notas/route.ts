@@ -328,6 +328,14 @@ export async function POST(req: NextRequest) {
       ref,
       pdfUrl: res.pdfUrl,
       erro: patch.nota_erro,
+      // BLOCO 82: dados p/ imprimir o mini DANFE 80mm logo apos a autorizacao
+      // (sem precisar de outra consulta) — o app usa na hora da venda
+      chave: res.chave || '',
+      serie: res.serie || '',
+      protocolo: res.protocolo || '',
+      dataAutorizacao: res.dataAutorizacao || '',
+      qrCode: res.qrCode || '',
+      emitente: res.emitente,
     },
   });
 }

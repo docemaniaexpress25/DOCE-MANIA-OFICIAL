@@ -94,6 +94,18 @@ export interface FocusNotaResultado {
   erro?: string;
   erro_sefaz?: string;
   mensagem_sefaz?: string;
+  // BLOCO 82: dados do emitente/autorizacao devolvidos pela Focus na consulta
+  // (usados no cabecalho do mini DANFE 80mm)
+  protocolo?: string;
+  razao_social_emitente?: string;
+  nome_emitente?: string;
+  cnpj_emitente?: string;
+  ie_emitente?: string;
+  data_autorizacao?: string;
+  total?: string | number;
+  qr_code?: string;
+  qrcode?: string;
+  url_consulta?: string;
 }
 
 const round2 = (v: number) => Math.round(v * 100) / 100;
@@ -304,6 +316,10 @@ export function interpretarResultado(data: FocusNotaResultado) {
     ? data.motivos.join('; ')
     : data.motivos || data.erro_sefaz || data.mensagem_sefaz || data.erro || '';
   const pdf = data.danfe_url || data.pdf_url || data.url_danfe || '';
+  // BLOCO 82: dados para o mini DANFE 80mm (emitente real da SEFAZ, protocolo,
+  // data de autorizacao e QR de consulta NFC-e quando a Focus devolve)
+  const emitenteNome = String(data.razao_social_emitente || data.nome_emitente || '').trim();
+  const emitenteCnpj = String(data.cnpj_emitente || '').replace(/\D/g, '');
   return {
     autorizada: status === 'autorizado',
     cancelada: status.startsWith('cancelado'),
@@ -315,5 +331,15 @@ export function interpretarResultado(data: FocusNotaResultado) {
     xmlUrl: data.arquivo_url || '',
     statusBruto: status,
     chave: (data.chave && /^\d{44}$/.test(String(data.chave))) ? String(data.chave) : '',
+    serie: String(data.serie || ''),
+    protocolo: String(data.protocolo || ''),
+    dataAutorizacao: String(data.data_autorizacao || ''),
+    total: Number(data.total) || 0,
+    qrCode: String(data.qr_code || data.qrcode || data.url_consulta || ''),
+    emitente: {
+      nome: emitenteNome,
+      cnpj: emitenteCnpj,
+      ie: String(data.ie_emitente || '').trim(),
+    },
   };
 }

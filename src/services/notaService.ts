@@ -6,12 +6,26 @@ import { NotaStatus } from '@/lib/types';
  * O token Focus NFe nunca toca o browser; aqui so vai o token de sessao do app.
  */
 
+export interface NotaEmitente {
+  nome?: string;
+  cnpj?: string;
+  ie?: string;
+  endereco?: string;
+}
+
 export interface NotaInfo {
   status: NotaStatus | string;
   numero?: string;
   ref?: string;
   pdfUrl?: string;
   erro?: string;
+  // BLOCO 82: dados p/ o mini DANFE 80mm (vindos da Focus via /api/notas)
+  chave?: string;            // 44 digitos — numero/serie/modelo derivam dela
+  serie?: string;
+  protocolo?: string;
+  dataAutorizacao?: string;
+  qrCode?: string;           // URL de consulta NFC-e (quando a Focus devolve)
+  emitente?: NotaEmitente;   // razao/CNPJ/IE reais da SEFAZ
 }
 
 export const notaService = {

@@ -13,6 +13,7 @@ import { wakeLockManager } from '@/utils/wakeLock';
 import { isIOSDevice, TEXTO_IMPRESSAO_IOS, TITULO_IMPRESSAO_IOS } from '@/lib/iosPrint';
 import { saleService } from '@/services/saleService';
 import { notaService } from '@/services/notaService';
+import { danfeMiniTexto } from '@/lib/danfeTexto';
 import { clienteAptoNfe, mascararCpf, validaCpf } from '@/lib/cnpjAutocomplete';
 
 interface PDVProps {
@@ -188,7 +189,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   // O vendedor ESCOLHE a forma: NF-e (cliente CNPJ apto), NFC-e
   // (com ou sem CPF) ou cupom nao fiscal (botao OK, fluxo comum).
   // ============================================================
-  const [notaResult, setNotaResult] = useState<{ status: string; numero?: string; pdfUrl?: string; erro?: string } | null>(null);
+  const [notaResult, setNotaResult] = useState<{ status: string; numero?: string; pdfUrl?: string; erro?: string; chave?: string; serie?: string; protocolo?: string; dataAutorizacao?: string; qrCode?: string; emitente?: { nome?: string; cnpj?: string; ie?: string } } | null>(null);
   const [notaEmitindo, setNotaEmitindo] = useState(false);
   const [nfcCpfPanel, setNfcCpfPanel] = useState(false);
   const [nfcCpfInput, setNfcCpfInput] = useState('');
@@ -213,8 +214,104 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       if (r.nota) setNotaResult({ status: r.nota.status || 'REJEITADA', erro: r.nota.erro });
       return;
     }
-    setNotaResult({ status: r.nota?.status || 'EMITINDO', numero: r.nota?.numero, pdfUrl: r.nota?.pdfUrl, erro: r.nota?.erro });
+    // BLOCO 82: guarda chave/serie/protocolo/emitente p/ imprimir o mini DANFE na hora
+    setNotaResult({
+      status: r.nota?.status || 'EMITINDO',
+      numero: r.nota?.numero,
+      pdfUrl: r.nota?.pdfUrl,
+      erro: r.nota?.erro,
+      chave: r.nota?.chave || '',
+      serie: r.nota?.serie || '',
+      protocolo: r.nota?.protocolo || '',
+      dataAutorizacao: r.nota?.dataAutorizacao || '',
+      qrCode: r.nota?.qrCode || '',
+      emitente: r.nota?.emitente,
+    });
     setNfcCpfPanel(false);
+  };
+
+  // ==================================================================
+  // BLOCO 82: MINI DANFE 80mm no modal de venda finalizada — imprime o
+  // DANFE simplificado assim que a nota autoriza, direto na rua.
+  // ==================================================================
+  const handleImprimirDanfeModal = async () => {
+    const s = saleResultModal?.sale;
+    if (!s || notaEmitindo) return;
+    setNotaEmitindo(true);
+    try {
+      let d = {
+        chave: notaResult?.chave || '',
+        numero: notaResult?.numero || '',
+        serie: notaResult?.serie || '',
+        protocolo: notaResult?.protocolo || '',
+        dataAutorizacao: notaResult?.dataAutorizacao || '',
+        qrCode: notaResult?.qrCode || '',
+        emitente: notaResult?.emitente,
+      };
+      if (!d.chave || !d.emitente?.cnpj) {
+        const r = await notaService.consultar(s.id);
+        if (r.ok && r.nota) {
+          setNotaResult(prev => prev ? {
+            ...prev,
+            numero: r.nota?.numero || prev.numero,
+            pdfUrl: r.nota?.pdfUrl || prev.pdfUrl,
+            chave: r.nota?.chave || prev.chave,
+            serie: r.nota?.serie || prev.serie,
+            protocolo: r.nota?.protocolo || prev.protocolo,
+            dataAutorizacao: r.nota?.dataAutorizacao || prev.dataAutorizacao,
+            qrCode: r.nota?.qrCode || prev.qrCode,
+            emitente: r.nota?.emitente || prev.emitente,
+          } : prev);
+          d = {
+            chave: r.nota?.chave || d.chave,
+            numero: r.nota?.numero || d.numero,
+            serie: r.nota?.serie || d.serie,
+            protocolo: r.nota?.protocolo || d.protocolo,
+            dataAutorizacao: r.nota?.dataAutorizacao || d.dataAutorizacao,
+            qrCode: r.nota?.qrCode || d.qrCode,
+            emitente: r.nota?.emitente || d.emitente,
+          };
+        }
+      }
+      if (!d.chave) {
+        setAppModal({ title: 'DANFE', message: 'Nota sem chave de acesso ainda — aguarde a autorizacao da SEFAZ e tente de novo.', icon: 'fa-solid fa-triangle-exclamation', iconColor: 'text-rose-500', type: 'error' });
+        return;
+      }
+      const prods = new Map(products.map(p => [p.id, p.nome] as const));
+      const itens = (s.itens || []).map(i => ({
+        descricao: prods.get(i.produtoId) || 'ITEM',
+        quantidade: Number(i.quantidade) || 0,
+        valorUnitario: Number(i.precoVenda) || 0,
+      }));
+      const texto = danfeMiniTexto({
+        tipo: (s.modoNota === 'NFCE' ? 'NFCE' : 'NFE') as 'NFE' | 'NFCE',
+        chave: d.chave,
+        numero: d.numero,
+        serie: d.serie,
+        protocolo: d.protocolo,
+        dataAutorizacao: d.dataAutorizacao,
+        emitente: d.emitente,
+        qrCode: d.qrCode,
+        dataVenda: s.data,
+        cliente: { nome: client.nomeFantasia || client.nome || '', doc: client.cnpj || '' },
+        itens,
+        valorTotal: Number(s.valorTotal) || 0,
+        metodoPagamento: s.metodoPagamento,
+        detalhePagamento: s.detalhePagamento,
+        statusPagamento: s.statusPagamento,
+        dataVencimento: s.dataVencimento,
+        entregaStatus: s.entregaStatus,
+        tipoVenda: s.tipoVenda,
+      });
+      const ok = await bluetoothPrinter.print(texto, '80MM', { skipConfirm: true });
+      if (ok) setAppModal({ title: 'DANFE', message: 'DANFE enviado a impressora!', icon: 'fa-solid fa-circle-check', iconColor: 'text-emerald-500', type: 'success' });
+      else setAppModal({ title: 'DANFE', message: 'Impressao nao realizada — conecte a impressora Bluetooth.', icon: 'fa-solid fa-bluetooth-b', iconColor: 'text-blue-500', type: 'info' });
+    } catch (e: any) {
+      const msg = e?.message || '';
+      setAppModal({ title: 'DANFE', message: msg === 'BLUETOOTH_NAO_SUPORTADO' ? 'Bluetooth nao disponivel neste aparelho (use o Chrome do Android).' : `Erro na impressao: ${msg}`, icon: 'fa-solid fa-triangle-exclamation', iconColor: 'text-rose-500', type: 'error' });
+    } finally {
+      setNotaEmitindo(false);
+    }
   };
 
   // ============================================================
@@ -1622,6 +1719,10 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                         <i className="fa-solid fa-file-pdf mr-2"></i>Abrir DANFE e Enviar ao Cliente
                       </a>
                     )}
+                    {/* BLOCO 82: mini DANFE na térmica 80mm — na rua, na hora */}
+                    <button onClick={handleImprimirDanfeModal} disabled={notaEmitindo} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest disabled:opacity-60 flex items-center justify-center">
+                      <i className={`fa-solid ${notaEmitindo ? 'fa-spinner fa-spin' : 'fa-print'} mr-2`}></i>{notaEmitindo ? 'Imprimindo...' : 'Imprimir DANFE (80mm)'}
+                    </button>
                   </div>
                 ) : notaResult?.status === 'REJEITADA' ? (
                   <div className="bg-rose-50 border border-rose-200 p-3 rounded-2xl">
@@ -1693,6 +1794,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                 clienteDoc={client.cnpj}
                 clienteCep={client.enderecoCep}
                 clienteTelefone={client.telefone}
+                clienteNome={client.nomeFantasia || client.nome}
                 // BLOCO 67: no modal de venda finalizada o card JA ABRE expandido
                 // (regra do Bloco 25: o dono precisa achar o botao de gerar na
                 // hora). No cupom reaberto ele fica dobrado para nao cobrir a tela.

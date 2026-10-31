@@ -161,6 +161,8 @@ export interface Sale {
   notaNumero?: string;
   notaPdfUrl?: string;
   notaErro?: string;
+  /** BLOCO 82: chave de acesso (44 dig) — fonte do mini DANFE 80mm */
+  notaChave?: string;
   /** Bloco 29 (ROTA 2): modo do atendimento — define o estoque de casa da baixa e a margem real */
   modoNota?: ModoNota;
 }

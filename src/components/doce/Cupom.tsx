@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Sale, Client, Product } from '@/lib/types';
 import { gerarCupomTexto } from '@/lib/cupomTexto';
+import { danfeMiniTexto } from '@/lib/danfeTexto';
 import { bluetoothPrinter, PrintJob } from '@/services/bluetoothPrinterService';
 import { notaService, NotaInfo } from '@/services/notaService';
 import BoletoCard from '@/components/doce/BoletoCard';
@@ -43,6 +44,8 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
     numero: sale.notaNumero,
     pdfUrl: sale.notaPdfUrl,
     erro: sale.notaErro,
+    // BLOCO 82: chave de acesso vem do banco (saleService) — fonte do mini DANFE
+    chave: sale.notaChave,
   }));
   const [notaBusy, setNotaBusy] = useState(false);
   // BLOCO 67: bloco da NF-e DOBRAVEL (linha de status sempre visivel, acoes
@@ -60,7 +63,7 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
       setModal({ title: 'Nota Fiscal', message: r.erro, icon: 'fa-solid fa-triangle-exclamation', type: 'danger', onConfirm: () => setModal(null) });
       return;
     }
-    if (r.nota) setNota(r.nota);
+    if (r.nota) setNota(n => ({ ...n, ...r.nota }));
     if (r.ok && r.nota?.status === 'AUTORIZADA') {
       showToast?.('Nota autorizada!', 'success');
     } else if (r.nota?.status === 'REJEITADA') {
@@ -74,7 +77,83 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
     const r = await notaService.consultar(sale.id);
     setNotaBusy(false);
     if (r.erro && !r.nota) { showToast?.(r.erro, 'error'); return; }
-    if (r.nota) setNota(r.nota);
+    if (r.nota) setNota(n => ({ ...n, ...r.nota }));
+  };
+
+  // ==================================================================
+  // BLOCO 82: MINI DANFE 80mm — imprime o DANFE simplificado na térmica
+  // (chave de acesso com código de barras + QR de consulta NFC-e).
+  // Se a chave/emitente não estão em memória, consulta a SEFAZ 1x antes.
+  // ==================================================================
+  const handleImprimirDanfe = async () => {
+    if (notaBusy || !isVendaSalva) return;
+    setNotaBusy(true);
+    try {
+      let d = {
+        chave: nota.chave || '',
+        numero: nota.numero || '',
+        serie: nota.serie || '',
+        protocolo: nota.protocolo || '',
+        dataAutorizacao: nota.dataAutorizacao || '',
+        qrCode: nota.qrCode || '',
+        emitente: nota.emitente,
+      };
+      if (!d.chave || !d.emitente?.cnpj) {
+        const r = await notaService.consultar(sale.id);
+        if (r.ok && r.nota) {
+          setNota(n => ({ ...n, ...r.nota }));
+          d = {
+            chave: r.nota.chave || d.chave,
+            numero: r.nota.numero || d.numero,
+            serie: r.nota.serie || d.serie,
+            protocolo: r.nota.protocolo || d.protocolo,
+            dataAutorizacao: r.nota.dataAutorizacao || d.dataAutorizacao,
+            qrCode: r.nota.qrCode || d.qrCode,
+            emitente: r.nota.emitente || d.emitente,
+          };
+        }
+      }
+      if (!d.chave) {
+        showToast?.('Nota sem chave de acesso — toque em “Atualizar situação na SEFAZ” e tente de novo.', 'error');
+        return;
+      }
+      const prods = new Map(products.map(p => [p.id, p.nome] as const));
+      const itens = (sale.itens || []).map(i => ({
+        descricao: prods.get(i.produtoId) || 'ITEM',
+        quantidade: Number(i.quantidade) || 0,
+        valorUnitario: Number(i.precoVenda) || 0,
+      }));
+      const texto = danfeMiniTexto({
+        tipo: sale.modoNota === 'NFCE' ? 'NFCE' : 'NFE',
+        chave: d.chave,
+        numero: d.numero,
+        serie: d.serie,
+        protocolo: d.protocolo,
+        dataAutorizacao: d.dataAutorizacao,
+        emitente: d.emitente,
+        qrCode: d.qrCode,
+        dataVenda: sale.data,
+        cliente: { nome: clientLocal?.nomeFantasia || clientLocal?.nome || '', doc: clientLocal?.cnpj || '' },
+        itens,
+        valorTotal: Number(sale.valorTotal) || 0,
+        metodoPagamento: sale.metodoPagamento,
+        detalhePagamento: sale.detalhePagamento,
+        statusPagamento: sale.statusPagamento,
+        dataVencimento: sale.dataVencimento,
+        entregaStatus: sale.entregaStatus,
+        tipoVenda: sale.tipoVenda,
+      });
+      showToast?.('Enviando DANFE à impressora...', 'success');
+      const ok = await bluetoothPrinter.print(texto, '80MM', { skipConfirm: true });
+      if (ok) showToast?.('DANFE enviado à impressora!', 'success');
+      else showToast?.('Impressão não realizada — conecte a impressora.', 'error');
+    } catch (e: any) {
+      const msg = e?.message || '';
+      if (msg === 'BLUETOOTH_NAO_SUPORTADO') showToast?.('Bluetooth não disponível neste aparelho (use o Chrome do Android).', 'error');
+      else showToast?.(`Erro na impressão do DANFE: ${msg}`, 'error');
+    } finally {
+      setNotaBusy(false);
+    }
   };
 
   const notaBadge = () => {
@@ -418,11 +497,21 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
                   {nota.status === 'REJEITADA' && nota.erro && (
                     <p className="text-[9px] leading-snug font-bold opacity-80 break-words">{nota.erro}</p>
                   )}
-                  {nota.status === 'AUTORIZADA' && nota.pdfUrl && (
-                    <a href={nota.pdfUrl} target="_blank" rel="noopener noreferrer"
-                      className="block w-full bg-emerald-600 text-white font-black py-3 rounded-xl text-center text-[10px] uppercase tracking-widest active:scale-95">
-                      <i className="fa-solid fa-file-pdf mr-1"></i> Abrir DANFE (PDF)
-                    </a>
+                  {nota.status === 'AUTORIZADA' && (
+                    <>
+                      {nota.pdfUrl && (
+                        <a href={nota.pdfUrl} target="_blank" rel="noopener noreferrer"
+                          className="block w-full bg-emerald-600 text-white font-black py-3 rounded-xl text-center text-[10px] uppercase tracking-widest active:scale-95">
+                          <i className="fa-solid fa-file-pdf mr-1"></i> Abrir DANFE (PDF)
+                        </a>
+                      )}
+                      {/* BLOCO 82: mini DANFE na térmica 80mm */}
+                      <button onClick={handleImprimirDanfe} disabled={notaBusy}
+                        className="block w-full bg-blue-600 text-white font-black py-3 rounded-xl text-[10px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
+                        <i className={`fa-solid ${notaBusy ? 'fa-spinner fa-spin' : 'fa-print'} mr-1`}></i>
+                        Imprimir DANFE (80mm)
+                      </button>
+                    </>
                   )}
                   {(nota.status === 'NAO_EMITIDA' || nota.status === 'REJEITADA' || nota.status === 'CANCELADA') && (
                     <button onClick={handleEmitirNota} disabled={notaBusy}
@@ -447,6 +536,7 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
               clienteDoc={clientLocal.cnpj}
               clienteCep={clientLocal.enderecoCep}
               clienteTelefone={clientLocal.telefone}
+              clienteNome={clientLocal.nomeFantasia || clientLocal.nome}
               showToast={showToast}
             />
           )}

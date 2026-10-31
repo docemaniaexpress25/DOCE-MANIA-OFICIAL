@@ -2,6 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import { boletoService, BoletoInfo } from '@/services/boletoService';
+import { comprovanteBoletoTexto } from '@/lib/danfeTexto';
+import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
 import { validaCpfCnpj } from '@/lib/validaDoc';
 
 /**
@@ -28,6 +30,7 @@ interface BoletoCardProps {
   clienteDoc?: string;        // CPF/CNPJ do cliente no cadastro
   clienteCep?: string;        // CEP do cliente no cadastro (Inter exige)
   clienteTelefone?: string;   // para o WhatsApp
+  clienteNome?: string;       // BLOCO 82: pagador no comprovante 80mm
   showToast?: (msg: string, type?: 'success' | 'error') => void;
   /** BLOCO 67: abrir ja expandido (modal de venda finalizada). No cupom
    *  reaberto o padrao e DOBRADO — o card nao pode cobrir a tela. */
@@ -40,7 +43,7 @@ const dataBR = (iso?: string) => {
   return `${d}/${m}/${a}`;
 };
 
-const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, notaStatus, notaNumero, clienteDoc, clienteCep, clienteTelefone, showToast, abertoInicial }) => {
+const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, notaStatus, notaNumero, clienteDoc, clienteCep, clienteTelefone, clienteNome, showToast, abertoInicial }) => {
   const [boleto, setBoleto] = useState<BoletoInfo | null>(null);
   const [indisponivel, setIndisponivel] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -138,6 +141,38 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
     const r = await boletoService.abrirPdf(saleId);
     setBusy(false);
     if (!r.ok && r.erro) showToast?.(r.erro, 'error');
+  };
+
+  // ==================================================================
+  // BLOCO 82: COMPROVANTE 80mm — imprime na térmica a linha digitável
+  // com código de barras + QR do PIX (o boleto oficial continua sendo
+  // o PDF do Inter p/ WhatsApp). Fonte: dados já carregados no card.
+  // ==================================================================
+  const handleImprimirComprovante = async () => {
+    if (busy || !boleto) return;
+    setBusy(true);
+    try {
+      const texto = comprovanteBoletoTexto({
+        vendaRef: saleId.slice(0, 8).toUpperCase(),
+        pagadorNome: clienteNome,
+        pagadorDoc: clienteDoc,
+        valor: boleto.valor,
+        vencimento: boleto.vencimento,
+        status: boleto.status,
+        linhaDigitavel: boleto.linhaDigitavel,
+        codigoBarras: boleto.codigoBarras,
+        pixCopiaECola: boleto.pixCopiaECola,
+      });
+      const ok = await bluetoothPrinter.print(texto, '80MM', { skipConfirm: true });
+      if (ok) showToast?.('Comprovante enviado à impressora!', 'success');
+      else showToast?.('Impressão não realizada — conecte a impressora.', 'error');
+    } catch (e: any) {
+      const msg = e?.message || '';
+      if (msg === 'BLUETOOTH_NAO_SUPORTADO') showToast?.('Bluetooth não disponível neste aparelho (use o Chrome do Android).', 'error');
+      else showToast?.(`Erro na impressão: ${msg}`, 'error');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const handleCopiarTexto = async (txt: string, rotulo: string) => {
@@ -243,6 +278,14 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
                 <i className="fa-brands fa-whatsapp mr-1"></i> Enviar
               </button>
             </div>
+          )}
+          {/* BLOCO 82: comprovante na térmica 80mm (linha digitável + código de barras + QR PIX) */}
+          {['A_RECEBER', 'ATRASADO', 'RECEBIDO', 'MARCADO_RECEBIDO'].includes(boleto.status) && (boleto.linhaDigitavel || boleto.pixCopiaECola) && (
+            <button onClick={handleImprimirComprovante} disabled={busy}
+              className="block w-full bg-blue-600 text-white font-black py-2.5 rounded-xl text-[9px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
+              <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-print'} mr-1`}></i>
+              Imprimir comprovante (80mm)
+            </button>
           )}
           {form && (
             <div className="space-y-2 bg-white/70 rounded-xl p-2.5">

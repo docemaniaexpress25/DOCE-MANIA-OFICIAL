@@ -48,6 +48,24 @@ Docs oficiais: https://developers.inter.co/references/cobranca-bolepix
 
 Depois de salvar: **Redeploy** do projeto.
 
+> **BLOCO 85 (nov/2026) — "pode ser o env na Vercel?": agora o app DIZ.**
+> O card do boleto mostra um aviso âmbar "credenciais do Inter ausentes no
+> servidor" quando falta env (GET `/api/boletos?saleId=...` devolve
+> `inter.configurado/ambiente`). Sem env, o botão Gerar avisa na hora em vez
+> de falhar depois.
+>
+> **Diagnóstico da produção (nov/2026):** a única tentativa real de boleto
+> (venda `2466...` de 07/10, cliente "Missioneiro") chegou ao Inter e foi
+> recusada com a mensagem genérica — o cliente não tem CNPJ nem CEP
+> cadastrados. Com o código atual isso vira aviso claro ANTES de chamar o
+> Inter ("Boleto precisa de CPF/CNPJ..." / "...precisa do CEP (8 dígitos)").
+> O Inter autenticou bem (OAuth+mTLS OK) → env da Vercel estava funcionando
+> nesse dia. O botão "Imprimir comprovante (80mm)" só aparece DEPOIS que o
+> boleto existe (`A_RECEBER`+) — por isso nunca foi visto imprimindo.
+> Corrigidos 3 bugs do comprovante 80mm: CODE128 sem comprimento (engolia o
+> fim do papel), QR com módulo fixo (estourava 72mm com PIX longo) e PIX
+> truncado a 200 caracteres (QR do PIX não imprimia).
+
 ### 3. Supabase — rode o SQL do Bloco 25 (SQL Editor)
 
 ```sql
@@ -61,6 +79,7 @@ Cria as colunas `sales.inter_boleto_*` e `sales.nota_chave` (chave de acesso da 
 1. Faça uma venda (ou use uma com saldo em aberto) → Cupom → **Gerar Boleto**.
 2. Confirme vencimento/valor → o card passa a `BOLETO A RECEBER` com linha digitável + PIX.
 3. Toque em **PDF** (abre o boleto) e **Enviar** (WhatsApp com linha digitável e PIX).
+4. **Imprimir comprovante (80mm)**: térmica imprime linha digitável + código de barras + QR do PIX (o boleto oficial segue sendo o PDF do Inter).
 
 ## Custos/rates (API Inter)
 

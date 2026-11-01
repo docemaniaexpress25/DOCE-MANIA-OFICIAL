@@ -6,6 +6,7 @@ import { isFocusConfigured, consultarNota } from '@/lib/focusNfe';
 import { validaCpfCnpj, mascaraCpfCnpj } from '@/lib/validaDoc';
 import {
   isInterConfigured,
+  getInterConfig,
   emitirCobranca,
   recuperarCobranca,
   recuperarPdf,
@@ -102,7 +103,13 @@ export async function GET(req: NextRequest) {
   if (session.perfil !== 'ADMIN' && session.sub !== sale.vendedor_id) {
     return BAD(403, 'Voce so pode ver o boleto das suas proprias vendas.');
   }
-  return NextResponse.json({ ok: true, boleto: cobrancaPublica(sale as Record<string, unknown>) });
+  // BLOCO 85: status das credenciais Inter visivel no app — o dono para de
+  // adivinhar "pode ser o env na vercel": o card AVISA quando falta env.
+  return NextResponse.json({
+    ok: true,
+    boleto: cobrancaPublica(sale as Record<string, unknown>),
+    inter: { configurado: isInterConfigured(), ambiente: getInterConfig().ambiente },
+  });
 }
 
 export async function POST(req: NextRequest) {

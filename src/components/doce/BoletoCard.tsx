@@ -37,6 +37,11 @@ interface BoletoCardProps {
   abertoInicial?: boolean;
 }
 
+interface InterStatus {
+  configurado: boolean;
+  ambiente: string;
+}
+
 const dataBR = (iso?: string) => {
   if (!iso || !/^\d{4}-\d{2}-\d{2}/.test(iso)) return iso || '';
   const [a, m, d] = iso.slice(0, 10).split('-');
@@ -46,6 +51,7 @@ const dataBR = (iso?: string) => {
 const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, notaStatus, notaNumero, clienteDoc, clienteCep, clienteTelefone, clienteNome, showToast, abertoInicial }) => {
   const [boleto, setBoleto] = useState<BoletoInfo | null>(null);
   const [indisponivel, setIndisponivel] = useState(false);
+  const [inter, setInter] = useState<InterStatus | null>(null); // BLOCO 85: env do Inter visivel
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState(false);
   // BLOCO 67: card DOBRAVEL — a linha de status e sempre visivel (1 linha),
@@ -66,6 +72,7 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
       if (!vivo) return;
       if (!r.ok) { setIndisponivel(true); return; } // SQL/Inter nao configurado: esconde a secao
       setBoleto(r.boleto || null);
+      setInter(r.inter || null);
       if (r.boleto?.status === 'NAO_GERADO') {
         const d = new Date(Date.now() + 7 * 24 * 3600 * 1000);
         setVenc(new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d));
@@ -78,6 +85,12 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
 
   const handleGerar = async () => {
     if (busy || !saleId) return;
+    // BLOCO 85: sem env do Inter o clique so frustra — avisa na hora
+    if (inter && !inter.configurado) {
+      setErroLocal('Boleto temporariamente indisponível: as credenciais do Inter não estão configuradas no servidor (env da Vercel). Avise o admin para definir INTER_CLIENT_ID, INTER_CLIENT_SECRET e o certificado.');
+      showToast?.('Inter não configurado no servidor (env Vercel).', 'error');
+      return;
+    }
     setErroLocal('');
     // Validacao local (evita a mensagem generica do Inter e poupa a chamada):
     const docFinal = doc.replace(/\D/g, '') || (clienteDoc || '').replace(/\D/g, '');
@@ -231,6 +244,14 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
       </button>
       {expandido && (
         <div className="px-3 pb-3 space-y-2">
+          {/* BLOCO 85: env do Inter faltando no servidor — aviso claro no lugar
+              de falha generica ao gerar (o dono suspeitava "env na vercel") */}
+          {inter && !inter.configurado && (
+            <p className="text-[9px] leading-snug font-bold bg-amber-50 text-amber-800 border border-amber-200 rounded-lg px-2 py-1.5">
+              <i className="fa-solid fa-plug-circle-xmark mr-1"></i>
+              Boleto temporariamente indisponível: credenciais do Inter ausentes no servidor. O admin precisa definir INTER_CLIENT_ID, INTER_CLIENT_SECRET e o certificado (mTLS) nas variáveis da Vercel.
+            </p>
+          )}
           {['A_RECEBER', 'ATRASADO'].includes(boleto.status) && (
             <button onClick={handleConsultar} disabled={busy} className="text-[9px] font-black underline disabled:opacity-50">
               Atualizar situação no Inter

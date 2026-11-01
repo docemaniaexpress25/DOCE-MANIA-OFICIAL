@@ -28,7 +28,28 @@ export interface NotaInfo {
   emitente?: NotaEmitente;   // razao/CNPJ/IE reais da SEFAZ
 }
 
+export interface FocusStatusInfo {
+  configurado: boolean;      // BLOCO 85: env FOCUS_NFE_TOKEN presente no servidor
+  ambiente: string;          // 'homologacao' | 'producao'
+  emitenteCnpj: boolean;     // dados do emitente configurados (NFC-e exige)
+}
+
 export const notaService = {
+  /** BLOCO 85: status da integracao Focus + nota da venda (leitura barata). */
+  async statusIntegracao(saleId: string): Promise<{ ok: boolean; focus?: FocusStatusInfo; nota?: NotaInfo | null; erro?: string }> {
+    try {
+      const res = await fetch(`/api/notas?saleId=${encodeURIComponent(saleId)}`, {
+        method: 'GET',
+        headers: { ...authHeaders() },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}` };
+      return { ok: true, focus: data.focus, nota: data.nota };
+    } catch (e: unknown) {
+      return { ok: false, erro: e instanceof Error ? e.message : 'Falha de conexao' };
+    }
+  },
+
   /**
    * Emite a nota da venda.
    * - Sem tipo: automatico (CNPJ valido -> NFe, senao NFC-e).

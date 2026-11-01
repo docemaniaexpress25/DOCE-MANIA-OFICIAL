@@ -28,9 +28,14 @@ export interface GerarBoletoParams {
   cepManual?: string;        // CEP informado na tela quando o cadastro nao tem (Inter exige)
 }
 
+export interface InterStatusInfo {
+  configurado: boolean;      // BLOCO 85: credenciais Inter presentes no servidor
+  ambiente: string;          // 'producao' | 'sandbox'
+}
+
 export const boletoService = {
   /** Estado atual do boleto da venda (leitura barata). */
-  async status(saleId: string): Promise<{ ok: boolean; boleto?: BoletoInfo; erro?: string }> {
+  async status(saleId: string): Promise<{ ok: boolean; boleto?: BoletoInfo; inter?: InterStatusInfo; erro?: string }> {
     try {
       const res = await fetch(`/api/boletos?saleId=${encodeURIComponent(saleId)}`, {
         method: 'GET',
@@ -38,7 +43,7 @@ export const boletoService = {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}` };
-      return { ok: true, boleto: data.boleto };
+      return { ok: true, boleto: data.boleto, inter: data.inter };
     } catch (e: unknown) {
       return { ok: false, erro: e instanceof Error ? e.message : 'Falha de conexao' };
     }

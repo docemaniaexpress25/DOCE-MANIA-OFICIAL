@@ -99,15 +99,20 @@ const escpos = {
   // ==========================================================
   // BLOCO 82: QR CODE (model 2, nivel M) — GS ( k
   // Usado no mini DANFE NFC-e (consulta SEFAZ) e no PIX do boleto.
+  // BLOCO 85: tamanho do modulo DINAMICO — PIX copia-e-cola tem
+  // 250-400 caracteres (QR versao 23-29) e com modulo fixo 6 o
+  // QR passa dos 576 dots (72mm) do papel 80mm (sai cortado ou o
+  // firmware recusa). Regra: (modulos+8) * tamanho <= 576.
   // ==========================================================
   qr(data: string): Uint8Array {
     // conteudo de QR e sempre ASCII (URL da SEFAZ / chave / copia-e-cola)
     const bytes = new TextEncoder().encode(data.slice(0, 512));
+    const modulo = bytes.length <= 100 ? 8 : bytes.length <= 250 ? 6 : bytes.length <= 480 ? 5 : 4;
     const parts: Uint8Array[] = [
       // function 165: seleciona modelo 2
       new Uint8Array([GS, 0x28, 0x6B, 0x04, 0x00, 0x31, 0x41, 0x32, 0x00]),
-      // function 167: tamanho do modulo (6 dots — legivel em 80mm)
-      new Uint8Array([GS, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x43, 0x06]),
+      // function 167: tamanho do modulo (dinamico pelo conteudo)
+      new Uint8Array([GS, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x43, modulo]),
       // function 169: correcao de erro nivel M
       new Uint8Array([GS, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x45, 0x31]),
     ];
@@ -125,18 +130,22 @@ const escpos = {
   // Usado na chave de acesso de 44 digitos do DANFE e no
   // codigo de barras do boleto. Largura 1 dot (44 digitos
   // subset B cabem nos 72mm do papel 80mm).
+  // BLOCO 85 (fix): o comando GS k com m=73 usa o formato
+  // NOVO (GS k 73 n d1...dn, n = comprimento em bytes) — o
+  // codigo mandava dados + NUL (formato antigo do m=0..6) e a
+  // impressora lia '{' (0x7B=123) como comprimento, engolindo
+  // o resto do buffer (comprovante saia corrompido/sem corte).
   // ==========================================================
   barcode128(data: string): Uint8Array {
     const payload = '{B' + data.replace(/[^0-9A-Za-z]/g, '');
     const bytes = new TextEncoder().encode(payload);
-    // GS w 1 (largura) + GS h 80 (altura) + GS H 0 (sem HRI) + GS k 73 dados NUL
+    // GS w 1 (largura) + GS h 80 (altura) + GS H 0 (sem HRI) + GS k 73 n "{B"+dados
     return this._concat([
       new Uint8Array([GS, 0x77, 0x01]),
       new Uint8Array([GS, 0x68, 0x50]),
       new Uint8Array([GS, 0x48, 0x00]),
-      new Uint8Array([GS, 0x6B, 0x49]),
+      new Uint8Array([GS, 0x6B, 0x49, bytes.length]),
       bytes,
-      new Uint8Array([0x00]),
     ]);
   },
 };

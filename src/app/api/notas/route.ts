@@ -10,25 +10,39 @@ import {
   cancelarNota,
   interpretarResultado,
   montarPayloadNfe,
+  montarPayloadNfce,
+  tpagDeMetodo,
   refForSale,
   nextTentativa,
   validaCpfCnpj,
   numeroDoEndereco,
   FocusDoc,
+  FocusDestinatarioV2,
+  FocusFormaPagamento,
 } from '@/lib/focusNfe';
 
 /**
  * NOTAS FISCAIS (Bloco 10) — emissao de NF-e / NFC-e na venda de pronta entrega.
  *
+ * BLOCO 85: payload atualizado para a API Focus v2.0 (formato "flat" da
+ * referencia oficial doc.focusnfe.com.br — ago/2026). Mudancas que importam:
+ * - destinatario RASO (cnpj_destinatario, nome_destinatario...), sem objeto cliente
+ * - pagamento: PIX = tPag 17 (16 e deposito bancario!)
+ * - NFC-e: data_emissao SEMPRE "agora" (SEFAZ recusa dhEmi > 5 min)
+ * - NF-e: emissao no momento em que o usuario "bate" a nota (data de emissao
+ *   real), referencia da venda vai nas informacoes adicionais
+ *
  * POST /api/notas   { acao: 'EMITIR', saleId, tipo?: 'NFE'|'NFCE' }
  *                   { acao: 'CONSULTAR', saleId }
  *                   { acao: 'CANCELAR', saleId, justificativa }   [ADMIN]
+ * GET  /api/notas?saleId=...  -> status da integracao Focus + nota da venda
+ *                                (sem chamada externa; usado pelo Cupom para
+ *                                avisar quando o env FOCUS_NFE_TOKEN falta)
  *
  * Regras:
  * - Vendedor so mexe nas PROPRIAS vendas; admin em qualquer uma.
  * - Cliente com CNPJ valido -> NF-e (modelo 55). Consumidor final -> NFC-e.
- * - NF-e exige cadastro fiscal completo (razao, endereco, numero, bairro,
- *   municipio, UF). Rejeicao 422 orienta completar o cadastro.
+ * - NF-e exige cadastro minimo (CNPJ + razao — Bloco 77, regra do dono).
  * - Se as colunas do Bloco 10 ainda nao existirem no Supabase, responde 503
  *   com instrucao clara (probe serverSchema, padrao do projeto).
  */
@@ -65,6 +79,39 @@ function notaPublica(s: Record<string, unknown>): NotaPublica {
   };
 }
 
+const COLS_NOTA = 'id, vendedor_id, client_id, valor_total, metodo_pagamento, detalhe_pagamento, status_pagamento, data_venda, nota_status, nota_tipo, nota_numero, nota_ref, nota_pdf_url, nota_xml_url, nota_erro';
+
+export async function GET(req: NextRequest) {
+  const bridged = await devBridge(req);
+  if (bridged) return bridged;
+  const session = sessionFromRequest(req);
+  if (!session) return BAD(401, 'Sessao expirada. Faca login novamente.');
+
+  const saleId = req.nextUrl.searchParams.get('saleId') || '';
+  if (!saleId) return BAD(400, 'Parametro ausente (saleId).');
+
+  // Status da integracao (sem tocar a Focus) — o Cupom usa para avisar
+  // quando o env da Vercel esta faltando em vez de erro generico no clique.
+  const cfg = getFocusConfig();
+  const focus = {
+    configurado: isFocusConfigured(),
+    ambiente: cfg.ambiente,
+    emitenteCnpj: !!cfg.cnpj,
+  };
+
+  if (!(await hasNotaColumns())) {
+    return NextResponse.json({ ok: true, focus, nota: null });
+  }
+
+  const db = getServiceClient();
+  const { data: sale, error } = await db.from('sales').select(COLS_NOTA).eq('id', saleId).single();
+  if (error || !sale) return BAD(404, 'Venda nao encontrada.');
+  if (session.perfil !== 'ADMIN' && session.sub !== sale.vendedor_id) {
+    return BAD(403, 'Voce so pode ver a nota das suas proprias vendas.');
+  }
+  return NextResponse.json({ ok: true, focus, nota: notaPublica(sale as Record<string, unknown>) });
+}
+
 export async function POST(req: NextRequest) {
   const bridged = await devBridge(req);
   if (bridged) return bridged;
@@ -85,7 +132,7 @@ export async function POST(req: NextRequest) {
   // Carrega a venda e valida permissao
   const { data: sale, error: saleErr } = await db
     .from('sales')
-    .select('id, vendedor_id, client_id, valor_total, metodo_pagamento, detalhe_pagamento, status_pagamento, data_venda, nota_status, nota_tipo, nota_numero, nota_ref, nota_pdf_url, nota_xml_url, nota_erro')
+    .select(COLS_NOTA)
     .eq('id', saleId)
     .single();
 
@@ -186,15 +233,12 @@ export async function POST(req: NextRequest) {
   const prods = (prodsData || []) as unknown as Record<string, unknown>[];
   const prodMap = new Map(prods.map(p => [p.id as string, p]));
 
-  const metodos: Record<string, string> = { DINHEIRO: '01', PIX: '16', A_PRAZO: '15' };
-
   const payloadItems = items.map((i: Record<string, unknown>) => {
     const p = (prodMap.get(i.produto_id as string) || {}) as Record<string, unknown>;
     return {
       codigo: String(p.id || '').slice(0, 8),
       descricao: String(p.nome || 'Produto'),
       ncm: fiscalCols ? (p.ncm as string) || undefined : undefined,
-      cest: fiscalCols ? (p.cest as string) || undefined : undefined,
       cfop: fiscalCols ? (p.cfop as string) || undefined : undefined,
       ean: fiscalCols ? (p.ean as string) || undefined : undefined,
       unidade: fiscalCols ? ((p.unidade as string) || 'UN') : 'UN',
@@ -206,14 +250,31 @@ export async function POST(req: NextRequest) {
 
   const valorTotal = Number(sale.valor_total) || 0;
 
-  // Cliente para a nota (NF-e exige cadastro completo; NFC-e pode ser anonima)
+  // Pagamento v2.0 — PIX = tPag 17 (armadilha: 16 e deposito bancario)
+  const tp = tpagDeMetodo(sale.metodo_pagamento as string);
+  const pagamento: FocusFormaPagamento = {
+    indicador_pagamento: tp.indicador,
+    forma_pagamento: tp.forma,
+    valor_pagamento: Math.round(valorTotal * 100) / 100,
+  };
+
   const uf = String(client.endereco_uf || '').toUpperCase().trim();
   const municipio = String(client.endereco_municipio || '').trim();
   const logradouro = String(client.endereco || '').trim();
   const bairro = String(client.bairro || '').trim();
   const razao = String(client.razao_social || client.nome_fantasia || '').trim();
 
-  let clientePayload: Record<string, unknown> | undefined;
+  // Data de emissao: AGORA (NFC-e recusa dhEmi com +5 min; a NF-e "batida"
+  // pelo botao tambem emite na hora — a data da venda vai nas informacoes)
+  const dataEmissao = new Date();
+  const vendaCurta = String(saleId).slice(0, 8).toUpperCase();
+  const dataVendaTxt = sale.data_venda
+    ? new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date(sale.data_venda as string))
+    : '';
+  const informacoes = `Venda ${vendaCurta}${dataVendaTxt ? ` de ${dataVendaTxt}` : ''} registrada pelo app Doce Mania. NF-e emitida em ${carimbo()}.`;
+
+  // Destinatario + payload por tipo de documento
+  let payload;
   if (doc === 'nfe') {
     // BLOCO 77 (regra do dono): a NF-e NAO e batida por este app (o dono
     // emite no sistema externo dele) — aqui o app so CONTROLA a venda como
@@ -226,82 +287,80 @@ export async function POST(req: NextRequest) {
     if (faltando.length > 0) {
       return BAD(422, `Cadastro incompleto para NF-e. Complete no cadastro do cliente: ${faltando.join(', ')}.`);
     }
-    const ie = String(client.inscricao_estadual || '').trim();
-    const numeroEndereco = numeroDoEndereco(client.endereco_numero as string, logradouro);
-    clientePayload = {
+    const destinatario: FocusDestinatarioV2 = {
+      nome: razao,
       cpf_cnpj: String(client.cnpj).replace(/\D/g, ''),
-      razao_social: razao,
-      inscricao_estadual: ie || 'ISENTO',
-      endereco_uf: uf || undefined,
-      endereco_municipio: municipio || undefined,
-      endereco_logradouro: logradouro || undefined,
-      endereco_numero: numeroEndereco || undefined,
-      endereco_bairro: bairro || undefined,
-      endereco_cep: String(client.endereco_cep || '').replace(/\D/g, '') || undefined,
-      telefone: String(client.telefone || '').replace(/\D/g, '') || undefined,
+      inscricao_estadual: String(client.inscricao_estadual || '').trim() || undefined,
+      logradouro: logradouro || undefined,
+      numero: numeroDoEndereco(client.endereco_numero as string, logradouro),
+      bairro: bairro || undefined,
+      municipio: municipio || undefined,
+      uf: uf || undefined,
+      cep: String(client.endereco_cep || '').replace(/\D/g, '') || undefined,
       email: String((client as Record<string, unknown>).email || '').trim() || undefined,
+      telefone: String(client.telefone || '').replace(/\D/g, '') || undefined,
     };
+    payload = montarPayloadNfe({
+      dataEmissao,
+      natureza: cfg.natureza,
+      ufEmitente: cfg.ufEmitente,
+      destinatario,
+      itens: payloadItems,
+      valorTotalVenda: valorTotal,
+      pagamento,
+      informacoesAdicionais: informacoes,
+    });
   } else {
     // NFC-e (Bloco 12): escolha explicita do vendedor na tela de venda
     // - CPF informado (e valido): NFC-e identificando o consumidor
     // - Sem CPF: NFC-e ANONIMA (CONSUMIDOR NAO IDENTIFICADO)
     const cpfNaNota = String(body.cpf || '').replace(/\D/g, '');
+    let destinatario: FocusDestinatarioV2 | undefined;
     if (cpfNaNota) {
       if (validaCpfCnpj(cpfNaNota) !== 'CPF') {
         return BAD(422, 'CPF invalido (digitos verificadores nao conferem). Corrija o CPF ou deixe vazio para NFC-e sem identificacao.');
       }
       const nomeConsumidor = String(client.nome || client.nome_fantasia || '').trim();
-      clientePayload = {
+      destinatario = {
+        nome: (nomeConsumidor || 'CONSUMIDOR').slice(0, 60),
         cpf_cnpj: cpfNaNota,
-        razao_social: (nomeConsumidor || 'CONSUMIDOR').slice(0, 60),
-        endereco_uf: uf || cfg.ufEmitente,
-        endereco_municipio: municipio || '-',
-        endereco_logradouro: logradouro || '-',
-        endereco_numero: numeroDoEndereco(client.endereco_numero as string, logradouro),
-        endereco_bairro: bairro || '-',
+        logradouro: logradouro || undefined,
+        numero: numeroDoEndereco(client.endereco_numero as string, logradouro),
+        bairro: bairro || undefined,
+        municipio: municipio || undefined,
+        uf: uf || cfg.ufEmitente,
       };
     } else if (razao && tipoEscolhido !== 'NFCE') {
       // Fluxo automatico (sem escolha): NFC-e identificada pelo cadastro (melhor para o cliente)
-      clientePayload = {
-        razao_social: razao.slice(0, 60),
-        endereco_uf: uf || cfg.ufEmitente,
-        endereco_municipio: municipio || '-',
-        endereco_logradouro: logradouro || '-',
-        endereco_numero: numeroDoEndereco(client.endereco_numero as string, logradouro),
-        endereco_bairro: bairro || '-',
+      destinatario = {
+        nome: razao.slice(0, 60),
+        cpf_cnpj: cpfCnpj ? String(client.cnpj).replace(/\D/g, '') : undefined,
+        logradouro: logradouro || undefined,
+        numero: numeroDoEndereco(client.endereco_numero as string, logradouro),
+        bairro: bairro || undefined,
+        municipio: municipio || undefined,
+        uf: uf || cfg.ufEmitente,
       };
-      if (cpfCnpj) clientePayload.cpf_cnpj = String(client.cnpj).replace(/\D/g, '');
     }
     // tipoEscolhido NFCE sem CPF (ou sem razao): fica anonimo de proposito
+    payload = montarPayloadNfce({
+      dataEmissao,
+      natureza: undefined, // v2.0 NFC-e tem padrao proprio ("VENDA AO CONSUMIDOR")
+      ufEmitente: cfg.ufEmitente,
+      destinatario,
+      itens: payloadItems,
+      valorTotalVenda: valorTotal,
+      pagamento,
+      informacoesAdicionais: informacoes,
+    });
   }
 
   const ref = refForSale(saleId, nextTentativa(sale.nota_ref as string));
 
-  const payload = montarPayloadNfe({
-    dataVenda: new Date(sale.data_venda || Date.now()),
-    natureza: cfg.natureza,
-    ufEmitente: cfg.ufEmitente,
-    cliente: (clientePayload || {
-      razao_social: 'CONSUMIDOR NAO IDENTIFICADO',
-      endereco_uf: cfg.ufEmitente,
-      endereco_municipio: '-',
-      endereco_logradouro: '-',
-      endereco_numero: 'S/N',
-      endereco_bairro: '-',
-    }) as unknown as Parameters<typeof montarPayloadNfe>[0]['cliente'],
-    itens: payloadItems,
-    valorTotalVenda: valorTotal,
-    pagamento: {
-      forma_pagamento: metodos[sale.metodo_pagamento as string] || '01',
-      valor_pagamento: valorTotal.toFixed(2),
-    },
-    informacoesAdicionais: `Venda ${saleId.slice(0, 8).toUpperCase()} registrada pelo app Doce Mania em ${carimbo()}.`,
-  });
-
   // Marca EMITINDO antes de chamar a Focus (rastreabilidade se cair a conexao)
   await atualizarNota(saleId, { nota_status: 'EMITINDO', nota_tipo: doc === 'nfce' ? 'NFCE' : 'NFE', nota_ref: ref, nota_erro: null });
 
-  const r = await emitirNfe(doc, ref, payload as never);
+  const r = await emitirNfe(doc, ref, payload);
   if (!r.ok || !r.data || 'erro' in r.data) {
     const erro = (r.data as { erro?: string }).erro || `HTTP ${r.status}`;
     await atualizarNota(saleId, { nota_status: 'REJEITADA', nota_erro: erro });

@@ -57,7 +57,15 @@ create index if not exists idx_sales_nota_status on sales (nota_status) where no
 1. Compre o **certificado digital e-CNPJ A1** (~R$ 150–350/ano — Valid, Certisign, Serasa, Soluti).
 2. Faça o **credenciamento na SEFAZ-RS** para NF-e/NFC-e (gratuito, online; homologação → produção).
 
-### 4. Focus NFe
+### 4. Focus NFe (API v2.0 — Bloco 85)
+
+> ⚠️ **BLOCO 85 (nov/2026): a Focus publicou a API v2.0** (doc.focusnfe.com.br,
+> atualizada ago/2026) com payload "flat" novo — destinatario RASO
+> (`cnpj_destinatario`/`nome_destinatario`), items com números, resposta com
+> `chave_nfe`/`caminho_danfe`/`qrcode_url`. O cliente do app
+> (`src/lib/focusNfe.ts`) foi reescrito para o formato novo e testado
+> (payloads byte-a-byte). Correção importante: **PIX = tPag 17** (16 é
+> Depósito Bancário!).
 
 1. Crie a conta em focusnfe.com.br, cadastre a empresa (CNPJ, IE, endereço) e **suba o certificado A1** no painel.
 2. Copie o **token de homologação** (e depois o de produção).
@@ -67,8 +75,18 @@ create index if not exists idx_sales_nota_status on sales (nota_status) where no
 |---|---|
 | `FOCUS_NFE_TOKEN` | token da Focus (homologação primeiro) |
 | `FOCUS_NFE_AMBIENTE` | `homologacao` → depois `producao` |
+| `FOCUS_NFE_CNPJ` | CNPJ do emitente (só dígitos) — v2.0 pede no payload |
+| `FOCUS_NFE_IE` | Inscrição Estadual do emitente |
+| `FOCUS_NFE_RAZAO` | Razão social |
+| `FOCUS_NFE_FANTASIA` | Nome fantasia |
+| `FOCUS_NFE_LOGRADOURO` / `_NUMERO` / `_BAIRRO` / `_MUNICIPIO` / `_CEP` | endereço do emitente |
+| `FOCUS_NFE_REGIME` | (opcional, default `1` = Simples Nacional) |
 | `FOCUS_NFE_NATUREZA` | (opcional, default `Venda de mercadoria`) |
 | `FOCUS_NFE_UF_EMITENTE` | (opcional, default `RS`) |
+
+> **Como saber se o env está certo sem chutar:** o Cupom da venda mostra um
+> aviso âmbar "token da Focus NFe ausente no servidor" quando falta env
+> (GET `/api/notas?saleId=...` devolve `focus.configurado/ambiente`).
 
 ### 5. Teste e produção
 

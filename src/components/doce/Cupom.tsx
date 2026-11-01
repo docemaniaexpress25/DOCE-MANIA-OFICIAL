@@ -5,7 +5,7 @@ import { Sale, Client, Product } from '@/lib/types';
 import { gerarCupomTexto } from '@/lib/cupomTexto';
 import { danfeMiniTexto } from '@/lib/danfeTexto';
 import { bluetoothPrinter, PrintJob } from '@/services/bluetoothPrinterService';
-import { notaService, NotaInfo } from '@/services/notaService';
+import { notaService, NotaInfo, FocusStatusInfo } from '@/services/notaService';
 import BoletoCard from '@/components/doce/BoletoCard';
 import ConfirmModal from '@/components/doce/ConfirmModal';
 import PrinterSelector from '@/components/doce/PrinterSelector';
@@ -48,6 +48,9 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
     chave: sale.notaChave,
   }));
   const [notaBusy, setNotaBusy] = useState(false);
+  // BLOCO 85: status da integracao Focus (env da Vercel) — o painel AVISA
+  // quando o token nao esta configurado em vez de falhar generico no clique.
+  const [focus, setFocus] = useState<FocusStatusInfo | null>(null);
   // BLOCO 67: bloco da NF-e DOBRAVEL (linha de status sempre visivel, acoes
   // atras do toque) — junto com o boleto, empurrava o cupom pra fora da tela.
   // Rejeitada abre expandido de cara (o erro precisa ser lido).
@@ -55,6 +58,13 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
 
   const handleEmitirNota = async () => {
     if (notaBusy || !isVendaSalva) return;
+    // BLOCO 85: sem token Focus o clique so frustra — avisa com o que falta
+    if (focus && !focus.configurado) {
+      const msg = 'NF-e temporariamente indisponível: o token da Focus NFe não está configurado no servidor (env FOCUS_NFE_TOKEN na Vercel). Avise o admin.';
+      showToast?.(msg, 'error');
+      setModal({ title: 'Nota Fiscal', message: msg, icon: 'fa-solid fa-triangle-exclamation', type: 'danger', onConfirm: () => setModal(null) });
+      return;
+    }
     setNotaBusy(true);
     const r = await notaService.emitir(sale.id);
     setNotaBusy(false);
@@ -70,6 +80,20 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
       showToast?.(r.nota.erro || 'Nota rejeitada pela SEFAZ', 'error');
     }
   };
+
+  // BLOCO 85: busca o status da integracao (barato, sem tocar a Focus) e
+  // sincroniza a nota com o banco (ex.: venda registrada como NF no wizard)
+  useEffect(() => {
+    if (!isVendaSalva || !sale.id) return;
+    let vivo = true;
+    (async () => {
+      const r = await notaService.statusIntegracao(String(sale.id));
+      if (!vivo) return;
+      if (r.ok && r.focus) setFocus(r.focus);
+      if (r.ok && r.nota) setNota(n => ({ ...n, ...r.nota! }));
+    })();
+    return () => { vivo = false; };
+  }, [isVendaSalva, sale.id]);
 
   const handleConsultarNota = async () => {
     if (notaBusy || !isVendaSalva) return;
@@ -489,6 +513,14 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
               </button>
               {notaAberta && (
                 <div className="px-3 pb-3 space-y-2">
+                  {/* BLOCO 85: env Focus faltando no servidor — aviso claro no
+                      lugar de falha generica ao emitir */}
+                  {focus && !focus.configurado && (
+                    <p className="text-[9px] leading-snug font-bold bg-amber-50 text-amber-800 border border-amber-200 rounded-lg px-2 py-1.5">
+                      <i className="fa-solid fa-plug-circle-xmark mr-1"></i>
+                      NF-e temporariamente indisponível: token da Focus NFe ausente no servidor. O admin precisa definir FOCUS_NFE_TOKEN (e FOCUS_NFE_AMBIENTE) nas variáveis da Vercel.
+                    </p>
+                  )}
                   {nota.status === 'EMITINDO' && (
                     <button onClick={handleConsultarNota} disabled={notaBusy} className="text-[9px] font-black underline disabled:opacity-50">
                       Atualizar situação na SEFAZ

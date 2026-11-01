@@ -138,7 +138,10 @@ export function danfeMiniTexto(o: DanfeMiniInput): string {
   const emitCnpj = (o.emitente?.cnpj || info?.cnpj || '').replace(/\D/g, '');
 
   const L: string[] = [];
-  const push = (s: string) => L.push(s.substring(0, 200));
+  // BLOCO 85: marcadores [[QR:...]] / [[BARCODE:...]] NAO podem ser truncados
+  // (o QR da SEFAZ é uma URL longa — cortar quebrava o marcador e o QR
+  // simplesmente nao imprimia)
+  const push = (s: string) => L.push(/^\[\[(QR|BARCODE):/.test(s) ? s : s.substring(0, 200));
 
   // ---- Cabecalho ----
   push('*'.repeat(COLS));
@@ -251,7 +254,11 @@ const STATUS_LABEL: Record<string, string> = {
 
 export function comprovanteBoletoTexto(o: BoletoComprovanteInput): string {
   const L: string[] = [];
-  const push = (s: string) => L.push(s.substring(0, 200));
+  // BLOCO 85: marcadores de QR/barras NAO podem ser truncados (o PIX
+  // copia-e-cola tem 300-400 caracteres — cortar quebrava o marcador [[QR:]]
+  // e o QR do PIX NAO imprimia) e a linha do pix em si sai completa
+  // (a impressora quebra a linha sozinha nas 48 colunas).
+  const push = (s: string) => L.push(/^\[\[(QR|BARCODE):/.test(s) ? s : s.substring(0, 600));
 
   push('*'.repeat(COLS));
   push(ctr('COMPROVANTE - BOLETO + PIX'));

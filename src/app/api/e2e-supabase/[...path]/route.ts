@@ -353,6 +353,16 @@ async function handle(req: NextRequest, segments: string[]) {
       }
       arr.forEach((row: any) => {
         const clone = { ...row };
+        // BLOCO 87: daily_routes tem PK composta (vendedor_id, data) — o POST
+        // emula o upsert do banco real: substitui a linha do par, nao empilha
+        // duplicata (duplicata quebraria o .maybeSingle() do GET /api/daily-route).
+        if (table === 'daily_routes') {
+          const rows = tables[table];
+          const idx = rows.findIndex(r => r.vendedor_id === clone.vendedor_id && r.data === clone.data);
+          if (idx >= 0) rows[idx] = { ...rows[idx], ...clone };
+          else rows.push(clone);
+          return;
+        }
         if (!clone.id) clone.id = `${table}-novo-${Math.random().toString(36).slice(2, 8)}`;
         if (table === 'sales') {
           clone.valor_total = clone.valor_total ?? 0;

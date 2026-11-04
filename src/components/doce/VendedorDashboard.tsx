@@ -193,6 +193,26 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   useEffect(() => { saveLocalState(`v_reopened_${user.id}_${todayStr}`, reopenedClientIds); }, [reopenedClientIds, user.id, todayStr]);
   useEffect(() => { saveLocalState(`v_atendidos_${user.id}_${todayStr}`, atendidosHoje); }, [atendidosHoje, user.id, todayStr]);
 
+  // BLOCO 87 (sync entre aparelhos): o SERVIDOR e a fonte da verdade do estado
+  // pulado (o merge da rota do servidor chegou pelo Bloco 87 no doce-app).
+  // - Cliente que o SERVIDOR diz NAO estar mais pulado (reaberto em outro
+  //   aparelho da mesma conta) -> limpa o skip local (optimisticSkipped
+  //   persistido sobrevivia ao refresh e mantinha o card pulado pra sempre).
+  // - Cliente que o SERVIDOR diz estar pulado -> limpa reabertura local.
+  // Mudanca LOCAL de skip/reopen ja grava no servidor antes do proximo sync
+  // (lock de 5s), entao o efeito nunca desfaz o que o proprio aparelho fez.
+  useEffect(() => {
+    const serverSkipped = new Set(dailyRouteState?.skippedClientIds || []);
+    setOptimisticSkipped(prev => {
+      const next = prev.filter(id => serverSkipped.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+    setReopenedClientIds(prev => {
+      const next = prev.filter(id => !serverSkipped.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [dailyRouteState]);
+
   // Se o cliente selecionado nao existe mais na lista, limpa a selecao
   useEffect(() => {
     if (selectedClient && !clients.find(c => c.id === selectedClient.id)) {

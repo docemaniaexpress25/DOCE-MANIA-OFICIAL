@@ -106,25 +106,66 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Campo date invalido (use YYYY-MM-DD).' }, { status: 400 });
     }
 
-    const payload = {
-      vendedor_id: session.sub, // SEMPRE da sessao (nao do body)
-      data: date,
-      client_ids: limparIds(body?.clientIds),
-      skipped_client_ids: limparIds(body?.skippedClientIds),
-    };
+    const clientIds = limparIds(body?.clientIds);
+    const skippedClientIds = limparIds(body?.skippedClientIds);
 
     const supabase = getServiceClient();
-    const { error } = await supabase
-      .from('daily_routes')
-      .upsert(payload, { onConflict: 'vendedor_id,data' });
 
-    if (error) {
-      console.error('[api/daily-route POST] falha:', error.code, error.message);
+    // BLOCO 87 (sync entre aparelhos): update-then-insert em vez de
+    // .upsert(onConflict vendedor_id,data). O upsert via PostgREST EXIGE uma
+    // unique constraint (vendedor_id,data) na tabela — se a tabela de prod foi
+    // criada sem ela, o upsert falha (42P10) em silencio, o POST 500a e a
+    // daily_routes ficava VAZIA pra sempre (rota nunca sincronizava). Update
+    // + insert nao dependem de constraint nenhuma: funcionam em qualquer shape.
+    const { data: updRows, error: updErr } = await supabase
+      .from('daily_routes')
+      .update({ client_ids: clientIds, skipped_client_ids: skippedClientIds })
+      .eq('vendedor_id', session.sub)
+      .eq('data', date)
+      .select('vendedor_id');
+    if (updErr) {
+      console.error('[api/daily-route POST] update falhou:', updErr.code, updErr.message);
       return NextResponse.json(
-        { error: 'Falha ao salvar rota diaria.', code: error.code, detail: String(error.message || '').slice(0, 200) },
+        { error: 'Falha ao salvar rota diaria.', code: updErr.code, detail: String(updErr.message || '').slice(0, 200) },
         { status: 500 }
       );
     }
+
+    if (!updRows || updRows.length === 0) {
+      // Linha ainda nao existe hoje -> insere. Se dois aparelhos salvarem ao
+      // mesmo tempo (23505 duplicate), cai no update de novo (o outro ja criou).
+      const { error: insErr } = await supabase
+        .from('daily_routes')
+        .insert({
+          vendedor_id: session.sub, // SEMPRE da sessao (nao do body)
+          data: date,
+          client_ids: clientIds,
+          skipped_client_ids: skippedClientIds,
+        });
+      if (insErr) {
+        if (insErr.code === '23505') {
+          const { error: updErr2 } = await supabase
+            .from('daily_routes')
+            .update({ client_ids: clientIds, skipped_client_ids: skippedClientIds })
+            .eq('vendedor_id', session.sub)
+            .eq('data', date);
+          if (updErr2) {
+            console.error('[api/daily-route POST] re-update pos corrida falhou:', updErr2.code, updErr2.message);
+            return NextResponse.json(
+              { error: 'Falha ao salvar rota diaria.', code: updErr2.code, detail: String(updErr2.message || '').slice(0, 200) },
+              { status: 500 }
+            );
+          }
+        } else {
+          console.error('[api/daily-route POST] insert falhou:', insErr.code, insErr.message);
+          return NextResponse.json(
+            { error: 'Falha ao salvar rota diaria.', code: insErr.code, detail: String(insErr.message || '').slice(0, 200) },
+            { status: 500 }
+          );
+        }
+      }
+    }
+
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     console.error('[api/daily-route POST] erro:', e?.message);

@@ -346,18 +346,40 @@ const App: React.FC = () => {
     }
   }, [fetchTransactionalData]);
 
+  // BLOCO 87 (sync entre aparelhos): mescla a rota do SERVIDOR com a local.
+  // Servidor e a FONTE DA VERDADE para skippedClientIds (pulo/reabertura feita
+  // em qualquer aparelho da mesma conta propagam); clientIds e UNIAO (rota
+  // montada no servidor + o que só existe local — nunca remove).
+  const mergeDailyRouteStates = useCallback((server: DailyRouteState, prev: DailyRouteState): DailyRouteState => {
+    if (server.date !== prev.date) return prev;
+    const clientIds = [...new Set([...(server.clientIds || []), ...(prev.clientIds || [])])];
+    const skippedClientIds = [...new Set(server.skippedClientIds || [])];
+    return { date: prev.date, clientIds, skippedClientIds };
+  }, []);
+
+  // Busca a rota do dia no servidor e mescla no estado local (se mudou).
+  // Respeita o lock de 5s pos skip/reopen (nao desfaz mudanca em andamento).
+  const syncDailyRouteFromServer = useCallback(async (motivo: string) => {
+    if (!currentUser || currentUser.role !== 'VENDEDOR') return;
+    if (Date.now() < routeUpdateLockUntilRef.current) return;
+    const today = getTodayDateString();
+    try {
+      const server = await dailyRouteService.getRoute(currentUser.id, today);
+      if (!server) return; // servidor sem rota de hoje — mantem a local
+      setDailyRouteState(prev => {
+        if (prev.date !== today) return prev;
+        const merged = mergeDailyRouteStates(server, prev);
+        if (JSON.stringify(merged) === JSON.stringify(prev)) return prev; // nada mudou
+        console.log(`[ROTA] Sync de outro aparelho aplicado (${motivo}).`);
+        return merged;
+      });
+    } catch { /* offline: mantem a local */ }
+  }, [currentUser, mergeDailyRouteStates]);
+
   useEffect(() => {
     const loadRoute = async () => {
       if (currentUser && currentUser.role === 'VENDEDOR') {
         const today = getTodayDateString();
-
-        // Se ja temos rota do dia no estado (veio do localStorage) com clientes,
-        // confia nela e NAO sobrescreve com Supabase (evita race condition)
-        if (dailyRouteState.date === today && dailyRouteState.clientIds.length > 0) {
-          routeInitializedRef.current = true;
-          console.log('[ROTA] Estado local valido para hoje, pulando reload do Supabase.');
-          return;
-        }
 
         // Se estamos dentro do periodo de lock (pos skip/reopen), nao recarregar
         if (Date.now() < routeUpdateLockUntilRef.current) {
@@ -365,30 +387,46 @@ const App: React.FC = () => {
           return;
         }
 
-        const route = await dailyRouteService.getRoute(currentUser.id, today);
-        if (route) {
-          setDailyRouteState(route);
-        } else {
-          const todayDay = new Date().getDay();
-          const routeClients = clients
-            .filter(c => c.diaRoteiro === todayDay && c.ativo && c.rota === (currentUser.rota || 'ROTA_01'))
-            .sort((a, b) => (a.ordem || 0) - (b.ordem || 0))
-            .map(c => c.id);
-          
-          // Preserva qualquer skippedClientIds que ja existia no estado local
-          // (caso o save no Supabase nao tenha completado antes do refresh)
-          const existingSkipped = dailyRouteState.skippedClientIds || [];
-          const newRoute = { date: today, clientIds: routeClients, skippedClientIds: existingSkipped };
-          setDailyRouteState(newRoute);
-          await dailyRouteService.updateRoute(currentUser.id, newRoute);
+        // BLOCO 87: o servidor manda agora. Antes: se o localStorage tinha rota
+        // de hoje com clientes, ele ERA a fonte e o Supabase nunca era lido —
+        // pulo feito em outro aparelho nunca chegava (rota nao sincronizava).
+        // Agora: SEMPRE busca a rota do dia no servidor e mescla (servidor manda
+        // nos pulados; union nos clientes). O localStorage vira so cache/offline.
+        const server = await dailyRouteService.getRoute(currentUser.id, today);
+        if (server && ((server.clientIds || []).length > 0 || (server.skippedClientIds || []).length > 0)) {
+          setDailyRouteState(prev => {
+            if (prev.date !== today) return prev;
+            const merged = mergeDailyRouteStates(server, prev);
+            if (JSON.stringify(merged) === JSON.stringify(prev)) return prev;
+            console.log('[ROTA] Rota carregada do servidor (sync multi-aparelho).');
+            return merged;
+          });
+          routeInitializedRef.current = true;
+          return;
         }
+
+        // Servidor sem rota de hoje (1o acesso do dia nesta conta): monta pela
+        // diaRoteiro, mescla com o que ja existe no aparelho e SALVA no servidor
+        // — de hoje em diante qualquer aparelho logado nessa conta enxerga igual.
+        const todayDay = new Date().getDay();
+        const routeClients = clients
+          .filter(c => c.diaRoteiro === todayDay && c.ativo && c.rota === (currentUser.rota || 'ROTA_01'))
+          .sort((a, b) => (a.ordem || 0) - (b.ordem || 0))
+          .map(c => c.id);
+
+        // Preserva qualquer skippedClientIds que ja existia no estado local
+        // (caso o save no Supabase nao tenha completado antes do refresh)
+        const existingSkipped = dailyRouteState.skippedClientIds || [];
+        const newRoute = { date: today, clientIds: routeClients, skippedClientIds: existingSkipped };
+        setDailyRouteState(newRoute);
+        await dailyRouteService.updateRoute(currentUser.id, newRoute);
         routeInitializedRef.current = true;
       }
     };
     if (clients.length > 0) {
       loadRoute();
     }
-  }, [currentUser, clients.length > 0]); // muda so quando clients aparece/volta a zero, nao a cada edicao
+  }, [currentUser, clients.length > 0, mergeDailyRouteStates]); // muda so quando clients aparece/volta a zero, nao a cada edicao
 
   useEffect(() => {
     const checkDate = () => {
@@ -398,17 +436,22 @@ const App: React.FC = () => {
         routeInitializedRef.current = false;
         setDailyRouteState({ date: today, clientIds: [], skippedClientIds: [] });
         fetchCoreData();
+      } else {
+        // BLOCO 87 (sync entre aparelhos): a cada tick (30s em prod) e a cada
+        // focus da aba, puxa a rota do servidor — pulo/reabertura feita em
+        // outro aparelho da mesma conta aparece aqui em segundos.
+        void syncDailyRouteFromServer('tick');
       }
     };
 
     const interval = setInterval(checkDate, process.env.NEXT_PUBLIC_E2E_MOCK === '1' ? 30 * 60 * 1000 : 30000);
     window.addEventListener('focus', checkDate);
-    
+
     return () => {
       clearInterval(interval);
       window.removeEventListener('focus', checkDate);
     };
-  }, [dailyRouteState.date, fetchCoreData]);
+  }, [dailyRouteState.date, fetchCoreData, syncDailyRouteFromServer]);
 
   useEffect(() => {
     let timeoutId: any;

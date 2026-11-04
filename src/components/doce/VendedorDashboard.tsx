@@ -599,16 +599,43 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const rotaDeHoje = useMemo(() => {
     const clientMap = new Map((clients || []).map(c => [c.id, c]));
     const clientIds = dailyRouteState?.clientIds || [];
-    const clientsInRoute = clientIds
-      .map(id => clientMap.get(id))
-      .filter((c): c is Client => !!c && (c.ativo ?? false));
-    return clientsInRoute.sort((a, b) => {
-      const orderMap = new Map(clientOrder.map((id, idx) => [id, idx]));
+
+    // BLOCO 86 (bug do dono): "clientes nao aparecem no dia de hoje".
+    // A rota do dia era um SNAPSHOT congelado (clientIds gravados quando a
+    // rota foi montada no primeiro acesso do dia). Cliente cadastrado DEPOIS
+    // disso (novo cliente ja nasce com diaRoteiro = hoje) ou cliente com
+    // diaRoteiro alterado para hoje NUNCA entrava — so no dia seguinte,
+    // quando a rota era remontada.
+    // FIX: a rota do dia = snapshot + TODOS os clientes ativos da rota do
+    // vendedor com diaRoteiro === hoje (novos entram no fim, na ordem
+    // global). Recalcula a cada mudanca de clients (cadastro, edicao,
+    // reload) — a aba Rota do Dia passa a ser sempre completa, ao vivo.
+    const orderMap = new Map(clientOrder.map((id, idx) => [id, idx]));
+    const sortFn = (a: Client, b: Client) => {
       const idxA = orderMap.get(a.id) ?? (a.ordem || 0);
       const idxB = orderMap.get(b.id) ?? (b.ordem || 0);
       return idxA - idxB;
-    }) || []; 
-  }, [clients, dailyRouteState, clientOrder]); 
+    };
+
+    // 1. Snapshot da rota (ordem montada + clientes puxados na mao) — preservado.
+    const snapshot = clientIds
+      .map(id => clientMap.get(id))
+      .filter((c): c is Client => !!c && (c.ativo ?? false))
+      .sort(sortFn);
+
+    // 2. Clientes do dia que NAO estao no snapshot — entram automaticamente.
+    const snapshotIds = new Set(clientIds);
+    const doDia = (clients || [])
+      .filter(c =>
+        (c.ativo ?? false) &&
+        c.rota === (user.rota || 'ROTA_01') &&
+        c.diaRoteiro === diaAtual &&
+        !snapshotIds.has(c.id)
+      )
+      .sort(sortFn);
+
+    return [...snapshot, ...doDia];
+  }, [clients, dailyRouteState, clientOrder, user.rota, diaAtual]);
 
   // NOVO: Clientes filtrados pela busca
   const filteredClients = useMemo(() => {

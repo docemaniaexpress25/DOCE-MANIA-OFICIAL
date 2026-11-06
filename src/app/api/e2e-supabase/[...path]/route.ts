@@ -351,6 +351,11 @@ async function handle(req: NextRequest, segments: string[]) {
         });
         return NextResponse.json(arr, { status: 201 });
       }
+      // BLOCO 88: devolve os CLONES (com o id gerado) — antes devolvia `arr`
+      // (payload original SEM id) e o .select() do insert recebia sale.id
+      // undefined: sale_items gravava sem sale_id e o PATCH de reserva
+      // (estoque_baixado) nao encontrava a venda.
+      const clones: any[] = [];
       arr.forEach((row: any) => {
         const clone = { ...row };
         // BLOCO 87: daily_routes tem PK composta (vendedor_id, data) — o POST
@@ -392,18 +397,19 @@ async function handle(req: NextRequest, segments: string[]) {
           clone.confirmado = clone.confirmado ?? false;
         }
         tables[table].push(clone);
+        clones.push(clone);
       });
       // BLOCO 40: supabase-js .single() pede OBJETO (Accept vnd.pgrst.object).
       // O insert da pre-venda usa .select(...).single() — sem isso o client
       // recebia array e o pedido mapeava vazio (cupom com R$ 0.00).
       const wantsObject = (req.headers.get('accept') || '').includes('vnd.pgrst.object');
       if (wantsObject) {
-        return new NextResponse(JSON.stringify(arr[0] ?? null), {
+        return new NextResponse(JSON.stringify(clones[0] ?? null), {
           status: 201,
           headers: { 'Content-Type': 'application/json' },
         });
       }
-      return NextResponse.json(arr, { status: 201 });
+      return NextResponse.json(clones, { status: 201 });
     }
 
     // BLOCO 31: PATCH persistente com filtro col=eq.valor (ordem_entrega, editor...)

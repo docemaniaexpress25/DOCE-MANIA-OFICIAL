@@ -831,10 +831,27 @@ const App: React.FC = () => {
       };
       // BLOCO 13: pedido pendente — exclusao dele usa a API da fila
       pvPendentesRef.current.add(mapped.id);
-      // Aviso de estoque principal insuficiente (nao bloqueia o pedido)
+      // BLOCO 88 (RESERVA): o servidor ja subtraiu o estoque — espelha NA TELA
+      // na hora (sem esperar o refetch). O catalogo da pre-venda filtra saldo
+      // > 0: vendeu tudo, o produto some do PDV no ato — nao da pra vender
+      // 15 un com 5 em estoque.
+      try {
+        const qtdMap = new Map<string, number>();
+        for (const it of (data.itens || [])) {
+          const pid = String(it.produtoId);
+          qtdMap.set(pid, (qtdMap.get(pid) || 0) + (Number(it.quantidade) || 0));
+        }
+        if (qtdMap.size > 0) {
+          setProducts(prev => prev.map(p => {
+            const q = qtdMap.get(p.id);
+            return q ? { ...p, estoquePrincipal: (Number(p.estoquePrincipal) || 0) - q } : p;
+          }));
+        }
+      } catch { /* espelho best-effort: o refetch corrige */ }
+      // Aviso de estoque insuficiente NO ATO da reserva (nao bloqueia o pedido)
       if (Array.isArray(d.avisos) && d.avisos.length > 0) {
-        const linhas = d.avisos.map((a: any) => `${a.produto}: pediu ${a.solicitado}, tem ${a.disponivel}`).join('\n');
-        setAdminNotification(`Atencao — estoque principal baixo:\n${linhas}`);
+        const linhas = d.avisos.map((a: any) => `${a.produto}: pediu ${a.solicitado}, tinha ${a.disponivel}`).join('\n');
+        setAdminNotification(`Atencao — reservou SEM estoque completo (saldo pode ficar negativo):\n${linhas}`);
       }
       // NAO entra no estado "sales" (venda so existe apos a entrega confirmada).
       // O cupom usa o pedido retornado direto.

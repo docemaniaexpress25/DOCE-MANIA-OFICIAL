@@ -49,7 +49,7 @@ interface PDVProps {
   nfcCpfInicial?: string;
 }
 
-type PDVView = 'CART' | 'RECEIPT_PREVIEW' | 'PAYMENT' | 'PRE_PEDIDO_PREVIEW';
+type PDVView = 'CART' | 'PAYMENT' | 'PRE_PEDIDO_PREVIEW';
 
 // Tipo do item do carrinho
 type CartItem = { quantidade: number; precoVenda: string };
@@ -1105,39 +1105,9 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     );
   }
 
-  if (view === 'RECEIPT_PREVIEW') {
-    return (
-      <div className="fixed inset-0 bg-gray-900 z-[100] flex flex-col">
-        <div className="flex-1 overflow-y-auto">
-          <Cupom 
-            sale={{ 
-              id: 'preview', 
-              vendedorId, 
-              clientId: client.id, 
-              data: new Date(), 
-              valorTotal: total, 
-              valorPago: 0, 
-              metodoPagamento: (isPreVenda ? metodoEntrega : metodo) as any, 
-              statusPagamento: metodo === 'A_PRAZO' ? 'PENDENTE' : 'PAGO', 
-              itens: getOrderedItems(),
-              // BLOCO 13/41: o preview ja mostra o cupom FINAL (trocas + observação + forma combinada)
-              trocas: trocasComObs || undefined,
-              tipoVenda: isPreVenda ? 'PRE_VENDA' : 'PRONTA',
-              entregaStatus: isPreVenda ? 'PENDENTE' : undefined,
-              detalhePagamento: isPreVenda ? `PRE-VENDA — cobrar ${condicaoPv === 'AVISTA' && (metodoEntrega === 'BOLETO' || metodoEntrega === 'CHEQUE') ? 'DINHEIRO' : metodoEntrega} na entrega (${condicaoPv === 'APRAZO' ? 'A PRAZO' : 'A VISTA'})` : undefined,
-              dataVencimento: isPreVenda && condicaoPv === 'APRAZO' ? new Date(`${vencimentoPv}T23:59:59-03:00`) : undefined,
-            }} 
-            client={client} 
-            products={products} 
-            onBack={() => setView('CART')} 
-            onClose={() => setView('PAYMENT')} 
-            allowDelete={false}
-            closeLabel="IR PARA PAGAMENTO"
-          />
-        </div>
-      </div>
-    );
-  }
+  // BLOCO 88: a tela RECEIPT_PREVIEW (cupom com defaults ANTES das perguntas)
+  // foi removida — o cupom REAL so existe depois de registrar (cupomPosRegistro).
+  // Toda venda vai primeiro ao PAYMENT (perguntas), depois ao cupom real.
 
   if (view === 'PRE_PEDIDO_PREVIEW') {
     return (
@@ -1455,21 +1425,19 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
             onClick={() => {
               if (isPrePedido) {
                 setView('PRE_PEDIDO_PREVIEW');
-              } else if (isPreVenda && wizardPagamento) {
-                // BLOCO 40 (regra do dono): na PRE-VENDA o cupom que vale é o
-                // POS-registro (com tipo de doc + forma de pagamento reais).
-                // O preview antes do wizard mostrava defaults (DINHEIRO A VISTA
-                // / CUPOM) e o vendedor imprimia o cupom errado — agora vai
-                // direto ao wizard e o cupom certo aparece no final.
-                setView('PAYMENT');
               } else {
-                setView('RECEIPT_PREVIEW');
+                // BLOCO 88 (regra do dono): TODES as perguntas ANTES de gerar
+                // cupom — documento (cupom/NF-e/NFC-e), a vista/prazo,
+                // dinheiro/pix/boleto. O preview que mostrava defaults
+                // (DINHEIRO A VISTA) sumiu; o cupom REAL nasce depois de
+                // registrar (mesma ordem da pre-venda desde o Bloco 40).
+                setView('PAYMENT');
               }
             }}
             disabled={(total <= 0 && getOrderedItems().length === 0) || hasMarginViolation || (!allCategoriesVisited && !sellFromCentral)}
             className={`px-6 py-4 rounded-2xl font-black uppercase text-xs ${(total > 0 || getOrderedItems().length > 0) && !hasMarginViolation && (allCategoriesVisited || sellFromCentral) ? (isPreVenda ? 'bg-emerald-600 text-white shadow-lg' : isPrePedido ? 'bg-indigo-600 text-white shadow-lg' : 'bg-blue-600 text-white shadow-lg') : 'bg-gray-200 text-gray-400'}`}
           >
-            {isPrePedido ? 'Gerar Rascunho' : isPreVenda && wizardPagamento ? 'Ir para pagamento' : 'Gerar Cupom'}
+            {isPrePedido ? 'Gerar Rascunho' : 'Ir para pagamento'}
           </button>
         </div>
       </footer>
@@ -1504,7 +1472,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                   erro={wizardErro}
                   enviando={finalizando}
                   onConfirm={handleConfirmWizard}
-                  onVoltar={() => setView('RECEIPT_PREVIEW')}
+                  onVoltar={() => setView('CART')}
                   /* BLOCO 29 (ROTA 2): modo fixado no atendimento — pula o passo NOTA */
                   modoInicial={modoAtivo}
                   nfcCpfInicial={nfcCpfInicial}
@@ -1638,7 +1606,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                   ? <><i className="fa-solid fa-spinner fa-spin mr-2"></i>{isPreVenda ? 'Registrando pedido...' : 'Finalizando...'}</>
                   : (isPreVenda ? 'Registrar Pedido (Pre-Venda)' : 'Concluir Venda')}
               </button>
-              <button onClick={() => setView('RECEIPT_PREVIEW')} className="w-full py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Voltar ao Cupom</button>
+              <button onClick={() => setView('CART')} className="w-full py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Voltar ao Carrinho</button>
                 </>
               )}
            </div>

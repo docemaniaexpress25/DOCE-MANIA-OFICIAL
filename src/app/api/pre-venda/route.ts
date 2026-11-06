@@ -1304,8 +1304,8 @@ export async function POST(req: NextRequest) {
 
     // ---------- EDITAR_PEDIDO (BLOCO 31: admin edita o pedido antes da entrega) ----------
     // Itens (qtd/preco/adicionar/remover), condicao e forma de pagamento.
-    // Somente PRE_VENDA nao entregue — o estoque da pre-venda baixa na
-    // entrega, entao editar antes nao mexe no estoque (trigger inofensivo).
+    // Somente PRE_VENDA nao entregue — BLOCO 88: o pedido ja RESERVOU o estoque
+    // no registro; a edicao ajusta a reserva por delta (novo - antigo).
     // Comissao: nasce na entrega com o valor do pedido editado (sem ajuste aqui).
     if (acao === 'EDITAR_PEDIDO') {
       if (!admin) return NextResponse.json({ ok: false, error: 'Somente o admin edita pedidos.' }, { status: 403 });
@@ -1330,6 +1330,14 @@ export async function POST(req: NextRequest) {
       }
 
       const valorTotal = round2(itens.reduce((a: number, i: any) => a + i.quantidade * i.precoVenda, 0));
+
+      // BLOCO 88: pedido RESERVADO? (estoque baixa no registro agora). A edicao
+      // precisa acompanhar a reserva: delta por produto (novo - antigo).
+      let wasReserved = false;
+      try {
+        const { data: ebRow } = await supabase.from('sales').select('estoque_baixado').eq('id', saleId).maybeSingle();
+        wasReserved = (ebRow as any)?.estoque_baixado === true;
+      } catch { /* sonda best-effort: sem ela, segue modelo legado */ }
 
       // Pagamento no MESMO formato da API de venda (a fila parseia do detalhe)
       const condicao = String(body.condicao || '').toUpperCase() === 'APRAZO' ? 'APRAZO' : 'AVISTA';
@@ -1374,9 +1382,18 @@ export async function POST(req: NextRequest) {
       if (!r.ok) return NextResponse.json({ ok: false, error: r.erro || 'Erro ao atualizar o pedido.' }, { status: 500 });
 
       // 2) substitui os itens (rollback manual: re-insere os antigos se falhar)
+      // BLOCO 88: com reserva ativa, desmarca o guard ANTES de apagar os itens
+      // (o trigger de estorno legado devolveria na coluna errada) — o ajuste
+      // do estoque é feito AQUI por delta, no Estoque Total.
+      if (wasReserved) {
+        await supabase.from('sales').update({ estoque_baixado: false }).eq('id', saleId);
+      }
       const { data: antigos } = await supabase.from('sale_items').select('produto_id, product_id, quantidade, preco_venda').eq('sale_id', saleId);
       const { error: delErr } = await supabase.from('sale_items').delete().eq('sale_id', saleId);
-      if (delErr) return NextResponse.json({ ok: false, error: 'Falha ao substituir itens: ' + delErr.message }, { status: 500 });
+      if (delErr) {
+        if (wasReserved) await supabase.from('sales').update({ estoque_baixado: true }).eq('id', saleId);
+        return NextResponse.json({ ok: false, error: 'Falha ao substituir itens: ' + delErr.message }, { status: 500 });
+      }
       const { error: insErr } = await supabase.from('sale_items').insert(
         itens.map((i: any) => ({ sale_id: saleId, produto_id: i.produtoId, product_id: i.produtoId, quantidade: i.quantidade, preco_venda: i.precoVenda }))
       );
@@ -1386,7 +1403,36 @@ export async function POST(req: NextRequest) {
             antigos.map((a: any) => ({ sale_id: saleId, produto_id: a.produto_id, product_id: a.product_id || a.produto_id, quantidade: a.quantidade, preco_venda: a.preco_venda }))
           );
         }
+        // itens antigos restaurados = reserva continua valida, remarca o guard
+        if (wasReserved) await supabase.from('sales').update({ estoque_baixado: true }).eq('id', saleId);
         return NextResponse.json({ ok: false, error: 'Falha ao gravar itens — pedido anterior restaurado.' }, { status: 500 });
+      }
+
+      // BLOCO 88: aplica o DELTA da reserva (novo - antigo) no Estoque Total
+      // e remarca o guard da venda.
+      if (wasReserved) {
+        try {
+          const delta = new Map<string, number>();
+          for (const a of (antigos || []) as any[]) {
+            const pid = String(a.produto_id);
+            delta.set(pid, (delta.get(pid) || 0) - (Number(a.quantidade) || 0));
+          }
+          for (const i of itens) {
+            delta.set(i.produtoId, (delta.get(i.produtoId) || 0) + i.quantidade);
+          }
+          const idsDelta = [...delta.keys()].filter(pid => (delta.get(pid) || 0) !== 0);
+          if (idsDelta.length > 0) {
+            const { data: prodsDelta } = await supabase.from('products').select('id, estoque_principal').in('id', idsDelta);
+            await Promise.all(((prodsDelta || []) as any[]).map(p =>
+              supabase.from('products').update({
+                estoque_principal: (Number(p.estoque_principal) || 0) - (delta.get(String(p.id)) || 0),
+              }).eq('id', p.id)
+            ));
+          }
+        } catch (eDelta) {
+          console.warn('[pre-venda] EDITAR_PEDIDO delta da reserva falhou:', (eDelta as any)?.message);
+        }
+        await supabase.from('sales').update({ estoque_baixado: true }).eq('id', saleId);
       }
 
       await logEventoSeguro(supabase, saleRow.route_id || null, saleId, userId, 'PEDIDO_EDITADO', `Pedido editado pelo admin: ${itens.length} itens, total R$ ${valorTotal.toFixed(2)}`);
@@ -1417,6 +1463,32 @@ export async function POST(req: NextRequest) {
         if (hh > 11 || (hh === 11 && mm > 59)) {
           return NextResponse.json({ ok: false, error: 'Prazo de exclusao expirou (ate 11:59). Solicite ao administrador.' }, { status: 403 });
         }
+      }
+      // BLOCO 88: pedido RESERVADO (estoque baixa no registro agora) — devolve
+      // a quantidade ao Estoque Total antes de apagar. Desmarca o guard ANTES
+      // para o trigger de estorno legado nunca devolver na coluna errada.
+      try {
+        const { data: ebRow } = await supabase.from('sales').select('estoque_baixado').eq('id', saleId).maybeSingle();
+        if ((ebRow as any)?.estoque_baixado === true) {
+          await supabase.from('sales').update({ estoque_baixado: false }).eq('id', saleId);
+          const { data: itensRes } = await supabase.from('sale_items').select('produto_id, quantidade').eq('sale_id', saleId);
+          const devolve = new Map<string, number>();
+          for (const it of (itensRes || []) as any[]) {
+            const pid = String(it.produto_id);
+            devolve.set(pid, (devolve.get(pid) || 0) + (Number(it.quantidade) || 0));
+          }
+          const idsDev = [...devolve.keys()];
+          if (idsDev.length > 0) {
+            const { data: prodsDev } = await supabase.from('products').select('id, estoque_principal').in('id', idsDev);
+            await Promise.all(((prodsDev || []) as any[]).map(p =>
+              supabase.from('products').update({
+                estoque_principal: (Number(p.estoque_principal) || 0) + (devolve.get(String(p.id)) || 0),
+              }).eq('id', p.id)
+            ));
+          }
+        }
+      } catch (eDev) {
+        console.warn('[pre-venda] EXCLUIR_VENDA devolucao da reserva falhou:', (eDev as any)?.message);
       }
       // limpa o rastro na ordem certa (eventos -> itens -> venda)
       await supabase.from('entrega_eventos').delete().eq('sale_id', saleId);
@@ -1606,7 +1678,10 @@ export async function POST(req: NextRequest) {
       // existe sem a venda entregue (idempotente: re-entrega atualiza a row).
       await registrarComissaoPreVenda(supabase, saleRow, comissaoQuitada);
 
-      // Baixa do estoque principal (entregou = saiu do estoque central)
+      // Baixa do estoque — BLOCO 88: pedidos NOVOS ja RESERVARAM no registro
+      // (estoque_baixado=true) e o guard do RPC torna esta chamada NO-OP.
+      // Pedidos ANTIGOS (pre-deploy, sem reserva) continuam baixando aqui —
+      // migracao graciosa, nenhuma pendente fica sem baixa.
       try { await supabase.rpc('baixar_estoque_principal', { p_sale_id: saleId }); } catch (e) {
         console.error('[pre-venda] baixa estoque falhou:', (e as any)?.message);
       }

@@ -490,7 +490,8 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
           </button>
         )}
       </div>
-      <button onClick={onVoltar} disabled={enviando} className="w-full py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest disabled:opacity-50">Voltar ao Cupom</button>
+      {/* BLOCO 88: volta pro CARRINHO — o cupom so existe depois de registrar */}
+      <button onClick={onVoltar} disabled={enviando} className="w-full py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest disabled:opacity-50">Voltar ao Carrinho</button>
 
       {/* ===== BLOCO 51 (regra do dono): enquanto o pedido/venda esta sendo
           gravado, a tela inteira mostra o GIF de processamento + "NAO FECHE A

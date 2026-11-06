@@ -11,8 +11,8 @@ import { hasModoVendaColumn, hasEstoquesNotaColumns } from '@/lib/serverSchema';
  *
  * - Exige sessao (Bearer token): o vendedor_id vem SEMPRE da sessao.
  * - NAO baixa a carga da van (diferente do RPC processar_venda_v2).
- * - NAO baixa o estoque principal aqui: a baixa acontece quando a entrega
- *   e confirmada (acao ENTREGUE em /api/pre-venda -> RPC baixar_estoque_principal).
+ * - BLOCO 88: RESERVA o estoque principal NA HORA do registro (estoque_baixado
+ *  =true na venda) — a entrega NAO baixa de novo (guard do RPC).
  * - A venda nasce tipo_venda='PRE_VENDA', entrega_status='PENDENTE',
  *   status_pagamento='PENDENTE' (pagamento coletado na entrega).
  *
@@ -245,12 +245,17 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: 'Erro ao gravar os itens do pedido.', detalhe: itemsErr.message }, { status: 500 });
     }
 
-    // ---------- AVISO de estoque (nao bloqueia) + PREVISAO de comissao ----------
-    // BLOCO 44: as duas consultas saem em PARALELO (eram sequenciais e somavam
-    // ~1s na finalização do pedido).
-    // BLOCO 75 (ESTOQUE TOTAL): o aviso consulta SEMPRE o Estoque Total — o
-    // documento (CUPOM/NF-e/NFC-e) nao escolhe mais cofre; so alimenta o
-    // contador na baixa.
+    // ---------- BLOCO 88: RESERVA DE ESTOQUE no registro do pedido (regra do dono) ----------
+    // ANTES: a baixa so acontecia na ENTREGA — o vendedor vendia 15 un com 5
+    // em estoque e o saldo real so ficava errado no fim da rota.
+    // AGORA: o pedido RESERVA a quantidade na hora (subtrai do Estoque Total
+    // no ato do registro) e grava estoque_baixado=true na venda. Com isso o
+    // RPC baixar_estoque_principal da entrega vira NO-OP (guard de
+    // idempotencia) — ninguem baixa duas vezes.
+    // Sem estoque suficiente o pedido NAO e bloqueado (venda por encomenda
+    // existe), mas volta o aviso "pediu X, tinha Y" — e o saldo negativo
+    // aparece no ato, visivel pra todo mundo.
+    // ---------- AVISO + PREVISAO de comissao (BLOCO 44: em PARALELO) ----------
     // BLOCO 21: previsão da comissão de PRÉ-VENDA — mesma regra que GERA a
     // comissão na entrega (lib/comissaoPv); a tela "Pedido Registrado!" mostra
     // ESTE valor (o browser recalculava com a % de PRONTA ENTREGA — errado).
@@ -258,22 +263,43 @@ export async function POST(req: NextRequest) {
     let comissaoPrevista: number | undefined;
     try {
       const prodIds = [...new Set(itens.map(i => i.produtoId))];
-      const colAviso = 'estoque_principal';
       const [prodsRes, prev] = await Promise.all([
-        supabase.from('products').select(`id, nome, ${colAviso}`).in('id', prodIds),
+        supabase.from('products').select('id, nome, estoque_principal').in('id', prodIds),
         comissaoPvDeItens(supabase, itens.map(i => ({ produto_id: i.produtoId, quantidade: i.quantidade, preco_venda: i.precoVenda }))).catch(() => 0),
       ]);
       const map: Record<string, any> = {};
       (prodsRes.data || []).forEach((p: any) => { map[p.id] = p; });
       for (const i of itens) {
         const p = map[i.produtoId];
-        const disp = Number(p?.[colAviso] ?? 0);
+        const disp = Number(p?.estoque_principal ?? 0);
         if (p && i.quantidade > disp) {
           avisos.push({ produto: p.nome || 'Produto', solicitado: i.quantidade, disponivel: disp });
         }
       }
       if (isFinite(prev) && prev > 0) comissaoPrevista = prev;
-    } catch { /* aviso/previsao sao best-effort: nunca bloqueiam o pedido */ }
+
+      // RESERVA: guarda o guard ANTES da baixa (se a baixa falhar, a entrega
+      // ainda tem o RPC de plano B — mesmo comportamento de hoje).
+      const { error: markErr } = await supabase.from('sales').update({ estoque_baixado: true }).eq('id', sale.id);
+      if (!markErr) {
+        const reservas = new Map<string, number>();
+        for (const i of itens) reservas.set(i.produtoId, (reservas.get(i.produtoId) || 0) + i.quantidade);
+        await Promise.all([...reservas].map(async ([pid, qtd]) => {
+          const p = map[pid];
+          if (!p) return;
+          await supabase.from('products').update({
+            estoque_principal: (Number(p.estoque_principal) || 0) - qtd,
+          }).eq('id', pid);
+        }));
+      } else {
+        // Guard falhou (rede/coluna): NAO reserva — a entrega faz a baixa
+        // como sempre fez (degradacao graciosa, zero risco de sumir estoque).
+        console.error('[api/pre-venda/venda] reserva NAO aplicada (marcacao falhou):', markErr.message);
+      }
+    } catch (eRes) {
+      // reserva/aviso sao best-effort: nunca bloqueiam o pedido
+      console.error('[api/pre-venda/venda] reserva de estoque falhou:', (eRes as any)?.message);
+    }
 
     return NextResponse.json({ ok: true, sale, comissaoPrevista, avisos: avisos.length > 0 ? avisos : undefined });
   } catch (e: any) {

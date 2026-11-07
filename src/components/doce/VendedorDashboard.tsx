@@ -14,6 +14,7 @@ import PDV from '@/components/doce/PDV';
 import Cupom from '@/components/doce/Cupom';
 import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
 import ConfirmModal from '@/components/doce/ConfirmModal';
+import LucroRotaVendedor from '@/components/doce/LucroRotaVendedor';
 // BLOCO 82: impressão no iPhone — instruções do Bluefy quando a Apple bloqueia o Bluetooth
 import { isIOSDevice, TEXTO_IMPRESSAO_IOS, TITULO_IMPRESSAO_IOS } from '@/lib/iosPrint';
 import FilaEntregas from '@/components/doce/FilaEntregas';
@@ -62,7 +63,15 @@ interface VendedorDashboardProps {
   setClientOrder: (ids: string[]) => void;
 }
 
-type TabType = 'HOME' | 'ROTEIRO' | 'CARGA' | 'HISTORY' | 'FINANCE' | 'CREDIT' | 'CLIENTES' | 'WEEKLY' | 'STOCK_VIEW' | 'AVISOS' | 'ENTREGAS';
+type TabType = 'HOME' | 'ROTEIRO' | 'CARGA' | 'HISTORY' | 'FINANCE' | 'CREDIT' | 'CLIENTES' | 'WEEKLY' | 'STOCK_VIEW' | 'AVISOS' | 'ENTREGAS' | 'LUCRO_ROTA';
+
+// BLOCO 92 — Aba LUCRO DA ROTA: EXCLUSIVA do vendedor David (R5).
+// Casamento por id (a prova de renome) + fallback pelo nome (se o dono
+// recriar o usuario). Nenhum outro vendedor enxerga a aba — nem o admin.
+const LUCRO_ROTA_USER_ID = '7c989927-a148-479c-bf00-11f35bfa66b0'; // David - R5
+const podeVerLucroRota = (u: any): boolean =>
+  !!u && String(u.role || '').toUpperCase() === 'VENDEDOR' &&
+  (String(u.id || '') === LUCRO_ROTA_USER_ID || /^david/i.test(String(u.nome || '').trim()));
 
 // Helpers para comprovante
 const compressImage = (file: File): Promise<string> => new Promise((resolve) => {
@@ -1273,6 +1282,9 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
       {activeTab === 'ENTREGAS' && <FilaEntregas user={user} showToast={showToast} modo="VENDEDOR" />}
 
+      {/* BLOCO 92: Lucro da Rota — só renderiza pro David, mesmo que o estado guarde a aba */}
+      {activeTab === 'LUCRO_ROTA' && podeVerLucroRota(user) && <LucroRotaVendedor user={user} showToast={showToast} />}
+
       {activeTab === 'HOME' && (
         <div className="py-4 space-y-4">
           <div className="grid grid-cols-2 gap-4">
@@ -1283,6 +1295,8 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
           <MenuCard icon="fa-truck-fast" title="Minha Carga" tab="CARGA" color="bg-purple-50 text-purple-600" badge={minhasPendentes.length > 0} />
           <MenuCard icon="fa-receipt" title="Vendas" tab="HISTORY" color="bg-blue-50 text-[#1E3A5F]" />
           <MenuCard icon="fa-wallet" title="Financeiro" tab="FINANCE" color="bg-emerald-50 text-[#1F7A4D]" badge={(messages || []).some(m => !m.lida && m.type === 'COMMISSION_CONFIRMATION')} />
+          {/* BLOCO 92: aba exclusiva do David (R5) — lucro da rota na mão do vendedor */}
+          {podeVerLucroRota(user) && <MenuCard icon="fa-chart-line" title="Lucro da Rota" tab="LUCRO_ROTA" color="bg-teal-50 text-teal-600" />}
           <MenuCard icon="fa-file-invoice-dollar" title="Contas a Receber" tab="CREDIT" color="bg-rose-50 text-rose-600" />
           <MenuCard icon="fa-users" title="Clientes" tab="CLIENTES" color="bg-green-50 text-green-600" />
           <MenuCard icon="fa-calendar-days" title="Roteiro Semanal" tab="WEEKLY" color="bg-indigo-50 text-indigo-600" />

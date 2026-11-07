@@ -89,6 +89,21 @@ export default function GestaoCatalogoPortal(props: GestaoCatalogoPortalProps) {
   const [obsOk, setObsOk] = useState<boolean | null>(null);
   const [vinculosOk, setVinculosOk] = useState<boolean | null>(null);
   const [busca, setBusca] = useState('');
+  // BLOCO 89 — ESPELHO DO ESTOQUE CENTRAL: por padrao o catalogo mostra SO
+  // familias com saldo no estoque central (a mesma regra do portal do
+  // cliente). "Todas" abre o modo gestao (renomear/foto de produto zerado).
+  // A escolha fica guardada no aparelho (localStorage).
+  const [soComEstoque, setSoComEstoque] = useState(true);
+  useEffect(() => {
+    try {
+      const salvo = localStorage.getItem('dm_catalogo_somente_estoque');
+      if (salvo === 'todas') setSoComEstoque(false);
+    } catch { /* ignora */ }
+  }, []);
+  const alternaVisao = (comEstoque: boolean) => {
+    setSoComEstoque(comEstoque);
+    try { localStorage.setItem('dm_catalogo_somente_estoque', comEstoque ? 'com-estoque' : 'todas'); } catch { /* ignora */ }
+  };
   const [expandida, setExpandida] = useState<string | null>(null);
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [urlFoto, setUrlFoto] = useState('');
@@ -155,14 +170,35 @@ export default function GestaoCatalogoPortal(props: GestaoCatalogoPortalProps) {
 
   const semFotoCount = useMemo(() => familias.filter((f) => !fotoDaFamilia(f)).length, [familias, porId]);
 
+  // BLOCO 89 — SINCRONIZACAO COM O ESTOQUE CENTRAL (contagens do espelho):
+  // familias/produtos com pelo menos 1 unidade no estoque_principal — igual
+  // ao filtro do portal do cliente (ativo + estoque > 0). Produto INATIVO com
+  // saldo continua aparecendo (regra do dono: "se tem estoque, tem no catalogo").
+  const contagens = useMemo(() => {
+    let produtosComEstoque = 0;
+    let familiasComEstoque = 0;
+    for (const f of familias) {
+      const tem = f.variantes.some((v) => v.estoque > 0);
+      if (tem) {
+        familiasComEstoque++;
+        produtosComEstoque += f.variantes.filter((v) => v.estoque > 0).length;
+      }
+    }
+    return { produtosComEstoque, familiasComEstoque };
+  }, [familias]);
+
   const familiasFiltradas = useMemo(() => {
+    let lista = familias;
+    // ESPELHO DO ESTOQUE CENTRAL: sem saldo em TODAS as variantes = fora do
+    // catalogo (como no portal do cliente). "Todas" = modo gestao.
+    if (soComEstoque) lista = lista.filter((f) => f.variantes.some((v) => v.estoque > 0));
     const q = busca.trim().toLowerCase();
-    if (!q) return familias;
-    return familias.filter((f) => {
+    if (!q) return lista;
+    return lista.filter((f) => {
       if (f.nome.toLowerCase().includes(q)) return true;
       return f.variantes.some((v) => (porId.get(v.produtoId)?.nome || '').toLowerCase().includes(q));
     });
-  }, [familias, busca, porId]);
+  }, [familias, busca, porId, soComEstoque]);
 
   /** Reordena a familia inteira NO PORTAL (catalogo_order) — o PDV NAO muda (Bloco 23) */
   const moveFamilia = (key: string, dir: 'UP' | 'DOWN') => {
@@ -296,7 +332,6 @@ export default function GestaoCatalogoPortal(props: GestaoCatalogoPortalProps) {
   if (fotosBloqueadas) faltando.push('foto e caixa');
   if (obsBloqueada) faltando.push('observação do cliente');
   if (vinculosBloqueados) faltando.push('vínculo de família e ordem do portal');
-  const totalProdutos = products.length;
 
   return (
     <div className="space-y-4 pb-24">
@@ -304,17 +339,34 @@ export default function GestaoCatalogoPortal(props: GestaoCatalogoPortalProps) {
       <div className="px-2 pt-1">
         <h2 className="text-xl sm:text-2xl font-black text-gray-800 tracking-tight">Catálogo do Portal</h2>
         <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider mt-0.5">
-          Arrume o catálogo do cliente à vontade — a ordem do PDV fica intacta
+          Espelho do estoque central — quem tem saldo, aparece. A ordem do PDV fica intacta
         </p>
         <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+          <span className="text-[9px] font-black text-emerald-600 bg-emerald-50 px-2 py-1 rounded-lg border border-emerald-100 uppercase tracking-tight"><i className="fa-solid fa-boxes-stacked mr-1 text-[8px]"></i>{contagens.produtosComEstoque} produtos com estoque</span>
           <span className="text-[9px] font-black text-blue-600 bg-blue-50 px-2 py-1 rounded-lg border border-blue-100 uppercase tracking-tight">{familias.length} famílias</span>
-          <span className="text-[9px] font-black text-gray-500 bg-gray-50 px-2 py-1 rounded-lg border border-gray-100 uppercase tracking-tight">{totalProdutos} produtos</span>
           <span className={`text-[9px] font-black px-2 py-1 rounded-lg border uppercase tracking-tight ${semFotoCount === 0 ? 'text-emerald-600 bg-emerald-50 border-emerald-100' : 'text-amber-600 bg-amber-50 border-amber-200'}`}>
             {semFotoCount === 0 ? 'todas com foto' : `${semFotoCount} sem foto`}
           </span>
           <span className="text-[9px] font-black text-emerald-600 bg-emerald-50 px-2 py-1 rounded-lg border border-emerald-100 uppercase tracking-tight"><i className="fa-solid fa-shuffle mr-1 text-[8px]"></i>ordem só do portal</span>
         </div>
       </div>
+
+      {/* BLOCO 89 — VISAO: ESPELHO DO ESTOQUE CENTRAL x MODO GESTAO */}
+      <div className="px-1 flex items-center gap-1.5">
+        <button onClick={() => alternaVisao(true)} aria-pressed={soComEstoque}
+          className={`flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase border active:scale-95 transition ${soComEstoque ? 'bg-emerald-600 text-white border-emerald-500 shadow-sm' : 'bg-white text-gray-400 border-gray-100'}`}>
+          <i className="fa-solid fa-boxes-stacked mr-1"></i>Com estoque ({contagens.familiasComEstoque} famílias)
+        </button>
+        <button onClick={() => alternaVisao(false)} aria-pressed={!soComEstoque}
+          className={`flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase border active:scale-95 transition ${!soComEstoque ? 'bg-blue-600 text-white border-blue-500 shadow-sm' : 'bg-white text-gray-400 border-gray-100'}`}>
+          <i className="fa-solid fa-list mr-1"></i>Todas ({familias.length})
+        </button>
+      </div>
+      {!soComEstoque && (
+        <p className="px-3 -mt-2 text-[9px] text-gray-400 font-bold uppercase tracking-wider">
+          Modo gestão: mostra também as famílias zeradas do estoque central
+        </p>
+      )}
 
       {/* BANNER BLOCOS 15+18 */}
       {faltando.length > 0 && (
@@ -360,8 +412,21 @@ export default function GestaoCatalogoPortal(props: GestaoCatalogoPortalProps) {
                 </div>
                 <button onClick={() => { setExpandida(aberta ? null : f.key); setUrlFoto(''); }} className="flex-1 min-w-0 text-left cursor-pointer">
                   <h3 className="font-black text-gray-800 text-[13px] leading-tight uppercase truncate">{f.nome}</h3>
+                  {/* BLOCO 89 — GRAMAGENS AO LADO DA FOTO (pedido do dono):
+                      1 chip por tamanho com o saldo vivo do estoque central.
+                      Zerado = cinza (mas continua listado, como no exemplo
+                      "270g 115g 68g e Peq" do Ruffles). */}
+                  <div className="flex items-center gap-1 mt-1.5 flex-wrap">
+                    {f.variantes.map((v) => {
+                      const temSaldo = v.estoque > 0;
+                      return (
+                        <span key={v.produtoId} className={`text-[9px] font-black px-1.5 py-0.5 rounded-lg border uppercase tracking-tight ${temSaldo ? 'text-emerald-700 bg-emerald-50 border-emerald-100' : 'text-gray-400 bg-gray-50 border-gray-100'}`}>
+                          {v.rotulo || 'único'}<span className={`ml-1 font-bold ${temSaldo ? 'text-emerald-500' : 'text-gray-300'}`}>{v.estoque}un</span>
+                        </span>
+                      );
+                    })}
+                  </div>
                   <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                    <span className="text-[9px] font-black text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded-lg border border-gray-100 uppercase">{f.variantes.length} {f.variantes.length === 1 ? 'tamanho' : 'tamanhos'}</span>
                     {!foto && <span className="text-[9px] font-black text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-lg border border-amber-200 uppercase">sem foto</span>}
                     {algumaCaixa && <span className="text-[9px] font-black text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-lg border border-emerald-100 uppercase"><i className="fa-solid fa-box mr-0.5 text-[7px]"></i>caixa</span>}
                     {algumaObs && <span className="text-[9px] font-black text-violet-600 bg-violet-50 px-1.5 py-0.5 rounded-lg border border-violet-100 uppercase"><i className="fa-solid fa-comment-dots mr-0.5 text-[7px]"></i>obs</span>}

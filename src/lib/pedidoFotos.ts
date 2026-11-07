@@ -68,11 +68,30 @@ export const FOTOS_FAMILIA: Record<string, string> = {
   'trufa premium': 'https://vvywceybsdfyyuwvsqnq.supabase.co/storage/v1/object/public/product-images/products/item-1785601114257.jpg',
 };
 
-/** Busca a foto da familia (nome do produto do estoque). Null = usar placeholder. */
+/** Busca a foto da familia (nome do produto do estoque). Null = usar placeholder.
+ *
+ *  BLOCO 89 — fallback por PREFIXO: se o nome completo da familia nao tem foto
+ *  no mapa, tenta o prefixo de 2 palavras e depois a 1a palavra (a MARCA).
+ *  Assim "Ruffles Chur" / "Ruffles Cs" recebem a foto da marca "ruffles",
+ *  "Torcida Cebola"/"Torcida Chur" recebem a de "torcida", "Fandangos Chur"
+ *  a de "fandangos" etc. — sem cadastrar nada. So usa fotos que JA EXISTEM
+ *  no mapa (nada inventado), e o products.imagem (Bloco 15) continua vencendo.
+ */
 export function fotoFamilia(nomeProduto: string): string | null {
   const n = nomeProduto.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   const fam = n.replace(/\b\d+(?:[.,]\d+)?\s*(g|gr|kg|ml|l|litro|litros|un|unds?|x)\b/g, '')
     .replace(/\b(peq|pequeno|pequena|grande|litro|g)\b/g, '')
     .replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
-  return FOTOS_FAMILIA[fam] || null;
+  if (!fam) return null;
+  if (FOTOS_FAMILIA[fam]) return FOTOS_FAMILIA[fam];
+  const palavras = fam.split(' ');
+  if (palavras.length >= 2) {
+    const duas = palavras.slice(0, 2).join(' ');
+    if (FOTOS_FAMILIA[duas]) return FOTOS_FAMILIA[duas];
+  }
+  if (palavras.length >= 1) {
+    const uma = palavras[0];
+    if (FOTOS_FAMILIA[uma]) return FOTOS_FAMILIA[uma];
+  }
+  return null;
 }

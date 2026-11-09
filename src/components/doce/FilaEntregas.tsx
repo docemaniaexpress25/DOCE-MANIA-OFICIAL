@@ -83,8 +83,9 @@ interface ApiResp {
   meuFechamento?: { id: string; valor_dinheiro: number; valor_pix: number; qtd_entregas: number; confirmado: boolean; obs: string | null } | null;
   fechamentosHoje?: any[];
   conferencia?: { porEntregador: { entregadorId: string; nome: string; dinheiro: number; pix: number; qtdEntregas: number; vendas: { saleId: string; cliente: string; valorTotal: number; valorPago: number; recebimento: string }[] }[] };
-  // BLOCO 96: entregadores ativos (seletor da carga) + CAIXA SEPARADO por entregador
-  entregadores?: { id: string; nome: string }[];
+  // BLOCO 96/97: entregadores ativos (seletor da carga — agora sao os
+  // VENDEDORES nomeados, sem criar usuario de entregador) + CAIXA SEPARADO
+  entregadores?: { id: string; nome: string; perfil?: string }[];
   caixasPorEntregador?: CaixaEnt[];
   migracaoPendente?: boolean;
   error?: string;
@@ -653,7 +654,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
     if (!p) return;
     const entregadores = data?.entregadores || [];
     if (entregadores.length > 0 && !cargaEntId) {
-      showToast('Selecione quem é o ENTREGADOR desta venda antes de carregar.', 'error');
+      showToast('Selecione quem CARREGOU esta entrega antes de carregar.', 'error');
       return;
     }
     const entNome = entregadores.find(e => e.id === cargaEntId)?.nome || p.entregadorNome || null;
@@ -787,9 +788,19 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                 {p.separado && pend && (
                   <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded-md bg-gray-300 text-gray-600"><i className="fa-solid fa-boxes-stacked mr-0.5"></i>Separado</span>
                 )}
-                {/* BLOCO 96: entregador da venda — escolhido no check de carga */}
-                {modo !== 'VENDEDOR' && p.entregadorId && pend && (
-                  <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded-md bg-teal-50 text-teal-700 shrink-0"><i className="fa-solid fa-motorcycle mr-0.5"></i>{p.entregadorNome || 'Entregador'}</span>
+                {/* BLOCO 96/97: entregador da venda = vendedor nominado —
+                    escolhido no check de carga; no admin o badge e CLICAVEL
+                    para trocar quem carregou aquela entrega */}
+                {p.entregadorId && pend && (
+                  modo === 'ADMIN' ? (
+                    <button onClick={() => abrirSheetCarga(p)} disabled={!!busy}
+                      title="Trocar quem carregou esta entrega"
+                      className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded-md bg-teal-50 text-teal-700 shrink-0 active:scale-95 transition-transform disabled:opacity-60">
+                      <i className="fa-solid fa-motorcycle mr-0.5"></i>{p.entregadorNome || 'Entregador'}
+                    </button>
+                  ) : (
+                    <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded-md bg-teal-50 text-teal-700 shrink-0"><i className="fa-solid fa-motorcycle mr-0.5"></i>{p.entregadorNome || 'Entregador'}</span>
+                  )
                 )}
                 {/* BLOCO 58: pedido carregado no veiculo (check do admin) */}
                 {p.carregadoEm && pend && (
@@ -1684,25 +1695,26 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
               {sheetCarga.carregadoEm ? 'Trocar entregador da carga' : 'Carregar no veículo'}
             </h3>
             <p className="text-[11px] font-bold text-gray-600 capitalize text-center mt-1">{sheetCarga.cliente.nome} · {fmt(sheetCarga.valorTotal)}</p>
-            <p className="text-[9px] font-black text-gray-400 uppercase text-center mt-3 leading-snug">Quem é o ENTREGADOR desta venda?</p>
+            <p className="text-[9px] font-black text-gray-400 uppercase text-center mt-3 leading-snug">Quem CARREGOU esta entrega? <span className="text-gray-300">(entregador da venda)</span></p>
             {(data?.entregadores || []).length > 0 ? (
               <div className="flex gap-1.5 flex-wrap mt-2">
                 {(data?.entregadores || []).map(e => (
                   <button key={e.id} onClick={() => setCargaEntId(e.id)}
                     className={`px-3 py-2.5 rounded-xl text-[10px] font-black uppercase border-2 transition-colors ${cargaEntId === e.id ? 'bg-emerald-600 border-emerald-600 text-white shadow' : 'bg-white border-gray-200 text-gray-500'}`}>
-                    <i className="fa-solid fa-motorcycle mr-1"></i>{e.nome}
+                    <i className={`fa-solid ${e.perfil === 'ENTREGADOR' ? 'fa-motorcycle' : 'fa-user'} mr-1`}></i>{e.nome}
+                    {e.perfil !== 'ENTREGADOR' && <span className="ml-1 text-[7px] font-black opacity-60">VENDEDOR</span>}
                   </button>
                 ))}
               </div>
             ) : (
               <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mt-2">
-                <p className="text-[9px] font-black text-amber-700 uppercase"><i className="fa-solid fa-triangle-exclamation mr-1"></i>Nenhum usuário ENTREGADOR cadastrado</p>
-                <p className="text-[9px] font-semibold text-amber-600 mt-0.5 leading-snug">Crie usuários Entregador no menu Usuários para escolher quem leva cada venda — o caixa fica separado por entregador. Pode carregar sem entregador (modo antigo).</p>
+                <p className="text-[9px] font-black text-amber-700 uppercase"><i className="fa-solid fa-triangle-exclamation mr-1"></i>Nenhum vendedor ativo</p>
+                <p className="text-[9px] font-semibold text-amber-600 mt-0.5 leading-snug">O entregador é escolhido entre os VENDEDORES — cadastre/ative um vendedor no menu Usuários (não precisa criar usuário entregador). Pode carregar sem entregador (modo antigo).</p>
               </div>
             )}
             {cargaEntId && (
               <p className="text-[9px] font-black text-emerald-600 uppercase text-center mt-2">
-                <i className="fa-solid fa-circle-check mr-1"></i>Entregador: {(data?.entregadores || []).find(e => e.id === cargaEntId)?.nome || 'Entregador'} — as entregas dele caem no caixa DELE
+                <i className="fa-solid fa-circle-check mr-1"></i>Entregador: {(data?.entregadores || []).find(e => e.id === cargaEntId)?.nome || 'Entregador'} — essa entrega alimenta o caixa DELE
               </p>
             )}
             <button onClick={confirmarCarga} disabled={!!busy}

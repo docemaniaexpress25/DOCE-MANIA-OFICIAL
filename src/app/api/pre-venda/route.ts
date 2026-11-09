@@ -825,18 +825,26 @@ async function getFila(supabase: any, userId: string, perfil: string) {
     pixHoje = meu ? meu.pix : 0;
   }
 
-  // BLOCO 96: entregadores ativos para o seletor de carga (o admin escolhe
-  // QUEM e o entregador de cada venda antes de carregar o veiculo)
-  let entregadores: { id: string; nome: string }[] = [];
+  // BLOCO 97 (regra do dono): NAO existem usuarios entregadores novos — os
+  // VENDEDORES sao nominados entregadores tambem. O seletor de carga lista
+  // vendedores ativos (entregadores antigos que ja existirem continuam na
+  // lista para nao quebrar o legado). Vendedores vem primeiro.
+  let entregadores: { id: string; nome: string; perfil?: string }[] = [];
   if (perfil === 'ADMIN') {
     try {
       const { data: ents } = await supabase
         .from('app_users')
-        .select('id, nome')
-        .eq('perfil', 'ENTREGADOR')
+        .select('id, nome, perfil')
+        .in('perfil', ['VENDEDOR', 'ENTREGADOR'])
         .eq('ativo', true)
         .order('nome', { ascending: true });
-      entregadores = (ents || []).map((u: any) => ({ id: u.id, nome: u.nome || 'Entregador' }));
+      const vistos = new Set<string>();
+      entregadores = (ents || [])
+        .filter((u: any) => u.id && !vistos.has(u.id) && vistos.add(u.id))
+        .map((u: any) => ({ id: u.id, nome: u.nome || 'Entregador', perfil: String(u.perfil || 'VENDEDOR') }))
+        .sort((a: any, b: any) =>
+          (a.perfil === 'VENDEDOR' ? 0 : 1) - (b.perfil === 'VENDEDOR' ? 0 : 1) ||
+          String(a.nome || '').localeCompare(String(b.nome || '')));
     } catch { /* app_users antigo: seletor vem vazio e a carga funciona sem entregador */ }
   }
 

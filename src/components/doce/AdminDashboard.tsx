@@ -13,6 +13,8 @@ import Cupom from '@/components/doce/Cupom';
 import ClientHistory from '@/components/doce/ClientHistory';
 // BLOCO 79: Lucro por Rota — faturamento x custo dos produtos vendidos, rota por rota, ao vivo
 import LucroRotas from '@/components/doce/LucroRotas';
+// BLOCO 95: Fiscal — fila de produtos vindos das XMLs de compra (Spedy/upload)
+import FiscalXml from '@/components/doce/FiscalXml';
 // BLOCO 62: validação da chave Pix do recebimento (CPF/CNPJ/telefone/email/EVP)
 import { normalizarChavePix, formatPixKey } from '@/lib/pix';
 // BLOCO 63: arrastar-e-soltar estilo kanban na ordem do Estoque Central (dnd-kit) —
@@ -109,7 +111,7 @@ interface AdminDashboardProps {
   setMelhorias?: (v: MelhoriasFlags) => void;
 }
 
-type TabType = 'HOME' | 'CATALOGO' | 'CATALOGO_PORTAL' | 'CATEGORIAS' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'COMPROVANTES' | 'ENTREGAS' | 'LUCRO' | 'BACKUP' | 'SETTINGS';
+type TabType = 'HOME' | 'CATALOGO' | 'CATALOGO_PORTAL' | 'FISCAL_XML' | 'CATEGORIAS' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'COMPROVANTES' | 'ENTREGAS' | 'LUCRO' | 'BACKUP' | 'SETTINGS';
 
 type ReportType = 'RESUMO' | 'TOP_CLIENTES' | 'TOP_PRODUTOS' | 'CLIENTES_RISCO' | 'VENDAS_CATEGORIAS' | 'PRODUTOS_RENTAVEIS' | null;
 type ReportFilterType = 'RESUMO' | 'TOP_PRODUTOS' | 'TOP_CLIENTES' | 'CATEGORIAS' | 'VENDEDORES' | 'DIVIDAS' | 'PRODUTOS_RENTAVEIS';
@@ -1594,6 +1596,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           <div className="px-2 flex items-center justify-between"><div><h2 className="text-2xl font-black text-gray-800 tracking-tight">Painel Administrativo</h2><p className="text-xs text-gray-400 font-semibold uppercase tracking-wider">Gestão e Controle Total</p></div><div className="flex items-center gap-2"><button onClick={() => setShowNotifPrefs(true)} className="w-10 h-10 bg-white text-gray-400 rounded-xl flex items-center justify-center shadow-sm border border-gray-100 active:scale-90"><i className="fa-solid fa-sliders text-xs"></i></button><button onClick={() => { setShowNotifPanel(!showNotifPanel); if (showNotifPanel) markAllRead(); }} className="w-10 h-10 bg-white text-blue-600 rounded-xl flex items-center justify-center shadow-sm border border-gray-100 active:scale-90 relative"><i className="fa-solid fa-bell text-sm"></i>{unreadCount > 0 && (<span className="absolute -top-1 -right-1 w-5 h-5 bg-rose-500 text-white text-[8px] font-black rounded-full flex items-center justify-center animate-pulse">{unreadCount > 9 ? '9+' : unreadCount}</span>)}</button></div></div>
           <div className="grid grid-cols-2 gap-4">
             <MenuCard icon="fa-boxes-stacked" title="Estoque" tab="CATALOGO" color="bg-blue-50 text-blue-600" />
+            <MenuCard icon="fa-file-code" title="XML → Produtos" tab="FISCAL_XML" color="bg-teal-50 text-teal-600" />
             <MenuCard icon="fa-store" title="Catalogo Portal" tab="CATALOGO_PORTAL" color="bg-emerald-50 text-emerald-600" />
             <MenuCard icon="fa-tags" title="Categorias" tab="CATEGORIAS" color="bg-indigo-50 text-indigo-600" />
             <MenuCard icon="fa-truck-ramp-box" title="Cargas" tab="CARGAS" color="bg-orange-50 text-orange-600" />
@@ -1652,6 +1655,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           showToast={showToast}
         />
       )}
+
+      {activeTab === 'FISCAL_XML' && <FiscalXml products={props.products} showToast={showToast} />}
 
       {activeTab === 'CATEGORIAS' && (
         <div className="space-y-6 py-4">

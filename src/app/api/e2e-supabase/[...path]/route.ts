@@ -12,7 +12,7 @@ import { hashSync } from 'bcryptjs';
  * testar a fila de entrega do admin (setas de ordem + editor de pedido).
  */
 
-const CATCH_TABLES = ['app_users', 'clients', 'products', 'app_settings', 'product_categories', 'product_subcategories', 'cargas', 'cargas_pendentes', 'system_messages', 'commissions', 'commission_payment_logs', 'sales', 'seller_expenses', 'push_tokens', 'daily_routes', 'entrega_rotas', 'entrega_eventos', 'sale_items', 'payment_comprovantes', 'caixa_fechamentos', 'pre_vendas', 'pedidos'];
+const CATCH_TABLES = ['app_users', 'clients', 'products', 'app_settings', 'product_categories', 'product_subcategories', 'cargas', 'cargas_pendentes', 'system_messages', 'commissions', 'commission_payment_logs', 'sales', 'seller_expenses', 'push_tokens', 'daily_routes', 'entrega_rotas', 'entrega_eventos', 'sale_items', 'payment_comprovantes', 'caixa_fechamentos', 'pre_vendas', 'pedidos', 'xml_importacoes', 'xml_itens'];
 
 const users = [{
   id: 'adminuser', nome: 'Admin Teste', email: '', perfil: 'ADMIN', ativo: true,
@@ -211,6 +211,9 @@ const tables: Record<string, any[]> = {
   caixa_fechamentos: [],
   pre_vendas: [],
   pedidos: [],
+  // BLOCO 95: fila fiscal de produtos vindos da XML (aba XML → Produtos)
+  xml_importacoes: [],
+  xml_itens: [],
 };
 
 function json(data: any, status = 200) {
@@ -406,6 +409,15 @@ async function handle(req: NextRequest, segments: string[]) {
         if (table === 'caixa_fechamentos') {
           clone.data = clone.data ?? new Date().toISOString().slice(0, 10);
           clone.confirmado = clone.confirmado ?? false;
+        }
+        // BLOCO 95: defaults da fila fiscal (criado_em vem do DEFAULT now() do SQL)
+        if (table === 'xml_importacoes') {
+          clone.criado_em = clone.criado_em ?? new Date().toISOString();
+          clone.origem = clone.origem ?? 'UPLOAD';
+        }
+        if (table === 'xml_itens') {
+          clone.criado_em = clone.criado_em ?? new Date().toISOString();
+          clone.status = clone.status ?? 'PENDENTE';
         }
         tables[table].push(clone);
         clones.push(clone);

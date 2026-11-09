@@ -508,7 +508,11 @@ async function enrichFila(supabase: any, salesRows: any[]) {
   if (salesRows.length === 0) return [];
   const clientIds = [...new Set(salesRows.map((s: any) => s.client_id).filter(Boolean))];
   const saleIds = salesRows.map((s: any) => s.id);
-  const vendedorIds = [...new Set(salesRows.map((s: any) => s.vendedor_id).filter(Boolean))];
+  // BLOCO 96: nomes tambem dos ENTREGADORES atribuidos (badge do card + caixa)
+  const vendedorIds = [...new Set([
+    ...salesRows.map((s: any) => s.vendedor_id).filter(Boolean),
+    ...salesRows.map((s: any) => s.entregador_id).filter(Boolean),
+  ])];
 
   const [clientsRes, itemsRes, usersRes, fotosRes] = await Promise.all([
     fetchClientsFlex(supabase, clientIds),
@@ -580,6 +584,10 @@ async function enrichFila(supabase: any, salesRows: any[]) {
       // carregado no veiculo (null = ainda nao carregado). Bancos sem a
       // coluna (SQL 58 pendente) vêm undefined = null = nao carregado.
       carregadoEm: s.carga_confirmada_em ?? null,
+      // BLOCO 96: entregador ATRIBUIDO a venda (escolhido no check de carga —
+      // cada entregador tem o proprio caixa e ve so a propria carga)
+      entregadorId: s.entregador_id ?? null,
+      entregadorNome: s.entregador_id ? (userMap[s.entregador_id] || 'Entregador') : null,
       vendedorId: s.vendedor_id,
       vendedorNome: userMap[s.vendedor_id] || '',
       temFoto: !!temFotoSet[s.id],
@@ -607,6 +615,16 @@ async function enrichFila(supabase: any, salesRows: any[]) {
 async function getFila(supabase: any, userId: string, perfil: string) {
   const { start, end } = dayRangeIso();
   const proprio = perfil === 'VENDEDOR';
+  // BLOCO 96 (regra do dono): CADA ENTREGADOR tem o seu proprio caixa e ve SO
+  // a sua carga. A venda recebe o entregador ANTES de entrar no veiculo (check
+  // de carga com entregador). O entregador logado ve: vendas atribuidas a ele
+  // + as antigas sem entregador (transicao — nada desaparece). O admin ve tudo.
+  let entFiltroUuid: string | null = null;
+  if (perfil === 'ENTREGADOR') {
+    entFiltroUuid = await resolveEntregadorUuid(supabase, userId);
+  }
+  const filtroEntregador = (q: any) =>
+    entFiltroUuid ? q.or(`entregador_id.eq.${entFiltroUuid},entregador_id.is.null`) : q;
   // BLOCO 31: ordem_entrega entra nas colunas SO se o SQL ja rodou (sonda)
   const temOrdem = await hasOrdemEntregaColumn();
   // BLOCO 40: modo_nota idem (tipo do documento no cupom da fila/pedidos)
@@ -623,6 +641,7 @@ async function getFila(supabase: any, userId: string, perfil: string) {
     .in('entrega_status', ['PENDENTE', 'EM_ROTA'])
     .order('data_venda', { ascending: true });
   if (proprio) qAtiva = qAtiva.eq('vendedor_id', userId);
+  qAtiva = filtroEntregador(qAtiva);
   const { data: ativas, error: ativaErr } = await qAtiva;
 
   // Bloco 13 nao rodou: refaz sem as colunas novas
@@ -653,6 +672,7 @@ async function getFila(supabase: any, userId: string, perfil: string) {
     .gte('data_venda', dias7)
     .order('data_venda', { ascending: false });
   if (proprio) qFal = qFal.eq('vendedor_id', userId);
+  qFal = filtroEntregador(qFal);
   const { data: falhados } = await qFal;
 
   // ---- Entregues HOJE (para o resumo/transparencia) ----
@@ -664,6 +684,7 @@ async function getFila(supabase: any, userId: string, perfil: string) {
     .gte('data_venda', dias7)
     .order('data_venda', { ascending: false });
   if (proprio) qEnt = qEnt.eq('vendedor_id', userId);
+  qEnt = filtroEntregador(qEnt);
   const { data: entreguesRows } = await qEnt;
   // entregues hoje = data_venda em qualquer dia, mas o evento ENTREGUE de hoje:
   // simplificacao segura: usamos os eventos de hoje para filtrar
@@ -720,29 +741,103 @@ async function getFila(supabase: any, userId: string, perfil: string) {
   // e so recomeca quando o admin clica no botao "Fechar caixa". Sem nenhum
   // fechamento anterior, considera os ultimos 60 dias (teto de egress — nunca
   // escaneia o historico inteiro).
-  let desdeCaixaIso: string | null = null;
+  // BLOCO 96 (regra do dono): CADA ENTREGADOR tem o SEU caixa. Guardamos o
+  // ultimo fechamento POR entregador e somamos os eventos de entrega de cada
+  // um a partir do fechamento DELE (o global segue existindo para o sheet
+  // legado e para o entregador sem atribuicao).
+  let fechamentosCaixa: any[] = [];
   try {
-    const { data: ultimoFech } = await supabase
+    const { data: fechRows } = await supabase
       .from('caixa_fechamentos')
-      .select('criado_em')
+      .select('entregador_id, criado_em')
       .order('criado_em', { ascending: false })
-      .limit(1);
-    desdeCaixaIso = ultimoFech && ultimoFech[0]?.criado_em ? String(ultimoFech[0].criado_em) : null;
+      .limit(500);
+    fechamentosCaixa = fechRows || [];
   } catch { /* tabela antiga: segue sem limite de fechamento */ }
-  const desdeCaixa = desdeCaixaIso || new Date(Date.now() - 60 * 24 * 3600 * 1000).toISOString();
+  const desdePorEnt: Record<string, string> = {};
+  let desdeCaixaIso: string | null = null; // fechamento mais RECENTE (janela global legada)
+  for (const f of fechamentosCaixa) {
+    const iso = String(f.criado_em || '');
+    if (!iso) continue;
+    if (!desdeCaixaIso) desdeCaixaIso = iso; // rows em ordem desc = 1o e o mais recente
+    const eid = String(f.entregador_id || '');
+    if (eid && !desdePorEnt[eid]) desdePorEnt[eid] = iso;
+  }
+  // BLOCO 96 (fix): a busca cobre o TETO de 60 dias — o caixa de um
+  // entregador SEM fechamento proprio inclui entregas antigas dele (que podem
+  // preceder o fechamento mais antigo). O corte certo acontece POR ENTREGADOR
+  // no loop abaixo (desde o fechamento DELE), nao na busca.
+  const desdeCaixa = new Date(Date.now() - 60 * 24 * 3600 * 1000).toISOString();
   const { data: evCaixa } = await supabase
     .from('entrega_eventos')
     .select('sale_id, status, motivo, criado_em')
     .eq('status', 'ENTREGUE')
     .gte('criado_em', desdeCaixa);
 
+  // BLOCO 96: vendas -> entregador (quem carregou/entregou) para agrupar o caixa
+  const entPorSale: Record<string, string | null> = {};
+  const saleIdsCaixa = [...new Set((evCaixa || []).map((e: any) => String(e.sale_id)))];
+  if (saleIdsCaixa.length > 0) {
+    const { data: salesEnt } = await supabase.from('sales').select('id, entregador_id').in('id', saleIdsCaixa);
+    (salesEnt || []).forEach((s: any) => { entPorSale[String(s.id)] = s.entregador_id ?? null; });
+  }
+
   // Caixa EM ABERTO (dinheiro/pix recebidos desde o ultimo fechamento) —
-  // estimativa a partir dos eventos de entrega
+  // estimativa a partir dos eventos de entrega: global + POR ENTREGADOR
   let dinheiroHoje = 0, pixHoje = 0;
+  const caixasMap: Record<string, { entregadorId: string; nome: string; dinheiro: number; pix: number; desde: string | null; qtdEntregas: number }> = {};
   for (const e of evCaixa || []) {
     const { din, pix } = partesDeMotivo(e.motivo);
-    dinheiroHoje = round2(dinheiroHoje + din);
-    pixHoje = round2(pixHoje + pix);
+    // global (legado/sheet): so o que veio DEPOIS do fechamento mais recente global
+    if (!desdeCaixaIso || String(e.criado_em || '') > desdeCaixaIso) {
+      dinheiroHoje = round2(dinheiroHoje + din);
+      pixHoje = round2(pixHoje + pix);
+    }
+    const entId = String(entPorSale[String(e.sale_id)] || 'SEM_ENTREGADOR');
+    const g = (caixasMap[entId] ||= {
+      entregadorId: entId, nome: '', dinheiro: 0, pix: 0,
+      // cada entregador conta desde o FECHAMENTO DELE; o grupo SEM entregador
+      // segue a janela global (fechamento mais recente)
+      desde: entId === 'SEM_ENTREGADOR' ? (desdeCaixaIso || null) : (desdePorEnt[entId] || null),
+      qtdEntregas: 0,
+    });
+    // so entra no caixa DELE o que veio DEPOIS do fechamento DELE
+    if (g.desde && String(e.criado_em || '') <= g.desde) continue;
+    g.dinheiro = round2(g.dinheiro + din);
+    g.pix = round2(g.pix + pix);
+    g.qtdEntregas += 1;
+  }
+  const idsCaixa = Object.keys(caixasMap).filter(k => k !== 'SEM_ENTREGADOR');
+  if (idsCaixa.length > 0) {
+    const { data: usCaixa } = await supabase.from('app_users').select('id, nome').in('id', idsCaixa);
+    (usCaixa || []).forEach((u: any) => { if (caixasMap[u.id]) caixasMap[u.id].nome = u.nome; });
+  }
+  if (caixasMap['SEM_ENTREGADOR']) caixasMap['SEM_ENTREGADOR'].nome = 'Sem entregador (antigo)';
+  // zero em aberto (fechado agora) = nao aparece na lista — caixa limpo
+  const caixasPorEntregador = Object.values(caixasMap)
+    .filter((g: any) => g.qtdEntregas > 0 || g.dinheiro > 0 || g.pix > 0)
+    .sort((a: any, b: any) => b.dinheiro - a.dinheiro || b.pix - a.pix);
+  // ENTREGADOR logado: o "caixa" dele e o SEU proprio (regra do dono — cada
+  // entregador com o caixa separado). Admin continua vendo o global no sheet.
+  if (entFiltroUuid) {
+    const meu = caixasMap[entFiltroUuid];
+    dinheiroHoje = meu ? meu.dinheiro : 0;
+    pixHoje = meu ? meu.pix : 0;
+  }
+
+  // BLOCO 96: entregadores ativos para o seletor de carga (o admin escolhe
+  // QUEM e o entregador de cada venda antes de carregar o veiculo)
+  let entregadores: { id: string; nome: string }[] = [];
+  if (perfil === 'ADMIN') {
+    try {
+      const { data: ents } = await supabase
+        .from('app_users')
+        .select('id, nome')
+        .eq('perfil', 'ENTREGADOR')
+        .eq('ativo', true)
+        .order('nome', { ascending: true });
+      entregadores = (ents || []).map((u: any) => ({ id: u.id, nome: u.nome || 'Entregador' }));
+    } catch { /* app_users antigo: seletor vem vazio e a carga funciona sem entregador */ }
   }
 
   // Resumo legivel do recebimento de uma entrega (para a conferencia do admin)
@@ -812,6 +907,9 @@ async function getFila(supabase: any, userId: string, perfil: string) {
     fila: filaFmt,
     falhados: await enrichFila(supabase, falhados || []),
     entreguesHoje: entreguesHojeEnr,
+    // BLOCO 96: entregadores ativos (o admin escolhe QUEM leva cada venda no check de carga)
+    entregadores,
+    caixasPorEntregador,
     resumo: {
       naFila: filaFmt.length,
       valorFila: round2(filaFmt.reduce((a: number, p: any) => a + p.valorTotal, 0)),
@@ -980,7 +1078,17 @@ export async function GET(req: NextRequest) {
             .select('*')
             .eq('data', todayStr())
             .order('criado_em', { ascending: false });
-          return NextResponse.json({ ...fila, fechamentosHoje: fechs || [] });
+          // BLOCO 96: nome do entregador em cada fechamento (caixa separado por entregador)
+          const idsFech = [...new Set((fechs || []).map((f: any) => String(f.entregador_id || '')).filter(Boolean))];
+          const nomesFech: Record<string, string> = {};
+          if (idsFech.length > 0) {
+            const { data: usFech } = await supabase.from('app_users').select('id, nome').in('id', idsFech);
+            (usFech || []).forEach((u: any) => { nomesFech[u.id] = u.nome; });
+          }
+          return NextResponse.json({
+            ...fila,
+            fechamentosHoje: (fechs || []).map((f: any) => ({ ...f, entregadorNome: nomesFech[String(f.entregador_id)] || null })),
+          });
         }
       }
       return NextResponse.json(fila);
@@ -1159,11 +1267,27 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: false, error: 'Banco desatualizado: rode o Bloco 58 do SQL (check de carga).' }, { status: 503 });
       }
       const carregado = !!body.carregado;
+      // BLOCO 96 (regra do dono): ANTES de carregar o veiculo o admin escolhe
+      // QUEM e o entregador daquela venda/cliente. O entregador vai para
+      // sales.entregador_id — cada entregador ve so a propria carga e tem o
+      // SEU caixa (as entregas dele caem no caixa dele).
+      const entAlvoBruto = String(body.entregadorId || '');
+      let entAlvo: string | null = null;
+      if (entAlvoBruto && carregado) {
+        entAlvo = await resolveEntregadorUuid(supabase, entAlvoBruto);
+        if (!entAlvo) {
+          return NextResponse.json({ ok: false, error: 'Entregador invalido — crie um usuario Entregador real no menu Usuarios.' }, { status: 400 });
+        }
+      }
       // carga_confirmada_por e uuid: resolve pseudo-usuarios (login fixo) para
       // um uuid real/fixo — senao o update inteiro quebraria com 22P02.
       const porUuid = carregado ? await resolveEntregadorUuid(supabase, userId) : null;
       const payload: Record<string, unknown> = carregado
-        ? { carga_confirmada_em: new Date().toISOString(), ...(porUuid ? { carga_confirmada_por: porUuid } : {}) }
+        ? {
+            carga_confirmada_em: new Date().toISOString(),
+            ...(porUuid ? { carga_confirmada_por: porUuid } : {}),
+            ...(entAlvo ? { entregador_id: entAlvo } : {}),
+          }
         : { carga_confirmada_em: null, carga_confirmada_por: null };
       const { error: cargaErr } = await supabase.from('sales').update(payload).eq('id', saleIdCarga);
       const codeCarga = (cargaErr as any)?.code || '';
@@ -1171,7 +1295,12 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: false, error: 'Banco desatualizado: rode o Bloco 58 do SQL (check de carga).' }, { status: 503 });
       }
       if (cargaErr) throw cargaErr;
-      await logEventoSeguro(supabase, null, saleIdCarga, userId, carregado ? 'CARGA_OK' : 'CARGA_REMOVIDA', carregado ? 'Pedido carregado no veiculo (check do admin)' : 'Check de carga removido pelo admin');
+      let nomeAlvo = '';
+      if (entAlvo) {
+        const { data: uAlvo } = await supabase.from('app_users').select('nome').eq('id', entAlvo).maybeSingle();
+        nomeAlvo = uAlvo?.nome ? ` — entregador: ${uAlvo.nome}` : '';
+      }
+      await logEventoSeguro(supabase, null, saleIdCarga, userId, carregado ? 'CARGA_OK' : 'CARGA_REMOVIDA', carregado ? `Pedido carregado no veiculo (check do admin)${nomeAlvo}` : 'Check de carga removido pelo admin');
       return NextResponse.json({ ok: true, carregado });
     }
 
@@ -1205,6 +1334,9 @@ export async function POST(req: NextRequest) {
           confirmado: true,
           confirmado_por: userId,
           confirmado_em: new Date().toISOString(),
+          // BLOCO 96: criado_em explicito — o "desde" do caixa DELE parte daqui
+          // (sem depender do DEFAULT now() do banco; mocks/ambientes antigos)
+          criado_em: new Date().toISOString(),
         }, { onConflict: 'entregador_id,data' });
       const code = (caixaErr as any)?.code || '';
       if (caixaErr && (code === '42P01' || code === '42501' || code === 'PGRST204' || code === '42703')) {

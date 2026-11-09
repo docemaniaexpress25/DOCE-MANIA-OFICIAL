@@ -60,6 +60,10 @@ interface FilaItem {
   // BLOCO 58: check de carga — timestamp de quando o pedido foi carregado no
   // veiculo (null/undefined = ainda nao carregado). Quem marca e o ADMIN.
   carregadoEm?: string | null;
+  // BLOCO 96: entregador ATRIBUIDO a venda (escolhido no check de carga) —
+  // cada entregador tem o SEU caixa e ve so a propria carga
+  entregadorId?: string | null;
+  entregadorNome?: string | null;
   vendedorId: string;
   vendedorNome: string;
   // BLOCO 64: numero/sala do endereco — impressao da ordem mostra "Rua X, 123"
@@ -79,8 +83,21 @@ interface ApiResp {
   meuFechamento?: { id: string; valor_dinheiro: number; valor_pix: number; qtd_entregas: number; confirmado: boolean; obs: string | null } | null;
   fechamentosHoje?: any[];
   conferencia?: { porEntregador: { entregadorId: string; nome: string; dinheiro: number; pix: number; qtdEntregas: number; vendas: { saleId: string; cliente: string; valorTotal: number; valorPago: number; recebimento: string }[] }[] };
+  // BLOCO 96: entregadores ativos (seletor da carga) + CAIXA SEPARADO por entregador
+  entregadores?: { id: string; nome: string }[];
+  caixasPorEntregador?: CaixaEnt[];
   migracaoPendente?: boolean;
   error?: string;
+}
+
+// BLOCO 96: caixa EM ABERTO de um entregador (desde o fechamento DELE)
+interface CaixaEnt {
+  entregadorId: string;
+  nome: string;
+  dinheiro: number;
+  pix: number;
+  desde: string | null;
+  qtdEntregas: number;
 }
 
 const fmt = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -218,6 +235,13 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
   const [mostrarLista, setMostrarLista] = useState(false);
   // BLOCO 31: edicao do pedido pelo admin (antes da entrega) + busy por sale
   const [editPedido, setEditPedido] = useState<FilaItem | null>(null);
+  // BLOCO 96 (regra do dono): FILTRO POR VENDEDOR acima da fila — clicou no
+  // vendedor, aparecem so as entregas dele (pronta entrega e pre-venda).
+  const [filtroVendedor, setFiltroVendedor] = useState<string>('TODOS');
+  // BLOCO 96 (regra do dono): check de carga com ESCOLHA DO ENTREGADOR — antes
+  // de o entregador carregar, seleciona quem e o entregador daquela venda/cliente.
+  const [sheetCarga, setSheetCarga] = useState<FilaItem | null>(null);
+  const [cargaEntId, setCargaEntId] = useState('');
   const mounted = useRef(true);
   // BLOCO 59 (ordem de entrega rapida): estado da gravacao das setas.
   // - dataRef: ultima fila conhecida (a gravacao debounced le daqui, fora do render)
@@ -235,6 +259,35 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
+
+  // ===== BLOCO 96: filtro por vendedor (chips acima da fila — modo ADMIN) =====
+  const vendedorDe = (p: FilaItem) => p.vendedorId || 'SEM_VEND';
+  const vendedoresDaFila = useMemo(() => {
+    const map = new Map<string, { id: string; nome: string; count: number }>();
+    for (const p of (data?.fila || [])) {
+      const id = vendedorDe(p);
+      const g = map.get(id) || { id, nome: p.vendedorNome || 'Sem vendedor', count: 0 };
+      g.count += 1;
+      map.set(id, g);
+    }
+    return [...map.values()].sort((a, b) => b.count - a.count || a.nome.localeCompare(b.nome));
+  }, [data]);
+  const nomeFiltroAtivo = filtroVendedor === 'TODOS' ? '' : (vendedoresDaFila.find(v => v.id === filtroVendedor)?.nome || '');
+  const filaVisivel = useMemo(() => {
+    const f = data?.fila || [];
+    if (filtroVendedor === 'TODOS') return f;
+    return f.filter(p => vendedorDe(p) === filtroVendedor);
+  }, [data, filtroVendedor]);
+  const falhadosVisivel = useMemo(() => {
+    const f = data?.falhados || [];
+    if (filtroVendedor === 'TODOS') return f;
+    return f.filter(p => vendedorDe(p) === filtroVendedor);
+  }, [data, filtroVendedor]);
+  const entreguesVisivel = useMemo(() => {
+    const f = data?.entreguesHoje || [];
+    if (filtroVendedor === 'TODOS') return f;
+    return f.filter(p => vendedorDe(p) === filtroVendedor);
+  }, [data, filtroVendedor]);
 
   const podeEntregar = modo === 'ENTREGADOR' || modo === 'ADMIN';
   const podePrioridade = modo === 'ENTREGADOR' || modo === 'ADMIN';
@@ -437,13 +490,14 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
     if (from < 0 || to < 0) return;
     aplicarOrdem(arrayMove(listaOrdenada, from, to));
   }
+  // BLOCO 61/96: lista ordenada usa a fila FILTRADA pelo vendedor (o kanban,
+  // a impressao e a gravacao da ordem seguem sempre a mesma lista).
   const listaOrdenada = useMemo(() => {
-    if (!data) return [];
-    const f = data.fila || [];
+    const f = filaVisivel;
     const temManual = f.some(p => typeof p.ordemEntrega === 'number' && p.ordemEntrega > 0);
     if (temManual) return [...f].sort(compararOrdemEntrega);
     return [...f.filter(p => p.prioridade === 1), ...f.filter(p => p.prioridade === 2), ...f.filter(p => p.prioridade === 0 || p.prioridade == null)];
-  }, [data]);
+  }, [filaVisivel]);
   const ordemManualAtiva = (data?.fila || []).some(p => typeof p.ordemEntrega === 'number' && p.ordemEntrega > 0);
   // BLOCO 64: a impressao da ordem de entrega sai APENAS com os pedidos que o
   // admin ja marcou como carregados no veiculo — na MESMA ordem da fila.
@@ -542,8 +596,14 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
   }
 
   // BLOCO 33: caixa e fechado pelo ADMIN — abre o sheet pre-preenchido com o
-  // dinheiro estimado do entregador selecionado (grupos da conferencia).
+  // dinheiro estimado do entregador selecionado. BLOCO 96: com o caixa
+  // SEPARADO por entregador, o pre-preenchimento usa o caixa EM ABERTO DELE.
   function abrirCaixaAdmin() {
+    const caixas = data?.caixasPorEntregador || [];
+    if (caixas.length > 0) {
+      abrirCaixaEntregador(caixas[0]);
+      return;
+    }
     const grupos = data?.conferencia?.porEntregador || [];
     if (grupos.length === 0) { showToast('Nenhuma entrega hoje — nada para fechar no caixa.', 'error'); return; }
     const primeiro = grupos[0];
@@ -552,30 +612,74 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
     setSheetCaixa(true);
   }
 
+  // BLOCO 96: abre o fechamento do caixa DE UM entregador especifico, ja
+  // pre-preenchido com o dinheiro em especie EM ABERTO DELE (desde o fechamento dele).
+  function abrirCaixaEntregador(g: CaixaEnt) {
+    setCaixaEntId(g.entregadorId);
+    setCaixaDinheiro(g.dinheiro ? String(Number(g.dinheiro).toFixed(2)) : '');
+    setSheetCaixa(true);
+  }
+
   function trocarEntCaixa(id: string) {
     setCaixaEntId(id);
-    const g = (data?.conferencia?.porEntregador || []).find((x: any) => x.entregadorId === id);
-    setCaixaDinheiro(g && g.dinheiro ? String(Number(g.dinheiro).toFixed(2)) : '');
+    const g = (data?.caixasPorEntregador || []).find(x => x.entregadorId === id);
+    if (g) { setCaixaDinheiro(g.dinheiro ? String(Number(g.dinheiro).toFixed(2)) : ''); return; }
+    const gc = (data?.conferencia?.porEntregador || []).find((x: any) => x.entregadorId === id);
+    setCaixaDinheiro(gc && gc.dinheiro ? String(Number(gc.dinheiro).toFixed(2)) : '');
   }
 
   async function fecharCaixa() {
     const v = parseFloat(caixaDinheiro) || 0;
     if (v < 0) { showToast('Valor invalido.', 'error'); return; }
-    const ok = await acao({ acao: 'FECHAR_CAIXA', entregadorId: caixaEntId, valorDinheiro: v, valorPix: data?.caixa?.pixHoje || 0, qtdEntregas: data?.resumo?.entreguesHoje || 0, obs: caixaObs }, 'Caixa fechado — a partir de agora a conta recomeca!');
+    // BLOCO 96: pix e qtd de entregas do CAIXA DO ENTREGADOR selecionado
+    const gSel = (data?.caixasPorEntregador || []).find(x => x.entregadorId === caixaEntId);
+    const pixAberto = gSel ? gSel.pix : (data?.caixa?.pixHoje || 0);
+    const qtdSel = gSel ? gSel.qtdEntregas : (data?.resumo?.entreguesHoje || 0);
+    const nomeSel = gSel?.nome || 'Entregador';
+    const ok = await acao({ acao: 'FECHAR_CAIXA', entregadorId: caixaEntId, valorDinheiro: v, valorPix: pixAberto, qtdEntregas: qtdSel, obs: caixaObs }, `Caixa de ${nomeSel} fechado — a conta DELE recomeca!`);
     if (ok) { setSheetCaixa(false); setCaixaDinheiro(''); setCaixaObs(''); setCaixaEntId(''); }
   }
 
-  // BLOCO 58: check de carga do admin — atualiza a tela NA HORA (otimista,
-  // sem recarregar a fila inteira: economiza egress) e reverte se falhar.
-  async function toggleCarga(p: FilaItem) {
-    const novo = !p.carregadoEm;
+  // ===== BLOCO 96 (regra do dono): CARGA COM ENTREGADOR — o admin clica em
+  // Carregar, escolhe QUEM e o entregador daquela venda/cliente e confirma.
+  // Ja carregado: o mesmo sheet troca o entregador ou remove do veiculo.
+  function abrirSheetCarga(p: FilaItem) {
+    setCargaEntId(p.entregadorId || '');
+    setSheetCarga(p);
+  }
+
+  async function confirmarCarga() {
+    const p = sheetCarga;
+    if (!p) return;
+    const entregadores = data?.entregadores || [];
+    if (entregadores.length > 0 && !cargaEntId) {
+      showToast('Selecione quem é o ENTREGADOR desta venda antes de carregar.', 'error');
+      return;
+    }
+    const entNome = entregadores.find(e => e.id === cargaEntId)?.nome || p.entregadorNome || null;
+    // otimista: o badge e o contador "No veiculo" atualizam na hora
     setData(d => d ? {
       ...d,
-      fila: d.fila.map(f => f.saleId === p.saleId ? { ...f, carregadoEm: novo ? new Date().toISOString() : null } : f),
+      fila: d.fila.map(f => f.saleId === p.saleId ? {
+        ...f,
+        carregadoEm: new Date().toISOString(),
+        ...(cargaEntId ? { entregadorId: cargaEntId, entregadorNome: entNome } : {}),
+      } : f),
     } : d);
-    const ok = await acao({ acao: 'CHECK_CARGA', saleId: p.saleId, carregado: novo },
-      novo ? 'Pedido CARREGADO no veiculo!' : 'Check de carga removido!', false, true);
-    if (!ok) load(true);
+    const ok = await acao({ acao: 'CHECK_CARGA', saleId: p.saleId, carregado: true, entregadorId: cargaEntId || undefined },
+      cargaEntId ? `Carregado — entregador: ${entNome}!` : 'Pedido CARREGADO no veiculo!', false, true);
+    if (!ok) load(true); else setSheetCarga(null);
+  }
+
+  async function descarregar() {
+    const p = sheetCarga;
+    if (!p) return;
+    setData(d => d ? {
+      ...d,
+      fila: d.fila.map(f => f.saleId === p.saleId ? { ...f, carregadoEm: null } : f),
+    } : d);
+    const ok = await acao({ acao: 'CHECK_CARGA', saleId: p.saleId, carregado: false }, 'Check de carga removido!', false, true);
+    if (!ok) load(true); else setSheetCarga(null);
   }
 
   if (loading && !data) {
@@ -606,12 +710,13 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
     );
   }
 
-  const fila = data.fila || [];
+  // BLOCO 96: listas respeitam o FILTRO POR VENDEDOR (chips acima da fila)
+  const fila = filaVisivel;
   const p1 = fila.filter(p => p.prioridade === 1);
   const p2 = fila.filter(p => p.prioridade === 2);
   const normais = fila.filter(p => p.prioridade === 0 || p.prioridade == null);
-  const falhados = data.falhados || [];
-  const entreguesHoje = data.entreguesHoje || [];
+  const falhados = falhadosVisivel;
+  const entreguesHoje = entreguesVisivel;
   // A PRAZO entregue hoje e ainda sem pagamento: o entregador NAO cobra —
   // o vendedor recebe na proxima visita (regra do dono). Mostrado so para
   // o entregador/admin nao contar esse dinheiro no acerto.
@@ -622,6 +727,19 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
   const caixaEst = data.caixa || { dinheiroHoje: 0, pixHoje: 0 };
   const desdeCaixa = caixaEst.desde ? new Date(caixaEst.desde) : null;
   const desdeCaixaOk = desdeCaixa && !isNaN(desdeCaixa.getTime());
+  // BLOCO 96: caixa do ENTREGADOR selecionado no sheet (fallback: global) —
+  // cada entregador tem o SEU caixa, o pre-preenchimento segue o DELE.
+  const caixaSel = (data?.caixasPorEntregador || []).find(x => x.entregadorId === caixaEntId);
+  const dinEmAbertoSel = caixaSel ? caixaSel.dinheiro : caixaEst.dinheiroHoje;
+  const pixEmAbertoSel = caixaSel ? caixaSel.pix : caixaEst.pixHoje;
+  const desdeSel = caixaSel?.desde || caixaEst.desde;
+  const desdeSelDate = desdeSel ? new Date(desdeSel) : null;
+  const desdeSelOk = desdeSelDate && !isNaN(desdeSelDate.getTime());
+  // BLOCO 96: lista do sheet de caixa — prefere o caixa POR ENTREGADOR;
+  // fallback: grupos da conferencia de hoje (modo antigo).
+  const listaCaixaSheet: any[] = (data?.caixasPorEntregador?.length ?? 0) > 0
+    ? (data?.caixasPorEntregador as any[])
+    : (data?.conferencia?.porEntregador || []);
   // BLOCO 58: contagem da carga — quantos pedidos da fila ja estao no veiculo
   const carregadosCount = fila.filter(p => p.carregadoEm).length;
 
@@ -668,6 +786,10 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                 )}
                 {p.separado && pend && (
                   <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded-md bg-gray-300 text-gray-600"><i className="fa-solid fa-boxes-stacked mr-0.5"></i>Separado</span>
+                )}
+                {/* BLOCO 96: entregador da venda — escolhido no check de carga */}
+                {modo !== 'VENDEDOR' && p.entregadorId && pend && (
+                  <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded-md bg-teal-50 text-teal-700 shrink-0"><i className="fa-solid fa-motorcycle mr-0.5"></i>{p.entregadorNome || 'Entregador'}</span>
                 )}
                 {/* BLOCO 58: pedido carregado no veiculo (check do admin) */}
                 {p.carregadoEm && pend && (
@@ -728,12 +850,12 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
             )}
             {/* BLOCO 61: as setas do Bloco 31 viraram arrastar-e-soltar — o
                 admin pega o card pelo numero e solta na posicao desejada. */}
-            {/* BLOCO 58: check de carga — o admin marca o pedido que entrou no
-                veiculo; a fila mistura carregados e nao carregados e o contador
-                do resumo mostra quantos estao no veiculo. */}
+            {/* BLOCO 96: check de carga COM ESCOLHA DO ENTREGADOR — o botao abre
+                o sheet onde o admin seleciona quem e o entregador da venda. Ja
+                carregado: o mesmo sheet troca o entregador ou remove do veiculo. */}
             {modo === 'ADMIN' && pend && (
-              <button onClick={() => toggleCarga(p)} disabled={!!busy}
-                title={p.carregadoEm ? 'Já carregado — clique para remover o check' : 'Marcar como carregado no veículo'}
+              <button onClick={() => abrirSheetCarga(p)} disabled={!!busy}
+                title={p.carregadoEm ? 'Já carregado — clique para trocar o entregador ou remover do veículo' : 'Marcar como carregado no veículo (escolhe o entregador)'}
                 className={`flex-1 min-w-[58px] py-2.5 rounded-xl text-[9px] font-black uppercase active:scale-95 transition-transform disabled:opacity-60 ${p.carregadoEm ? 'bg-emerald-600 text-white shadow' : 'bg-slate-100 text-slate-500'}`}>
                 <i className={`fa-solid ${p.carregadoEm ? 'fa-clipboard-check' : 'fa-truck-fast'} mr-1`}></i>{p.carregadoEm ? 'Carregado' : 'Carregar'}
               </button>
@@ -842,23 +964,6 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                     className="px-4 py-2.5 rounded-xl bg-slate-800 text-white text-[9px] font-black uppercase active:scale-95 shadow disabled:opacity-60">
                     <i className="fa-solid fa-cash-register mr-1"></i>{(data.fechamentosHoje || []).length > 0 ? 'Corrigir' : 'Fechar caixa'}
                   </button>
-                  {(data.fechamentosHoje || []).length > 0 && (
-                    <div className="mt-1.5 space-y-1">
-                      {(data.fechamentosHoje || []).map((f: any) => (
-                        <div key={f.id} className="flex items-center gap-2 justify-end">
-                          <span className="text-[9px] font-black text-slate-600">Dinheiro: {fmt(Number(f.valor_dinheiro))}</span>
-                          {f.confirmado ? (
-                            <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">Confirmado</span>
-                          ) : (
-                            <button onClick={() => acao({ acao: 'CONFIRMAR_CAIXA', caixaId: f.id }, 'Recebimento do dinheiro confirmado!')}
-                              className="text-[8px] font-black uppercase px-2 py-1 rounded bg-emerald-600 text-white active:scale-95">
-                              Confirmar
-                            </button>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
                 </div>
               ) : (
                 <p className="text-[8px] font-bold text-slate-400 uppercase text-right leading-snug max-w-[130px]">
@@ -866,6 +971,57 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                 </p>
               )}
             </div>
+
+            {/* BLOCO 96: fechamentos de hoje com o NOME do entregador (cada um
+                tem o seu caixa) — linha inteira embaixo, sem espremer o resumo */}
+            {modo === 'ADMIN' && (data.fechamentosHoje || []).length > 0 && (
+              <div className="mt-2 pt-2 border-t border-slate-100 space-y-1">
+                {(data.fechamentosHoje || []).map((f: any) => (
+                  <div key={f.id} className="flex items-center gap-2 justify-between bg-white rounded-lg border border-slate-100 px-2.5 py-1.5">
+                    <span className="text-[9px] font-black text-slate-600 truncate"><i className="fa-solid fa-motorcycle text-slate-300 mr-1"></i>{f.entregadorNome || 'Entregador'}</span>
+                    <span className="text-[9px] font-black text-slate-600 shrink-0">Dinheiro: {fmt(Number(f.valor_dinheiro))}</span>
+                    {f.confirmado ? (
+                      <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 shrink-0">Confirmado</span>
+                    ) : (
+                      <button onClick={() => acao({ acao: 'CONFIRMAR_CAIXA', caixaId: f.id }, 'Recebimento do dinheiro confirmado!')}
+                        className="text-[8px] font-black uppercase px-2 py-1 rounded bg-emerald-600 text-white active:scale-95 shrink-0">
+                        Confirmar
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* BLOCO 96 (regra do dono): CAIXA SEPARADO POR ENTREGADOR — cada
+                entregador tem o SEU caixa em aberto (desde o fechamento DELE)
+                e o admin fecha um por um, pre-preenchido com o dinheiro DELE. */}
+            {modo === 'ADMIN' && (data.caixasPorEntregador?.length ?? 0) > 0 && (
+              <div className="mt-2 pt-2 border-t border-slate-200 space-y-1.5">
+                <p className="text-[9px] font-black text-slate-500 uppercase"><i className="fa-solid fa-motorcycle mr-1"></i>Caixa por entregador (em aberto)</p>
+                {(data.caixasPorEntregador || []).map(g => (
+                  <div key={g.entregadorId} className={`bg-white rounded-xl border p-2.5 ${g.entregadorId === 'SEM_ENTREGADOR' ? 'border-amber-200 bg-amber-50/50' : 'border-slate-200'}`}>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-[10px] font-black text-slate-700 uppercase truncate"><i className="fa-solid fa-motorcycle text-emerald-500 mr-1"></i>{g.nome || 'Entregador'}</p>
+                        <p className="text-[8px] font-bold text-slate-400 uppercase">
+                          {g.desde ? `caixa aberto desde ${new Date(g.desde).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })} ${new Date(g.desde).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}` : 'sem fechamento anterior'} · {g.qtdEntregas} entrega(s)
+                        </p>
+                      </div>
+                      <button onClick={() => abrirCaixaEntregador(g)} disabled={!!busy}
+                        className="px-3 py-2 rounded-xl bg-slate-800 text-white text-[8px] font-black uppercase shrink-0 active:scale-95 disabled:opacity-60">
+                        <i className="fa-solid fa-cash-register mr-1"></i>Fechar caixa
+                      </button>
+                    </div>
+                    <p className="text-[11px] font-black text-slate-700 mt-1">
+                      <i className="fa-solid fa-money-bill-wave text-emerald-500 mr-1"></i>{fmt(g.dinheiro)}
+                      <span className="mx-2 text-slate-300">·</span>
+                      <i className="fa-brands fa-pix text-teal-500 mr-1"></i>{fmt(g.pix)}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
 
             {/* CONFERENCIA DO DIA (admin): o que o sistema registrou vs o que
                 foi fechado no caixa — entrega por entrega, para bater o dinheiro */}
@@ -956,6 +1112,35 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
           </div>
         )}
       </div>
+
+      {/* ===== BLOCO 96: FILTRO POR VENDEDOR (acima da fila — regra do dono:
+          clicou em cima do vendedor, aparecem so as entregas DELE) ===== */}
+      {modo === 'ADMIN' && vendedoresDaFila.length > 0 && (
+        <div className="print:hidden">
+          <div className="overflow-x-auto px-1 pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <div className="flex gap-1.5 min-w-max">
+              <button
+                onClick={() => setFiltroVendedor('TODOS')}
+                className={`px-3 py-2 rounded-xl text-[9px] font-black uppercase border-2 transition-colors shrink-0 ${filtroVendedor === 'TODOS' ? 'bg-gray-800 border-gray-800 text-white shadow' : 'bg-white border-gray-200 text-gray-500'}`}>
+                <i className="fa-solid fa-users mr-1"></i>Todos ({(data?.fila || []).length})
+              </button>
+              {vendedoresDaFila.map(v => (
+                <button
+                  key={v.id}
+                  onClick={() => setFiltroVendedor(cur => cur === v.id ? 'TODOS' : v.id)}
+                  className={`px-3 py-2 rounded-xl text-[9px] font-black uppercase border-2 transition-colors shrink-0 ${filtroVendedor === v.id ? 'bg-amber-500 border-amber-500 text-white shadow' : 'bg-white border-gray-200 text-gray-500'}`}>
+                  <i className="fa-solid fa-user-tag mr-1"></i>{v.nome} ({v.count})
+                </button>
+              ))}
+            </div>
+          </div>
+          {filtroVendedor !== 'TODOS' && (
+            <p className="text-[9px] font-black text-amber-600 uppercase px-1 mt-1.5">
+              <i className="fa-solid fa-filter mr-1"></i>Mostrando as entregas de {nomeFiltroAtivo} — {fila.length} na fila ({fmt(fila.reduce((a, p) => a + p.valorTotal, 0))})
+            </p>
+          )}
+        </div>
+      )}
 
       {/* ===== FILA PENDENTE — BLOCO 61: kanban de arrastar-e-soltar ===== */}
       <DndContext
@@ -1487,6 +1672,54 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
         </div>
       )}
 
+      {/* ===== BLOCO 96: SHEET DE CARGA — escolhe QUEM e o ENTREGADOR da
+          venda antes de o entregador carregar (multiplas opcoes). Ja
+          carregado: troca o entregador ou remove do veiculo. ===== */}
+      {sheetCarga && modo === 'ADMIN' && (
+        <div className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-sm flex items-end justify-center" onClick={() => setSheetCarga(null)}>
+          <div className="bg-white w-full max-w-md rounded-t-3xl p-6 animate-in slide-in-from-bottom duration-300" onClick={e => e.stopPropagation()}>
+            <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-4"></div>
+            <h3 className="text-sm font-black text-gray-800 uppercase text-center">
+              <i className="fa-solid fa-truck-fast text-emerald-600 mr-1"></i>
+              {sheetCarga.carregadoEm ? 'Trocar entregador da carga' : 'Carregar no veículo'}
+            </h3>
+            <p className="text-[11px] font-bold text-gray-600 capitalize text-center mt-1">{sheetCarga.cliente.nome} · {fmt(sheetCarga.valorTotal)}</p>
+            <p className="text-[9px] font-black text-gray-400 uppercase text-center mt-3 leading-snug">Quem é o ENTREGADOR desta venda?</p>
+            {(data?.entregadores || []).length > 0 ? (
+              <div className="flex gap-1.5 flex-wrap mt-2">
+                {(data?.entregadores || []).map(e => (
+                  <button key={e.id} onClick={() => setCargaEntId(e.id)}
+                    className={`px-3 py-2.5 rounded-xl text-[10px] font-black uppercase border-2 transition-colors ${cargaEntId === e.id ? 'bg-emerald-600 border-emerald-600 text-white shadow' : 'bg-white border-gray-200 text-gray-500'}`}>
+                    <i className="fa-solid fa-motorcycle mr-1"></i>{e.nome}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mt-2">
+                <p className="text-[9px] font-black text-amber-700 uppercase"><i className="fa-solid fa-triangle-exclamation mr-1"></i>Nenhum usuário ENTREGADOR cadastrado</p>
+                <p className="text-[9px] font-semibold text-amber-600 mt-0.5 leading-snug">Crie usuários Entregador no menu Usuários para escolher quem leva cada venda — o caixa fica separado por entregador. Pode carregar sem entregador (modo antigo).</p>
+              </div>
+            )}
+            {cargaEntId && (
+              <p className="text-[9px] font-black text-emerald-600 uppercase text-center mt-2">
+                <i className="fa-solid fa-circle-check mr-1"></i>Entregador: {(data?.entregadores || []).find(e => e.id === cargaEntId)?.nome || 'Entregador'} — as entregas dele caem no caixa DELE
+              </p>
+            )}
+            <button onClick={confirmarCarga} disabled={!!busy}
+              className={`w-full mt-4 py-4 rounded-2xl text-xs font-black uppercase tracking-wider shadow-lg active:scale-[0.98] transition-transform disabled:opacity-50 ${cargaEntId || (data?.entregadores || []).length === 0 ? 'bg-emerald-600 text-white' : 'bg-gray-200 text-gray-400'}`}>
+              <i className="fa-solid fa-truck-fast mr-1"></i>{sheetCarga.carregadoEm ? 'Salvar entregador' : 'Confirmar carga no veículo'}
+            </button>
+            {sheetCarga.carregadoEm && (
+              <button onClick={descarregar} disabled={!!busy}
+                className="w-full mt-2 py-3.5 rounded-2xl bg-rose-50 text-rose-600 text-[10px] font-black uppercase active:scale-95 disabled:opacity-60">
+                <i className="fa-solid fa-truck-ramp-box mr-1"></i>Remover do veículo
+              </button>
+            )}
+            <button onClick={() => setSheetCarga(null)} className="w-full mt-2 py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Cancelar</button>
+          </div>
+        </div>
+      )}
+
       {/* ===== SHEET: FECHAR CAIXA (BLOCO 33 — SOMENTE O ADMIN) ===== */}
       {sheetCaixa && modo === 'ADMIN' && (
         <div className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-sm flex items-end justify-center" onClick={() => setSheetCaixa(false)}>
@@ -1494,11 +1727,11 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
             <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-4"></div>
             <h3 className="text-sm font-black text-gray-800 uppercase text-center"><i className="fa-solid fa-cash-register text-emerald-600 mr-1"></i>Fechamento de caixa</h3>
             <p className="text-[10px] text-gray-400 font-semibold text-center mt-1">Conte o dinheiro em especie e feche — a conta recomeca do zero</p>
-            {(data?.conferencia?.porEntregador || []).length > 1 && (
+            {listaCaixaSheet.length > 1 && (
               <div className="mt-3">
-                <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Entregador do caixa</label>
+                <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Entregador do caixa (cada um tem o seu)</label>
                 <div className="flex gap-1.5 flex-wrap mt-1">
-                  {(data?.conferencia?.porEntregador || []).map((g: any) => (
+                  {listaCaixaSheet.map((g: any) => (
                     <button key={g.entregadorId} onClick={() => trocarEntCaixa(g.entregadorId)}
                       className={`px-3 py-2 rounded-xl text-[9px] font-black uppercase border-2 transition-colors ${caixaEntId === g.entregadorId ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white border-gray-100 text-gray-500'}`}>
                       {g.nome || 'Entregador'} ({g.qtdEntregas})
@@ -1507,16 +1740,16 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                 </div>
               </div>
             )}
-            {(data?.conferencia?.porEntregador || []).length === 1 && (
+            {listaCaixaSheet.length === 1 && (
               <p className="text-[9px] font-black text-emerald-600 uppercase text-center mt-2">
-                <i className="fa-solid fa-motorcycle mr-1"></i>{(data!.conferencia!.porEntregador[0] as any).nome || 'Entregador'}
+                <i className="fa-solid fa-motorcycle mr-1"></i>{listaCaixaSheet[0].nome || 'Entregador'}
               </p>
             )}
             <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 text-center mt-4">
               <p className="text-[9px] font-black text-emerald-500 uppercase">Dinheiro em espécie em aberto (estimado)</p>
-              <p className="text-[8px] font-bold text-emerald-400 uppercase">{desdeCaixaOk ? `desde ${desdeCaixa!.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })} ${desdeCaixa!.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}` : 'sem fechamento anterior'}</p>
-              <p className="text-2xl font-black text-emerald-700">{fmt(caixaEst.dinheiroHoje)}</p>
-              <p className="text-[9px] font-bold text-teal-600 uppercase mt-1">Pix em aberto: {fmt(caixaEst.pixHoje)} (nao vem em especie)</p>
+              <p className="text-[8px] font-bold text-emerald-400 uppercase">{desdeSelOk ? `desde ${desdeSelDate!.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })} ${desdeSelDate!.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}` : 'sem fechamento anterior'}</p>
+              <p className="text-2xl font-black text-emerald-700">{fmt(dinEmAbertoSel)}</p>
+              <p className="text-[9px] font-bold text-teal-600 uppercase mt-1">Pix em aberto: {fmt(pixEmAbertoSel)} (nao vem em especie)</p>
               {prazoEntregueHoje > 0 && (
                 <p className="text-[9px] font-black text-orange-500 uppercase mt-2 leading-snug">A prazo entregue hoje: {fmt(prazoEntregueHoje)} — NAO entra aqui (vendedor recebe depois)</p>
               )}
@@ -1596,6 +1829,8 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                   <th className="text-left py-1 w-8">#</th>
                   <th className="text-left py-1">Cliente</th>
                   <th className="text-left py-1">Endereço</th>
+                  {/* BLOCO 96: com caixa separado por entregador, a lista imprime QUEM entrega */}
+                  {listaImprimir.some(p => p.entregadorId) && <th className="text-left py-1 w-24">Entregador</th>}
                   <th className="text-right py-1 w-20">Valor</th>
                   <th className="text-center py-1 w-16">Pgto</th>
                 </tr>
@@ -1607,6 +1842,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                     <td className="py-1.5 font-bold">{p.prioridade === 1 ? 'P1 ' : p.prioridade === 2 ? 'P2 ' : ''}{p.cliente.nome}</td>
                     {/* BLOCO 64: endereco completo — rua + numero/sala + bairro */}
                     <td className="py-1.5 text-gray-600">{p.cliente.endereco}{p.cliente.numero ? `, ${p.cliente.numero}` : ''}{p.cliente.bairro ? ` — ${p.cliente.bairro}` : ''}</td>
+                    {listaImprimir.some(x => x.entregadorId) && <td className="py-1.5 text-gray-600 uppercase text-[9px] font-black">{p.entregadorNome || '—'}</td>}
                     <td className="py-1.5 text-right font-bold">{fmt(p.valorTotal)}</td>
                     <td className="py-1.5 text-center uppercase text-[9px] font-black">{p.formaPgto}</td>
                   </tr>

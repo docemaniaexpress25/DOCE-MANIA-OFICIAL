@@ -34,6 +34,16 @@ const users = [{
   id: 'vend04', nome: 'Gil Pantoja', email: '', perfil: 'VENDEDOR', ativo: true,
   telefone: '', whatsapp: '', foto: null, placa_veiculo: '', rota: 'ROTA_04',
   pre_venda: false, rota2: false, pin_hash: hashSync('123456', 10),
+}, {
+  // BLOCO 96 (regra do dono): ENTREGADORES reais — o admin escolhe QUEM leva
+  // cada venda no check de carga e CADA entregador tem o SEU proprio caixa.
+  id: 'ent01', nome: 'João Entregador', email: '', perfil: 'ENTREGADOR', ativo: true,
+  telefone: '', whatsapp: '', foto: null, placa_veiculo: '', rota: '',
+  pre_venda: false, rota2: false, pin_hash: hashSync('123456', 10),
+}, {
+  id: 'ent02', nome: 'Marcos Entregador', email: '', perfil: 'ENTREGADOR', ativo: true,
+  telefone: '', whatsapp: '', foto: null, placa_veiculo: '', rota: '',
+  pre_venda: false, rota2: false, pin_hash: hashSync('123456', 10),
 }];
 
 const clients = [{
@@ -168,6 +178,17 @@ const salesSeed = [
     prioridade: 0, separado: false, separado_em: null, entregador_id: null,
     comprovante_foto: null, modo_nota: null, route_id: null, entrega_seq: null, ordem_entrega: null,
   },
+  // BLOCO 96: pre-venda de OUTRO vendedor (Rota 1) — prova o FILTRO POR
+  // VENDEDOR da fila (chips acima da fila no modo admin)
+  {
+    id: 'sale-fila-003', vendedor_id: 'vend01', client_id: 'cli-6',
+    valor_total: 21.75, valor_pago: 0, metodo_pagamento: 'A_PRAZO',
+    detalhe_pagamento: 'PRE-VENDA — cobrar DINHEIRO na entrega (A VISTA)',
+    status_pagamento: 'PENDENTE', data_venda: iso(30), data_vencimento: null,
+    tipo_venda: 'PRE_VENDA', entrega_status: 'PENDENTE', trocas: null,
+    prioridade: 0, separado: false, separado_em: null, entregador_id: null,
+    comprovante_foto: null, modo_nota: null, route_id: null, entrega_seq: null, ordem_entrega: null,
+  },
   // BLOCO 67: divida ANTIGA do cli-5 (3 dias, pronta entrega a prazo) —
   // banner de divida no PDV sem tirar o botao Atender (nao e venda de hoje
   // nem pre-venda pendente na fila)
@@ -186,6 +207,7 @@ const saleItemsSeed = [
   { id: 'si-1', sale_id: 'sale-fila-001', produto_id: 'prod-1', product_id: 'prod-1', quantidade: 3, preco_venda: 2.39 },
   { id: 'si-2', sale_id: 'sale-fila-002', produto_id: 'prod-2', product_id: 'prod-2', quantidade: 3, preco_venda: 4.29 },
   { id: 'si-3', sale_id: 'sale-divida-001', produto_id: 'prod-1', product_id: 'prod-1', quantidade: 10, preco_venda: 2.5 },
+  { id: 'si-4', sale_id: 'sale-fila-003', produto_id: 'prod-1', product_id: 'prod-1', quantidade: 5, preco_venda: 4.35 },
 ];
 
 const tables: Record<string, any[]> = {
@@ -383,6 +405,16 @@ async function handle(req: NextRequest, segments: string[]) {
           return;
         }
         if (!clone.id) clone.id = `${table}-novo-${Math.random().toString(36).slice(2, 8)}`;
+        // BLOCO 96: caixa_fechamentos tem UNIQUE (entregador_id, data) — o POST
+        // emula o upsert do banco real (senao cada "Fechar caixa" empilhava
+        // linhas e o caixa por entregador nunca zerava no mock).
+        if (table === 'caixa_fechamentos') {
+          const rows = tables[table];
+          const idx = rows.findIndex(r => r.entregador_id === clone.entregador_id && r.data === clone.data);
+          if (idx >= 0) rows[idx] = { ...rows[idx], ...clone };
+          else rows.push(clone);
+          return;
+        }
         if (table === 'sales') {
           clone.valor_total = clone.valor_total ?? 0;
           clone.valor_pago = clone.valor_pago ?? 0;

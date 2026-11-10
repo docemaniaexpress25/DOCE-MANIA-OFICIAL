@@ -2884,7 +2884,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             {/* BLOCO 62: chave do RECEBIMENTO — o QR do Pix a vista cobrado na entrega usa essa chave */}
             <div className="border-t border-gray-100 pt-4 space-y-2">
               <div className="flex items-center justify-between gap-2 flex-wrap">
-                <label className="text-[9px] font-black text-gray-400 uppercase">Chave do recebimento (QR gerado na entrega)</label>
+                <label className="text-[9px] font-black text-gray-400 uppercase">Chave do recebimento (QR do Pix — PDV e entrega)</label>
                 {(() => {
                   const v = (props.pixChave || '').trim();
                   if (!v) return <span className="text-[8px] font-black uppercase px-2 py-0.5 rounded-md bg-gray-100 text-gray-500">Padrão: CPF {formatPixKey('01735712043')}</span>;
@@ -2900,7 +2900,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                 placeholder="CPF, CNPJ, telefone, e-mail ou chave aleatória"
                 className="w-full p-3 bg-gray-50 border border-gray-100 rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-teal-100"
               />
-              <p className="text-[8px] text-gray-400 font-semibold leading-snug">Usada no QR Code do Pix cobrado na entrega. Aceita CPF, CNPJ, telefone (com DDD), e-mail ou chave aleatória. Vazio = usa o padrão (CPF 017.357.120-43).</p>
+              <p className="text-[8px] text-gray-400 font-semibold leading-snug">Chave que RECEBE nas duas telas: no PDV da pronta entrega (QR gerado com o valor da venda, ao escolher Pix) e na entrega da pré-venda. Aceita CPF, CNPJ, telefone (com DDD), e-mail ou chave aleatória. Vazio = usa o padrão (CPF 017.357.120-43).</p>
             </div>
           </div>
 

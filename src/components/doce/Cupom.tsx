@@ -508,12 +508,14 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
             BLOCO 78: overflow-auto (y E x) — em aparelho pequeno (320px) o
             papel 80mm (48 colunas) nao cabe e passa a rolar em vez de cortar. */}
         <div className="px-4 pt-4 pb-3 bg-white">
-          {/* BLOCO 100: os marcadores [[PEQ]]/[[FIMPEQ]] viram trecho em fonte
-              MENOR no preview (na impressora vira font B ESC/POS de verdade) —
-              as TROCAS saem com menos ênfase, abaixo do total. */}
+          {/* BLOCO 100/101: os marcadores [[PEQ]]/[[FIMPEQ]] viram trecho em
+              fonte MUITO MENOR no preview (na impressora vira font B ESC/POS de
+              verdade — a menor que existe) — as TROCAS saem com bem menos
+              ênfase, abaixo do total, em letra MENOR que a descrição dos
+              produtos (regra do dono: "pequeno mesmo"). */}
           <div className="font-mono text-[11px] leading-tight text-black bg-gray-50 rounded-xl border border-gray-100 pl-4 pr-3 py-2.5 whitespace-pre select-none max-h-[38vh] overflow-auto cupom-scroll">
             {cupomSegmentos(generateText(printWidth)).map((seg, i) => seg.pequeno ? (
-              <span key={i} className="text-[9px] text-gray-500">{seg.txt}</span>
+              <span key={i} className="text-[8px] leading-[1.15] text-gray-400">{seg.txt}</span>
             ) : (
               <React.Fragment key={i}>{seg.txt}</React.Fragment>
             ))}

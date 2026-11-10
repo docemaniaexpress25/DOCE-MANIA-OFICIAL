@@ -69,6 +69,13 @@ const escpos = {
   /** Set character size: 0=normal, 0x11=double H+W */
   charSize(mode: number): Uint8Array { return new Uint8Array([GS, 0x21, mode]); },
 
+  /**
+   * BLOCO 100 (regra do dono): FONTE PEQUENA (font B) — as TROCAS do cupom
+   * saem em letras menores que o resto (GS ! 0x01 = font B, altura/largura
+   * normais). Impressoras térmicas ESC/POS suportam de fábrica.
+   */
+  fontSmall(on: boolean): Uint8Array { return new Uint8Array([GS, 0x21, on ? 0x01 : 0x00]); },
+
   /** Raw text encoded in CP860 */
   text(str: string): Uint8Array { return encodeToCP860(str); },
 
@@ -689,6 +696,14 @@ class BluetoothPrinterService {
       // (chave de acesso + consulta SEFAZ) e pelo comprovante de boleto
       // (codigo de barras + PIX). Centralizados no papel.
       // ------------------------------------------------------------
+      // ------------------------------------------------------------
+      // BLOCO 100: marcadores [[PEQ]] / [[FIMPEQ]] trocam para a FONTE
+      // PEQUENA (font B) — usado pelo bloco TROCAS do cupom (menos
+      // ênfase, regra do dono). O marcador nao imprime nada.
+      // ------------------------------------------------------------
+      if (trimmed === '[[PEQ]]') { push(escpos.fontSmall(true)); continue; }
+      if (trimmed === '[[FIMPEQ]]') { push(escpos.fontSmall(false)); continue; }
+
       const mQr = trimmed.match(/^\[\[QR:(.+)\]\]$/);
       const mBc = trimmed.match(/^\[\[BARCODE:(.+)\]\]$/);
       if (mQr || mBc) {

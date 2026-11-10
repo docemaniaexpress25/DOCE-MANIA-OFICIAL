@@ -145,6 +145,67 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const trocasValorNum = (() => { const v = parseFloat(trocasValorCusto.replace(',', '.')); return isFinite(v) && v > 0 ? Math.round(v * 100) / 100 : 0; })();
   const limparAnotacoes = () => { setTrocasTexto(''); setObsTexto(''); setIsObsActive(false); setTrocasValorCusto(''); };
 
+  // ============================================================
+  // BLOCO 100 (regra do dono): TROCAS com CUSTO CALCULADO — cada linha
+  // que reconhece um produto do catálogo soma QTD x PREÇO DE CUSTO; o
+  // total calculado preenche sozinho o campo "Valor (custo)". Linhas
+  // que não batem com produto nenhum ficam de fora (o vendedor pode
+  // digitar o valor manualmente nesse caso).
+  // ============================================================
+  const trocasCalculo = useMemo(() => {
+    const linhas = trocasTexto.split(/[\n;]+/).map(s => s.trim()).filter(Boolean);
+    let total = 0;
+    let reconhecidos = 0;
+    const nomeIdx = new Map<string, Product>();
+    products.forEach(p => { if (p.ativo) nomeIdx.set(p.nome.trim().toLowerCase(), p); });
+    for (const linha of linhas) {
+      // formato do autocomplete: "2 Toddynho 200ml" (qtd no inicio, opcional)
+      const m = linha.match(/^(\d+(?:[.,]\d+)?)\s+(.+)$/);
+      const qtd = m ? (parseFloat(m[1].replace(',', '.')) || 1) : 1;
+      const nome = (m ? m[2] : linha).trim().toLowerCase();
+      if (!nome) continue;
+      const prod =
+        nomeIdx.get(nome) ||
+        products.find(p => p.ativo && nome.length >= 4 && p.nome.toLowerCase().startsWith(nome)) ||
+        products.find(p => p.ativo && nome.length >= 4 && p.nome.toLowerCase().includes(nome));
+      const custoUnit = Number(prod?.precoCusto) || 0;
+      if (prod && custoUnit > 0) {
+        total += Math.round(qtd * custoUnit * 100) / 100;
+        reconhecidos++;
+      }
+    }
+    return { total: Math.round(total * 100) / 100, reconhecidos, qtdLinhas: linhas.length };
+  }, [trocasTexto, products]);
+
+  // BLOCO 100: o valor calculado ESCREVE o campo (regra do dono: "faça os
+  // cálculos e dê esse valor no final"). Texto vazio limpa o campo; linhas
+  // sem produto reconhecido deixam o valor manual do vendedor intacto.
+  useEffect(() => {
+    if (trocasCalculo.total > 0) {
+      setTrocasValorCusto(trocasCalculo.total.toFixed(2).replace('.', ','));
+    } else if (!trocasTexto.trim()) {
+      setTrocasValorCusto('');
+    }
+  }, [trocasCalculo.total, trocasTexto]);
+
+  // ============================================================
+  // BLOCO 100 (regra do dono): CUPOM DE CONFERÊNCIA — na PRONTA ENTREGA o
+  // vendedor imprime o cupom (já com cliente, forma de pagamento, itens e
+  // total) ANTES de finalizar a venda. O registro so acontece quando ele
+  // toca em FINALIZAR VENDA dentro do cupom.
+  // ============================================================
+  const [cupomConferencia, setCupomConferencia] = useState<Sale | null>(null);
+  // Dados congelados para o registro depois da conferência (nem o fluxo
+  // direto nem o wizard registram mais sozinhos na pronta entrega).
+  const [pendRegistro, setPendRegistro] = useState<{
+    payload: any; trocasTxt: string; trocasVal: number; trocaDesconto: number; isPrazo: boolean; formaAtraso?: string;
+  } | null>(null);
+
+  // BLOCO 100: PIX gerado com o VALOR DA VENDA — BR Code (Pix Copia e Cola)
+  // atrelado a chave Pix configurada em Configurações (app_settings).
+  const [pixGerado, setPixGerado] = useState<{ qrDataUrl: string; payload: string; chaveFormatada: string } | null>(null);
+  const [pixFalhou, setPixFalhou] = useState(false);
+
   // Pre-venda e pre-pedido vendem do ESTOQUE CENTRAL (nao da carga da van)
   const sellFromCentral = isPrePedido || isPreVenda;
 
@@ -605,6 +666,38 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     return Math.max(0, rec - total);
   }, [valorRecebido, total]);
 
+  // ============================================================
+  // BLOCO 100 (regra do dono): QR DO PIX gerado com o VALOR DA VENDA —
+  // BR Code (Pix Copia e Cola) atrelado a chave Pix configurada nas
+  // Configurações (app_settings.pix_chave_entrega, lida no servidor).
+  // O cliente escaneia e o valor já vem preenchido no app do banco.
+  // ============================================================
+  useEffect(() => {
+    if (view !== 'PAYMENT' || isPreVenda || metodo !== 'PIX' || !(total > 0)) {
+      setPixGerado(null);
+      setPixFalhou(false);
+      return;
+    }
+    let vivo = true;
+    setPixFalhou(false);
+    (async () => {
+      try {
+        const { authHeaders } = await import('@/services/userService');
+        const r = await fetch(`/api/pix/venda?valor=${total.toFixed(2)}`, { headers: authHeaders() });
+        const d = await r.json().catch(() => ({}));
+        if (!vivo) return;
+        if (r.ok && d.ok && d.qrDataUrl) {
+          setPixGerado({ qrDataUrl: d.qrDataUrl, payload: d.payload, chaveFormatada: d.chaveFormatada || '' });
+        } else {
+          setPixFalhou(true);
+        }
+      } catch {
+        if (vivo) setPixFalhou(true);
+      }
+    })();
+    return () => { vivo = false; };
+  }, [view, isPreVenda, metodo, total]);
+
   const handlePrazoDays = (days: number) => {
     setPrazoDays(days);
     const d = new Date();
@@ -655,22 +748,25 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       }
     }
 
-    isFinalizingRef.current = true;
-    setFinalizando(true);
-
     const itens = getOrderedItems();
     const vt = parseFloat(valorTroca) || 0;
     const descontoInfo = isTrocaActive && vt > 0 ? ` (Troca: R$ ${vt.toFixed(2)})` : '';
 
-    // BLOCO 44 (anti-duplicação): o carrinho sai da tela ANTES do envio — se o
-    // vendedor recarregar/desistir durante a demora, o pedido não se repete.
-    // Em falha, o carrinho volta para a tela.
-    const carrinhoPrev = cart;
-    localStorage.removeItem(cartKey);
-    setCart({});
-
-    // ===== PRE-VENDA: registra o PEDIDO (sem cobranca, sem baixa de carga) =====
+    // BLOCO 100 (regra do dono): na PRE-VENDA o registro continua DIRETO (o
+    // pedido vai para a fila/separação — não há entrega na hora). Na PRONTA
+    // ENTREGA o fluxo para no CUPOM DE CONFERÊNCIA antes de registrar.
     if (isPreVenda) {
+      isFinalizingRef.current = true;
+      setFinalizando(true);
+
+      // BLOCO 44 (anti-duplicação): o carrinho sai da tela ANTES do envio — se o
+      // vendedor recarregar/desistir durante a demora, o pedido não se repete.
+      // Em falha, o carrinho volta para a tela.
+      const carrinhoPrev = cart;
+      localStorage.removeItem(cartKey);
+      setCart({});
+
+      // ===== PRE-VENDA: registra o PEDIDO (sem cobranca, sem baixa de carga) =====
       const formaFinal = condicaoPv === 'AVISTA' && (metodoEntrega === 'BOLETO' || metodoEntrega === 'CHEQUE') ? 'DINHEIRO' : metodoEntrega;
       const r = await processPreVenda!({ clientId: client.id, valorTotal: total, itens, formaPagamento: formaFinal, condicao: condicaoPv, vencimento: condicaoPv === 'APRAZO' ? vencimentoPv : undefined, trocas: trocasComObs, trocasValor: trocasValorNum || undefined });
       if (r.pedido) {
@@ -707,6 +803,12 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       return;
     }
     
+    // ============================================================
+    // BLOCO 100 (regra do dono): PRONTA ENTREGA — NÃO registra aqui.
+    // Monta o payload completo (cliente, forma de pagamento, itens, total)
+    // e abre o CUPOM DE CONFERÊNCIA: o vendedor imprime, confere os itens
+    // e só então toca em FINALIZAR VENDA (finalizarAposConferencia).
+    // ============================================================
     let finalDetalhe = '';
     if (metodo === 'PIX') {
       finalDetalhe = selectedPixSlot === 1 ? pix1Name : pix2Name;
@@ -717,7 +819,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       finalDetalhe = detalheMetodo;
     }
     finalDetalhe += descontoInfo;
-    
+
     const salePayload: any = { 
       vendedorId, 
       clientId: client.id, 
@@ -735,15 +837,64 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     } else { 
       salePayload.statusPagamento = 'PAGO'; 
     }
-    
-    const newSale = await processSale(salePayload);
-    if (newSale) { 
+
+    setPendRegistro({
+      payload: salePayload,
+      trocasTxt: trocasComObs,
+      trocasVal: trocasValorNum,
+      trocaDesconto: isTrocaActive ? vt : 0,
+      isPrazo: metodo === 'A_PRAZO',
+      // BLOCO 50: a prazo em CHEQUE não tem botão de boleto no resultado
+      formaAtraso: metodo === 'A_PRAZO' && tipoPrazo === 'CHEQUE' ? 'CHEQUE' : undefined,
+    });
+    setCupomConferencia(vendaConferenciaDe(salePayload));
+  };
+
+  // BLOCO 100: venda provisória (id 'preview') que alimenta o cupom de
+  // conferência — MESMO texto do cupom real (cliente + pagamento + total).
+  const vendaConferenciaDe = (payload: any): Sale => ({
+    id: 'preview',
+    vendedorId: payload.vendedorId,
+    clientId: payload.clientId,
+    valorTotal: payload.valorTotal,
+    valorPago: payload.valorPago,
+    metodoPagamento: payload.metodoPagamento,
+    detalhePagamento: payload.detalhePagamento,
+    statusPagamento: payload.statusPagamento,
+    dataVencimento: payload.dataVencimento,
+    itens: payload.itens,
+    data: new Date(),
+    trocas: trocasComObs || undefined,
+    trocasValor: trocasValorNum || undefined,
+  } as unknown as Sale);
+
+  // ============================================================
+  // BLOCO 100: registro da PRONTA ENTREGA — roda quando o vendedor toca
+  // em FINALIZAR VENDA dentro do cupom de conferência.
+  // ============================================================
+  const finalizarAposConferencia = async () => {
+    const pend = pendRegistro;
+    if (!pend || isFinalizingRef.current) return; // BLOQUEIO: evita venda duplicada
+
+    isFinalizingRef.current = true;
+    setFinalizando(true);
+    setCupomConferencia(null);
+
+    // BLOCO 44 (anti-duplicação): o carrinho sai da tela ANTES do envio — se o
+    // vendedor recarregar/desistir durante a demora, o pedido não se repete.
+    // Em falha, o carrinho volta para a tela.
+    const carrinhoPrev = cart;
+    localStorage.removeItem(cartKey);
+    setCart({});
+
+    const newSale = await processSale(pend.payload);
+    if (newSale) {
       lastFinishedSaleRef.current = newSale;
       setFinalizando(false);
 
       // Calcula comissao e abre modal bonito
       let comissaoTotal = 0;
-      itens.forEach(item => {
+      (pend.payload.itens || []).forEach((item: any) => {
         const prod = products.find(p => p.id === item.produtoId);
         if (prod) {
           comissaoTotal += (item.quantidade * item.precoVenda) * ((prod.comissaoPercentual || 0) / 100);
@@ -751,23 +902,22 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       });
 
       setSaleResultModal({
-        total,
+        total: pend.payload.valorTotal,
         comissao: comissaoTotal,
-        troca: isTrocaActive ? vt : 0,
-        isPrazo: metodo === 'A_PRAZO',
+        troca: pend.trocaDesconto,
+        isPrazo: pend.isPrazo,
         clientName: client.nomeFantasia,
-        sale: { ...newSale, trocas: trocasComObs || undefined, trocasValor: trocasValorNum || undefined },
-        // BLOCO 50: a prazo em CHEQUE não tem botão de boleto no resultado
-        formaAtraso: metodo === 'A_PRAZO' && tipoPrazo === 'CHEQUE' ? 'CHEQUE' : undefined,
+        sale: { ...newSale, trocas: pend.trocasTxt || undefined, trocasValor: pend.trocasVal || undefined },
+        formaAtraso: pend.formaAtraso,
       });
       // BLOCO 13/41/98: persiste as TROCAS (+ valor de custo) + OBSERVAÇÃO da pronta entrega (best-effort)
-      if (trocasComObs || trocasValorNum > 0) {
+      if (pend.trocasTxt || pend.trocasVal > 0) {
         try {
           const { authHeaders } = await import('@/services/userService');
           fetch('/api/sales/trocas', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...authHeaders() },
-            body: JSON.stringify({ saleId: newSale.id, trocas: trocasComObs, trocasValor: trocasValorNum || undefined }),
+            body: JSON.stringify({ saleId: newSale.id, trocas: pend.trocasTxt, trocasValor: pend.trocasVal || undefined }),
           }).catch(() => {});
         } catch {}
         limparAnotacoes();
@@ -776,6 +926,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       isFinalizingRef.current = false; // Libera se falhou
       setCart(carrinhoPrev);
       setFinalizando(false);
+      setAppModal({ title: 'Falha ao Finalizar', message: 'Nao foi possivel concluir a venda. Verifique sua conexao e tente novamente — o carrinho voltou para a tela.', icon: 'fa-solid fa-circle-exclamation', iconColor: 'text-rose-500', type: 'error' });
     }
   };
 
@@ -802,13 +953,6 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       if (rec + 0.001 < total) { setWizardErro(`Valor recebido (R$ ${rec.toFixed(2)}) e menor que o total da venda (R$ ${total.toFixed(2)}).`); return; }
     }
 
-    isFinalizingRef.current = true;
-    setFinalizando(true);
-    // BLOCO 44 (anti-duplicação): o carrinho sai da tela ANTES do envio —
-    // recarregou/desistiu durante a demora = pedido não se repete. Falha volta.
-    const carrinhoPrev = cart;
-    localStorage.removeItem(cartKey);
-    setCart({});
     const itens = getOrderedItems();
     const vt = parseFloat(valorTroca) || 0;
     const descontoInfo = isTrocaActive && vt > 0 ? ` (Troca: R$ ${vt.toFixed(2)})` : '';
@@ -818,8 +962,16 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         ? ` | COM NOTA: NFC-e${w.nfcCpf ? ` (CPF ${w.nfcCpf})` : ''}`
         : '';
 
-    // ===== PRE-VENDA via wizard =====
+    // BLOCO 100: PRE-VENDA registra direto; PRONTA ENTREGA para no CUPOM DE
+    // CONFERÊNCIA (o vendedor imprime e finaliza dentro dele).
     if (isPreVenda) {
+      isFinalizingRef.current = true;
+      setFinalizando(true);
+      // BLOCO 44 (anti-duplicação): o carrinho sai da tela ANTES do envio —
+      // recarregou/desistiu durante a demora = pedido não se repete. Falha volta.
+      const carrinhoPrev = cart;
+      localStorage.removeItem(cartKey);
+      setCart({});
       const formaApi = w.condicao === 'AVISTA'
         ? (w.forma === 'MISTO' ? 'DINHEIRO' : w.forma)
         : (w.forma === 'PIX_DATA' ? 'PIX' : w.forma);
@@ -866,7 +1018,11 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       return;
     }
 
-    // ===== PRONTA ENTREGA via wizard =====
+    // ============================================================
+    // ===== PRONTA ENTREGA via wizard — BLOCO 100: CONFERÊNCIA ANTES
+    // DE FINALIZAR: monta o payload e abre o cupom (o registro roda no
+    // FINALIZAR VENDA do cupom, via finalizarAposConferencia).
+    // ============================================================
     let metodo: PaymentMethod;
     let finalDetalhe = '';
     if (w.condicao === 'AVISTA') {
@@ -918,45 +1074,16 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       salePayload.statusPagamento = 'PAGO';
     }
 
-    const newSale = await processSale(salePayload);
-    if (newSale) {
-      lastFinishedSaleRef.current = newSale;
-      setFinalizando(false);
-      let comissaoTotal = 0;
-      itens.forEach(item => {
-        const prod = products.find(p => p.id === item.produtoId);
-        if (prod) {
-          comissaoTotal += (item.quantidade * item.precoVenda) * ((prod.comissaoPercentual || 0) / 100);
-        }
-      });
-      setSaleResultModal({
-        total,
-        comissao: comissaoTotal,
-        troca: isTrocaActive ? vt : 0,
-        isPrazo: metodo === 'A_PRAZO',
-        clientName: client.nomeFantasia,
-        sale: { ...newSale, trocas: trocasComObs || undefined, trocasValor: trocasValorNum || undefined },
-        // BLOCO 50: a prazo em CHEQUE não tem botão de boleto no resultado
-        formaAtraso: metodo === 'A_PRAZO' && w.forma === 'CHEQUE' ? 'CHEQUE' : undefined,
-      });
-      // BLOCO 13/41/98: persiste as TROCAS (+ valor de custo) + OBSERVAÇÃO da pronta entrega (best-effort)
-      if (trocasComObs || trocasValorNum > 0) {
-        try {
-          const { authHeaders } = await import('@/services/userService');
-          fetch('/api/sales/trocas', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...authHeaders() },
-            body: JSON.stringify({ saleId: newSale.id, trocas: trocasComObs, trocasValor: trocasValorNum || undefined }),
-          }).catch(() => {});
-        } catch {}
-        limparAnotacoes();
-      }
-    } else {
-      isFinalizingRef.current = false; // Libera se falhou
-      setCart(carrinhoPrev);
-      setFinalizando(false);
-      setWizardErro('Nao foi possivel concluir a venda. Verifique sua conexao e tente novamente.');
-    }
+    setPendRegistro({
+      payload: salePayload,
+      trocasTxt: trocasComObs,
+      trocasVal: trocasValorNum,
+      trocaDesconto: isTrocaActive ? vt : 0,
+      isPrazo: metodo === 'A_PRAZO',
+      // BLOCO 50: a prazo em CHEQUE não tem botão de boleto no resultado
+      formaAtraso: metodo === 'A_PRAZO' && w.forma === 'CHEQUE' ? 'CHEQUE' : undefined,
+    });
+    setCupomConferencia(vendaConferenciaDe(salePayload));
   };
 
   const productIdsInCarga = useMemo(() => new Set(minhaCarga.map(c => c.produtoId)), [minhaCarga]);
@@ -1400,13 +1527,26 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                   <div className="absolute bottom-full left-1 right-4 mb-1 bg-white border border-gray-100 rounded-xl shadow-lg overflow-hidden z-20">
                     {trocasSugestoes.map(p => (
                       <button key={p.id} onClick={() => addSugestaoTroca(p.nome)} className="w-full text-left px-3 py-2.5 text-[11px] font-bold text-gray-700 hover:bg-orange-50 active:bg-orange-100 flex items-center gap-2">
-                        <i className="fa-solid fa-plus text-orange-400 text-[9px]"></i>{p.nome}
+                        <i className="fa-solid fa-plus text-orange-400 text-[9px] shrink-0"></i>
+                        <span className="flex-1 truncate">{p.nome}</span>
+                        {/* BLOCO 100: a sugestão já mostra o CUSTO do produto */}
+                        <span className="text-[9px] font-black text-orange-500 shrink-0">custo R$ {(Number(p.precoCusto) || 0).toFixed(2).replace('.', ',')}</span>
                       </button>
                     ))}
                     <p className="px-3 py-1.5 text-[8px] font-bold text-gray-300 uppercase bg-gray-50">Toque para adicionar — um item por linha</p>
                   </div>
                 )}
               </div>
+              {/* BLOCO 100: resumo do CÁLCULO — o app soma o custo dos produtos
+                  reconhecidos e dá o valor final sozinho */}
+              {trocasTexto.trim() && (
+                <p className={`text-[8px] font-black uppercase leading-snug ${trocasCalculo.reconhecidos > 0 ? 'text-orange-600' : 'text-orange-400'}`}>
+                  <i className={`fa-solid ${trocasCalculo.reconhecidos > 0 ? 'fa-calculator' : 'fa-circle-question'} mr-1`}></i>
+                  {trocasCalculo.reconhecidos > 0
+                    ? `${trocasCalculo.reconhecidos} de ${trocasCalculo.qtdLinhas} linha(s) reconhecida(s) — custo total: R$ ${trocasCalculo.total.toFixed(2).replace('.', ',')}`
+                    : 'Nenhum produto reconhecido — escreva o valor de custo manualmente.'}
+                </p>
+              )}
               <div className="flex items-center gap-2">
                 <span className="text-[8px] font-black text-orange-400 uppercase shrink-0 leading-tight">Valor<br />(custo)</span>
                 <input
@@ -1416,8 +1556,11 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                   placeholder="R$ 0,00"
                   className="flex-1 bg-white border border-orange-100 rounded-lg text-[11px] font-black text-orange-700 p-2 text-right outline-none focus:ring-2 focus:ring-orange-100"
                 />
+                {trocasCalculo.total > 0 && (
+                  <span className="text-[7px] font-black uppercase px-1.5 py-1 rounded-md bg-orange-500 text-white shrink-0" title="Valor calculado pelo custo dos produtos reconhecidos">auto</span>
+                )}
               </div>
-              <p className="text-[8px] font-semibold text-orange-400 leading-snug">O valor é em PREÇO DE CUSTO: na entrega levamos produtos que fechem esse valor (ex.: trocas de R$ 30 de custo = R$ 30 em produtos).</p>
+              <p className="text-[8px] font-semibold text-orange-400 leading-snug">O valor é em PREÇO DE CUSTO e é calculado sozinho pelos produtos reconhecidos — na entrega levamos produtos que fechem esse valor (ex.: trocas de R$ 30 de custo = R$ 30 em produtos).</p>
             </div>
           </div>
         )}
@@ -1594,21 +1737,45 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
 
               {metodo === 'PIX' && (
                 <div className="mb-6 space-y-4 animate-in fade-in duration-300">
-                   <p className="text-[9px] font-black text-gray-400 uppercase text-center">Selecione o Banco para Receber</p>
+                   <p className="text-[9px] font-black text-gray-400 uppercase text-center">Conta para registrar (anotação da venda)</p>
                    <div className="grid grid-cols-2 gap-2">
                      <button onClick={() => setSelectedPixSlot(1)} className={`p-3 rounded-xl border text-[10px] font-black uppercase transition-all ${selectedPixSlot === 1 ? 'border-blue-600 bg-blue-50 text-blue-600' : 'border-gray-100 text-gray-400'}`}>{pix1Name}</button>
                      <button onClick={() => setSelectedPixSlot(2)} className={`p-3 rounded-xl border text-[10px] font-black uppercase transition-all ${selectedPixSlot === 2 ? 'border-blue-600 bg-blue-50 text-blue-600' : 'border-gray-100 text-gray-400'}`}>{pix2Name}</button>
                    </div>
-                   
-                   <div className="bg-gray-50 p-4 rounded-2xl flex flex-col items-center border border-gray-100">
-                     <p className="text-[8px] font-black text-gray-400 uppercase mb-3">QR CODE PARA PAGAMENTO</p>
-                     <div className="w-32 h-32 bg-white rounded-xl flex items-center justify-center border border-gray-200 overflow-hidden shadow-inner">
-                        {selectedPixSlot === 1 ? (
-                          pix1Code ? <img src={pix1Code} className="w-full h-full object-contain" /> : <i className="fa-solid fa-qrcode text-gray-200 text-3xl"></i>
+
+                   {/* BLOCO 100 (regra do dono): QR DO PIX GERADO com o VALOR
+                       DA VENDA — BR Code atrelado a chave Pix configurada em
+                       Configurações (não é mais o QR fixo do banco). */}
+                   <div className="bg-teal-50/60 p-4 rounded-2xl flex flex-col items-center border border-teal-100">
+                     <p className="text-[8px] font-black text-teal-500 uppercase mb-1">PIX — QR com o valor da venda</p>
+                     <p className="text-2xl font-black text-teal-700 mb-2">R$ {total.toFixed(2)}</p>
+                     <div className="w-44 h-44 bg-white rounded-xl flex items-center justify-center border border-gray-200 overflow-hidden shadow-inner">
+                        {pixGerado ? (
+                          <img src={pixGerado.qrDataUrl} alt="QR Pix com o valor da venda" className="w-full h-full object-contain" />
+                        ) : pixFalhou ? (
+                          /* fallback: QR fixo do banco (sem valor) quando o gerador falha */
+                          selectedPixSlot === 1
+                            ? (pix1Code ? <img src={pix1Code} className="w-full h-full object-contain" /> : <i className="fa-solid fa-qrcode text-gray-200 text-3xl"></i>)
+                            : (pix2Code ? <img src={pix2Code} className="w-full h-full object-contain" /> : <i className="fa-solid fa-qrcode text-gray-200 text-3xl"></i>)
                         ) : (
-                          pix2Code ? <img src={pix2Code} className="w-full h-full object-contain" /> : <i className="fa-solid fa-qrcode text-gray-200 text-3xl"></i>
+                          <i className="fa-solid fa-spinner fa-spin text-teal-300 text-3xl"></i>
                         )}
                      </div>
+                     {pixGerado ? (
+                       <>
+                         <p className="text-[9px] font-bold text-gray-400 mt-2 text-center leading-snug">Chave Pix das Configurações: <span className="font-black text-gray-600">{pixGerado.chaveFormatada}</span></p>
+                         <button
+                           onClick={() => { navigator.clipboard?.writeText(pixGerado.payload).then(() => setAppModal({ title: 'Pix copiado', message: 'Código Copia e Cola na área de transferência — o cliente cola no app do banco e o valor já vem preenchido.', icon: 'fa-solid fa-copy', iconColor: 'text-teal-500', type: 'success' })).catch(() => {}); }}
+                           className="mt-2 px-4 py-2.5 rounded-xl bg-teal-600 text-white text-[9px] font-black uppercase active:scale-95 shadow"
+                         >
+                           <i className="fa-solid fa-copy mr-1"></i>Copiar código Pix (copia e cola)
+                         </button>
+                       </>
+                     ) : pixFalhou ? (
+                       <p className="text-[8px] font-bold text-rose-400 mt-2 text-center leading-snug">Não deu para gerar o QR com valor — mostre o QR fixo do banco (acima) e confira o valor com o cliente.</p>
+                     ) : (
+                       <p className="text-[8px] font-bold text-teal-400 mt-2">Gerando QR com o valor da venda...</p>
+                     )}
                    </div>
                 </div>
               )}
@@ -1623,8 +1790,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                 className={`w-full bg-emerald-600 text-white py-5 rounded-2xl font-black uppercase text-xs shadow-xl active:scale-95 transition-all mb-2 tracking-widest ${(hasMarginViolation || finalizando) ? 'opacity-60 cursor-not-allowed' : ''}`}
               >
                 {finalizando
-                  ? <><i className="fa-solid fa-spinner fa-spin mr-2"></i>{isPreVenda ? 'Registrando pedido...' : 'Finalizando...'}</>
-                  : (isPreVenda ? 'Registrar Pedido (Pre-Venda)' : 'Concluir Venda')}
+                  ? <><i className="fa-solid fa-spinner fa-spin mr-2"></i>{isPreVenda ? 'Registrando pedido...' : 'Abrindo conferência...'}</>
+                  : (isPreVenda ? 'Registrar Pedido (Pre-Venda)' : 'Revisar cupom e conferir')}
               </button>
               <button onClick={() => setView('CART')} className="w-full py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Voltar ao Carrinho</button>
                 </>
@@ -1633,6 +1800,21 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         </div>
       )}
     </div>
+
+    {/* BLOCO 100 (regra do dono): CUPOM DE CONFERÊNCIA — na pronta entrega o
+        cupom (com cliente, forma de pagamento, itens e total) aparece ANTES
+        de registrar a venda: imprime, confere e finaliza dentro dele. */}
+    {cupomConferencia && (
+      <Cupom
+        sale={cupomConferencia}
+        client={client}
+        products={products}
+        onClose={() => setCupomConferencia(null)}
+        conferencia
+        finalizando={finalizando}
+        onFinalizar={finalizarAposConferencia}
+      />
+    )}
 
     {/* MODAL: Venda finalizada com comissao */}
     {saleResultModal && (

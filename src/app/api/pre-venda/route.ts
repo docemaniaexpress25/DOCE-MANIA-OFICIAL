@@ -861,10 +861,15 @@ async function getFila(supabase: any, userId: string, perfil: string) {
     .sort((a: any, b: any) => b.dinheiro - a.dinheiro || b.pix - a.pix || b.aReceber - a.aReceber);
   // ENTREGADOR logado: o "caixa" dele e o SEU proprio (regra do dono — cada
   // entregador com o caixa separado). Admin continua vendo o global no sheet.
+  // BLOCO 100: o A RECEBER e a QUANTIDADE de entregas do ENTREGADOR logado
+  // tambem sao os DELES — o card "Seu caixa" mostra a conta completa dele.
+  let caixaQtdEntregas: number | undefined = undefined;
   if (entFiltroUuid) {
     const meu = caixasMap[entFiltroUuid];
     dinheiroHoje = meu ? meu.dinheiro : 0;
     pixHoje = meu ? meu.pix : 0;
+    aReceberGlobal = meu ? meu.aReceber : 0;
+    caixaQtdEntregas = meu ? meu.qtdEntregas : 0;
   }
 
   // BLOCO 97/98 (regra do dono): NAO existem usuarios entregadores novos — os
@@ -977,7 +982,8 @@ async function getFila(supabase: any, userId: string, perfil: string) {
       valorEntregueHoje: round2(entreguesHoje.reduce((a: number, s: any) => a + Number(s.valor_total || 0), 0)),
       falhados: (falhados || []).length,
     },
-    caixa: { dinheiroHoje, pixHoje, aReceber: aReceberGlobal, desde: desdeCaixaIso },
+    // BLOCO 100: qtdEntregas do ENTREGADOR logado (card "Seu caixa")
+    caixa: { dinheiroHoje, pixHoje, aReceber: aReceberGlobal, desde: desdeCaixaIso, ...(caixaQtdEntregas !== undefined ? { qtdEntregas: caixaQtdEntregas } : {}) },
     ...(conferencia ? { conferencia } : {}),
     sem13,
   };

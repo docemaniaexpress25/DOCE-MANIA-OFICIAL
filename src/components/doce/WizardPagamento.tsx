@@ -1,5 +1,5 @@
 "use client";
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 
 /**
  * BLOCO 27 — ROTA 2: wizard guiado de fechamento da venda (teste).
@@ -104,6 +104,34 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
   const md = parseFloat(mistoDinheiro) || 0;
   const mp = parseFloat(mistoPix) || 0;
   const mistoFalta = Math.round((total - md - mp) * 100) / 100;
+
+  // ============================================================
+  // BLOCO 100 (regra do dono): QR DO PIX GERADO com o VALOR DA VENDA —
+  // BR Code (Pix Copia e Cola) atrelado a chave Pix configurada em
+  // Configurações (app_settings.pix_chave_entrega, lida no servidor via
+  // /api/pix/venda). O cliente escaneia e o valor ja vem preenchido.
+  // ============================================================
+  const [pixGerado, setPixGerado] = useState<{ qrDataUrl: string; payload: string; chaveFormatada: string } | null>(null);
+  const [pixFalhou, setPixFalhou] = useState(false);
+  const pixNaVisita = forma === 'PIX' && !isPreVenda && condicao === 'AVISTA';
+  useEffect(() => {
+    if (!pixNaVisita || !(total > 0)) { setPixGerado(null); setPixFalhou(false); return; }
+    let vivo = true;
+    setPixFalhou(false);
+    (async () => {
+      try {
+        const { authHeaders } = await import('@/services/userService');
+        const r = await fetch(`/api/pix/venda?valor=${total.toFixed(2)}`, { headers: authHeaders() });
+        const d = await r.json().catch(() => ({}));
+        if (!vivo) return;
+        if (r.ok && d.ok && d.qrDataUrl) setPixGerado({ qrDataUrl: d.qrDataUrl, payload: d.payload, chaveFormatada: d.chaveFormatada || '' });
+        else setPixFalhou(true);
+      } catch {
+        if (vivo) setPixFalhou(true);
+      }
+    })();
+    return () => { vivo = false; };
+  }, [pixNaVisita, total]);
 
   const formaLabel = condicao === 'AVISTA'
     ? (forma === 'DINHEIRO' ? 'Dinheiro' : forma === 'PIX' ? 'Pix' : 'Misto (dinheiro + Pix)')
@@ -289,10 +317,36 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
                 <button onClick={() => setPixSlot(1)} className={`p-3 rounded-xl border text-[10px] font-black uppercase transition-all ${pixSlot === 1 ? 'border-emerald-600 bg-emerald-50 text-emerald-700' : 'border-gray-100 text-gray-400'}`}>{pix1Name}</button>
                 <button onClick={() => setPixSlot(2)} className={`p-3 rounded-xl border text-[10px] font-black uppercase transition-all ${pixSlot === 2 ? 'border-emerald-600 bg-emerald-50 text-emerald-700' : 'border-gray-100 text-gray-400'}`}>{pix2Name}</button>
               </div>
-              <div className="bg-gray-50 p-3 rounded-2xl flex items-center justify-center border border-gray-100">
-                <div className="w-28 h-28 bg-white rounded-xl flex items-center justify-center border border-gray-200 overflow-hidden">
-                  {pixSlot === 1 ? (pix1Code ? <img src={pix1Code} alt="QR Pix" className="w-full h-full object-contain" /> : <i className="fa-solid fa-qrcode text-gray-200 text-3xl"></i>) : (pix2Code ? <img src={pix2Code} alt="QR Pix" className="w-full h-full object-contain" /> : <i className="fa-solid fa-qrcode text-gray-200 text-3xl"></i>)}
+              {/* BLOCO 100 (regra do dono): QR GERADO com o VALOR DA VENDA —
+                  BR Code da chave Pix das Configurações. Sem chave/erro de
+                  rede: cai no QR fixo do banco (sem valor). */}
+              <div className="bg-teal-50/60 p-3 rounded-2xl flex flex-col items-center border border-teal-100">
+                <p className="text-[8px] font-black text-teal-500 uppercase mb-0.5">PIX — QR com o valor da venda</p>
+                <p className="text-xl font-black text-teal-700 mb-1.5">{fmt(total)}</p>
+                <div className="w-36 h-36 bg-white rounded-xl flex items-center justify-center border border-gray-200 overflow-hidden">
+                  {pixGerado ? (
+                    <img src={pixGerado.qrDataUrl} alt="QR Pix com o valor da venda" className="w-full h-full object-contain" />
+                  ) : pixFalhou ? (
+                    pixSlot === 1 ? (pix1Code ? <img src={pix1Code} alt="QR Pix" className="w-full h-full object-contain" /> : <i className="fa-solid fa-qrcode text-gray-200 text-3xl"></i>) : (pix2Code ? <img src={pix2Code} alt="QR Pix" className="w-full h-full object-contain" /> : <i className="fa-solid fa-qrcode text-gray-200 text-3xl"></i>)
+                  ) : (
+                    <i className="fa-solid fa-spinner fa-spin text-teal-300 text-3xl"></i>
+                  )}
                 </div>
+                {pixGerado ? (
+                  <>
+                    <p className="text-[9px] font-bold text-gray-400 mt-1.5 text-center leading-snug">Chave Pix das Configurações: <span className="font-black text-gray-600">{pixGerado.chaveFormatada}</span></p>
+                    <button
+                      onClick={() => { navigator.clipboard?.writeText(pixGerado.payload).catch(() => {}); setErroLocal(null); }}
+                      className="mt-1.5 px-3 py-2 rounded-xl bg-teal-600 text-white text-[8px] font-black uppercase active:scale-95 shadow"
+                    >
+                      <i className="fa-solid fa-copy mr-1"></i>Copiar código Pix (copia e cola)
+                    </button>
+                  </>
+                ) : pixFalhou ? (
+                  <p className="text-[8px] font-bold text-rose-400 mt-1.5 text-center leading-snug">QR com valor indisponível — use o QR fixo do banco e confira o valor.</p>
+                ) : (
+                  <p className="text-[8px] font-bold text-teal-400 mt-1.5">Gerando QR com o valor da venda...</p>
+                )}
               </div>
             </div>
           )}

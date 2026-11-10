@@ -167,7 +167,7 @@ export function gerarCupomTexto({ sale, client, products, width }: CupomTextoInp
   // resto continua no bloco TROCAS (pedidos antigos ficam iguais).
   // BLOCO 98 (regra do dono): UM ITEM POR LINHA — separa tambem por virgula
   // (formato do autocomplete do PDV) e quebra a linha em ESPACO (nunca no
-  // meio do nome), com o valor de custo destacado no cabecalho do bloco.
+  // meio do nome).
   const rawAnot = String((sale as any).trocas || '').trim();
   const partes98 = trocasPartes(rawAnot);
   const linhasTrocas: string[] = partes98.itens;
@@ -176,24 +176,6 @@ export function gerarCupomTexto({ sale, client, products, width }: CupomTextoInp
   const obsDireta = String((sale as any).observacoes || '').trim();
   if (obsDireta) linhasObs.unshift(obsDireta);
   const trocasCusto = trocasValorNumero((sale as any).trocasValor);
-
-  if (linhasTrocas.length > 0 || trocasCusto !== null) {
-    t += '-'.repeat(totalWidth) + '\n';
-    t += trocasCusto !== null
-      ? `${padR('TROCAS', descW)}${padL(`CUSTO R$ ${trocasCusto.toFixed(2)}`, totalWidth - descW)}\n`
-      : 'TROCAS:\n';
-    for (const linha of linhasTrocas) {
-      // quebra em ESPACO: nada de nome de produto cortado ao meio
-      let rest = linha;
-      while (rest.length > descW) {
-        let corte = rest.lastIndexOf(' ', descW);
-        if (corte <= 0) corte = descW; // palavra unica maior que a coluna
-        t += padR(rest.substring(0, corte), descW) + '\n';
-        rest = rest.substring(corte).trimStart();
-      }
-      if (rest) t += padR(rest, descW) + '\n';
-    }
-  }
 
   if (linhasObs.length > 0) {
     t += '-'.repeat(totalWidth) + '\n';
@@ -245,6 +227,33 @@ export function gerarCupomTexto({ sale, client, products, width }: CupomTextoInp
     if (sale.statusPagamento === 'PENDENTE' && sale.dataVencimento) {
       t += `Vencimento: ${fmtDia(sale.dataVencimento)}\n`;
     }
+  }
+
+  // BLOCO 100 (regra do dono): TROCAS sai ABAIXO do total da venda e em
+  // LETRAS MENORES (menos enfase — quem separa ja leu o total antes). Os
+  // marcadores [[PEQ]] / [[FIMPEQ]] ligam a fonte pequena (font B ESC/POS)
+  // na impressora e o preview renderiza menor; cupomSemMarcadores() tira
+  // tudo para copiar/WhatsApp.
+  if (linhasTrocas.length > 0 || trocasCusto !== null) {
+    t += '[[PEQ]]\n';
+    // BLOCO 100: cabecalho numa linha so — "TROCAS - custo R$ X" ate 32
+    // colunas do papel de 56mm sem cortar o valor (o padrao antigo
+    // padR+padL truncava "R$ 12.40" para "R$ 12.")
+    t += trocasCusto !== null
+      ? `TROCAS - custo R$ ${trocasCusto.toFixed(2)}:\n`
+      : 'TROCAS:\n';
+    for (const linha of linhasTrocas) {
+      // quebra em ESPACO: nada de nome de produto cortado ao meio
+      let rest = linha;
+      while (rest.length > descW) {
+        let corte = rest.lastIndexOf(' ', descW);
+        if (corte <= 0) corte = descW; // palavra unica maior que a coluna
+        t += padR(rest.substring(0, corte), descW) + '\n';
+        rest = rest.substring(corte).trimStart();
+      }
+      if (rest) t += padR(rest, descW) + '\n';
+    }
+    t += '[[FIMPEQ]]\n';
   }
 
   // BLOCO 38 (regra do dono): a parte de baixo do cupom e a BASE DA
@@ -342,4 +351,40 @@ export function gerarCupomTexto({ sale, client, products, width }: CupomTextoInp
   t += '\n\n\n\n\n';
 
   return t;
+}
+
+// ============================================================
+// BLOCO 100: marcadores de FONTE PEQUENA do cupom.
+//   [[PEQ]]    -> liga a fonte menor (font B ESC/POS) a partir daqui
+//   [[FIMPEQ]] -> volta para a fonte normal
+// O preview (Cupom.tsx) renderiza o trecho menor e a impressora
+// (bluetoothPrinterService) troca a fonte de verdade no papel.
+// ============================================================
+export const CUPOM_PEQ_ABRE = '[[PEQ]]';
+export const CUPOM_PEQ_FECHA = '[[FIMPEQ]]';
+
+/** Divide o texto do cupom em segmentos normais/pequenos (para o preview) */
+export function cupomSegmentos(texto: string): { txt: string; pequeno: boolean }[] {
+  const segs: { txt: string; pequeno: boolean }[] = [];
+  let pequeno = false;
+  let buf = '';
+  for (const linhaBruta of String(texto || '').split('\n')) {
+    const linha = linhaBruta.trim();
+    if (linha === CUPOM_PEQ_ABRE || linha === CUPOM_PEQ_FECHA) {
+      if (buf) { segs.push({ txt: buf, pequeno }); buf = ''; }
+      pequeno = linha === CUPOM_PEQ_ABRE;
+      continue;
+    }
+    buf += (buf ? '\n' : '') + linhaBruta;
+  }
+  if (buf) segs.push({ txt: buf, pequeno });
+  return segs;
+}
+
+/** Texto do cupom SEM marcadores (para copiar / WhatsApp) */
+export function cupomSemMarcadores(texto: string): string {
+  return String(texto || '')
+    .split('\n')
+    .filter(l => l.trim() !== CUPOM_PEQ_ABRE && l.trim() !== CUPOM_PEQ_FECHA)
+    .join('\n');
 }

@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { Sale, Client, Product } from '@/lib/types';
-import { gerarCupomTexto } from '@/lib/cupomTexto';
+import { gerarCupomTexto, cupomSegmentos, cupomSemMarcadores } from '@/lib/cupomTexto';
 import { danfeMiniTexto } from '@/lib/danfeTexto';
 import { bluetoothPrinter, PrintJob } from '@/services/bluetoothPrinterService';
 import { notaService, NotaInfo, FocusStatusInfo } from '@/services/notaService';
@@ -29,9 +29,15 @@ interface CupomProps {
   closeLabel?: string; 
   /** Bloco 10: habilita emissao de NF-e/NFC-e nesta tela (so em venda salva) */
   allowNota?: boolean;
+  /** BLOCO 100 (regra do dono): modo CONFERÊNCIA da pronta entrega — o
+   *  vendedor imprime o cupom (com cliente/pagamento) ANTES de finalizar.
+   *  Mostra o banner + o botao grande FINALIZAR VENDA. */
+  conferencia?: boolean;
+  onFinalizar?: () => void;
+  finalizando?: boolean;
 }
 
-const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, onDeleteSale, allowDelete, showToast, closeLabel, allowNota }) => {
+const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, onDeleteSale, allowDelete, showToast, closeLabel, allowNota, conferencia, onFinalizar, finalizando }) => {
   const [printWidth, setPrintWidth] = useState<PrinterWidth>('56MM');
   const [printJob, setPrintJob] = useState<PrintJob>({ status: 'idle' });
   const [modal, setModal] = useState<{title:string;message:string;icon:string;iconColor?:string;onConfirm:()=>void;type?:string}|null>(null);
@@ -382,7 +388,8 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
   }, [printWidth, sale, showToast, generateText]);
 
   const handleCopy = async () => {
-    const rawText = generateText(printWidth);
+    // BLOCO 100: copia SEM os marcadores [[PEQ]] (texto limpo)
+    const rawText = cupomSemMarcadores(generateText(printWidth));
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) {
         await navigator.clipboard.writeText(rawText);
@@ -400,7 +407,8 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
   };
 
   const handleWhatsApp = () => {
-    const rawText = generateText(printWidth);
+    // BLOCO 100: WhatsApp sem os marcadores [[PEQ]] (texto limpo)
+    const rawText = cupomSemMarcadores(generateText(printWidth));
     const phone = (clientLocal.telefone || '').replace(/\D/g, '');
     window.open(`https://wa.me/55${phone}?text=${encodeURIComponent('*CUPOM DOCE MANIA*\n' + rawText)}`, '_blank');
   };
@@ -486,14 +494,29 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
           </div>
         )}
 
+        {/* BLOCO 100: banner da CONFERÊNCIA — imprima antes de finalizar */}
+        {conferencia && (
+          <div className="mx-4 mt-3 bg-amber-50 border border-amber-300 rounded-2xl px-3.5 py-3">
+            <p className="text-[10px] font-black text-amber-700 uppercase tracking-wide"><i className="fa-solid fa-clipboard-check mr-1"></i>Conferência da venda</p>
+            <p className="text-[9px] font-semibold text-amber-600 leading-snug mt-1">Confira os itens, IMPRIMA este cupom para a conferência e toque em FINALIZAR VENDA. O cupom já sai com cliente, forma de pagamento e total — antes de fechar a venda.</p>
+          </div>
+        )}
+
         {/* BLOCO 67: o texto do cupom agora ROLA (max 38% da tela) com barra
             de rolagem visivel (.cupom-scroll) — cupom com muitos itens nao
             empurra mais os botoes para fora da tela.
             BLOCO 78: overflow-auto (y E x) — em aparelho pequeno (320px) o
             papel 80mm (48 colunas) nao cabe e passa a rolar em vez de cortar. */}
         <div className="px-4 pt-4 pb-3 bg-white">
+          {/* BLOCO 100: os marcadores [[PEQ]]/[[FIMPEQ]] viram trecho em fonte
+              MENOR no preview (na impressora vira font B ESC/POS de verdade) —
+              as TROCAS saem com menos ênfase, abaixo do total. */}
           <div className="font-mono text-[11px] leading-tight text-black bg-gray-50 rounded-xl border border-gray-100 pl-4 pr-3 py-2.5 whitespace-pre select-none max-h-[38vh] overflow-auto cupom-scroll">
-            {generateText(printWidth)}
+            {cupomSegmentos(generateText(printWidth)).map((seg, i) => seg.pequeno ? (
+              <span key={i} className="text-[9px] text-gray-500">{seg.txt}</span>
+            ) : (
+              <React.Fragment key={i}>{seg.txt}</React.Fragment>
+            ))}
           </div>
           {(sale.itens || []).length > 5 && (
             <p className="text-[8px] text-gray-300 text-center mt-1.5 uppercase font-black tracking-widest">
@@ -503,6 +526,18 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
         </div>
 
         <div className="bg-gray-100 p-5 flex flex-col gap-3 border-t border-gray-200">
+          {/* BLOCO 100 (regra do dono): na CONFERÊNCIA o botao principal é
+              FINALIZAR VENDA — a impressao fica em cima, o fechamento aqui. */}
+          {conferencia && onFinalizar && (
+            <button
+              onClick={onFinalizar}
+              disabled={finalizando}
+              className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest flex items-center justify-center disabled:opacity-60"
+            >
+              <i className={`fa-solid ${finalizando ? 'fa-spinner fa-spin' : 'fa-circle-check'} mr-2`}></i>
+              {finalizando ? 'Finalizando...' : 'Finalizar venda'}
+            </button>
+          )}
           {/* ===== Bloco 10: Nota Fiscal (NF-e / NFC-e) — BLOCO 67: dobravel ===== */}
           {isVendaSalva && (
             <div className={`rounded-2xl border ${nb.cls}`}>

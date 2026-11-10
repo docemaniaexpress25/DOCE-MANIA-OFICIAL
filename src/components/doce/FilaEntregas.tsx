@@ -88,7 +88,8 @@ interface ApiResp {
   // BLOCO 58 (regra do dono): o caixa NAO zera por dia — e o valor EM ABERTO
   // desde o ULTIMO fechamento de caixa do admin (desde = quando comeca a conta).
   // BLOCO 99: com o A RECEBER (saldo a prazo/parcial das entregas dele)
-  caixa?: { dinheiroHoje: number; pixHoje: number; aReceber?: number; desde?: string | null };
+  // BLOCO 100: qtdEntregas do ENTREGADOR logado (o caixa e DELE)
+  caixa?: { dinheiroHoje: number; pixHoje: number; aReceber?: number; desde?: string | null; qtdEntregas?: number };
   meuFechamento?: { id: string; valor_dinheiro: number; valor_pix: number; qtd_entregas: number; confirmado: boolean; obs: string | null } | null;
   fechamentosHoje?: any[];
   conferencia?: { porEntregador: { entregadorId: string; nome: string; dinheiro: number; pix: number; qtdEntregas: number; vendas: { saleId: string; cliente: string; valorTotal: number; valorPago: number; recebimento: string }[] }[] };
@@ -817,18 +818,19 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                 {p.separado && pend && (
                   <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded-md bg-gray-300 text-gray-600"><i className="fa-solid fa-boxes-stacked mr-0.5"></i>Separado</span>
                 )}
-                {/* BLOCO 96/97: entregador da venda = vendedor nominado —
+                {/* BLOCO 96/97/100: entregador da venda = vendedor nominado —
                     escolhido no check de carga; no admin o badge e CLICAVEL
-                    para trocar quem carregou aquela entrega */}
+                    para trocar quem carregou aquela entrega. O dono pediu o
+                    texto EXPLICITO: "Carregado por {nome}". */}
                 {p.entregadorId && pend && (
                   modo === 'ADMIN' ? (
                     <button onClick={() => abrirSheetCarga(p)} disabled={!!busy}
                       title="Trocar quem carregou esta entrega"
                       className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded-md bg-teal-50 text-teal-700 shrink-0 active:scale-95 transition-transform disabled:opacity-60">
-                      <i className="fa-solid fa-motorcycle mr-0.5"></i>{p.entregadorNome || 'Entregador'}
+                      <i className="fa-solid fa-motorcycle mr-0.5"></i>Carregado por {p.entregadorNome || 'entregador'}
                     </button>
                   ) : (
-                    <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded-md bg-teal-50 text-teal-700 shrink-0"><i className="fa-solid fa-motorcycle mr-0.5"></i>{p.entregadorNome || 'Entregador'}</span>
+                    <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded-md bg-teal-50 text-teal-700 shrink-0"><i className="fa-solid fa-motorcycle mr-0.5"></i>Carregado por {p.entregadorNome || 'entregador'}</span>
                   )
                 )}
                 {/* BLOCO 58: pedido carregado no veiculo (check do admin) */}
@@ -987,7 +989,69 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
         </div>
 
         {/* CAIXA DO DIA (entregador e admin) */}
-        {modo !== 'VENDEDOR' && (
+        {modo !== 'VENDEDOR' && modo !== 'ADMIN' && (
+          /* BLOCO 100 (regra do dono): SEU CAIXA — card novo do ENTREGADOR
+              logado. O dinheiro em espécie é o HEROI (é o que ele entrega na
+              mão), Pix e A receber no quadrado, com contagem de entregas e
+              as notas de "não cobrar" e "só o admin zera". */
+          <div className="mt-3 rounded-2xl border-2 border-emerald-100 bg-gradient-to-b from-emerald-50/70 to-white p-3.5 shadow-sm">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-[10px] font-black text-emerald-700 uppercase tracking-wide"><i className="fa-solid fa-motorcycle mr-1"></i>Seu caixa</p>
+                <p className="text-[8px] font-bold text-slate-400 uppercase leading-snug">
+                  {desdeCaixaOk
+                    ? <>em aberto desde {desdeCaixa!.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })} às {desdeCaixa!.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</>
+                    : 'sem fechamento anterior'}
+                </p>
+              </div>
+              {typeof caixaEst.qtdEntregas === 'number' && (
+                <span className="text-[8px] font-black uppercase px-2 py-1 rounded-lg bg-white border border-emerald-200 text-emerald-600 shrink-0">
+                  <i className="fa-solid fa-box mr-0.5"></i>{caixaEst.qtdEntregas} entrega(s)
+                </span>
+              )}
+            </div>
+
+            {/* DINHEIRO — o valor em espécie na mão dele (hero) */}
+            <div className="mt-2.5 bg-white rounded-xl border border-emerald-200 p-3 flex items-center gap-3 shadow-sm">
+              <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow">
+                <i className="fa-solid fa-money-bill-wave"></i>
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-[8px] font-black text-emerald-500 uppercase leading-none">Dinheiro em espécie (na sua mão)</p>
+                <p className="text-[22px] font-black text-emerald-700 leading-tight mt-0.5">{fmt(caixaEst.dinheiroHoje)}</p>
+              </div>
+            </div>
+
+            {/* PIX + A RECEBER — as outras duas contas, cada uma na sua casa */}
+            <div className="grid grid-cols-2 gap-2 mt-2">
+              <div className="bg-white rounded-xl border border-teal-100 p-2.5 text-center shadow-sm">
+                <p className="text-[7px] font-black text-teal-500 uppercase leading-none"><i className="fa-brands fa-pix mr-0.5"></i>Pix recebido</p>
+                <p className="text-[15px] font-black text-teal-700 mt-1">{fmt(caixaEst.pixHoje)}</p>
+                <p className="text-[7px] font-bold text-teal-400 uppercase mt-0.5">não vai em espécie</p>
+              </div>
+              <div className="bg-white rounded-xl border border-amber-100 p-2.5 text-center shadow-sm">
+                <p className="text-[7px] font-black text-amber-500 uppercase leading-none"><i className="fa-solid fa-hand-holding-dollar mr-0.5"></i>A receber</p>
+                <p className="text-[15px] font-black text-amber-700 mt-1">{fmt(aReceberEst)}</p>
+                <p className="text-[7px] font-bold text-amber-400 uppercase mt-0.5">cliente ainda deve</p>
+              </div>
+            </div>
+
+            {/* TOTAL do caixa (dinheiro + pix) — o que ele bate com o sistema */}
+            <div className="mt-2 flex items-center justify-between bg-slate-800 text-white rounded-xl px-3 py-2 shadow-sm">
+              <p className="text-[8px] font-black uppercase leading-snug">Total do caixa<br /><span className="text-[7px] font-bold text-white/50">dinheiro + pix</span></p>
+              <p className="text-[15px] font-black">{fmt(caixaEst.dinheiroHoje + caixaEst.pixHoje)}</p>
+            </div>
+
+            {prazoEntregueHoje > 0 && (
+              <p className="text-[8px] font-black text-orange-500 uppercase mt-2"><i className="fa-solid fa-hand-holding-dollar mr-1"></i>A prazo entregue hoje (NAO cobrar): {fmt(prazoEntregueHoje)}</p>
+            )}
+            <p className="text-[8px] font-semibold text-slate-400 mt-2 leading-snug">
+              <i className="fa-solid fa-user-shield mr-1"></i>O caixa só zera quando o ADMIN fecha — cada entregador tem o caixa DELE.
+            </p>
+          </div>
+        )}
+
+        {modo === 'ADMIN' && (
           <div className="mt-3 bg-slate-50 border border-slate-100 rounded-2xl p-3">
             <div className="flex items-center justify-between gap-2">
               <div className="min-w-0">

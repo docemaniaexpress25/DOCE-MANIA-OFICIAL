@@ -2031,7 +2031,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           <div className="grid gap-3 px-1">
             {filteredHistory.map(s => (
               <button key={s.id} onClick={() => setSelectedSale(s)} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex flex-col text-left transition-all hover:border-blue-200">
-                <div className="flex justify-between items-start mb-2"><span className="text-[9px] font-black text-gray-400 uppercase">{s.data.toLocaleDateString()} {s.data.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span><span className={`text-[9px] font-black px-2 py-0.5 rounded uppercase ${s.statusPagamento === 'PAGO' ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>{s.statusPagamento === 'PAGO' ? 'RECEBIDA' : 'EM ABERTO'}</span></div>
+                <div className="flex justify-between items-start mb-2"><span className="text-[9px] font-black text-gray-400 uppercase">{s.data.toLocaleDateString()} {s.data.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span><span className="flex items-center gap-1.5">
+                  {/* BLOCO 109 (regra do dono): situacao fiscal VISIVEL na lista —
+                      o admin ve de cara qual venda ainda falta emitir nota (clique
+                      abre o cupom com o PASSO 2: emitir NF-e/NFC-e, boleto, Pix). */}
+                  {s.notaStatus === 'AUTORIZADA' && <span className="text-[8px] font-black px-1.5 py-0.5 rounded uppercase bg-emerald-50 text-emerald-600" title="Nota autorizada">NF ✓</span>}
+                  {s.notaStatus === 'REJEITADA' && <span className="text-[8px] font-black px-1.5 py-0.5 rounded uppercase bg-rose-50 text-rose-600" title="Nota rejeitada — toque para reemitir">NF ✗</span>}
+                  {s.notaStatus === 'EMITINDO' && <span className="text-[8px] font-black px-1.5 py-0.5 rounded uppercase bg-amber-50 text-amber-600" title="Nota processando na SEFAZ">NF…</span>}
+                  <span className={`text-[9px] font-black px-2 py-0.5 rounded uppercase ${s.statusPagamento === 'PAGO' ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>{s.statusPagamento === 'PAGO' ? 'RECEBIDA' : 'EM ABERTO'}</span></span></div>
                 <div className="flex justify-between items-end"><div><h4 className="font-bold text-gray-800 text-sm leading-tight">{props.clients.find(c => c.id === s.clientId)?.nomeFantasia || 'Cliente'}</h4><p className="text-[10px] text-gray-400 font-bold uppercase mt-1">Vend: {props.users.find(u => u.id === s.vendedorId)?.nome ?? 'Desc.'}</p></div><p className="text-sm font-black text-gray-800">R$ {s.valorTotal.toFixed(2)}</p></div>
               </button>
             ))}

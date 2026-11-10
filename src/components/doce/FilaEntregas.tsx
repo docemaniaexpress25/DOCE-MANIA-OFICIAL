@@ -5,6 +5,12 @@ import { authHeaders } from '@/services/userService';
 import Cupom from '@/components/doce/Cupom';
 import EditorPedido from '@/components/doce/EditorPedido';
 import TrocasBox from '@/components/doce/TrocasBox';
+// BLOCO 109: fiscal na fila de entregas — o ADMIN emite a nota com 1 clique
+// direto no card (regra do dono: na pre-venda quem emite e o admin), imprime
+// o DANFE simplificado na termica 80mm ou abre o PDF A4 (DANFE oficial Focus).
+import { notaService } from '@/services/notaService';
+import { danfeMiniTexto } from '@/lib/danfeTexto';
+import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
 // BLOCO 61: arrastar-e-soltar estilo kanban para ordenar a rota (dnd-kit).
 // Funciona com mouse, TOQUE (celular do admin) e teclado (espaco pega, setas
 // movem, espaco solta) — substitui as setas de cima/baixo do Bloco 31.
@@ -72,6 +78,8 @@ interface FilaItem {
   entregadorNome?: string | null;
   // BLOCO 98: valor das trocas em R$ PRECO DE CUSTO (entrega devolve produtos que fechem esse valor)
   trocasValor?: number | null;
+  // BLOCO 109: situacao fiscal da venda (badge NF + emitir 1 clique no card)
+  notaStatus?: string | null;
   vendedorId: string;
   vendedorNome: string;
   // BLOCO 64: numero/sala do endereco — impressao da ordem mostra "Rua X, 123"
@@ -202,6 +210,146 @@ function compararOrdemEntrega(a: FilaItem, b: FilaItem): number {
   if (oa !== ob) return oa - ob;
   return new Date(a.dataVenda).getTime() - new Date(b.dataVenda).getTime();
 }
+
+// ============================================================================
+// BLOCO 109 (regra do dono): FISCAL DO ADMIN NA FILA DE ENTREGAS
+// "o vendedor so define a venda e o que vai ser vendido... quem gera a nota
+// com 1 clique e o admin na fila de entregas" + "liberdade de imprimir NF-e
+// NFC em 80mm ou A4". Acoes por card, SEM abrir outra tela:
+//   [Emitir NF]  1 clique -> /api/notas (CNPJ do cliente -> NF-e 55; sem doc
+//                -> NFC-e 65 de consumidor)
+//   EMITINDO  -> badge ambar + [Consultar] (sincroniza com a SEFAZ)
+//   AUTORIZADA -> badge verde + [80mm] (DANFE simplificado na termica)
+//                + [PDF A4] (DANFE oficial da Focus em nova aba)
+//   REJEITADA -> badge vermelho + [Tentar de novo] (reemissao -r2/-r3)
+// VENDEDOR/ENTREGADOR: nada fiscal aqui (so o admin mexe na nota da pre-venda).
+// ============================================================================
+interface NotaLocal { status: string; numero?: string; pdfUrl?: string; chave?: string; erro?: string }
+const AcaoFiscalAdmin: React.FC<{ p: FilaItem; showToast: (m: string, t?: 'success' | 'error') => void }> = ({ p, showToast }) => {
+  const [nota, setNota] = useState<NotaLocal>({ status: (p.notaStatus || 'NAO_EMITIDA').toUpperCase() });
+  const [busy, setBusy] = useState(false);
+
+  const emitir = async () => {
+    if (busy) return;
+    setBusy(true);
+    const r = await notaService.emitir(p.saleId);
+    setBusy(false);
+    if (r.nota) setNota({ status: r.nota.status, numero: r.nota.numero, pdfUrl: r.nota.pdfUrl, chave: r.nota.chave, erro: r.nota.erro });
+    if (r.nota?.status === 'AUTORIZADA') showToast(`NF autorizada! ${r.nota.numero || ''}`, 'success');
+    else if (r.nota?.status === 'REJEITADA') showToast(r.nota.erro || 'Nota rejeitada pela SEFAZ', 'error');
+    else if (r.erro && !r.nota) showToast(r.erro, 'error');
+    else if (r.nota?.status === 'EMITINDO') showToast('Nota na SEFAZ — consulte em alguns segundos.', 'success');
+  };
+
+  const consultar = async () => {
+    if (busy) return;
+    setBusy(true);
+    const r = await notaService.consultar(p.saleId);
+    setBusy(false);
+    if (r.nota) setNota({ status: r.nota.status, numero: r.nota.numero, pdfUrl: r.nota.pdfUrl, chave: r.nota.chave, erro: r.nota.erro });
+    if (r.nota?.status === 'AUTORIZADA') showToast('Nota autorizada!', 'success');
+    else if (r.erro && !r.nota) showToast(r.erro, 'error');
+    else showToast('Sem novidade na SEFAZ.', 'success');
+  };
+
+  // DANFE 80mm: consulta a nota (chave/emitente) e imprime o simplificado
+  // na termica — mesmo layout do botao do Cupom (Bloco 82).
+  const imprimir80 = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      let d: NotaLocal & { serie?: string; protocolo?: string; dataAutorizacao?: string; qrCode?: string; emitente?: any } = { ...nota };
+      if (!d.chave) {
+        const r = await notaService.consultar(p.saleId);
+        if (r.ok && r.nota) {
+          d = { ...d, ...r.nota };
+          setNota({ status: r.nota.status, numero: r.nota.numero, pdfUrl: r.nota.pdfUrl, chave: r.nota.chave, erro: r.nota.erro });
+        }
+      }
+      if (!d.chave) { showToast('Nota sem chave de acesso — consulte a SEFAZ e tente de novo.', 'error'); setBusy(false); return; }
+      const texto = danfeMiniTexto({
+        chave: d.chave,
+        numero: d.numero || '',
+        serie: d.serie || '',
+        protocolo: d.protocolo || '',
+        dataAutorizacao: d.dataAutorizacao || '',
+        emitente: d.emitente,
+        qrCode: d.qrCode || '',
+        dataVenda: p.dataVenda,
+        cliente: { nome: p.cliente.nome, doc: p.cliente.cnpj || '' },
+        itens: p.itens.map(i => ({ descricao: i.nome, quantidade: i.quantidade, valorUnitario: i.precoVenda })),
+        valorTotal: p.valorTotal,
+        metodoPagamento: p.metodoPagamento || undefined,
+        detalhePagamento: p.detalhePagamento || undefined,
+        statusPagamento: p.statusPagamento,
+        dataVencimento: p.dataVencimento || undefined,
+        entregaStatus: p.entregaStatus,
+        tipoVenda: 'PRE_VENDA',
+      });
+      showToast('Enviando DANFE à impressora...', 'success');
+      const ok = await bluetoothPrinter.print(texto, '80MM', { skipConfirm: true });
+      if (ok) showToast('DANFE enviado à impressora!', 'success');
+      else showToast('Impressão não realizada — conecte a impressora.', 'error');
+    } catch (e: any) {
+      const msg = e?.message || '';
+      if (msg === 'BLUETOOTH_NAO_SUPORTADO') showToast('Bluetooth não disponível neste aparelho (use o Chrome do Android).', 'error');
+      else showToast(`Erro na impressão do DANFE: ${msg}`, 'error');
+    }
+    setBusy(false);
+  };
+
+  const abrirPdf = async () => {
+    if (busy) return;
+    if (nota.pdfUrl) { window.open(nota.pdfUrl, '_blank', 'noopener'); return; }
+    setBusy(true);
+    const r = await notaService.consultar(p.saleId);
+    setBusy(false);
+    if (r.nota) setNota({ status: r.nota.status, numero: r.nota.numero, pdfUrl: r.nota.pdfUrl, chave: r.nota.chave, erro: r.nota.erro });
+    if (r.nota?.pdfUrl) window.open(r.nota.pdfUrl, '_blank', 'noopener');
+    else showToast('PDF do DANFE ainda não disponível na SEFAZ.', 'error');
+  };
+
+  const st = nota.status;
+  return (
+    <div className="flex flex-wrap items-center gap-2 mt-2 pt-2 border-t border-gray-50" data-bloco="109-fiscal">
+      {st === 'AUTORIZADA' && (
+        <>
+          <span className="text-[8px] font-black uppercase px-2 py-1 rounded-md bg-emerald-50 text-emerald-700 shrink-0" title="Nota autorizada na SEFAZ"><i className="fa-solid fa-circle-check mr-1"></i>NF {nota.numero || 'OK'}</span>
+          <button onClick={imprimir80} disabled={busy} title="DANFE simplificado na térmica 80mm"
+            className="flex-1 min-w-[64px] py-2.5 rounded-xl bg-blue-50 text-blue-600 text-[9px] font-black uppercase text-center active:scale-95 transition-transform disabled:opacity-60">
+            <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-print'} mr-1`}></i>80mm
+          </button>
+          <button onClick={abrirPdf} disabled={busy} title="DANFE oficial (PDF A4) da Focus — nova aba"
+            className="flex-1 min-w-[64px] py-2.5 rounded-xl bg-rose-50 text-rose-600 text-[9px] font-black uppercase text-center active:scale-95 transition-transform disabled:opacity-60">
+            <i className="fa-solid fa-file-pdf mr-1"></i>A4/PDF
+          </button>
+        </>
+      )}
+      {st === 'EMITINDO' && (
+        <>
+          <span className="text-[8px] font-black uppercase px-2 py-1 rounded-md bg-amber-50 text-amber-700 shrink-0"><i className="fa-solid fa-hourglass-half mr-1"></i>Processando na SEFAZ</span>
+          <button onClick={consultar} disabled={busy} className="flex-1 min-w-[64px] py-2.5 rounded-xl bg-amber-500 text-white text-[9px] font-black uppercase text-center active:scale-95 transition-transform disabled:opacity-60">
+            <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-arrows-rotate'} mr-1`}></i>Consultar
+          </button>
+        </>
+      )}
+      {st === 'REJEITADA' && (
+        <>
+          <span className="text-[8px] font-black uppercase px-2 py-1 rounded-md bg-rose-100 text-rose-700 shrink-0" title={nota.erro || 'Rejeitada'}><i className="fa-solid fa-circle-xmark mr-1"></i>Rejeitada</span>
+          <button onClick={emitir} disabled={busy} className="flex-1 min-w-[64px] py-2.5 rounded-xl bg-slate-800 text-white text-[9px] font-black uppercase text-center active:scale-95 transition-transform disabled:opacity-60">
+            <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-file-invoice-dollar'} mr-1`}></i>Tentar de novo
+          </button>
+        </>
+      )}
+      {(st === 'NAO_EMITIDA' || st === 'CANCELADA' || !st) && (
+        <button onClick={emitir} disabled={busy} title="Emite agora: cliente com CNPJ -> NF-e; sem documento -> NFC-e de consumidor"
+          className="flex-1 min-w-[96px] py-2.5 rounded-xl bg-slate-100 text-slate-700 text-[9px] font-black uppercase text-center active:scale-95 transition-transform disabled:opacity-60 hover:bg-slate-200">
+          <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-file-invoice-dollar'} mr-1`}></i>Emitir NF
+        </button>
+      )}
+    </div>
+  );
+};
 
 export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'success' | 'error') => void; modo: 'ENTREGADOR' | 'ADMIN' | 'VENDEDOR'; melhorias?: MelhoriasFlags }> = ({ user, showToast, modo, melhorias: melhoriasProp }) => {
   // BLOCO 14: interruptores (admin liga/desliga em Configuracoes)
@@ -578,6 +726,9 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
     metodoPagamento: p.metodoPagamento || 'A_PRAZO',
     detalhePagamento: p.detalhePagamento || `PRE-VENDA — cobrar ${p.formaPgto} na entrega (${p.condicao === 'APRAZO' ? 'A PRAZO' : 'A VISTA'})`,
     modoNota: p.modoNota || undefined,
+    // BLOCO 109: situacao fiscal real da venda — o Cupom abre com o status
+    // certo da nota (AUTORIZADA/REJEITADA/...) sem precisar consultar antes.
+    notaStatus: p.notaStatus || undefined,
     tipoVenda: 'PRE_VENDA',
     entregaStatus: p.entregaStatus,
     statusPagamento: p.statusPagamento,
@@ -908,6 +1059,13 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
               </button>
             )}
           </div>
+
+          {/* BLOCO 109 (regra do dono): fiscal SOMENTE do admin na fila — emitir
+              NF-e/NFC-e com 1 clique, DANFE 80mm ou PDF A4. Vendedor/entregador
+              nao ve (na pre-venda quem emite a nota e o admin). */}
+          {modo === 'ADMIN' && p.saleId && (
+            <AcaoFiscalAdmin p={p} showToast={showToast} />
+          )}
 
           {/* entregador/admin: entrega e falha com botoes grandes */}
           {podeEntregar && pend && (
@@ -1983,6 +2141,9 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
           onClose={() => setCupom(null)}
           closeLabel="FECHAR"
           showToast={showToast}
+          // BLOCO 109: so o ADMIN abre o cupom da fila com o PASSO 2 fiscal
+          // (emitir nota, DANFE 80mm/A4, boleto, Pix) — emissao posterior.
+          allowNota={modo === 'ADMIN'}
         />
       )}
 

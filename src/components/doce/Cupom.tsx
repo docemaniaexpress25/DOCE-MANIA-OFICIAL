@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Sale, Client, Product } from '@/lib/types';
 import { gerarCupomTexto, cupomSegmentos, cupomSemMarcadores } from '@/lib/cupomTexto';
 import { danfeMiniTexto } from '@/lib/danfeTexto';
@@ -66,6 +66,17 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
   // produtos no PREÇO CUPOM (custo). O cliente paga o cupom normal; a fiscal
   // sai sem identificacao e com o preço da caixa. Requer cupomDuploNfc ON.
   const [modoCupomNfc, setModoCupomNfc] = useState<boolean>(false);
+
+  // BLOCO 109 (regra do dono: "na pronta entrega os botões de nota/boleto
+  // devem aparecer depois de imprimir o cupom, na mesma tela SEM RODAR PARA
+  // BAIXO"): após a 1ª impressão OK o PASSO 1 COLAPSA numa linha compacta
+  // (reimprimir/copiar/opções) e a tela desliza suavemente até o PASSO 2 —
+  // nota, boleto e Pix ficam visíveis sem o usuário rolar nada.
+  const [passo1Aberto, setPasso1Aberto] = useState<boolean>(true);
+  const passo2Ref = useRef<HTMLDivElement | null>(null);
+  const descerParaPasso2 = () => {
+    setTimeout(() => passo2Ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 320);
+  };
 
   const handleEmitirNota = async () => {
     if (notaBusy || !isVendaSalva) return;
@@ -357,6 +368,13 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
             if (success) {
               setModal({title:'Impresso!', message:'Cupom impresso com sucesso!', icon:'fa-solid fa-circle-check', type:'success', onConfirm:()=>setModal(null)});
               if (showToast) showToast('Impresso com sucesso!', 'success');
+              // BLOCO 109: cupom na mao = hora da parte fiscal. O PASSO 1
+              // colapsa e a tela desce suave até os botões de nota/boleto —
+              // tudo na MESMA tela, sem rodar para baixo manualmente.
+              if (isVendaSalva) {
+                setPasso1Aberto(false);
+                descerParaPasso2();
+              }
             } else {
               // print() retornou false: seletor cancelado ou impressora nao conectada
               setModal({
@@ -518,7 +536,7 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
               verdade — a menor que existe) — as TROCAS saem com bem menos
               ênfase, abaixo do total, em letra MENOR que a descrição dos
               produtos (regra do dono: "pequeno mesmo"). */}
-          <div className="font-mono text-[11px] leading-tight text-black bg-gray-50 rounded-xl border border-gray-100 pl-4 pr-3 py-2.5 whitespace-pre select-none max-h-[38vh] overflow-auto cupom-scroll">
+          <div className={`font-mono text-[11px] leading-tight text-black bg-gray-50 rounded-xl border border-gray-100 pl-4 pr-3 py-2.5 whitespace-pre select-none overflow-auto cupom-scroll ${isVendaSalva ? 'max-h-[24vh]' : 'max-h-[38vh]'}`}>
             {cupomSegmentos(generateText(printWidth)).map((seg, i) => seg.pequeno ? (
               <span key={i} className="text-[8px] leading-[1.15] text-gray-400">{seg.txt}</span>
             ) : (
@@ -549,58 +567,82 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
               BLOCO 108 — FLUXO FECHADO (regra do dono): PRIMEIRO imprime o
               cupom (conferencia/entrega), SO DEPOIS sai a parte fiscal.
               PASSO 1 = imprimir/copiar/WhatsApp · PASSO 2 = NF/NFC-e,
-              boleto e Pix. Mesmos botoes, agora na ordem certa. */}
-          {isVendaSalva && (
-            <div className="flex items-center gap-2 mt-1">
-              <span className="w-7 h-7 rounded-full bg-blue-600 text-white font-black text-xs flex items-center justify-center shadow-sm shrink-0">1</span>
-              <p className="text-[9px] font-black text-blue-600 uppercase tracking-widest">Imprima o cupom</p>
-              <span className="flex-1 h-px bg-gray-200"></span>
+              boleto e Pix. Mesmos botoes, agora na ordem certa.
+              BLOCO 109: após a 1ª impressão o PASSO 1 COLAPSA numa linha
+              compacta — o PASSO 2 (nota/boleto) sobe e fica visível SEM o
+              usuário rodar para baixo. Toque no ⚙ reabre todas as opções. */}
+          {isVendaSalva && !passo1Aberto ? (
+            <div className="flex items-center gap-1.5 bg-blue-50 rounded-2xl px-3 py-2">
+              <span className="w-6 h-6 rounded-full bg-emerald-600 text-white font-black text-[10px] flex items-center justify-center shadow-sm shrink-0" title="Cupom impresso"><i className="fa-solid fa-check"></i></span>
+              <p className="text-[9px] font-black text-blue-600 uppercase tracking-wider flex-1 min-w-0 truncate">Cupom impresso</p>
+              <button onClick={handlePrint} disabled={isPrinting} title="Imprimir de novo"
+                className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center active:scale-90 disabled:opacity-60">
+                <i className={`fa-solid ${isPrinting ? 'fa-spinner fa-spin' : 'fa-print'}`}></i>
+              </button>
+              <button onClick={handleCopy} title="Copiar o cupom"
+                className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center active:scale-90">
+                <i className="fa-solid fa-copy"></i>
+              </button>
+              <button onClick={() => setPasso1Aberto(true)} title="Imprimir de novo em outro papel, outra impressora, WhatsApp"
+                className="w-10 h-10 rounded-xl bg-white border border-blue-200 text-blue-600 flex items-center justify-center active:scale-90">
+                <i className="fa-solid fa-sliders"></i>
+              </button>
             </div>
+          ) : (
+            <>
+              {isVendaSalva && (
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="w-7 h-7 rounded-full bg-blue-600 text-white font-black text-xs flex items-center justify-center shadow-sm shrink-0">1</span>
+                  <p className="text-[9px] font-black text-blue-600 uppercase tracking-widest">Imprima o cupom</p>
+                  <span className="flex-1 h-px bg-gray-200"></span>
+                </div>
+              )}
+
+              <PrinterSelector accent="blue" />
+
+              {/* Paper width selector */}
+              <div className="flex bg-gray-200 p-1 rounded-2xl mb-1">
+                <button 
+                  onClick={() => setPrintWidth('56MM')} 
+                  className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${printWidth === '56MM' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500'}`}
+                >
+                  <i className="fa-solid fa-receipt mr-1"></i>56mm
+                </button>
+                <button 
+                  onClick={() => setPrintWidth('80MM')} 
+                  className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${printWidth === '80MM' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-400'}`}
+                >
+                  <i className="fa-solid fa-receipt mr-1"></i>80mm
+                </button>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-2">
+                <button 
+                  onClick={handlePrint} 
+                  disabled={isPrinting}
+                  className={`font-black py-4 rounded-2xl flex items-center justify-center gap-2 active:scale-95 text-[10px] uppercase shadow-lg transition-all ${
+                    isPrinting 
+                      ? 'bg-gray-300 text-gray-500 cursor-not-allowed' 
+                      : 'bg-blue-600 text-white'
+                  }`}
+                >
+                  <i className={`fa-solid ${isPrinting ? 'fa-spinner fa-spin' : 'fa-print'}`}></i> 
+                  {isPrinting ? 'Imprimindo...' : 'Imprimir'}
+                </button>
+                <button onClick={handleCopy} className="bg-emerald-600 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 active:scale-95 text-[10px] uppercase shadow-lg">
+                  <i className="fa-solid fa-copy"></i> Copiar
+                </button>
+              </div>
+
+              <button onClick={() => { setModal({title:'Enviar WhatsApp', message:'Deseja enviar este cupom pelo WhatsApp para o cliente?', icon:'fa-brands fa-whatsapp', iconColor:'text-white', onConfirm:()=>{setModal(null); handleWhatsApp();}}) }} className="w-full bg-green-50 text-green-600 border border-green-100 font-black py-2.5 rounded-2xl flex items-center justify-center gap-2 active:scale-95 text-[9px] uppercase transition-colors hover:bg-green-100">
+                <i className="fa-brands fa-whatsapp text-sm"></i> Enviar pelo WhatsApp
+              </button>
+            </>
           )}
-
-          <PrinterSelector accent="blue" />
-
-          {/* Paper width selector */}
-          <div className="flex bg-gray-200 p-1 rounded-2xl mb-1">
-            <button 
-              onClick={() => setPrintWidth('56MM')} 
-              className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${printWidth === '56MM' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500'}`}
-            >
-              <i className="fa-solid fa-receipt mr-1"></i>56mm
-            </button>
-            <button 
-              onClick={() => setPrintWidth('80MM')} 
-              className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${printWidth === '80MM' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-400'}`}
-            >
-              <i className="fa-solid fa-receipt mr-1"></i>80mm
-            </button>
-          </div>
-          
-          <div className="grid grid-cols-2 gap-2">
-            <button 
-              onClick={handlePrint} 
-              disabled={isPrinting}
-              className={`font-black py-4 rounded-2xl flex items-center justify-center gap-2 active:scale-95 text-[10px] uppercase shadow-lg transition-all ${
-                isPrinting 
-                  ? 'bg-gray-300 text-gray-500 cursor-not-allowed' 
-                  : 'bg-blue-600 text-white'
-              }`}
-            >
-              <i className={`fa-solid ${isPrinting ? 'fa-spinner fa-spin' : 'fa-print'}`}></i> 
-              {isPrinting ? 'Imprimindo...' : 'Imprimir'}
-            </button>
-            <button onClick={handleCopy} className="bg-emerald-600 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 active:scale-95 text-[10px] uppercase shadow-lg">
-              <i className="fa-solid fa-copy"></i> Copiar
-            </button>
-          </div>
-
-          <button onClick={() => { setModal({title:'Enviar WhatsApp', message:'Deseja enviar este cupom pelo WhatsApp para o cliente?', icon:'fa-brands fa-whatsapp', iconColor:'text-white', onConfirm:()=>{setModal(null); handleWhatsApp();}}) }} className="w-full bg-green-50 text-green-600 border border-green-100 font-black py-2.5 rounded-2xl flex items-center justify-center gap-2 active:scale-95 text-[9px] uppercase transition-colors hover:bg-green-100">
-            <i className="fa-brands fa-whatsapp text-sm"></i> Enviar pelo WhatsApp
-          </button>
 
           {/* PASSO 2 — fiscal e recebimento so DEPOIS do cupom impresso */}
           {isVendaSalva && (
-            <div className="flex items-center gap-2 pt-2">
+            <div ref={passo2Ref} className="flex items-center gap-2 pt-2 scroll-mt-4">
               <span className="w-7 h-7 rounded-full bg-violet-600 text-white font-black text-xs flex items-center justify-center shadow-sm shrink-0">2</span>
               <p className="text-[9px] font-black text-violet-600 uppercase tracking-widest">Depois de imprimir — nota, boleto e Pix</p>
               <span className="flex-1 h-px bg-gray-200"></span>
@@ -650,6 +692,15 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
                     </>
                   )}
                   {/* BLOCO 108: MODO CUPOM — NFC anonima com preço cupom (antes de emitir) */}
+                  {/* BLOCO 109: cliente SEM documento é emitível — NFC-e de
+                      consumidor não precisa de CPF/CNPJ. O aviso deixa claro
+                      para o vendedor o que vai sair e como melhorar depois. */}
+                  {(nota.status === 'NAO_EMITIDA' || nota.status === 'REJEITADA' || nota.status === 'CANCELADA') && !String(clientLocal?.cnpj || '').trim() && (
+                    <p className="text-[9px] leading-snug font-bold bg-teal-50 text-teal-700 border border-teal-200 rounded-lg px-2 py-1.5">
+                      <i className="fa-solid fa-circle-info mr-1"></i>
+                      Cliente sem CPF/CNPJ no cadastro — a nota sai como NFC-e de consumidor (sem destinatário), emitível agora. Para NF-e completa, cadastre o documento e emita de novo.
+                    </p>
+                  )}
                   {(nota.status === 'NAO_EMITIDA' || nota.status === 'REJEITADA' || nota.status === 'CANCELADA') && (
                     <button onClick={() => setModoCupomNfc(!modoCupomNfc)} aria-pressed={modoCupomNfc}
                       className={`w-full flex items-center gap-2 p-3 rounded-xl border transition-all ${modoCupomNfc ? 'bg-violet-50 border-violet-300' : 'bg-gray-50 border-gray-100'}`}>

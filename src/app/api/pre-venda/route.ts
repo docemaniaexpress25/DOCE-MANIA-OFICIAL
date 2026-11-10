@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/serverSupabase';
 import { sessionFromRequest, isAdminSession } from '@/lib/session';
-import { hasEntregaTables, hasBoletoFotoColumn, hasModoVendaColumn, hasCargaCheckColumns } from '@/lib/serverSchema';
+import { hasEntregaTables, hasBoletoFotoColumn, hasModoVendaColumn, hasCargaCheckColumns, hasNotaColumns } from '@/lib/serverSchema';
 import { salvarFotoSupabase } from '@/lib/fotoStorage';
 import { sendPushToUser } from '@/lib/pushSender';
 import QRCode from 'qrcode';
@@ -594,6 +594,9 @@ async function enrichFila(supabase: any, salesRows: any[]) {
       detalhePagamento: det || null,
       metodoPagamento: s.metodo_pagamento || null,
       modoNota: s.modo_nota || null,
+      // BLOCO 109: situacao fiscal da venda (NAO_EMITIDA/AUTORIZADA/REJEITADA/...)
+      // — alimenta o badge NF e o botao de emissao 1 clique do admin no card.
+      notaStatus: s.nota_status || null,
       trocas: s.trocas ?? null,
       prioridade: typeof s.prioridade === 'number' ? s.prioridade : 0,
       // BLOCO 31: posicao manual da rota (definida pelo admin com setas)
@@ -655,7 +658,9 @@ async function getFila(supabase: any, userId: string, perfil: string) {
   const temCarga = await hasCargaCheckColumns();
   // BLOCO 98: trocas_valor (valor de custo das trocas) — entra SO quando o SQL rodou
   const temTrocasValor = await hasTrocasValorColumn();
-  const filaCols = `${FILA_COLS_13}${temOrdem ? ', ordem_entrega' : ''}${modoCol ? `, ${modoCol}` : ''}${temCarga ? ', carga_confirmada_em' : ''}${temTrocasValor ? ', trocas_valor' : ''}`;
+  // BLOCO 109: situacao fiscal da venda (badge NF no card + emitir nota 1 clique)
+  const temNota = await hasNotaColumns();
+  const filaCols = `${FILA_COLS_13}${temOrdem ? ', ordem_entrega' : ''}${modoCol ? `, ${modoCol}` : ''}${temCarga ? ', carga_confirmada_em' : ''}${temTrocasValor ? ', trocas_valor' : ''}${temNota ? ', nota_status' : ''}`;
 
   // ---- Fila ativa: PENDENTE/EM_ROTA (inclui legado) — qualquer dia (fila viva) ----
   let qAtiva = supabase

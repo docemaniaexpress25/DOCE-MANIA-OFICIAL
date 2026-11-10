@@ -1,3 +1,5 @@
+import crypto from 'node:crypto';
+
 /**
  * Cliente SPEDY (docs.spedy.com.br) — emissao de NF-e/NFC-e, recebimento DFe
  * (notas contra o CNPJ da empresa), certificado A1 e catalogo de produtos,
@@ -63,6 +65,12 @@ export function getSpedyConfig() {
     empresaId: process.env.SPEDY_EMPRESA_ID || '',
     natureza: process.env.SPEDY_NATUREZA || 'Venda de mercadoria',
     ufEmitente: (process.env.SPEDY_UF_EMITENTE || 'RS').toUpperCase(),
+    // BLOCO 95 (webhook): segredo das assinaturas Standard Webhooks (valor de
+    // GET /v1/webhooks/secret — aceita com ou sem prefixo whsec_) e a chave
+    // geral do app. Sem segredo o /api/spedy/webhook recusa TUDO (503) — o
+    // endpoint fica exposto na internet e nao aceita nada nao assinado.
+    webhookSecret: process.env.SPEDY_WEBHOOK_SECRET || '',
+    enabled: process.env.SPEDY_ENABLED === '1',
   };
 }
 
@@ -575,8 +583,73 @@ export async function baixarXmlInboundSpedy(id: string) {
 }
 
 // ---------------------------------------------------------------------------
-// Webhooks (rota futura /api/spedy/webhook — eventos que importam pro app)
+// Webhooks (rota /api/spedy/webhook — eventos que importam pro app)
 // ---------------------------------------------------------------------------
+
+/**
+ * BLOCO 95: o integrationId que o app manda na emissao e "VENDA-<saleId>"
+ * (reemissao anexa -r2, -r3... no fim). O webhook decompoe de volta para
+ * achar a venda no espelho sales.nota_*.
+ */
+export function decompoeIntegrationId(ref?: string | null): { saleId: string | null } {
+  const raw = String(ref || '').trim();
+  const m = raw.match(/^VENDA-(.+?)(?:-r\d+)?$/i);
+  return { saleId: m ? m[1] : null };
+}
+
+/**
+ * BLOCO 95: verificacao de assinatura do webhook da Spedy — padrao STANDARD
+ * WEBHOOKS (docs.spedy.com.br): cabecalhos webhook-id, webhook-timestamp e
+ * webhook-signature ("v1,<base64>" — uma ou mais durante rotacao de segredo).
+ *   assinatura = HMAC-SHA256(segredo, "<id>.<timestamp>.<corpo>") em base64
+ * O segredo vem de GET /v1/webhooks/secret (env SPEDY_WEBHOOK_SECRET — aceita
+ * com ou sem prefixo whsec_). Comparacao em tempo constante + janela de 5
+ * minutos contra replay. SEM segredo configurado recusa tudo (o endpoint
+ * fica exposto na internet — nao aceita nada nao assinado).
+ */
+export async function verificarAssinaturaWebhook(
+  headers: Headers,
+  corpoCru: string
+): Promise<{ valido: boolean; motivo?: string }> {
+  const secret = process.env.SPEDY_WEBHOOK_SECRET || '';
+  if (!secret) {
+    return { valido: false, motivo: 'SPEDY_WEBHOOK_SECRET nao configurado no servidor (Vercel).' };
+  }
+
+  const id = headers.get('webhook-id') || '';
+  const ts = headers.get('webhook-timestamp') || '';
+  const sigHeader = headers.get('webhook-signature') || '';
+  if (!id || !ts || !sigHeader) {
+    return { valido: false, motivo: 'Cabecalhos Standard Webhooks ausentes (webhook-id/timestamp/signature).' };
+  }
+
+  // Janela de tolerancia: 5 minutos — fora disso e replay, recusa.
+  const tsNum = Number(ts);
+  if (!Number.isFinite(tsNum)) return { valido: false, motivo: 'webhook-timestamp invalido.' };
+  const agora = Math.floor(Date.now() / 1000);
+  if (Math.abs(agora - tsNum) > 300) {
+    return { valido: false, motivo: 'webhook-timestamp fora da tolerancia de 5 min (possivel replay).' };
+  }
+
+  // Segredo: "whsec_<base64>" (Standard Webhooks) ou base64 cru.
+  const secretoLimpo = secret.replace(/^whsec_/, '');
+  const secretBytes = Buffer.from(secretoLimpo, 'base64');
+  const key = secretBytes.length > 0 ? secretBytes : Buffer.from(secretoLimpo, 'utf8');
+
+  const esperado = crypto.createHmac('sha256', key).update(`${id}.${ts}.${corpoCru}`, 'utf8').digest('base64');
+
+  // "v1,abc v1,def" (rotacao de segredo) — vale qualquer uma.
+  for (const parte of sigHeader.split(/[ ,]+/)) {
+    const sig = parte.trim();
+    if (!sig) continue;
+    const v1 = sig.startsWith('v1,') ? sig.slice(3) : sig;
+    const a = Buffer.from(v1);
+    const b = Buffer.from(esperado);
+    if (a.length === b.length && crypto.timingSafeEqual(a, b)) return { valido: true };
+  }
+  return { valido: false, motivo: 'Assinatura HMAC invalida.' };
+}
+
 export const SPEDY_WEBHOOK_EVENTS = [
   'invoice.status_changed',   // qualquer mudanca de status
   'invoice.authorized',       // AUTORIZADA -> baixa estoque COM NF + salva XML/DANFE

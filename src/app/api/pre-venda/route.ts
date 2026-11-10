@@ -7,7 +7,7 @@ import { sendPushToUser } from '@/lib/pushSender';
 import QRCode from 'qrcode';
 import { buildPixPayload, generateTxid, lerChavePixEntrega } from '@/lib/pix';
 // BLOCO 21: regra ÚNICA da comissão de pré-venda (compartilhada com /api/pre-venda/venda)
-import { comissaoPvDeItens, COMISSAO_PV_DEFAULT, round2 } from '@/lib/comissaoPv';
+import { comissaoPvDeItens, comissaoPeDeItens, COMISSAO_PV_DEFAULT, round2 } from '@/lib/comissaoPv';
 
 /**
  * PRÉ-VENDA / ROTAS DE ENTREGA (estilo Shopee)
@@ -137,6 +137,18 @@ async function hasOrdemEntregaColumn(): Promise<boolean> {
   return _temOrdemEntrega;
 }
 
+// BLOCO 98: sales.trocas_valor (valor das trocas em R$ PRECO DE CUSTO).
+// Sonda 1x por processo — sem a coluna o campo simplesmente nao sai na fila.
+let _temTrocasValor: boolean | null = null;
+async function hasTrocasValorColumn(): Promise<boolean> {
+  if (_temTrocasValor !== null) return _temTrocasValor;
+  try {
+    const { error } = await getServiceClient().from('sales').select('trocas_valor').limit(1);
+    _temTrocasValor = !error;
+  } catch { _temTrocasValor = false; }
+  return _temTrocasValor;
+}
+
 /** Carimbo pt-BR (America/Sao_Paulo) compativel com o parser do portal do cliente:
  *  "12/02/2025 14:33" -> o portal le " | 12/02/2025 14:33: R$ 50.00 (DINHEIRO)" */
 function carimboAgora(): string {
@@ -183,16 +195,24 @@ async function getMelhorias(supabase: any): Promise<{ trocaSeparacao: boolean; p
  *   - à vista quitado no aceite  -> DISPONIVEL (vendedor pode receber)
  *   - parcial / boleto / nao pago -> A_RECEBER (entra quando o dinheiro
  *     da venda entrar completo — o recebimento posterior vira DISPONIVEL)
+ */
+/**
+ * BLOCO 14/98 — comissao da PRE-VENDA entregue.
+ * usarComissaoPe (regra do dono, Bloco 98): o VENDEDOR que entrega a PROPIA
+ * venda ganha a taxa de PRONTA ENTREGA do produto (foi ele que vendeu e
+ * levou). Entregador dedicado/admin: taxa de PRE-VENDA, como sempre.
  * Nunca reduz valor de comissão já registrada e nunca trava a entrega.
  */
-async function registrarComissaoPreVenda(supabase: any, sale: any, quitada: boolean) {
+async function registrarComissaoPreVenda(supabase: any, sale: any, quitada: boolean, usarComissaoPe = false) {
   try {
     const { data: items } = await supabase
       .from('sale_items').select('produto_id, quantidade, preco_venda').eq('sale_id', sale.id);
     const itens = items || [];
     if (itens.length === 0) return;
 
-    const comissao = await comissaoPvDeItens(supabase, itens);
+    const comissao = usarComissaoPe
+      ? await comissaoPeDeItens(supabase, itens)
+      : await comissaoPvDeItens(supabase, itens);
     if (!(comissao > 0)) return;
 
     const total = Math.max(Number(sale.valor_total || 0), 0.01);
@@ -478,9 +498,9 @@ async function updateSaleFlex(supabase: any, saleId: string, payload: Record<str
   const { error } = await supabase.from('sales').update(payload).eq('id', saleId);
   if (!error) return { ok: true, sem13: false };
   const msg = String(error.message || '');
-  if (/trocas|prioridade|separado|entregador_id/i.test(msg)) {
+  if (/trocas|prioridade|separado|entregador_id|trocas_valor/i.test(msg)) {
     const flex = { ...payload };
-    delete flex.trocas; delete flex.prioridade; delete flex.separado; delete flex.separado_em; delete flex.entregador_id;
+    delete flex.trocas; delete flex.prioridade; delete flex.separado; delete flex.separado_em; delete flex.entregador_id; delete flex.trocas_valor;
     // Se sobrar algo de verdade (ex.: entrega_status), aplica sem as colunas novas.
     // Se NAO sobrar nada, o update seria vazio = sucesso falso. Exige o SQL.
     if (Object.keys(flex).length === 0) {
@@ -587,7 +607,9 @@ async function enrichFila(supabase: any, salesRows: any[]) {
       // BLOCO 96: entregador ATRIBUIDO a venda (escolhido no check de carga —
       // cada entregador tem o proprio caixa e ve so a propria carga)
       entregadorId: s.entregador_id ?? null,
-      entregadorNome: s.entregador_id ? (userMap[s.entregador_id] || 'Entregador') : null,
+      // BLOCO 98: o UUID do acesso fixo da base = o "ENTREGADOR 1" (quem loga
+      // como entregador) — nome nominal em vez de "Entregador" generico.
+      entregadorNome: s.entregador_id ? (userMap[s.entregador_id] || (s.entregador_id === UUID_ACESSO_FIXO.ENTREGADOR ? 'Entregador 1' : 'Entregador')) : null,
       vendedorId: s.vendedor_id,
       vendedorNome: userMap[s.vendedor_id] || '',
       temFoto: !!temFotoSet[s.id],
@@ -631,7 +653,9 @@ async function getFila(supabase: any, userId: string, perfil: string) {
   const modoCol = await salesColsComModo();
   // BLOCO 58: check de carga (pedido carregado no veiculo) — entra SO quando o SQL rodou
   const temCarga = await hasCargaCheckColumns();
-  const filaCols = `${FILA_COLS_13}${temOrdem ? ', ordem_entrega' : ''}${modoCol ? `, ${modoCol}` : ''}${temCarga ? ', carga_confirmada_em' : ''}`;
+  // BLOCO 98: trocas_valor (valor de custo das trocas) — entra SO quando o SQL rodou
+  const temTrocasValor = await hasTrocasValorColumn();
+  const filaCols = `${FILA_COLS_13}${temOrdem ? ', ordem_entrega' : ''}${modoCol ? `, ${modoCol}` : ''}${temCarga ? ', carga_confirmada_em' : ''}${temTrocasValor ? ', trocas_valor' : ''}`;
 
   // ---- Fila ativa: PENDENTE/EM_ROTA (inclui legado) — qualquer dia (fila viva) ----
   let qAtiva = supabase
@@ -812,6 +836,10 @@ async function getFila(supabase: any, userId: string, perfil: string) {
     const { data: usCaixa } = await supabase.from('app_users').select('id, nome').in('id', idsCaixa);
     (usCaixa || []).forEach((u: any) => { if (caixasMap[u.id]) caixasMap[u.id].nome = u.nome; });
   }
+  // BLOCO 98: o UUID do acesso fixo = o "ENTREGADOR 1" (quem loga como entregador)
+  if (caixasMap[UUID_ACESSO_FIXO.ENTREGADOR] && !caixasMap[UUID_ACESSO_FIXO.ENTREGADOR].nome) {
+    caixasMap[UUID_ACESSO_FIXO.ENTREGADOR].nome = 'Entregador 1';
+  }
   if (caixasMap['SEM_ENTREGADOR']) caixasMap['SEM_ENTREGADOR'].nome = 'Sem entregador (antigo)';
   // zero em aberto (fechado agora) = nao aparece na lista — caixa limpo
   const caixasPorEntregador = Object.values(caixasMap)
@@ -825,27 +853,29 @@ async function getFila(supabase: any, userId: string, perfil: string) {
     pixHoje = meu ? meu.pix : 0;
   }
 
-  // BLOCO 97 (regra do dono): NAO existem usuarios entregadores novos — os
-  // VENDEDORES sao nominados entregadores tambem. O seletor de carga lista
-  // vendedores ativos (entregadores antigos que ja existirem continuam na
-  // lista para nao quebrar o legado). Vendedores vem primeiro.
+  // BLOCO 97/98 (regra do dono): NAO existem usuarios entregadores novos — os
+  // VENDEDORES sao nominados entregadores tambem. E a opcao PRINCIPAL e o
+  // "ENTREGADOR 1" (quem loga como entregador): id 'ENTREGADOR' e o
+  // pseudo-usuario do login fixo; resolveEntregadorUuid mapeia para o usuario
+  // real (se existir exatamente 1) ou para o UUID fixo da base. No sheet ele
+  // aparece como CHIP GIGANTE no topo, os vendedores ativos em chips menores.
   let entregadores: { id: string; nome: string; perfil?: string }[] = [];
   if (perfil === 'ADMIN') {
+    entregadores = [{ id: 'ENTREGADOR', nome: 'Entregador 1', perfil: 'ENTREGADOR_FIXO' }];
     try {
       const { data: ents } = await supabase
         .from('app_users')
         .select('id, nome, perfil')
-        .in('perfil', ['VENDEDOR', 'ENTREGADOR'])
+        .in('perfil', ['VENDEDOR'])
         .eq('ativo', true)
         .order('nome', { ascending: true });
-      const vistos = new Set<string>();
-      entregadores = (ents || [])
-        .filter((u: any) => u.id && !vistos.has(u.id) && vistos.add(u.id))
-        .map((u: any) => ({ id: u.id, nome: u.nome || 'Entregador', perfil: String(u.perfil || 'VENDEDOR') }))
-        .sort((a: any, b: any) =>
-          (a.perfil === 'VENDEDOR' ? 0 : 1) - (b.perfil === 'VENDEDOR' ? 0 : 1) ||
-          String(a.nome || '').localeCompare(String(b.nome || '')));
-    } catch { /* app_users antigo: seletor vem vazio e a carga funciona sem entregador */ }
+      const vistos = new Set<string>([entregadores[0].id]);
+      (ents || []).forEach((u: any) => {
+        if (!u.id || vistos.has(u.id)) return;
+        vistos.add(u.id);
+        entregadores.push({ id: u.id, nome: u.nome || 'Vendedor', perfil: String(u.perfil || 'VENDEDOR') });
+      });
+    } catch { /* app_users antigo: so o Entregador 1 no seletor */ }
   }
 
   // Resumo legivel do recebimento de uma entrega (para a conferencia do admin)
@@ -864,6 +894,8 @@ async function getFila(supabase: any, userId: string, perfil: string) {
   const filaFmt = fila.map((p: any) => ({
     ...p,
     motivo: null,
+    // BLOCO 98: valor de custo das trocas para a UI (null quando o SQL nao rodou)
+    trocasValor: temTrocasValor ? (p.trocas_valor ?? null) : null,
   }));
 
   const entreguesHojeEnr = await enrichFila(supabase, entreguesHoje);
@@ -905,6 +937,10 @@ async function getFila(supabase: any, userId: string, perfil: string) {
     if (ids.length > 0) {
       const { data: usrs } = await supabase.from('app_users').select('id, nome').in('id', ids);
       (usrs || []).forEach((u: any) => { if (grupos[u.id]) grupos[u.id].nome = u.nome; });
+    }
+    // BLOCO 98: UUID do acesso fixo = "Entregador 1"; SEM entregador = legado
+    if (grupos[UUID_ACESSO_FIXO.ENTREGADOR] && !grupos[UUID_ACESSO_FIXO.ENTREGADOR].nome) {
+      grupos[UUID_ACESSO_FIXO.ENTREGADOR].nome = 'Entregador 1';
     }
     if (grupos['SEM_ENTREGADOR']) grupos['SEM_ENTREGADOR'].nome = 'Entregador (registro antigo)';
     conferencia = { porEntregador: Object.values(grupos).sort((a: any, b: any) => b.qtdEntregas - a.qtdEntregas) };
@@ -1284,7 +1320,7 @@ export async function POST(req: NextRequest) {
       if (entAlvoBruto && carregado) {
         entAlvo = await resolveEntregadorUuid(supabase, entAlvoBruto);
         if (!entAlvo) {
-          return NextResponse.json({ ok: false, error: 'Entregador invalido — crie um usuario Entregador real no menu Usuarios.' }, { status: 400 });
+          return NextResponse.json({ ok: false, error: 'Entregador invalido — escolha o Entregador 1 ou um vendedor da lista.' }, { status: 400 });
         }
       }
       // carga_confirmada_por e uuid: resolve pseudo-usuarios (login fixo) para
@@ -1305,8 +1341,12 @@ export async function POST(req: NextRequest) {
       if (cargaErr) throw cargaErr;
       let nomeAlvo = '';
       if (entAlvo) {
-        const { data: uAlvo } = await supabase.from('app_users').select('nome').eq('id', entAlvo).maybeSingle();
-        nomeAlvo = uAlvo?.nome ? ` — entregador: ${uAlvo.nome}` : '';
+        if (entAlvo === UUID_ACESSO_FIXO.ENTREGADOR) {
+          nomeAlvo = ' — entregador: Entregador 1';
+        } else {
+          const { data: uAlvo } = await supabase.from('app_users').select('nome').eq('id', entAlvo).maybeSingle();
+          nomeAlvo = uAlvo?.nome ? ` — entregador: ${uAlvo.nome}` : ' — entregador: Entregador 1';
+        }
       }
       await logEventoSeguro(supabase, null, saleIdCarga, userId, carregado ? 'CARGA_OK' : 'CARGA_REMOVIDA', carregado ? `Pedido carregado no veiculo (check do admin)${nomeAlvo}` : 'Check de carga removido pelo admin');
       return NextResponse.json({ ok: true, carregado });
@@ -1402,11 +1442,16 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: false, error: 'Recurso desligado nas Configuracoes.' }, { status: 400 });
       }
       const trocas = String(body.trocas ?? '').slice(0, 500).trim();
-      const r = await updateSaleFlex(supabase, saleId, { trocas: trocas || null });
+      // BLOCO 98: valor de custo das trocas (R$) — editavel junto com o texto
+      const tvNum = Number(body.trocasValor);
+      const trocasValor = isFinite(tvNum) && tvNum > 0 ? Math.round(tvNum * 100) / 100 : null;
+      const flexTrocas: Record<string, unknown> = { trocas: trocas || null };
+      if (trocasValor !== null) flexTrocas.trocas_valor = trocasValor;
+      const r = await updateSaleFlex(supabase, saleId, flexTrocas);
       if (!r.ok) {
         return NextResponse.json({ ok: false, error: r.erro || 'Banco desatualizado: rode o Bloco 13 do SQL.' }, { status: r.sem13 ? 503 : 500 });
       }
-      await logEventoSeguro(supabase, saleRow.route_id || null, saleId, userId, 'TROCAS', trocas ? `Trocas ajustadas: ${trocas}` : 'Trocas removidas');
+      await logEventoSeguro(supabase, saleRow.route_id || null, saleId, userId, 'TROCAS', trocas ? `Trocas ajustadas: ${trocas}${trocasValor !== null ? ` (custo R$ ${trocasValor.toFixed(2)})` : ''}` : 'Trocas removidas');
       return NextResponse.json({ ok: true });
     }
 
@@ -1654,12 +1699,16 @@ export async function POST(req: NextRequest) {
 
     // ============================================================================
     // BLOCO 13: ENTREGUE / FALHOU / REABRIR — FILA CONTINUA (sem rota obrigatória)
-    // REGRA DO DONO: vendedor NUNCA entrega — somente ENTREGADOR (e o admin).
+    // REGRA DO DONO (Bloco 98 atualizada): o VENDEDOR pode entregar a PROPIA
+    // venda pelo menu Entregas (foi ele que vendeu e decidiu levar — e nisso
+    // ganha a comissão de PRONTA ENTREGA). Venda alheia: só o ENTREGADOR (e o admin).
     // ============================================================================
-    const podeEntregar = admin || session.perfil === 'ENTREGADOR';
+    const entregaPropria = String(saleRow.vendedor_id || '') === String(userId);
+    const podeEntregar = admin || session.perfil === 'ENTREGADOR' ||
+      (session.perfil === 'VENDEDOR' && entregaPropria);
     if (acao === 'ENTREGUE' || acao === 'FALHOU' || acao === 'REABRIR') {
       if (!podeEntregar) {
-        return NextResponse.json({ ok: false, error: 'Somente o ENTREGADOR confirma entregas. O vendedor nao entrega.' }, { status: 403 });
+        return NextResponse.json({ ok: false, error: 'Entrega pelo ENTREGADOR ou pelo PROPRIO vendedor da venda.' }, { status: 403 });
       }
     }
     const rotaIdRef = saleRow.route_id || null;
@@ -1740,6 +1789,11 @@ export async function POST(req: NextRequest) {
         // gravar direto derruba o update e a entrega nunca é registrada.
         const entUuid = await resolveEntregadorUuid(supabase, userId);
         if (entUuid) updates.entregador_id = entUuid;
+      } else if (session.perfil === 'VENDEDOR' && entregaPropria) {
+        // BLOCO 98 (regra do dono): o vendedor entregou a PROPIA venda — ele
+        // e o entregador desta entrega: cai no CAIXA DELE (agrupamento por
+        // sales.entregador_id) e na conferencia do dia como o nome DELE.
+        if (RE_UUID.test(String(userId || ''))) updates.entregador_id = userId;
       }
       let eventoMotivo = '';
       // ECONOMIA DE BANCO: a foto vai para o Storage (bucket privado
@@ -1816,7 +1870,10 @@ export async function POST(req: NextRequest) {
 
       // BLOCO 22: comissão APÓS a confirmação da entrega — a comissão nunca
       // existe sem a venda entregue (idempotente: re-entrega atualiza a row).
-      await registrarComissaoPreVenda(supabase, saleRow, comissaoQuitada);
+      // BLOCO 98 (regra do dono): vendedor que entrega a PROPIA venda ganha a
+      // comissão de PRONTA ENTREGA do produto (vendeu E entregou); entregador
+      // dedicado mantém a comissão de PRÉ-VENDA.
+      await registrarComissaoPreVenda(supabase, saleRow, comissaoQuitada, entregaPropria);
 
       // Baixa do estoque — BLOCO 88: pedidos NOVOS ja RESERVARAM no registro
       // (estoque_baixado=true) e o guard do RPC torna esta chamada NO-OP.
@@ -1867,7 +1924,7 @@ export async function POST(req: NextRequest) {
             : pagamento === 'MISTO' ? `entregue — R$ ${recebido.toFixed(2)} recebidos (dinheiro + pix)`
             : `entregue — R$ ${recebido.toFixed(2)} recebidos`;
           const liberada = updates.status_pagamento === 'PAGO';
-          await avisarVendedor(supabase, saleRow.vendedor_id, saleRow.client_id, 'Venda entregue \u2705', `${recebidoTxt}. Comissao ${liberada ? 'LIBERADA' : 'aguardando pagamento completo'}.`);
+          await avisarVendedor(supabase, saleRow.vendedor_id, saleRow.client_id, 'Venda entregue \u2705', `${recebidoTxt}. Comissao ${entregaPropria ? 'de PRONTA ENTREGA (voce vendeu e entregou): ' : ''}${liberada ? 'LIBERADA' : 'aguardando pagamento completo'}.`);
         }
       } catch { /* nunca trava a entrega */ }
 

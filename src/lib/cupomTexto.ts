@@ -1,4 +1,5 @@
 import { Sale, Client, Product } from '@/lib/types';
+import { trocasPartes, trocasValorNumero } from '@/lib/trocasTexto';
 
 /**
  * BLOCO 13: gerador de cupom COMPARTILHADO.
@@ -164,30 +165,33 @@ export function gerarCupomTexto({ sale, client, products, width }: CupomTextoInp
   // e ela grava como linha "OBS: ..." na coluna trocas (mesmo padrao do
   // portal). O cupom separa: linhas "OBS:" imprimem no bloco OBSERVACAO e o
   // resto continua no bloco TROCAS (pedidos antigos ficam iguais).
+  // BLOCO 98 (regra do dono): UM ITEM POR LINHA — separa tambem por virgula
+  // (formato do autocomplete do PDV) e quebra a linha em ESPACO (nunca no
+  // meio do nome), com o valor de custo destacado no cabecalho do bloco.
   const rawAnot = String((sale as any).trocas || '').trim();
-  const linhasTrocas: string[] = [];
-  const linhasObs: string[] = [];
-  rawAnot.split(/[\n;]+/).map(s => s.trim()).filter(Boolean).forEach(l => {
-    const semPrefixo = l.replace(/^obs[:\-]\s*/i, '');
-    // BLOCO 45 (regra do dono): linha SEM letra/numero (ex. "-", "—", "...")
-    // nao imprime bloco nenhum — o cupom nao mostra TROCAS/OBSERVACAO vazio.
-    if (!/[a-z0-9]/i.test(semPrefixo)) return;
-    if (/^obs[:\-]/i.test(l)) linhasObs.push(semPrefixo);
-    else linhasTrocas.push(l);
-  });
+  const partes98 = trocasPartes(rawAnot);
+  const linhasTrocas: string[] = partes98.itens;
+  const linhasObs: string[] = partes98.obs;
   // Campo proprio de observacoes (futuro/legado) tambem imprime como observacao
   const obsDireta = String((sale as any).observacoes || '').trim();
   if (obsDireta) linhasObs.unshift(obsDireta);
+  const trocasCusto = trocasValorNumero((sale as any).trocasValor);
 
-  if (linhasTrocas.length > 0) {
+  if (linhasTrocas.length > 0 || trocasCusto !== null) {
     t += '-'.repeat(totalWidth) + '\n';
-    t += 'TROCAS:\n';
+    t += trocasCusto !== null
+      ? `${padR('TROCAS', descW)}${padL(`CUSTO R$ ${trocasCusto.toFixed(2)}`, totalWidth - descW)}\n`
+      : 'TROCAS:\n';
     for (const linha of linhasTrocas) {
+      // quebra em ESPACO: nada de nome de produto cortado ao meio
       let rest = linha;
-      while (rest.length > 0) {
-        t += padR(rest.substring(0, descW), descW) + '\n';
-        rest = rest.substring(descW);
+      while (rest.length > descW) {
+        let corte = rest.lastIndexOf(' ', descW);
+        if (corte <= 0) corte = descW; // palavra unica maior que a coluna
+        t += padR(rest.substring(0, corte), descW) + '\n';
+        rest = rest.substring(corte).trimStart();
       }
+      if (rest) t += padR(rest, descW) + '\n';
     }
   }
 

@@ -4,6 +4,7 @@ import { User, Product, MelhoriasFlags, MELHORIAS_DEFAULT } from '@/lib/types';
 import { authHeaders } from '@/services/userService';
 import { sounds } from '@/utils/sound';
 import Cupom from '@/components/doce/Cupom';
+import TrocasBox from '@/components/doce/TrocasBox';
 
 /**
  * BLOCO 13 — TELA DO SECRETÁRIO DA BASE FÍSICA.
@@ -27,6 +28,7 @@ interface FilaItem {
   formaPgto: string;
   condicao: string;
   trocas: string | null;
+  trocasValor?: number | null;
   prioridade: number;
   separado: boolean;
   vendedorNome: string;
@@ -61,7 +63,7 @@ const SecretarioView: React.FC<{ user: User; showToast: (m: string, t?: 'success
   const [cupom, setCupom] = useState<FilaItem | null>(null);
   const [alarmando, setAlarmando] = useState(false);
   // BLOCO 14: ajustar trocas no card (ex.: substituiu por outro do mesmo valor)
-  const [editTrocas, setEditTrocas] = useState<{ p: FilaItem; texto: string } | null>(null);
+  const [editTrocas, setEditTrocas] = useState<{ p: FilaItem; texto: string; valor: string } | null>(null);
   // quantidade de pedidos ainda NAO separados — base do alarme
   const aSepararRef = useRef<number>(-1);
   const alarmTimer = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -146,6 +148,7 @@ const SecretarioView: React.FC<{ user: User; showToast: (m: string, t?: 'success
     itens: p.itens.map(i => ({ produtoId: i.produtoId, quantidade: i.quantidade, precoVenda: i.precoVenda })),
     dataVencimento: p.dataVencimento ? new Date(p.dataVencimento) : undefined,
     trocas: p.trocas || undefined,
+    trocasValor: (p as any).trocasValor ?? undefined,
     tipoVenda: 'PRE_VENDA',
     entregaStatus: p.entregaStatus,
   });
@@ -198,12 +201,10 @@ const SecretarioView: React.FC<{ user: User; showToast: (m: string, t?: 'success
                 <i className="fa-solid fa-location-dot mr-1"></i>{p.cliente.endereco || 'Sem endereco'}{p.cliente.bairro ? ` — ${p.cliente.bairro}` : ''}
               </p>
               {p.trocas && (
-                <p className="text-[9px] font-black text-orange-600 mt-1 bg-orange-50 rounded-lg px-2 py-1 leading-snug">
-                  <i className="fa-solid fa-right-left mr-1"></i>Trocas: {p.trocas}
-                </p>
+                <TrocasBox trocas={p.trocas} valor={(p as any).trocasValor} className="mt-1" />
               )}
               {melhorias.trocaSeparacao && (
-                <button onClick={() => setEditTrocas({ p, texto: p.trocas || '' })} disabled={!!busy}
+                <button onClick={() => setEditTrocas({ p, texto: p.trocas || '', valor: (p as any).trocasValor ? String((p as any).trocasValor) : '' })} disabled={!!busy}
                   className="text-[8px] font-black text-orange-500 uppercase mt-1 active:scale-95 transition-transform">
                   <i className="fa-solid fa-pencil mr-1"></i>{p.trocas ? 'Editar trocas' : 'Anotar troca'}
                 </button>
@@ -313,16 +314,26 @@ const SecretarioView: React.FC<{ user: User; showToast: (m: string, t?: 'success
             <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-4"></div>
             <h3 className="text-sm font-black text-gray-800 uppercase text-center"><i className="fa-solid fa-right-left text-orange-500 mr-1"></i>Trocas do pedido</h3>
             <p className="text-[10px] text-gray-400 font-semibold text-center mt-1 capitalize">{editTrocas.p.cliente.nome}</p>
-            <p className="text-[9px] text-gray-400 font-bold text-center mt-0.5">Item em falta trocado por outro do mesmo valor? Anote aqui — sai no cupom.</p>
+            <p className="text-[9px] text-gray-400 font-bold text-center mt-0.5">Anote aqui — 1 item por linha, sai no cupom. Se a troca não voltar pelo mesmo produto, anote o VALOR em PREÇO DE CUSTO.</p>
             <textarea
               value={editTrocas.texto}
               onChange={e => setEditTrocas({ ...editTrocas, texto: e.target.value })}
               rows={3} maxLength={500}
-              placeholder="Ex.: 1 Lays sour cream 62g"
-              className="w-full mt-3 p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-bold outline-none focus:ring-2 focus:ring-orange-100 resize-none"
+              placeholder={'1 Lays sour cream 62g\n2 Toddynho 200ml'}
+              className="w-full mt-3 p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-bold outline-none focus:ring-2 focus:ring-orange-100 resize-none leading-relaxed"
             />
+            <div className="flex items-center gap-2 mt-2">
+              <span className="text-[8px] font-black text-gray-400 uppercase shrink-0">Valor (custo)</span>
+              <input
+                type="text" inputMode="decimal"
+                value={editTrocas.valor}
+                onChange={e => setEditTrocas({ ...editTrocas, valor: e.target.value })}
+                placeholder="R$ 0,00"
+                className="flex-1 bg-gray-50 border border-gray-100 rounded-xl text-sm font-black text-orange-600 px-3 py-2.5 text-right outline-none focus:ring-2 focus:ring-orange-100"
+              />
+            </div>
             <button
-              onClick={async () => { const t = editTrocas; setEditTrocas(null); await acao({ acao: 'EDITAR_TROCAS', saleId: t.p.saleId, trocas: t.texto }, 'Trocas atualizadas! Imprima o cupom corrigido.'); }}
+              onClick={async () => { const t = editTrocas; setEditTrocas(null); const tv = parseFloat(t.valor.replace(',', '.')) || 0; await acao({ acao: 'EDITAR_TROCAS', saleId: t.p.saleId, trocas: t.texto, trocasValor: tv > 0 ? tv : undefined }, 'Trocas atualizadas! Imprima o cupom corrigido.'); }}
               disabled={!!busy}
               className="w-full mt-3 py-4 bg-orange-500 text-white rounded-2xl text-xs font-black uppercase tracking-wider shadow-lg active:scale-[0.98] transition-transform disabled:opacity-60"
             >

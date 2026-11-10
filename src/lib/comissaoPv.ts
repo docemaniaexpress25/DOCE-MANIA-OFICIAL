@@ -81,3 +81,32 @@ export async function comissaoPvDeItens(supabase: any, itens: any[]): Promise<nu
   });
   return round2(cheia);
 }
+
+/**
+ * BLOCO 98 (regra do dono): comissão de PRONTA ENTREGA de um conjunto de
+ * itens (R$) — usada quando o VENDEDOR entrega a PROPIA venda pelo menu
+ * Entregas ("foi ele que vendeu e depois entregou"). Usa o campo
+ * comissao_percentual do produto (vazio = 10%); degrada para o padrão
+ * se o campo não existir.
+ */
+export async function comissaoPeDeItens(supabase: any, itens: any[]): Promise<number> {
+  const prodIds = [...new Set(itens.map((i: any) => i.produto_id).filter(Boolean))];
+  if (prodIds.length === 0) return 0;
+
+  const pctPE: Record<string, number | null> = {};
+  try {
+    const r = await supabase.from('products').select('id, comissao_percentual').in('id', prodIds);
+    if (!r.error) {
+      (r.data || []).forEach((p: any) => {
+        pctPE[p.id] = (p.comissao_percentual === null || p.comissao_percentual === undefined) ? null : Number(p.comissao_percentual);
+      });
+    }
+  } catch { /* campo antigo: usa o padrão */ }
+
+  let cheia = 0;
+  itens.forEach((i: any) => {
+    const pct = pctPeDeProduto(pctPE[i.produto_id]);
+    cheia += Number(i.quantidade || 0) * Number(i.preco_venda || 0) * (pct / 100);
+  });
+  return round2(cheia);
+}

@@ -22,6 +22,10 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const saleId = String(body.saleId || '');
     const trocas = String(body.trocas || '').trim().slice(0, 500) || null;
+    // BLOCO 98: valor das trocas em R$ PRECO DE CUSTO (coluna trocas_valor —
+    // degrada graciosa se o SQL nao rodou: grava so o texto)
+    const tvNum = Number(body.trocasValor);
+    const trocasValor = isFinite(tvNum) && tvNum > 0 ? Math.round(tvNum * 100) / 100 : null;
     if (!saleId) return NextResponse.json({ ok: false, error: 'saleId obrigatorio.' }, { status: 400 });
 
     const admin = isAdminSession(req);
@@ -35,7 +39,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: 'Pedido ja entregue — troca nao pode mais mudar.' }, { status: 409 });
     }
 
-    const { error } = await supabase.from('sales').update({ trocas }).eq('id', saleId);
+    let { error } = await supabase.from('sales').update({ trocas, trocas_valor: trocasValor }).eq('id', saleId);
+    // Coluna trocas_valor ainda nao existe (SQL 98 pendente): grava so o texto
+    if (error && /trocas_valor/i.test(error.message || '')) {
+      ({ error } = await supabase.from('sales').update({ trocas }).eq('id', saleId));
+    }
     if (error) {
       if (/trocas/i.test(error.message || '')) {
         return NextResponse.json({ ok: false, error: 'Banco desatualizado: rode o Bloco 13 do SQL (coluna trocas).' }, { status: 503 });

@@ -100,6 +100,10 @@ export async function POST(req: NextRequest) {
 
     // Trocas: texto livre do vendedor (impresso no cupom)
     const trocas = String((body as any).trocas || '').trim().slice(0, 500) || null;
+    // BLOCO 98: valor das trocas em R$ PRECO DE CUSTO (a entrega devolve
+    // produtos que fechem esse valor). Informativo — nao e desconto.
+    const tvNum = Number((body as any).trocasValor);
+    const trocasValor = isFinite(tvNum) && tvNum > 0 ? Math.round(tvNum * 100) / 100 : null;
 
     const supabase = getServiceClient();
 
@@ -184,8 +188,9 @@ export async function POST(req: NextRequest) {
           tipo_venda: 'PRE_VENDA',
           entrega_status: 'PENDENTE',
         };
-    // Bloco 13 (colunas podem nao existir antes do SQL rodado)
-    const bloco13 = { trocas };
+    // Bloco 13 (colunas podem nao existir antes do SQL rodado) + Bloco 98 (trocas_valor)
+    const bloco13: Record<string, unknown> = { trocas };
+    if (trocasValor !== null) bloco13.trocas_valor = trocasValor;
     // BLOCO 29: modo do atendimento na venda (quando a coluna existe)
     if (modo && temModoVenda) (basePayload as any).modo_nota = modo;
     let payload = { ...basePayload, ...bloco13 };
@@ -203,9 +208,11 @@ export async function POST(req: NextRequest) {
       .select(SEL_COLS)
       .single() as unknown as Promise<any>);
 
-    if (saleErr && /trocas|modo_nota/i.test(saleErr.message || '')) {
-      const semColunas: any = { ...basePayload };
-      if (/modo_nota/i.test(saleErr.message || '')) delete (semColunas as any).modo_nota; else delete (semColunas as any).trocas;
+    if (saleErr && /trocas|modo_nota|trocas_valor/i.test(saleErr.message || '')) {
+      const semColunas: any = { ...basePayload, trocas };
+      if (/modo_nota/i.test(saleErr.message || '')) delete (semColunas as any).modo_nota;
+      else if (/trocas_valor/i.test(saleErr.message || '')) { if (!/trocas/i.test(saleErr.message || '')) delete (semColunas as any).trocas; }
+      else delete (semColunas as any).trocas;
       ({ data: sale, error: saleErr } = await supabase
         .from('sales')
         .insert(semColunas)

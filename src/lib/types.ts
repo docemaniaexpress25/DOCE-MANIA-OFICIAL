@@ -150,6 +150,8 @@ export interface Sale {
   entregaStatus?: string; // PENDENTE | EM_ROTA | ENTREGUE | FALHOU
   /** Trocas anotadas pelo vendedor (impressas no cupom) ex.: "1 Lays sour cream 62g" */
   trocas?: string;
+  /** BLOCO 98: valor das trocas em R$ PRECO DE CUSTO — a entrega devolve produtos que fechem esse valor */
+  trocasValor?: number | null;
   /** 0 = normal, 1 = PRIORIDADE 1, 2 = PRIORIDADE 2 */
   prioridade?: number;
   /** Secretario da base separou o pedido (card cinza) */

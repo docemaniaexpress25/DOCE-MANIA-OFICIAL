@@ -4,6 +4,7 @@ import { User, Product, MelhoriasFlags, MELHORIAS_DEFAULT } from '@/lib/types';
 import { authHeaders } from '@/services/userService';
 import Cupom from '@/components/doce/Cupom';
 import EditorPedido from '@/components/doce/EditorPedido';
+import TrocasBox from '@/components/doce/TrocasBox';
 // BLOCO 61: arrastar-e-soltar estilo kanban para ordenar a rota (dnd-kit).
 // Funciona com mouse, TOQUE (celular do admin) e teclado (espaco pega, setas
 // movem, espaco solta) — substitui as setas de cima/baixo do Bloco 31.
@@ -20,8 +21,9 @@ import { CSS } from '@dnd-kit/utilities';
  *   2. PRIORIDADE 2 (ambar)
  *   3. Demais — mais antigo primeiro (o card mostra "esperando Xd")
  *
- * Quem entrega: SOMENTE o ENTREGADOR (e o admin). O vendedor acompanha
- * (modo VENDEDOR: leitura) — regra do dono: vendedor nao entrega.
+ * Quem entrega: o ENTREGADOR (e o admin) — e, desde o Bloco 98, o PROPRIO
+ * vendedor pode entregar a venda DELE pelo menu Entregas (nesse caso ganha
+ * a comissão de PRONTA ENTREGA). Venda alheia: vendedor não entrega.
  *
  * Aceite do recebimento:
  *   DINHEIRO -> valor recebido + troco calculado (suporta parcial)
@@ -64,6 +66,8 @@ interface FilaItem {
   // cada entregador tem o SEU caixa e ve so a propria carga
   entregadorId?: string | null;
   entregadorNome?: string | null;
+  // BLOCO 98: valor das trocas em R$ PRECO DE CUSTO (entrega devolve produtos que fechem esse valor)
+  trocasValor?: number | null;
   vendedorId: string;
   vendedorNome: string;
   // BLOCO 64: numero/sala do endereco — impressao da ordem mostra "Rua X, 123"
@@ -220,7 +224,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
   const [fotoPix, setFotoPix] = useState<string | null>(null);
   // BLOCO 14: foto opcional da entrega concluída + edição de trocas pelo admin
   const [fotoEntrega, setFotoEntrega] = useState<string | null>(null);
-  const [sheetTrocas, setSheetTrocas] = useState<{ p: FilaItem; texto: string } | null>(null);
+  const [sheetTrocas, setSheetTrocas] = useState<{ p: FilaItem; texto: string; valor: string } | null>(null);
   const [cupom, setCupom] = useState<FilaItem | null>(null);
   const [verEntregues, setVerEntregues] = useState(false);
   const [sheetCaixa, setSheetCaixa] = useState(false);
@@ -290,7 +294,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
     return f.filter(p => vendedorDe(p) === filtroVendedor);
   }, [data, filtroVendedor]);
 
-  const podeEntregar = modo === 'ENTREGADOR' || modo === 'ADMIN';
+  const podeEntregar = modo === 'ENTREGADOR' || modo === 'ADMIN' || modo === 'VENDEDOR'; // Bloco 98: o vendedor entrega a PROPIA venda (fila dele = vendas dele)
   const podePrioridade = modo === 'ENTREGADOR' || modo === 'ADMIN';
 
   const load = useCallback(async (silencioso = false) => {
@@ -572,6 +576,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
     itens: p.itens.map(i => ({ produtoId: i.produtoId, quantidade: i.quantidade, precoVenda: i.precoVenda })),
     dataVencimento: p.dataVencimento ? new Date(p.dataVencimento) : undefined,
     trocas: p.trocas || undefined,
+    trocasValor: p.trocasValor ?? undefined,
   });
   const clientOf = (p: FilaItem): any => ({
     id: p.cliente.id,
@@ -813,12 +818,10 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                 <i className="fa-solid fa-location-dot mr-1"></i>{p.cliente.endereco || 'Sem endereco'}{p.cliente.numero ? `, ${p.cliente.numero}` : ''}{p.cliente.bairro ? ` — ${p.cliente.bairro}` : ''}
               </p>
               {p.trocas && (
-                <p className="text-[9px] font-black text-orange-600 mt-1 bg-orange-50 rounded-lg px-2 py-1 leading-snug">
-                  <i className="fa-solid fa-right-left mr-1"></i>Trocas: {p.trocas}
-                </p>
+                <TrocasBox trocas={p.trocas} valor={p.trocasValor} className="mt-1" />
               )}
               {melhorias.trocaSeparacao && modo === 'ADMIN' && pend && (
-                <button onClick={() => setSheetTrocas({ p, texto: p.trocas || '' })} disabled={!!busy}
+                <button onClick={() => setSheetTrocas({ p, texto: p.trocas || '', valor: p.trocasValor ? String(p.trocasValor) : '' })} disabled={!!busy}
                   className="text-[8px] font-black text-orange-500 uppercase mt-1 active:scale-95 transition-transform">
                   <i className="fa-solid fa-pencil mr-1"></i>{p.trocas ? 'Editar trocas' : 'Anotar troca da separação'}
                 </button>
@@ -916,7 +919,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
             <div>
               <p className="text-[10px] font-black text-gray-700 uppercase leading-none">Fila de entregas</p>
               <p className="text-[8px] font-bold text-gray-400 uppercase mt-0.5">
-                {modo === 'VENDEDOR' ? 'Seus pedidos — o entregador entrega' : 'Continua — entra pedido, sai entregue'}
+                {modo === 'VENDEDOR' ? 'Seus pedidos — entregue voce mesmo (comissão de pronta entrega) ou deixe com o entregador' : 'Continua — entra pedido, sai entregue'}
               </p>
             </div>
           </div>
@@ -1277,9 +1280,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
               {sp.condicao === 'APRAZO' ? ' (a prazo)' : ' (à vista)'}
             </p>
             {sp.trocas && (
-              <p className="text-[9px] font-black text-orange-600 text-center bg-orange-50 rounded-xl px-3 py-2 mt-2">
-                <i className="fa-solid fa-right-left mr-1"></i>Trocas: {sp.trocas}
-              </p>
+              <TrocasBox trocas={sp.trocas} valor={sp.trocasValor} className="mt-2" />
             )}
 
             {/* --- BLOCO 27: PAGO NA VISITA — só confirma a entrega --- */}
@@ -1663,16 +1664,27 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
             <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-4"></div>
             <h3 className="text-sm font-black text-gray-800 uppercase text-center"><i className="fa-solid fa-right-left text-orange-500 mr-1"></i>Trocas do pedido</h3>
             <p className="text-[10px] text-gray-400 font-semibold text-center mt-1 capitalize">{sheetTrocas.p.cliente.nome}</p>
-            <p className="text-[9px] text-gray-400 font-bold text-center mt-0.5">Ajuste o que sai no cupom — ex.: item em falta trocado por outro do mesmo valor</p>
+            <p className="text-[9px] text-gray-400 font-bold text-center mt-0.5">Ajuste o que sai no cupom — 1 item por linha. As trocas nem sempre voltam pelo mesmo produto: anote o VALOR em PREÇO DE CUSTO.</p>
             <textarea
               value={sheetTrocas.texto}
               onChange={e => setSheetTrocas({ ...sheetTrocas, texto: e.target.value })}
               rows={3} maxLength={500}
-              placeholder="Ex.: 1 Lays sour cream 62g"
-              className="w-full mt-3 p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-bold outline-none focus:ring-2 focus:ring-orange-100 resize-none"
+              placeholder={'1 Lays sour cream 62g\n2 Toddynho 200ml'}
+              className="w-full mt-3 p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-bold outline-none focus:ring-2 focus:ring-orange-100 resize-none leading-relaxed"
             />
+            <div className="flex items-center gap-2 mt-2">
+              <span className="text-[8px] font-black text-gray-400 uppercase shrink-0">Valor (custo)</span>
+              <input
+                type="text" inputMode="decimal"
+                value={sheetTrocas.valor}
+                onChange={e => setSheetTrocas({ ...sheetTrocas, valor: e.target.value })}
+                placeholder="R$ 0,00"
+                className="flex-1 bg-gray-50 border border-gray-100 rounded-xl text-sm font-black text-orange-600 px-3 py-2.5 text-right outline-none focus:ring-2 focus:ring-orange-100"
+              />
+            </div>
+            <p className="text-[8px] font-semibold text-gray-400 mt-1.5 leading-snug">Na entrega levamos produtos que fechem esse valor de custo.</p>
             <button
-              onClick={async () => { const t = sheetTrocas; setSheetTrocas(null); await acao({ acao: 'EDITAR_TROCAS', saleId: t.p.saleId, trocas: t.texto }, 'Trocas atualizadas! O cupom sai corrigido.'); }}
+              onClick={async () => { const t = sheetTrocas; setSheetTrocas(null); const tv = parseFloat(t.valor.replace(',', '.')) || 0; await acao({ acao: 'EDITAR_TROCAS', saleId: t.p.saleId, trocas: t.texto, trocasValor: tv > 0 ? tv : undefined }, 'Trocas atualizadas! O cupom sai corrigido.'); }}
               disabled={!!busy}
               className="w-full mt-3 py-4 bg-orange-500 text-white rounded-2xl text-xs font-black uppercase tracking-wider shadow-lg active:scale-[0.98] transition-transform disabled:opacity-60"
             >
@@ -1697,14 +1709,29 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
             <p className="text-[11px] font-bold text-gray-600 capitalize text-center mt-1">{sheetCarga.cliente.nome} · {fmt(sheetCarga.valorTotal)}</p>
             <p className="text-[9px] font-black text-gray-400 uppercase text-center mt-3 leading-snug">Quem CARREGOU esta entrega? <span className="text-gray-300">(entregador da venda)</span></p>
             {(data?.entregadores || []).length > 0 ? (
-              <div className="flex gap-1.5 flex-wrap mt-2">
-                {(data?.entregadores || []).map(e => (
+              <div className="mt-2 space-y-2">
+                {/* BLOCO 98 (regra do dono): o ENTREGADOR 1 (quem loga como entregador)
+                    e a opcao PRINCIPAL — botao GIGANTE no topo; os vendedores que
+                    eventualmente levam a entrega ficam em chips menores abaixo. */}
+                {(data?.entregadores || []).filter(e => e.perfil === 'ENTREGADOR_FIXO').map(e => (
                   <button key={e.id} onClick={() => setCargaEntId(e.id)}
-                    className={`px-3 py-2.5 rounded-xl text-[10px] font-black uppercase border-2 transition-colors ${cargaEntId === e.id ? 'bg-emerald-600 border-emerald-600 text-white shadow' : 'bg-white border-gray-200 text-gray-500'}`}>
-                    <i className={`fa-solid ${e.perfil === 'ENTREGADOR' ? 'fa-motorcycle' : 'fa-user'} mr-1`}></i>{e.nome}
-                    {e.perfil !== 'ENTREGADOR' && <span className="ml-1 text-[7px] font-black opacity-60">VENDEDOR</span>}
+                    className={`w-full py-4 rounded-2xl text-xs font-black uppercase tracking-wide border-2 transition-colors flex items-center justify-center gap-2 ${cargaEntId === e.id ? 'bg-emerald-600 border-emerald-600 text-white shadow-lg' : 'bg-emerald-50 border-emerald-200 text-emerald-700'}`}>
+                    <i className="fa-solid fa-motorcycle text-sm"></i>{e.nome}
+                    <span className={`text-[8px] px-1.5 py-0.5 rounded-md font-black ${cargaEntId === e.id ? 'bg-white/20' : 'bg-white'}`}>PRINCIPAL</span>
                   </button>
                 ))}
+                {(data?.entregadores || []).filter(e => e.perfil !== 'ENTREGADOR_FIXO').length > 0 && (
+                  <p className="text-[8px] font-black text-gray-300 uppercase tracking-widest pt-1">Ou um vendedor leva:</p>
+                )}
+                <div className="flex gap-1.5 flex-wrap">
+                  {(data?.entregadores || []).filter(e => e.perfil !== 'ENTREGADOR_FIXO').map(e => (
+                    <button key={e.id} onClick={() => setCargaEntId(e.id)}
+                      className={`px-3 py-2.5 rounded-xl text-[10px] font-black uppercase border-2 transition-colors ${cargaEntId === e.id ? 'bg-emerald-600 border-emerald-600 text-white shadow' : 'bg-white border-gray-200 text-gray-500'}`}>
+                      <i className="fa-solid fa-user mr-1"></i>{e.nome}
+                      <span className="ml-1 text-[7px] font-black opacity-60">VENDEDOR</span>
+                    </button>
+                  ))}
+                </div>
               </div>
             ) : (
               <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mt-2">

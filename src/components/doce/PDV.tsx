@@ -82,6 +82,10 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   // BLOCO 13: trocas anotadas pelo vendedor (sai no cupom) com autocomplete de produto
   const [trocasTexto, setTrocasTexto] = useState('');
   const [trocasSugestao, setTrocasSugestao] = useState(false);
+  // BLOCO 98 (regra do dono): VALOR das trocas em R$ PRECO DE CUSTO — as trocas
+  // nem sempre voltam pelo mesmo produto; a entrega leva itens que fechem
+  // esse valor. Informativo (nao e desconto — o desconto segue no campo proprio).
+  const [trocasValorCusto, setTrocasValorCusto] = useState('');
   // BLOCO 41: OBSERVAÇÃO do pedido — switch novo (mesmo sistema do de trocas);
   // o texto sai impresso no cupom no bloco OBSERVACAO (grava como linha "OBS: ...").
   const [isObsActive, setIsObsActive] = useState(false);
@@ -127,7 +131,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const addSugestaoTroca = (nome: string) => {
     const partes = trocasTexto.split(/[\n,]+/);
     partes[partes.length - 1] = `1 ${nome}`;
-    setTrocasTexto(partes.join(', '));
+    // BLOCO 98: um item POR LINHA (era ", " — virava texto corrido sem espaçamento)
+    setTrocasTexto(partes.filter(s => s.trim()).join('\n'));
     setTrocasSugestao(false);
   };
 
@@ -136,7 +141,9 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   // gerador de cupom imprime no bloco OBSERVACAO, separado das TROCAS.
   const obsLimpa = obsTexto.trim().replace(/\s*\n\s*/g, ' / ');
   const trocasComObs = [trocasTexto.trim(), obsLimpa ? `OBS: ${obsLimpa}` : ''].filter(Boolean).join('\n');
-  const limparAnotacoes = () => { setTrocasTexto(''); setObsTexto(''); setIsObsActive(false); };
+  // BLOCO 98: valor de custo das trocas (R$) — vai junto com o texto para a venda
+  const trocasValorNum = (() => { const v = parseFloat(trocasValorCusto.replace(',', '.')); return isFinite(v) && v > 0 ? Math.round(v * 100) / 100 : 0; })();
+  const limparAnotacoes = () => { setTrocasTexto(''); setObsTexto(''); setIsObsActive(false); setTrocasValorCusto(''); };
 
   // Pre-venda e pre-pedido vendem do ESTOQUE CENTRAL (nao da carga da van)
   const sellFromCentral = isPrePedido || isPreVenda;
@@ -665,7 +672,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     // ===== PRE-VENDA: registra o PEDIDO (sem cobranca, sem baixa de carga) =====
     if (isPreVenda) {
       const formaFinal = condicaoPv === 'AVISTA' && (metodoEntrega === 'BOLETO' || metodoEntrega === 'CHEQUE') ? 'DINHEIRO' : metodoEntrega;
-      const r = await processPreVenda!({ clientId: client.id, valorTotal: total, itens, formaPagamento: formaFinal, condicao: condicaoPv, vencimento: condicaoPv === 'APRAZO' ? vencimentoPv : undefined, trocas: trocasComObs });
+      const r = await processPreVenda!({ clientId: client.id, valorTotal: total, itens, formaPagamento: formaFinal, condicao: condicaoPv, vencimento: condicaoPv === 'APRAZO' ? vencimentoPv : undefined, trocas: trocasComObs, trocasValor: trocasValorNum || undefined });
       if (r.pedido) {
         const pedido = r.pedido;
         limparAnotacoes();
@@ -749,18 +756,18 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         troca: isTrocaActive ? vt : 0,
         isPrazo: metodo === 'A_PRAZO',
         clientName: client.nomeFantasia,
-        sale: { ...newSale, trocas: trocasComObs || undefined },
+        sale: { ...newSale, trocas: trocasComObs || undefined, trocasValor: trocasValorNum || undefined },
         // BLOCO 50: a prazo em CHEQUE não tem botão de boleto no resultado
         formaAtraso: metodo === 'A_PRAZO' && tipoPrazo === 'CHEQUE' ? 'CHEQUE' : undefined,
       });
-      // BLOCO 13/41: persiste as TROCAS + OBSERVAÇÃO da pronta entrega (best-effort)
-      if (trocasComObs) {
+      // BLOCO 13/41/98: persiste as TROCAS (+ valor de custo) + OBSERVAÇÃO da pronta entrega (best-effort)
+      if (trocasComObs || trocasValorNum > 0) {
         try {
           const { authHeaders } = await import('@/services/userService');
           fetch('/api/sales/trocas', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...authHeaders() },
-            body: JSON.stringify({ saleId: newSale.id, trocas: trocasComObs }),
+            body: JSON.stringify({ saleId: newSale.id, trocas: trocasComObs, trocasValor: trocasValorNum || undefined }),
           }).catch(() => {});
         } catch {}
         limparAnotacoes();
@@ -821,6 +828,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         formaPagamento: formaApi, condicao: w.condicao,
         vencimento: w.condicao === 'APRAZO' ? w.vencimento : undefined,
         trocas: trocasComObs,
+        trocasValor: trocasValorNum || undefined,
         // BLOCO 39 (regra do dono): pré-venda NUNCA recebe na visita —
         // a vista = ENTREGADOR cobra na entrega (pedido PENDENTE);
         // a prazo = VENDEDOR cobra na data/visita. Sem pagoNaVisita.
@@ -927,18 +935,18 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         troca: isTrocaActive ? vt : 0,
         isPrazo: metodo === 'A_PRAZO',
         clientName: client.nomeFantasia,
-        sale: { ...newSale, trocas: trocasComObs || undefined },
+        sale: { ...newSale, trocas: trocasComObs || undefined, trocasValor: trocasValorNum || undefined },
         // BLOCO 50: a prazo em CHEQUE não tem botão de boleto no resultado
         formaAtraso: metodo === 'A_PRAZO' && w.forma === 'CHEQUE' ? 'CHEQUE' : undefined,
       });
-      // BLOCO 13/41: persiste as TROCAS + OBSERVAÇÃO da pronta entrega (best-effort)
-      if (trocasComObs) {
+      // BLOCO 13/41/98: persiste as TROCAS (+ valor de custo) + OBSERVAÇÃO da pronta entrega (best-effort)
+      if (trocasComObs || trocasValorNum > 0) {
         try {
           const { authHeaders } = await import('@/services/userService');
           fetch('/api/sales/trocas', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...authHeaders() },
-            body: JSON.stringify({ saleId: newSale.id, trocas: trocasComObs }),
+            body: JSON.stringify({ saleId: newSale.id, trocas: trocasComObs, trocasValor: trocasValorNum || undefined }),
           }).catch(() => {});
         } catch {}
         limparAnotacoes();
@@ -1370,34 +1378,46 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           )}
         </div>
 
-        {/* BLOCO 41: campos abrem SÓ quando o switch correspondente está ligado */}
+        {/* BLOCO 41/98: campos abrem SÓ quando o switch correspondente está ligado */}
         {isTrocaActive && (
           <div className="px-1 relative space-y-1.5">
             <div className="flex items-center gap-2">
               <span className="text-[8px] font-black text-gray-400 uppercase shrink-0">Desconto</span>
               <input type="number" value={valorTroca} onChange={e => setValorTroca(e.target.value)} placeholder="R$ 0.00" className="flex-1 bg-white border border-orange-100 rounded-lg text-[11px] font-black text-orange-600 p-2 text-right outline-none" />
             </div>
-            <div className="relative">
-              <div className="flex items-center gap-2">
-                <i className="fa-solid fa-right-left text-orange-400 text-[10px]"></i>
-                <input
+            <div className="bg-orange-50/70 border border-orange-100 rounded-xl p-2.5 space-y-2">
+              <div className="relative">
+                <p className="text-[8px] font-black text-orange-400 uppercase mb-1"><i className="fa-solid fa-right-left mr-1"></i>Trocas (1 por linha — sai itemizado no cupom)</p>
+                <textarea
                   value={trocasTexto}
                   onChange={e => { setTrocasTexto(e.target.value); setTrocasSugestao(true); }}
                   onFocus={() => setTrocasSugestao(true)}
-                  placeholder="Trocas: ex. 1 Lays sour cream 62g"
-                  className="flex-1 bg-white border border-orange-100 rounded-xl text-[11px] font-bold text-orange-700 px-3 py-2 outline-none focus:ring-2 focus:ring-orange-100"
+                  rows={3} maxLength={400}
+                  placeholder={'1 Lays sour cream 62g\n2 Toddynho 200ml'}
+                  className="w-full bg-white border border-orange-100 rounded-xl text-[11px] font-bold text-orange-800 px-3 py-2 outline-none focus:ring-2 focus:ring-orange-100 resize-none leading-relaxed"
+                />
+                {trocasSugestao && trocasSugestoes.length > 0 && (
+                  <div className="absolute bottom-full left-1 right-4 mb-1 bg-white border border-gray-100 rounded-xl shadow-lg overflow-hidden z-20">
+                    {trocasSugestoes.map(p => (
+                      <button key={p.id} onClick={() => addSugestaoTroca(p.nome)} className="w-full text-left px-3 py-2.5 text-[11px] font-bold text-gray-700 hover:bg-orange-50 active:bg-orange-100 flex items-center gap-2">
+                        <i className="fa-solid fa-plus text-orange-400 text-[9px]"></i>{p.nome}
+                      </button>
+                    ))}
+                    <p className="px-3 py-1.5 text-[8px] font-bold text-gray-300 uppercase bg-gray-50">Toque para adicionar — um item por linha</p>
+                  </div>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[8px] font-black text-orange-400 uppercase shrink-0 leading-tight">Valor<br />(custo)</span>
+                <input
+                  type="text" inputMode="decimal"
+                  value={trocasValorCusto}
+                  onChange={e => setTrocasValorCusto(e.target.value)}
+                  placeholder="R$ 0,00"
+                  className="flex-1 bg-white border border-orange-100 rounded-lg text-[11px] font-black text-orange-700 p-2 text-right outline-none focus:ring-2 focus:ring-orange-100"
                 />
               </div>
-              {trocasSugestao && trocasSugestoes.length > 0 && (
-                <div className="absolute bottom-full left-1 right-4 mb-1 bg-white border border-gray-100 rounded-xl shadow-lg overflow-hidden z-20">
-                  {trocasSugestoes.map(p => (
-                    <button key={p.id} onClick={() => addSugestaoTroca(p.nome)} className="w-full text-left px-3 py-2.5 text-[11px] font-bold text-gray-700 hover:bg-orange-50 active:bg-orange-100 flex items-center gap-2">
-                      <i className="fa-solid fa-plus text-orange-400 text-[9px]"></i>{p.nome}
-                    </button>
-                  ))}
-                  <p className="px-3 py-1.5 text-[8px] font-bold text-gray-300 uppercase bg-gray-50">Toque para adicionar — separe por vírgula</p>
-                </div>
-              )}
+              <p className="text-[8px] font-semibold text-orange-400 leading-snug">O valor é em PREÇO DE CUSTO: na entrega levamos produtos que fechem esse valor (ex.: trocas de R$ 30 de custo = R$ 30 em produtos).</p>
             </div>
           </div>
         )}

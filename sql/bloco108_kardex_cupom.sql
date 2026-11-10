@@ -6,11 +6,19 @@
 -- movimentações mostra aviso e o modo cupom continua funcionando com
 -- fallback (preço de custo) — nada quebra.
 --
+-- IMPORTANTE — ESTE SQL NÃO MUDA A ROTINA DE VENDA:
+--   Nada aqui liga NFC automática, não muda preço, não mexe no estoque
+--   existente e não altera nenhum fluxo. As rotas continuam vendendo
+--   só cupom EXATAMENTE como hoje. Todo switch nasce OFF e só liga
+--   depois, na tela Configurações > ERP Fiscal & Automações.
+--
 -- 1. estoque_movimentos — o KARDEX: TODO movimento de estoque registrado
 --    (entrada XML/manual, saída de venda, ajuste, estorno) com quem fez,
 --    quando, custo e saldo após. O admin vê TODAS as entradas e saídas.
 -- 2. Trigger em sale_items — registra SAÍDA na venda e ESTORNO na exclusão
 --    AUTOMATICAMENTE (aprovado a falhas: se o kardex falhar, a venda segue).
+--    Blindado: funciona MESMO SEM o Bloco 80 (custo_unitario fica NULL
+--    em vez de quebrar) e aceita produto_id OU product_id.
 -- 3. RPC registrar_movimento_estoque — entrada/saída manual ATÔMICA
 --    (grava movimento + atualiza estoque_principal na mesma transação).
 -- 4. products.preco_cupom — o "preço da caixa" para o MODO CUPOM: cliente
@@ -33,22 +41,28 @@ create table if not exists estoque_movimentos (
   referencia     text,                             -- sale_id / identificador do XML / obs
   quantidade     numeric(12,3) not null,           -- SEMPRE positiva (o tipo define a direção)
   custo_unitario numeric(12,4),                    -- custo congelado no momento (quando houver)
-  saldo_apos     numeric(12,3),                    -- estoque_principal após o movimento
+  saldo_apos     numeric(12,3),                    -- estoque_principal após movimento manual
   usuario_id     uuid,
   usuario_nome   text,
   criado_em      timestamptz not null default now()
 );
 
 alter table estoque_movimentos enable row level security;
--- RLS fechada: só service_role (as APIs do app) toca no kardex.
+-- RLS fechada de propósito (sem políticas): só o service_role das APIs do
+-- app enxerga o kardex. Nenhum usuário direto mexe no histórico.
 create index if not exists idx_kardex_produto on estoque_movimentos (produto_id, criado_em desc);
 create index if not exists idx_kardex_tipo    on estoque_movimentos (tipo, criado_em desc);
 create index if not exists idx_kardex_data    on estoque_movimentos (criado_em desc);
+create index if not exists idx_kardex_ref     on estoque_movimentos (referencia);
 
 -- ---------------------------------------------------------------------------
 -- 2. TRIGGER — toda venda registra SAÍDA; exclusão registra ESTORNO.
 --    SECURITY DEFINER + EXCEPTION swallow: o kardex NUNCA pode quebrar uma
 --    venda (regra "aprovado a falhas" do dono).
+--    BLINDAGEM: lê as colunas via to_jsonb(NEW/OLD) — se o Bloco 80 ainda
+--    não rodou (custo_unitario ausente) o custo vem NULL e o movimento é
+--    gravado do mesmo jeito; e funciona com produto_id OU product_id
+--    (a tabela real tem as duas).
 -- ---------------------------------------------------------------------------
 create or replace function trg_sale_items_kardex()
 returns trigger
@@ -56,15 +70,35 @@ language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  v         jsonb := to_jsonb(coalesce(new, old));
+  v_produto uuid;
+  v_qtd     numeric;
+  v_custo   numeric;
 begin
+  -- produto: tenta produto_id, cai para product_id (legado). Nulo = pula.
+  v_produto := nullif(v->>'produto_id', '')::uuid;
+  if v_produto is null then
+    v_produto := nullif(v->>'product_id', '')::uuid;
+  end if;
+  if v_produto is null then
+    return coalesce(new, old);
+  end if;
+
+  v_qtd := nullif(v->>'quantidade', '')::numeric;
+  if v_qtd is null or v_qtd = 0 then
+    return coalesce(new, old);
+  end if;
+
+  -- custo congelado (Bloco 80). Ausente = NULL, sem erro.
+  v_custo := nullif(v->>'custo_unitario', '')::numeric;
+
   if (tg_op = 'INSERT') then
     insert into estoque_movimentos (produto_id, tipo, origem, referencia, quantidade, custo_unitario)
-    values (new.produto_id, 'SAIDA', 'VENDA', new.sale_id::text, new.quantidade, new.custo_unitario);
-    return new;
+    values (v_produto, 'SAIDA', 'VENDA', v->>'sale_id', v_qtd, v_custo);
   elsif (tg_op = 'DELETE') then
     insert into estoque_movimentos (produto_id, tipo, origem, referencia, quantidade, custo_unitario)
-    values (old.produto_id, 'ESTORNO', 'VENDA', old.sale_id::text, old.quantidade, old.custo_unitario);
-    return old;
+    values (v_produto, 'ESTORNO', 'VENDA', v->>'sale_id', v_qtd, v_custo);
   end if;
   return coalesce(new, old);
 exception when others then
@@ -152,19 +186,33 @@ alter table clients add column if not exists modo_cupom boolean not null default
 --    chaves: nfeAutoPe, cupomDuploNfc, boletoAutoAReceber,
 --            emitente { cnpj, ie, razao, fantasia, logradouro, numero,
 --                       bairro, municipio, uf, cep, regime }
+--    Tudo OFF/por padrão — nada muda na rotina até o dono ligar na tela.
 -- ---------------------------------------------------------------------------
 alter table app_settings add column if not exists erp_config jsonb not null default '{}'::jsonb;
 
 -- ---------------------------------------------------------------------------
--- VERIFICAÇÃO
---   select * from estoque_movimentos order by criado_em desc limit 20;
---   select registrar_movimento_estoque('<produto-uuid>','ENTRADA',5,'MANUAL','teste');
---   select nome, preco_cupom from products limit 5;
---   select erp_config from app_settings where id = 'global_settings';
---   (rollback: drop table if exists estoque_movimentos;
---              drop trigger if exists trg_kardex_sale_items on sale_items;
---              drop function if exists registrar_movimento_estoque(...);
---              alter table products drop column if exists preco_cupom;
---              alter table clients drop column if exists modo_cupom;
---              alter table app_settings drop column if exists erp_config;)
+-- VERIFICAÇÃO (rode um a um depois de aplicar):
+--   1) select count(*) from estoque_movimentos;                       -- deve dar 0
+--   2) select nome, preco_cupom from products limit 5;                -- coluna existe
+--   3) select modo_cupom, count(*) from clients group by 1;           -- coluna existe
+--   4) select erp_config from app_settings where id = 'global_settings';
+--
+-- TESTE DO KARDEX (opcional, ao vivo):
+--   5) select registrar_movimento_estoque(
+--        (select id from products limit 1), 'ENTRADA', 5, 'MANUAL', 'teste-108');
+--      → {"ok": true, "saldo": N}
+--   6) select * from estoque_movimentos order by criado_em desc limit 5;
+--   7) desfaz o teste: select registrar_movimento_estoque(
+--        (select id from products limit 1), 'SAIDA', 5, 'MANUAL', 'rollback teste-108');
+--   A partir de agora, TODA venda nova gravará SAÍDA sozinha (trigger), e
+--   exclusão de item gravará ESTORNO. Edição de venda = estorno + saída nova.
+--
+-- ROLLBACK COMPLETO (se um dia precisar):
+--   drop trigger if exists trg_kardex_sale_items on sale_items;
+--   drop function if exists trg_sale_items_kardex();
+--   drop function if exists registrar_movimento_estoque(uuid, text, numeric, text, text, numeric, uuid, text);
+--   drop table if exists estoque_movimentos;
+--   alter table products drop column if exists preco_cupom;
+--   alter table clients drop column if exists modo_cupom;
+--   alter table app_settings drop column if exists erp_config;
 -- ----------------------------------------------------------------------------

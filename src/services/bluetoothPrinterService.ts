@@ -70,11 +70,26 @@ const escpos = {
   charSize(mode: number): Uint8Array { return new Uint8Array([GS, 0x21, mode]); },
 
   /**
-   * BLOCO 100 (regra do dono): FONTE PEQUENA (font B) — as TROCAS do cupom
-   * saem em letras menores que o resto (GS ! 0x01 = font B, altura/largura
-   * normais). Impressoras térmicas ESC/POS suportam de fábrica.
+   * BLOCO 102 (regra do dono): FONTE PEQUENA (Font B) — as TROCAS do cupom
+   * saem em letras menores que a descrição dos itens ("PEQUENO MESMO").
+   *
+   * CORREÇÃO das trocas com letra ENORME: antes mandava GS ! 0x01
+   * (0x1D 0x21 0x01). No ESC/POS, GS ! é o comando de AMPLIAÇÃO de tamanho
+   * (bits 0-2 = altura) — 0x01 = ALTURA DOBRADA, ou seja, imprimia as trocas
+   * GIGANTES em vez de pequenas. A fonte menor de verdade é a Font B,
+   * selecionada por ESC ! 0x01 (0x1B 0x21 0x01 — a menor fonte da impressora
+   * térmica, ~9x17 dots contra 12x24 da Font A). GS ! 0x00 antes garante
+   * ampliação 1x em qualquer modelo. Ao desligar, ESC ! 0x00 volta para a
+   * Font A normal.
    */
-  fontSmall(on: boolean): Uint8Array { return new Uint8Array([GS, 0x21, on ? 0x01 : 0x00]); },
+  fontSmall(on: boolean): Uint8Array {
+    const gs1x = new Uint8Array([GS, 0x21, 0x00]);
+    const escFont = new Uint8Array([ESC, 0x21, on ? 0x01 : 0x00]);
+    const out = new Uint8Array(gs1x.length + escFont.length);
+    out.set(gs1x, 0);
+    out.set(escFont, gs1x.length);
+    return out;
+  },
 
   /** Raw text encoded in CP860 */
   text(str: string): Uint8Array { return encodeToCP860(str); },

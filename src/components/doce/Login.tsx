@@ -169,9 +169,12 @@ const Login: React.FC<LoginProps> = ({ users, onLogin, logo, status = 'OK', onRe
   // (admin, entregador e secretario ficam escondidos atras dos 5 toques)
   const temEntregadorReal = users.some(u => u.role === 'ENTREGADOR');
   const temSecretarioReal = users.some(u => u.role === 'SECRETARIO');
+  // BLOCO 99: usuarios LIGADOS primeiro; os DESLIGADOS vao pro fim da lista
   const visibleUsers = isAdminUnlocked
     ? users
     : users.filter(u => u.role === 'VENDEDOR');
+  const orderedUsers = [...visibleUsers].sort((a, b) =>
+    (b.ativo !== false ? 1 : 0) - (a.ativo !== false ? 1 : 0));
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-blue-600 p-6">
@@ -203,24 +206,43 @@ const Login: React.FC<LoginProps> = ({ users, onLogin, logo, status = 'OK', onRe
               </button>
             </div>
           )}
-          {status === 'OK' && visibleUsers.length === 0 && (
+          {status === 'OK' && orderedUsers.length === 0 && (
             <p className="py-6 text-[10px] font-black text-gray-400 uppercase tracking-widest">Nenhum usuário cadastrado</p>
           )}
-          {visibleUsers.map(user => (
-            <button
-              key={user.id}
-              onClick={() => handleSelectUser(user)}
-              className="w-full bg-gray-50 hover:bg-blue-50 text-gray-800 font-bold py-4 px-6 rounded-2xl border border-gray-100 flex items-center justify-between transition-all active:scale-95 group"
-            >
-              <div className="flex flex-col items-start">
-                <span className="text-sm">{user.nome}</span>
-                <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded ${user.role === 'ADMIN' ? 'bg-orange-100 text-orange-600' : user.role === 'ENTREGADOR' ? 'bg-emerald-100 text-emerald-600' : user.role === 'SECRETARIO' ? 'bg-slate-200 text-slate-600' : 'bg-blue-100 text-blue-600'}`}>
-                  {user.role}
-                </span>
-              </div>
-              <i className="fa-solid fa-chevron-right text-gray-300 group-hover:text-blue-500 transition-colors"></i>
-            </button>
-          ))}
+          {/* BLOCO 99 (regra do dono): usuario DESLIGADO no menu Usuarios = o
+              card aparece TRAVADO com o selo DESLIGADO (nao abre, o PIN nao
+              funciona). Ex.: Rota 2 desligada continua visivel no fim da lista. */}
+          {orderedUsers.map(user => {
+            const desligado = user.ativo === false;
+            // BLOCO 99: usuario sem nome (ex.: Rota 2 cadastrada como ' ') —
+            // o card mostra a ROTA dele em vez de ficar vazio
+            const nomeExibicao = String(user.nome || '').trim()
+              || (user.role === 'VENDEDOR' && user.rota ? `Rota ${String(user.rota).replace('ROTA_', '')}` : 'Usuário');
+            return (
+              <button
+                key={user.id}
+                onClick={() => { if (!desligado) handleSelectUser(user); }}
+                disabled={desligado}
+                title={desligado ? 'Acesso DESLIGADO pelo administrador' : undefined}
+                className={`w-full text-gray-800 font-bold py-4 px-6 rounded-2xl border flex items-center justify-between transition-all group ${desligado ? 'bg-gray-50 border-gray-100 opacity-60 cursor-not-allowed grayscale' : 'bg-gray-50 hover:bg-blue-50 border-gray-100 active:scale-95'}`}
+              >
+                <div className="flex flex-col items-start min-w-0">
+                  <span className="text-sm truncate">{nomeExibicao}</span>
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded ${user.role === 'ADMIN' ? 'bg-orange-100 text-orange-600' : user.role === 'ENTREGADOR' ? 'bg-emerald-100 text-emerald-600' : user.role === 'SECRETARIO' ? 'bg-slate-200 text-slate-600' : 'bg-blue-100 text-blue-600'}`}>
+                      {user.role}
+                    </span>
+                    {desligado && (
+                      <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded bg-rose-50 text-rose-500 border border-rose-100">
+                        <i className="fa-solid fa-lock mr-1"></i>Desligado
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <i className={`fa-solid ${desligado ? 'fa-lock text-gray-300' : 'fa-chevron-right text-gray-300 group-hover:text-blue-500'} transition-colors`}></i>
+              </button>
+            );
+          })}
           {/* ENTREGADOR + SECRETARIO: liberados junto com o admin (5 toques no logo).
               Se existir usuario real criado pelo admin, o pseudo-acesso some. */}
           {isAdminUnlocked && !temEntregadorReal && (

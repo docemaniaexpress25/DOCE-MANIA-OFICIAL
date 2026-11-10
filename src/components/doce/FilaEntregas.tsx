@@ -24,6 +24,10 @@ import { CSS } from '@dnd-kit/utilities';
  * Quem entrega: o ENTREGADOR (e o admin) — e, desde o Bloco 98, o PROPRIO
  * vendedor pode entregar a venda DELE pelo menu Entregas (nesse caso ganha
  * a comissão de PRONTA ENTREGA). Venda alheia: vendedor não entrega.
+ * BLOCO 99 (regra do dono): venda CARREGADA e ALOCADA a um entregador fica
+ * EXCLUSIVA dele — nem o vendedor que vendeu entrega por conta propria; so
+ * volta a poder se o ADMIN DESALOCAR (quem define e o admin, botao no sheet
+ * de carga). Cada entregador tem o SEU caixa: Dinheiro / Pix / A receber.
  *
  * Aceite do recebimento:
  *   DINHEIRO -> valor recebido + troco calculado (suporta parcial)
@@ -83,7 +87,8 @@ interface ApiResp {
   resumo?: { naFila: number; valorFila: number; atrasados: number; separados: number; entreguesHoje: number; valorEntregueHoje: number; falhados: number };
   // BLOCO 58 (regra do dono): o caixa NAO zera por dia — e o valor EM ABERTO
   // desde o ULTIMO fechamento de caixa do admin (desde = quando comeca a conta).
-  caixa?: { dinheiroHoje: number; pixHoje: number; desde?: string | null };
+  // BLOCO 99: com o A RECEBER (saldo a prazo/parcial das entregas dele)
+  caixa?: { dinheiroHoje: number; pixHoje: number; aReceber?: number; desde?: string | null };
   meuFechamento?: { id: string; valor_dinheiro: number; valor_pix: number; qtd_entregas: number; confirmado: boolean; obs: string | null } | null;
   fechamentosHoje?: any[];
   conferencia?: { porEntregador: { entregadorId: string; nome: string; dinheiro: number; pix: number; qtdEntregas: number; vendas: { saleId: string; cliente: string; valorTotal: number; valorPago: number; recebimento: string }[] }[] };
@@ -96,11 +101,13 @@ interface ApiResp {
 }
 
 // BLOCO 96: caixa EM ABERTO de um entregador (desde o fechamento DELE)
+// BLOCO 99: com A RECEBER (o que o cliente ainda deve das entregas dele)
 interface CaixaEnt {
   entregadorId: string;
   nome: string;
   dinheiro: number;
   pix: number;
+  aReceber: number;
   desde: string | null;
   qtdEntregas: number;
 }
@@ -688,6 +695,20 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
     if (!ok) load(true); else setSheetCarga(null);
   }
 
+  // BLOCO 99 (regra do dono): QUEM DEFINE E O ADMIN — desaloca a venda do
+  // entregador (limpa entregador + check de carga). A venda volta a poder ser
+  // entregue pelo PROPRIO vendedor (comissao de pronta entrega) ou realocada.
+  async function desalocarEntrega() {
+    const p = sheetCarga;
+    if (!p) return;
+    setData(d => d ? {
+      ...d,
+      fila: d.fila.map(f => f.saleId === p.saleId ? { ...f, carregadoEm: null, entregadorId: null, entregadorNome: null } : f),
+    } : d);
+    const ok = await acao({ acao: 'DESALOCAR_ENTREGA', saleId: p.saleId }, 'Entrega DESALOCADA — o vendedor pode entregar a propria venda de novo.', false, true);
+    if (!ok) load(true); else setSheetCarga(null);
+  }
+
   if (loading && !data) {
     return <div className="py-14 flex justify-center"><div className="w-9 h-9 border-4 border-emerald-100 border-t-emerald-600 rounded-full animate-spin" /></div>;
   }
@@ -730,7 +751,9 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
     .filter((p: FilaItem) => p.condicao === 'APRAZO' && p.valorPago < p.valorTotal)
     .reduce((a: number, p: FilaItem) => Math.round((a + (p.valorTotal - p.valorPago)) * 100) / 100, 0);
   const resumo = data.resumo;
-  const caixaEst = data.caixa || { dinheiroHoje: 0, pixHoje: 0 };
+  // BLOCO 99: as TRES contas do caixa — dinheiro, pix e A RECEBER (a prazo/parcial)
+  const caixaEst = data.caixa || { dinheiroHoje: 0, pixHoje: 0, aReceber: 0 };
+  const aReceberEst = caixaEst.aReceber ?? 0;
   const desdeCaixa = caixaEst.desde ? new Date(caixaEst.desde) : null;
   const desdeCaixaOk = desdeCaixa && !isNaN(desdeCaixa.getTime());
   // BLOCO 96: caixa do ENTREGADOR selecionado no sheet (fallback: global) —
@@ -738,6 +761,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
   const caixaSel = (data?.caixasPorEntregador || []).find(x => x.entregadorId === caixaEntId);
   const dinEmAbertoSel = caixaSel ? caixaSel.dinheiro : caixaEst.dinheiroHoje;
   const pixEmAbertoSel = caixaSel ? caixaSel.pix : caixaEst.pixHoje;
+  const aReceberSel = caixaSel ? caixaSel.aReceber : aReceberEst;
   const desdeSel = caixaSel?.desde || caixaEst.desde;
   const desdeSelDate = desdeSel ? new Date(desdeSel) : null;
   const desdeSelOk = desdeSelDate && !isNaN(desdeSelDate.getTime());
@@ -885,22 +909,34 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
 
           {/* entregador/admin: entrega e falha com botoes grandes */}
           {podeEntregar && pend && (
-            <div className="flex gap-2 mt-2">
-              <button
-                onClick={() => abrirSheetEntrega(p)}
-                disabled={!!busy}
-                className="flex-[1.6] py-4 rounded-2xl bg-emerald-600 text-white text-[11px] font-black uppercase shadow-md active:scale-95 transition-transform disabled:opacity-60"
-              >
-                <i className="fa-solid fa-check mr-1"></i>Entregue
-              </button>
-              <button
-                onClick={() => { setMotivoSel(MOTIVOS_FALHA[0]); setMotivoOutro(''); setSheetFalhou(p); }}
-                disabled={!!busy}
-                className="flex-1 py-4 rounded-2xl bg-rose-50 text-rose-600 text-[11px] font-black uppercase active:scale-95 transition-transform disabled:opacity-60"
-              >
-                <i className="fa-solid fa-xmark mr-1"></i>Falhou
-              </button>
-            </div>
+            modo === 'VENDEDOR' && p.entregadorId && p.entregadorId !== user.id ? (
+              /* BLOCO 99 (regra do dono): venda CARREGADA e ALOCADA a outro
+                 entregador fica EXCLUSIVA dele — o vendedor NAO entrega. So
+                 volta a poder se o admin DESALOCAR (quem define e o admin). */
+              <div className="mt-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5">
+                <p className="text-[9px] font-black text-amber-700 uppercase leading-snug">
+                  <i className="fa-solid fa-truck-fast mr-1"></i>Carregada para {p.entregadorNome || 'o entregador'} — a entrega é DELE
+                </p>
+                <p className="text-[8px] font-semibold text-amber-600 mt-0.5 leading-snug">Você não entrega por conta própria. O ADMIN pode DESALOCAR essa entrega (menu Entregas) se precisar.</p>
+              </div>
+            ) : (
+              <div className="flex gap-2 mt-2">
+                <button
+                  onClick={() => abrirSheetEntrega(p)}
+                  disabled={!!busy}
+                  className="flex-[1.6] py-4 rounded-2xl bg-emerald-600 text-white text-[11px] font-black uppercase shadow-md active:scale-95 transition-transform disabled:opacity-60"
+                >
+                  <i className="fa-solid fa-check mr-1"></i>Entregue
+                </button>
+                <button
+                  onClick={() => { setMotivoSel(MOTIVOS_FALHA[0]); setMotivoOutro(''); setSheetFalhou(p); }}
+                  disabled={!!busy}
+                  className="flex-1 py-4 rounded-2xl bg-rose-50 text-rose-600 text-[11px] font-black uppercase active:scale-95 transition-transform disabled:opacity-60"
+                >
+                  <i className="fa-solid fa-xmark mr-1"></i>Falhou
+                </button>
+              </div>
+            )
           )}
         </div>
       </div>
@@ -954,20 +990,31 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
         {modo !== 'VENDEDOR' && (
           <div className="mt-3 bg-slate-50 border border-slate-100 rounded-2xl p-3">
             <div className="flex items-center justify-between gap-2">
-              <div>
+              <div className="min-w-0">
                 <p className="text-[8px] font-black text-slate-400 uppercase">Caixa em aberto (estimado)</p>
                 <p className="text-[8px] font-bold text-slate-400 uppercase">
                   {desdeCaixaOk
                     ? <>desde {desdeCaixa!.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })} {desdeCaixa!.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</>
                     : 'sem fechamento anterior'}
                 </p>
-                <p className="text-[11px] font-black text-slate-700">
-                  <i className="fa-solid fa-money-bill-wave text-emerald-500 mr-1"></i>{fmt(caixaEst.dinheiroHoje)}
-                  <span className="mx-2 text-slate-300">·</span>
-                  <i className="fa-brands fa-pix text-teal-500 mr-1"></i>{fmt(caixaEst.pixHoje)}
-                </p>
+                {/* BLOCO 99 (regra do dono): as TRES contas CLARAS — Dinheiro,
+                    Pix e A Receber, cada uma na sua caixinha */}
+                <div className="grid grid-cols-3 gap-1.5 mt-1.5">
+                  <div className="bg-emerald-50 rounded-xl px-2 py-1.5 text-center">
+                    <p className="text-[7px] font-black text-emerald-500 uppercase leading-none"><i className="fa-solid fa-money-bill-wave mr-0.5"></i>Dinheiro</p>
+                    <p className="text-[12px] font-black text-emerald-700 mt-0.5">{fmt(caixaEst.dinheiroHoje)}</p>
+                  </div>
+                  <div className="bg-teal-50 rounded-xl px-2 py-1.5 text-center">
+                    <p className="text-[7px] font-black text-teal-500 uppercase leading-none"><i className="fa-brands fa-pix mr-0.5"></i>Pix</p>
+                    <p className="text-[12px] font-black text-teal-700 mt-0.5">{fmt(caixaEst.pixHoje)}</p>
+                  </div>
+                  <div className="bg-amber-50 rounded-xl px-2 py-1.5 text-center">
+                    <p className="text-[7px] font-black text-amber-500 uppercase leading-none"><i className="fa-solid fa-hand-holding-dollar mr-0.5"></i>A receber</p>
+                    <p className="text-[12px] font-black text-amber-700 mt-0.5">{fmt(aReceberEst)}</p>
+                  </div>
+                </div>
                 {prazoEntregueHoje > 0 && (
-                  <p className="text-[8px] font-black text-orange-500 uppercase mt-1"><i className="fa-solid fa-hand-holding-dollar mr-1"></i>A prazo entregue hoje (NAO cobrar): {fmt(prazoEntregueHoje)}</p>
+                  <p className="text-[8px] font-black text-orange-500 uppercase mt-1.5"><i className="fa-solid fa-hand-holding-dollar mr-1"></i>A prazo entregue hoje (NAO cobrar): {fmt(prazoEntregueHoje)}</p>
                 )}
               </div>
               {/* BLOCO 33: SOMENTE O ADMIN fecha o caixa (regra do dono). O
@@ -1027,11 +1074,22 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                         <i className="fa-solid fa-cash-register mr-1"></i>Fechar caixa
                       </button>
                     </div>
-                    <p className="text-[11px] font-black text-slate-700 mt-1">
-                      <i className="fa-solid fa-money-bill-wave text-emerald-500 mr-1"></i>{fmt(g.dinheiro)}
-                      <span className="mx-2 text-slate-300">·</span>
-                      <i className="fa-brands fa-pix text-teal-500 mr-1"></i>{fmt(g.pix)}
-                    </p>
+                    {/* BLOCO 99: as TRES contas CLARAS do caixa DELE — dinheiro,
+                        pix e a receber (o cliente ainda deve) */}
+                    <div className="grid grid-cols-3 gap-1.5 mt-1.5">
+                      <div className="bg-emerald-50 rounded-lg px-1.5 py-1 text-center">
+                        <p className="text-[7px] font-black text-emerald-500 uppercase leading-none"><i className="fa-solid fa-money-bill-wave mr-0.5"></i>Dinheiro</p>
+                        <p className="text-[11px] font-black text-emerald-700 mt-0.5">{fmt(g.dinheiro)}</p>
+                      </div>
+                      <div className="bg-teal-50 rounded-lg px-1.5 py-1 text-center">
+                        <p className="text-[7px] font-black text-teal-500 uppercase leading-none"><i className="fa-brands fa-pix mr-0.5"></i>Pix</p>
+                        <p className="text-[11px] font-black text-teal-700 mt-0.5">{fmt(g.pix)}</p>
+                      </div>
+                      <div className="bg-amber-50 rounded-lg px-1.5 py-1 text-center">
+                        <p className="text-[7px] font-black text-amber-500 uppercase leading-none"><i className="fa-solid fa-hand-holding-dollar mr-0.5"></i>A receber</p>
+                        <p className="text-[11px] font-black text-amber-700 mt-0.5">{fmt(g.aReceber || 0)}</p>
+                      </div>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1754,6 +1812,14 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                 <i className="fa-solid fa-truck-ramp-box mr-1"></i>Remover do veículo
               </button>
             )}
+            {/* BLOCO 99 (regra do dono): QUEM DEFINE E O ADMIN — desaloca a
+                venda do entregador; o vendedor volta a poder entregar a própria */}
+            {sheetCarga.entregadorId && (
+              <button onClick={desalocarEntrega} disabled={!!busy}
+                className="w-full mt-2 py-3.5 rounded-2xl bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-black uppercase active:scale-95 disabled:opacity-60">
+                <i className="fa-solid fa-link-slash mr-1"></i>Desalocar entrega (deixa sem entregador)
+              </button>
+            )}
             <button onClick={() => setSheetCarga(null)} className="w-full mt-2 py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Cancelar</button>
           </div>
         </div>
@@ -1788,7 +1854,18 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
               <p className="text-[9px] font-black text-emerald-500 uppercase">Dinheiro em espécie em aberto (estimado)</p>
               <p className="text-[8px] font-bold text-emerald-400 uppercase">{desdeSelOk ? `desde ${desdeSelDate!.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })} ${desdeSelDate!.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}` : 'sem fechamento anterior'}</p>
               <p className="text-2xl font-black text-emerald-700">{fmt(dinEmAbertoSel)}</p>
-              <p className="text-[9px] font-bold text-teal-600 uppercase mt-1">Pix em aberto: {fmt(pixEmAbertoSel)} (nao vem em especie)</p>
+              {/* BLOCO 99: as tres contas na cara no fechamento */}
+              <div className="grid grid-cols-2 gap-1.5 mt-2">
+                <div className="bg-white/70 rounded-xl px-2 py-1.5">
+                  <p className="text-[7px] font-black text-teal-500 uppercase"><i className="fa-brands fa-pix mr-0.5"></i>Pix em aberto</p>
+                  <p className="text-[13px] font-black text-teal-700">{fmt(pixEmAbertoSel)}</p>
+                </div>
+                <div className="bg-white/70 rounded-xl px-2 py-1.5">
+                  <p className="text-[7px] font-black text-amber-500 uppercase"><i className="fa-solid fa-hand-holding-dollar mr-0.5"></i>A receber</p>
+                  <p className="text-[13px] font-black text-amber-700">{fmt(aReceberSel || 0)}</p>
+                </div>
+              </div>
+              <p className="text-[7px] font-bold text-gray-400 uppercase mt-1">Pix nao vem em especie · A receber = a prazo/parcial que o cliente ainda deve</p>
               {prazoEntregueHoje > 0 && (
                 <p className="text-[9px] font-black text-orange-500 uppercase mt-2 leading-snug">A prazo entregue hoje: {fmt(prazoEntregueHoje)} — NAO entra aqui (vendedor recebe depois)</p>
               )}

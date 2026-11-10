@@ -80,6 +80,15 @@
   * {
     @apply border-border outline-ring/50;
   }
+  /* BLOCO 99 (regra do dono): NENHUMA tela pode rolar de LADO — o card do
+     cliente (e o resto do app) quebrava para o lado porque um elemento largo
+     (logo do topo, chip, texto longo) empurrava a pagina toda. `clip` nao
+     cria scroll-container, entao o header sticky continua funcionando; o
+     `hidden` antes cobre navegadores velhos sem suporte a clip. */
+  html, body {
+    overflow-x: hidden;
+    overflow-x: clip;
+  }
   body {
     @apply bg-background text-foreground;
     font-family: 'Inter', sans-serif;

@@ -993,15 +993,21 @@ const App: React.FC = () => {
           {offlineSync.getPendingCount() > 0 && <span className="bg-white/20 px-1.5 py-0.5 rounded-full ml-1">{offlineSync.getPendingCount()}</span>}
         </div>
       )}
-      <header className="bg-white h-20 px-6 shadow-sm flex justify-between items-center sticky top-0 z-50 border-b" style={{ paddingTop: 'max(env(safe-area-inset-top), 0px)' }}>
-        {logo ? <img src={logo} alt="" className="h-14 w-auto object-contain" /> : <span className="font-black text-[11px] text-gray-300 uppercase tracking-widest">{companyName}</span>}
-        <div className="flex items-center gap-3">
-          <div className="text-right"><p className="text-[10px] font-black uppercase text-gray-400">{currentUser.role}</p><p className="text-sm font-bold text-gray-800">{currentUser.nome}</p></div>
-          <button onClick={() => { clearSessionToken(); setCurrentUser(null); }} className="text-gray-400 p-2"><i className="fa-solid fa-right-from-bracket"></i></button>
+      {/* BLOCO 99: header a prova de logo largo — o logo NUNCA empurra a pagina
+          para o lado (era o causador do card do Cliente quebrando). Cada lado
+          tem limite proprio e o conteudo encolhe, nao estoura. */}
+      <header className="bg-white h-20 px-3 sm:px-6 shadow-sm flex justify-between items-center gap-2 min-w-0 sticky top-0 z-50 border-b" style={{ paddingTop: 'max(env(safe-area-inset-top), 0px)' }}>
+        {logo ? <img src={logo} alt="" className="h-14 w-auto max-w-[45vw] sm:max-w-[260px] object-contain min-w-0" /> : <span className="font-black text-[11px] text-gray-300 uppercase tracking-widest truncate min-w-0">{companyName}</span>}
+        <div className="flex items-center gap-2 sm:gap-3 shrink-0 min-w-0">
+          <div className="text-right min-w-0 max-w-[38vw] sm:max-w-none"><p className="text-[10px] font-black uppercase text-gray-400 truncate">{currentUser.role}</p><p className="text-sm font-bold text-gray-800 truncate">{currentUser.nome}</p></div>
+          <button onClick={() => { clearSessionToken(); setCurrentUser(null); }} className="text-gray-400 p-2 shrink-0" aria-label="Sair"><i className="fa-solid fa-right-from-bracket"></i></button>
         </div>
       </header>
-      
-      <main className="container mx-auto p-4 max-w-lg">
+
+      {/* BLOCO 99: `container` + `max-w-lg` brigavam entre si (o container
+          sobrescrevia o max-width em telas maiores) — agora é um max-width
+          simples e sem ambiguidade. */}
+      <main className="w-full max-w-lg mx-auto p-4">
         {currentUser.role === 'ENTREGADOR' ? (
           <EntregadorShell user={currentUser} melhorias={melhorias} />
         ) : currentUser.role === 'SECRETARIO' ? (

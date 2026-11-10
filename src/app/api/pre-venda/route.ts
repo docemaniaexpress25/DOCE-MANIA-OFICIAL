@@ -799,27 +799,39 @@ async function getFila(supabase: any, userId: string, perfil: string) {
     .gte('criado_em', desdeCaixa);
 
   // BLOCO 96: vendas -> entregador (quem carregou/entregou) para agrupar o caixa
+  // BLOCO 99: valores da venda tbm vem junto — o saldo nao pago da entrega
+  // alimenta o "A RECEBER" do caixa (a prazo / parcial que o cliente deve)
   const entPorSale: Record<string, string | null> = {};
+  const valoresPorSale: Record<string, { total: number; pago: number }> = {};
   const saleIdsCaixa = [...new Set((evCaixa || []).map((e: any) => String(e.sale_id)))];
   if (saleIdsCaixa.length > 0) {
-    const { data: salesEnt } = await supabase.from('sales').select('id, entregador_id').in('id', saleIdsCaixa);
-    (salesEnt || []).forEach((s: any) => { entPorSale[String(s.id)] = s.entregador_id ?? null; });
+    const { data: salesEnt } = await supabase.from('sales').select('id, entregador_id, valor_total, valor_pago').in('id', saleIdsCaixa);
+    (salesEnt || []).forEach((s: any) => {
+      entPorSale[String(s.id)] = s.entregador_id ?? null;
+      valoresPorSale[String(s.id)] = { total: Number(s.valor_total || 0), pago: Number(s.valor_pago || 0) };
+    });
   }
 
   // Caixa EM ABERTO (dinheiro/pix recebidos desde o ultimo fechamento) —
   // estimativa a partir dos eventos de entrega: global + POR ENTREGADOR
-  let dinheiroHoje = 0, pixHoje = 0;
-  const caixasMap: Record<string, { entregadorId: string; nome: string; dinheiro: number; pix: number; desde: string | null; qtdEntregas: number }> = {};
+  // BLOCO 99: cada grupo mostra as 3 contas CLARAS — dinheiro, pix e A RECEBER
+  let dinheiroHoje = 0, pixHoje = 0, aReceberGlobal = 0;
+  const caixasMap: Record<string, { entregadorId: string; nome: string; dinheiro: number; pix: number; aReceber: number; desde: string | null; qtdEntregas: number }> = {};
   for (const e of evCaixa || []) {
     const { din, pix } = partesDeMotivo(e.motivo);
+    const vInfo = valoresPorSale[String(e.sale_id)];
+    // saldo nao pago da venda entregue = A RECEBER (a prazo/parcial — o
+    // cliente ainda deve; quando o vendedor cobrar, e dele cobrar depois)
+    const restante = vInfo ? Math.max(0, round2(vInfo.total - vInfo.pago)) : 0;
     // global (legado/sheet): so o que veio DEPOIS do fechamento mais recente global
     if (!desdeCaixaIso || String(e.criado_em || '') > desdeCaixaIso) {
       dinheiroHoje = round2(dinheiroHoje + din);
       pixHoje = round2(pixHoje + pix);
+      aReceberGlobal = round2(aReceberGlobal + restante);
     }
     const entId = String(entPorSale[String(e.sale_id)] || 'SEM_ENTREGADOR');
     const g = (caixasMap[entId] ||= {
-      entregadorId: entId, nome: '', dinheiro: 0, pix: 0,
+      entregadorId: entId, nome: '', dinheiro: 0, pix: 0, aReceber: 0,
       // cada entregador conta desde o FECHAMENTO DELE; o grupo SEM entregador
       // segue a janela global (fechamento mais recente)
       desde: entId === 'SEM_ENTREGADOR' ? (desdeCaixaIso || null) : (desdePorEnt[entId] || null),
@@ -829,6 +841,7 @@ async function getFila(supabase: any, userId: string, perfil: string) {
     if (g.desde && String(e.criado_em || '') <= g.desde) continue;
     g.dinheiro = round2(g.dinheiro + din);
     g.pix = round2(g.pix + pix);
+    g.aReceber = round2(g.aReceber + restante);
     g.qtdEntregas += 1;
   }
   const idsCaixa = Object.keys(caixasMap).filter(k => k !== 'SEM_ENTREGADOR');
@@ -842,9 +855,10 @@ async function getFila(supabase: any, userId: string, perfil: string) {
   }
   if (caixasMap['SEM_ENTREGADOR']) caixasMap['SEM_ENTREGADOR'].nome = 'Sem entregador (antigo)';
   // zero em aberto (fechado agora) = nao aparece na lista — caixa limpo
+  // BLOCO 99: grupo que so tem A RECEBER tambem aparece (o dono quer ver)
   const caixasPorEntregador = Object.values(caixasMap)
-    .filter((g: any) => g.qtdEntregas > 0 || g.dinheiro > 0 || g.pix > 0)
-    .sort((a: any, b: any) => b.dinheiro - a.dinheiro || b.pix - a.pix);
+    .filter((g: any) => g.qtdEntregas > 0 || g.dinheiro > 0 || g.pix > 0 || g.aReceber > 0)
+    .sort((a: any, b: any) => b.dinheiro - a.dinheiro || b.pix - a.pix || b.aReceber - a.aReceber);
   // ENTREGADOR logado: o "caixa" dele e o SEU proprio (regra do dono — cada
   // entregador com o caixa separado). Admin continua vendo o global no sheet.
   if (entFiltroUuid) {
@@ -963,7 +977,7 @@ async function getFila(supabase: any, userId: string, perfil: string) {
       valorEntregueHoje: round2(entreguesHoje.reduce((a: number, s: any) => a + Number(s.valor_total || 0), 0)),
       falhados: (falhados || []).length,
     },
-    caixa: { dinheiroHoje, pixHoje, desde: desdeCaixaIso },
+    caixa: { dinheiroHoje, pixHoje, aReceber: aReceberGlobal, desde: desdeCaixaIso },
     ...(conferencia ? { conferencia } : {}),
     sem13,
   };
@@ -1352,6 +1366,29 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, carregado });
     }
 
+    // ---------- DESALOCAR_ENTREGA (BLOCO 99: QUEM DEFINE E O ADMIN) ----------
+    // Venda carregada e alocada a um entregador fica EXCLUSIVA dele: o vendedor
+    // (nem o que vendeu) entrega por conta propria. O admin pode DESALOCAR —
+    // limpa o entregador e o check de carga, e a venda volta a poder ser
+    // entregue pelo proprio vendedor (comissao de pronta entrega) ou realocada.
+    if (acao === 'DESALOCAR_ENTREGA') {
+      if (!admin) return NextResponse.json({ ok: false, error: 'Somente o admin desaloca a entrega.' }, { status: 403 });
+      const saleIdDes = String(body.saleId || '');
+      if (!saleIdDes) return NextResponse.json({ ok: false, error: 'saleId obrigatoria.' }, { status: 400 });
+      if (!(await hasCargaCheckColumns())) {
+        return NextResponse.json({ ok: false, error: 'Banco desatualizado: rode o Bloco 58 do SQL (check de carga).' }, { status: 503 });
+      }
+      const payloadDes: Record<string, unknown> = { entregador_id: null, carga_confirmada_em: null, carga_confirmada_por: null };
+      const { error: desErr } = await supabase.from('sales').update(payloadDes).eq('id', saleIdDes);
+      const codeDes = (desErr as any)?.code || '';
+      if (desErr && (codeDes === '42P01' || codeDes === '42501' || codeDes === 'PGRST204' || codeDes === '42703' || codeDes === '22P02')) {
+        return NextResponse.json({ ok: false, error: 'Banco desatualizado: rode o Bloco 58 do SQL (check de carga).' }, { status: 503 });
+      }
+      if (desErr) throw desErr;
+      await logEventoSeguro(supabase, null, saleIdDes, userId, 'ENTREGA_DESALOCADA', 'Admin DESALOCOU a entrega — o vendedor pode entregar a propria venda de novo');
+      return NextResponse.json({ ok: true });
+    }
+
     // ---------- FECHAR_CAIXA (BLOCO 33: SOMENTE O ADMIN fecha o caixa) ----------
     // ANTES do guard de saleId: esta acao nao tem venda associada. Antes o
     // entregador fechava e o guard "saleId obrigatoria" engolia o POST (bug
@@ -1702,6 +1739,10 @@ export async function POST(req: NextRequest) {
     // REGRA DO DONO (Bloco 98 atualizada): o VENDEDOR pode entregar a PROPIA
     // venda pelo menu Entregas (foi ele que vendeu e decidiu levar — e nisso
     // ganha a comissão de PRONTA ENTREGA). Venda alheia: só o ENTREGADOR (e o admin).
+    // REGRA DO DONO (Bloco 99): venda CARREGADA e ALOCADA a um entregador fica
+    // EXCLUSIVA dele — o vendedor nao entrega por conta propria. Volta a ser
+    // dele se o admin DESALOCAR (DESALOCAR_ENTREGA). Se a alocação é o PROPRIO
+    // vendedor, ele entrega normal (o caixa é dele).
     // ============================================================================
     const entregaPropria = String(saleRow.vendedor_id || '') === String(userId);
     const podeEntregar = admin || session.perfil === 'ENTREGADOR' ||
@@ -1709,6 +1750,15 @@ export async function POST(req: NextRequest) {
     if (acao === 'ENTREGUE' || acao === 'FALHOU' || acao === 'REABRIR') {
       if (!podeEntregar) {
         return NextResponse.json({ ok: false, error: 'Entrega pelo ENTREGADOR ou pelo PROPRIO vendedor da venda.' }, { status: 403 });
+      }
+      // BLOCO 99: alocada a OUTRO entregador = travada para o vendedor
+      if (session.perfil === 'VENDEDOR' && entregaPropria && saleRow.entregador_id && String(saleRow.entregador_id) !== String(userId)) {
+        let nomeEnt = 'Entregador 1';
+        try {
+          const { data: uEnt } = await supabase.from('app_users').select('nome').eq('id', String(saleRow.entregador_id)).maybeSingle();
+          if (uEnt?.nome) nomeEnt = String(uEnt.nome);
+        } catch { /* app_users antigo: segue com o nome padrao */ }
+        return NextResponse.json({ ok: false, error: `Essa entrega ja foi CARREGADA para ${nomeEnt}. So ele entrega — o admin pode DESALOCAR no menu Entregas.` }, { status: 403 });
       }
     }
     const rotaIdRef = saleRow.route_id || null;

@@ -68,6 +68,9 @@ export interface Product {
   /** BLOCO 70: PREÇO ESPECIAL GB — preço exclusivo para clientes ESPECIAL GB.
    *  0/undefined/null = produto sem preço GB → cai no preço normal do PDV. */
   precoEspecialGb?: number | null;
+  /** BLOCO 108 — MODO CUPOM: preço da "caixa" para a NFC anônima do cliente
+   *  que quer só cupom (0 = usa o preço de custo do produto). */
+  precoCupom?: number;
 }
 
 export interface Carga {
@@ -122,6 +125,10 @@ export interface Client {
   /** BLOCO 70: cliente ESPECIAL GB — no PDV os produtos com preco_especial_gb > 0
    *  entram nesse preço (normal = preços de hoje, nada muda). */
   clienteEspecialGb?: boolean;
+  /** BLOCO 108 — MODO CUPOM: cliente que "quer somente cupom" (sem NF-e e
+   *  sem NFC identificada). Na venda dele, além do cupom, sai uma NFC-e
+   *  anônima com os produtos no preço cupom (ligável/desligável em Configurações). */
+  modoCupom?: boolean;
 }
 
 export type NotaStatus = 'NAO_EMITIDA' | 'EMITINDO' | 'AUTORIZADA' | 'REJEITADA' | 'CANCELADA';

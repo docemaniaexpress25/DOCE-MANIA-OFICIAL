@@ -16,7 +16,7 @@ import { getServiceClient } from '@/lib/serverSupabase';
 const TTL_MS = 30_000;
 
 type Probe = { ok: boolean; at: number };
-const probes: Record<string, Probe | null> = { preVenda: null, entrega: null, foto: null, nota: null, fiscalProduto: null, rota2: null, estoquesNota: null, modoCarga: null, pendenteModo: null, modoVenda: null, produtoTeste: null };
+const probes: Record<string, Probe | null> = { preVenda: null, entrega: null, foto: null, nota: null, fiscalProduto: null, rota2: null, estoquesNota: null, modoCarga: null, pendenteModo: null, modoVenda: null, produtoTeste: null, notaEmitidaEm: null, precoCupom: null, clientModoCupom: null, erpConfig: null };
 
 async function probeColumn(table: string, column: string, key: string): Promise<boolean> {
   const now = Date.now();
@@ -96,4 +96,29 @@ export function hasModoVendaColumn(): Promise<boolean> {
 /** sales.carga_confirmada_em existe? (Bloco 58 — check do admin: pedido carregado no veiculo) */
 export function hasCargaCheckColumns(): Promise<boolean> {
   return probeColumn('sales', 'carga_confirmada_em', 'cargaCheck');
+}
+
+/** sales.nota_emitida_em existe? (Bloco 108 — carimbo de quando a nota saiu) */
+export function hasNotaEmitidaEm(): Promise<boolean> {
+  return probeColumn('sales', 'nota_emitida_em', 'notaEmitidaEm');
+}
+
+/** products.preco_cupom existe? (Bloco 108 — modo cupom: NFC anonima com preco da caixa) */
+export function hasPrecoCupom(): Promise<boolean> {
+  return probeColumn('products', 'preco_cupom', 'precoCupom');
+}
+
+/** clients.modo_cupom existe? (Bloco 108 — cliente que quer somente cupom) */
+export function hasClientModoCupom(): Promise<boolean> {
+  return probeColumn('clients', 'modo_cupom', 'clientModoCupom');
+}
+
+/** app_settings.erp_config existe? (Bloco 108 — central de automacoes ERP) */
+export function hasErpConfig(): Promise<boolean> {
+  return probeColumn('app_settings', 'erp_config', 'erpConfig');
+}
+
+/** estoque_movimentos existe? (Bloco 108 — kardex) */
+export function hasKardexTable(): Promise<boolean> {
+  return probeColumn('estoque_movimentos', 'id', 'kardex');
 }

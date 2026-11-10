@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServiceClient, devBridge } from '@/lib/serverSupabase';
 import { sessionFromRequest } from '@/lib/session';
-import { hasNotaColumns, hasProductFiscalColumns, hasBoletoColumns } from '@/lib/serverSchema';
+import { hasNotaColumns, hasProductFiscalColumns, hasBoletoColumns, hasPrecoCupom, hasNotaEmitidaEm, hasClientModoCupom } from '@/lib/serverSchema';
+import { lerEmitentePayload, lerErpConfig } from '@/lib/erpConfig';
 import {
   getFocusConfig,
   isFocusConfigured,
@@ -19,6 +20,7 @@ import {
   FocusDoc,
   FocusDestinatarioV2,
   FocusFormaPagamento,
+  FocusNfePayloadV2,
 } from '@/lib/focusNfe';
 
 /**
@@ -198,20 +200,42 @@ export async function POST(req: NextRequest) {
 
   const cfg = getFocusConfig();
 
+  // ------------------------------------------------------------------
+  // BLOCO 108 — MODO CUPOM (regra do dono): cliente que "quer somente
+  // cupom" recebe e paga o cupom normal; a NFC-e ANONIMA que alimenta
+  // a fiscal sai com o PREÇO CUPOM do produto (products.preco_cupom;
+  // 0 = cai no preço de custo). Liga/desliga nas Configurações ERP.
+  // Cliente marcado modo_cupom entra no modo AUTOMATICAMENTE.
+  // ------------------------------------------------------------------
+  const erp = await lerErpConfig();
+  const temPrecoCupom = await hasPrecoCupom();
+  const temClientModoCupom = await hasClientModoCupom();
+  const temEmitidaEm = await hasNotaEmitidaEm();
+  const emitentePayload = (await lerEmitentePayload()) as Partial<FocusNfePayloadV2>;
+
   // Cliente da venda
   const { data: client } = await db
     .from('clients')
-    .select('nome_fantasia, nome, cnpj, telefone, endereco, bairro, razao_social, inscricao_estadual, endereco_numero, endereco_cep, endereco_municipio, endereco_uf, email')
+    .select(`nome_fantasia, nome, cnpj, telefone, endereco, bairro, razao_social, inscricao_estadual, endereco_numero, endereco_cep, endereco_municipio, endereco_uf, email${temClientModoCupom ? ', modo_cupom' : ''}`)
     .eq('id', sale.client_id)
     .single();
 
   if (!client) return BAD(422, 'Cliente da venda nao encontrado.');
 
+  const modoCupomPed = body.modoCupom === true;
+  const clientModoCupom = temClientModoCupom && (client as Record<string, unknown>).modo_cupom === true;
+  if (modoCupomPed && !erp.cupomDuploNfc) {
+    return BAD(422, 'Modo cupom DESLIGADO. Ligue em Configuracoes -> ERP Fiscal & Automacoes (cupomDuploNfc).');
+  }
+  const modoCupom = erp.cupomDuploNfc && (modoCupomPed || clientModoCupom);
+
   // Tipo automatico: CNPJ valido -> NFe; caso contrario NFC-e (consumidor)
   const cpfCnpj = validaCpfCnpj(client.cnpj);
   const tipoEscolhido = (body.tipo as string) || '';
   let doc: FocusDoc;
-  if (tipoEscolhido === 'NFE' || tipoEscolhido === 'NFCE') {
+  if (modoCupom) {
+    doc = 'nfce'; // BLOCO 108: modo cupom e SEMPRE NFC-e anonima (sem consumidor)
+  } else if (tipoEscolhido === 'NFE' || tipoEscolhido === 'NFCE') {
     doc = tipoEscolhido === 'NFE' ? 'nfe' : 'nfce';
   } else {
     doc = cpfCnpj === 'CNPJ' ? 'nfe' : 'nfce';
@@ -226,15 +250,28 @@ export async function POST(req: NextRequest) {
   if (!items || items.length === 0) return BAD(422, 'Venda sem itens — nao e possivel emitir nota.');
 
   const prodIds = [...new Set(items.map((i: Record<string, unknown>) => i.produto_id as string))];
+  const prodCols = [
+    'id, nome',
+    fiscalCols ? 'ncm, cest, cfop, ean, unidade, origem' : '',
+    // BLOCO 108: preco_cupom (0 = cai no custo) + custo como fallback
+    temPrecoCupom ? 'preco_cupom' : '',
+    'preco_custo',
+  ].filter(Boolean).join(', ');
   const { data: prodsData } = await db
     .from('products')
-    .select(fiscalCols ? 'id, nome, ncm, cest, cfop, ean, unidade, origem' : 'id, nome')
+    .select(prodCols)
     .in('id', prodIds);
   const prods = (prodsData || []) as unknown as Record<string, unknown>[];
   const prodMap = new Map(prods.map(p => [p.id as string, p]));
 
   const payloadItems = items.map((i: Record<string, unknown>) => {
     const p = (prodMap.get(i.produto_id as string) || {}) as Record<string, unknown>;
+    // BLOCO 108 (regra do dono): no modo cupom a NFC anônima sai com o
+    // PREÇO CUPOM do produto; sem preco_cupom (0), usa o PREÇO DE CUSTO;
+    // sem custo também (0), cai no preço de venda da venda.
+    const precoCupom = temPrecoCupom ? Number(p.preco_cupom) || 0 : 0;
+    const custo = Number(p.preco_custo) || 0;
+    const valorUnitCupom = precoCupom > 0 ? precoCupom : custo > 0 ? custo : Number(i.preco_venda) || 0;
     return {
       codigo: String(p.id || '').slice(0, 8),
       descricao: String(p.nome || 'Produto'),
@@ -244,11 +281,14 @@ export async function POST(req: NextRequest) {
       unidade: fiscalCols ? ((p.unidade as string) || 'UN') : 'UN',
       origem: fiscalCols ? (p.origem as string) || undefined : undefined,
       quantidade: Number(i.quantidade) || 0,
-      valorUnitario: Number(i.preco_venda) || 0,
+      valorUnitario: modoCupom ? valorUnitCupom : (Number(i.preco_venda) || 0),
     };
   });
 
-  const valorTotal = Number(sale.valor_total) || 0;
+  // BLOCO 108: no modo cupom o TOTAL da NFC é a soma dos preços cupom
+  // (a venda real continua no valor que o cliente pagou — gravado no banco)
+  const valorTotalCupom = Math.round(payloadItems.reduce((acc, it) => acc + it.quantidade * it.valorUnitario, 0) * 100) / 100;
+  const valorTotal = modoCupom ? valorTotalCupom : (Number(sale.valor_total) || 0);
 
   // Pagamento v2.0 — PIX = tPag 17 (armadilha: 16 e deposito bancario)
   const tp = tpagDeMetodo(sale.metodo_pagamento as string);
@@ -271,7 +311,9 @@ export async function POST(req: NextRequest) {
   const dataVendaTxt = sale.data_venda
     ? new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date(sale.data_venda as string))
     : '';
-  const informacoes = `Venda ${vendaCurta}${dataVendaTxt ? ` de ${dataVendaTxt}` : ''} registrada pelo app Doce Mania. NF-e emitida em ${carimbo()}.`;
+  const informacoes = modoCupom
+    ? `Venda cupom ${vendaCurta} — NFC-e nao identificada (modo cupom). Emitida em ${carimbo()}.`
+    : `Venda ${vendaCurta}${dataVendaTxt ? ` de ${dataVendaTxt}` : ''} registrada pelo app Doce Mania. NF-e emitida em ${carimbo()}.`;
 
   // Destinatario + payload por tipo de documento
   let payload;
@@ -309,6 +351,7 @@ export async function POST(req: NextRequest) {
       valorTotalVenda: valorTotal,
       pagamento,
       informacoesAdicionais: informacoes,
+      emitente: emitentePayload,
     });
   } else {
     // NFC-e (Bloco 12): escolha explicita do vendedor na tela de venda
@@ -330,7 +373,7 @@ export async function POST(req: NextRequest) {
         municipio: municipio || undefined,
         uf: uf || cfg.ufEmitente,
       };
-    } else if (razao && tipoEscolhido !== 'NFCE') {
+    } else if (razao && tipoEscolhido !== 'NFCE' && !modoCupom) {
       // Fluxo automatico (sem escolha): NFC-e identificada pelo cadastro (melhor para o cliente)
       destinatario = {
         nome: razao.slice(0, 60),
@@ -352,6 +395,7 @@ export async function POST(req: NextRequest) {
       valorTotalVenda: valorTotal,
       pagamento,
       informacoesAdicionais: informacoes,
+      emitente: emitentePayload,
     });
   }
 
@@ -377,7 +421,14 @@ export async function POST(req: NextRequest) {
   };
   // Bloco 25: guarda a chave de acesso (44 dig) p/ atrelar a NF-e ao boleto Inter
   if (res.chave && (await hasBoletoColumns())) patch.nota_chave = res.chave;
-  await atualizarNota(saleId, patch);
+  // BLOCO 108: carimbo de emissao autorizada (historico completo do admin)
+  if (res.autorizada && temEmitidaEm) patch.nota_emitida_em = new Date().toISOString();
+  const { error: errPatch } = await db.from('sales').update(patch).eq('id', saleId);
+  if (errPatch && temEmitidaEm) {
+    // coluna nota_emitida_em ainda nao existe (SQL 108 pendente) — grava sem ela
+    delete patch.nota_emitida_em;
+    await atualizarNota(saleId, patch);
+  }
 
   return NextResponse.json({
     ok: res.autorizada || res.processando,

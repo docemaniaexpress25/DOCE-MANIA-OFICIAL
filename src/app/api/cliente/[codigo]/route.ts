@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServiceClient, isServerSupabaseConfigured } from '@/lib/serverSupabase';
+import { hasNotaColumns } from '@/lib/serverSchema';
 
 /**
  * GET /api/cliente/[codigo]
@@ -81,9 +82,17 @@ export async function GET(
     // EGRESS: todas as PENDENTES (saldo exato) + pagas dos ultimos 120 dias
     // (antes eram TODAS as vendas de todos os tempos em cada visita).
     const desde = new Date(Date.now() - 120 * 24 * 60 * 60 * 1000).toISOString();
+    // Sonda Bloco 10: quando as colunas de nota fiscal existem, o portal ganha
+    // acesso ao DANFE (PDF) e XML das notas autorizadas (nota_tipo define o rotulo).
+    // Tolerante a SQL antigo: sem as colunas, a select segue identica a de antes.
+    const hasNota = await hasNotaColumns();
     const { data: salesData } = await supabase
       .from('sales')
-      .select('id, valor_total, valor_pago, metodo_pagamento, status_pagamento, data_venda, data_vencimento, detalhe_pagamento, entrega_status, sale_items(produto_id, quantidade, preco_venda)')
+      .select(
+        'id, valor_total, valor_pago, metodo_pagamento, status_pagamento, data_venda, data_vencimento, detalhe_pagamento, entrega_status' +
+        (hasNota ? ', nota_status, nota_tipo, nota_numero, nota_pdf_url, nota_xml_url' : '') +
+        ', sale_items(produto_id, quantidade, preco_venda)'
+      )
       .eq('client_id', found.id)
       .or(`status_pagamento.eq.PENDENTE,data_venda.gte.${desde}`)
       .order('data_venda', { ascending: false })

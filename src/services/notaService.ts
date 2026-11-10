@@ -56,12 +56,13 @@ export const notaService = {
    * - tipo 'NFCE': NFC-e; se `cpfNaNota` informado e valido, emite
    *   identificando o consumidor; se vazio, NFC-e sem identificacao.
    */
-  async emitir(saleId: string, tipo?: 'NFE' | 'NFCE', cpfNaNota?: string): Promise<{ ok: boolean; jaEmitida?: boolean; nota?: NotaInfo; erro?: string }> {
+  async emitir(saleId: string, tipo?: 'NFE' | 'NFCE', cpfNaNota?: string, modoCupom?: boolean): Promise<{ ok: boolean; jaEmitida?: boolean; nota?: NotaInfo; erro?: string }> {
     try {
       const res = await fetch('/api/notas', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify({ acao: 'EMITIR', saleId, tipo, cpf: cpfNaNota || undefined }),
+        // BLOCO 108: modoCupom -> NFC-e ANONIMA com os produtos no preco cupom/custo
+        body: JSON.stringify({ acao: 'EMITIR', saleId, tipo, cpf: cpfNaNota || undefined, modoCupom: modoCupom || undefined }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}`, nota: data.nota };

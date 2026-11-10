@@ -62,6 +62,11 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
   // Rejeitada abre expandido de cara (o erro precisa ser lido).
   const [notaAberta, setNotaAberta] = useState<boolean>(() => sale.notaStatus === 'REJEITADA');
 
+  // BLOCO 108 — MODO CUPOM: cliente "somente cupom" -> NFC-e ANONIMA com os
+  // produtos no PREÇO CUPOM (custo). O cliente paga o cupom normal; a fiscal
+  // sai sem identificacao e com o preço da caixa. Requer cupomDuploNfc ON.
+  const [modoCupomNfc, setModoCupomNfc] = useState<boolean>(false);
+
   const handleEmitirNota = async () => {
     if (notaBusy || !isVendaSalva) return;
     // BLOCO 85: sem token Focus o clique so frustra — avisa com o que falta
@@ -72,7 +77,7 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
       return;
     }
     setNotaBusy(true);
-    const r = await notaService.emitir(sale.id);
+    const r = await notaService.emitir(sale.id, undefined, undefined, modoCupomNfc);
     setNotaBusy(false);
     if (r.erro && !r.nota) {
       showToast?.(r.erro, 'error');
@@ -540,6 +545,68 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
               {finalizando ? 'Finalizando...' : 'Finalizar venda'}
             </button>
           )}
+          {/* ================================================================
+              BLOCO 108 — FLUXO FECHADO (regra do dono): PRIMEIRO imprime o
+              cupom (conferencia/entrega), SO DEPOIS sai a parte fiscal.
+              PASSO 1 = imprimir/copiar/WhatsApp · PASSO 2 = NF/NFC-e,
+              boleto e Pix. Mesmos botoes, agora na ordem certa. */}
+          {isVendaSalva && (
+            <div className="flex items-center gap-2 mt-1">
+              <span className="w-7 h-7 rounded-full bg-blue-600 text-white font-black text-xs flex items-center justify-center shadow-sm shrink-0">1</span>
+              <p className="text-[9px] font-black text-blue-600 uppercase tracking-widest">Imprima o cupom</p>
+              <span className="flex-1 h-px bg-gray-200"></span>
+            </div>
+          )}
+
+          <PrinterSelector accent="blue" />
+
+          {/* Paper width selector */}
+          <div className="flex bg-gray-200 p-1 rounded-2xl mb-1">
+            <button 
+              onClick={() => setPrintWidth('56MM')} 
+              className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${printWidth === '56MM' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500'}`}
+            >
+              <i className="fa-solid fa-receipt mr-1"></i>56mm
+            </button>
+            <button 
+              onClick={() => setPrintWidth('80MM')} 
+              className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${printWidth === '80MM' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-400'}`}
+            >
+              <i className="fa-solid fa-receipt mr-1"></i>80mm
+            </button>
+          </div>
+          
+          <div className="grid grid-cols-2 gap-2">
+            <button 
+              onClick={handlePrint} 
+              disabled={isPrinting}
+              className={`font-black py-4 rounded-2xl flex items-center justify-center gap-2 active:scale-95 text-[10px] uppercase shadow-lg transition-all ${
+                isPrinting 
+                  ? 'bg-gray-300 text-gray-500 cursor-not-allowed' 
+                  : 'bg-blue-600 text-white'
+              }`}
+            >
+              <i className={`fa-solid ${isPrinting ? 'fa-spinner fa-spin' : 'fa-print'}`}></i> 
+              {isPrinting ? 'Imprimindo...' : 'Imprimir'}
+            </button>
+            <button onClick={handleCopy} className="bg-emerald-600 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 active:scale-95 text-[10px] uppercase shadow-lg">
+              <i className="fa-solid fa-copy"></i> Copiar
+            </button>
+          </div>
+
+          <button onClick={() => { setModal({title:'Enviar WhatsApp', message:'Deseja enviar este cupom pelo WhatsApp para o cliente?', icon:'fa-brands fa-whatsapp', iconColor:'text-white', onConfirm:()=>{setModal(null); handleWhatsApp();}}) }} className="w-full bg-green-50 text-green-600 border border-green-100 font-black py-2.5 rounded-2xl flex items-center justify-center gap-2 active:scale-95 text-[9px] uppercase transition-colors hover:bg-green-100">
+            <i className="fa-brands fa-whatsapp text-sm"></i> Enviar pelo WhatsApp
+          </button>
+
+          {/* PASSO 2 — fiscal e recebimento so DEPOIS do cupom impresso */}
+          {isVendaSalva && (
+            <div className="flex items-center gap-2 pt-2">
+              <span className="w-7 h-7 rounded-full bg-violet-600 text-white font-black text-xs flex items-center justify-center shadow-sm shrink-0">2</span>
+              <p className="text-[9px] font-black text-violet-600 uppercase tracking-widest">Depois de imprimir — nota, boleto e Pix</p>
+              <span className="flex-1 h-px bg-gray-200"></span>
+            </div>
+          )}
+
           {/* ===== Bloco 10: Nota Fiscal (NF-e / NFC-e) — BLOCO 67: dobravel ===== */}
           {isVendaSalva && (
             <div className={`rounded-2xl border ${nb.cls}`}>
@@ -582,6 +649,17 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
                       </button>
                     </>
                   )}
+                  {/* BLOCO 108: MODO CUPOM — NFC anonima com preço cupom (antes de emitir) */}
+                  {(nota.status === 'NAO_EMITIDA' || nota.status === 'REJEITADA' || nota.status === 'CANCELADA') && (
+                    <button onClick={() => setModoCupomNfc(!modoCupomNfc)} aria-pressed={modoCupomNfc}
+                      className={`w-full flex items-center gap-2 p-3 rounded-xl border transition-all ${modoCupomNfc ? 'bg-violet-50 border-violet-300' : 'bg-gray-50 border-gray-100'}`}>
+                      <i className={`fa-solid ${modoCupomNfc ? 'fa-square-check text-violet-600' : 'fa-regular fa-square text-gray-300'} text-base`}></i>
+                      <span className="flex-1 text-left min-w-0">
+                        <span className="block text-[9px] font-black uppercase text-violet-700">Só cupom — NFC anônima (preço cupom)</span>
+                        <span className="block text-[8px] font-bold text-gray-400 leading-snug">Cliente sem nota identificada: a NFC sai com os produtos no preço cupom/custo. Requer o modo ligado nas Configurações ERP.</span>
+                      </span>
+                    </button>
+                  )}
                   {(nota.status === 'NAO_EMITIDA' || nota.status === 'REJEITADA' || nota.status === 'CANCELADA') && (
                     <button onClick={handleEmitirNota} disabled={notaBusy}
                       className="block w-full bg-slate-800 text-white font-black py-3 rounded-xl text-[10px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
@@ -610,45 +688,8 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
             />
           )}
 
-          <PrinterSelector accent="blue" />
-
-          {/* Paper width selector */}
-          <div className="flex bg-gray-200 p-1 rounded-2xl mb-1">
-            <button 
-              onClick={() => setPrintWidth('56MM')} 
-              className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${printWidth === '56MM' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500'}`}
-            >
-              <i className="fa-solid fa-receipt mr-1"></i>56mm
-            </button>
-            <button 
-              onClick={() => setPrintWidth('80MM')} 
-              className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${printWidth === '80MM' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-400'}`}
-            >
-              <i className="fa-solid fa-receipt mr-1"></i>80mm
-            </button>
-          </div>
-          
-          <div className="grid grid-cols-2 gap-2">
-            <button 
-              onClick={handlePrint} 
-              disabled={isPrinting}
-              className={`font-black py-4 rounded-2xl flex items-center justify-center gap-2 active:scale-95 text-[10px] uppercase shadow-lg transition-all ${
-                isPrinting 
-                  ? 'bg-gray-300 text-gray-500 cursor-not-allowed' 
-                  : 'bg-blue-600 text-white'
-              }`}
-            >
-              <i className={`fa-solid ${isPrinting ? 'fa-spinner fa-spin' : 'fa-print'}`}></i> 
-              {isPrinting ? 'Imprimindo...' : 'Imprimir'}
-            </button>
-            <button onClick={handleCopy} className="bg-emerald-600 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 active:scale-95 text-[10px] uppercase shadow-lg">
-              <i className="fa-solid fa-copy"></i> Copiar
-            </button>
-          </div>
-
-          <button onClick={() => { setModal({title:'Enviar WhatsApp', message:'Deseja enviar este cupom pelo WhatsApp para o cliente?', icon:'fa-brands fa-whatsapp', iconColor:'text-white', onConfirm:()=>{setModal(null); handleWhatsApp();}}) }} className="w-full bg-green-50 text-green-600 border border-green-100 font-black py-2.5 rounded-2xl flex items-center justify-center gap-2 active:scale-95 text-[9px] uppercase transition-colors hover:bg-green-100">
-            <i className="fa-brands fa-whatsapp text-sm"></i> Enviar pelo WhatsApp
-          </button>
+          {/* BLOCO 108: os botoes de impressao subiram para o PASSO 1 (acima da
+              nota) — fluxo fechado: cupom impresso ANTES da parte fiscal. */}
 
           {/* ===== BLOCO 72: atualizar WhatsApp/Localização do cliente (opcional) ===== */}
           {clientLocal?.id && (

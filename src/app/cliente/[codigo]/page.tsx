@@ -13,11 +13,26 @@ const ENTREGA_META: Record<string, { label: string; cls: string }> = {
   ENTREGUE: { label: 'Entregue', cls: 'text-emerald-600 bg-emerald-50' },
   FALHOU: { label: 'Entrega nao realizada', cls: 'text-rose-600 bg-rose-50' },
 };
+
+/** Badge da situacao da nota fiscal (Bloco 10) — no portal so a AUTORIZADA aparece, mas o mapa fica pronto */
+const NOTA_META: Record<string, { label: string; cls: string; icon: string }> = {
+  AUTORIZADA: { label: 'Autorizada', cls: 'text-emerald-600 bg-emerald-50', icon: 'fa-solid fa-circle-check' },
+  EMITINDO: { label: 'Emitindo', cls: 'text-amber-600 bg-amber-50', icon: 'fa-solid fa-hourglass-half' },
+  REJEITADA: { label: 'Rejeitada', cls: 'text-rose-600 bg-rose-50', icon: 'fa-solid fa-circle-xmark' },
+  CANCELADA: { label: 'Cancelada', cls: 'text-gray-500 bg-gray-100', icon: 'fa-solid fa-ban' },
+};
 interface Sale {
   id: string; valor_total: number; valor_pago: number; metodo_pagamento: string;
   status_pagamento: string; data_venda: string; data_vencimento: string | null;
   /** Situacao da entrega da pre-venda (PENDENTE | EM_ROTA | ENTREGUE | FALHOU) */
   entrega_status?: string | null;
+  /** Nota fiscal (Bloco 10) — so chega quando o SQL do Bloco 10 foi aplicado;
+   *  AUTORIZADA libera o DANFE (PDF) e o XML no portal */
+  nota_status?: string | null;
+  nota_tipo?: string | null;
+  nota_numero?: string | null;
+  nota_pdf_url?: string | null;
+  nota_xml_url?: string | null;
   sale_items: SaleItem[];
   /** Historico organizado dos recebimentos (pagamentos parciais) */
   pagamentos?: Pagamento[];
@@ -50,6 +65,14 @@ interface PixData {
 function formatDate(d: string) { return new Date(d).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' }); }
 function formatCurrency(v: number) { return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }); }
 function getPaymentLabel(m: string) { return { DINHEIRO: 'Dinheiro', PIX: 'PIX', A_PRAZO: 'A Prazo' }[m] || m; }
+
+/** Rotulo da nota (NF-e / NFC-e) conforme nota_tipo gravado na emissao (Bloco 10) */
+function notaRotulo(tipo: string | null | undefined, numero: string | null | undefined) {
+  const t = String(tipo || '').toUpperCase();
+  const prefix = t === 'NFE' ? 'NF-e' : t === 'NFCE' ? 'NFC-e' : 'NF';
+  const num = String(numero || '').trim();
+  return num ? `${prefix} nº ${num}` : prefix;
+}
 
 /** Comprime a foto do comprovante no proprio aparelho antes de enviar */
 function compressImage(file: File): Promise<string> {
@@ -135,7 +158,7 @@ export default function ClienteDashboard() {
   }, [codigo, refreshKey]);
 
   function toggle(id: string) {
-    setExpanded(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+    setExpanded(prev => { const n = new Set(prev); if (n.has(id)) { n.delete(id); } else { n.add(id); } return n; });
   }
 
   // ---- Fluxo Pix ----
@@ -234,6 +257,10 @@ export default function ClienteDashboard() {
   const saldoPendente = vendasPendentes.reduce((a, s) => a + (Number(s.valor_total) - Number(s.valor_pago)), 0);
   const listSales = tab === 'pendentes' ? vendasPendentes : sales;
   const compPendentes = comprovantes.filter(c => c.status === 'PENDENTE').length;
+  // Notas fiscais (Bloco 10): a secao so existe se o backend devolveu colunas de
+  // nota (SQL aplicado) — com SQL antigo ela simplesmente nao renderiza.
+  const temNotas = sales.some(s => s.nota_status);
+  const notasFiscais = sales.filter(s => s.nota_status === 'AUTORIZADA');
 
   return (
     <div className="min-h-screen bg-gray-100">
@@ -590,6 +617,81 @@ export default function ClienteDashboard() {
           })}
         </div>
       </div>
+
+      {/* Minhas Notas Fiscais — DANFE (PDF) e XML (Bloco 10; so renderiza se o backend devolveu notas) */}
+      {temNotas && (
+        <div className="max-w-md mx-auto px-4 mt-4">
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 bg-blue-50 rounded-xl flex items-center justify-center">
+                  <i className="fa-solid fa-file-invoice text-blue-500 text-[11px]"></i>
+                </div>
+                <p className="text-[10px] font-black text-gray-700">Minhas Notas Fiscais</p>
+              </div>
+              {notasFiscais.length > 0 && (
+                <span className="text-[9px] font-black text-emerald-600 bg-emerald-50 px-2 py-1 rounded-lg border border-emerald-100 shrink-0">
+                  {notasFiscais.length} nota{notasFiscais.length > 1 ? 's' : ''}
+                </span>
+              )}
+            </div>
+            {notasFiscais.length === 0 ? (
+              <div className="bg-gray-50 rounded-xl px-3 py-2.5 border border-gray-100 flex items-start gap-2">
+                <i className="fa-solid fa-circle-info text-gray-300 text-[10px] mt-0.5 shrink-0"></i>
+                <p className="text-[9px] text-gray-400 font-semibold leading-relaxed">
+                  Nenhuma nota fiscal autorizada ainda — as notas aparecem aqui automaticamente após a emissão.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {notasFiscais.map(s => {
+                  const label = notaRotulo(s.nota_tipo, s.nota_numero);
+                  const pdfUrl = s.nota_pdf_url || '';
+                  const xmlUrl = s.nota_xml_url || '';
+                  // WhatsApp: numero da nota + links disponiveis (PDF/XML), tudo URL-encodado
+                  const waTexto = encodeURIComponent(
+                    `Nota fiscal ${label} da compra de ${formatDate(s.data_venda)}` +
+                    (pdfUrl ? `\nDANFE (PDF): ${pdfUrl}` : '') +
+                    (xmlUrl ? `\nXML: ${xmlUrl}` : '')
+                  );
+                  const badge = s.nota_status ? NOTA_META[s.nota_status] : undefined;
+                  return (
+                    <div key={s.id} className="bg-gray-50 rounded-xl px-3 py-2.5 border border-gray-100">
+                      <div className="flex items-center gap-2">
+                        <i className="fa-solid fa-file-invoice text-gray-400 text-[10px] shrink-0"></i>
+                        <p className="text-[11px] font-black text-gray-700 flex-1 min-w-0 truncate">{label}</p>
+                        {badge && (
+                          <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded shrink-0 ${badge.cls}`}>
+                            <i className={`${badge.icon} mr-1`}></i>{badge.label}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[9px] text-gray-400 font-semibold mt-0.5">
+                        Compra de {formatDate(s.data_venda)} — {formatCurrency(Number(s.valor_total) || 0)}
+                      </p>
+                      <div className="flex flex-wrap gap-1.5 mt-2">
+                        {pdfUrl && (
+                          <a href={pdfUrl} target="_blank" rel="noopener noreferrer" className="text-[9px] font-black uppercase tracking-wide inline-flex items-center gap-1 bg-blue-50 text-blue-600 border border-blue-100 rounded-lg px-2.5 py-1.5 active:scale-[0.97] transition-transform">
+                            <i className="fa-solid fa-file-pdf"></i>DANFE (PDF)
+                          </a>
+                        )}
+                        {xmlUrl && (
+                          <a href={xmlUrl} target="_blank" rel="noopener noreferrer" className="text-[9px] font-black uppercase tracking-wide inline-flex items-center gap-1 bg-gray-100 text-gray-600 border border-gray-200 rounded-lg px-2.5 py-1.5 active:scale-[0.97] transition-transform">
+                            <i className="fa-solid fa-code"></i>XML
+                          </a>
+                        )}
+                        <a href={`https://wa.me/?text=${waTexto}`} target="_blank" rel="noopener noreferrer" className="text-[9px] font-black uppercase tracking-wide inline-flex items-center gap-1 bg-emerald-50 text-emerald-600 border border-emerald-100 rounded-lg px-2.5 py-1.5 active:scale-[0.97] transition-transform">
+                          <i className="fa-brands fa-whatsapp"></i>WhatsApp
+                        </a>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="text-center pb-6">
         <p className="text-[9px] text-gray-300 font-semibold tracking-widest uppercase">Doce Mania Distribuidora</p>

@@ -435,7 +435,10 @@ function destinatarioV2(d: FocusDestinatarioV2, doc: FocusDoc): Partial<FocusNfe
   return out;
 }
 
-/** Monta o payload NF-e (modelo 55) v2.0 a partir da venda. */
+/** Monta o payload NF-e (modelo 55) v2.0 a partir da venda.
+ *  BLOCO 108: `emitente` opcional SOBRESCREVE os dados do emitente das env
+ *  vars (campos gravados na tela ERP Fiscal & Automações — campo vazio
+ *  volta pro env). */
 export function montarPayloadNfe(opts: {
   dataEmissao: Date;
   natureza?: string;
@@ -445,6 +448,7 @@ export function montarPayloadNfe(opts: {
   valorTotalVenda: number;
   pagamento: FocusFormaPagamento;
   informacoesAdicionais?: string;
+  emitente?: Partial<FocusNfePayloadV2>;
 }): FocusNfePayloadV2 {
   const ufEmit = opts.ufEmitente || getFocusConfig().ufEmitente;
   const ufDestino = (opts.destinatario.uf || '').toUpperCase();
@@ -462,6 +466,7 @@ export function montarPayloadNfe(opts: {
     presenca_comprador: 1,
     modalidade_frete: 9,
     ...emitenteDaConfig(),
+    ...(opts.emitente || {}),
     ...destinatarioV2(opts.destinatario, 'nfe'),
     valor_produtos: valorProdutos,
     valor_desconto: descontoTotal > 0 ? descontoTotal : undefined,
@@ -473,7 +478,8 @@ export function montarPayloadNfe(opts: {
 }
 
 /** Monta o payload NFC-e (modelo 65) v2.0 — data_emissao SEMPRE agora
- *  (a SEFAZ recusa dhEmi com mais de 5 min de diferenca). */
+ *  (a SEFAZ recusa dhEmi com mais de 5 min de diferenca).
+ *  BLOCO 108: `emitente` opcional idem NF-e. */
 export function montarPayloadNfce(opts: {
   dataEmissao: Date;
   natureza?: string;
@@ -483,6 +489,7 @@ export function montarPayloadNfce(opts: {
   valorTotalVenda: number;
   pagamento: FocusFormaPagamento;
   informacoesAdicionais?: string;
+  emitente?: Partial<FocusNfePayloadV2>;
 }): FocusNfePayloadV2 {
   const cfg = getFocusConfig();
   const ufEmit = opts.ufEmitente || cfg.ufEmitente;
@@ -498,6 +505,7 @@ export function montarPayloadNfce(opts: {
     modalidade_frete: 9,
     local_destino: ufDestino && ufDestino !== ufEmit ? 2 : 1,
     ...emitenteDaConfig(),
+    ...(opts.emitente || {}),
     ...(opts.destinatario ? destinatarioV2(opts.destinatario, 'nfce') : {}),
     items,
     formas_pagamento: [opts.pagamento],

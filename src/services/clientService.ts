@@ -31,6 +31,8 @@ function mapClient(c: any): Client {
     email: c.email || undefined,
     // BLOCO 70: cliente ESPECIAL GB — undefined = SQL ainda nao rodado (trata como normal)
     clienteEspecialGb: c.cliente_especial_gb === true,
+    // BLOCO 108: modo cupom — undefined = SQL ainda nao rodado (trata como normal)
+    modoCupom: c.modo_cupom === true,
   } as Client;
 }
 
@@ -39,7 +41,7 @@ export const clientService = {
     // BLOCO 20: paginado — mantem ordem por 'ordem' com desempate estavel por id
     // EGRESS: colunas explicitas (206 clientes x colunas fiscais em toda recarga).
     // Fallback progressivo ao '*' caso alguma coluna ainda nao exista (SQL pendente).
-    const COLS = 'id, nome_fantasia, nome, ativar_cnpj, cnpj, telefone, endereco, bairro, ativo, localizacao, dia_roteiro, ordem, observacoes, pin_localizacao, rota, portal_code, razao_social, inscricao_estadual, endereco_numero, endereco_cep, endereco_municipio, endereco_uf, email, cliente_especial_gb';
+    const COLS = 'id, nome_fantasia, nome, ativar_cnpj, cnpj, telefone, endereco, bairro, ativo, localizacao, dia_roteiro, ordem, observacoes, pin_localizacao, rota, portal_code, razao_social, inscricao_estadual, endereco_numero, endereco_cep, endereco_municipio, endereco_uf, email, cliente_especial_gb, modo_cupom';
     let data: any[];
     try {
       data = await fetchAllPages<any>('clients', COLS, { orderCol: 'ordem', ascending: true, tiebreak: true });
@@ -71,6 +73,8 @@ export const clientService = {
       // BLOCO 71 (regra do dono): o flag só vale nas rotas liberadas — fora
       // delas o cliente nasce/grava sempre NORMAL, independente do form.
       cliente_especial_gb: podeClienteEspecialGB(rota || 'ROTA_01') ? !!client.clienteEspecialGb : false,
+      // BLOCO 108: cliente "somente cupom"
+      modo_cupom: !!client.modoCupom,
     };
     // Fiscais (Bloco 10): envia com checagem suave — se a coluna ainda nao
     // existir o Supabase rejeita o insert, entao refaz sem elas (fallback).
@@ -99,6 +103,12 @@ export const clientService = {
       console.warn('Coluna cliente_especial_gb ausente (Bloco 69 nao rodado). Salvando sem ela.');
       const semGb = { ...payload }; delete semGb.cliente_especial_gb;
       ({ data, error } = await supabase.from('clients').insert(semGb).select().single());
+    }
+    // BLOCO 108: modo_cupom pode nao existir (SQL pendente): refaz sem
+    if (error && /modo_cupom/i.test(error.message || '')) {
+      console.warn('Coluna modo_cupom ausente (Bloco 108 nao rodado). Salvando sem ela.');
+      const semCupom = { ...payload }; delete semCupom.modo_cupom;
+      ({ data, error } = await supabase.from('clients').insert(semCupom).select().single());
     }
     if (error) {
       console.error('Erro ao inserir cliente:', error);
@@ -147,6 +157,8 @@ export const clientService = {
     if (updates.clienteEspecialGb !== undefined && updates.rota !== undefined) {
       payload.cliente_especial_gb = podeClienteEspecialGB(updates.rota) ? !!updates.clienteEspecialGb : false;
     }
+    // BLOCO 108: cliente "somente cupom"
+    if (updates.modoCupom !== undefined) payload.modo_cupom = !!updates.modoCupom;
 
     let { data, error } = await supabase.from('clients').update(payload).eq('id', id).select().single();
     // BLOCO 76 (bug do dono): CNPJ/edicao do cliente nao salvava no app do
@@ -178,6 +190,12 @@ export const clientService = {
       console.warn('Coluna cliente_especial_gb ausente (Bloco 69 nao rodado). Salvando sem ela.');
       const fallback3 = { ...payload }; delete fallback3.cliente_especial_gb;
       ({ data, error } = await supabase.from('clients').update(fallback3).eq('id', id).select().single());
+    }
+    // BLOCO 108: modo_cupom pode nao existir (SQL pendente): refaz sem
+    if (error && /modo_cupom/i.test(error.message || '')) {
+      console.warn('Coluna modo_cupom ausente (Bloco 108 nao rodado). Salvando sem ela.');
+      const fallback4 = { ...payload }; delete fallback4.modo_cupom;
+      ({ data, error } = await supabase.from('clients').update(fallback4).eq('id', id).select().single());
     }
     if (error) {
       console.error('Erro ao atualizar cliente:', error);

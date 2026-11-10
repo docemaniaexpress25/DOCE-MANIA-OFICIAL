@@ -230,7 +230,7 @@ export async function POST(request: NextRequest) {
     if (acao === 'VINCULAR') {
       if (!body.itemId || !body.produtoId) return BAD(400, 'itemId e produtoId obrigatorios.');
       const r = await aplicarVinculo(body.itemId, body.produtoId);
-      if ('erro' in r && r.erro) return BAD(400, r.erro);
+      if ('erro' in r && r.erro) return BAD(400, String(r.erro));
       return NextResponse.json({ ok: true, ...r });
     }
 

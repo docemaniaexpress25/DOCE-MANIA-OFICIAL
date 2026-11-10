@@ -57,9 +57,13 @@ export async function GET(request: NextRequest) {
   try {
     const supabase = getServiceClient();
 
+    // ATENCAO: qtd_pendentes NAO e coluna do banco (o SQL do bloco 95 nao a
+    // cria) — a contagem por importacao e calculada em memoria abaixo via
+    // pendentesPorImp (xml_itens). Pedia-la no select quebrava o GET inteiro
+    // com "Could not find the 'qtd_pendentes' column" mesmo com o SQL aplicado.
     const { data: importacoes, error: eImp } = await supabase
       .from('xml_importacoes')
-      .select('id, chave, origem, emit_cnpj, emit_nome, numero, serie, data_emissao, valor_total, criado_em, qtd_itens, qtd_pendentes')
+      .select('id, chave, origem, emit_cnpj, emit_nome, numero, serie, data_emissao, valor_total, criado_em, qtd_itens')
       .order('criado_em', { ascending: false })
       .limit(200);
     if (eImp) return BAD(500, `Falha lendo importacoes: ${eImp.message}`);

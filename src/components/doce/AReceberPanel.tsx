@@ -63,21 +63,17 @@ interface GrupoCliente {
   menorVencTs: number | null;
 }
 
-const AReceberPanel: React.FC<Props> = ({ sales, clients, onRegistrarPagamento, onGerarBoleto, onAbrirCupom }) => {
-  const clientesMap = useMemo(() => {
-    const m = new Map<string, any>();
-    (clients || []).forEach((c: any) => { if (c?.id) m.set(String(c.id), c); });
-    return m;
-  }, [clients]);
-
+// Funcao PURA de modulo: o React Compiler exige que o useMemo dependa so de
+// valores estaveis — chamar nomeCliente() (funcao recriada a cada render)
+// dentro do memo quebrava a memoizacao ("Compilation Skipped: Existing
+// memoization could not be preserved"). Toda a logica vive aqui fora.
+function computarResumoAReceber(sales: any[], clientesMap: Map<string, any>) {
+  const hoje = new Date();
+  hoje.setHours(0, 0, 0, 0);
   const nomeCliente = (id: string) => {
     const c = clientesMap.get(String(id));
     return String(c?.nome_fantasia || c?.nome || c?.nomeFantasia || '').trim() || 'Cliente';
   };
-
-  const { grupos, total, qtdVendas, vencidasTotal, vencidasQtd, aVencerTotal, aVencerQtd } = useMemo(() => {
-    const hoje = new Date();
-    hoje.setHours(0, 0, 0, 0);
 
     const abertas: VendaAberta[] = (sales || []).map((s: any): VendaAberta => {
       const valorTotal = Number(s?.valor_total ?? s?.valorTotal ?? 0) || 0;
@@ -151,7 +147,22 @@ const AReceberPanel: React.FC<Props> = ({ sales, clients, onRegistrarPagamento, 
       aVencerTotal: abertas.filter(v => !v.vencida).reduce((acc, v) => acc + v.saldo, 0),
       aVencerQtd: abertas.filter(v => !v.vencida).length,
     };
-  }, [sales, clientesMap]);
+}
+
+const AReceberPanel: React.FC<Props> = ({ sales, clients, onRegistrarPagamento, onGerarBoleto, onAbrirCupom }) => {
+  const clientesMap = useMemo(() => {
+    const m = new Map<string, any>();
+    (clients || []).forEach((c: any) => { if (c?.id) m.set(String(c.id), c); });
+    return m;
+  }, [clients]);
+
+  const nomeCliente = (id: string) => {
+    const c = clientesMap.get(String(id));
+    return String(c?.nome_fantasia || c?.nome || c?.nomeFantasia || '').trim() || 'Cliente';
+  };
+
+  const resumo = useMemo(() => computarResumoAReceber(sales, clientesMap), [sales, clientesMap]);
+  const { grupos, total, qtdVendas, vencidasTotal, vencidasQtd, aVencerTotal, aVencerQtd } = resumo;
 
   const chipMetodo = (metodo: string) => {
     const label = (metodo || '—').replace(/_/g, ' ');

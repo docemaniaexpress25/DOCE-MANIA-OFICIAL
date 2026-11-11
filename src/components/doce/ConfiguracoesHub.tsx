@@ -421,7 +421,7 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
 
       {/* ===== TOAST LOCAL ===== */}
       {toast && (
-        <div className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-[500] px-5 py-3 rounded-2xl shadow-xl text-[11px] font-black uppercase tracking-wide flex items-center gap-2 whitespace-nowrap ${toast.tipo === 'success' ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white'}`}>
+        <div className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-[500] px-5 py-3 rounded-2xl shadow-xl text-[11px] font-black uppercase tracking-wide flex items-center gap-2 max-w-[92vw] text-center ${toast.tipo === 'success' ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white'}`}>
           <i className={`fa-solid ${toast.tipo === 'success' ? 'fa-circle-check' : 'fa-triangle-exclamation'}`}></i>{toast.msg}
         </div>
       )}

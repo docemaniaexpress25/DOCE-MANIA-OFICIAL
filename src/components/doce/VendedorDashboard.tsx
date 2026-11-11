@@ -1449,28 +1449,31 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
           <div className="grid gap-3 px-1">
             {filteredClients.map(c => (
-              <div key={c.id} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex items-center justify-between transition-all active:scale-95 group">
+              <div key={c.id} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex items-center gap-3 transition-all min-w-0 active:scale-95 group">
                 {/* SEM SETAS DE ORDENAÇÃO - REMOVIDAS CONFORME SOLICITADO */}
-                <div className="flex-1 cursor-pointer" onClick={() => setViewingClientHistory(c)}>
-                  <div className="flex items-center gap-2">
-                    <h4 className="font-bold text-gray-800 text-sm leading-tight uppercase">{c.nomeFantasia ?? 'Cliente'}</h4>
+                {/* BLOCO 109 (padrao BLOCO 99 do admin): card a prova de estouro —
+                    nome encolhe com truncate e NUNCA empurra o botao editar de lado */}
+                <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setViewingClientHistory(c)}>
+                  <div className="flex items-center gap-2 flex-wrap min-w-0">
+                    <h4 className="font-bold text-gray-800 text-sm leading-tight uppercase truncate min-w-0">{c.nomeFantasia ?? 'Cliente'}</h4>
                     {/* BLOCO 70B: selo do cliente ESPECIAL GB na lista */}
                     {c.clienteEspecialGb && <span className="text-[8px] font-black text-amber-700 bg-amber-100 border border-amber-200 px-1.5 py-0.5 rounded-md uppercase whitespace-nowrap flex-shrink-0"><i className="fa-solid fa-star mr-0.5"></i>GB</span>}
                     {c.telefone && (
-                      <a 
-                        href={`https://wa.me/55${c.telefone.replace(/\D/g, '')}`} 
-                        target="_blank" 
-                        className="text-emerald-500" 
+                      <a
+                        href={`https://wa.me/55${c.telefone.replace(/\D/g, '')}`}
+                        target="_blank"
+                        className="text-emerald-500 flex-shrink-0"
                         onClick={(e) => e.stopPropagation()}
+                        aria-label={`WhatsApp ${c.nomeFantasia ?? 'cliente'}`}
                       >
                         <i className="fa-brands fa-whatsapp text-lg"></i>
                       </a>
                     )}
                   </div>
-                  <p className="text-[10px] text-gray-400 font-semibold uppercase mt-1">{c.telefone} • {DIAS_SEMANA[c.diaRoteiro]}</p>
+                  <p className="text-[10px] text-gray-400 font-semibold uppercase mt-1 truncate">{c.telefone} • {DIAS_SEMANA[c.diaRoteiro]}</p>
                 </div>
-                <div className="flex flex-col gap-1">
-                  <button onClick={(e) => { e.stopPropagation(); handleOpenEditClient(c); }} className="w-10 h-10 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center active:scale-95"><i className="fa-solid fa-pencil-alt text-xs"></i></button>
+                <div className="flex flex-col gap-1 flex-shrink-0">
+                  <button onClick={(e) => { e.stopPropagation(); handleOpenEditClient(c); }} className="w-10 h-10 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center active:scale-95" aria-label={`Editar ${c.nomeFantasia ?? 'cliente'}`}><i className="fa-solid fa-pencil-alt text-xs"></i></button>
                 </div>
               </div>
             ))}
@@ -1565,18 +1568,20 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
               </div>
 
               <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
-                <table className="w-full text-left">
-                  <thead className="bg-gray-50"><tr><th className="p-4 text-[10px] font-black text-gray-400 uppercase">Item</th><th className="p-4 text-center text-[10px] font-black text-gray-400 uppercase">Preço</th><th className="p-4 text-right text-[10px] font-black text-gray-400 uppercase">Qtd</th></tr></thead>
-                  <tbody className="divide-y divide-gray-50">
-                    {orderedCargaProducts.map(({ product: p, carga: c }) => (
-                      <tr key={c.produtoId}>
-                        <td className="p-4 text-xs font-semibold uppercase">{p.nome ?? 'Desc.'}</td>
-                        <td className="p-4 text-center text-xs text-gray-400">R$ {(p.precoVenda ?? 0).toFixed(2)}</td>
-                        <td className="p-4 text-right font-black text-lg text-blue-600">{c.quantidade}</td>
-                      </tr>
-                    ))}
-                  </tbody> 
-                </table>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left">
+                    <thead className="bg-gray-50"><tr><th className="p-4 text-[10px] font-black text-gray-400 uppercase">Item</th><th className="p-4 text-center text-[10px] font-black text-gray-400 uppercase">Preço</th><th className="p-4 text-right text-[10px] font-black text-gray-400 uppercase">Qtd</th></tr></thead>
+                    <tbody className="divide-y divide-gray-50">
+                      {orderedCargaProducts.map(({ product: p, carga: c }) => (
+                        <tr key={c.produtoId}>
+                          <td className="p-4 text-xs font-semibold uppercase break-words min-w-[120px]">{p.nome ?? 'Desc.'}</td>
+                          <td className="p-4 text-center text-xs text-gray-400 whitespace-nowrap">R$ {(p.precoVenda ?? 0).toFixed(2)}</td>
+                          <td className="p-4 text-right font-black text-lg text-blue-600">{c.quantidade}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
 
                             <button 
@@ -2021,7 +2026,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
       {editingClient && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[310] flex items-end sm:items-center justify-center p-4">
-          <div className="bg-white w-full max-md rounded-t-[2rem] sm:rounded-[2rem] shadow-2xl p-8 animate-in slide-in-from-bottom duration-300 max-h-[90vh] overflow-y-auto">
+          <div className="bg-white w-full max-w-md rounded-t-[2rem] sm:rounded-[2rem] shadow-2xl p-8 animate-in slide-in-from-bottom duration-300 max-h-[90vh] overflow-y-auto">
              <div className="flex justify-between items-center mb-6"><h3 className="font-black text-gray-800 uppercase text-sm tracking-tight">{editingClient === 'NEW' ? 'Novo Cliente' : 'Editar Cliente'}</h3></div>
              <div className="space-y-4 pb-6">
                 {/* BLOCO 12: Dados fiscais no topo — com NF-e + Email */}
@@ -2246,7 +2251,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         if (!notaClient.email?.trim()) faltantes.push('email');
         return (
         <div className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-sm flex items-end justify-center" onClick={() => { setNotaSheet(null); setNfcCpfModoPanel(false); setNfeCnpjPanel(false); }}>
-          <div className="bg-white w-full max-w-md rounded-t-3xl p-6 animate-in slide-in-from-bottom duration-300" onClick={e => e.stopPropagation()}>
+          <div className="bg-white w-full max-w-md rounded-t-3xl p-6 animate-in slide-in-from-bottom duration-300 max-h-[92vh] overflow-y-auto overscroll-contain" onClick={e => e.stopPropagation()}>
             <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-4"></div>
             <p className="text-[9px] font-black text-violet-500 uppercase text-center tracking-widest">
               {notaSheet.vendaModo === 'PRONTA' ? 'Pronta entrega' : 'Pré-venda'} — Iniciando atendimento

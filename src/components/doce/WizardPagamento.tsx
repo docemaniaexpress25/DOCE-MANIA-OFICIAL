@@ -241,7 +241,7 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
           <React.Fragment key={label}>
             <div className={`flex items-center gap-1 px-2.5 py-1.5 rounded-full text-[8px] font-black uppercase tracking-wide transition-all ${i === passo ? 'bg-violet-600 text-white shadow-md' : i < passo ? 'bg-violet-50 text-violet-500' : 'bg-gray-50 text-gray-300'}`}>
               {i < passo ? <i className="fa-solid fa-check text-[7px]"></i> : <span className="font-black">{i + 1}</span>}
-              <span className="hidden sm:inline">{label}</span>
+              <span>{label}</span>
             </div>
             {i < PASSOS.length - 1 && <div className={`w-2 h-0.5 rounded ${i < passo ? 'bg-violet-300' : 'bg-gray-100'}`}></div>}
           </React.Fragment>

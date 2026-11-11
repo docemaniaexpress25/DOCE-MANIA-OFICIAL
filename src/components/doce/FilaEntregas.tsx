@@ -1132,10 +1132,10 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
         </div>
 
         <div className="grid grid-cols-4 gap-1.5 text-center">
-          <div className="bg-gray-50 rounded-xl p-2"><p className="text-[7px] font-black text-gray-400 uppercase">Na fila</p><p className="text-[13px] font-black text-gray-800">{resumo?.naFila ?? fila.length}</p></div>
-          <div className="bg-amber-50 rounded-xl p-2"><p className="text-[7px] font-black text-amber-500 uppercase">Atrasados</p><p className="text-[13px] font-black text-amber-700">{resumo?.atrasados ?? 0}</p></div>
-          <div className="bg-rose-50 rounded-xl p-2"><p className="text-[7px] font-black text-rose-400 uppercase">Falhas</p><p className="text-[13px] font-black text-rose-600">{falhados.length}</p></div>
-          <div className="bg-emerald-50 rounded-xl p-2"><p className="text-[7px] font-black text-emerald-500 uppercase">Entregues</p><p className="text-[13px] font-black text-emerald-700">{resumo?.entreguesHoje ?? entreguesHoje.length}</p></div>
+          <div className="bg-gray-50 rounded-xl p-2"><p className="text-[8px] font-black text-gray-400 uppercase">Na fila</p><p className="text-[13px] font-black text-gray-800">{resumo?.naFila ?? fila.length}</p></div>
+          <div className="bg-amber-50 rounded-xl p-2"><p className="text-[8px] font-black text-amber-500 uppercase">Atrasados</p><p className="text-[13px] font-black text-amber-700">{resumo?.atrasados ?? 0}</p></div>
+          <div className="bg-rose-50 rounded-xl p-2"><p className="text-[8px] font-black text-rose-400 uppercase">Falhas</p><p className="text-[13px] font-black text-rose-600">{falhados.length}</p></div>
+          <div className="bg-emerald-50 rounded-xl p-2"><p className="text-[8px] font-black text-emerald-500 uppercase">Entregues</p><p className="text-[13px] font-black text-emerald-700">{resumo?.entreguesHoje ?? entreguesHoje.length}</p></div>
         </div>
         <div className="flex gap-2 mt-2 text-[9px] font-bold flex-wrap">
           <span className="text-gray-600"><i className="fa-solid fa-wallet mr-1"></i>Fila: {fmt(resumo?.valorFila ?? 0)}</span>
@@ -1183,20 +1183,20 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
             {/* PIX + A RECEBER — as outras duas contas, cada uma na sua casa */}
             <div className="grid grid-cols-2 gap-2 mt-2">
               <div className="bg-white rounded-xl border border-teal-100 p-2.5 text-center shadow-sm">
-                <p className="text-[7px] font-black text-teal-500 uppercase leading-none"><i className="fa-brands fa-pix mr-0.5"></i>Pix recebido</p>
+                <p className="text-[8px] font-black text-teal-500 uppercase leading-none"><i className="fa-brands fa-pix mr-0.5"></i>Pix recebido</p>
                 <p className="text-[15px] font-black text-teal-700 mt-1">{fmt(caixaEst.pixHoje)}</p>
-                <p className="text-[7px] font-bold text-teal-400 uppercase mt-0.5">não vai em espécie</p>
+                <p className="text-[8px] font-bold text-teal-400 uppercase mt-0.5">não vai em espécie</p>
               </div>
               <div className="bg-white rounded-xl border border-amber-100 p-2.5 text-center shadow-sm">
-                <p className="text-[7px] font-black text-amber-500 uppercase leading-none"><i className="fa-solid fa-hand-holding-dollar mr-0.5"></i>A receber</p>
+                <p className="text-[8px] font-black text-amber-500 uppercase leading-none"><i className="fa-solid fa-hand-holding-dollar mr-0.5"></i>A receber</p>
                 <p className="text-[15px] font-black text-amber-700 mt-1">{fmt(aReceberEst)}</p>
-                <p className="text-[7px] font-bold text-amber-400 uppercase mt-0.5">cliente ainda deve</p>
+                <p className="text-[8px] font-bold text-amber-400 uppercase mt-0.5">cliente ainda deve</p>
               </div>
             </div>
 
             {/* TOTAL do caixa (dinheiro + pix) — o que ele bate com o sistema */}
             <div className="mt-2 flex items-center justify-between bg-slate-800 text-white rounded-xl px-3 py-2 shadow-sm">
-              <p className="text-[8px] font-black uppercase leading-snug">Total do caixa<br /><span className="text-[7px] font-bold text-white/50">dinheiro + pix</span></p>
+              <p className="text-[8px] font-black uppercase leading-snug">Total do caixa<br /><span className="text-[8px] font-bold text-white/50">dinheiro + pix</span></p>
               <p className="text-[15px] font-black">{fmt(caixaEst.dinheiroHoje + caixaEst.pixHoje)}</p>
             </div>
 
@@ -1223,15 +1223,15 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                     Pix e A Receber, cada uma na sua caixinha */}
                 <div className="grid grid-cols-3 gap-1.5 mt-1.5">
                   <div className="bg-emerald-50 rounded-xl px-2 py-1.5 text-center">
-                    <p className="text-[7px] font-black text-emerald-500 uppercase leading-none"><i className="fa-solid fa-money-bill-wave mr-0.5"></i>Dinheiro</p>
+                    <p className="text-[8px] font-black text-emerald-500 uppercase leading-none"><i className="fa-solid fa-money-bill-wave mr-0.5"></i>Dinheiro</p>
                     <p className="text-[12px] font-black text-emerald-700 mt-0.5">{fmt(caixaEst.dinheiroHoje)}</p>
                   </div>
                   <div className="bg-teal-50 rounded-xl px-2 py-1.5 text-center">
-                    <p className="text-[7px] font-black text-teal-500 uppercase leading-none"><i className="fa-brands fa-pix mr-0.5"></i>Pix</p>
+                    <p className="text-[8px] font-black text-teal-500 uppercase leading-none"><i className="fa-brands fa-pix mr-0.5"></i>Pix</p>
                     <p className="text-[12px] font-black text-teal-700 mt-0.5">{fmt(caixaEst.pixHoje)}</p>
                   </div>
                   <div className="bg-amber-50 rounded-xl px-2 py-1.5 text-center">
-                    <p className="text-[7px] font-black text-amber-500 uppercase leading-none"><i className="fa-solid fa-hand-holding-dollar mr-0.5"></i>A receber</p>
+                    <p className="text-[8px] font-black text-amber-500 uppercase leading-none"><i className="fa-solid fa-hand-holding-dollar mr-0.5"></i>A receber</p>
                     <p className="text-[12px] font-black text-amber-700 mt-0.5">{fmt(aReceberEst)}</p>
                   </div>
                 </div>
@@ -1300,15 +1300,15 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                         pix e a receber (o cliente ainda deve) */}
                     <div className="grid grid-cols-3 gap-1.5 mt-1.5">
                       <div className="bg-emerald-50 rounded-lg px-1.5 py-1 text-center">
-                        <p className="text-[7px] font-black text-emerald-500 uppercase leading-none"><i className="fa-solid fa-money-bill-wave mr-0.5"></i>Dinheiro</p>
+                        <p className="text-[8px] font-black text-emerald-500 uppercase leading-none"><i className="fa-solid fa-money-bill-wave mr-0.5"></i>Dinheiro</p>
                         <p className="text-[11px] font-black text-emerald-700 mt-0.5">{fmt(g.dinheiro)}</p>
                       </div>
                       <div className="bg-teal-50 rounded-lg px-1.5 py-1 text-center">
-                        <p className="text-[7px] font-black text-teal-500 uppercase leading-none"><i className="fa-brands fa-pix mr-0.5"></i>Pix</p>
+                        <p className="text-[8px] font-black text-teal-500 uppercase leading-none"><i className="fa-brands fa-pix mr-0.5"></i>Pix</p>
                         <p className="text-[11px] font-black text-teal-700 mt-0.5">{fmt(g.pix)}</p>
                       </div>
                       <div className="bg-amber-50 rounded-lg px-1.5 py-1 text-center">
-                        <p className="text-[7px] font-black text-amber-500 uppercase leading-none"><i className="fa-solid fa-hand-holding-dollar mr-0.5"></i>A receber</p>
+                        <p className="text-[8px] font-black text-amber-500 uppercase leading-none"><i className="fa-solid fa-hand-holding-dollar mr-0.5"></i>A receber</p>
                         <p className="text-[11px] font-black text-amber-700 mt-0.5">{fmt(g.aReceber || 0)}</p>
                       </div>
                     </div>
@@ -1341,11 +1341,11 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                           </div>
                           <div className="grid grid-cols-2 gap-2 mt-2">
                             <div className="bg-emerald-50 rounded-lg p-2 text-center">
-                              <p className="text-[7px] font-black text-emerald-500 uppercase">Sistema: dinheiro</p>
+                              <p className="text-[8px] font-black text-emerald-500 uppercase">Sistema: dinheiro</p>
                               <p className="text-[13px] font-black text-emerald-700">{fmt(g.dinheiro)}</p>
                             </div>
                             <div className="bg-teal-50 rounded-lg p-2 text-center">
-                              <p className="text-[7px] font-black text-teal-500 uppercase">Sistema: pix</p>
+                              <p className="text-[8px] font-black text-teal-500 uppercase">Sistema: pix</p>
                               <p className="text-[13px] font-black text-teal-700">{fmt(g.pix)}</p>
                             </div>
                           </div>
@@ -1354,17 +1354,17 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                               <div className="flex items-center justify-between gap-2">
                                 <p className="text-[8px] font-black text-slate-500 uppercase leading-snug">Caixa fechado:<br />{fmt(Number(fech.valor_dinheiro))} din · {fmt(Number(fech.valor_pix))} pix</p>
                                 {fech.confirmado ? (
-                                  <span className="text-[7px] font-black uppercase px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 shrink-0">Confirmado</span>
+                                  <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 shrink-0">Confirmado</span>
                                 ) : (
                                   <button onClick={() => acao({ acao: 'CONFIRMAR_CAIXA', caixaId: fech.id }, 'Recebimento do dinheiro confirmado!')}
                                     className="text-[8px] font-black uppercase px-2 py-1.5 rounded bg-emerald-600 text-white active:scale-95 shrink-0">Confirmar</button>
                                 )}
                               </div>
                               <div className="flex gap-1.5 mt-1.5 flex-wrap">
-                                <span className={`text-[7px] font-black uppercase px-1.5 py-0.5 rounded ${bate(dinDiff) ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
+                                <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded ${bate(dinDiff) ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
                                   <i className={`fa-solid ${bate(dinDiff) ? 'fa-check' : 'fa-triangle-exclamation'} mr-0.5`}></i>Dinheiro: {bate(dinDiff) ? 'bateu' : `dif. R$ ${Math.abs(dinDiff!).toFixed(2)}`}
                                 </span>
-                                <span className={`text-[7px] font-black uppercase px-1.5 py-0.5 rounded ${bate(pixDiff) ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
+                                <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded ${bate(pixDiff) ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
                                   <i className={`fa-solid ${bate(pixDiff) ? 'fa-check' : 'fa-triangle-exclamation'} mr-0.5`}></i>Pix: {bate(pixDiff) ? 'bateu' : `dif. R$ ${Math.abs(pixDiff!).toFixed(2)}`}
                                 </span>
                               </div>
@@ -1381,11 +1381,11 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                                 <div key={v.saleId} className="flex items-center justify-between bg-slate-50 rounded-lg px-2.5 py-1.5">
                                   <div className="min-w-0">
                                     <p className="text-[9px] font-black text-slate-600 capitalize truncate">{v.cliente}</p>
-                                    <p className="text-[7px] font-bold text-slate-400 uppercase">{v.recebimento}</p>
+                                    <p className="text-[8px] font-bold text-slate-400 uppercase">{v.recebimento}</p>
                                   </div>
                                   <div className="text-right shrink-0 ml-2">
                                     <p className="text-[9px] font-black text-slate-700">{fmt(v.valorPago)}</p>
-                                    <p className="text-[7px] font-bold text-slate-400">de {fmt(v.valorTotal)}</p>
+                                    <p className="text-[8px] font-bold text-slate-400">de {fmt(v.valorTotal)}</p>
                                   </div>
                                 </div>
                               ))}
@@ -1628,7 +1628,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                     {(['DINHEIRO', 'PIX', 'MISTO'] as const).map(m => (
                       <button key={m} onClick={() => { setPgtoAgora(m); setQrPix(null); setQrErro(''); }}
                         className={`flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all ${pgtoAgora === m ? 'bg-gray-800 text-white shadow-md' : 'bg-gray-50 text-gray-400'}`}>
-                        {m === 'DINHEIRO' ? 'Dinheiro' : m === 'PIX' ? 'Pix' : 'Misto (2 formas)'}
+                        {m === 'DINHEIRO' ? 'Dinheiro' : m === 'PIX' ? 'Pix' : 'Misto'}
                       </button>
                     ))}
                   </div>
@@ -1902,7 +1902,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
       {/* ===== SHEET: NAO ENTREGUE ===== */}
       {sheetFalhou && (
         <div className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-sm flex items-end justify-center" onClick={() => setSheetFalhou(null)}>
-          <div className="bg-white w-full max-w-md rounded-t-3xl p-6 animate-in slide-in-from-bottom duration-300" onClick={e => e.stopPropagation()}>
+          <div className="bg-white w-full max-w-md rounded-t-3xl p-6 animate-in slide-in-from-bottom duration-300 max-h-[92vh] overflow-y-auto overscroll-contain" onClick={e => e.stopPropagation()}>
             <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-4"></div>
             <h3 className="text-sm font-black text-gray-800 uppercase text-center">Nao entregue</h3>
             <p className="text-[10px] text-gray-400 font-semibold text-center mt-1 capitalize">{sheetFalhou.cliente.nome}</p>
@@ -1940,7 +1940,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
       {/* ===== SHEET: EDITAR TROCAS (BLOCO 14 — admin ajusta o que sai no cupom) ===== */}
       {sheetTrocas && (
         <div className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-sm flex items-end justify-center" onClick={() => setSheetTrocas(null)}>
-          <div className="bg-white w-full max-w-md rounded-t-3xl p-6 animate-in slide-in-from-bottom duration-300" onClick={e => e.stopPropagation()}>
+          <div className="bg-white w-full max-w-md rounded-t-3xl p-6 animate-in slide-in-from-bottom duration-300 max-h-[92vh] overflow-y-auto overscroll-contain" onClick={e => e.stopPropagation()}>
             <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-4"></div>
             <h3 className="text-sm font-black text-gray-800 uppercase text-center"><i className="fa-solid fa-right-left text-orange-500 mr-1"></i>Trocas do pedido</h3>
             <p className="text-[10px] text-gray-400 font-semibold text-center mt-1 capitalize">{sheetTrocas.p.cliente.nome}</p>
@@ -1980,7 +1980,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
           carregado: troca o entregador ou remove do veiculo. ===== */}
       {sheetCarga && modo === 'ADMIN' && (
         <div className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-sm flex items-end justify-center" onClick={() => setSheetCarga(null)}>
-          <div className="bg-white w-full max-w-md rounded-t-3xl p-6 animate-in slide-in-from-bottom duration-300" onClick={e => e.stopPropagation()}>
+          <div className="bg-white w-full max-w-md rounded-t-3xl p-6 animate-in slide-in-from-bottom duration-300 max-h-[92vh] overflow-y-auto overscroll-contain" onClick={e => e.stopPropagation()}>
             <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-4"></div>
             <h3 className="text-sm font-black text-gray-800 uppercase text-center">
               <i className="fa-solid fa-truck-fast text-emerald-600 mr-1"></i>
@@ -2008,7 +2008,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                     <button key={e.id} onClick={() => setCargaEntId(e.id)}
                       className={`px-3 py-2.5 rounded-xl text-[10px] font-black uppercase border-2 transition-colors ${cargaEntId === e.id ? 'bg-emerald-600 border-emerald-600 text-white shadow' : 'bg-white border-gray-200 text-gray-500'}`}>
                       <i className="fa-solid fa-user mr-1"></i>{e.nome}
-                      <span className="ml-1 text-[7px] font-black opacity-60">VENDEDOR</span>
+                      <span className="ml-1 text-[8px] font-black opacity-60">VENDEDOR</span>
                     </button>
                   ))}
                 </div>
@@ -2050,7 +2050,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
       {/* ===== SHEET: FECHAR CAIXA (BLOCO 33 — SOMENTE O ADMIN) ===== */}
       {sheetCaixa && modo === 'ADMIN' && (
         <div className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-sm flex items-end justify-center" onClick={() => setSheetCaixa(false)}>
-          <div className="bg-white w-full max-w-md rounded-t-3xl p-6 animate-in slide-in-from-bottom duration-300" onClick={e => e.stopPropagation()}>
+          <div className="bg-white w-full max-w-md rounded-t-3xl p-6 animate-in slide-in-from-bottom duration-300 max-h-[92vh] overflow-y-auto overscroll-contain" onClick={e => e.stopPropagation()}>
             <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-4"></div>
             <h3 className="text-sm font-black text-gray-800 uppercase text-center"><i className="fa-solid fa-cash-register text-emerald-600 mr-1"></i>Fechamento de caixa</h3>
             <p className="text-[10px] text-gray-400 font-semibold text-center mt-1">Conte o dinheiro em especie e feche — a conta recomeca do zero</p>
@@ -2079,15 +2079,15 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
               {/* BLOCO 99: as tres contas na cara no fechamento */}
               <div className="grid grid-cols-2 gap-1.5 mt-2">
                 <div className="bg-white/70 rounded-xl px-2 py-1.5">
-                  <p className="text-[7px] font-black text-teal-500 uppercase"><i className="fa-brands fa-pix mr-0.5"></i>Pix em aberto</p>
+                  <p className="text-[8px] font-black text-teal-500 uppercase"><i className="fa-brands fa-pix mr-0.5"></i>Pix em aberto</p>
                   <p className="text-[13px] font-black text-teal-700">{fmt(pixEmAbertoSel)}</p>
                 </div>
                 <div className="bg-white/70 rounded-xl px-2 py-1.5">
-                  <p className="text-[7px] font-black text-amber-500 uppercase"><i className="fa-solid fa-hand-holding-dollar mr-0.5"></i>A receber</p>
+                  <p className="text-[8px] font-black text-amber-500 uppercase"><i className="fa-solid fa-hand-holding-dollar mr-0.5"></i>A receber</p>
                   <p className="text-[13px] font-black text-amber-700">{fmt(aReceberSel || 0)}</p>
                 </div>
               </div>
-              <p className="text-[7px] font-bold text-gray-400 uppercase mt-1">Pix nao vem em especie · A receber = a prazo/parcial que o cliente ainda deve</p>
+              <p className="text-[8px] font-bold text-gray-400 uppercase mt-1">Pix nao vem em especie · A receber = a prazo/parcial que o cliente ainda deve</p>
               {prazoEntregueHoje > 0 && (
                 <p className="text-[9px] font-black text-orange-500 uppercase mt-2 leading-snug">A prazo entregue hoje: {fmt(prazoEntregueHoje)} — NAO entra aqui (vendedor recebe depois)</p>
               )}

@@ -5,6 +5,8 @@ import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
 import PrinterSelector from '@/components/doce/PrinterSelector';
 // BLOCO 82: impressão no iPhone — instruções do Bluefy quando a Apple bloqueia o Bluetooth
 import { isIOSDevice, TEXTO_IMPRESSAO_IOS, TITULO_IMPRESSAO_IOS } from '@/lib/iosPrint';
+// BLOCO 111: impressão térmica USB do PC — canal BT x USB persistente por dispositivo
+import { imprimirViaUsb, lerCanalImpressao } from '@/lib/usbPrint';
 
 interface RelatorioFiscalProps {
   user: User;
@@ -95,6 +97,14 @@ const RelatorioFiscal: React.FC<RelatorioFiscalProps> = ({ user, carga, products
       type: 'info',
       onConfirm: async () => {
         setModal(null);
+        // BLOCO 111: canal USB do PC — relatório sai pela janela de impressão
+        if (lerCanalImpressao() === 'USB') {
+          imprimirViaUsb(generateText(), format, (m) => {
+            setModal({ title: 'Erro na Impressao', message: `Falha ao imprimir relatorio: ${m}`, icon: 'fa-solid fa-triangle-exclamation', iconColor: 'text-rose-500', type: 'error', onConfirm: () => setModal(null) });
+          });
+          setModal({ title: 'Janela de impressão aberta', message: 'Escolha a impressora térmica USB do computador e confirme.', icon: 'fa-solid fa-desktop', iconColor: 'text-violet-500', type: 'success', onConfirm: () => setModal(null) });
+          return;
+        }
         try {
           await bluetoothPrinter.print(generateText(), format, { skipConfirm: true });
           setModal({ title: 'Sucesso', message: 'Relatorio impresso com sucesso!', icon: 'fa-solid fa-check', iconColor: 'text-emerald-500', type: 'success', onConfirm: () => setModal(null) });

@@ -909,3 +909,20 @@ CODIGO:
 QA E2E (mock, 390x844, .env.local removido depois): upload XML de teste com CEST → 1 nota importada/2 itens; chips "CEST 1703700" e "CEST 1702301" visiveis; vinculo → toast "cadastro fiscal completado" e produto ganhou ncm+ean+cest (completados:["ncm","ean","cest"]); DAR ENTRADA item → estoque 100→124, toast "+24 UN — saldo agora: 124 UN ⚠ entrada simples (sem kardex)", badge "nao entra 2x"; API de entrada 2x → 400 "Entrada ja feita"; ENTRADA_LOTE → entradas:1 (estoque 80→90), 2a chamada entradas:0; zero erros console/dev.log. Lint 0 erros/10 warnings.
 
 PENDENTE DO DONO: colar no Supabase o 95.1 (libera o botao via sonda em ate 30s) e o 108 (entrada vira kardex de verdade — sem aviso).
+## BLOCO 111 — IMPRESSÃO TÉRMICA USB DO PC (cupom também no computador) (2025-11-11)
+
+PEDIDO DO CHEFE: "as impressões do cupom tbm poderao ser impressas por impressora de usb no computador! o sistema é o mesmo, usamos tanto a térmica bluetooth quanto a térmica de pc por usb".
+
+DECISÃO TÉCNICA: navegador não fala ESC/POS por USB sem permissão especial (WebUSB frágil, só Chrome). Caminho universal e zero instalação: renderizar o MESMO texto do cupom (32/48 colunas, Courier) numa folha virtual do tamanho do papel térmico (@page 58mm/80mm auto, white-space pre, marcadores [[PEQ]]→span 0.72em) e abrir o DIÁLOGO DE IMPRESSÃO do navegador (iframe srcdoc + window.print). O Windows manda pra térmica USB e o navegador MEMORIZA a última impressora (2ª impressão = 1 clique).
+
+CANAL DE IMPRESSÃO (novo conceito): BT x USB, gravado em localStorage POR DISPOSITIVO (docemania_canal_impressao). Default inteligente: aparelho sem Web Bluetooth (desktop/Firefox/iPhone) começa em USB; celular com BT começa em Bluetooth. A escolha vale para TODOS os pontos de impressão.
+
+CODIGO:
+- src/lib/usbPrint.ts (NOVO): temBluetoothNavegador(), lerCanalImpressao(), salvarCanalImpressao(), imprimirViaUsb(texto, width, onError?) — folha térmica em iframe (auto-remoção no afterprint + fallback 60s), escapeHtml, converterMarcadores, onError por callback (erros do load do iframe são assíncronos — try/catch do caller não pegaria).
+- Cupom.tsx (cobre de GRAÇA as 4 telas que usam o componente: PDV pós-venda, fila entregas, histórico vendedor, vendas admin): estado canalImpr + trocarCanal persistente; branch USB no doPrint com o MESMO contrato do BT (passo 1 colapsa e fiscal sobe — BLOCO 109); toggle "Bluetooth / USB do PC" no PASSO 1; PrinterSelector só no BT, dica violeta no USB; botão principal vira "Imprimir (USB)" violeta; badge "Impressora do PC (USB) — janela de impressão"; erro BLUETOOTH_NAO_SUPORTADO em desktop agora direciona pro USB.
+- PDV.tsx: toggle canal no PRÉ-PEDIDO ( PrinterSelector só BT / dica USB); pré-pedido e DANFE 80mm respeitam o canal.
+- VendedorDashboard.tsx: lista de carga (56mm) respeita o canal.
+- FilaEntregas.tsx: DANFE térmica do admin (80mm) respeita o canal.
+- RelatorioFiscal.tsx: relatório de fiscalização (56/80) respeita o canal.
+
+QA: lint 0 erros/10 warnings (baseline); tsc sem erros novos nos arquivos tocados (usbPrint zero); dev server 200 sem erros no log; mecânica da folha validada no Chrome real via agent-browser (iframe srcdoc monta, texto do cupom presente, span .peq criado, @page "58mm auto" presente); diálogo de impressão e impressora física são do PC do usuário (só produção).

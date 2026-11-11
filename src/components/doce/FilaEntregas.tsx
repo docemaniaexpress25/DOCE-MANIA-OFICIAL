@@ -11,6 +11,8 @@ import TrocasBox from '@/components/doce/TrocasBox';
 import { notaService } from '@/services/notaService';
 import { danfeMiniTexto } from '@/lib/danfeTexto';
 import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
+// BLOCO 111: impressão térmica USB do PC — canal BT x USB persistente por dispositivo
+import { imprimirViaUsb, lerCanalImpressao } from '@/lib/usbPrint';
 // BLOCO 61: arrastar-e-soltar estilo kanban para ordenar a rota (dnd-kit).
 // Funciona com mouse, TOQUE (celular do admin) e teclado (espaco pega, setas
 // movem, espaco solta) — substitui as setas de cima/baixo do Bloco 31.
@@ -287,6 +289,15 @@ const AcaoFiscalAdmin: React.FC<{ p: FilaItem; showToast: (m: string, t?: 'succe
         tipoVenda: 'PRE_VENDA',
       });
       showToast('Enviando DANFE à impressora...', 'success');
+      // BLOCO 111: canal USB do PC — DANFE sai pela janela de impressão
+      if (lerCanalImpressao() === 'USB') {
+        imprimirViaUsb(texto, '80MM', (m) => {
+          showToast(`Erro na impressão do DANFE: ${m}`, 'error');
+        });
+        showToast('DANFE na janela de impressão — escolha a térmica USB do PC.', 'success');
+        setBusy(false);
+        return;
+      }
       const ok = await bluetoothPrinter.print(texto, '80MM', { skipConfirm: true });
       if (ok) showToast('DANFE enviado à impressora!', 'success');
       else showToast('Impressão não realizada — conecte a impressora.', 'error');

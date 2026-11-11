@@ -17,6 +17,8 @@ import ConfirmModal from '@/components/doce/ConfirmModal';
 import LucroRotaVendedor from '@/components/doce/LucroRotaVendedor';
 // BLOCO 82: impressão no iPhone — instruções do Bluefy quando a Apple bloqueia o Bluetooth
 import { isIOSDevice, TEXTO_IMPRESSAO_IOS, TITULO_IMPRESSAO_IOS } from '@/lib/iosPrint';
+// BLOCO 111: impressão térmica USB do PC — canal BT x USB persistente por dispositivo
+import { imprimirViaUsb, lerCanalImpressao } from '@/lib/usbPrint';
 import FilaEntregas from '@/components/doce/FilaEntregas';
 
 
@@ -1195,6 +1197,14 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         t += pR('UNIDADES:', W - 6) + pL(String(totalUnidadesCarga), 6) + '\n';
         t += '='.repeat(W) + '\n';
         t += '\n\n\n\n\n\n\n\n';
+        // BLOCO 111: canal USB do PC — lista de carga sai pela janela de impressão
+        if (lerCanalImpressao() === 'USB') {
+          imprimirViaUsb(t, '56MM', (m) => {
+            setConfirmAction({ title: 'Erro na Impressao', message: 'Falha: ' + m, icon: 'fa-solid fa-triangle-exclamation', type: 'alert', onConfirm: () => setConfirmAction(null) });
+          });
+          setConfirmAction({ title: 'Janela de impressão aberta', message: 'Escolha a impressora térmica USB do computador e confirme.', icon: 'fa-solid fa-desktop', type: 'success', onConfirm: () => setConfirmAction(null) });
+          return;
+        }
         try {
           const ok = await bluetoothPrinter.print(t, '56MM', { skipConfirm: true });
           if (!ok) {

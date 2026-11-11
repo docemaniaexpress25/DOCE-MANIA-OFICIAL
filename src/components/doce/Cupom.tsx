@@ -14,6 +14,8 @@ import { authHeaders } from '@/services/userService';
 // BLOCO 82: impressão no iPhone — Apple bloqueia Web Bluetooth no Safari/Chrome iOS;
 // caminho que funciona: navegador Bluefy (App Store) com instruções passo a passo
 import { isIOSDevice, TEXTO_IMPRESSAO_IOS, TITULO_IMPRESSAO_IOS } from '@/lib/iosPrint';
+// BLOCO 111: impressão térmica USB do PC — canal BT x USB persistente por dispositivo
+import { imprimirViaUsb, lerCanalImpressao, salvarCanalImpressao, CanalImpressao } from '@/lib/usbPrint';
 
 type PrinterWidth = '56MM' | '80MM';
 
@@ -39,6 +41,10 @@ interface CupomProps {
 
 const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, onDeleteSale, allowDelete, showToast, closeLabel, allowNota, conferencia, onFinalizar, finalizando }) => {
   const [printWidth, setPrintWidth] = useState<PrinterWidth>('56MM');
+  // BLOCO 111: canal de impressão do dispositivo (Bluetooth térmica x USB do PC).
+  // Default inteligente: desktop sem Web Bluetooth começa no USB.
+  const [canalImpr, setCanalImprState] = useState<CanalImpressao>(() => lerCanalImpressao());
+  const trocarCanal = (c: CanalImpressao) => { setCanalImprState(c); salvarCanalImpressao(c); };
   const [printJob, setPrintJob] = useState<PrintJob>({ status: 'idle' });
   const [modal, setModal] = useState<{title:string;message:string;icon:string;iconColor?:string;onConfirm:()=>void;type?:string}|null>(null);
   const [isBluetoothAvailable] = useState(() => bluetoothPrinter.isAvailable());
@@ -357,6 +363,23 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
     const doPrint = async () => {
           const rawText = generateText(printWidth);
 
+          // ===== BLOCO 111: canal USB do PC — folha 58/80mm no diálogo de impressão =====
+          if (canalImpr === 'USB') {
+            imprimirViaUsb(rawText, printWidth, (m) => {
+              setModal({title:'Falha na Impressão', message:'Não consegui abrir a janela de impressão: ' + m, icon:'fa-solid fa-triangle-exclamation', type:'alert', onConfirm:()=>setModal(null)});
+              if (showToast) showToast('Erro na impressão.', 'error');
+            });
+            setModal({title:'Janela de impressão aberta', message:'Escolha a impressora térmica USB do computador e confirme.\n\nDica: o navegador memoriza a última impressora usada — nas próximas impressões sai com 1 clique.', icon:'fa-solid fa-desktop', type:'success', onConfirm:()=>setModal(null)});
+            if (showToast) showToast('Cupom enviado à janela de impressão!', 'success');
+            // Mesmo contrato do Bluetooth: impresso = passo 1 colapsa e o
+            // fiscal sobe na mesma tela (BLOCO 109).
+            if (isVendaSalva) {
+              setPasso1Aberto(false);
+              descerParaPasso2();
+            }
+            return;
+          }
+
           try {
             // bluetoothPrinter.print() handles the full flow:
             // 1. Checks Bluetooth availability
@@ -393,7 +416,8 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
               if (isIOSDevice()) {
                 setModal({title:TITULO_IMPRESSAO_IOS, message:TEXTO_IMPRESSAO_IOS, icon:'fa-brands fa-apple', type:'alert', onConfirm:()=>setModal(null)});
               } else {
-                setModal({title:'Bluetooth Indisponivel', message:'Para impressao via Bluetooth, use o Chrome do Android com Bluetooth ativado.', icon:'fa-solid fa-bluetooth-b', type:'alert', onConfirm:()=>setModal(null)});
+                // BLOCO 111: desktop/Firefox sem Web Bluetooth — direciona pro canal USB que agora existe.
+                setModal({title:'Bluetooth Indisponivel', message:'Neste aparelho não há Bluetooth para sites.\n\nToque em “USB do PC” (canal de impressão) para imprimir na térmica conectada ao computador.', icon:'fa-solid fa-desktop', type:'alert', onConfirm:()=>setModal(null)});
               }
             } else if (msg.includes('SERVICO_NAO_ENCONTRADO') || msg.includes('CARACTERISTICA')) {
               setModal({title:'Erro de Impressora', message:'Servico de impressao nao encontrado. Verifique se a impressora esta ligada e pareada.', icon:'fa-solid fa-triangle-exclamation', type:'alert', onConfirm:()=>setModal(null)});
@@ -408,7 +432,7 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
     setModal({title:'Confirmar Impressao', message: `Modelo: ${widthLabel}
 Itens: ${(sale.itens || []).length}
 Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onConfirm: doPrint});
-  }, [printWidth, sale, showToast, generateText]);
+  }, [printWidth, sale, showToast, generateText, canalImpr, isVendaSalva]);
 
   const handleCopy = async () => {
     // BLOCO 100: copia SEM os marcadores [[PEQ]] (texto limpo)
@@ -461,6 +485,10 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
       case 'error':
         return { color: 'bg-red-100 text-red-700', icon: 'fa-triangle-exclamation', text: printJob.error || 'Erro' };
       default:
+        // BLOCO 111: canal USB — a impressora “vive” no diálogo de impressão do PC
+        if (canalImpr === 'USB') {
+          return { color: 'bg-violet-100 text-violet-700', icon: 'fa-desktop', text: 'Impressora do PC (USB) — janela de impressão' };
+        }
         if (isConnected) {
           return { color: 'bg-emerald-100 text-emerald-700', icon: 'fa-bluetooth-b', text: printerName || 'Conectado' };
         }
@@ -598,7 +626,30 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
                 </div>
               )}
 
-              <PrinterSelector accent="blue" />
+              {/* BLOCO 111: canal de impressão — Bluetooth (celular) x USB do PC.
+                  A escolha fica gravada no aparelho e vale para todo o sistema. */}
+              <div className="flex bg-gray-200 p-1 rounded-2xl">
+                <button
+                  onClick={() => trocarCanal('BT')}
+                  className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${canalImpr === 'BT' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500'}`}
+                >
+                  <i className="fa-brands fa-bluetooth-b mr-1"></i>Bluetooth
+                </button>
+                <button
+                  onClick={() => trocarCanal('USB')}
+                  className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${canalImpr === 'USB' ? 'bg-white shadow-sm text-violet-600' : 'text-gray-500'}`}
+                >
+                  <i className="fa-solid fa-desktop mr-1"></i>USB do PC
+                </button>
+              </div>
+
+              {canalImpr === 'BT' ? (
+                <PrinterSelector accent="blue" />
+              ) : (
+                <p className="text-[9px] font-bold text-violet-600 bg-violet-50 border border-violet-100 rounded-xl px-3 py-2 leading-snug">
+                  <i className="fa-solid fa-circle-info mr-1"></i>A janela de impressão do computador vai abrir — escolha a térmica USB. O navegador memoriza a escolhida.
+                </p>
+              )}
 
               {/* Paper width selector */}
               <div className="flex bg-gray-200 p-1 rounded-2xl mb-1">
@@ -623,11 +674,11 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
                   className={`font-black py-4 rounded-2xl flex items-center justify-center gap-2 active:scale-95 text-[10px] uppercase shadow-lg transition-all ${
                     isPrinting 
                       ? 'bg-gray-300 text-gray-500 cursor-not-allowed' 
-                      : 'bg-blue-600 text-white'
+                      : canalImpr === 'USB' ? 'bg-violet-600 text-white' : 'bg-blue-600 text-white'
                   }`}
                 >
-                  <i className={`fa-solid ${isPrinting ? 'fa-spinner fa-spin' : 'fa-print'}`}></i> 
-                  {isPrinting ? 'Imprimindo...' : 'Imprimir'}
+                  <i className={`fa-solid ${isPrinting ? 'fa-spinner fa-spin' : canalImpr === 'USB' ? 'fa-desktop' : 'fa-print'}`}></i> 
+                  {isPrinting ? 'Imprimindo...' : canalImpr === 'USB' ? 'Imprimir (USB)' : 'Imprimir'}
                 </button>
                 <button onClick={handleCopy} className="bg-emerald-600 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 active:scale-95 text-[10px] uppercase shadow-lg">
                   <i className="fa-solid fa-copy"></i> Copiar

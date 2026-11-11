@@ -122,3 +122,13 @@ export function hasErpConfig(): Promise<boolean> {
 export function hasKardexTable(): Promise<boolean> {
   return probeColumn('estoque_movimentos', 'id', 'kardex');
 }
+
+/** xml_itens.cest existe? (Bloco 95.1 — CEST da nota de compra) */
+export function hasXmlCestColumn(): Promise<boolean> {
+  return probeColumn('xml_itens', 'cest', 'xmlCest');
+}
+
+/** xml_itens.entrada_estoque_em existe? (Bloco 95.1 — trava de entrada duplicada) */
+export function hasXmlEntradaColumn(): Promise<boolean> {
+  return probeColumn('xml_itens', 'entrada_estoque_em', 'xmlEntrada');
+}

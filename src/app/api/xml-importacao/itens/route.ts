@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { devBridge, getServiceClient, isServerSupabaseConfigured } from '@/lib/serverSupabase';
 import { isAdminSession } from '@/lib/session';
 import { sugerirProduto } from '@/lib/xmlCompra';
+import { hasXmlCestColumn, hasXmlEntradaColumn } from '@/lib/serverSchema';
 
 /**
  * FILA DE PRODUTOS VINDOS DA XML (Bloco 95) — sincronizar os itens das notas
@@ -15,7 +16,7 @@ import { sugerirProduto } from '@/lib/xmlCompra';
  * POST /api/xml-importacao/itens                                                            [ADMIN]
  *   { acao: 'VINCULAR',  itemId, produtoId }        — liga o item ao produto
  *     existente e COMPLETA o cadastro fiscal do produto onde estiver vazio
- *     (ncm/ean/unidade/origem) — nunca sobrescreve valor ja preenchido.
+ *     (ncm/ean/unidade/origem/cest) — nunca sobrescreve valor ja preenchido.
  *   { acao: 'CRIAR',     itemId, produto: { nome, precoVenda, precoCusto?, unidade? } }
  *                                                    — cria produto novo no
  *     catalogo (ativo, estoque 0 — entrada de estoque e outro fluxo) com os
@@ -24,6 +25,12 @@ import { sugerirProduto } from '@/lib/xmlCompra';
  *   { acao: 'REABRIR',   itemId }                    — volta pra fila.
  *   { acao: 'VINCULAR_SUGESTOES' }                   — aplica VINCULAR a TODOS
  *     os itens pendentes com sugestao de score >= 0.9 (lote).
+ *   { acao: 'ENTRADA_ESTOQUE', itemId }              — BLOCO 95.1: transforma o
+ *     item vinculado em ENTRADA no estoque central via RPC do kardex (bloco
+ *     108): quantidade da nota, custo = valor unitario da nota, origem 'XML'.
+ *     Carimba entrada_estoque_em para nao deixar entrar 2x.
+ *   { acao: 'ENTRADA_LOTE' }                         — entrada de TODOS os
+ *     itens vinculados/criados que ainda nao entraram (nota inteira 1 clique).
  */
 
 const BAD = (status: number, erro: string, extra: Record<string, unknown> = {}) =>
@@ -53,6 +60,7 @@ interface ItemFila {
   cEAN: string;
   xProd: string;
   ncm: string;
+  cest: string | null;
   cfop: string;
   unidade: string;
   quantidade: number;
@@ -62,14 +70,21 @@ interface ItemFila {
   status: string;
   produtoId: string | null;
   produtoNome: string | null;
+  entradaEstoqueEm: string | null;
   sugestao: { produtoId: string; nome: string; score: number } | null;
 }
 
 async function carregarFila(status: string, limit: number): Promise<ItemFila[] | { erro: string }> {
   const supabase = getServiceClient();
+  // BLOCO 95.1: colunas novas entram no select SO quando o SQL 95.1 rodou —
+  // pedia-las sem o SQL o GET inteiro 500ava (mesmo bug do qtd_pendentes).
+  const [comCest, comEntrada] = await Promise.all([hasXmlCestColumn(), hasXmlEntradaColumn()]);
+  let cols = 'id, importacao_id, c_prod, c_ean, x_prod, ncm, cfop, unidade, quantidade, valor_unitario, valor_total, cst_icms, status, produto_id';
+  if (comCest) cols += ', cest';
+  if (comEntrada) cols += ', entrada_estoque_em';
   let q = supabase
     .from('xml_itens')
-    .select('id, importacao_id, c_prod, c_ean, x_prod, ncm, cfop, unidade, quantidade, valor_unitario, valor_total, cst_icms, status, produto_id')
+    .select(cols)
     .order('criado_em', { ascending: true })
     .limit(Math.max(1, Math.min(500, limit)));
   if (status !== 'TODOS') q = q.eq('status', status);
@@ -121,6 +136,7 @@ async function carregarFila(status: string, limit: number): Promise<ItemFila[] |
       cEAN: String(raw.c_ean || ''),
       xProd: String(raw.x_prod || ''),
       ncm: String(raw.ncm || ''),
+      cest: comCest ? (raw.cest ? String(raw.cest) : null) : null,
       cfop: String(raw.cfop || ''),
       unidade: String(raw.unidade || 'UN'),
       quantidade: Number(raw.quantidade) || 0,
@@ -130,6 +146,7 @@ async function carregarFila(status: string, limit: number): Promise<ItemFila[] |
       status: String(raw.status || 'PENDENTE'),
       produtoId: vinculadoId,
       produtoNome: vinculado ? String(vinculado.nome || '') : null,
+      entradaEstoqueEm: comEntrada && raw.entrada_estoque_em ? String(raw.entrada_estoque_em) : null,
       sugestao,
     };
   });
@@ -155,13 +172,14 @@ export async function GET(request: NextRequest) {
 
   const fila = await carregarFila(status, limit);
   if (fila instanceof Array) {
-    return NextResponse.json({ ok: true, itens: fila });
+    const comEntrada = await hasXmlEntradaColumn();
+    return NextResponse.json({ ok: true, itens: fila, temEntrada: comEntrada });
   }
   return BAD(500, (fila as { erro: string }).erro);
 }
 
 interface BodyAcao {
-  acao?: 'VINCULAR' | 'CRIAR' | 'IGNORAR' | 'REABRIR' | 'VINCULAR_SUGESTOES';
+  acao?: 'VINCULAR' | 'CRIAR' | 'IGNORAR' | 'REABRIR' | 'VINCULAR_SUGESTOES' | 'ENTRADA_ESTOQUE' | 'ENTRADA_LOTE';
   itemId?: string;
   produtoId?: string;
   produto?: { nome?: string; precoVenda?: number; precoCusto?: number; unidade?: string };
@@ -175,7 +193,7 @@ async function aplicarVinculo(itemId: string, produtoId: string) {
   const rec = item as Record<string, unknown>;
   if (String(rec.status) !== 'PENDENTE') return { erro: 'Item ja resolvido (reabra primeiro).' };
 
-  const { data: prod } = await supabase.from('products').select('id, nome, ncm, ean, unidade, origem').eq('id', produtoId).maybeSingle();
+  const { data: prod } = await supabase.from('products').select('id, nome, ncm, ean, unidade, origem, cest').eq('id', produtoId).maybeSingle();
   if (!prod) return { erro: 'Produto nao encontrado.' };
   const p = prod as Record<string, unknown>;
 
@@ -183,12 +201,26 @@ async function aplicarVinculo(itemId: string, produtoId: string) {
   const ncmXml = String(rec.ncm || '').trim();
   const eanXml = String(rec.c_ean || '').trim();
   const unXml = String(rec.unidade || '').trim();
+  const cestXml = String(rec.cest || '').trim();
   if (ncmXml && !String(p.ncm || '').trim()) patch.ncm = ncmXml;
   if (eanXml && !String(p.ean || '').trim()) patch.ean = eanXml;
   if (unXml && !String(p.unidade || '').trim()) patch.unidade = unXml;
+  // BLOCO 95.1: CEST so preenche se vazio — e o cadastro fiscal que sai na nota
+  if (cestXml && !String(p.cest || '').trim()) patch.cest = cestXml;
   if (Object.keys(patch).length > 0) {
     const { error: eProd } = await supabase.from('products').update(patch).eq('id', produtoId);
-    if (eProd) return { erro: `Falha completando produto: ${eProd.message}` };
+    if (eProd) {
+      // products.cest pode ainda nao existir (bloco 12 nao rodou): tenta sem cest
+      if ('cest' in patch) {
+        const semCest = { ...patch };
+        delete semCest.cest;
+        if (Object.keys(semCest).length > 0) {
+          await supabase.from('products').update(semCest).eq('id', produtoId);
+        }
+      } else {
+        return { erro: `Falha completando produto: ${eProd.message}` };
+      }
+    }
   }
 
   const { error: eItem } = await supabase
@@ -201,6 +233,61 @@ async function aplicarVinculo(itemId: string, produtoId: string) {
     produtoNome: String(p.nome || ''),
     completados: Object.keys(patch),
   } as Record<string, unknown>;
+}
+
+/**
+ * BLOCO 95.1 — ENTRADA DE ESTOQUE de 1 item da fila (ja vinculado/criado).
+ * 1o tente: RPC registrar_movimento_estoque do bloco 108 (kardex: movimento
+ * origem='XML' + estoque_principal na mesma transacao).
+ * Fallback: RPC inexistente (bloco 108 nao rodou) -> soma direto no estoque
+ * principal e devolve aviso. NUNCA entra 2x (carimbo entrada_estoque_em).
+ */
+async function entradaEstoqueItem(supabase: ReturnType<typeof getServiceClient>, rec: Record<string, unknown>, itemId: string): Promise<{ ok?: boolean; saldo?: number; aviso?: string; erro?: string }> {
+  const produtoId = rec.produto_id ? String(rec.produto_id) : '';
+  if (!produtoId) return { erro: 'Item sem produto vinculado — vincule ou crie o produto primeiro.' };
+  const qtd = Number(rec.quantidade) || 0;
+  if (qtd <= 0) return { erro: 'Quantidade da nota invalida.' };
+  const custo = Number(rec.valor_unitario) > 0 ? Number(rec.valor_unitario) : null;
+  const referencia = String(rec.importacao_id || '') || null;
+
+  const r = await supabase.rpc('registrar_movimento_estoque', {
+    p_produto_id: produtoId,
+    p_tipo: 'ENTRADA',
+    p_quantidade: qtd,
+    p_origem: 'XML',
+    p_referencia: referencia,
+    p_custo_unitario: custo,
+    p_usuario_id: null,
+    p_usuario_nome: 'XML → Produtos',
+  });
+  const dados = (r.data ?? null) as { ok?: boolean; saldo?: number; erro?: string } | null;
+
+  if (dados && dados.ok) {
+    return { ok: true, saldo: Number(dados.saldo) };
+  }
+
+  // RPC existente mas recusou (ex.: produto inexistente) — erro REAL, nao engole
+  if (dados && dados.ok === false && dados.erro) {
+    return { erro: `Kardex recusou a entrada: ${dados.erro}` };
+  }
+
+  // Fallback: RPC nao existe (bloco 108 pendente) OU resposta nula (mock) —
+  // le o estoque atual, soma em memoria e grava (PostgREST nao aceita
+  // expressao SQL no update; 1 admin operando, corrida improvavel e sem risco).
+  const { data: prod } = await supabase.from('products').select('estoque_principal').eq('id', produtoId).maybeSingle();
+  if (!prod) return { erro: 'Produto nao encontrado para a entrada.' };
+  const atual = Number((prod as Record<string, unknown>).estoque_principal) || 0;
+  const novo = Math.max(0, atual + qtd);
+  const { error: eUpd } = await supabase.from('products').update({ estoque_principal: novo }).eq('id', produtoId);
+  if (eUpd) return { erro: `Falha na entrada direta: ${eUpd.message}` };
+  return { ok: true, saldo: novo, aviso: 'Entrada simples (sem kardex) — rode o SQL do bloco 108 para o historico.' };
+}
+
+/** Carimba a entrada do item (protegido pela sonda — so quando a coluna existe). */
+async function carimbarEntrada(supabase: ReturnType<typeof getServiceClient>, itemId: string): Promise<boolean> {
+  if (!(await hasXmlEntradaColumn())) return false;
+  const { error } = await supabase.from('xml_itens').update({ entrada_estoque_em: new Date().toISOString() }).eq('id', itemId);
+  return !error;
 }
 
 export async function POST(request: NextRequest) {
@@ -305,6 +392,52 @@ export async function POST(request: NextRequest) {
         else ok++;
       }
       return NextResponse.json({ ok: true, vinculados: ok, falhas: falhas.slice(0, 5) });
+    }
+
+    // ===== BLOCO 95.1: ENTRADA DE ESTOQUE =====
+    if (acao === 'ENTRADA_ESTOQUE') {
+      if (!body.itemId) return BAD(400, 'itemId obrigatorio.');
+      const { data: item } = await supabase.from('xml_itens').select('*').eq('id', body.itemId).maybeSingle();
+      if (!item) return BAD(400, 'Item nao encontrado.');
+      const rec = item as Record<string, unknown>;
+      const st = String(rec.status || '');
+      if (st !== 'VINCULADO' && st !== 'CRIADO') return BAD(400, 'So entra no estoque item vinculado ou criado.');
+      if (!(await hasXmlEntradaColumn())) {
+        return BAD(400, 'Banco desatualizado: rode sql/bloco95_1_cest_entrada.sql no Supabase (trava contra entrada duplicada).');
+      }
+      if (rec.entrada_estoque_em) {
+        return BAD(400, 'Entrada ja feita — o estoque desse item ja recebeu a quantidade da nota.');
+      }
+      const r = await entradaEstoqueItem(supabase, rec, String(body.itemId));
+      if (r.erro) return BAD(400, r.erro);
+      await carimbarEntrada(supabase, String(body.itemId));
+      return NextResponse.json({ ok: true, saldo: r.saldo ?? null, aviso: r.aviso ?? null });
+    }
+
+    if (acao === 'ENTRADA_LOTE') {
+      // Nota inteira: TODOS os vinculados/criados que ainda nao entraram
+      if (!(await hasXmlEntradaColumn())) {
+        return BAD(400, 'Banco desatualizado: rode sql/bloco95_1_cest_entrada.sql no Supabase (trava contra entrada duplicada).');
+      }
+      const { data: itens } = await supabase
+        .from('xml_itens')
+        .select('*')
+        .in('status', ['VINCULADO', 'CRIADO'])
+        .is('entrada_estoque_em', null)
+        .limit(500);
+      const alvos = (itens || []) as Record<string, unknown>[];
+      if (alvos.length === 0) return NextResponse.json({ ok: true, entradas: 0, falhas: [] });
+      let ok = 0;
+      const falhas: string[] = [];
+      for (const rec of alvos) {
+        const r = await entradaEstoqueItem(supabase, rec, String(rec.id));
+        if (r.erro) falhas.push(`${String(rec.x_prod || 'item')}: ${r.erro}`);
+        else {
+          await carimbarEntrada(supabase, String(rec.id));
+          ok++;
+        }
+      }
+      return NextResponse.json({ ok: true, entradas: ok, falhas: falhas.slice(0, 5), aviso: falhas.length === 0 ? null : 'Parte dos itens falhou — veja as mensagens.' });
     }
 
     return BAD(400, `Acao desconhecida: ${acao}`);

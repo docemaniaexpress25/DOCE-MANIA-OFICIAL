@@ -24,6 +24,8 @@ export interface ItemXmlCompra {
   cEAN: string;
   xProd: string;
   ncm: string;
+  /** CEST (Especificação Substituição Tributária) — Bloco 95.1 */
+  cest: string;
   cfop: string;
   uCom: string;
   qCom: number;
@@ -155,6 +157,8 @@ export function parseXmlNfe(xmlTexto: string): ParseXmlResultado {
       cEAN: (txt(prod.cEAN) === 'SEM GTIN' ? '' : txt(prod.cEAN).replace(/\D/g, '')),
       xProd: txt(prod.xProd).slice(0, 120),
       ncm: txt(prod.NCM).replace(/\D/g, '').slice(0, 8),
+      // BLOCO 95.1: CEST vem no no <prod><CEST> (so existe quando ha ST)
+      cest: txt(prod.CEST).replace(/\D/g, '').slice(0, 7),
       cfop: txt(prod.CFOP).replace(/\D/g, '').slice(0, 4),
       uCom: txt(prod.uCom).toUpperCase().slice(0, 6) || 'UN',
       qCom: num(prod.qCom),

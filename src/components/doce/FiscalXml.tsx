@@ -54,6 +54,7 @@ interface ItemFila {
   cEAN: string;
   xProd: string;
   ncm: string;
+  cest: string | null;
   cfop: string;
   unidade: string;
   quantidade: number;
@@ -63,6 +64,7 @@ interface ItemFila {
   status: string;
   produtoId: string | null;
   produtoNome: string | null;
+  entradaEstoqueEm: string | null;
   sugestao: { produtoId: string; nome: string; score: number } | null;
 }
 
@@ -138,6 +140,8 @@ const FiscalXml: React.FC<FiscalXmlProps> = ({ products, showToast, onProdutoCri
   const [trocandoId, setTrocandoId] = useState<string | null>(null);
   const [buscaProduto, setBuscaProduto] = useState('');
   const [processando, setProcessando] = useState<string | null>(null);
+  // BLOCO 95.1: entrada de estoque liberada so com o SQL 95.1 rodado (a API avisa)
+  const [temEntrada, setTemEntrada] = useState(false);
 
   const [spedyAberto, setSpedyAberto] = useState(false);
   const [spedyOcupado, setSpedyOocupado] = useState<string | null>(null);
@@ -191,9 +195,11 @@ const FiscalXml: React.FC<FiscalXmlProps> = ({ products, showToast, onProdutoCri
       const res = await fetch(`/api/xml-importacao/itens?status=${st}&limit=300`, { headers: authHeaders(), cache: 'no-store' });
       const d = await res.json().catch(() => null);
       setItens(res.ok && d?.ok ? (d.itens as ItemFila[]) : []);
+      setTemEntrada(!!d?.temEntrada);
       if (!res.ok && d?.erro && d.erro.includes('bloco95')) setErro(String(d.erro));
     } catch {
       setItens([]);
+      setTemEntrada(false);
     } finally {
       setCarregandoItens(false);
     }
@@ -323,6 +329,49 @@ const FiscalXml: React.FC<FiscalXmlProps> = ({ products, showToast, onProdutoCri
       await carregarItens(subAba);
     } catch {
       showToast('Sem conexão para o lote.', 'error');
+    } finally {
+      setProcessando(null);
+    }
+  };
+
+  // ---------- BLOCO 95.1: ENTRADA DE ESTOQUE ----------
+  const darEntrada = async (item: ItemFila) => {
+    setProcessando(item.id);
+    try {
+      const res = await fetch('/api/xml-importacao/itens', {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ acao: 'ENTRADA_ESTOQUE', itemId: item.id }),
+      });
+      const d = await res.json().catch(() => null);
+      if (!res.ok || !d?.ok) { showToast(d?.erro || 'Entrada falhou.', 'error'); return; }
+      const saldo = d.saldo != null ? ` — saldo agora: ${Number(d.saldo).toLocaleString('pt-BR')} un` : '';
+      showToast(`Estoque entrou! +${item.quantidade} ${item.unidade}${saldo}${d.aviso ? ' ⚠ ' + d.aviso : ''}`, 'success');
+      await carregarItens(subAba);
+    } catch {
+      showToast('Sem conexão para a entrada.', 'error');
+    } finally {
+      setProcessando(null);
+    }
+  };
+
+  const darEntradaLote = async () => {
+    const alvos = itens.filter((i) => i.produtoId && !i.entradaEstoqueEm);
+    if (alvos.length === 0) { showToast('Nenhum item desta lista sem entrada.', 'error'); return; }
+    if (!window.confirm(`Dar entrada no estoque de ${alvos.length} item(ns)?\n\nQuantidades da nota somam no estoque central (custo = valor da nota).`)) return;
+    setProcessando('LOTE_ENTRADA');
+    try {
+      const res = await fetch('/api/xml-importacao/itens', {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ acao: 'ENTRADA_LOTE' }),
+      });
+      const d = await res.json().catch(() => null);
+      if (!res.ok || !d?.ok) { showToast(d?.erro || 'Lote de entrada falhou.', 'error'); return; }
+      showToast(`Entradas feitas: ${d.entradas}${(d.falhas || []).length ? ` • ${d.falhas.length} falha(s)` : ''}${d.aviso ? ' ⚠ ' + d.aviso : ''}`, (d.falhas || []).length ? 'error' : 'success');
+      await carregarItens(subAba);
+    } catch {
+      showToast('Sem conexão para o lote de entrada.', 'error');
     } finally {
       setProcessando(null);
     }
@@ -689,6 +738,22 @@ const FiscalXml: React.FC<FiscalXmlProps> = ({ products, showToast, onProdutoCri
             </div>
           )}
 
+          {/* BLOCO 95.1: entrada da NOTA INTEIRA 1 clique (vinculados/criados sem entrada) */}
+          {(subAba === 'VINCULADOS' || subAba === 'CRIADOS') && temEntrada && (() => {
+            const semEntrada = itens.filter((i) => i.produtoId && !i.entradaEstoqueEm).length;
+            if (semEntrada === 0) return null;
+            return (
+              <button
+                onClick={darEntradaLote}
+                disabled={processando === 'LOTE_ENTRADA'}
+                className="w-full py-3 rounded-xl bg-slate-900 text-white text-xs font-black uppercase tracking-wide shadow-md active:scale-[0.99] transition-transform disabled:opacity-60 flex items-center justify-center gap-2"
+              >
+                <i className={`fa-solid ${processando === 'LOTE_ENTRADA' ? 'fa-spinner fa-spin' : 'fa-truck-ramp-box'}`} />
+                Dar entrada no estoque — {semEntrada} item(ns) da nota
+              </button>
+            );
+          })()}
+
           {/* NOTAS: importacoes */}
           {subAba === 'NOTAS' && (
             <div className="space-y-2 max-h-[32rem] overflow-y-auto pr-1">
@@ -768,23 +833,49 @@ const FiscalXml: React.FC<FiscalXmlProps> = ({ products, showToast, onProdutoCri
                     )}
                     {item.cfop && <span className="text-[10px] font-bold bg-gray-100 text-gray-600 px-2 py-1 rounded-lg">CFOP {item.cfop} (entrada)</span>}
                     {item.cstIcms && <span className="text-[10px] font-bold bg-gray-100 text-gray-600 px-2 py-1 rounded-lg">CST {item.cstIcms}</span>}
+                    {item.cest && <span className="text-[10px] font-bold bg-violet-50 text-violet-600 px-2 py-1 rounded-lg" title="CEST da nota de compra — completa o cadastro na vinculação">CEST {item.cest}</span>}
                   </div>
 
                   {/* Status resolvido */}
                   {item.status !== 'PENDENTE' && (
-                    <div className="mt-3 flex items-center justify-between gap-2 bg-gray-50 rounded-xl p-2.5">
-                      <p className="text-xs text-gray-600 min-w-0">
-                        {item.status === 'VINCULADO' && <><i className="fa-solid fa-link text-emerald-500" /> <b>Vinculado</b> a {item.produtoNome || '—'} • NCM/EAN completados</>}
-                        {item.status === 'CRIADO' && <><i className="fa-solid fa-plus text-gray-700" /> <b>Criado</b>: {item.produtoNome || '—'} • no catálogo com dados fiscais</>}
-                        {item.status === 'IGNORADO' && <><i className="fa-solid fa-ban text-gray-400" /> Ignorado</>}
-                      </p>
-                      <button
-                        onClick={() => reabrir(item)}
-                        disabled={processando === item.id}
-                        className="px-2.5 h-7 rounded-lg bg-white border border-gray-200 text-[11px] font-bold text-gray-600 disabled:opacity-50 flex-shrink-0"
-                      >
-                        Reabrir
-                      </button>
+                    <div className="mt-3 space-y-2">
+                      <div className="flex items-center justify-between gap-2 bg-gray-50 rounded-xl p-2.5">
+                        <p className="text-xs text-gray-600 min-w-0">
+                          {item.status === 'VINCULADO' && <><i className="fa-solid fa-link text-emerald-500" /> <b>Vinculado</b> a {item.produtoNome || '—'} • NCM/EAN/CEST completados</>}
+                          {item.status === 'CRIADO' && <><i className="fa-solid fa-plus text-gray-700" /> <b>Criado</b>: {item.produtoNome || '—'} • no catálogo com dados fiscais</>}
+                          {item.status === 'IGNORADO' && <><i className="fa-solid fa-ban text-gray-400" /> Ignorado</>}
+                        </p>
+                        <button
+                          onClick={() => reabrir(item)}
+                          disabled={processando === item.id}
+                          className="px-2.5 h-7 rounded-lg bg-white border border-gray-200 text-[11px] font-bold text-gray-600 disabled:opacity-50 flex-shrink-0"
+                        >
+                          Reabrir
+                        </button>
+                      </div>
+                      {/* BLOCO 95.1: ENTRADA DE ESTOQUE (item vinculado/criado) */}
+                      {(item.status === 'VINCULADO' || item.status === 'CRIADO') && temEntrada && (
+                        item.entradaEstoqueEm ? (
+                          <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-100 rounded-xl p-2.5">
+                            <i className="fa-solid fa-circle-check text-emerald-600" />
+                            <p className="text-xs font-bold text-emerald-700 min-w-0 flex-1">
+                              Estoque entrou: +{item.quantidade} {item.unidade} (custo {fmtBRL(item.valorUnitario)})
+                              <span className="block text-[10px] font-semibold text-emerald-500">
+                                {new Date(item.entradaEstoqueEm).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} — não entra 2x
+                              </span>
+                            </p>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => darEntrada(item)}
+                            disabled={processando === item.id}
+                            className="w-full py-2.5 rounded-xl bg-emerald-600 text-white text-xs font-black uppercase tracking-wide shadow-sm active:scale-[0.98] transition-transform disabled:opacity-60"
+                          >
+                            <i className={`fa-solid ${processando === item.id ? 'fa-spinner fa-spin' : 'fa-truck-ramp-box'} mr-1.5`} />
+                            Dar entrada no estoque — +{item.quantidade} {item.unidade}
+                          </button>
+                        )
+                      )}
                     </div>
                   )}
 

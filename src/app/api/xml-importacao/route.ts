@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { devBridge, getServiceClient, isServerSupabaseConfigured } from '@/lib/serverSupabase';
 import { isAdminSession } from '@/lib/session';
 import { parseXmlNfe } from '@/lib/xmlCompra';
+import { hasXmlCestColumn } from '@/lib/serverSchema';
 
 /**
  * IMPORTACAO DE XML DE COMPRA (Bloco 95) — origem da aba "XML → Produtos".
@@ -209,12 +210,16 @@ export async function POST(request: NextRequest) {
       }
 
       // 3) Itens -> fila fiscal (staging)
+      // BLOCO 95.1: cest grava junto QUANDO a coluna ja existe (SQL 95.1 rodado);
+      // sem o SQL, sobe sem cest e a sonda se autocorrige em ate 30s.
+      const comCest = await hasXmlCestColumn();
       const linhas = nota.itens.map((it) => ({
         importacao_id: (impRow as Record<string, unknown>).id,
         c_prod: it.cProd,
         c_ean: it.cEAN,
         x_prod: it.xProd,
         ncm: it.ncm,
+        ...(comCest && it.cest ? { cest: it.cest } : {}),
         cfop: it.cfop,
         unidade: it.uCom,
         quantidade: it.qCom,

@@ -893,3 +893,19 @@ FIXES APLICADOS:
 
 QA E2E (agent-browser, viewport 360x800, mock E2E .env.local removido após): login admin → HOME ok; ENTREGAS = cards com 7 botões de ação quebrando em linhas SEM sobrepor, EMITIR NF full-width, Entregue/Falhou lado a lado; sheet NÃO ENTREGUE = Confirmar visível; sheet CARGA = botão entregador PRINCIPAL + chips vendedores + Confirmar/Cancelar visíveis; sheet CAIXA = toast "sem entregas hoje" (mock sem vendas entregues, correto); CLIENTES admin = cards limpos; painel NOTIFICAÇÕES ocupa largura certa em 360px; vendedor: CLIENTES criado "Cliente Com Nome Gigante Muito Muito Longo Para Testar Truncamento Ltda ME" → card renderiza com ELLIPSIS e botão editar no lugar (fix comprovado); MINHA CARGA tabela ok; PDV footer switches em wrap; wizard À vista→Dinheiro→Resumo com labels visíveis; venda concluída → modal VENDA FINALIZADA com EMITIR NFC-E + OK VER CUPOM na mesma tela sem rolar; cupom 56mm/80mm/imprimir/copiar/whatsapp organizados; zero erros de console e no dev.log (só warning de push negado no headless).
 LINT: 0 erros / 10 warnings (baseline). Mock e2e desativado (.env.local removido) e server reiniciado limpo.
+## BLOCO 95.1 (XML→Produtos) — CEST de verdade + ENTRADA DE ESTOQUE 1 clique (2025-11-10)
+
+CONTEXTO: dono perguntou "quando vinculo o produto do XML o que acontece? atualiza estoque? preenche NCM CEST?". Resposta auditada: estoque NAO atualizava, NCM/EAN/unidade completavam, CEST nao era capturado (nem coluna nem parser). Este bloco fecha os 2 buracos propostos e aprovados.
+
+SQL (sql/bloco95_1_cest_entrada.sql — colar no Supabase, idempotente): xml_itens.cest text + xml_itens.entrada_estoque_em timestamptz + garantia products.cest (ja vem do bloco 12).
+
+CODIGO:
+- src/lib/xmlCompra.ts: parser extrai <prod><CEST> (so digitos, 7) → ItemXmlCompra.cest.
+- src/app/api/xml-importacao/route.ts (POST upload): grava cest junto QUANDO a sonda hasXmlCestColumn() confirma a coluna (degradação segura — sem o SQL 95.1 sobe sem cest e autocorrige em 30s; mesmo padrao do fix qtd_pendentes).
+- src/lib/serverSchema.ts: sondas hasXmlCestColumn() + hasXmlEntradaColumn().
+- src/app/api/xml-importacao/itens/route.ts: (a) GET com select dinâmico cest/entrada_estoque_em (probe) + devolve flag temEntrada; (b) VINCULAR completa CEST do produto se vazio (fallback: update sem cest se products.cest faltar); (c) NOVO ENTRADA_ESTOQUE itemId: valida status VINCULADO/CRIADO + exige coluna entrada_estoque_em (trava 2x) + chama RPC registrar_movimento_estoque do BLOCO 108 (ENTRADA, origem 'XML', custo = valor unitario da nota, referencia = importacao_id) → carimba entrada_estoque_em; FALLBACK quando RPC nao existe (bloco 108 pendente ou mock): le estoque, soma em memoria, grava e devolve aviso "rode o bloco 108"; (d) NOVO ENTRADA_LOTE: TODOS os vinculados/criados sem entrada (nota inteira 1 clique), idempotente.
+- src/components/doce/FiscalXml.tsx: chip CEST violeta nos badges do item; no card resolvido: badge verde "Estoque entrou: +N un (custo R$) — nao entra 2x" OU botao verde "DAR ENTRADA NO ESTOQUE — +N un"; barra preta "DAR ENTRADA NO ESTOQUE — N item(ns) da nota" nas abas Vinculados/Criados (com confirm()).
+
+QA E2E (mock, 390x844, .env.local removido depois): upload XML de teste com CEST → 1 nota importada/2 itens; chips "CEST 1703700" e "CEST 1702301" visiveis; vinculo → toast "cadastro fiscal completado" e produto ganhou ncm+ean+cest (completados:["ncm","ean","cest"]); DAR ENTRADA item → estoque 100→124, toast "+24 UN — saldo agora: 124 UN ⚠ entrada simples (sem kardex)", badge "nao entra 2x"; API de entrada 2x → 400 "Entrada ja feita"; ENTRADA_LOTE → entradas:1 (estoque 80→90), 2a chamada entradas:0; zero erros console/dev.log. Lint 0 erros/10 warnings.
+
+PENDENTE DO DONO: colar no Supabase o 95.1 (libera o botao via sonda em ate 30s) e o 108 (entrada vira kardex de verdade — sem aviso).

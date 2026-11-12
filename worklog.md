@@ -926,3 +926,17 @@ CODIGO:
 - RelatorioFiscal.tsx: relatório de fiscalização (56/80) respeita o canal.
 
 QA: lint 0 erros/10 warnings (baseline); tsc sem erros novos nos arquivos tocados (usbPrint zero); dev server 200 sem erros no log; mecânica da folha validada no Chrome real via agent-browser (iframe srcdoc monta, texto do cupom presente, span .peq criado, @page "58mm auto" presente); diálogo de impressão e impressora física são do PC do usuário (só produção).
+## BLOCO 112 — REFORÇO DE IMPRESSÃO (cupom saía claro; auto-teste sai escuro) (2026-11-11)
+
+RELATO DO CHEFE: "comprei uma impressora térmica e o teste de impressão sai escuro da maneira correta, porém quando vou imprimir o cupom fica muito fraco".
+
+DIAGNÓSTICO (auditoria do código de impressão): auto-teste escuro = hardware/papel OK (impressão feita pelo próprio firmware). Cupom fraco = payload/calibração: (a) no canal USB o papel virtual do BLOCO 111 tinha a fonte pequena (.peq, bloco TROCAS) em #222/CINZA — térmica queima ponto proporcional ao preto, cinza sai fraco; texto renderizado pelo Windows sai com anti-aliasing (bordas acinzentadas = pontos parcialmente queimados); (b) no canal BT o texto ESC/POS saía na densidade de fábrica, sem reforço; (c) na térmica portátil, bateria fraca na hora do cupom (auto-teste é feito com bateria cheia) agrava — causa nº 1 de campo, coberta nas dicas do app.
+
+DECISÃO (aplicável aos DOIS canais, "o sistema é o mesmo"): REFORÇO DE IMPRESSÃO = cupom inteiro em NEGRITO — negrito queima pontos DUPLOS sem mudar a grade de caracteres (ESC E não altera largura; Courier New bold tem o MESMO avanço monoespaçado do regular) → alinhamento por colunas preservado no BT e no USB. Configuração POR DISPOSITIVO em localStorage (docemania_reforco_impressao), default LIGADO (a queixa real é cupom claro; quem preferir traço fino desliga).
+
+CODIGO:
+- src/lib/usbPrint.ts: lerReforcoImpressao()/salvarReforcoImpressao() (default true); folha virtual agora imprime 100% PRETO (.peq #222→#000) + font-weight 700 quando reforço ligado + -webkit-print-color-adjust/print-color-adjust exact (impede o driver de aclarear); aproveitado para consolidar o srcdoc duplicado do BLOCO 111 (uma só atribuição, remover/falhar preservados).
+- src/services/bluetoothPrinterService.ts: buildEscposBuffer envia ESC E 1 (bold global) logo após init+CP860 quando reforço ligado; toggles de negrito do TOTAL GERAL viram no-op com reforço ativo (bold global não pode ser desligado no meio do cupom) — nos ramos 56MM (bloco centralizado) e 80MM.
+- ConfiguracoesHub.tsx: NOVO CARD 4 "Impressão" (fa-print) com Switch "Reforço de impressão (cupom mais escuro)" + toast "Reforço LIGADO/DESLIGADO neste aparelho" + dica embutida "Cupom ainda saindo claro?": bateria (portátil), Propriedades da impressora no Windows → Preferências → VELOCIDADE/DENSIDADE (USB), cabeça térmica limpa e papel de qualidade.
+
+QA E2E (mock e2e, 390x844 e 1280x800): login admin (5 toques no logo) → Painel → CONFIGURAÇÕES → Abrir Configuracoes ERP → card IMPRESSÃO visível; 1º clique no switch → toast "REFORÇO DESLIGADO NESTE APARELHO" + localStorage '0'; reload + re-login → LS persistiu '0'; 2º clique → toast "REFORÇO LIGADO NESTE APARELHO" + localStorage '1'; ZERO erros de console/página. Lint 0 erros/10 warnings (baseline). .env.local do mock e script de QA removidos.

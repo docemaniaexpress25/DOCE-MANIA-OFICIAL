@@ -1,6 +1,9 @@
 "use client";
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { authHeaders } from '@/services/userService';
+// BLOCO 112: reforço de impressão (config POR DISPOSITIVO em localStorage —
+// não vai para o banco: cada aparelho/impressora tem sua calibração)
+import { lerReforcoImpressao, salvarReforcoImpressao } from '@/lib/usbPrint';
 
 /**
  * ERP FISCAL & AUTOMAÇÕES — hub de configurações organizado em cards que expandem.
@@ -91,6 +94,11 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
   const [form, setForm] = useState<Emitente>(EMITENTE_VAZIO);
   const [salvandoEmitente, setSalvandoEmitente] = useState(false);
   const [salvandoSwitch, setSalvandoSwitch] = useState<string | null>(null);
+
+  // BLOCO 112 — reforço de impressão (cupom mais escuro). useState(true) +
+  // useEffect evita mismatch de hidratação (localStorage só existe no cliente).
+  const [reforco, setReforco] = useState(true);
+  useEffect(() => { setReforco(lerReforcoImpressao()); }, []);
 
   const [toast, setToast] = useState<{ msg: string; tipo: 'success' | 'error' } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -416,6 +424,34 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
             </div>
             <span className="absolute -top-2 right-3 bg-amber-100 text-amber-600 text-[7px] font-black px-2 py-0.5 rounded-md uppercase tracking-wide">Em breve (importador manual em uso)</span>
           </button>
+        </div>
+      )}
+
+      {/* ===== CARD 4 — IMPRESSÃO (BLOCO 112) ===== */}
+      {!carregando && !erro && (
+        <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm mx-2 space-y-3">
+          <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider"><i className="fa-solid fa-print text-slate-600 mr-2"></i>Impressão</h3>
+          <p className="text-[10px] text-gray-400 font-semibold leading-snug">Ajuste do cupom térmico — vale para a impressora Bluetooth e para a térmica USB do PC <strong className="text-gray-500">neste aparelho</strong>.</p>
+
+          <div className="flex items-center justify-between gap-3 border-t border-gray-50 pt-3">
+            <div className="flex items-start gap-3 pr-2">
+              <i className="fa-solid fa-bolt text-amber-500 mt-1"></i>
+              <div>
+                <p className="text-[11px] font-bold text-gray-600 uppercase">Reforço de impressão (cupom mais escuro)</p>
+                <p className="text-[9px] text-gray-400 font-semibold leading-snug mt-0.5">Cupom inteiro em negrito na térmica — use quando a impressão sair clara. Desligue se preferir o traço fino.</p>
+              </div>
+            </div>
+            <Switch on={reforco} onClick={() => { const v = !reforco; setReforco(v); salvarReforcoImpressao(v); mostrarToast(v ? 'Reforço LIGADO neste aparelho' : 'Reforço DESLIGADO neste aparelho', 'success'); }} />
+          </div>
+
+          <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4">
+            <p className="text-[9px] font-black text-slate-500 uppercase flex items-center gap-1.5 mb-1.5"><i className="fa-solid fa-circle-info text-teal-600"></i>Cupom ainda saindo claro?</p>
+            <ul className="text-[9px] font-semibold text-gray-500 leading-snug space-y-1 list-decimal list-inside">
+              <li>Impressora portátil: bateria fraca é a causa nº 1 — carregue até o fim e teste de novo.</li>
+              <li>PC (USB): Propriedades da impressora no Windows → Preferências de impressão → diminua a VELOCIDADE ou aumente a DENSIDADE.</li>
+              <li>Limpe a cabeça térmica (pó/graxa) e use papel térmico de qualidade, no lado certo.</li>
+            </ul>
+          </div>
         </div>
       )}
 

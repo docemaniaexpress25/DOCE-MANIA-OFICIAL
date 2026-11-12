@@ -48,6 +48,37 @@ export function salvarCanalImpressao(canal: CanalImpressao): void {
   } catch { /* nada que possamos fazer */ }
 }
 
+// ============================================================
+// BLOCO 112 — REFORCO DE IMPRESSAO (cupom mais escuro)
+// Queixa de campo: auto-teste da termica sai escuro mas o CUPOM sai
+// claro. Nos dois canais o remédio do lado do sistema é NEGRITO:
+// - Bluetooth: comando ESC/POS ESC E 1 no início do buffer — a cabeça
+//   queima pontos DUPLOS, mesma grade de caracteres (nao muda largura).
+// - USB: font-weight 700 no papel virtual — Courier New bold tem o MESMO
+//   avanço monoespaçado do regular (colunas continuam alinhadas) e o
+//   driver do Windows converte mais pixels pretos = impressão escura.
+// Gravado em localStorage POR DISPOSITIVO. Default LIGADO (a queixa real
+// de campo é cupom claro; quem preferir o traço fino desliga aqui).
+// ============================================================
+const REFORCO_KEY = 'docemania_reforco_impressao';
+
+export function lerReforcoImpressao(): boolean {
+  if (typeof window === 'undefined') return true;
+  try {
+    const salvo = window.localStorage.getItem(REFORCO_KEY);
+    if (salvo === '0') return false;
+    if (salvo === '1') return true;
+  } catch { /* localStorage bloqueado — usa default */ }
+  return true;
+}
+
+export function salvarReforcoImpressao(v: boolean): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(REFORCO_KEY, v ? '1' : '0');
+  } catch { /* nada que possamos fazer */ }
+}
+
 const escapeHtml = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
@@ -95,6 +126,14 @@ export function imprimirViaUsb(
   iframe.style.border = '0';
   iframe.style.opacity = '0';
 
+  // BLOCO 112: reforço de impressão — quando ligado, o papel virtual sai em
+  // NEGRITO (font-weight 700) e TUDO em preto sólido: a fonte pequena (.peq)
+  // era #222/CINZA e imprimia mais clara na térmica; print-color-adjust impede
+  // o driver de "aclarear" o texto.
+  const cssReforco = lerReforcoImpressao()
+    ? 'font-weight: 700; -webkit-print-color-adjust: exact; print-color-adjust: exact;'
+    : '-webkit-print-color-adjust: exact; print-color-adjust: exact;';
+
   // srcdoc = documento autocontido (sem CORS); margin 0 + padding minimo para
   // a termica cortar certinho; white-space pre preserva o alinhamento por
   // colunas do cupom (totais na mesma coluna da impressora BT).
@@ -113,8 +152,9 @@ export function imprimirViaUsb(
     line-height: 1.3;
     white-space: pre;
     color: #000;
+    ${cssReforco}
   }
-  .peq { font-size: 0.72em; color: #222; }
+  .peq { font-size: 0.72em; color: #000; }
 </style>
 </head>
 <body>${converterMarcadores(escapeHtml(String(texto || '')))}</body>
@@ -130,31 +170,6 @@ export function imprimirViaUsb(
     if (onError) onError(msg);
     else console.error('[usbPrint]', msg);
   };
-
-  // srcdoc = documento autocontido (sem CORS); margin 0 + padding minimo para
-  // a termica cortar certinho; white-space pre preserva o alinhamento por
-  // colunas do cupom (totais na mesma coluna da impressora BT).
-  iframe.srcdoc = `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>Cupom</title>
-<style>
-  @page { size: ${pageMm} auto; margin: 0; }
-  html, body { margin: 0; padding: 0; background: #fff; }
-  body {
-    padding: 1.5mm 1mm;
-    font-family: 'Courier New', Courier, ui-monospace, monospace;
-    font-size: ${fontPx};
-    line-height: 1.3;
-    white-space: pre;
-    color: #000;
-  }
-  .peq { font-size: 0.72em; color: #222; }
-</style>
-</head>
-<body>${converterMarcadores(escapeHtml(String(texto || '')))}</body>
-</html>`;
 
   // Remove o iframe depois da impressao (e com fallback de seguranca)
   iframe.addEventListener('load', () => {

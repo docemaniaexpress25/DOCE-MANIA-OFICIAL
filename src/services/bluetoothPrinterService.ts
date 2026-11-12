@@ -7,6 +7,9 @@
  * Suporta impressoras térmicas ESC/POS de 56mm e 80mm.
  */
 
+// BLOCO 112: reforço de impressão (config por dispositivo, em localStorage)
+import { lerReforcoImpressao } from '@/lib/usbPrint';
+
 // ============================================================
 // CP860 (Português) Character Encoding
 // ============================================================
@@ -700,6 +703,19 @@ class BluetoothPrinterService {
     push(escpos.init());
     push(escpos.codePage860());
 
+    // ------------------------------------------------------------
+    // BLOCO 112 — REFORÇO DE IMPRESSÃO: quando ligado (default), o cupom
+    // inteiro sai em NEGRITO (ESC E 1): a cabeça térmica queima pontos
+    // DUPLOS, compensando impressoras com densidade baixa/velocidade alta
+    // (queixa de campo: auto-teste escuro, cupom claro). ESC E NÃO muda a
+    // grade de caracteres — mesma largura, alinhamento preservado. Com o
+    // reforço ativo os toggles de negrito do TOTAL GERAL viram no-op (o
+    // bold global já está ligado e não pode ser desligado no meio do cupom).
+    // Desligável em CONFIGURAÇÕES → Impressão (por dispositivo).
+    // ------------------------------------------------------------
+    const reforco = lerReforcoImpressao();
+    if (reforco) push(escpos.bold(true));
+
     // Process line by line
     const lines = text.split('\n');
     for (const line of lines) {
@@ -740,9 +756,9 @@ class BluetoothPrinterService {
         //    ficava colado na esquerda e os tracos no meio = "bugado").
         // ------------------------------------------------------------
         push(escpos.align(1));
-        if (trimmed.includes('TOTAL GERAL')) push(escpos.bold(true));
+        if (trimmed.includes('TOTAL GERAL') && !reforco) push(escpos.bold(true));
         push(escpos.text(trimmed.padEnd(cols, ' ') + '\n'));
-        if (trimmed.includes('TOTAL GERAL')) push(escpos.bold(false));
+        if (trimmed.includes('TOTAL GERAL') && !reforco) push(escpos.bold(false));
         continue;
       }
 
@@ -755,7 +771,7 @@ class BluetoothPrinterService {
       }
       else if (trimmed.includes('TOTAL GERAL')) {
         push(escpos.align(0));
-        push(escpos.bold(true));
+        if (!reforco) push(escpos.bold(true));
       }
       else {
         push(escpos.align(0)); // default left
@@ -763,7 +779,7 @@ class BluetoothPrinterService {
 
       push(escpos.text(trimmed + '\n'));
 
-      if (trimmed.includes('TOTAL GERAL')) {
+      if (trimmed.includes('TOTAL GERAL') && !reforco) {
         push(escpos.bold(false));
       }
     }

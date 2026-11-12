@@ -884,7 +884,9 @@ async function getFila(supabase: any, userId: string, perfil: string) {
   // real (se existir exatamente 1) ou para o UUID fixo da base. No sheet ele
   // aparece como CHIP GIGANTE no topo, os vendedores ativos em chips menores.
   let entregadores: { id: string; nome: string; perfil?: string }[] = [];
-  if (perfil === 'ADMIN') {
+  // BLOCO 114 (pedido do dono): o SECRETARIO da base tambem carrega/descarrega
+  // a entrega — precisa do mesmo seletor de entregadores que o admin usa.
+  if (perfil === 'ADMIN' || perfil === 'SECRETARIO') {
     entregadores = [{ id: 'ENTREGADOR', nome: 'Entregador 1', perfil: 'ENTREGADOR_FIXO' }];
     try {
       const { data: ents } = await supabase
@@ -1332,8 +1334,10 @@ export async function POST(req: NextRequest) {
     // ---------- CHECK_CARGA (BLOCO 58: admin marca o pedido CARREGADO no veiculo) ----------
     // Na fila podera haver pedidos carregados e outros ainda nao — o check
     // mostra quantos estao no veiculo e qual esta carregado.
+    // BLOCO 114 (pedido do dono): o SECRETARIO da base tambem carrega/descarrega
+    // (mesma tela de separacao, quem fisicamente poe no veiculo pode marcar).
     if (acao === 'CHECK_CARGA') {
-      if (!admin) return NextResponse.json({ ok: false, error: 'Somente o admin marca a carga.' }, { status: 403 });
+      if (!admin && session.perfil !== 'SECRETARIO') return NextResponse.json({ ok: false, error: 'Somente admin/secretario marcam a carga.' }, { status: 403 });
       const saleIdCarga = String(body.saleId || '');
       if (!saleIdCarga) return NextResponse.json({ ok: false, error: 'saleId obrigatoria.' }, { status: 400 });
       if (!(await hasCargaCheckColumns())) {

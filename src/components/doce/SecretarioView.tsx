@@ -22,6 +22,11 @@ import EditorPedido from '@/components/doce/EditorPedido';
  * finalizada. Mesmo EditorPedido da fila do admin; o servidor aceita
  * SECRETARIO na ação EDITAR_PEDIDO.
  *
+ * BLOCO 114 (pedido do dono): o secretário também CARREGA e DESCARREGA a
+ * entrega — botão "Carregar no veículo" no card com o mesmo sheet do admin
+ * (Entregador 1 PRINCIPAL + vendedores em chips) e "Remover do veículo".
+ * A ação é a mesma CHECK_CARGA da fila, agora liberada p/ SECRETARIO na API.
+ *
  * O secretário NÃO vende, NÃO entrega e NÃO mexe no cadastro de produtos
  * (a aba Estoque segue limitada à quantidade — BLOCO 19).
  */
@@ -45,6 +50,10 @@ interface FilaItem {
   separado: boolean;
   vendedorNome: string;
   dataVencimento: string | null;
+  // BLOCO 114: check de carga (mesmo dado da fila do admin — enrichFila)
+  carregadoEm?: string | null;
+  entregadorId?: string | null;
+  entregadorNome?: string | null;
   cliente: { id: string; nome: string; endereco: string; bairro: string; telefone: string; cnpj?: string | null; email?: string | null };
   itens: { nome: string; produtoId: string; quantidade: number; precoVenda: number }[];
 }
@@ -52,6 +61,8 @@ interface FilaItem {
 interface ApiResp {
   hoje: string;
   fila: FilaItem[];
+  // BLOCO 114: entregadores ativos (Entregador 1 PRINCIPAL + vendedores)
+  entregadores?: { id: string; nome: string; perfil?: string }[];
   resumo?: { naFila: number; valorFila: number; separados: number; entreguesHoje: number; valorEntregueHoje: number };
   migracaoPendente?: boolean;
   error?: string;
@@ -81,6 +92,9 @@ const SecretarioView: React.FC<{ user: User; showToast: (m: string, t?: 'success
   const [editTrocas, setEditTrocas] = useState<{ p: FilaItem; texto: string; valor: string } | null>(null);
   // BLOCO 113: editar o pedido inteiro (itens + forma de pagamento)
   const [editPedido, setEditPedido] = useState<FilaItem | null>(null);
+  // BLOCO 114: sheet de carga — escolhe o ENTREGADOR e carrega no veículo
+  const [sheetCarga, setSheetCarga] = useState<FilaItem | null>(null);
+  const [cargaEntId, setCargaEntId] = useState('');
   // quantidade de pedidos ainda NAO separados — base do alarme
   const aSepararRef = useRef<number>(-1);
   const alarmTimer = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -154,6 +168,36 @@ const SecretarioView: React.FC<{ user: User; showToast: (m: string, t?: 'success
   }
 
   const productsOf = (p: FilaItem): Product[] => p.itens.map(i => ({ id: i.produtoId, nome: i.nome, precoCusto: 0, precoVenda: i.precoVenda, precoMinimo: 0, comissaoPercentual: 0, estoquePrincipal: 0, ativo: true }));
+
+  // ===== BLOCO 114 (pedido do dono): CARREGAR/DESCARREGAR a entrega —
+  // mesma CHECK_CARGA da fila do admin; a API aceita SECRETARIO.
+  function abrirSheetCarga(p: FilaItem) {
+    setCargaEntId(p.entregadorId || '');
+    setSheetCarga(p);
+  }
+
+  async function confirmarCarga() {
+    const p = sheetCarga;
+    if (!p) return;
+    const ents = data?.entregadores || [];
+    if (ents.length > 0 && !cargaEntId) {
+      showToast('Selecione quem CARREGOU esta entrega antes de carregar.', 'error');
+      return;
+    }
+    const entNome = ents.find(e => e.id === cargaEntId)?.nome || p.entregadorNome || null;
+    const ok = await acao(
+      { acao: 'CHECK_CARGA', saleId: p.saleId, carregado: true, entregadorId: cargaEntId || undefined },
+      cargaEntId ? `Carregado — entregador: ${entNome}!` : 'Pedido CARREGADO no veículo!'
+    );
+    if (ok) setSheetCarga(null);
+  }
+
+  async function descarregar() {
+    const p = sheetCarga;
+    if (!p) return;
+    const ok = await acao({ acao: 'CHECK_CARGA', saleId: p.saleId, carregado: false }, 'Check de carga removido!');
+    if (ok) setSheetCarga(null);
+  }
   const saleOf = (p: FilaItem): any => ({
     id: p.saleId,
     data: new Date(p.dataVenda),
@@ -259,6 +303,15 @@ const SecretarioView: React.FC<{ user: User; showToast: (m: string, t?: 'success
               </button>
             )}
           </div>
+
+          {/* ===== BLOCO 114: CARREGAR/DESCARREGAR a entrega (mesmo fluxo do admin) ===== */}
+          <button onClick={() => abrirSheetCarga(p)} disabled={!!busy}
+            className={`w-full mt-2 py-3.5 rounded-2xl text-[10px] font-black uppercase active:scale-[0.98] transition-transform border flex items-center justify-center gap-1.5 disabled:opacity-60 ${p.carregadoEm ? 'bg-emerald-600 border-emerald-600 text-white shadow-md' : 'bg-emerald-50 border-emerald-200 text-emerald-700'}`}>
+            <i className="fa-solid fa-truck-fast mr-1"></i>
+            {p.carregadoEm
+              ? <>No veículo{p.entregadorNome ? ` — ${p.entregadorNome}` : ''} · tocar p/ trocar/descarregar</>
+              : 'Carregar no veículo'}
+          </button>
         </div>
       </div>
     );
@@ -365,6 +418,69 @@ const SecretarioView: React.FC<{ user: User; showToast: (m: string, t?: 'success
               <i className="fa-solid fa-check mr-1"></i>Salvar trocas
             </button>
             <button onClick={() => setEditTrocas(null)} className="w-full mt-2 py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Cancelar</button>
+          </div>
+        </div>
+      )}
+
+      {/* ===== BLOCO 114: SHEET DE CARGA — mesmo fluxo do admin: escolhe QUEM
+          é o ENTREGADOR da venda (Entregador 1 PRINCIPAL + vendedores) e
+          confirma; já carregado: troca o entregador ou REMOVE do veículo. ===== */}
+      {sheetCarga && (
+        <div className="fixed inset-0 z-[250] bg-black/60 backdrop-blur-sm flex items-end justify-center" onClick={() => setSheetCarga(null)}>
+          <div className="bg-white w-full max-w-md rounded-t-3xl p-6 animate-in slide-in-from-bottom duration-300 max-h-[92vh] overflow-y-auto overscroll-contain" onClick={e => e.stopPropagation()}>
+            <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-4"></div>
+            <h3 className="text-sm font-black text-gray-800 uppercase text-center">
+              <i className="fa-solid fa-truck-fast text-emerald-600 mr-1"></i>
+              {sheetCarga.carregadoEm ? 'Trocar entregador da carga' : 'Carregar no veículo'}
+            </h3>
+            <p className="text-[11px] font-bold text-gray-600 capitalize text-center mt-1">{sheetCarga.cliente.nome} · {fmt(sheetCarga.valorTotal)}</p>
+            <p className="text-[9px] font-black text-gray-400 uppercase text-center mt-3 leading-snug">Quem CARREGOU esta entrega? <span className="text-gray-300">(entregador da venda)</span></p>
+            {(data?.entregadores || []).length > 0 ? (
+              <div className="mt-2 space-y-2">
+                {/* Entregador 1 (login fixo da base) é a opção PRINCIPAL —
+                    botão gigante no topo; vendedores em chips menores. */}
+                {(data?.entregadores || []).filter(e => e.perfil === 'ENTREGADOR_FIXO').map(e => (
+                  <button key={e.id} onClick={() => setCargaEntId(e.id)}
+                    className={`w-full py-4 rounded-2xl text-xs font-black uppercase tracking-wide border-2 transition-colors flex items-center justify-center gap-2 ${cargaEntId === e.id ? 'bg-emerald-600 border-emerald-600 text-white shadow-lg' : 'bg-emerald-50 border-emerald-200 text-emerald-700'}`}>
+                    <i className="fa-solid fa-motorcycle text-sm"></i>{e.nome}
+                    <span className={`text-[8px] px-1.5 py-0.5 rounded-md font-black ${cargaEntId === e.id ? 'bg-white/20' : 'bg-white'}`}>PRINCIPAL</span>
+                  </button>
+                ))}
+                {(data?.entregadores || []).filter(e => e.perfil !== 'ENTREGADOR_FIXO').length > 0 && (
+                  <p className="text-[8px] font-black text-gray-300 uppercase tracking-widest pt-1">Ou um vendedor leva:</p>
+                )}
+                <div className="flex gap-1.5 flex-wrap">
+                  {(data?.entregadores || []).filter(e => e.perfil !== 'ENTREGADOR_FIXO').map(e => (
+                    <button key={e.id} onClick={() => setCargaEntId(e.id)}
+                      className={`px-3 py-2.5 rounded-xl text-[10px] font-black uppercase border-2 transition-colors ${cargaEntId === e.id ? 'bg-emerald-600 border-emerald-600 text-white shadow' : 'bg-white border-gray-200 text-gray-500'}`}>
+                      <i className="fa-solid fa-user mr-1"></i>{e.nome}
+                      <span className="ml-1 text-[8px] font-black opacity-60">VENDEDOR</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mt-2">
+                <p className="text-[9px] font-black text-amber-700 uppercase"><i className="fa-solid fa-triangle-exclamation mr-1"></i>Nenhum vendedor ativo</p>
+                <p className="text-[9px] font-semibold text-amber-600 mt-0.5 leading-snug">O entregador é escolhido entre os VENDEDORES — peça ao admin para ativar um no menu Usuários. Pode carregar sem entregador (modo antigo).</p>
+              </div>
+            )}
+            {cargaEntId && (
+              <p className="text-[9px] font-black text-emerald-600 uppercase text-center mt-2">
+                <i className="fa-solid fa-circle-check mr-1"></i>Entregador: {(data?.entregadores || []).find(e => e.id === cargaEntId)?.nome || 'Entregador'} — essa entrega alimenta o caixa DELE
+              </p>
+            )}
+            <button onClick={confirmarCarga} disabled={!!busy}
+              className={`w-full mt-4 py-4 rounded-2xl text-xs font-black uppercase tracking-wider shadow-lg active:scale-[0.98] transition-transform disabled:opacity-50 ${cargaEntId || (data?.entregadores || []).length === 0 ? 'bg-emerald-600 text-white' : 'bg-gray-200 text-gray-400'}`}>
+              <i className="fa-solid fa-truck-fast mr-1"></i>{sheetCarga.carregadoEm ? 'Salvar entregador' : 'Confirmar carga no veículo'}
+            </button>
+            {sheetCarga.carregadoEm && (
+              <button onClick={descarregar} disabled={!!busy}
+                className="w-full mt-2 py-3.5 rounded-2xl bg-rose-50 text-rose-600 text-[10px] font-black uppercase active:scale-95 disabled:opacity-60">
+                <i className="fa-solid fa-truck-ramp-box mr-1"></i>Remover do veículo
+              </button>
+            )}
+            <button onClick={() => setSheetCarga(null)} className="w-full mt-2 py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Cancelar</button>
           </div>
         </div>
       )}

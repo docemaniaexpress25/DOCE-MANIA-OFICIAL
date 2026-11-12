@@ -954,3 +954,22 @@ CODIGO:
 - ABA ESTOQUE DO SECRETARIO: ja existia (BLOCO 19) e foi VALIDADA de ponta a ponta — lista TODOS os itens, ajusta quantidade via /api/secretario/estoque (whitelist estoque_principal, sessao SECRETARIO/ADMIN); nada a mudar, so prova.
 
 QA E2E (mock e2e, agent-browser; .env.local removido depois): usuario SECRETARIO criado no mock (sec01, PIN 123456); login Secretaria Teste → abas SEPARACAO/ESTOQUE; EDITAR PEDIDO no card Emporio (PV-ILA001): sheet abriu com itens+pagamento, forma → PIX + "Cliente ja pagou na visita", SALVAR → POST /api/pre-venda 200, fila recarregou com forma PAGO_VISITA/status PAGO/chip "JA PAGO NA VISITA"; cupom do pedido agora imprime "Pagamento na entrega: PAGO NA VISITA (PIX)" + "PAGAMENTO: PAGO NA VISITA (PIX)"; regressao: pedido normal (Pix a prazo) segue "Pagamento na entrega: PIX (A PRAZO)" + "PAGAMENTO: PIX A PRAZO 7 DIAS"; ESTOQUE: ajuste Palitinho Morango 100→85 → POST /api/secretario/estoque 200 + badge 85 un + toast; ADMIN: fila com EDITAR/CARREGAR/P1 intacta. Lint 0 erros/10 warnings (baseline). Zero erros de console/dev.log.
+## BLOCO 114 — SECRETARIO CARREGA E DESCARREGA A ENTREGA (CHECK_CARGA) (2026-11-12)
+
+PEDIDO DO CHEFE: "liberar tbm no login do secretario o fluxo de carregar a entrega e descarregar!"
+
+MAPEAMENTO: "Carregar/Descarregar" = o CHECK_CARGA da fila de entregas (BLOCO 96) — botao Carregar no card escolhe QUEM e o ENTREGADOR da venda (Entregador 1 PRINCIPAL + vendedores em chips) e marca o pedido no veiculo; descarregar = remover o check. A acao era exclusiva do ADMIN na API (403 "Somente o admin marca a carga") e a tela do secretario (SecretarioView) nao tinha o botao. A carga da VAN (cofre, /api/cargas) continua ADMIN-only — o pedido do chefe foi sobre carregar/descarregar a ENTREGA (mesmas palavras dos botoes da fila).
+
+API (src/app/api/pre-venda/route.ts):
+- POST CHECK_CARGA: gate `if (!admin)` -> `if (!admin && session.perfil !== 'SECRETARIO')` (msg "Somente admin/secretario marcam a carga"). ADMIN inalterado.
+- GET ?fila=1: lista de `entregadores` (Entregador 1 FIXO + vendedores ativos) agora sai tambem para SECRETARIO (era so ADMIN) — o sheet do secretario usa o mesmo seletor.
+- Sem risco de colisao: entregador_id/carga_confirmada_em/carga_confirmada_por seguem via resolveEntregadorUuid (aceita uuid real e pseudo-login); DESALOCAR_ENTREGA continua ADMIN-only (BLOCO 99: quem define e o admin).
+
+UI (src/components/doce/SecretarioView.tsx):
+- FilaItem ganhou carregadoEm/entregadorId/entregadorNome (ja vinham do enrichFila — a interface nao declarava); ApiResp ganhou entregadores[].
+- Card (a separar E separados): botao full-width "Carregar no veiculo" (verde claro); quando carregado: "No veiculo — <Entregador> · tocar p/ trocar/descarregar" (verde solido).
+- SHEET DE CARGA (copia do BLOCO 96 do admin): Entregador 1 botao GIGANTE PRINCIPAL, vendedores em chips, confirmar -> POST {acao:'CHECK_CARGA', saleId, carregado:true, entregadorId}; ja carregado: "Salvar entregador" (troca) + "Remover do veiculo" (descarregar). Fallback ambar "Nenhum vendedor ativo" com dica (pode carregar sem entregador — modo antigo). Sem DESALOCAR (fica pro admin, regra do BLOCO 99).
+
+QA E2E (agent-browser 390x844 e 1280x800, ponte dev -> producao, SOMENTE leitura/renderizacao — nenhum POST para nao mutar vendas reais do chefe): login Secretario (PIN 1234, 5 toques no logo) -> aba SEPARACAO carrega a fila real (3 a separar/6 separados/11 entregues); botao CARREGAR NO VEICULO presente nos 9 cards, full-width, sem sobrepor cupom/separado; sheet abre com titulo, cliente+valor, pergunta do entregador e fallback ambar (ESPERADO pre-deploy: backend antigo ainda nao devolve entregadores p/ SECRETARIO — pos-deploy aparecem Entregador 1 PRINCIPAL + chips) + Confirmar/Cancelar visiveis; sheet fecha limpo; aba ESTOQUE intacta; desktop 1280 card alinhado com EDITAR PEDIDO (113) intacto; ZERO erros de console e no dev.log.
+LINT: 0 erros / 10 warnings (baseline exata). tsc: zero erros nos 2 arquivos tocados (restantes pre-existentes do 108).
+POS-DEPLOY (verificar depois do push): GET entregadores chega no login secretario; botao Confirmar marca de verdade (chefe testa no campo).

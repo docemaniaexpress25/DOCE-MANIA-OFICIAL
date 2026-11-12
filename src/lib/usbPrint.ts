@@ -112,9 +112,18 @@ export function imprimirViaUsb(
     return;
   }
 
-  // Papel 58mm (32 colunas @ 10.5px Courier) | papel 80mm (48 colunas @ 10px)
+  // Papel 58mm (32 colunas @ 10.5px Courier) | papel 80mm (48 colunas @ 12px)
   const pageMm = width === '80MM' ? '80mm' : '58mm';
-  const fontPx = width === '80MM' ? '10px' : '10.5px';
+  const fontPx = width === '80MM' ? '12px' : '10.5px';
+  // BLOCO 113 (regra do dono): no 80mm o cupom saia PEQUENO — o dono testou no
+  // dialogo de impressao e a ESCALA 120% era o tamanho certo. O 120% agora nasce
+  // assado na pagina virtual: fonte 12px (era 10px = +20% de letra) e um
+  // letter-spacing negativo que compacta as 48 colunas de volta para os MESMOS
+  // 288px (~76mm) de hoje — sem ele, 48 colunas a 12px dariam 91mm e
+  // estourariam/cortariam o papel. A partir de agora: imprimir com a escala
+  // PADRAO (100%) do dialogo, sem escala personalizada. Letra maior + negrito
+  // = mais legivel e sem o "borrado" da letra miuda rasterizada pelo driver.
+  const espaco80 = width === '80MM' ? 'letter-spacing: -1.2px;' : '';
 
   const iframe = document.createElement('iframe');
   iframe.setAttribute('aria-hidden', 'true');
@@ -153,8 +162,12 @@ export function imprimirViaUsb(
     white-space: pre;
     color: #000;
     ${cssReforco}
+    ${espaco80}
   }
-  .peq { font-size: 0.72em; color: #000; }
+  /* Bloco 113: a fonte pequena (TROCAS) herda o espacamento compactado do
+     80mm — com 12px x 0.72 o negrito tocaria a letra vizinha; espacamento
+     proprio para a fonte pequena nao vazar tinta umas nas outras. */
+  .peq { font-size: 0.72em; color: #000; ${width === '80MM' ? 'letter-spacing: -0.8px;' : ''} }
 </style>
 </head>
 <body>${converterMarcadores(escapeHtml(String(texto || '')))}</body>

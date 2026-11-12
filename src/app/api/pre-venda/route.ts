@@ -1104,10 +1104,14 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ comissaoPct: COMISSAO_PV_DEFAULT });
     }
 
-    // ---------- BLOCO 31: produtos para o editor de pedido (admin) ----------
+    // ---------- BLOCO 31/113: produtos para o editor de pedido ----------
+    // BLOCO 113: o SECRETARIO da base agora edita pedidos antes da entrega
+    // (pedido do dono) — entao o editor de produtos atende admin E secretario.
     // Leve: colunas explicitas, so ativos — 1 request quando o modal abre.
     if (url.searchParams.get('produtos') === '1') {
-      if (!isAdminSession(req)) return NextResponse.json({ error: 'Acesso restrito ao admin.' }, { status: 403 });
+      if (!isAdminSession(req) && session.perfil !== 'SECRETARIO') {
+        return NextResponse.json({ error: 'Acesso restrito ao admin ou secretario.' }, { status: 403 });
+      }
       const { data, error } = await supabase
         .from('products')
         .select('id, nome, preco_venda, preco_minimo')
@@ -1537,11 +1541,15 @@ export async function POST(req: NextRequest) {
 
     // ---------- EDITAR_PEDIDO (BLOCO 31: admin edita o pedido antes da entrega) ----------
     // Itens (qtd/preco/adicionar/remover), condicao e forma de pagamento.
+    // BLOCO 113 (pedido do dono): o SECRETARIO da base TAMBEM edita o pedido
+    // enquanto a entrega nao foi finalizada (mesma tela do EditorPedido).
     // Somente PRE_VENDA nao entregue — BLOCO 88: o pedido ja RESERVOU o estoque
     // no registro; a edicao ajusta a reserva por delta (novo - antigo).
     // Comissao: nasce na entrega com o valor do pedido editado (sem ajuste aqui).
     if (acao === 'EDITAR_PEDIDO') {
-      if (!admin) return NextResponse.json({ ok: false, error: 'Somente o admin edita pedidos.' }, { status: 403 });
+      if (!admin && session.perfil !== 'SECRETARIO') {
+        return NextResponse.json({ ok: false, error: 'Somente o admin ou o secretario editam pedidos.' }, { status: 403 });
+      }
       if (saleRow.entrega_status === 'ENTREGUE') {
         return NextResponse.json({ ok: false, error: 'Pedido ja entregue — nao pode mais ser editado.' }, { status: 409 });
       }

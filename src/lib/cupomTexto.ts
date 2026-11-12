@@ -36,6 +36,20 @@ export function formaCobrancaDeSale(s: { metodoPagamento?: string; detalhePagame
   return 'DINHEIRO';
 }
 
+// ============================================================
+// BLOCO 113: PEDIDO PAGO NA VISITA no cupom.
+// O pedido editado como "Cliente ja pagou na visita" grava o detalhe
+// "PAGO NA VISITA pelo vendedor (PIX) — entrega sem cobranca". O cupom
+// precisa dizer ISSO (nao cobrar nada na entrega) e nao inventar uma
+// forma: extrai o instrumento do parenteses (PIX/DINHEIRO).
+// ============================================================
+export function pagoNaVisitaDeSale(detalhePagamento?: string | null): string | null {
+  const detU = String(detalhePagamento || '').toUpperCase();
+  if (!detU.includes('PAGO NA VISITA')) return null;
+  const m = detU.match(/PAGO NA VISITA[^()]*\((DINHEIRO|PIX)\)/);
+  return m ? `PAGO NA VISITA (${m[1]})` : 'PAGO NA VISITA';
+}
+
 /**
  * BLOCO 37 (regra do dono): tipo de documento do atendimento — impresso
  * DESTACADO na parte de baixo do cupom. Fontes, em ordem:
@@ -68,6 +82,9 @@ export function formaPagamentoDeSale(s: { metodoPagamento?: string; detalhePagam
 
   // ---- Pre-venda pendente: "PRE-VENDA — cobrar X na entrega (A PRAZO)" ----
   if (isPedido) {
+    // BLOCO 113: pago na visita — nada a cobrar na entrega (instrumento no parenteses)
+    const pagoVisita = pagoNaVisitaDeSale(det);
+    if (pagoVisita) return { forma: pagoVisita, condicao: 'A VISTA' };
     const m = detU.match(/COBRAR\s+(DINHEIRO|PIX|BOLETO|CHEQUE)\s+NA ENTREGA/);
     const forma = m ? m[1] : formaCobrancaDeSale(s);
     const condicao: 'A VISTA' | 'A PRAZO' = detU.includes('A PRAZO') ? 'A PRAZO' : 'A VISTA';
@@ -198,12 +215,14 @@ export function gerarCupomTexto({ sale, client, products, width }: CupomTextoInp
   // Pre-venda: imprime a forma combinada de cobranca na entrega
   const isPedido = sale.tipoVenda === 'PRE_VENDA' && sale.entregaStatus !== 'ENTREGUE';
   if (isPedido) {
-    const forma = formaCobrancaDeSale({ metodoPagamento: sale.metodoPagamento as string, detalhePagamento: sale.detalhePagamento });
-    const prazo = /A PRAZO/i.test(String(sale.detalhePagamento || ''));
+    const detPg = String(sale.detalhePagamento || '');
+    // BLOCO 113: pago na visita — "Pagamento na entrega: PAGO NA VISITA (PIX)"
+    const pagoVisita = pagoNaVisitaDeSale(detPg);
+    const prazo = /A PRAZO/i.test(detPg);
     // BLOCO 13.3: em 56mm (32 colunas) "Pagamento na entrega: DINHEIRO (A PRAZO)"
     // estoura a linha. A forma vai completa na linha de baixo (nunca quebra no meio).
     const pgLabel = 'Pagamento na entrega:';
-    const pgValor = `${forma}${prazo ? ' (A PRAZO)' : ' (A VISTA)'}`;
+    const pgValor = pagoVisita ?? `${formaCobrancaDeSale({ metodoPagamento: sale.metodoPagamento as string, detalhePagamento: detPg })}${prazo ? ' (A PRAZO)' : ' (A VISTA)'}`;
     if ((pgLabel + ' ' + pgValor).length <= totalWidth) {
       t += `${pgLabel} ${pgValor}\n`;
     } else {
@@ -266,6 +285,9 @@ export function gerarCupomTexto({ sale, client, products, width }: CupomTextoInp
   // no topo do cupom; quem separa nao precisa do resto).
   const tipoDoc = tipoDocumentoDeSale(sale as any);
   const { forma: formaPg, condicao: condicaoPg } = formaPagamentoDeSale(sale as any);
+  // BLOCO 113: no rodape, pedido pago na visita NAO leva condicao (A VISTA)
+  // em cima de "PAGO NA VISITA (PIX)" — imprime so a marcação.
+  const pagoVisitaRodape = isPedido ? pagoNaVisitaDeSale(String(sale.detalhePagamento || '')) : null;
 
   t += '='.repeat(totalWidth) + '\n';
   t += center(`>>> ${tipoDoc} <<<`, totalWidth) + '\n';
@@ -314,7 +336,10 @@ export function gerarCupomTexto({ sale, client, products, width }: CupomTextoInp
   // — nunca um label solto com a segunda linha fora de alinho.
   let payValor: string;
   let payValorCurto: string;
-  if (condicaoPg === 'A PRAZO') {
+  if (pagoVisitaRodape) {
+    payValor = pagoVisitaRodape;
+    payValorCurto = pagoVisitaRodape;
+  } else if (condicaoPg === 'A PRAZO') {
     let dias = 0;
     if (sale.dataVencimento) {
       // BLOCO 40: dias de CALENDARIO em America/Sao_Paulo (meio-dia UTC das

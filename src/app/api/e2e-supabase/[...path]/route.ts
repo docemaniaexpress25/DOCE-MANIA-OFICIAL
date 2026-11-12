@@ -44,6 +44,12 @@ const users = [{
   id: 'ent02', nome: 'Marcos Entregador', email: '', perfil: 'ENTREGADOR', ativo: true,
   telefone: '', whatsapp: '', foto: null, placa_veiculo: '', rota: '',
   pre_venda: false, rota2: false, pin_hash: hashSync('123456', 10),
+}, {
+  // BLOCO 113: SECRETARIO da base — abas Separação (fila + editar pedido) e
+  // Estoque (ajuste de quantidade via /api/secretario/estoque).
+  id: 'sec01', nome: 'Secretaria Teste', email: '', perfil: 'SECRETARIO', ativo: true,
+  telefone: '', whatsapp: '', foto: null, placa_veiculo: '', rota: '',
+  pre_venda: false, rota2: false, pin_hash: hashSync('123456', 10),
 }];
 
 const clients = [{

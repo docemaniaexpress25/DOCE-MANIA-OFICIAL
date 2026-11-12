@@ -5,6 +5,8 @@ import { authHeaders } from '@/services/userService';
 import { sounds } from '@/utils/sound';
 import Cupom from '@/components/doce/Cupom';
 import TrocasBox from '@/components/doce/TrocasBox';
+// BLOCO 113: secretario edita o pedido (itens + forma de pagamento) antes da entrega
+import EditorPedido from '@/components/doce/EditorPedido';
 
 /**
  * BLOCO 13 — TELA DO SECRETÁRIO DA BASE FÍSICA.
@@ -14,7 +16,14 @@ import TrocasBox from '@/components/doce/TrocasBox';
  *  - separa o pedido na prateleira e aperta SEPARADO -> card fica CINZA
  *  - 🔔 ALARME SONORO quando entra pedido novo (tocar até reconhecer)
  *
- * O secretário NÃO vende, NÃO entrega e NÃO mexe em valores.
+ * BLOCO 113 (pedido do dono): ganhou o botão EDITAR PEDIDO — ajusta itens
+ * (qtd/preço/adicionar/remover) e a FORMA DE PAGAMENTO (à vista/a prazo,
+ * instrumento, vencimento, pago na visita) enquanto a entrega não foi
+ * finalizada. Mesmo EditorPedido da fila do admin; o servidor aceita
+ * SECRETARIO na ação EDITAR_PEDIDO.
+ *
+ * O secretário NÃO vende, NÃO entrega e NÃO mexe no cadastro de produtos
+ * (a aba Estoque segue limitada à quantidade — BLOCO 19).
  */
 
 interface FilaItem {
@@ -27,6 +36,9 @@ interface FilaItem {
   statusPagamento: string;
   formaPgto: string;
   condicao: string;
+  // BLOCO 113: detalhe real da venda — o cupom usa para o PAGO NA VISITA (PIX)
+  // em vez do texto sintético "cobrar PAGO_VISITA na entrega".
+  detalhePagamento?: string | null;
   trocas: string | null;
   trocasValor?: number | null;
   prioridade: number;
@@ -51,6 +63,9 @@ const PGTO_META: Record<string, { label: string; icon: string; chip: string }> =
   DINHEIRO: { label: 'Dinheiro', icon: 'fa-solid fa-money-bill-wave', chip: 'bg-emerald-50 text-emerald-700' },
   PIX: { label: 'Pix', icon: 'fa-brands fa-pix', chip: 'bg-teal-50 text-teal-700' },
   BOLETO: { label: 'Boleto', icon: 'fa-solid fa-barcode', chip: 'bg-amber-50 text-amber-700' },
+  // BLOCO 113: formas que o editor de pedido pode gravar (mesma fila do admin)
+  PAGO_VISITA: { label: 'Já pago na visita', icon: 'fa-solid fa-circle-check', chip: 'bg-emerald-100 text-emerald-800' },
+  CHEQUE: { label: 'Cheque', icon: 'fa-solid fa-money-check', chip: 'bg-slate-50 text-slate-700' },
 };
 const pgtoMeta = (m: string) => PGTO_META[m] || PGTO_META.DINHEIRO;
 
@@ -64,6 +79,8 @@ const SecretarioView: React.FC<{ user: User; showToast: (m: string, t?: 'success
   const [alarmando, setAlarmando] = useState(false);
   // BLOCO 14: ajustar trocas no card (ex.: substituiu por outro do mesmo valor)
   const [editTrocas, setEditTrocas] = useState<{ p: FilaItem; texto: string; valor: string } | null>(null);
+  // BLOCO 113: editar o pedido inteiro (itens + forma de pagamento)
+  const [editPedido, setEditPedido] = useState<FilaItem | null>(null);
   // quantidade de pedidos ainda NAO separados — base do alarme
   const aSepararRef = useRef<number>(-1);
   const alarmTimer = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -143,7 +160,9 @@ const SecretarioView: React.FC<{ user: User; showToast: (m: string, t?: 'success
     valorTotal: p.valorTotal,
     valorPago: p.valorPago,
     metodoPagamento: 'A_PRAZO',
-    detalhePagamento: `PRE-VENDA — cobrar ${p.formaPgto} na entrega (${p.condicao === 'APRAZO' ? 'A PRAZO' : 'A VISTA'})`,
+    // BLOCO 113: detalhe REAL do banco (mantém "PAGO NA VISITA pelo vendedor
+    // (PIX)" e "| COM NOTA: ..." no cupom). Sem detalhe, sintetiza como antes.
+    detalhePagamento: p.detalhePagamento || `PRE-VENDA — cobrar ${p.formaPgto} na entrega (${p.condicao === 'APRAZO' ? 'A PRAZO' : 'A VISTA'})`,
     statusPagamento: p.statusPagamento,
     itens: p.itens.map(i => ({ produtoId: i.produtoId, quantidade: i.quantidade, precoVenda: i.precoVenda })),
     dataVencimento: p.dataVencimento ? new Date(p.dataVencimento) : undefined,
@@ -212,6 +231,12 @@ const SecretarioView: React.FC<{ user: User; showToast: (m: string, t?: 'success
               <div className="flex items-center gap-2 mt-1.5 flex-wrap">
                 <span className="text-[13px] font-black text-gray-800">{fmt(p.valorTotal)}</span>
                 <span className={`text-[9px] font-black px-2 py-0.5 rounded-md uppercase ${pg.chip}`}><i className={`${pg.icon} mr-1`}></i>{pg.label}</span>
+                {/* BLOCO 113: editar itens e forma de pagamento antes da entrega */}
+                <button onClick={() => setEditPedido(p)} disabled={!!busy}
+                  title="Editar itens e forma de pagamento do pedido"
+                  className="text-[9px] font-black uppercase px-2 py-1 rounded-lg bg-violet-50 text-violet-600 border border-violet-100 active:scale-95 transition-transform disabled:opacity-60">
+                  <i className="fa-solid fa-pen-to-square mr-1"></i>Editar pedido
+                </button>
                 {p.vendedorNome && <span className="text-[8px] font-bold text-gray-400 uppercase">venda: {p.vendedorNome}</span>}
               </div>
             </div>
@@ -342,6 +367,24 @@ const SecretarioView: React.FC<{ user: User; showToast: (m: string, t?: 'success
             <button onClick={() => setEditTrocas(null)} className="w-full mt-2 py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Cancelar</button>
           </div>
         </div>
+      )}
+
+      {/* ===== BLOCO 113: EDITAR PEDIDO (itens + forma de pagamento) ===== */}
+      {editPedido && (
+        <EditorPedido
+          pedido={{
+            saleId: editPedido.saleId,
+            numero: editPedido.numero,
+            cliente: { nome: editPedido.cliente.nome },
+            valorTotal: editPedido.valorTotal,
+            formaPgto: editPedido.formaPgto,
+            condicao: editPedido.condicao,
+            itens: editPedido.itens,
+          }}
+          onClose={() => setEditPedido(null)}
+          onSalvo={(msg) => { setEditPedido(null); showToast(msg, 'success'); load(true); }}
+          showToast={showToast}
+        />
       )}
 
       {/* ===== CUPOM IDENTICO ===== */}

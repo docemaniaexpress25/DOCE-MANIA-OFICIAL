@@ -1184,3 +1184,20 @@ QA:
 - LINT: 0 erros / 10 warnings (baseline exata).
 
 SEM SQL — nenhuma mudanca de schema (a regra usa entregador_id/carga_confirmada_em que ja existem).
+
+## bloco120 — FIX: IPHONE NAO IMPRIMIA OS CUPONS (2026-11-13)
+
+DONO: "iphone nao esta conseguindo imprimir os cupons, arrume por favor"
+
+CAUSA RAIZ: no iOS o Safari NAO TEM navigator.bluetooth — o canal cai em USB (correto), mas o canal USB imprimia via IFRAME ESCONDIDO chamando iframe.contentWindow.print(). O Safari do iPhone IGNORA print() vindo de iframe: a folha de impressao nunca abre e nada acontece, SEM erro nenhum. Segundo caminho quebrado no iOS: a folha "Ordem de Entrega" chamava window.print() dentro de setTimeout(150) — depois do timeout a chamada perde o gesto do usuario e o iOS tambem ignora.
+
+IMPLEMENTACAO:
+- src/lib/usbPrint.ts: export dispositivoIOS() (iPhone/iPod/iPad classico + iPad em modo desktop "Macintosh" com toque). imprimirViaUsb() agora DETECTA iOS e usa caminho proprio imprimirViaIos(): cupom montado num container NO DOCUMENTO PRINCIPAL que so existe na impressao (@page 58/80mm; @media print esconde todo o app e mostra so o cupom — mesma tipografia/negrito/escala do papel virtual do desktop) + window.print(). PAINEL DE REFORCO (fixed, bottom + safe-area, z maximo) com botao grande "IMPRIMIR CUPOM": se o print() automatico for ignorado (chamadas depois de await perdem o gesto no iOS), o toque no botao e GESTO DIRETO — a folha abre com certeza. Painel tem dica: no iPhone escolher impressora AirPrint; termica somente-Bluetooth continua no Android/PC (limitacao do Safari, nao do sistema). Limpeza no afterprint + FECHAR + timeout 120s; impressao nova remove sobras da anterior. Caminho desktop/Android (iframe) INTACTO — zero mudanca para quem ja imprimia.
+- FilaEntregas.tsx (folha "Ordem de Entrega"): no iOS o auto-print de 150ms NAO roda mais — a folha fica aberta com botao verde "IMPRIMIR AGORA" (toque direto) e FECHAR; nos outros aparelhos a impressao automatica de sempre.
+- Todos os pontos de impressao herdam o fix por terem o mesmo funil (PDV cupom/ressuprimento, Cupom, DANFE da fila, VendedorDashboard, RelatorioFiscal, lista de carga): 1 correcao central, zero mudanca de chamada.
+
+QA:
+- LINT: 0 erros / 10 warnings (baseline exata); dev server compilou limpo.
+- SONDA POS-DEPLOY: confirmar 'dm-impressao-termica' no bundle JS de producao (pagina carrega e o caminho iOS entra no ar). Teste fisico na folha do iPhone e com o dono (AirPrint) — limite do sandbox: nao ha iPhone/AirPrint aqui; a correcao segue o padrao conhecido do Safari (print so pela janela principal + gesto direto).
+
+SEM SQL — nenhuma mudanca de schema/API.

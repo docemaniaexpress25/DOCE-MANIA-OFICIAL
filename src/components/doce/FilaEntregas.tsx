@@ -12,7 +12,7 @@ import { notaService } from '@/services/notaService';
 import { danfeMiniTexto } from '@/lib/danfeTexto';
 import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
 // BLOCO 111: impressão térmica USB do PC — canal BT x USB persistente por dispositivo
-import { imprimirViaUsb, lerCanalImpressao } from '@/lib/usbPrint';
+import { imprimirViaUsb, lerCanalImpressao, dispositivoIOS } from '@/lib/usbPrint';
 // BLOCO 61: arrastar-e-soltar estilo kanban para ordenar a rota (dnd-kit).
 // Funciona com mouse, TOQUE (celular do admin) e teclado (espaco pega, setas
 // movem, espaco solta) — substitui as setas de cima/baixo do Bloco 31.
@@ -821,6 +821,11 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
     const prontos = listaOrdenada.filter(p => p.carregadoEm);
     if (prontos.length === 0) { showToast('Nenhum pedido carregado ainda — marque os pedidos no veículo antes de imprimir.', 'error'); return; }
     setMostrarLista(true);
+    // BLOCO 120 (iPhone): print() depois de setTimeout perde o gesto e o iOS
+    // IGNORA a chamada (folha nunca abre). No iPhone a folha fica na tela com
+    // o botao "IMPRIMIR AGORA" — toque direto = gesto garantido. Nos outros
+    // aparelhos mantem a impressao automatica de sempre.
+    if (dispositivoIOS()) return;
     setTimeout(() => { window.print(); setMostrarLista(false); }, 150);
   }
 
@@ -2358,6 +2363,11 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
             <p className="text-[9px] text-gray-400 text-center mt-4">{ordemManualAtiva ? 'Ordem definida pelo admin (arrastar-e-soltar na fila).' : 'Regra: P1 primeiro, depois P2, depois mais antigo.'} Assinatura do entregador: ____________________</p>
           </div>
           <div className="max-w-xl mx-auto mt-4 print:hidden">
+            {/* BLOCO 120 (iPhone): botao com GESTO DIRETO — o auto-print de 150ms
+                e ignorado pelo iOS, entao aqui o dono manda imprimir por toque. */}
+            {dispositivoIOS() && (
+              <button onClick={() => window.print()} className="w-full bg-emerald-600 text-white font-black py-3 rounded-2xl uppercase text-[10px] mb-2">Imprimir agora</button>
+            )}
             <button onClick={() => setMostrarLista(false)} className="w-full bg-slate-800 text-white font-black py-3 rounded-2xl uppercase text-[10px]">Fechar</button>
           </div>
         </div>

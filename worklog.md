@@ -1201,3 +1201,24 @@ QA:
 - SONDA POS-DEPLOY (commit 4d16ded no ar): varredura do grafo de chunks de producao (shell 10KB -> BFS nos chunks) — MARCA ENCONTRADA em /_next/static/immutable/chunks/2xf3xkf88jxc_.js (novo usbPrint no ar). Teste fisico na folha do iPhone e com o dono (AirPrint) — limite do sandbox: nao ha iPhone/AirPrint aqui; a correcao segue o padrao conhecido do Safari (print so pela janela principal + gesto direto).
 
 SEM SQL — nenhuma mudanca de schema/API.
+
+## bloco120.1 — FIX: VENDEDOR ENTREGAVA SUA PROPIA VENDA SEM O ADMIN TER CARREGADO (2026-11-13)
+
+DONO: "ESTOU LOGADO COMO VENDEDOR! E ELE ESTA VENDO AS SUAS ENTREGAS E PODENDO ENTREGAR ELAS MESMO SEM TER SIDO CARREGADO PELO ADMIN! ISSO NAO PODE ACONTECER! ELE PODERA VER A FILA DE ENTREGAS POREM NAO PODERA ENTREGAR SE NAO FOR CARREGADO PARA ELE COMO ADMIN, LOGADO COMO ENTREGADOR TA TUDO CORRETO! POREM ARRUME ESSA TELA DE ENTREGAS DO VENDEDOR! ELE SO PODERA VER AS ENTREGAS EM TRANSITO E A FILA! POREM PODERA ENTREGAR APENAS AS QUE TIVEREM CARREGADAS NO NOME DELE!"
+
+CAUSA RAIZ (fresta da regra 119): o guard do POST e a flag minhaCarga consideravam "carga no nome dele" = atribuida a ele OU venda PROPIA sem atribuicao (entregaPropria). Resultado: o vendedor via suas pre-vendas nao carregadas no bloco verde "SUAS ENTREGAS" e entregava sem o check de carga do admin/secretario — caixa furado.
+
+NOVA REGRA DO VENDEDOR (entregador INTACTO, dono validou; admin mantem poder total):
+- VENDEDOR so entrega (ENTREGUE/FALHOU/REABRIR) a entrega CARREGADA NO NOME DELE: os DOIS juntos — carga_confirmada_em (check de carga feito) E entregador_id = uuid dele.
+- Venda propria SEM carregamento: aparece na fila SO para conferencia (403 com mensagem clara no servidor).
+
+IMPLEMENTACAO (src/app/api/pre-venda/route.ts):
+- POST (guard ENTREGUE/FALHOU/REABRIR): carregadaNoNomeDoVendedor = perfil VENDEDOR && carga_confirmada_em && entregador_id == userId (busca tolerante da coluna — bancos sem SQL 58 ficam bloqueados, sem quebrar o POST). Mensagens 403 novas: sem atribuicao -> "Essa entrega NAO esta CARREGADA NO SEU NOME — o admin/secretario carrega no check de carga. Voce ve a fila so para conferencia."; atribuida a ele sem carga -> "Essa entrega esta no seu nome mas SEM o check de carga do admin/secretario — aguarde o carregamento no veiculo."; carregada para outro -> mensagem do dono (119, mantida e agora vale para vendedor tb).
+- GET ?fila=1: enrichFila ganha perfilRecebimento — minhaCarga do VENDEDOR agora exige carregada no nome dele; ENTREGADOR mantem a regra 119 (atribuida a ele). Fila ativa, falhados e entregues de hoje usam a mesma conta.
+- UI (FilaEntregas.tsx): banner do card sem atribuicao, quando o logado e o VENDEDOR dono da venda, agora diz "Sua venda ainda NAO foi carregada no seu nome — o admin/secretario faz o check de carga. So conferencia aqui." (antes dizia que o proprio vendedor recebia). Comentario do bloco recebivel atualizado.
+
+QA:
+- LINT: 0 erros / 10 warnings (baseline exata).
+- SONDA POS-DEPLOY (planejada): entregador fixo — as 4 cargas dele continuam minhaCarga=true (regra 119 intacta) e as do Daniel false; e o bundle com a nova conta no ar. Teste do vendedor real: mensagem 403 nova exige login de vendedor (PIN so do dono) — validar com o dono na folha dele.
+
+SEM SQL — nenhuma mudanca de schema.

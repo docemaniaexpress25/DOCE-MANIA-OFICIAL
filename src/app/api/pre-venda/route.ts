@@ -542,8 +542,11 @@ async function updateSaleFlex(supabase: any, saleId: string, payload: Record<str
  * "ENTREGADOR" (nao-uuid) e a carga gravada em sales.entregador_id e UUID —
  * comparar no CLIENTE nunca bate e o botao de receber nao aparece. O SERVIDOR
  * conhece o uuid resolvido (resolveEntregadorUuid) e declara minhaCarga em
- * cada item; o cliente so obedece. Admin recebe undefined (pode receber tudo). */
-async function enrichFila(supabase: any, salesRows: any[], donoRecebimento?: string | null) {
+ * cada item; o cliente so obedece. Admin recebe undefined (pode receber tudo).
+ * BLOCO 120.1 (regra do dono): para VENDEDOR, minhaCarga = CARREGADA no nome
+ * dele (check de carga do admin/secretario: carga_confirmada_em + entregador_id
+ * = ele). Venda propria SEM carregamento NAO e recebivel — so conferencia. */
+async function enrichFila(supabase: any, salesRows: any[], donoRecebimento?: string | null, perfilRecebimento?: string) {
   if (salesRows.length === 0) return [];
   const clientIds = [...new Set(salesRows.map((s: any) => s.client_id).filter(Boolean))];
   const saleIds = salesRows.map((s: any) => s.id);
@@ -635,9 +638,16 @@ async function enrichFila(supabase: any, salesRows: any[], donoRecebimento?: str
       //   sem atribuicao -> so o VENDEDOR da venda.
       // undefined para admin (pode receber tudo) e para bancos legados.
       minhaCarga: donoRecebimento
-        ? (s.entregador_id
-            ? String(s.entregador_id) === String(donoRecebimento)
-            : String(s.vendedor_id || '') === String(donoRecebimento))
+        ? (perfilRecebimento === 'VENDEDOR'
+            // BLOCO 120.1 (regra do dono): vendedor so e recebivel o CARREGADO
+            // no nome dele (check de carga do admin/secretario) — venda propria
+            // sem carregamento fica so para conferencia.
+            ? (!!s.carga_confirmada_em && String(s.entregador_id || '') === String(donoRecebimento))
+            // ENTREGADOR (regra 119 mantida): atribuida a ele no check de carga;
+            // sem atribuicao, praticamente nunca e do entregador.
+            : (s.entregador_id
+                ? String(s.entregador_id) === String(donoRecebimento)
+                : String(s.vendedor_id || '') === String(donoRecebimento)))
         : undefined,
       // BLOCO 98: o UUID do acesso fixo da base = o "ENTREGADOR 1" (quem loga
       // como entregador) — nome nominal em vez de "Entregador" generico.
@@ -752,7 +762,7 @@ async function getFila(supabase: any, userId: string, perfil: string) {
   const entreguesHojeIds = new Set((evHoje || []).map((e: any) => e.sale_id));
   const entreguesHoje = (entreguesRows || []).filter((s: any) => entreguesHojeIds.has(s.id));
 
-  const fila = await enrichFila(supabase, ativasRows || [], meuUuidCarga);
+  const fila = await enrichFila(supabase, ativasRows || [], meuUuidCarga, perfil);
   // BLOCO 31: se o admin ja definiu ordem manual (setas), ela MANDA —
   // pedidos novos (sem ordem) entram no fim da fila, por antiguidade.
   if (fila.some((f: any) => typeof f.ordemEntrega === 'number' && f.ordemEntrega > 0)) {
@@ -951,7 +961,7 @@ async function getFila(supabase: any, userId: string, perfil: string) {
     trocasValor: temTrocasValor ? (p.trocas_valor ?? null) : null,
   }));
 
-  const entreguesHojeEnr = await enrichFila(supabase, entreguesHoje, meuUuidCarga);
+  const entreguesHojeEnr = await enrichFila(supabase, entreguesHoje, meuUuidCarga, perfil);
   const nomePorSale: Record<string, string> = {};
   for (const p of entreguesHojeEnr) nomePorSale[String(p.saleId)] = p.cliente?.nome || 'Cliente';
 
@@ -1002,7 +1012,7 @@ async function getFila(supabase: any, userId: string, perfil: string) {
   return {
     hoje: todayStr(),
     fila: filaFmt,
-    falhados: await enrichFila(supabase, falhados || [], meuUuidCarga),
+    falhados: await enrichFila(supabase, falhados || [], meuUuidCarga, perfil),
     entreguesHoje: entreguesHojeEnr,
     // BLOCO 96: entregadores ativos (o admin escolhe QUEM leva cada venda no check de carga)
     entregadores,
@@ -1786,12 +1796,14 @@ export async function POST(req: NextRequest) {
 
     // ============================================================================
     // BLOCO 13: ENTREGUE / FALHOU / REABRIR — FILA CONTINUA (sem rota obrigatória)
-    // REGRA DO DONO (Bloco 119 — CONFERENCIA DE ENTREGAS E VALORES): a fila
+    // REGRA DO DONO (Bloco 119/120.1 — CONFERENCIA DE ENTREGAS E VALORES): a fila
     // aparece inteira para todos (vendedor/entregador conferem), mas o
-    // RECEBIMENTO e exclusivo de quem tem a CARGA NO SEU NOME:
-    // - entrega atribuida no check de carga (entregador_id): SO o atribuido
-    //   recebe (a carga foi carregada para ele pelo secretario/admin);
-    // - sem atribuicao: SO o VENDEDOR da venda recebe (a carga e dele);
+    // RECEBIMENTO e exclusivo de quem tem a CARGA CARREGADA NO SEU NOME:
+    // - VENDEDOR (Bloco 120.1): SO entrega o que o admin/secretario CARREGOU no
+    //   nome dele (check de carga = carga_confirmada_em + entregador_id = ele).
+    //   Venda propria SEM carregamento NAO pode ser entregue — fica na fila so
+    //   para conferencia (fechamento do caixa na mao de quem carrega, sem furada).
+    // - ENTREGADOR (Bloco 119, mantido — dono validou): entrega atribuida a ele.
     // - ADMIN mantem o poder total (conferencia e correcao).
     // ============================================================================
     const entregaPropria = String(saleRow.vendedor_id || '') === String(userId);
@@ -1800,8 +1812,19 @@ export async function POST(req: NextRequest) {
     const atribuidoA = saleRow.entregador_id ? String(saleRow.entregador_id) : null;
     const meuEntUuid = session.perfil === 'ENTREGADOR' ? await resolveEntregadorUuid(supabase, userId) : userId;
     const atribuidaAele = !!atribuidoA && String(meuEntUuid || '') === atribuidoA;
+    // BLOCO 120.1: busca tolerante do check de carga (bancos sem a coluna do
+    // SQL 58 ficam com null = entrega nao carregada = vendedor bloqueado).
+    let carregadoEmPost: string | null = null;
+    try {
+      const rCarga = await supabase.from('sales').select('carga_confirmada_em').eq('id', saleId).maybeSingle();
+      if (!rCarga.error && rCarga.data) carregadoEmPost = rCarga.data.carga_confirmada_em ?? null;
+    } catch { /* coluna ausente (SQL 58 pendente): segue como nao carregada */ }
+    // BLOCO 120.1 (regra do dono): para o VENDEDOR, "carga no nome dele" exige
+    // os DOIS: check de carga feito (carga_confirmada_em) E atribuicao a ele.
+    const carregadaNoNomeDoVendedor = session.perfil === 'VENDEDOR' &&
+      !!carregadoEmPost && atribuidoA === String(userId);
     const podeEntregar = admin || session.perfil === 'ENTREGADOR' ||
-      (session.perfil === 'VENDEDOR' && (entregaPropria || atribuidaAele));
+      (session.perfil === 'VENDEDOR' && carregadaNoNomeDoVendedor);
     if (acao === 'ENTREGUE' || acao === 'FALHOU' || acao === 'REABRIR') {
       if (!admin) {
         // BLOCO 119 (regra do dono — CONFERENCIA DE ENTREGAS E VALORES): quem
@@ -1813,6 +1836,15 @@ export async function POST(req: NextRequest) {
             if (uEnt?.nome) nomeEnt = String(uEnt.nome);
           } catch { /* app_users antigo: segue com o nome padrao */ }
           return NextResponse.json({ ok: false, error: `Essa entrega foi CARREGADA para ${nomeEnt}. So ele recebe — nada de dinheiro por conta de outro.` }, { status: 403 });
+        }
+        // BLOCO 120.1 (regra do dono): o VENDEDOR sem o check de carga NO SEU
+        // nome NAO entrega — nem a venda PROPIA dele (era a fresta: ele via
+        // "SUAS ENTREGAS" e entregava sem o admin ter carregado).
+        if (session.perfil === 'VENDEDOR' && !carregadaNoNomeDoVendedor) {
+          if (!atribuidoA) {
+            return NextResponse.json({ ok: false, error: 'Essa entrega NAO esta CARREGADA NO SEU NOME — o admin/secretario carrega no check de carga. Voce ve a fila so para conferencia.' }, { status: 403 });
+          }
+          return NextResponse.json({ ok: false, error: 'Essa entrega esta no seu nome mas SEM o check de carga do admin/secretario — aguarde o carregamento no veiculo.' }, { status: 403 });
         }
         if (!atribuidoA && !entregaPropria) {
           let nomeVend = 'o vendedor';

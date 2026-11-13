@@ -1161,13 +1161,21 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                     <p className="text-[9px] font-black text-slate-700 uppercase leading-snug">
                       <i className="fa-solid fa-user mr-1 text-teal-600"></i>Carga do vendedor {p.vendedorNome || '—'} — recebimento DELE
                     </p>
-                    <p className="text-[8px] font-semibold text-slate-500 mt-0.5 leading-snug">Sem entregador atribuído: quem recebe é o próprio vendedor da venda.</p>
+                    <p className="text-[8px] font-semibold text-slate-500 mt-0.5 leading-snug">
+                      {/* BLOCO 120.1 (regra do dono): para o VENDEDOR logado, a venda
+                          propria SEM check de carga NAO e recebivel — precisa do
+                          carregamento no nome dele pelo admin/secretario. */}
+                      {modo === 'VENDEDOR' && p.vendedorId === user.id
+                        ? 'Sua venda ainda NÃO foi carregada no seu nome — o admin/secretário faz o check de carga. Só conferência aqui.'
+                        : 'Sem entregador atribuído: quem recebe é o vendedor — e só com o check de carga no nome dele.'}
+                    </p>
                   </>
                 )}
               </div>
             ) : (
-              /* Pode receber: carga no NOME DELE (atribuida no check de carga
-                 ou venda propria sem entregador) — botões ENTREGUE/FALHOU. */
+              /* Pode receber: carga CARREGADA NO NOME DELE pelo admin/secretario
+                 (check de carga) — botões ENTREGUE/FALHOU. BLOCO 120.1: venda
+                 propria sem carregamento NAO entra mais aqui (so conferencia). */
               <div className="flex gap-2 mt-2">
                 <button
                   onClick={() => abrirSheetEntrega(p)}

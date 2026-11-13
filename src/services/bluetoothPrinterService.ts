@@ -266,7 +266,8 @@ class BluetoothPrinterService {
   constructor() {
     // Recover last printer ID from localStorage
     if (typeof window !== 'undefined') {
-      this.lastPrinterId = localStorage.getItem('bt_printer_id');
+      // BLOCO 118.4 (HOTFIX iPHONE): storage bloqueado lanca SecurityError — o app nao pode quebrar no boot.
+      try { this.lastPrinterId = localStorage.getItem('bt_printer_id'); } catch { this.lastPrinterId = null; }
 
       // BLOCO 68: o Android/Chrome costuma derrubar o GATT com o app em
       // segundo plano (tela apagada entre um atendimento e outro). Ao VOLTAR
@@ -313,7 +314,7 @@ class BluetoothPrinterService {
    */
   getSavedPrinterName(): string | null {
     if (typeof window === 'undefined') return null;
-    return localStorage.getItem('bt_printer_name');
+    try { return localStorage.getItem('bt_printer_name'); } catch { return null; }
   }
 
   /**
@@ -409,8 +410,10 @@ class BluetoothPrinterService {
 
     this.printer = printer;
     this.lastPrinterId = printer.device.id;
-    localStorage.setItem('bt_printer_id', printer.device.id);
-    localStorage.setItem('bt_printer_name', printer.name);
+    try {
+      localStorage.setItem('bt_printer_id', printer.device.id);
+      localStorage.setItem('bt_printer_name', printer.name);
+    } catch { /* storage bloqueado: impressora segue funcionando so na sessao */ }
     this.manualDisconnect = false;
 
     // BLOCO 68: guarda o device da sessao para reconexões silenciosas e
@@ -909,8 +912,10 @@ class BluetoothPrinterService {
     this.disconnect();
     this.lastDevice = null;
     this.lastPrinterId = null;
-    localStorage.removeItem('bt_printer_id');
-    localStorage.removeItem('bt_printer_name');
+    try {
+      localStorage.removeItem('bt_printer_id');
+      localStorage.removeItem('bt_printer_name');
+    } catch { /* ignora */ }
   }
 
   // ============================================================

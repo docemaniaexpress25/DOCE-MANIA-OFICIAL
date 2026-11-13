@@ -22,23 +22,35 @@ const dateReviver = (key: string, value: any): any => {
 };
 
 // Generic function to load state from localStorage
+// BLOCO 118.4 (HOTFIX iPHONE): o getItem agora esta DENTRO do try/catch.
+// Antes, se o Safari do iPhone tivesse "Bloquear todos os cookies", modo
+// privado antigo ou quota estourada, o localStorage LANCAVA SecurityError
+// e — como loadLocalState roda SINCRONO no primeiro render (useState) —
+// derrubava o React inteiro: TELA BRANCA sem recuperacao.
+// Agora qualquer falha de storage devolve o default e o app abre normal.
 export const loadLocalState = <T>(key: string, defaultValue: T): T => {
   if (typeof window === 'undefined') return defaultValue;
-  
-  const saved = localStorage.getItem(key);
-  if (saved) {
-    try {
-      const parsed = JSON.parse(saved, dateReviver);
-      return parsed as T;
-    } catch (e) {
-      console.error(`Error parsing localStorage key ${key}`, e);
-      localStorage.removeItem(key);
+  try {
+    const saved = localStorage.getItem(key);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved, dateReviver);
+        return parsed as T;
+      } catch (e) {
+        console.error(`Error parsing localStorage key ${key}`, e);
+        try { localStorage.removeItem(key); } catch { /* storage bloqueado */ }
+      }
     }
+  } catch (e) {
+    // SecurityError (cookies bloqueados / modo privado) ou QuotaExceeded:
+    // segue com o default — o app NUNCA deve quebrar por causa do storage.
+    console.error(`Error reading localStorage key ${key}`, e);
   }
   return defaultValue;
 };
 
 // Generic function to save state to localStorage
+// BLOCO 118.4: protege contra QuotaExceeded/SecurityError (iPhone).
 export const saveLocalState = <T>(key: string, state: T): void => {
   if (typeof window !== 'undefined') {
     try {

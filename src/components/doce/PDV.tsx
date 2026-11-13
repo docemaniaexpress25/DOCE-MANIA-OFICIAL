@@ -776,7 +776,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       // vendedor recarregar/desistir durante a demora, o pedido não se repete.
       // Em falha, o carrinho volta para a tela.
       const carrinhoPrev = cart;
-      localStorage.removeItem(cartKey);
+      try { localStorage.removeItem(cartKey); } catch { /* storage bloqueado */ }
       setCart({});
 
       // ===== PRE-VENDA: registra o PEDIDO (sem cobranca, sem baixa de carga) =====
@@ -897,7 +897,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     // vendedor recarregar/desistir durante a demora, o pedido não se repete.
     // Em falha, o carrinho volta para a tela.
     const carrinhoPrev = cart;
-    localStorage.removeItem(cartKey);
+    try { localStorage.removeItem(cartKey); } catch { /* storage bloqueado */ }
     setCart({});
 
     const newSale = await processSale(pend.payload);
@@ -983,7 +983,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       // BLOCO 44 (anti-duplicação): o carrinho sai da tela ANTES do envio —
       // recarregou/desistiu durante a demora = pedido não se repete. Falha volta.
       const carrinhoPrev = cart;
-      localStorage.removeItem(cartKey);
+      try { localStorage.removeItem(cartKey); } catch { /* storage bloqueado */ }
       setCart({});
       const formaApi = w.condicao === 'AVISTA'
         ? (w.forma === 'MISTO' ? 'DINHEIRO' : w.forma)

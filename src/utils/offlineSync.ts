@@ -22,7 +22,10 @@ function getQueue(): QueuedOp[] {
 }
 
 function saveQueue(queue: QueuedOp[]) {
-  localStorage.setItem(QUEUE_KEY, JSON.stringify(queue));
+  // BLOCO 118.4 (HOTFIX iPHONE): localStorage bloqueado/cheio lanca — nao pode derrubar o fluxo de venda.
+  try {
+    localStorage.setItem(QUEUE_KEY, JSON.stringify(queue));
+  } catch { /* storage indisponivel: fila segue so em memoria nesta execucao */ }
 }
 
 export const offlineSync = {

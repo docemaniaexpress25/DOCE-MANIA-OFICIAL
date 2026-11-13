@@ -179,6 +179,9 @@ export const notificationService = {
 
   savePreferences(types: NotificationType[]) {
     if (typeof window === 'undefined') return;
-    localStorage.setItem('admin_notif_prefs', JSON.stringify(types));
+    // BLOCO 118.4 (HOTFIX iPHONE): storage bloqueado nao pode quebrar a tela.
+    try {
+      localStorage.setItem('admin_notif_prefs', JSON.stringify(types));
+    } catch { /* ignora */ }
   },
 };

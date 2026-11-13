@@ -1061,3 +1061,14 @@ QA E2E (mock, agent-browser; .env.local do mock removido depois):
 - LAYOUT mobile 390x844 e desktop 1280x800 alinhados; ZERO erros de console (so warnings de push permission do browser) e ZERO erros no dev.log.
 LINT: 0 erros / 10 warnings (baseline exata).
 PENDENTE DO DONO: rodar sql/bloco118_caixa_fechamento.sql no Supabase (ate la o GET /api/caixa responde 503 com instrucao — degradacao segura, nada quebra).
+
+## bloco118.2 — CORRECAO: apagar a venda de teste "M ADRIANO" que apareceu no Caixa (2026-11-13)
+
+DONO: "RODEI! POREM APAGUE AQUELA VENDA M ADRIANO QUE APARECE NO CAIXA DO DAVID!"
+
+DIAGNOSTICO (sondas de producao, login secretario): SQL 118 rodado e NO AR — GET /api/caixa ok:true. Caixa ABERTO ja ZERADO (0 pagamentos) e historico com 1 fechamento (44c6706f-9e23-4907-a1af-5c560f2659b1, 17:58 UTC, "Administrador", R$ 264.26 DINHEIRO, qtdePagamentos 1). A venda presa nele: origem ENTREGA, sale b4a9c988-9cb8-4f93-906d-8e0acfd94f53, cliente "M adriano", vendedor "Daniel Gomes", R$ 264.26, comprovante true, detalhe "Entrega: DINHEIRO", criada 17:47 UTC (11 min antes do fechamento) = teste ao vivo do dono apos rodar o SQL. OBS: vendedor e Daniel Gomes, NAO o David R5 (nomes parecidos) — a aba Caixa e o LEDGER GERAL da casa (todos os vendedores aparecem, inclusive para quem esta logado como David).
+
+POR QUE NAO APAGOU PELA UI: EXCLUIR_VENDA (/api/pre-venda) recusa venda ENTREGUE (409 "Pedido ja entregue — exclusao indisponivel") — regra correta de producao; correcao de teste cai para SQL do dono (sem credenciais no sandbox).
+
+SQL ENTREGUE (sql/bloco118_2_apagar_venda_madriano.sql — dono roda inteiro no SQL Editor): (1) DELETE caixa_pagamentos por sale_id (pega qualquer duplicata) + DELETE caixa_fechamentos_geral 44c6706f (o snapshot continha SO essa venda — se ficasse, o historico mostraria R$ 264.26 fantasma para sempre); (2) DELETE entrega_eventos + commissions + payment_comprovantes por sale_id (no-op seguro se nada existir); (3) devolucao da reserva products.estoque_principal += sale_items.quantidade SO se sales.estoque_baixado IS TRUE (mesma regra do EXCLUIR_VENDA do app), antes dos deletes de itens; (4) DELETE sale_items (trigger trg_kardex_sale_items grava ESTORNO por item — rastreio fica no Kardex) e DELETE sales; SELECT final de conferencia (tudo deve retornar 0).
+POS-SQL (a validar quando o dono rodar): GET /api/caixa -> aberto zerado + historico 0; venda nao volta na fila nem no caixa de entregas.

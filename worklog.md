@@ -1222,3 +1222,19 @@ QA:
 - SONDA POS-DEPLOY (commit 9484021 no ar): (1) marca do novo codigo no bundle de producao — string nova do banner "Sua venda ainda" encontrada em /_next/static/immutable/chunks/18x6mqhuvodyp.js; (2) entregador fixo intacto — fila 9 (o dono entregou cargas no meio do teste): MINHAS=2 (PV-E12167, PV-B22FF4, ambas carregadas no nome dele, minhaCarga=true), outras=7 false; (3) sanity SECRETARIO — fila 9, sem erro, flags undefined (caminho admin-like ok). Teste do vendedor real (403 novo): exige login de vendedor (PIN so do dono) — validar com o dono na folha dele.
 
 SEM SQL — nenhuma mudanca de schema.
+
+## bloco121 — ESTUDO COMPLETO DE UX: MAPA MESTRE DE TELAS, BOTOES E FLUXOS (2026-11-13)
+
+PEDIDO DO DONO: agir como engenheiro especialista em UX/mobilidade (30+ anos) e estudar TODO o processo de vendas e gerenciamento: fluxo de telas e botoes, posicao de cada botao, acoes, fluxos e rotinas — sem deixar nada de fora — como base para deixar o app "simplesmente unico".
+
+METODO: 4 sondas de exploracao em paralelo sobre o codigo (sem alteracao):
+- Sonda A (navegacao/perfis): src/lib/doce-app.tsx (orquestrador real, 1077 l.), src/app/page.tsx (SPA unica + SafeBoundary + Splash), layout.tsx (Inter, Font Awesome, PWA, tema claro), Login.tsx + /api/login (5 toques no logo revelam ADMIN/ENTREGADOR/SECRETARIO; pins; rate limit), sessao HMAC 7d.
+- Sonda B (PDV): PDV.tsx (2163 l.), WizardPagamento.tsx, VendedorDashboard.tsx (2395 l.), Cupom.tsx, BoletoCard, fluxos pronta entrega x pre-venda x pre-pedido, RPC processar_venda_v2, /api/pre-venda/venda.
+- Sonda C (cargas/entregas): FilaEntregas.tsx (2387 l.) INTEIRA, /api/pre-venda/route.ts (2191 l.), CHECK_CARGA/DESALOCAR/ENTREGUE/FALHOU/FECHAR_CAIXA, SecretarioView, AdminEntregas, caixa por entregador + caixa David, guards 119/120.1, regras minhaCarga.
+- Sonda D (gestao): AdminDashboard.tsx (3179 l.) 18 abas, Estoque Central, Categorias, Cargas (van), Kardex, Catalogo Portal, Clientes, Usuarios/PINs, CaixaFechamento (David), Comissoes, Relatorios, Lucro por Rota, Contas a Receber, Comprovantes Pix, FiscalXml/Spedy, ConfiguracoesHub, Backup, portal /cliente/[codigo] e /pedido/[codigo].
+
+ENTREGA: relatorio mestre no chat com (1) inventario de telas por perfil, (2) fluxo de ouro end-to-end, (3) detalhe tela a tela botao a botao com posicoes, (4) rotinas do dia por papel, (5) diagnostico consolidado de ~40 pontos de atrito, (6) projeto "app unico" com propostas de redesign e (7) roadmap priorizado em fases.
+
+ACHADOS-CHAVE (para o backlog): QR Pix na entrega da para VENDEDOR mas API barra com 403 (bug real); busca de produto NAO existe no PDV; excluir produto sem gatilho na UI; RelatorioFiscal.tsx e EntregasView.tsx sao codigo morto; origem AJUSTE do caixa sem botao; duas experiencias de pagamento vivas (wizard x legado); 5 telas por venda; fonte 8px em avisos criticos; sem busca na fila de entregas; PINs fixos 1234 em pseudo-acessos; aba ativa persistida sem escopo por usuario.
+
+SEM SQL — nenhuma mudanca de schema/API. Nenhum deploy necessario (estudo).

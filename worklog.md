@@ -1165,3 +1165,21 @@ QA E2E MOCK (127.0.0.1:3000, .env.local criado/removido; APIs por curl + UI por 
 OBS p/ dono (fora do escopo, comportamento pre-existente): REABRIR devolve a entrega para a fila mas NAO estorna o pagamento ja registrado no caixa por entregador (no mock o teste deixou R$ 33,90 do David em aberto apos ENTREGUE+REABRIR). Se quiser que REABRIR estorne o caixa, abre-se um bloco novo.
 
 SEM SQL — nenhuma mudanca de schema.
+
+## bloco119.2 — FIX: ENTREGADOR NAO CONSEGUIA RECEBER AS ENTREGAS ALOCADAS A ELE (2026-11-13)
+
+DONO: "eu to logado como entregador e nao consigo receber as entregas que foram alocadas para mim! por favor arrume isso! o entregador deve ver e pode receber todas as entregas carregadas"
+
+CAUSA RAIZ (sonda de producao ANTES do fix confirmou): o login fixo ENTREGADOR cria sessao com id "ENTREGADOR" (string, nao-uuid) — /api/login linha 76. A carga alocada no check de carga grava sales.entregador_id = UUID RESOLVIDO (resolveEntregadorUuid: "ENTREGADOR" -> uuid fixo da base e6e10000-...0e6e1 ou o uuid do unico usuario real com perfil ENTREGADOR). A fila do GET nao dizia quem pode receber; o FRONT comparava p.entregadorId (uuid) === user.id ("ENTREGADOR") -> NUNCA bate -> as 5 entregas carregadas no nome do Entregador 1 (PV-E12167, PV-807C16, PV-D11577, PV-B22FF4, PV-ACA68F-parcial) apareciam como "Carga de Entregador 1 — recebimento DELE", SEM botao de receber. O POST ate permitiria (o guard do 119 ja resolve o uuid no servidor), mas a UI bloqueava antes.
+
+IMPLEMENTACAO:
+- SERVIDOR (/api/pre-venda GET ?fila=1): enrichFila ganhou donoRecebimento (identidade da sessao resolvida em uuid — ENTREGADOR: resolveEntregadorUuid(userId); VENDEDOR: userId real; ADMIN: null) e cada item da fila agora vem com minhaCarga: boolean — MESMA CONTA do guard do POST (entregador_id atribuido -> so o atribuido; sem atribuicao -> so o vendedor da venda). Aplicado na fila ativa, falhados e entregues de hoje. A verdade sobre quem recebe sai do SERVIDOR (uma unica fonte, cliente e POST nunca divergem).
+- CLIENTE (FilaEntregas.tsx): FilaItem.minhaCarga?: boolean; ehMinhaCarga obedece p.minhaCarga quando definida (fallback client-side so para resposta legada); minhasNaFila/outrasNaFila/minhasVisiveis passam a usar ehMinhaCarga. Resultado: no login ENTREGADOR, tudo que foi CARREGADO NO NOME DELE sobe no bloco verde "SUAS ENTREGAS" com ENTREGUE/FALHOU; as demais continuam na fila separadas por dono (so conferencia, bloqueio mantido no card e no 403 do servidor).
+- REGRA PRESERVADA: entregador continua NAO podendo receber carga alocada a outro (nem a venda sem atribuicao de outro vendedor) — caixa de cada um continua estanque.
+
+QA:
+- SONDA PRE-DEPLOY (producao, login ENTREGADOR PIN 1234): fila=12; 5 entregas com entregador_id=e6e10000-...0e6e1 ("Entregador 1") e carregadoEm=true; minhaCarga AUSENTE (bug confirmado no ar); caixasPorEntregador ok (Entregador 1 R$ 203,75 em aberto).
+- SONDA POS-DEPLOY: rodar apos o deploy verde (mesma rota) — esperar minhaCarga=true nas 5 alocadas ao Entregador 1 e false nas demais.
+- LINT: 0 erros / 10 warnings (baseline exata).
+
+SEM SQL — nenhuma mudanca de schema (a regra usa entregador_id/carga_confirmada_em que ja existem).

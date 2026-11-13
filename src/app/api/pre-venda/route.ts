@@ -536,8 +536,14 @@ async function updateSaleFlex(supabase: any, saleId: string, payload: Record<str
   return { ok: false, sem13: false, erro: error.message };
 }
 
-/** Monta o item da fila (formato UI) a partir das rows de sales */
-async function enrichFila(supabase: any, salesRows: any[]) {
+/** Monta o item da fila (formato UI) a partir das rows de sales.
+ * BLOCO 119.2 (bug do entregador): donoRecebimento = identidade da sessao
+ * resolvida para o mundo das cargas (uuid). O login fixo ENTREGADOR tem id
+ * "ENTREGADOR" (nao-uuid) e a carga gravada em sales.entregador_id e UUID —
+ * comparar no CLIENTE nunca bate e o botao de receber nao aparece. O SERVIDOR
+ * conhece o uuid resolvido (resolveEntregadorUuid) e declara minhaCarga em
+ * cada item; o cliente so obedece. Admin recebe undefined (pode receber tudo). */
+async function enrichFila(supabase: any, salesRows: any[], donoRecebimento?: string | null) {
   if (salesRows.length === 0) return [];
   const clientIds = [...new Set(salesRows.map((s: any) => s.client_id).filter(Boolean))];
   const saleIds = salesRows.map((s: any) => s.id);
@@ -623,6 +629,16 @@ async function enrichFila(supabase: any, salesRows: any[]) {
       // BLOCO 96: entregador ATRIBUIDO a venda (escolhido no check de carga —
       // cada entregador tem o proprio caixa e ve so a propria carga)
       entregadorId: s.entregador_id ?? null,
+      // BLOCO 119.2 (regra do dono): VERDADE DO SERVIDOR sobre quem pode
+      // receber — mesma conta do POST (atribuidoA/atribuidaAele/entregaPropria):
+      //   carga atribuida no check de carga -> so o atribuido (uuid resolvido);
+      //   sem atribuicao -> so o VENDEDOR da venda.
+      // undefined para admin (pode receber tudo) e para bancos legados.
+      minhaCarga: donoRecebimento
+        ? (s.entregador_id
+            ? String(s.entregador_id) === String(donoRecebimento)
+            : String(s.vendedor_id || '') === String(donoRecebimento))
+        : undefined,
       // BLOCO 98: o UUID do acesso fixo da base = o "ENTREGADOR 1" (quem loga
       // como entregador) — nome nominal em vez de "Entregador" generico.
       entregadorNome: s.entregador_id ? (userMap[s.entregador_id] || (s.entregador_id === UUID_ACESSO_FIXO.ENTREGADOR ? 'Entregador 1' : 'Entregador')) : null,
@@ -661,6 +677,13 @@ async function getFila(supabase: any, userId: string, perfil: string) {
   if (perfil === 'ENTREGADOR') {
     entFiltroUuid = await resolveEntregadorUuid(supabase, userId);
   }
+  // BLOCO 119.2 (bug do entregador sem botao de receber): identidade da sessao
+  // no mundo das cargas, em UUID. Vendedor real: o proprio id. Login fixo
+  // ENTREGADOR: o uuid resolvido acima (real ou fixo da base). Admin: null —
+  // recebe tudo e a flag nem e necessaria. Sem isso o cliente compara
+  // "ENTREGADOR" (string) com o uuid da carga e nunca bate.
+  const meuUuidCarga: string | null =
+    perfil === 'ENTREGADOR' ? entFiltroUuid : (perfil === 'VENDEDOR' ? userId : null);
   // BLOCO 31: ordem_entrega entra nas colunas SO se o SQL ja rodou (sonda)
   const temOrdem = await hasOrdemEntregaColumn();
   // BLOCO 40: modo_nota idem (tipo do documento no cupom da fila/pedidos)
@@ -729,7 +752,7 @@ async function getFila(supabase: any, userId: string, perfil: string) {
   const entreguesHojeIds = new Set((evHoje || []).map((e: any) => e.sale_id));
   const entreguesHoje = (entreguesRows || []).filter((s: any) => entreguesHojeIds.has(s.id));
 
-  const fila = await enrichFila(supabase, ativasRows || []);
+  const fila = await enrichFila(supabase, ativasRows || [], meuUuidCarga);
   // BLOCO 31: se o admin ja definiu ordem manual (setas), ela MANDA —
   // pedidos novos (sem ordem) entram no fim da fila, por antiguidade.
   if (fila.some((f: any) => typeof f.ordemEntrega === 'number' && f.ordemEntrega > 0)) {
@@ -928,7 +951,7 @@ async function getFila(supabase: any, userId: string, perfil: string) {
     trocasValor: temTrocasValor ? (p.trocas_valor ?? null) : null,
   }));
 
-  const entreguesHojeEnr = await enrichFila(supabase, entreguesHoje);
+  const entreguesHojeEnr = await enrichFila(supabase, entreguesHoje, meuUuidCarga);
   const nomePorSale: Record<string, string> = {};
   for (const p of entreguesHojeEnr) nomePorSale[String(p.saleId)] = p.cliente?.nome || 'Cliente';
 
@@ -979,7 +1002,7 @@ async function getFila(supabase: any, userId: string, perfil: string) {
   return {
     hoje: todayStr(),
     fila: filaFmt,
-    falhados: await enrichFila(supabase, falhados || []),
+    falhados: await enrichFila(supabase, falhados || [], meuUuidCarga),
     entreguesHoje: entreguesHojeEnr,
     // BLOCO 96: entregadores ativos (o admin escolhe QUEM leva cada venda no check de carga)
     entregadores,

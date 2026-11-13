@@ -78,6 +78,11 @@ interface FilaItem {
   // cada entregador tem o SEU caixa e ve so a propria carga
   entregadorId?: string | null;
   entregadorNome?: string | null;
+  // BLOCO 119.2 (fix do entregador): VERDADE DO SERVIDOR — esta carga pode ser
+  // recebida por mim? O servidor resolve o uuid do login fixo ENTREGADOR
+  // (sessao id "ENTREGADOR" e nunca-uuid) e compara com sales.entregador_id.
+  // undefined = admin (pode receber tudo) / legado (fallback no cliente).
+  minhaCarga?: boolean;
   // BLOCO 98: valor das trocas em R$ PRECO DE CUSTO (entrega devolve produtos que fechem esse valor)
   trocasValor?: number | null;
   // BLOCO 109: situacao fiscal da venda (badge NF + emitir 1 clique no card)
@@ -445,8 +450,14 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
   // ===== BLOCO 119: MINHA CARGA — a entrega pertence a mim quando:
   // - foi CARREGADA no meu nome (check de carga = entregador_id == eu), ou
   // - e venda minha e ninguem mais foi atribuido (carga propria do vendedor).
+  // BLOCO 119.2 (fix do entregador): a verdade vem do SERVIDOR (p.minhaCarga) —
+  // o login fixo ENTREGADOR tem id "ENTREGADOR" (string) e a carga gravada e
+  // UUID; comparar aqui no cliente NUNCA bate e o botao de receber somia.
+  // Fallback client-side so para resposta antiga em cache/legado.
   const ehMinhaCarga = (p: FilaItem): boolean =>
-    !!p.entregadorId ? p.entregadorId === user.id : p.vendedorId === user.id;
+    p.minhaCarga !== undefined
+      ? p.minhaCarga
+      : (!!p.entregadorId ? p.entregadorId === user.id : p.vendedorId === user.id);
   // BLOCO 119: quem pode RECEBER (aparece o botao ENTREGUE): admin sempre;
   // vendedor/entregador so a carga no nome DELE. As outras: visiveis para
   // conferencia, SEM chance de receber (banner com o dono do dinheiro).
@@ -460,10 +471,10 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
   // agrupadas por dono da carga: "Carga de X"). O RECEBIMENTO das outras
   // fica bloqueado no card E no servidor (403 com o nome do dono).
   const minhasNaFila = useMemo(() =>
-    (data?.fila || []).filter(p => p.entregadorId ? p.entregadorId === user.id : p.vendedorId === user.id),
+    (data?.fila || []).filter(p => ehMinhaCarga(p)),
   [data, user.id]);
   const outrasNaFila = useMemo(() =>
-    (data?.fila || []).filter(p => !(p.entregadorId ? p.entregadorId === user.id : p.vendedorId === user.id)),
+    (data?.fila || []).filter(p => !ehMinhaCarga(p)),
   [data, user.id]);
   const outrosAgrupados = useMemo(() => {
     const map = new Map<string, { key: string; nome: string; itens: FilaItem[]; total: number }>();
@@ -949,7 +960,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
   const normais = fila.filter(p => p.prioridade === 0 || p.prioridade == null);
   // BLOCO 119.1: SUAS entregas na ORDEM DA ROTA (ordem manual do admin quando
   // houver; senão P1 → P2 → mais antigo) — é o conteúdo do bloco "SUAS".
-  const minhasVisiveis = listaOrdenada.filter(p => p.entregadorId ? p.entregadorId === user.id : p.vendedorId === user.id);
+  const minhasVisiveis = listaOrdenada.filter(ehMinhaCarga);
   const totalMinhasNaFila = Math.round(minhasNaFila.reduce((a, p) => a + p.valorTotal, 0) * 100) / 100;
   const totalOutrasNaFila = Math.round(outrasNaFila.reduce((a, p) => a + p.valorTotal, 0) * 100) / 100;
   const falhados = falhadosVisivel;

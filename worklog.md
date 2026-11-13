@@ -1198,6 +1198,6 @@ IMPLEMENTACAO:
 
 QA:
 - LINT: 0 erros / 10 warnings (baseline exata); dev server compilou limpo.
-- SONDA POS-DEPLOY: confirmar 'dm-impressao-termica' no bundle JS de producao (pagina carrega e o caminho iOS entra no ar). Teste fisico na folha do iPhone e com o dono (AirPrint) — limite do sandbox: nao ha iPhone/AirPrint aqui; a correcao segue o padrao conhecido do Safari (print so pela janela principal + gesto direto).
+- SONDA POS-DEPLOY (commit 4d16ded no ar): varredura do grafo de chunks de producao (shell 10KB -> BFS nos chunks) — MARCA ENCONTRADA em /_next/static/immutable/chunks/2xf3xkf88jxc_.js (novo usbPrint no ar). Teste fisico na folha do iPhone e com o dono (AirPrint) — limite do sandbox: nao ha iPhone/AirPrint aqui; a correcao segue o padrao conhecido do Safari (print so pela janela principal + gesto direto).
 
 SEM SQL — nenhuma mudanca de schema/API.

@@ -185,7 +185,17 @@ export async function POST(req: NextRequest) {
       nota_status: res.cancelada ? 'CANCELADA' : sale.nota_status,
       nota_erro: res.cancelada ? null : res.motivo || null,
     });
-    return NextResponse.json({ ok: res.cancelada, nota: { ...notaPublica(sale as Record<string, unknown>), ...res } });
+    // BLOCO 116 (doc reference/cancelar_nfce.md): NFC-e so pode ser
+    // cancelada em ate 30 MINUTOS apos a emissao (NF-e: 24h). O aviso vai
+    // na resposta para o admin saber por que a SEFAZ pode recusar.
+    return NextResponse.json({
+      ok: res.cancelada,
+      aviso:
+        doc === 'nfce'
+          ? 'NFC-e so pode ser cancelada em ate 30 minutos apos a emissao (regra da SEFAZ).'
+          : undefined,
+      nota: { ...notaPublica(sale as Record<string, unknown>), ...res },
+    });
   }
 
   // ---------- EMITIR ----------

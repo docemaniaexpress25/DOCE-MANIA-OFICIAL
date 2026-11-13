@@ -32,6 +32,15 @@ interface BoletoConfig {
   autoBoletoAReceber: boolean;
 }
 
+// BLOCO 116 — webhook da Focus (status em tempo real, event 'nfe' via API /v2/hooks)
+interface FocoWebhook {
+  url: string;
+  instalado: boolean;
+  id: string;
+  segredoConfigurado: boolean;
+  erro: string;
+}
+
 interface Props {
   onBack: () => void;
   onAbrirMovimentos: () => void;
@@ -89,6 +98,8 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
   const [erro, setErro] = useState<string | null>(null);
   const [fiscal, setFiscal] = useState<FiscalConfig | null>(null);
   const [boleto, setBoleto] = useState<BoletoConfig | null>(null);
+  const [focoWebhook, setFocoWebhook] = useState<FocoWebhook | null>(null);
+  const [processandoHook, setProcessandoHook] = useState(false);
 
   const [emitenteAberto, setEmitenteAberto] = useState(false);
   const [form, setForm] = useState<Emitente>(EMITENTE_VAZIO);
@@ -131,6 +142,17 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
         interConfigurado: !!d.boleto?.interConfigurado,
         autoBoletoAReceber: !!d.boleto?.autoBoletoAReceber,
       });
+      setFocoWebhook(
+        d.focoWebhook
+          ? {
+              url: d.focoWebhook.url || '',
+              instalado: !!d.focoWebhook.instalado,
+              id: d.focoWebhook.id || '',
+              segredoConfigurado: !!d.focoWebhook.segredoConfigurado,
+              erro: d.focoWebhook.erro || '',
+            }
+          : null
+      );
     } catch (e) {
       setErro(e instanceof Error ? e.message : 'Sem conexão. Tente novamente.');
     } finally {
@@ -213,6 +235,26 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
     }
   };
 
+  /* ===== BLOCO 116 — webhook da Focus (instalar/remover via API da Focus) ===== */
+  const acaoWebhook = async (acao: 'INSTALAR_WEBHOOK' | 'REMOVER_WEBHOOK') => {
+    setProcessandoHook(true);
+    try {
+      const res = await fetch('/api/configuracoes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ acao }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok || !d.ok) throw new Error(d.erro || d.error || 'Falha no webhook.');
+      await carregar(false);
+      mostrarToast(acao === 'INSTALAR_WEBHOOK' ? 'Status em tempo real ATIVADO — a Focus avisa o app na hora!' : 'Webhook desativado.', 'success');
+    } catch (e) {
+      mostrarToast(e instanceof Error ? e.message : 'Falha no webhook.', 'error');
+    } finally {
+      setProcessandoHook(false);
+    }
+  };
+
   const setF = (k: keyof Emitente, v: string | number) => setForm(f => ({ ...f, [k]: v }));
 
   const inputCls = 'w-full p-3 bg-gray-50 border border-gray-100 rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-emerald-100';
@@ -283,6 +325,34 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
             {chipFonteEmitente()}
           </div>
           <p className="text-[10px] text-gray-400 font-semibold leading-snug">Emissão de NFC-e/NFe pela Focus NFe. O emitente abaixo é usado em toda nota — salvo aqui, vale para todos os aparelhos.</p>
+
+          {/* BLOCO 116 — status em tempo real via webhook da Focus */}
+          {focoWebhook && (
+            <div className="rounded-xl border border-gray-100 bg-gray-50 p-3 space-y-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                {focoWebhook.instalado ? (
+                  <ChipStatus cor="bg-emerald-50 text-emerald-600 border-emerald-100" icon="fa-bolt" label="Status em tempo real ATIVO" />
+                ) : (
+                  <ChipStatus cor="bg-gray-100 text-gray-500 border-gray-200" icon="fa-bolt" label="Status em tempo real desligado" />
+                )}
+                {!focoWebhook.segredoConfigurado && fiscal.focusConfigurado && (
+                  <ChipStatus cor="bg-amber-50 text-amber-600 border-amber-100" icon="fa-key" label="Falta env de segredo" />
+                )}
+              </div>
+              <p className="text-[9px] text-gray-400 font-semibold leading-snug">
+                Quando a SEFAZ autoriza/rejeita a nota, a Focus avisa o app na hora — o status atualiza sozinho na fila de entregas e no histórico (sem esperar o cron). Instalação feita aqui mesmo, sem tocar no painel da Focus.
+              </p>
+              <button
+                onClick={() => acaoWebhook(focoWebhook.instalado ? 'REMOVER_WEBHOOK' : 'INSTALAR_WEBHOOK')}
+                disabled={processandoHook || !fiscal.focusConfigurado || (!focoWebhook.instalado && !focoWebhook.segredoConfigurado)}
+                className={`w-full py-3 rounded-xl text-[10px] font-black uppercase flex items-center justify-center gap-2 active:scale-95 disabled:opacity-50 ${focoWebhook.instalado ? 'bg-rose-50 text-rose-600 border border-rose-100' : 'bg-emerald-600 text-white'}`}
+              >
+                <i className={`fa-solid ${processandoHook ? 'fa-spinner fa-spin' : focoWebhook.instalado ? 'fa-plug-circle-xmark' : 'fa-plug-circle-plus'}`}></i>
+                {processandoHook ? 'Processando...' : focoWebhook.instalado ? 'Desativar status em tempo real' : 'Ativar status em tempo real'}
+              </button>
+              {focoWebhook.erro && <p className="text-[8px] font-bold text-amber-600 uppercase">{focoWebhook.erro}</p>}
+            </div>
+          )}
 
           <button
             onClick={() => setEmitenteAberto(a => !a)}

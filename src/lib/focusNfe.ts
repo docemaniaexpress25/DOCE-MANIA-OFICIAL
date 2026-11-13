@@ -39,6 +39,21 @@
  * - formas_pagamento (tPag): 01 dinheiro, 02 cheque, 03/04 cartao, 15 boleto,
  *   17 PIX (16 = deposito bancario — armadilha comum), 91 pagamento posterior.
  * - NFC-e nao aceita 13/14/15 (duplicata/boleto) — venda a prazo vai de NF-e.
+ * - NF-e cancelavel em ate 24h; NFC-e em ate 30 MINUTOS (regra SEFAZ, doc
+ *   reference/cancelar_nfce.md).
+ * - STATUS v2.0 (doc consultar_nfe/emitir_nfce): autorizado | cancelado |
+ *   processando_autorizacao (NF-e assincrona, segue fila) | erro_autorizacao
+ *   (REJEICAO DEFINITIVA da SEFAZ — nao e processando!).
+ * - Rate limit: 100 req/min por token (doc cuidado-com-o-rate-limit) — por
+ *   isso o app usa WEBHOOK de status em vez de polling (doc utilizando-
+ *   webhooks: eventos reenviados por 48h com backoff).
+ * - Webhooks da Focus: POST/GET/DELETE /v2/hooks (doc reference/webhooks).
+ *   Evento 'nfe' notifica mudanca de status; `authorization` +
+ *   `authorization_header` definem o header de segredo que a Focus envia.
+ * - Contingencia: NF-e tem chaveamento automatico SVC transparente (doc
+ *   mecanismo-de-contingencia-automatica-svc — nada a fazer no app); NFC-e
+ *   offline exige Comunicador Offline (app de PC) — fora de escopo do app
+ *   mobile hoje.
  */
 
 export type FocusAmbiente = 'homologacao' | 'producao';
@@ -294,6 +309,13 @@ export interface FocusNotaResultado {
   qrcode_url?: string;          // NFC-e: QR de consulta
   url_consulta_nf?: string;
   contingencia_offline?: boolean;
+  contingencia_offline_efetivada?: boolean;
+  // webhooks v2.0 (doc reference/criar_webhook.md): POST /v2/hooks
+  id?: string;
+  url?: string;
+  authorization?: string;
+  authorization_header?: string;
+  event?: string;
   // erros v2.0: { codigo, mensagem, erros: [{mensagem, campo}] }
   codigo?: string;
   mensagem?: string;
@@ -523,6 +545,45 @@ export async function consultarNota(doc: FocusDoc, ref: string) {
   return focusRequest<FocusNotaResultado>('GET', `/v2/${doc}/${encodeURIComponent(ref)}`);
 }
 
+// ---------------------------------------------------------------------------
+// WEBHOOKS (doc reference/criar_webhook.md — POST /v2/hooks; listar GET
+// /v2/hooks; excluir DELETE /v2/hooks/{id}). A Focus recomenda webhook em vez
+// de polling (doc utilizando-webhooks: processamento em tempo real, menos
+// consumo de quota — limite e 100 req/min por token).
+// ---------------------------------------------------------------------------
+
+/** Lista os gatilhos cadastrados no token. */
+export async function listarWebhooksFocus() {
+  return focusRequest<FocusNotaResultado[]>('GET', '/v2/hooks');
+}
+
+/**
+ * Cria o gatilho de mudanca de status de NF-e. `segredo` vai no header
+ * `authorizationHeader` (ex.: 'x-dm-token') de cada notificacao — o app
+ * confere antes de reconsultar. `cnpj` opcional restringe ao emitente.
+ */
+export async function criarWebhookFocus(opts: {
+  url: string;
+  segredo: string;
+  authorizationHeader?: string;
+  cnpj?: string;
+}) {
+  const body: Record<string, unknown> = {
+    event: 'nfe',
+    url: opts.url,
+    authorization: opts.segredo,
+    authorization_header: opts.authorizationHeader || 'x-dm-token',
+  };
+  const cnpj = soDigitos(opts.cnpj);
+  if (cnpj) body.cnpj = cnpj;
+  return focusRequest<FocusNotaResultado>('POST', '/v2/hooks', body);
+}
+
+/** Exclui um gatilho pelo id (GET /v2/hooks devolve os ids). */
+export async function excluirWebhookFocus(id: string) {
+  return focusRequest<FocusNotaResultado>('DELETE', `/v2/hooks/${encodeURIComponent(id)}`);
+}
+
 /** Cancela a nota (requer justificativa >= 15 chars, regra da SEFAZ). */
 export async function cancelarNota(doc: FocusDoc, ref: string, justificativa: string) {
   return focusRequest<FocusNotaResultado>('DELETE', `/v2/${doc}/${encodeURIComponent(ref)}`, {
@@ -563,7 +624,11 @@ export function interpretarResultado(data: FocusNotaResultado) {
   return {
     autorizada: status === 'autorizado',
     cancelada: status.startsWith('cancelado'),
-    processando: status === 'processando_autorizacao' || status === 'erro_autorizacao',
+    // FIX bloco 116 (doc v2.0): 'erro_autorizacao' e REJEICAO DEFINITIVA da
+    // SEFAZ (ex.: "Rejeição: Total da NF difere..."), NAO e processamento.
+    // Antes isso mapeava rejeitada como EMITINDO e a venda ficava presa.
+    processando: status === 'processando_autorizacao',
+    rejeitada: status === 'erro_autorizacao',
     numero: data.numero || '',
     cStatus: data.status_sefaz || '',
     motivo,
@@ -577,6 +642,12 @@ export function interpretarResultado(data: FocusNotaResultado) {
     dataAutorizacao: String(data.data_autorizacao || ''),
     total: Number(data.total) || 0,
     qrCode: String(data.qrcode_url || data.url_consulta_nf || data.qr_code || data.url_consulta || ''),
+    // Contingencia (doc emitir_nfce.md): NFC-e emitida offline nasce
+    // 'autorizado' com contingencia_offline=true e efetiva sozinha depois —
+    // o app avisa o usuario que o espelho/DANFE e valido mas o QR so
+    // consulta apos a efetivacao.
+    contingenciaOffline: data.contingencia_offline === true,
+    contingenciaEfetivada: data.contingencia_offline !== true ? null : data.contingencia_offline_efetivada !== false,
     emitente: {
       nome: emitenteNome,
       cnpj: emitenteCnpj,

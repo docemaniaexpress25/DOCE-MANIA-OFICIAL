@@ -1023,3 +1023,41 @@ GAPS DA DOC x APP CORRIGIDOS (BLOCO 117):
 
 QA: lint 0 erros / 10 warnings (baseline exata). Pendente pos-deploy: re-sondar GET /api/focus/webhook e conferir after() compilando na Vercel (runtime node). Emissao real continua aguardando token/credenciais da Focus do dono (envs FOCUS_NFE_TOKEN + emitente) — todo o resto da integracao (emissao NF-e/NFC-e, consulta, cancelamento, webhook tempo real 3 eventos, DANFE/PDF/XML/chave, contingencia, cron fallback) esta NO AR e conforme a referencia v2.0.
 POS-DEPLOY BLOCO 117 (sondas ao vivo): deploy verde (~90s, commit 3092d1c). GET /api/focus/webhook -> instrucao nova com os TRES gatilhos (prova de build com after() na Vercel), configurado:false (envs Focus ainda ausentes — degrada segura). POST sem segredo -> 200 SEM_SEGREDO (seguro: sem segredo no servidor nao ha o que validar; 401 SEGREDO_INVALIDO entra so depois que o dono definir FOCUS_WEBHOOK_SECRET/CRON_SECRET). Diagnostico-banco estavel 12/14. Kardex ok:true (trigger continua gravando saidas das vendas novas).
+
+## bloco118 — FECHAMENTO DE CAIXA (dinheiro/pix com comprovantes) + COMISSAO DESATIVADA PARA O DAVID R5 (2026-11-13)
+
+DONO: "a tela financeiro do app no logim de vendedor nao precisa aparecer para o vendedor da rota 5 david, tbm nao precisa calcular comissao e pagamento de comissoes para ele. vamos trabalhar em uma nova aba com fechamento de caixa que nos mostra o dinheiro recebido assim como o pix recebido com comprovantes! esse caixa podera ser fechado a qualquer instante pelo admin, e sera persistido ate o fechamento assim como gerara log de pagamentos etc para ter rastreio!"
+
+SQL (sql/bloco118_caixa_fechamento.sql — dono roda no Supabase):
+- caixa_pagamentos = LEDGER: cada dinheiro/pix/deposito recebido vira 1 linha (origem VENDA|ENTREGA|RECEBIMENTO|PORTAL|AJUSTE, sale_id, cliente, vendedor, metodo, valor, comprovante, detalhe, usuario_id/nome, fechamento_id NULL = caixa aberto). Indice parcial nos abertos + indice por fechamento. RLS sem policy (service_role only).
+- caixa_fechamentos_geral = SNAPSHOT do fechamento do admin: janela_inicio, fechado_em, quem fechou, totais (dinheiro/pix/deposito/geral), qtde_pagamentos, observacao e os pagamentos presos em jsonb (pid liga a foto que fica no ledger). RLS sem policy.
+- IMPORTANTE: nome caixa_fechamentos_geral DE PROPOSITADO — caixa_fechamentos (singular) ja existe no banco (BLOCO 96: caixa do dia por ENTREGADOR com entregador_id/data); reutilizar zeraria o corte de janela do caixa por entregador da fila.
+- COMISSAO DO DAVID DESATIVADA NO BANCO: trigger BEFORE INSERT trg_comissoes_skip_david em commissions — se o seller e o David (app_users.nome ilike 'david%'; id muda se recriar, nome nao), o insert e DESCARTADO (cobre o RPC processar_venda_v2 do banco, que nao passa pelo app). Plus: delete das comissoes JA EXISTENTES dele (repasses passados ficam em commission_payment_logs para rastreio).
+
+CODIGO:
+- src/lib/equipe.ts (NOVO): DAVID_USER_ID (id producao 7c989927...) + isDavidVendedor (id OU nome /^david/i) + isDavidNome. Lib sem deps (client e server).
+- src/lib/caixaLedger.ts (NOVO): registrarPagamentoCaixa(supabase, {...}) — valida metodo/valor/origem, IDEMPOTENTE por sale_id+metodo+valor ainda aberto (protege duplo clique/reenvio), dataURL de comprovante vai ao Storage (fotos-pedidos/comprovantes) com fallback base64 na coluna; NUNCA lanca (ok:false + erro).
+- src/app/api/caixa/route.ts (NOVO): GET (ADMIN/SECRETARIO/VENDEDOR) = caixa aberto (pagamentos + totais + desde) + historico dos fechamentos (sem jsonb); POST REGISTRAR (vendedor/admin/secretario, usado pelos fluxos client) e POST FECHAR (ADMIN only: snapshot em caixa_fechamentos_geral + update is(fechamento_id null) prende os abertos). 503 amigavel "rode o SQL do Bloco 118" enquanto o dono nao rodar.
+- src/app/api/caixa/foto/route.ts (NOVO): GET ?id= → comprovante do pagamento (URL assinada 1h do Storage ou dataURL) — mesmo padrao do /api/pre-venda/foto.
+- src/app/api/caixa/fechamento/route.ts (NOVO): GET ?id= → detalhe do fechamento (totais + pagamentos presos do snapshot).
+- GANCHOS DE ENTRADA NO LEDGER (os 4 canais de dinheiro que entram):
+  (1) VENDA: processSale no doce-app.tsx — venda a vista DINHEIRO/PIX (status PAGO) chama POST /api/caixa REGISTRAR origem VENDA (best-effort, nunca trava a venda);
+  (2) ENTREGA: /api/pre-venda acao ENTREGUE — DINHEIRO/PIX/MISTO (misto = 2 linhas, pix leva a foto do comprovante) registra server-side origem ENTREGA (JA_PAGO NAO registra — dinheiro entrou por outro canal e duplicaria; boleto/nao-pago nao e dinheiro);
+  (3) RECEBIMENTO: receiveAccount no doce-app.tsx — conta a receber paga (DINHEIRO/PIX/DEPOSITO) chama REGISTRAR origem RECEBIMENTO;
+  (4) PORTAL: /api/comprovantes/revisar CONFIRMAR — pix do portal entra server-side origem PORTAL com a foto do comprovante do cliente.
+- src/components/doce/CaixaFechamento.tsx (NOVO): aba FECHAMENTO DE CAIXA — cards Dinheiro/Pix/Deposito + Total no Caixa, botao FECHAR CAIXA AGORA (so admin) com modal (resumo dos totais + observacao opcional), LOG DE PAGAMENTOS (badge origem + chip metodo + cliente/vendedor/hora/detalhe + botao comprovante abre modal foto), CAIXAS FECHADOS (historico expandivel com pagamentos presos), empty states. Vendedor/secretario veem em LEITURA ("fechamento pelo admin").
+- COMISSAO DO DAVID NO CODIGO (defesa em profundidade; o trigger do banco e a ultima linha):
+  - VendedorDashboard.tsx: podeVerFinanceiro = !isDavidVendedor — card FINANCEIRO some do app do David; render da aba tambem protegido + guard useEffect (estado antigo FINANCE cai na HOME). podeVerLucroRota consolidado no helper (sem duplicar id). NOVA aba CAIXA no app do vendedor (todos, incl. David — leitura).
+  - AdminDashboard.tsx: aba de comissoes renomeada CAIXA→COMISSOES (localStorage antigo normalizado: quem tinha 'CAIXA' salvo cai em 'COMISSOES') e NOVA aba CAIXA = fechamento; lista/totalizadores de comissao filtram isDavidVendedor (cadastro dele continua na aba Vendedores).
+  - /api/comissoes POST PAGAR: recusa vendedor David com 403 "Comissao desatualizada para este vendedor."
+  - /api/pre-venda registrarComissaoPreVenda: pula David antes de calcular/gravar (o trigger tambem cobre).
+- MOCK e2e: caixa_pagamentos + caixa_fechamentos_geral (defaults de timestamps), PATCH agora honra is.null (prende pagamentos ao fechar no mock), usuario David - R5 (david-r5, ROTA_05, PIN 123456) p/ QA.
+
+QA E2E (mock, agent-browser; .env.local do mock removido depois):
+- APIs: REGISTRAR dinheiro 50 + pix 20 + deposito 30 → GET mostra 3 pagamentos com usuarioNome resolvido; IDEMPOTENCIA: mesmo sale_id+metodo+valor devolveu o MESMO id (nao duplicou); FECHAR → snapshot totalGeral 100 qtde 3 fechadoPor Admin Teste + observacao; pos-fechamento aberto ZERADO e desde = fechado_em; detalhe do fechamento lista os 3 presos com temComprovante.
+- GANCHOS: ENTREGUE DINHEIRO (sale-fila-003) → ENTREGA DINHEIRO 21.75 cliente "Cliente Rota Um" vendedor "Rota 1 Teste" no caixa; comprovante do portal seedado + CONFIRMAR → PORTAL PIX 7.17 Emporio Teste temComprovante:true; GET /api/caixa/foto devolveu a imagem; VENDA A VISTA NO PDV VIA BROWSER (Rota 1 Teste → Mercado Rota Um → PRONTA → 2x Palitinho 4.78 → a vista DINHEIRO recebido 10 → cupom → FINALIZAR VENDA) → caixa registrou VENDA DINHEIRO 4.78 na hora.
+- DAVID: login david-r5 → HOME SEM card FINANCEIRO (com LUCRO DA ROTA e CAIXA); aba Caixa abre em leitura (sem FECHAR CAIXA AGORA, aviso "fechamento pelo admin"); comprovante abre; PAGAR comissao dele → 403 "Comissao desatualizada"; aba COMISSOES do admin mostra so Gil/Rota1/Rota2 (David ausente, avaliado via innerText).
+- ADMIN: HOME com COMISSOES + CAIXA; fechamento via UI (modal com totais + observacao + CONFIRMAR) → toast "CAIXA FECHADO — R$ 28.92 EM 2 PAGAMENTO(S)", caixa zera, historico com os 2 fechamentos; Vendedor normal (Rota 1 Teste) mantem FINANCEIRO + CAIXA.
+- LAYOUT mobile 390x844 e desktop 1280x800 alinhados; ZERO erros de console (so warnings de push permission do browser) e ZERO erros no dev.log.
+LINT: 0 erros / 10 warnings (baseline exata).
+PENDENTE DO DONO: rodar sql/bloco118_caixa_fechamento.sql no Supabase (ate la o GET /api/caixa responde 503 com instrucao — degradacao segura, nada quebra).

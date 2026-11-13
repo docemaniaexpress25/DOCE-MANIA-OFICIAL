@@ -12,7 +12,7 @@ import { hashSync } from 'bcryptjs';
  * testar a fila de entrega do admin (setas de ordem + editor de pedido).
  */
 
-const CATCH_TABLES = ['app_users', 'clients', 'products', 'app_settings', 'product_categories', 'product_subcategories', 'cargas', 'cargas_pendentes', 'system_messages', 'commissions', 'commission_payment_logs', 'sales', 'seller_expenses', 'push_tokens', 'daily_routes', 'entrega_rotas', 'entrega_eventos', 'sale_items', 'payment_comprovantes', 'caixa_fechamentos', 'pre_vendas', 'pedidos', 'xml_importacoes', 'xml_itens'];
+const CATCH_TABLES = ['app_users', 'clients', 'products', 'app_settings', 'product_categories', 'product_subcategories', 'cargas', 'cargas_pendentes', 'system_messages', 'commissions', 'commission_payment_logs', 'sales', 'seller_expenses', 'push_tokens', 'daily_routes', 'entrega_rotas', 'entrega_eventos', 'sale_items', 'payment_comprovantes', 'caixa_fechamentos', 'caixa_fechamentos_geral', 'caixa_pagamentos', 'pre_vendas', 'pedidos', 'xml_importacoes', 'xml_itens'];
 
 const users = [{
   id: 'adminuser', nome: 'Admin Teste', email: '', perfil: 'ADMIN', ativo: true,
@@ -49,6 +49,12 @@ const users = [{
   // Estoque (ajuste de quantidade via /api/secretario/estoque).
   id: 'sec01', nome: 'Secretaria Teste', email: '', perfil: 'SECRETARIO', ativo: true,
   telefone: '', whatsapp: '', foto: null, placa_veiculo: '', rota: '',
+  pre_venda: false, rota2: false, pin_hash: hashSync('123456', 10),
+}, {
+  // BLOCO 118: vendedor DAVID (R5) — comissão desativada (Financeiro some do
+  // app dele, APIs recusam liberar/pagar, SQL 118 descarta comissão nova dele).
+  id: 'david-r5', nome: 'David - R5', email: '', perfil: 'VENDEDOR', ativo: true,
+  telefone: '', whatsapp: '', foto: null, placa_veiculo: '', rota: 'ROTA_05',
   pre_venda: false, rota2: false, pin_hash: hashSync('123456', 10),
 }];
 
@@ -237,6 +243,10 @@ const tables: Record<string, any[]> = {
   sale_items: saleItemsSeed,
   payment_comprovantes: [],
   caixa_fechamentos: [],
+  // BLOCO 118: fechamento de caixa GERAL (tabela NOVA — não colide com a
+  // caixa_fechamentos do BLOCO 96, que é caixa por entregador/data)
+  caixa_fechamentos_geral: [],
+  caixa_pagamentos: [],
   pre_vendas: [],
   pedidos: [],
   // BLOCO 95: fila fiscal de produtos vindos da XML (aba XML → Produtos)
@@ -294,15 +304,20 @@ function aplicarFiltros(rows: any[], params: URLSearchParams): any[] {
 }
 
 // BLOCO 31: matcher generico col=eq.valor (DELETE usa sale_id, por exemplo)
+// BLOCO 118: col=is.null também entra (PATCH do fechamento prende pagamentos abertos)
 function linhasQueBatem(rows: any[], params: URLSearchParams): number[] {
   const eqs: [string, string][] = [];
+  const isNulls: string[] = [];
   for (const [key, val] of params.entries()) {
     const m = val.match(/^eq\.([\s\S]*)$/);
     if (m) eqs.push([key, m[1]]);
+    const mi = val.match(/^is\.([\s\S]*)$/);
+    if (mi && mi[1] === 'null') isNulls.push(key);
   }
   const idx: number[] = [];
   rows.forEach((r, i) => {
-    if (eqs.every(([k, v]) => String(r[k]) === v)) idx.push(i);
+    const isOk = isNulls.every(k => r[k] === null || r[k] === undefined);
+    if (isOk && eqs.every(([k, v]) => String(r[k]) === v)) idx.push(i);
   });
   return idx;
 }
@@ -447,6 +462,13 @@ async function handle(req: NextRequest, segments: string[]) {
         if (table === 'caixa_fechamentos') {
           clone.data = clone.data ?? new Date().toISOString().slice(0, 10);
           clone.confirmado = clone.confirmado ?? false;
+        }
+        // BLOCO 118: defaults do caixa novo (timestamptz com DEFAULT now() no SQL real)
+        if (table === 'caixa_pagamentos') {
+          clone.criado_em = clone.criado_em ?? new Date().toISOString();
+        }
+        if (table === 'caixa_fechamentos_geral') {
+          clone.fechado_em = clone.fechado_em ?? new Date().toISOString();
         }
         // BLOCO 95: defaults da fila fiscal (criado_em vem do DEFAULT now() do SQL)
         if (table === 'xml_importacoes') {

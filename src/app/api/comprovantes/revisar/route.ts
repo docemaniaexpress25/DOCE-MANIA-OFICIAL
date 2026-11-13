@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/serverSupabase';
 import { isAdminSession } from '@/lib/session';
+// BLOCO 118: caixa (fechamento) — pix do portal confirmado entra no ledger
+import { registrarPagamentoCaixa } from '@/lib/caixaLedger';
 
 /**
  * POST /api/comprovantes/revisar   [ADMIN]
@@ -37,7 +39,7 @@ export async function POST(req: NextRequest) {
     // 1. Comprovante
     const { data: comp, error: compErr } = await supabase
       .from('payment_comprovantes')
-      .select('id, sale_id, client_id, valor, status')
+      .select('id, sale_id, client_id, valor, status, foto')
       .eq('id', id)
       .limit(1)
       .maybeSingle();
@@ -108,6 +110,32 @@ export async function POST(req: NextRequest) {
       })
       .eq('id', id);
     if (compUpErr) throw compUpErr;
+
+    // BLOCO 118 — CAIXA: pix do portal CONFIRMADO entra no ledger do Fechamento
+    // de Caixa (com o comprovante do cliente). Best-effort: nunca trava a revisão.
+    try {
+      const nomeCli118 = comp.client_id
+        ? ((await supabase.from('clients').select('nome_fantasia').eq('id', comp.client_id).limit(1).maybeSingle()).data as any)?.nome_fantasia || null
+        : null;
+      const { data: saleV118 } = await supabase.from('sales').select('vendedor_id').eq('id', sale.id).limit(1).maybeSingle();
+      const vdNome118 = (saleV118 as any)?.vendedor_id
+        ? ((await supabase.from('app_users').select('nome').eq('id', (saleV118 as any).vendedor_id).limit(1).maybeSingle()).data as any)?.nome || null
+        : null;
+      await registrarPagamentoCaixa(supabase, {
+        origem: 'PORTAL',
+        metodo: 'PIX',
+        valor: Number(comp.valor || 0),
+        saleId: String(comp.sale_id || ''),
+        cliente: nomeCli118,
+        vendedor: vdNome118,
+        comprovante: (comp as any).foto || null,
+        detalhe: 'Pix confirmado no portal do cliente',
+        usuarioId: null,
+        usuarioNome: null,
+      });
+    } catch (e118) {
+      console.warn('[comprovantes/revisar] caixa (118) falhou:', (e118 as any)?.message);
+    }
 
     return NextResponse.json({
       ok: true,

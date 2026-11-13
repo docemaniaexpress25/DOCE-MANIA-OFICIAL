@@ -8,6 +8,8 @@ import QRCode from 'qrcode';
 import { buildPixPayload, generateTxid, lerChavePixEntrega } from '@/lib/pix';
 // BLOCO 21: regra ÚNICA da comissão de pré-venda (compartilhada com /api/pre-venda/venda)
 import { comissaoPvDeItens, comissaoPeDeItens, COMISSAO_PV_DEFAULT, round2 } from '@/lib/comissaoPv';
+// BLOCO 118: caixa (fechamento) — dinheiro/pix recebido na entrega entra no ledger
+import { registrarPagamentoCaixa } from '@/lib/caixaLedger';
 
 /**
  * PRÉ-VENDA / ROTAS DE ENTREGA (estilo Shopee)
@@ -205,6 +207,14 @@ async function getMelhorias(supabase: any): Promise<{ trocaSeparacao: boolean; p
  */
 async function registrarComissaoPreVenda(supabase: any, sale: any, quitada: boolean, usarComissaoPe = false) {
   try {
+    // BLOCO 118 (regra do dono): comissao desativada para o David (R5) —
+    // nao calcula nem grava (o trigger do SQL 118 no banco tambem descarta).
+    if (sale.vendedor_id) {
+      const { data: vd118 } = await supabase
+        .from('app_users').select('nome').eq('id', sale.vendedor_id).limit(1).maybeSingle();
+      if (vd118 && /^david/i.test(String(vd118.nome || '').trim())) return;
+    }
+
     const { data: items } = await supabase
       .from('sale_items').select('produto_id, quantidade, preco_venda').eq('sale_id', sale.id);
     const itens = items || [];
@@ -1947,6 +1957,44 @@ export async function POST(req: NextRequest) {
       // comissão de PRONTA ENTREGA do produto (vendeu E entregou); entregador
       // dedicado mantém a comissão de PRÉ-VENDA.
       await registrarComissaoPreVenda(supabase, saleRow, comissaoQuitada, entregaPropria);
+
+      // BLOCO 118 — CAIXA: dinheiro/pix recebido NA ENTREGA entra no ledger do
+      // Fechamento de Caixa (a parte do Pix leva o comprovante/foto). Best-effort:
+      // o caixa NUNCA trava a entrega. JA_PAGO nao entra aqui — o dinheiro entrou
+      // antes (portal/recebimento manual) e duplicaria; boleto/nao-pago nao e dinheiro.
+      try {
+        const nomeCli118 = saleRow.client_id
+          ? ((await supabase.from('clients').select('nome_fantasia').eq('id', saleRow.client_id).limit(1).maybeSingle()).data as any)?.nome_fantasia || null
+          : null;
+        const vdNome118 = saleRow.vendedor_id
+          ? ((await supabase.from('app_users').select('nome').eq('id', saleRow.vendedor_id).limit(1).maybeSingle()).data as any)?.nome || null
+          : null;
+        const partes118: { metodo: 'DINHEIRO' | 'PIX'; valor: number; comprovante?: string | null }[] = [];
+        if (pagamento === 'DINHEIRO') partes118.push({ metodo: 'DINHEIRO', valor: recebido });
+        else if (pagamento === 'PIX') partes118.push({ metodo: 'PIX', valor: recebido, comprovante: eventoFoto });
+        else if (pagamento === 'MISTO') {
+          if (mistoDin > 0) partes118.push({ metodo: 'DINHEIRO', valor: mistoDin });
+          if (mistoPix > 0) partes118.push({ metodo: 'PIX', valor: mistoPix, comprovante: eventoFoto });
+        }
+        for (const p118 of partes118) {
+          await registrarPagamentoCaixa(supabase, {
+            origem: 'ENTREGA',
+            metodo: p118.metodo,
+            valor: p118.valor,
+            saleId,
+            cliente: nomeCli118,
+            vendedor: vdNome118,
+            comprovante: p118.comprovante || null,
+            detalhe: pagamento === 'MISTO'
+              ? `Entrega mista — parte em ${p118.metodo === 'DINHEIRO' ? 'dinheiro' : 'pix'}${updates.status_pagamento === 'PENDENTE' ? ' (parcial)' : ''}`
+              : `Entrega: ${pagamento}${updates.status_pagamento === 'PENDENTE' ? ' (parcial)' : ''}`,
+            usuarioId: userId,
+            usuarioNome: null,
+          });
+        }
+      } catch (e118) {
+        console.warn('[pre-venda] caixa (118) falhou:', (e118 as any)?.message);
+      }
 
       // Baixa do estoque — BLOCO 88: pedidos NOVOS ja RESERVARAM no registro
       // (estoque_baixado=true) e o guard do RPC torna esta chamada NO-OP.

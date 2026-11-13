@@ -745,6 +745,29 @@ const App: React.FC = () => {
       const res = await saleService.insertSale(saleData);
       if (res) {
         fetchTransactionalData();
+        // BLOCO 118 — CAIXA: venda à vista (dinheiro/pix) entra no ledger do
+        // Fechamento de Caixa na hora. Best-effort: nunca trava a venda.
+        try {
+          const metodoCaixa = String(saleData.metodoPagamento || '').toUpperCase();
+          const pagoCaixa = String(saleData.statusPagamento || 'PAGO').toUpperCase();
+          if ((metodoCaixa === 'DINHEIRO' || metodoCaixa === 'PIX') && pagoCaixa === 'PAGO') {
+            const { authHeaders } = await import('@/services/userService');
+            fetch('/api/caixa', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', ...authHeaders() },
+              body: JSON.stringify({
+                acao: 'REGISTRAR',
+                origem: 'VENDA',
+                saleId: res.id || null,
+                metodo: metodoCaixa,
+                valor: Number(saleData.valorTotal || 0),
+                cliente: (clients || []).find((c: any) => c.id === saleData.clientId)?.nomeFantasia || null,
+                vendedor: currentUser?.nome || null,
+                detalhe: saleData.detalhePagamento ? String(saleData.detalhePagamento).slice(-200) : null,
+              }),
+            }).catch(() => {});
+          }
+        } catch { /* caixa nunca trava a venda */ }
         // Som de caixa registradora + haptics ao vender
         const { sounds } = await import('@/utils/sound');
         sounds.kaChing();
@@ -917,6 +940,26 @@ const App: React.FC = () => {
     const success = await saleService.updateSale(saleId, updates);
 
     if (success) {
+      // BLOCO 118 — CAIXA: recebimento manual (conta a receber) entra no ledger
+      // do Fechamento de Caixa. Best-effort: nunca trava o recebimento.
+      try {
+        if (['DINHEIRO', 'PIX', 'DEPOSITO'].includes(String(method))) {
+          const { authHeaders } = await import('@/services/userService');
+          fetch('/api/caixa', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            body: JSON.stringify({
+              acao: 'REGISTRAR',
+              origem: 'RECEBIMENTO',
+              saleId,
+              metodo: String(method),
+              valor: valorRecebido,
+              cliente: (clients || []).find((c: any) => c.id === sale.clientId)?.nomeFantasia || null,
+              detalhe: novoLog,
+            }),
+          }).catch(() => {});
+        }
+      } catch { /* caixa nunca trava o recebimento */ }
       if (statusPagamento === 'PAGO') {
         const comm = commissions.find(c => c.saleId === saleId);
         if (comm && comm.status === 'A_RECEBER') {

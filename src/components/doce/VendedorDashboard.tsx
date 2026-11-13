@@ -15,6 +15,9 @@ import Cupom from '@/components/doce/Cupom';
 import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
 import ConfirmModal from '@/components/doce/ConfirmModal';
 import LucroRotaVendedor from '@/components/doce/LucroRotaVendedor';
+// BLOCO 118: caixa da casa (dinheiro/pix recebidos com comprovantes) + regra do David (R5)
+import CaixaFechamento from '@/components/doce/CaixaFechamento';
+import { isDavidVendedor } from '@/lib/equipe';
 // BLOCO 82: impressão no iPhone — instruções do Bluefy quando a Apple bloqueia o Bluetooth
 import { isIOSDevice, TEXTO_IMPRESSAO_IOS, TITULO_IMPRESSAO_IOS } from '@/lib/iosPrint';
 // BLOCO 111: impressão térmica USB do PC — canal BT x USB persistente por dispositivo
@@ -65,15 +68,17 @@ interface VendedorDashboardProps {
   setClientOrder: (ids: string[]) => void;
 }
 
-type TabType = 'HOME' | 'ROTEIRO' | 'CARGA' | 'HISTORY' | 'FINANCE' | 'CREDIT' | 'CLIENTES' | 'WEEKLY' | 'STOCK_VIEW' | 'AVISOS' | 'ENTREGAS' | 'LUCRO_ROTA';
+type TabType = 'HOME' | 'ROTEIRO' | 'CARGA' | 'HISTORY' | 'FINANCE' | 'CREDIT' | 'CLIENTES' | 'WEEKLY' | 'STOCK_VIEW' | 'AVISOS' | 'ENTREGAS' | 'LUCRO_ROTA' | 'CAIXA';
 
 // BLOCO 92 — Aba LUCRO DA ROTA: EXCLUSIVA do vendedor David (R5).
-// Casamento por id (a prova de renome) + fallback pelo nome (se o dono
-// recriar o usuario). Nenhum outro vendedor enxerga a aba — nem o admin.
-const LUCRO_ROTA_USER_ID = '7c989927-a148-479c-bf00-11f35bfa66b0'; // David - R5
+// BLOCO 118 — regra do dono: comissao DESATIVADA para o David (R5): a aba
+// Financeiro sai do app dele e NENHUMA comissao nova e calculada/gravada para
+// ele (gate nas APIs + trigger no SQL 118 no banco). O caixa (Fechamento de
+// Caixa) vale para TODOS, inclusive ele.
 const podeVerLucroRota = (u: any): boolean =>
-  !!u && String(u.role || '').toUpperCase() === 'VENDEDOR' &&
-  (String(u.id || '') === LUCRO_ROTA_USER_ID || /^david/i.test(String(u.nome || '').trim()));
+  !!u && String(u.role || '').toUpperCase() === 'VENDEDOR' && isDavidVendedor(u);
+// BLOCO 118: Financeiro (comissoes) nao existe para o David — os demais veem.
+const podeVerFinanceiro = (u: any): boolean => !!u && !isDavidVendedor(u);
 
 // Helpers para comprovante
 const compressImage = (file: File): Promise<string> => new Promise((resolve) => {
@@ -112,6 +117,8 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   user, products = [], clients = [], allClients = [], cargas = [], cargasPendentes = [], sales = [], commissions = [], payoutLogs = [], expenses = [], messages = [], categories = [], subcategories = [], markMessageAsRead, processSale, processPreVenda, addClient, updateClient, deleteClient, receivePayment, deleteSale, aceitarCarga, addExpense, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, updateDailyRoute, companyName, companyCnpj, clientOrder, setClientOrder
 }) => {
   const [activeTab, setActiveTab] = useState<TabType>(() => loadLocalState('v_activeTab', 'HOME'));
+  // BLOCO 118: se o estado guardado apontava para FINANCE e o vendedor é o David (comissao desativada), volta pra HOME
+  useEffect(() => { if (activeTab === 'FINANCE' && !podeVerFinanceiro(user)) setActiveTab('HOME'); }, [activeTab, user]);
   const [selectedClient, setSelectedClient] = useState<Client | null>(() => loadLocalState('v_selectedClient', null));
   // Pre-venda: modo de atendimento escolhido ao abrir o cliente (Edipo)
   const [modoSheet, setModoSheet] = useState<Client | null>(null);
@@ -1304,9 +1311,12 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
           <MenuCard icon="fa-bell" title="Avisos" tab="AVISOS" color="bg-rose-50 text-rose-600" badge={atRiskClients.length > 0 ? atRiskClients.length : false} />
           <MenuCard icon="fa-truck-fast" title="Minha Carga" tab="CARGA" color="bg-purple-50 text-purple-600" badge={minhasPendentes.length > 0} />
           <MenuCard icon="fa-receipt" title="Vendas" tab="HISTORY" color="bg-blue-50 text-[#1E3A5F]" />
-          <MenuCard icon="fa-wallet" title="Financeiro" tab="FINANCE" color="bg-emerald-50 text-[#1F7A4D]" badge={(messages || []).some(m => !m.lida && m.type === 'COMMISSION_CONFIRMATION')} />
+          {/* BLOCO 118: Financeiro NAO aparece para o David (R5) — comissao desativada */}
+          {podeVerFinanceiro(user) && <MenuCard icon="fa-wallet" title="Financeiro" tab="FINANCE" color="bg-emerald-50 text-[#1F7A4D]" badge={(messages || []).some(m => !m.lida && m.type === 'COMMISSION_CONFIRMATION')} />}
           {/* BLOCO 92: aba exclusiva do David (R5) — lucro da rota na mão do vendedor */}
           {podeVerLucroRota(user) && <MenuCard icon="fa-chart-line" title="Lucro da Rota" tab="LUCRO_ROTA" color="bg-teal-50 text-teal-600" />}
+          {/* BLOCO 118: caixa da casa — dinheiro/pix recebidos com comprovantes (fechamento é do admin) */}
+          <MenuCard icon="fa-cash-register" title="Caixa" tab="CAIXA" color="bg-gray-100 text-gray-700" />
           <MenuCard icon="fa-file-invoice-dollar" title="Contas a Receber" tab="CREDIT" color="bg-rose-50 text-rose-600" />
           <MenuCard icon="fa-users" title="Clientes" tab="CLIENTES" color="bg-green-50 text-green-600" />
           <MenuCard icon="fa-calendar-days" title="Roteiro Semanal" tab="WEEKLY" color="bg-indigo-50 text-indigo-600" />
@@ -1661,7 +1671,8 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         </div>
       )}
 
-      {activeTab === 'FINANCE' && (
+      {/* BLOCO 118: render também protegido — David (R5) nunca vê o Financeiro (comissao desativada) */}
+      {activeTab === 'FINANCE' && podeVerFinanceiro(user) && (
         <div className="space-y-6">
            {liberadoPendenteTotal > 0 && (
              <div className="bg-gradient-to-r from-amber-500 to-orange-500 rounded-3xl p-5 shadow-lg text-white">
@@ -1777,6 +1788,9 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
            </div>
         </div>
       )}
+
+      {/* BLOCO 118: Caixa da casa — totais + log de pagamentos com comprovantes; fechamento só admin */}
+      {activeTab === 'CAIXA' && <CaixaFechamento user={user} showToast={showToast} />}
 
       {activeTab === 'CREDIT' && (
         <div className="space-y-4">

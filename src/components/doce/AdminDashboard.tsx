@@ -33,6 +33,10 @@ import GestaoCatalogoPortal from '@/components/doce/GestaoCatalogoPortal';
 import ConfiguracoesHub from '@/components/doce/ConfiguracoesHub';
 import MovimentacoesEstoque from '@/components/doce/MovimentacoesEstoque';
 import AReceberPanel from '@/components/doce/AReceberPanel';
+// BLOCO 118: Fechamento de Caixa (dinheiro/pix recebidos com comprovantes, fechado pelo admin)
+import CaixaFechamento from '@/components/doce/CaixaFechamento';
+// BLOCO 118: David (R5) não tem comissão — helper da casa
+import { isDavidVendedor } from '@/lib/equipe';
 
 interface AdminDashboardProps {
   products: Product[];
@@ -115,13 +119,18 @@ interface AdminDashboardProps {
   setMelhorias?: (v: MelhoriasFlags) => void;
 }
 
-type TabType = 'HOME' | 'CATALOGO' | 'CATALOGO_PORTAL' | 'FISCAL_XML' | 'CATEGORIAS' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'COMPROVANTES' | 'ENTREGAS' | 'LUCRO' | 'BACKUP' | 'SETTINGS' | 'CONFIG_ERP' | 'ESTOQUE_MOV';
+// BLOCO 118: 'CAIXA' agora é o FECHAMENTO DE CAIXA — as comissões viram aba 'COMISSOES'
+type TabType = 'HOME' | 'CATALOGO' | 'CATALOGO_PORTAL' | 'FISCAL_XML' | 'CATEGORIAS' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'COMISSOES' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'COMPROVANTES' | 'ENTREGAS' | 'LUCRO' | 'BACKUP' | 'SETTINGS' | 'CONFIG_ERP' | 'ESTOQUE_MOV';
 
 type ReportType = 'RESUMO' | 'TOP_CLIENTES' | 'TOP_PRODUTOS' | 'CLIENTES_RISCO' | 'VENDAS_CATEGORIAS' | 'PRODUTOS_RENTAVEIS' | null;
 type ReportFilterType = 'RESUMO' | 'TOP_PRODUTOS' | 'TOP_CLIENTES' | 'CATEGORIAS' | 'VENDEDORES' | 'DIVIDAS' | 'PRODUTOS_RENTAVEIS';
 
 const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
-  const [activeTab, setActiveTab] = useState<TabType>(() => loadLocalState('admin_activeTab', 'HOME'));
+  // BLOCO 118: quem tinha a aba 'CAIXA' (comissões) salva no localStorage cai em 'COMISSOES'
+  const [activeTab, setActiveTab] = useState<TabType>(() => {
+    const t = loadLocalState('admin_activeTab', 'HOME');
+    return t === 'CAIXA' ? 'COMISSOES' : t;
+  });
   const [selectedSale, setSelectedSale] = useState<Sale | null>(() => loadLocalState('admin_selectedSale', null));
   const [viewingClientHistory, setViewingClientHistory] = useState<Client | null>(null);
   const [filterOverdueOnly, setFilterOverdueOnly] = useState(false);
@@ -1625,7 +1634,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             <MenuCard icon="fa-tags" title="Categorias" tab="CATEGORIAS" color="bg-indigo-50 text-indigo-600" />
             <MenuCard icon="fa-truck-ramp-box" title="Cargas" tab="CARGAS" color="bg-orange-50 text-orange-600" />
             <MenuCard icon="fa-users" title="Clientes" tab="CLIENTES" color="bg-green-50 text-green-600" />
-            <MenuCard icon="fa-coins" title="Comissoes" tab="CAIXA" color="bg-yellow-50 text-yellow-600" />
+            <MenuCard icon="fa-coins" title="Comissoes" tab="COMISSOES" color="bg-yellow-50 text-yellow-600" />
+            {/* BLOCO 118: nova aba — fechamento de caixa do dono */}
+            <MenuCard icon="fa-cash-register" title="Caixa" tab="CAIXA" color="bg-emerald-50 text-emerald-600" />
             <MenuCard icon="fa-users-gear" title="Vendedores" tab="VENDEDORES" color="bg-purple-50 text-purple-600" />
             <MenuCard icon="fa-receipt" title="Vendas Realizadas" tab="HISTORY" color="bg-red-50 text-red-600" />
             <MenuCard icon="fa-calendar-days" title="Roteiro" tab="ROTEIRO" color="bg-indigo-50 text-indigo-600" />
@@ -1874,12 +1885,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         </div>
       )}
 
-      {activeTab === 'CAIXA' && (() => {
+      {activeTab === 'COMISSOES' && (() => {
         // BLOCO 14 — contas na língua do dia a dia:
         // A PAGAR AGORA = comissão que o vendedor pode receber hoje (dinheiro entrou − despesas)
         // AGUARDANDO = comissão de vendas que o cliente AINDA NÃO pagou (a prazo/boleto/não cobrou)
-        const totalDisponivel = props.users.filter(u => u.role === 'VENDEDOR').reduce((a, v) => a + getVendedorStats(v.id).comissaoDisponivel, 0);
-        const totalAPagar = props.users.filter(u => u.role === 'VENDEDOR').reduce((a, v) => a + getVendedorStats(v.id).comissaoAPagar, 0);
+        // BLOCO 118: David (R5) não tem comissão — sai da lista e dos totais (cadastro fica na aba Vendedores)
+        const vendedoresComissao = props.users.filter(u => u.role === 'VENDEDOR' && !isDavidVendedor(u));
+        const totalDisponivel = vendedoresComissao.reduce((a, v) => a + getVendedorStats(v.id).comissaoDisponivel, 0);
+        const totalAPagar = vendedoresComissao.reduce((a, v) => a + getVendedorStats(v.id).comissaoAPagar, 0);
         const totalAguardando = props.commissions.filter(c => c.status === 'A_RECEBER').reduce((a, c) => a + (c.valor ?? 0), 0);
         const totalJaPago = props.payoutLogs.filter(l => l.aceitado !== false).reduce((a, l) => a + (l.valorPago ?? 0), 0);
         const totalAguardandoRecibo = props.payoutLogs.filter(l => l.aceitado === false).reduce((a, l) => a + (l.valorPago ?? 0), 0);
@@ -1902,7 +1915,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
             <div className="px-1"><h3 className="font-black text-gray-800 uppercase text-xs tracking-wider px-1 mb-3"><i className="fa-solid fa-coins text-amber-500 mr-2"></i>Comissão por Vendedor</h3>
               <div className="grid gap-3">
-                {props.users.filter(u => u.role === 'VENDEDOR').map(v => {
+                {vendedoresComissao.map(v => {
                   const stats = getVendedorStats(v.id);
                   const vComms = props.commissions.filter(c => c.vendedorId === v.id).sort((a, b) => new Date(b.dataGeracao).getTime() - new Date(a.dataGeracao).getTime());
                   const detalheAberto = caixaDetalhe === v.id;
@@ -1989,6 +2002,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           </div>
         );
       })()}
+
+      {/* BLOCO 118: FECHAMENTO DE CAIXA — dinheiro/pix recebidos com comprovantes; o admin fecha a qualquer instante */}
+      {activeTab === 'CAIXA' && <CaixaFechamento user={props.adminUser} showToast={showToast} />}
 
       {activeTab === 'VENDEDORES' && (
         <div className="space-y-4">

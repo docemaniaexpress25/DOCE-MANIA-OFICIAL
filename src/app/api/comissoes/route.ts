@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/serverSupabase';
 import { sessionFromRequest, isAdminSession } from '@/lib/session';
 import { sendPushToUser } from '@/lib/pushSender';
+// BLOCO 118: comissao desativada para o David (R5) — APIs recusam liberar/pagar para ele
+import { isDavidNome } from '@/lib/equipe';
 
 /**
  * BLOCO 14 — COMISSÕES: acerto do admin (simples e à prova de erro).
@@ -71,6 +73,14 @@ export async function POST(req: NextRequest) {
     if (!vendedorId) return NextResponse.json({ ok: false, error: 'vendedorId obrigatorio.' }, { status: 400 });
 
     const supabase = getServiceClient();
+
+    // BLOCO 118 (regra do dono): comissao desativada para o David (R5) —
+    // nada de liberar/pagar comissão para ele.
+    const { data: vendedorRow118 } = await supabase
+      .from('app_users').select('nome').eq('id', vendedorId).limit(1).maybeSingle();
+    if (vendedorRow118 && isDavidNome(String((vendedorRow118 as any).nome || ''))) {
+      return NextResponse.json({ ok: false, error: 'Comissao desativada para este vendedor.' }, { status: 403 });
+    }
 
     // Comissões DISPONIVEL do vendedor, mais antigas primeiro (FIFO)
     const { data: rows, error: rowsErr } = await supabase

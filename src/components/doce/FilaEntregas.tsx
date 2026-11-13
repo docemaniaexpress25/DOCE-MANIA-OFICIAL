@@ -410,6 +410,11 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
   // BLOCO 96 (regra do dono): FILTRO POR VENDEDOR acima da fila — clicou no
   // vendedor, aparecem so as entregas dele (pronta entrega e pre-venda).
   const [filtroVendedor, setFiltroVendedor] = useState<string>('TODOS');
+  // BLOCO 119 (regra do dono — CONFERENCIA DE ENTREGAS E VALORES): a fila
+  // inteira aparece para vendedor/entregador, mas o RECEBIMENTO e so de quem
+  // tem a CARGA NO SEU NOME (check de carga feito pelo secretario/admin).
+  // O toggle "SÓ MINHA CARGA" esconde as entregas dos outros (default: TODAS,
+  // para a conferencia pedir por ele).
   // BLOCO 96 (regra do dono): check de carga com ESCOLHA DO ENTREGADOR — antes
   // de o entregador carregar, seleciona quem e o entregador daquela venda/cliente.
   const [sheetCarga, setSheetCarga] = useState<FilaItem | null>(null);
@@ -432,8 +437,23 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
+  const podeEntregar = modo === 'ENTREGADOR' || modo === 'ADMIN' || modo === 'VENDEDOR'; // Bloco 98: o vendedor entrega a PROPIA venda (fila dele = vendas dele)
+  const podePrioridade = modo === 'ENTREGADOR' || modo === 'ADMIN';
+
   // ===== BLOCO 96: filtro por vendedor (chips acima da fila — modo ADMIN) =====
   const vendedorDe = (p: FilaItem) => p.vendedorId || 'SEM_VEND';
+  // ===== BLOCO 119: MINHA CARGA — a entrega pertence a mim quando:
+  // - foi CARREGADA no meu nome (check de carga = entregador_id == eu), ou
+  // - e venda minha e ninguem mais foi atribuido (carga propria do vendedor).
+  const ehMinhaCarga = (p: FilaItem): boolean =>
+    !!p.entregadorId ? p.entregadorId === user.id : p.vendedorId === user.id;
+  // BLOCO 119: quem pode RECEBER (aparece o botao ENTREGUE): admin sempre;
+  // vendedor/entregador so a carga no nome DELE. As outras: visiveis para
+  // conferencia, SEM chance de receber (banner com o dono do dinheiro).
+  const podeReceberEntrega = (p: FilaItem): boolean =>
+    modo === 'ADMIN' || (podeEntregar && ehMinhaCarga(p));
+  // ===== BLOCO 119: toggle "SÓ MINHA CARGA" (vendedor/entregador)
+  const [soMinhaCarga, setSoMinhaCarga] = useState(false);
   const vendedoresDaFila = useMemo(() => {
     const map = new Map<string, { id: string; nome: string; count: number }>();
     for (const p of (data?.fila || [])) {
@@ -445,24 +465,24 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
     return [...map.values()].sort((a, b) => b.count - a.count || a.nome.localeCompare(b.nome));
   }, [data]);
   const nomeFiltroAtivo = filtroVendedor === 'TODOS' ? '' : (vendedoresDaFila.find(v => v.id === filtroVendedor)?.nome || '');
+  // BLOCO 119: filtro base — TODAS (conferencia) ou SÓ MINHA CARGA (trabalho do dia)
+  const filtroMinhaCarga = (lista: FilaItem[]): FilaItem[] =>
+    soMinhaCarga ? lista.filter(ehMinhaCarga) : lista;
   const filaVisivel = useMemo(() => {
     const f = data?.fila || [];
-    if (filtroVendedor === 'TODOS') return f;
+    if (filtroVendedor === 'TODOS') return filtroMinhaCarga(f);
     return f.filter(p => vendedorDe(p) === filtroVendedor);
-  }, [data, filtroVendedor]);
+  }, [data, filtroVendedor, soMinhaCarga]);
   const falhadosVisivel = useMemo(() => {
     const f = data?.falhados || [];
-    if (filtroVendedor === 'TODOS') return f;
+    if (filtroVendedor === 'TODOS') return filtroMinhaCarga(f);
     return f.filter(p => vendedorDe(p) === filtroVendedor);
-  }, [data, filtroVendedor]);
+  }, [data, filtroVendedor, soMinhaCarga]);
   const entreguesVisivel = useMemo(() => {
     const f = data?.entreguesHoje || [];
-    if (filtroVendedor === 'TODOS') return f;
+    if (filtroVendedor === 'TODOS') return filtroMinhaCarga(f);
     return f.filter(p => vendedorDe(p) === filtroVendedor);
-  }, [data, filtroVendedor]);
-
-  const podeEntregar = modo === 'ENTREGADOR' || modo === 'ADMIN' || modo === 'VENDEDOR'; // Bloco 98: o vendedor entrega a PROPIA venda (fila dele = vendas dele)
-  const podePrioridade = modo === 'ENTREGADOR' || modo === 'ADMIN';
+  }, [data, filtroVendedor, soMinhaCarga]);
 
   const load = useCallback(async (silencioso = false) => {
     if (!silencioso) setLoading(true);
@@ -1080,17 +1100,31 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
 
           {/* entregador/admin: entrega e falha com botoes grandes */}
           {podeEntregar && pend && (
-            modo === 'VENDEDOR' && p.entregadorId && p.entregadorId !== user.id ? (
-              /* BLOCO 99 (regra do dono): venda CARREGADA e ALOCADA a outro
-                 entregador fica EXCLUSIVA dele — o vendedor NAO entrega. So
-                 volta a poder se o admin DESALOCAR (quem define e o admin). */
-              <div className="mt-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5">
-                <p className="text-[9px] font-black text-amber-700 uppercase leading-snug">
-                  <i className="fa-solid fa-truck-fast mr-1"></i>Carregada para {p.entregadorNome || 'o entregador'} — a entrega é DELE
-                </p>
-                <p className="text-[8px] font-semibold text-amber-600 mt-0.5 leading-snug">Você não entrega por conta própria. O ADMIN pode DESALOCAR essa entrega (menu Entregas) se precisar.</p>
+            !podeReceberEntrega(p) ? (
+              /* BLOCO 119 (regra do dono — CONFERENCIA DE ENTREGAS E VALORES):
+                 a entrega aparece para conferencia, mas o RECEBIMENTO e de quem
+                 tem a CARGA NO SEU NOME. Sem atribuicao: so o vendedor dono.
+                 Atribuida no check de carga: so o atribuido. ADMIN decide tudo. */
+              <div className="mt-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5">
+                {p.entregadorId ? (
+                  <>
+                    <p className="text-[9px] font-black text-slate-700 uppercase leading-snug">
+                      <i className="fa-solid fa-truck-fast mr-1 text-teal-600"></i>Carga de {p.entregadorNome || 'outro entregador'} — recebimento DELE
+                    </p>
+                    <p className="text-[8px] font-semibold text-slate-500 mt-0.5 leading-snug">Foi carregada no nome dele pelo admin/secretário. Só conferência aqui — o dinheiro é do responsável.</p>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-[9px] font-black text-slate-700 uppercase leading-snug">
+                      <i className="fa-solid fa-user mr-1 text-teal-600"></i>Carga do vendedor {p.vendedorNome || '—'} — recebimento DELE
+                    </p>
+                    <p className="text-[8px] font-semibold text-slate-500 mt-0.5 leading-snug">Sem entregador atribuído: quem recebe é o próprio vendedor da venda.</p>
+                  </>
+                )}
               </div>
             ) : (
+              /* Pode receber: carga no NOME DELE (atribuida no check de carga
+                 ou venda propria sem entregador) — botões ENTREGUE/FALHOU. */
               <div className="flex gap-2 mt-2">
                 <button
                   onClick={() => abrirSheetEntrega(p)}
@@ -1126,7 +1160,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
             <div>
               <p className="text-[10px] font-black text-gray-700 uppercase leading-none">Fila de entregas</p>
               <p className="text-[8px] font-bold text-gray-400 uppercase mt-0.5">
-                {modo === 'VENDEDOR' ? 'Seus pedidos — entregue voce mesmo (comissão de pronta entrega) ou deixe com o entregador' : 'Continua — entra pedido, sai entregue'}
+                {modo === 'ADMIN' ? 'Continua — entra pedido, sai entregue' : modo === 'ENTREGADOR' ? 'Você recebe SÓ a carga carregada NO SEU NOME — as demais são conferência' : 'Você recebe SÓ a carga no SEU NOME — entregue você mesmo ou deixe com o entregador'}
               </p>
             </div>
           </div>
@@ -1156,6 +1190,19 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
             <span className="text-slate-700"><i className="fa-solid fa-truck-fast mr-1"></i>No veículo: {carregadosCount}/{fila.length}</span>
           )}
         </div>
+
+        {/* BLOCO 119 (regra do dono): toggle SÓ MINHA CARGA — vendedor/entregador
+            escondem as entregas dos outros (a fila continua visível por padrão
+            para a conferência pedida pelo dono). */}
+        {modo !== 'ADMIN' && podeEntregar && (
+          <button
+            onClick={() => setSoMinhaCarga(!soMinhaCarga)}
+            className={`w-full mt-2 py-2.5 rounded-xl text-[9px] font-black uppercase tracking-wide transition-all active:scale-95 border ${soMinhaCarga ? 'bg-emerald-600 text-white border-emerald-600 shadow' : 'bg-white text-gray-500 border-gray-200'}`}
+          >
+            <i className={`fa-solid ${soMinhaCarga ? 'fa-filter-circle-xmark' : 'fa-filter'} mr-1.5`}></i>
+            {soMinhaCarga ? 'Mostrando SÓ MINHA CARGA — toque para ver todas' : 'Mostrando TODAS as entregas — toque para ver SÓ MINHA CARGA'}
+          </button>
+        )}
 
         {/* CAIXA DO DIA (entregador e admin) */}
         {modo !== 'VENDEDOR' && modo !== 'ADMIN' && (

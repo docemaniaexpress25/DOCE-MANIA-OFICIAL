@@ -201,6 +201,27 @@ const salesSeed = [
     prioridade: 0, separado: false, separado_em: null, entregador_id: null,
     comprovante_foto: null, modo_nota: null, route_id: null, entrega_seq: null, ordem_entrega: null,
   },
+  // BLOCO 119 (regra do dono): carga carregada NO NOME DO DAVID (check de
+  // carga) — vendas de vendedores DIFERENTES na carga DELE: David pode
+  // receber as duas; os vendedores donos veem só conferência (bloqueadas).
+  {
+    id: 'sale-fila-004', vendedor_id: 'david-r5', client_id: 'cli-6',
+    valor_total: 15.5, valor_pago: 0, metodo_pagamento: 'A_PRAZO',
+    detalhe_pagamento: 'PRE-VENDA — cobrar DINHEIRO na entrega (A VISTA)',
+    status_pagamento: 'PENDENTE', data_venda: iso(25), data_vencimento: null,
+    tipo_venda: 'PRE_VENDA', entrega_status: 'PENDENTE', trocas: null,
+    prioridade: 0, separado: false, separado_em: null, entregador_id: 'david-r5',
+    comprovante_foto: null, modo_nota: null, route_id: null, entrega_seq: null, ordem_entrega: null,
+  },
+  {
+    id: 'sale-fila-005', vendedor_id: 'vend01', client_id: 'cli-7',
+    valor_total: 33.9, valor_pago: 0, metodo_pagamento: 'A_PRAZO',
+    detalhe_pagamento: 'PRE-VENDA — cobrar PIX na entrega (A VISTA)',
+    status_pagamento: 'PENDENTE', data_venda: iso(20), data_vencimento: null,
+    tipo_venda: 'PRE_VENDA', entrega_status: 'PENDENTE', trocas: null,
+    prioridade: 0, separado: false, separado_em: null, entregador_id: 'david-r5',
+    comprovante_foto: null, modo_nota: null, route_id: null, entrega_seq: null, ordem_entrega: null,
+  },
   // BLOCO 67: divida ANTIGA do cli-5 (3 dias, pronta entrega a prazo) —
   // banner de divida no PDV sem tirar o botao Atender (nao e venda de hoje
   // nem pre-venda pendente na fila)
@@ -220,6 +241,8 @@ const saleItemsSeed = [
   { id: 'si-2', sale_id: 'sale-fila-002', produto_id: 'prod-2', product_id: 'prod-2', quantidade: 3, preco_venda: 4.29 },
   { id: 'si-3', sale_id: 'sale-divida-001', produto_id: 'prod-1', product_id: 'prod-1', quantidade: 10, preco_venda: 2.5 },
   { id: 'si-4', sale_id: 'sale-fila-003', produto_id: 'prod-1', product_id: 'prod-1', quantidade: 5, preco_venda: 4.35 },
+  { id: 'si-5', sale_id: 'sale-fila-004', produto_id: 'prod-1', product_id: 'prod-1', quantidade: 5, preco_venda: 3.1 },
+  { id: 'si-6', sale_id: 'sale-fila-005', produto_id: 'prod-2', product_id: 'prod-2', quantidade: 10, preco_venda: 3.39 },
 ];
 
 const tables: Record<string, any[]> = {

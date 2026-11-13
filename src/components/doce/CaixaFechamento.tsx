@@ -219,6 +219,24 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
     );
   };
 
+  // BLOCO 119 (regra do dono): conferencia FACIL — pagamentos agrupados POR
+  // FORMA (dinheiro / pix / deposito) com subtotal por grupo. Fechar o caixa
+  // vira conferir grupo por grupo: dinheiro na gaveta, comprovantes no Pix.
+  const gruposMetodo = React.useMemo(() => {
+    const ordem: { key: string; label: string; icon: string; cor: string; chip: string }[] = [
+      { key: 'DINHEIRO', label: 'Dinheiro na mão', icon: 'fa-solid fa-money-bill-wave', cor: 'text-emerald-600', chip: 'bg-emerald-600 text-white' },
+      { key: 'PIX', label: 'Pix recebido', icon: 'fa-brands fa-pix', cor: 'text-violet-600', chip: 'bg-violet-600 text-white' },
+      { key: 'DEPOSITO', label: 'Depósito (conta da empresa)', icon: 'fa-solid fa-building-columns', cor: 'text-slate-600', chip: 'bg-slate-600 text-white' },
+    ];
+    return ordem
+      .map(g => {
+        const lista = pagamentos.filter(p => p.metodo === g.key);
+        const subtotal = Math.round(lista.reduce((a, p) => a + Number(p.valor || 0), 0) * 100) / 100;
+        return { ...g, lista, subtotal };
+      })
+      .filter(g => g.lista.length > 0);
+  }, [pagamentos]);
+
   return (
     <div className="space-y-4">
       <div className="px-2">
@@ -255,60 +273,99 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
 
       {!loading && !erro && (
         <>
-          {/* Totais do caixa aberto */}
+          {/* BLOCO 119: CARD HERÓI — total + as 3 contas com CONTAGEM de pagamentos.
+              A conferência é direta: quanto tem, de onde veio, quantos comprovantes. */}
           <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-md mx-1">
-            <p className="text-[8px] font-black text-gray-400 uppercase mb-3">Dinheiro e Pix recebidos (caixa aberto)</p>
-            <div className="grid grid-cols-3 gap-2 mb-3">
-              <div className="text-center bg-emerald-50 p-3 rounded-2xl">
-                <i className="fa-solid fa-money-bill-wave text-emerald-500 text-sm"></i>
-                <p className="text-[7px] font-black text-emerald-500 uppercase mt-1">Dinheiro</p>
-                <p className="text-[11px] font-black text-emerald-700">{fmt(totais.dinheiro)}</p>
+            <p className="text-[8px] font-black text-gray-400 uppercase mb-3">Caixa aberto — à vista (dinheiro + pix)</p>
+            <div className="bg-gray-900 rounded-2xl p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-[8px] font-black text-white opacity-60 uppercase">Total no caixa</p>
+                  <p className="text-3xl font-black text-emerald-400 leading-tight">{fmt(totais.total)}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[8px] font-black text-white opacity-60 uppercase">Pagamentos</p>
+                  <p className="text-xl font-black text-white">{pagamentos.length}</p>
+                </div>
               </div>
-              <div className="text-center bg-violet-50 p-3 rounded-2xl">
-                <i className="fa-solid fa-qrcode text-violet-500 text-sm"></i>
-                <p className="text-[7px] font-black text-violet-500 uppercase mt-1">Pix</p>
-                <p className="text-[11px] font-black text-violet-700">{fmt(totais.pix)}</p>
+              {desde && (
+                <p className="text-[8px] font-bold text-white opacity-40 uppercase mt-2">
+                  <i className="fa-regular fa-clock mr-1"></i>acumulado desde {new Date(desde).toLocaleDateString('pt-BR')} {new Date(desde).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                </p>
+              )}
+            </div>
+            <div className="grid grid-cols-2 gap-2 mt-3">
+              <div className="bg-emerald-50 p-3 rounded-2xl">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <i className="fa-solid fa-money-bill-wave text-emerald-500 text-sm"></i>
+                    <p className="text-[7px] font-black text-emerald-500 uppercase">Dinheiro na mão</p>
+                  </div>
+                  <span className="text-[7px] font-black text-emerald-600 bg-white px-1.5 py-0.5 rounded-md">{pagamentos.filter(p => p.metodo === 'DINHEIRO').length}</span>
+                </div>
+                <p className="text-[15px] font-black text-emerald-700 mt-1">{fmt(totais.dinheiro)}</p>
               </div>
-              <div className="text-center bg-slate-50 p-3 rounded-2xl">
-                <i className="fa-solid fa-building-columns text-slate-500 text-sm"></i>
-                <p className="text-[7px] font-black text-slate-500 uppercase mt-1">Depósito</p>
-                <p className="text-[11px] font-black text-slate-700">{fmt(totais.deposito)}</p>
+              <div className="bg-violet-50 p-3 rounded-2xl">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <i className="fa-brands fa-pix text-violet-500 text-sm"></i>
+                    <p className="text-[7px] font-black text-violet-500 uppercase">Pix (comprovante)</p>
+                  </div>
+                  <span className="text-[7px] font-black text-violet-600 bg-white px-1.5 py-0.5 rounded-md">{pagamentos.filter(p => p.metodo === 'PIX').length}</span>
+                </div>
+                <p className="text-[15px] font-black text-violet-700 mt-1">{fmt(totais.pix)}</p>
               </div>
             </div>
-            <div className="bg-gray-900 rounded-2xl p-4 flex items-center justify-between">
-              <div>
-                <p className="text-[8px] font-black text-white opacity-60 uppercase">Total no caixa</p>
-                <p className="text-xl font-black text-emerald-400">{fmt(totais.total)}</p>
+            {totais.deposito > 0 && (
+              <div className="bg-slate-50 p-3 rounded-2xl mt-2 flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <i className="fa-solid fa-building-columns text-slate-500 text-sm"></i>
+                  <p className="text-[7px] font-black text-slate-500 uppercase">Depósito — conta da empresa</p>
+                </div>
+                <p className="text-[13px] font-black text-slate-700">{fmt(totais.deposito)}</p>
               </div>
-              <i className="fa-solid fa-cash-register text-emerald-400/30 text-2xl"></i>
-            </div>
-            {isAdmin && (
+            )}
+            {isAdmin ? (
               <button
                 onClick={() => setModalFechar(true)}
                 className="w-full mt-3 bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 transition-all uppercase text-xs tracking-widest"
               >
-                <i className="fa-solid fa-lock mr-2"></i>Fechar caixa agora
+                <i className="fa-solid fa-lock mr-2"></i>Fechar caixa agora — R$ {Number(totais.total || 0).toFixed(2)}
               </button>
+            ) : (
+              <div className="w-full mt-3 bg-gray-100 text-gray-500 font-bold py-3 rounded-2xl uppercase text-[9px] tracking-widest text-center">
+                <i className="fa-solid fa-lock mr-2"></i>Leitura — o ADMIN fecha o caixa
+              </div>
             )}
           </div>
 
-          {/* Log de pagamentos do caixa aberto (rastreio) */}
-          <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden mx-1">
-            <div className="px-4 pt-4 pb-2 flex items-center justify-between">
-              <h3 className="text-[10px] font-black text-gray-800 uppercase tracking-widest"><i className="fa-solid fa-receipt text-emerald-500 mr-2"></i>Log de pagamentos</h3>
-              <span className="text-[8px] font-black text-gray-400 uppercase">{pagamentos.length} registro(s)</span>
-            </div>
-            <div className="divide-y divide-gray-50 max-h-96 overflow-y-auto">
-              {pagamentos.length === 0 && (
-                <div className="text-center py-10 px-4">
-                  <i className="fa-solid fa-inbox text-3xl text-gray-200"></i>
-                  <p className="text-[9px] font-black uppercase text-gray-400 mt-2 tracking-widest">Nenhum pagamento no caixa aberto</p>
-                  <p className="text-[8px] font-bold text-gray-300 uppercase mt-1">Só entra À VISTA: venda à vista e entrega cobrada (dinheiro/pix) do David</p>
+          {/* BLOCO 119: CONFERÊNCIA POR FORMA — grupo por grupo, subtotal por grupo.
+              Dinheiro = conta na gaveta. Pix = conta nos comprovantes. Depósito = extrato. */}
+          {gruposMetodo.length > 0 ? (
+            <div className="space-y-3 mx-1">
+              <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider px-1"><i className="fa-solid fa-clipboard-check text-emerald-500 mr-2"></i>Conferência por forma de pagamento</h3>
+              {gruposMetodo.map(g => (
+                <div key={g.key} className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
+                  <div className="px-4 py-3 flex items-center justify-between bg-gray-50/70">
+                    <div className="flex items-center gap-2">
+                      <span className={`text-[8px] font-black uppercase px-2 py-1 rounded-md ${g.chip}`}><i className={`${g.icon} mr-1`}></i>{g.label}</span>
+                      <span className="text-[8px] font-black text-gray-400 uppercase">{g.lista.length} pagamento(s)</span>
+                    </div>
+                    <p className={`text-sm font-black ${g.cor}`}>{fmt(g.subtotal)}</p>
+                  </div>
+                  <div className="divide-y divide-gray-50 max-h-80 overflow-y-auto">
+                    {g.lista.slice().reverse().map(p => renderPagamento(p))}
+                  </div>
                 </div>
-              )}
-              {pagamentos.slice().reverse().map((p) => renderPagamento(p))}
+              ))}
             </div>
-          </div>
+          ) : (
+            <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-8 text-center mx-1">
+              <i className="fa-solid fa-inbox text-3xl text-gray-200"></i>
+              <p className="text-[9px] font-black uppercase text-gray-400 mt-2 tracking-widest">Nenhum pagamento no caixa aberto</p>
+              <p className="text-[8px] font-bold text-gray-300 uppercase mt-1">Só entra À VISTA: venda à vista e entrega cobrada (dinheiro/pix) do David</p>
+            </div>
+          )}
 
           {/* Histórico de fechamentos (persistido) */}
           <div className="px-1 pt-1">
@@ -348,21 +405,52 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
         </>
       )}
 
-      {/* Modal: fechar caixa (admin) */}
+      {/* Modal: fechar caixa (admin) — BLOCO 119: conferência GUIADA em 3 passos */}
       {modalFechar && (
         <div className="fixed inset-0 z-[400] bg-black/60 flex items-end justify-center sm:items-center p-4" onClick={() => !fechando && setModalFechar(false)}>
-          <div className="bg-white w-full max-w-md rounded-3xl p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white w-full max-w-md rounded-3xl p-6 shadow-2xl max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-sm font-black text-gray-800 uppercase tracking-widest flex items-center gap-2">
               <i className="fa-solid fa-lock text-emerald-600"></i>Fechar o caixa agora
             </h3>
             <p className="text-[9px] font-bold text-gray-400 uppercase mt-1">O caixa atual fica PERSISTIDO para rastreio e um novo período começa vazio.</p>
-            <div className="bg-gray-50 rounded-2xl p-4 mt-4 space-y-1.5">
-              <div className="flex justify-between text-[10px] font-black uppercase"><span className="text-emerald-600">Dinheiro</span><span className="text-gray-700">{fmt(totais.dinheiro)}</span></div>
-              <div className="flex justify-between text-[10px] font-black uppercase"><span className="text-violet-600">Pix</span><span className="text-gray-700">{fmt(totais.pix)}</span></div>
-              {totais.deposito > 0 && <div className="flex justify-between text-[10px] font-black uppercase"><span className="text-slate-600">Depósito</span><span className="text-gray-700">{fmt(totais.deposito)}</span></div>}
-              <div className="flex justify-between text-sm font-black uppercase pt-1 border-t border-gray-200"><span className="text-gray-800">Total</span><span className="text-emerald-600">{fmt(totais.total)}</span></div>
-              <p className="text-[8px] font-bold text-gray-400 uppercase">{pagamentos.length} pagamento(s) no log</p>
+
+            {/* PASSO 1 — conferir o dinheiro físico */}
+            <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-3.5 mt-4 flex gap-2.5">
+              <div className="w-7 h-7 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0 font-black text-[11px]">1</div>
+              <div className="min-w-0">
+                <p className="text-[9px] font-black text-emerald-700 uppercase">Conferir o DINHEIRO na gaveta</p>
+                <p className="text-[8px] font-bold text-emerald-600/80 mt-0.5">
+                  {pagamentos.filter(p => p.metodo === 'DINHEIRO').length} recebimento(s) em dinheiro · esperado: <span className="font-black">{fmt(totais.dinheiro)}</span>
+                </p>
+              </div>
             </div>
+
+            {/* PASSO 2 — conferir os comprovantes Pix */}
+            <div className="bg-violet-50 border border-violet-100 rounded-2xl p-3.5 mt-2 flex gap-2.5">
+              <div className="w-7 h-7 rounded-lg bg-violet-600 text-white flex items-center justify-center shrink-0 font-black text-[11px]">2</div>
+              <div className="min-w-0">
+                <p className="text-[9px] font-black text-violet-700 uppercase">Conferir os COMPROVANTES Pix</p>
+                <p className="text-[8px] font-bold text-violet-600/80 mt-0.5">
+                  {pagamentos.filter(p => p.metodo === 'PIX').length} recebimento(s) no Pix · esperado: <span className="font-black">{fmt(totais.pix)}</span> — a foto de cada comprovante está no log acima
+                </p>
+              </div>
+            </div>
+
+            {/* PASSO 3 — resumo final */}
+            <div className="bg-gray-50 rounded-2xl p-4 mt-2 space-y-1.5">
+              <div className="flex gap-2.5">
+                <div className="w-7 h-7 rounded-lg bg-gray-800 text-white flex items-center justify-center shrink-0 font-black text-[11px]">3</div>
+                <p className="text-[9px] font-black text-gray-600 uppercase leading-tight pt-1">Confira o resumo e feche</p>
+              </div>
+              <div className="pt-1">
+                <div className="flex justify-between text-[10px] font-black uppercase"><span className="text-emerald-600">Dinheiro</span><span className="text-gray-700">{fmt(totais.dinheiro)}</span></div>
+                <div className="flex justify-between text-[10px] font-black uppercase"><span className="text-violet-600">Pix</span><span className="text-gray-700">{fmt(totais.pix)}</span></div>
+                {totais.deposito > 0 && <div className="flex justify-between text-[10px] font-black uppercase"><span className="text-slate-600">Depósito</span><span className="text-gray-700">{fmt(totais.deposito)}</span></div>}
+                <div className="flex justify-between text-sm font-black uppercase pt-1 border-t border-gray-200"><span className="text-gray-800">Total</span><span className="text-emerald-600">{fmt(totais.total)}</span></div>
+                <p className="text-[8px] font-bold text-gray-400 uppercase">{pagamentos.length} pagamento(s) no log</p>
+              </div>
+            </div>
+
             <div className="mt-4">
               <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Observação (opcional)</label>
               <textarea

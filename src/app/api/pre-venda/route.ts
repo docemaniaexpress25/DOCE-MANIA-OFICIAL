@@ -652,17 +652,15 @@ async function enrichFila(supabase: any, salesRows: any[]) {
 /** GET ?fila=1 — a fila viva: pendentes (P1 -> P2 -> mais antigo) + falhados + entregues de hoje */
 async function getFila(supabase: any, userId: string, perfil: string) {
   const { start, end } = dayRangeIso();
-  const proprio = perfil === 'VENDEDOR';
-  // BLOCO 96 (regra do dono): CADA ENTREGADOR tem o seu proprio caixa e ve SO
-  // a sua carga. A venda recebe o entregador ANTES de entrar no veiculo (check
-  // de carga com entregador). O entregador logado ve: vendas atribuidas a ele
-  // + as antigas sem entregador (transicao — nada desaparece). O admin ve tudo.
+  // BLOCO 119 (regra do dono): CONFERENCIA DE ENTREGAS E VALORES — a fila aparece
+  // INTEIRA para vendedor e entregador (igual admin). Quem pode RECEBER cada
+  // entrega e controlado no check de carga (entregador_id) + validacao do POST:
+  // so recebe a carga carregada NO SEU NOME (pelo secretario/admin) ou a venda
+  // propria sem entregador atribuido. As demais aparecem SEM chance de receber.
   let entFiltroUuid: string | null = null;
   if (perfil === 'ENTREGADOR') {
     entFiltroUuid = await resolveEntregadorUuid(supabase, userId);
   }
-  const filtroEntregador = (q: any) =>
-    entFiltroUuid ? q.or(`entregador_id.eq.${entFiltroUuid},entregador_id.is.null`) : q;
   // BLOCO 31: ordem_entrega entra nas colunas SO se o SQL ja rodou (sonda)
   const temOrdem = await hasOrdemEntregaColumn();
   // BLOCO 40: modo_nota idem (tipo do documento no cupom da fila/pedidos)
@@ -682,8 +680,6 @@ async function getFila(supabase: any, userId: string, perfil: string) {
     .eq('tipo_venda', 'PRE_VENDA')
     .in('entrega_status', ['PENDENTE', 'EM_ROTA'])
     .order('data_venda', { ascending: true });
-  if (proprio) qAtiva = qAtiva.eq('vendedor_id', userId);
-  qAtiva = filtroEntregador(qAtiva);
   const { data: ativas, error: ativaErr } = await qAtiva;
 
   // Bloco 13 nao rodou: refaz sem as colunas novas
@@ -697,7 +693,6 @@ async function getFila(supabase: any, userId: string, perfil: string) {
       .eq('tipo_venda', 'PRE_VENDA')
       .in('entrega_status', ['PENDENTE', 'EM_ROTA'])
       .order('data_venda', { ascending: true });
-    if (proprio) q2 = q2.eq('vendedor_id', userId);
     const { data } = await q2;
     ativasRows = data;
   } else if (ativaErr) {
@@ -713,8 +708,6 @@ async function getFila(supabase: any, userId: string, perfil: string) {
     .eq('entrega_status', 'FALHOU')
     .gte('data_venda', dias7)
     .order('data_venda', { ascending: false });
-  if (proprio) qFal = qFal.eq('vendedor_id', userId);
-  qFal = filtroEntregador(qFal);
   const { data: falhados } = await qFal;
 
   // ---- Entregues HOJE (para o resumo/transparencia) ----
@@ -725,8 +718,6 @@ async function getFila(supabase: any, userId: string, perfil: string) {
     .eq('entrega_status', 'ENTREGUE')
     .gte('data_venda', dias7)
     .order('data_venda', { ascending: false });
-  if (proprio) qEnt = qEnt.eq('vendedor_id', userId);
-  qEnt = filtroEntregador(qEnt);
   const { data: entreguesRows } = await qEnt;
   // entregues hoje = data_venda em qualquer dia, mas o evento ENTREGUE de hoje:
   // simplificacao segura: usamos os eventos de hoje para filtrar
@@ -1772,29 +1763,45 @@ export async function POST(req: NextRequest) {
 
     // ============================================================================
     // BLOCO 13: ENTREGUE / FALHOU / REABRIR — FILA CONTINUA (sem rota obrigatória)
-    // REGRA DO DONO (Bloco 98 atualizada): o VENDEDOR pode entregar a PROPIA
-    // venda pelo menu Entregas (foi ele que vendeu e decidiu levar — e nisso
-    // ganha a comissão de PRONTA ENTREGA). Venda alheia: só o ENTREGADOR (e o admin).
-    // REGRA DO DONO (Bloco 99): venda CARREGADA e ALOCADA a um entregador fica
-    // EXCLUSIVA dele — o vendedor nao entrega por conta propria. Volta a ser
-    // dele se o admin DESALOCAR (DESALOCAR_ENTREGA). Se a alocação é o PROPRIO
-    // vendedor, ele entrega normal (o caixa é dele).
+    // REGRA DO DONO (Bloco 119 — CONFERENCIA DE ENTREGAS E VALORES): a fila
+    // aparece inteira para todos (vendedor/entregador conferem), mas o
+    // RECEBIMENTO e exclusivo de quem tem a CARGA NO SEU NOME:
+    // - entrega atribuida no check de carga (entregador_id): SO o atribuido
+    //   recebe (a carga foi carregada para ele pelo secretario/admin);
+    // - sem atribuicao: SO o VENDEDOR da venda recebe (a carga e dele);
+    // - ADMIN mantem o poder total (conferencia e correcao).
     // ============================================================================
     const entregaPropria = String(saleRow.vendedor_id || '') === String(userId);
+    // BLOCO 119: a atribuicao do check de carga e resolvida para o login fixo
+    // ENTREGADOR (uuid fixo da base) antes de comparar.
+    const atribuidoA = saleRow.entregador_id ? String(saleRow.entregador_id) : null;
+    const meuEntUuid = session.perfil === 'ENTREGADOR' ? await resolveEntregadorUuid(supabase, userId) : userId;
+    const atribuidaAele = !!atribuidoA && String(meuEntUuid || '') === atribuidoA;
     const podeEntregar = admin || session.perfil === 'ENTREGADOR' ||
-      (session.perfil === 'VENDEDOR' && entregaPropria);
+      (session.perfil === 'VENDEDOR' && (entregaPropria || atribuidaAele));
     if (acao === 'ENTREGUE' || acao === 'FALHOU' || acao === 'REABRIR') {
-      if (!podeEntregar) {
-        return NextResponse.json({ ok: false, error: 'Entrega pelo ENTREGADOR ou pelo PROPRIO vendedor da venda.' }, { status: 403 });
-      }
-      // BLOCO 99: alocada a OUTRO entregador = travada para o vendedor
-      if (session.perfil === 'VENDEDOR' && entregaPropria && saleRow.entregador_id && String(saleRow.entregador_id) !== String(userId)) {
-        let nomeEnt = 'Entregador 1';
-        try {
-          const { data: uEnt } = await supabase.from('app_users').select('nome').eq('id', String(saleRow.entregador_id)).maybeSingle();
-          if (uEnt?.nome) nomeEnt = String(uEnt.nome);
-        } catch { /* app_users antigo: segue com o nome padrao */ }
-        return NextResponse.json({ ok: false, error: `Essa entrega ja foi CARREGADA para ${nomeEnt}. So ele entrega — o admin pode DESALOCAR no menu Entregas.` }, { status: 403 });
+      if (!admin) {
+        // BLOCO 119 (regra do dono — CONFERENCIA DE ENTREGAS E VALORES): quem
+        // NAO tem a carga no nome recebe a mensagem ESPECIFICA do dono do dinheiro.
+        if (atribuidoA && !atribuidaAele) {
+          let nomeEnt = 'o entregador';
+          try {
+            const { data: uEnt } = await supabase.from('app_users').select('nome').eq('id', atribuidoA).maybeSingle();
+            if (uEnt?.nome) nomeEnt = String(uEnt.nome);
+          } catch { /* app_users antigo: segue com o nome padrao */ }
+          return NextResponse.json({ ok: false, error: `Essa entrega foi CARREGADA para ${nomeEnt}. So ele recebe — nada de dinheiro por conta de outro.` }, { status: 403 });
+        }
+        if (!atribuidoA && !entregaPropria) {
+          let nomeVend = 'o vendedor';
+          try {
+            const { data: uVend } = await supabase.from('app_users').select('nome').eq('id', String(saleRow.vendedor_id || '')).maybeSingle();
+            if (uVend?.nome) nomeVend = String(uVend.nome);
+          } catch { /* segue com o nome padrao */ }
+          return NextResponse.json({ ok: false, error: `Essa carga e do vendedor ${nomeVend} — so ele pode receber. A entrega nao foi carregada no seu nome.` }, { status: 403 });
+        }
+        if (!podeEntregar) {
+          return NextResponse.json({ ok: false, error: 'Entrega pelo ENTREGADOR ou pelo PROPRIO vendedor da venda.' }, { status: 403 });
+        }
       }
     }
     const rotaIdRef = saleRow.route_id || null;

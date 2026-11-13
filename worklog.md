@@ -1115,3 +1115,29 @@ QA:
 - E2E local com agent-browser (localhost:3000): login renderiza com lista completa, ZERO erros de console, tela de PIN ok apos clicar em Deivid, NENHUM error boundary, NENHUM splash infinito, NENHUM regressao.
 - Producao re-sondada apos deploy: / 200, login ok, E2E Chromium sem erros de console.
 ORIENTACAO AO DONO (se o iPhone ainda falhar): (1) abrir no Safari e recarregar a pagina (o novo code fica no ar apos o deploy); (2) se abrir pelo icone da tela inicial (PWA), fechar e abrir de novo 2x; (3) se persistir: Ajustes > Safari > Avancado > Dados do site > sistema-doce-mania1 > apagar, e Ajustes > Safari > Privacidade: NAO bloquear todos os cookies; (4) testar tambem no modo normal (nao privado).
+
+## bloco119 — CONFERÊNCIA DE ENTREGAS E VALORES: fila inteira visível, recebimento SÓ da carga no SEU nome + caixa mais fácil (2026-11-13)
+
+DONO: "CRIE A REGRA PARA FACILITAR NOSSA CONFERENCIA DE ENTREGAS E VALORES! CRIE A REGRA DE SÓ APARECE PARA TODAS AS CARGAS QUE FORAM CARREGADAS PARA ELE PELO SECRETARIO OU ADMIN! AS OUTRAS ENTREGAS DA FILA DEVERAO APARECER POREM SEM A CHANCE DE SER RECEBIDAS! ESSA MESMA REGRA VALE PARA OS VENDEDORES! ELES PODERAO VER A FILA DE ENTREGAS, MAS SOMENTE PODERÃO RECEBER ENTREGAS CARREGADAS EM SEU NOME! ISSO DEIXARA O CAIXA FINANCEIRO ORGANIZADO! MELHORE O FLUXO DO CAIXA, QUE FIQUE FACIL ENTENDER E FAZER ESSE FECHAMENTO"
+
+REGRA 119 (quem PODE RECEBER cada entrega):
+- Entrega ATRIBUÍDA no check de carga (entregador_id — carregada pelo secretario/admin): SÓ o atribuido recebe (a carga foi carregada NO NOME dele).
+- Entrega SEM atribuição: SÓ o VENDEDOR da venda recebe (a carga é dele) — entrega própria/comissão de pronta entrega continua funcionando.
+- ADMIN mantém poder total (conferência e correção). SECRETARIO continua sem receber (carrega/descarrega, não cobra).
+- As demais entregas: APARECEM na fila para conferencia com banner "Carga de X — recebimento DELE", SEM botões ENTREGUE/FALHOU.
+
+IMPLEMENTACAO:
+- GET /api/pre-venda?fila=1: fila INTEIRA para vendedor e entregador (antes vendedor so via as dele e entregador so as atribuidas/legado). Falhados/entreguesHoje idem. Caixa por entregador continua separado (entFiltroUuid preservado para o caixa).
+- POST /api/pre-venda (ENTREGUE/FALHOU/REABRIR): validacao server com MENSAGENS ESPECIFICAS (nome de quem tem a carga) — 403 "Essa entrega foi CARREGADA para {nome}. So ele recebe..." / "Essa carga e do vendedor {nome} — so ele pode receber...". Vendedor logado com carga atribuida a ele agora PODE entregar (podeEntregar inclui atribuidaAele; uuid do login fixo ENTREGADOR resolvido antes de comparar).
+- FilaEntregas.tsx: podeReceberEntrega() (admin true; vendedor/entregador so ehMinhaCarga = entregadorId==eu || (sem entregador && vendedorId==eu)); Card mostra banner slate "Carga de {entregador} — recebimento DELE" (atribuida) ou "Carga do vendedor {nome} — recebimento DELE" (sem atribuicao) SEM botões; toggle SÓ MINHA CARGA no header (vendedor/entregador) filtra fila/falhados/entregues; textos do header atualizados (vendedor/entregador: "Você recebe SÓ a carga carregada NO SEU NOME").
+- CaixaFechamento.tsx (BLOCO 119 — fluxo mais facil): card HERÓI com TOTAL grande + contagem de pagamentos + acumulado desde; breakdown DINHEIRO NA MÃO / PIX (comprovante) / DEPOSITO com contagens; lista de pagamentos AGRUPADA POR FORMA com subtotal por grupo ("Conferência por forma de pagamento"); botão do admin mostra o valor ("Fechar caixa agora — R$ X"); David (vendedor) vê "Leitura — o ADMIN fecha o caixa"; modal de fechamento GUIADO em 3 PASSOS (1 conferir dinheiro na gaveta com esperado, 2 conferir comprovantes Pix com esperado, 3 resumo final + observação).
+- FIX DE NAVEGACAO (bug achado no QA): AdminDashboard remapeava 'CAIXA'->'COMISSOES' TODA vez que o app abria (migração legada do 118) — derrubava o admin da aba CAIXA nova ao recarregar. Removido ('CAIXA' é aba legitima do 118.3).
+- Mock e2e: sales 004 (David próprio atribuído a ele) e 005 (venda da Rota 1 carregada para David) + itens — provam a regra nos dois lados.
+
+QA E2E MOCK (127.0.0.1:3000, .env.local criado/removido; APIs por curl + UI por agent-browser):
+- APIs 7/7: vend01->carga do David 403 ESPECIFICA; david->alheia sem atribuicao 403 ESPECIFICA; david->atribuida a ele OK; vend01->propria OK; david->propria atribuida OK; admin->qualquer OK; entregador fixo->alheia sem atribuicao 403 ESPECIFICA.
+- UI (David R5): fila inteira (5 pedidos), banners nos 3 alheios SEM botões, ENTREGUE/FALHOU nos 2 dele, toggle SÓ MINHA CARGA filtra 2 e volta 5, console limpo; aba CAIXA com card herói + "LEITURA — O ADMIN FECHA O CAIXA".
+- UI (admin): ENTREGUE/FALHOU nos 5 + chips de filtro; CAIXA com botão "FECHAR CAIXA AGORA — R$ X" e modal 3 passos; cancelar nao cria fechamento.
+- FIX validado: admin recarrega na aba CAIXA e permanece nela (antes caia em COMISSOES).
+- LINT: 0 erros / 10 warnings (baseline exata).
+SEM SQL — nenhuma mudanca de schema (regra roda com entregador_id que ja existe; check de carga continua sendo feito pelo secretario/admin).

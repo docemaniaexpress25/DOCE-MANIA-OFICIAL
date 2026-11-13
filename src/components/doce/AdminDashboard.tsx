@@ -126,11 +126,12 @@ type ReportType = 'RESUMO' | 'TOP_CLIENTES' | 'TOP_PRODUTOS' | 'CLIENTES_RISCO' 
 type ReportFilterType = 'RESUMO' | 'TOP_PRODUTOS' | 'TOP_CLIENTES' | 'CATEGORIAS' | 'VENDEDORES' | 'DIVIDAS' | 'PRODUTOS_RENTAVEIS';
 
 const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
-  // BLOCO 118: quem tinha a aba 'CAIXA' (comissões) salva no localStorage cai em 'COMISSOES'
-  const [activeTab, setActiveTab] = useState<TabType>(() => {
-    const t = loadLocalState('admin_activeTab', 'HOME');
-    return t === 'CAIXA' ? 'COMISSOES' : t;
-  });
+  // BLOCO 119 (fix): o remapeamento legado 'CAIXA'->'COMISSOES' do Bloco 118
+  // rodava TODA vez que o app abria e DERRUBAVA o admin da aba CAIXA nova
+  // (fechamento de caixa, 118.3) para Comissoes ao recarregar — bug real de
+  // navegação. A migração pontual já aconteceu em produção; hoje 'CAIXA' e
+  // uma aba legitima e restaura normal.
+  const [activeTab, setActiveTab] = useState<TabType>(() => loadLocalState('admin_activeTab', 'HOME'));
   const [selectedSale, setSelectedSale] = useState<Sale | null>(() => loadLocalState('admin_selectedSale', null));
   const [viewingClientHistory, setViewingClientHistory] = useState<Client | null>(null);
   const [filterOverdueOnly, setFilterOverdueOnly] = useState(false);

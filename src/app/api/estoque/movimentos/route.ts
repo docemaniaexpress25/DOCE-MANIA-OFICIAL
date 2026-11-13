@@ -47,9 +47,14 @@ export async function GET(req: NextRequest) {
   }
 
   const db = getServiceClient();
+  // ATENCAO (bloco 108.1): NAO usar embed `products(nome)` aqui — o SQL 108
+  // cria estoque_movimentos SEM foreign key para products, e o PostgREST
+  // recusa o relacionamento ("Could not find a relationship ... schema
+  // cache"), quebrando o GET inteiro. Os nomes sao resolvidos em memoria
+  // abaixo — mesmo padrao de enrichFila/contas a receber (nunca depender de FK).
   let q = db
     .from('estoque_movimentos')
-    .select('id, produto_id, tipo, origem, referencia, quantidade, custo_unitario, saldo_apos, usuario_nome, criado_em, products(nome)')
+    .select('id, produto_id, tipo, origem, referencia, quantidade, custo_unitario, saldo_apos, usuario_nome, criado_em')
     .order('criado_em', { ascending: false })
     .limit(limit);
   if (['ENTRADA', 'SAIDA', 'AJUSTE', 'ESTORNO'].includes(tipo)) q = q.eq('tipo', tipo);
@@ -59,12 +64,31 @@ export async function GET(req: NextRequest) {
   if (error) return BAD(500, `Falha ao ler movimentacoes: ${error.message}`);
 
   const rows = (data || []) as Record<string, unknown>[];
+
+  // Nomes de produto em memoria (sem embed/FK — ver comentario acima)
+  const idsProdutos = Array.from(new Set(rows.map((r) => String(r.produto_id || '')).filter(Boolean)));
+  const nomes = new Map<string, string>();
+  if (idsProdutos.length) {
+    const { data: prods, error: eProds } = await db
+      .from('products')
+      .select('id, nome')
+      .in('id', idsProdutos);
+    if (!eProds) {
+      for (const p of (prods || []) as Record<string, unknown>[]) {
+        nomes.set(String(p.id), String(p.nome || 'Produto'));
+      }
+    }
+    // se a busca de nomes falhar, a lista segue com "Produto" — o kardex
+    // nunca deixa de mostrar os movimentos por causa do nome.
+  }
+  const nomeDe = (id: unknown) => nomes.get(String(id || '')) || 'Produto';
+
   const movimentos = rows
-    .filter((r) => !busca || String((r.products as Record<string, unknown> | null)?.nome || '').toLowerCase().includes(busca.toLowerCase()))
+    .filter((r) => !busca || nomeDe(r.produto_id).toLowerCase().includes(busca.toLowerCase()))
     .map((r) => ({
       id: r.id,
       produto_id: r.produto_id,
-      produto_nome: (r.products as Record<string, unknown> | null)?.nome || 'Produto',
+      produto_nome: nomeDe(r.produto_id),
       tipo: r.tipo,
       origem: r.origem,
       referencia: r.referencia || '',

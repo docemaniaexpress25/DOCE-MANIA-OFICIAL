@@ -1141,3 +1141,27 @@ QA E2E MOCK (127.0.0.1:3000, .env.local criado/removido; APIs por curl + UI por 
 - FIX validado: admin recarrega na aba CAIXA e permanece nela (antes caia em COMISSOES).
 - LINT: 0 erros / 10 warnings (baseline exata).
 SEM SQL — nenhuma mudanca de schema (regra roda com entregador_id que ja existe; check de carga continua sendo feito pelo secretario/admin).
+
+## bloco119.1 — FILA DO VENDEDOR SEPARADA: "SUAS ENTREGAS" so o que o ADMIN carregou no seu nome (2026-11-13)
+
+DONO: "NA FILA DE ENTREGA DO LOGIN DO VENDEDOR ELE VAI VER TODAS AS ENTREGAS SEPARADAS, E QUANDO ELE CLICAR PARA VER SUAS ENTREGAS APENAS AS QUE ELE TIVER CARREGADO, ESSE CARREGAMENTO FEITO PELO ADMIN! ELE NAO PODE ENTREGAR ALGO QUE ELE NAO TEJA CARREGADO"
+
+O que ja valia (BLOCO 119): server recusa ENTREGUE/FALHOU fora da carga no seu nome (403 com o nome do dono); fila inteira visivel com banner. O dono agora pediu a SEPARACAO VISUAL e um clique claro para ver SO as suas.
+
+IMPLEMENTACAO (src/components/doce/FilaEntregas.tsx — nenhuma mudanca de API/SQL):
+- DUAS ABAS no cabecalho da fila (vendedor/entregador): "SUAS ENTREGAS (n)" (verde, so a carga no SEU nome) e "TODAS (n)" (escuro, fila inteira). Aba ativa tem a dica embaixo: "Mostrando APENAS o que foi carregado NO SEU NOME (check de carga do admin/secretario)" / "Fila inteira SEPARADA — as suas tem botao de receber; as dos outros sao so conferencia".
+- FILA SEPARADA EM 2 BLOCOS (aba TODAS, vendedor/entregador): (1) bloco verde "SUAS ENTREGAS — CARREGADAS NO SEU NOME" com contagem+total e os cards DELE (com ENTREGUE/FALHOU), vazia mostra "Nenhuma entrega carregada para voce ainda — o admin/secretario carrega no check de carga"; (2) bloco cinza "DEMAIS ENTREGAS — SO CONFERENCIA" com contagem+total e AVISO "O recebimento e de quem tem a carga no nome — estas voce NAO entrega (o sistema bloqueia)", AGRUPADO POR DONO DA CARGA (sub-cabecalho "Carga de {nome} — N entrega(s) · R$ total") e cards SEM botao de receber. Ordem dentro dos blocos segue a rota (ordem manual do admin quando houver; senao P1->P2->mais antigo).
+- Chip de conferencia rapida no resumo: "Sua carga: n · R$ total"; subtitulo do cabecalho atualizado ("Voce ve TODAS SEPARADAS — recebe SO o que o admin/secretario carregou NO SEU NOME").
+- Regra de quem e "sua" (mantida do 119): entregador_id == eu (carregada no check de carga pelo secretario/admin) OU venda minha sem entregador atribuido (carga propria do vendedor — estoque da van carregado pelo admin). Admin mantem poder total (sem abas, fila unificada P1/P2/normais, ENTREGUE/FALHOU em todos).
+
+QA E2E MOCK (127.0.0.1:3000, .env.local criado/removido; APIs por curl + UI por agent-browser 390x844):
+- APIs 5/5: vend01->carga do Rota 2 403 "Essa carga e do vendedor Rota 2 Teste — so ele pode receive..."; david->carga do Rota 2 403; david->carga do vend01 403 "Essa carga e do vendedor Rota 1 Teste..."; david->ENTREGUE na 005 (carregada PARA ele) ok:true; david->REABRIR 005 ok:true (voltou pra fila).
+- UI David (david-r5): cabecalho "VOCE VE TODAS SEPARADAS...", chip "Sua carga: 2 · R$ 49,40", abas "SUAS ENTREGAS (2)"/"TODAS (5)"; bloco verde com 004+005 (ambas "Carregado por David - R5", com ENTREGUE/FALHOU); bloco cinza "DEMAIS ENTREGAS — SO CONFERENCIA 3 · R$ 41,79" com grupos "CARGA DE ROTA 2 TESTE — 2 ENTREGA(S) · R$ 20,04" (001+002, sem botao, banner "Carga do vendedor Rota 2 Teste") e "CARGA DE ROTA 1 TESTE — 1 ENTREGA(S) · R$ 21,75" (003); aba SUAS mostrou APENAS as 2 dele (sem nenhum alheio) + dica "MOSTRANDO APENAS O QUE FOI CARREGADO NO SEU NOME"; botao ENTREGUE na carga dele abriu o sheet ACEITE DA ENTREGA (Pix com comprovante obrigatoria).
+- UI vend01 (Rota 1): SUAS (1) = so a propria 003 com botao; TODAS (5) = bloco verde 1 · R$ 21,75 + bloco cinza 4 · R$ 69,44 com grupos "CARGA DE ROTA 2 TESTE — 2 · R$ 20,04" e "CARGA DE DAVID - R5 — 2 · R$ 49,40" (a 005 e venda DELE mas carregada NO NOME DO DAVID — aparece como carga do David, SEM botao, mensagem "Foi carregada no nome dele pelo admin/secretario"); aba SUAS mostrou so a 003.
+- UI admin: SEM abas SUAS/TODAS, fila unificada (P1/P2/normais) com P1/P2/CARREGAR/EDITAR/EMITIR NF/ENTREGUE/FALHOU nos 5 cards + chips por vendedor — poder total intacto.
+- ZERO erros de console nas 3 sessoes; dev.log limpo.
+- LINT: 0 erros / 10 warnings (baseline exata).
+
+OBS p/ dono (fora do escopo, comportamento pre-existente): REABRIR devolve a entrega para a fila mas NAO estorna o pagamento ja registrado no caixa por entregador (no mock o teste deixou R$ 33,90 do David em aberto apos ENTREGUE+REABRIR). Se quiser que REABRIR estorne o caixa, abre-se um bloco novo.
+
+SEM SQL — nenhuma mudanca de schema.

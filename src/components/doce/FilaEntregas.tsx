@@ -454,6 +454,28 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
     modo === 'ADMIN' || (podeEntregar && ehMinhaCarga(p));
   // ===== BLOCO 119: toggle "SÓ MINHA CARGA" (vendedor/entregador)
   const [soMinhaCarga, setSoMinhaCarga] = useState(false);
+  // ===== BLOCO 119.1 (pedido do dono): as DUAS LISTAS da fila, JÁ SEPARADAS —
+  // SUAS entregas (carregadas NO SEU NOME pelo admin/secretario no check de
+  // carga — ou venda própria sua) e as DOS OUTROS (somente conferência,
+  // agrupadas por dono da carga: "Carga de X"). O RECEBIMENTO das outras
+  // fica bloqueado no card E no servidor (403 com o nome do dono).
+  const minhasNaFila = useMemo(() =>
+    (data?.fila || []).filter(p => p.entregadorId ? p.entregadorId === user.id : p.vendedorId === user.id),
+  [data, user.id]);
+  const outrasNaFila = useMemo(() =>
+    (data?.fila || []).filter(p => !(p.entregadorId ? p.entregadorId === user.id : p.vendedorId === user.id)),
+  [data, user.id]);
+  const outrosAgrupados = useMemo(() => {
+    const map = new Map<string, { key: string; nome: string; itens: FilaItem[]; total: number }>();
+    for (const p of outrasNaFila) {
+      const key = p.entregadorId ? `E:${p.entregadorId}` : `V:${p.vendedorId || 'SEM_VEND'}`;
+      const g = map.get(key) || { key, nome: p.entregadorId ? (p.entregadorNome || 'entregador') : (p.vendedorNome || 'vendedor'), itens: [] as FilaItem[], total: 0 };
+      g.itens.push(p);
+      g.total = Math.round((g.total + p.valorTotal) * 100) / 100;
+      map.set(key, g);
+    }
+    return [...map.values()];
+  }, [outrasNaFila]);
   const vendedoresDaFila = useMemo(() => {
     const map = new Map<string, { id: string; nome: string; count: number }>();
     for (const p of (data?.fila || [])) {
@@ -925,6 +947,11 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
   const p1 = fila.filter(p => p.prioridade === 1);
   const p2 = fila.filter(p => p.prioridade === 2);
   const normais = fila.filter(p => p.prioridade === 0 || p.prioridade == null);
+  // BLOCO 119.1: SUAS entregas na ORDEM DA ROTA (ordem manual do admin quando
+  // houver; senão P1 → P2 → mais antigo) — é o conteúdo do bloco "SUAS".
+  const minhasVisiveis = listaOrdenada.filter(p => p.entregadorId ? p.entregadorId === user.id : p.vendedorId === user.id);
+  const totalMinhasNaFila = Math.round(minhasNaFila.reduce((a, p) => a + p.valorTotal, 0) * 100) / 100;
+  const totalOutrasNaFila = Math.round(outrasNaFila.reduce((a, p) => a + p.valorTotal, 0) * 100) / 100;
   const falhados = falhadosVisivel;
   const entreguesHoje = entreguesVisivel;
   // A PRAZO entregue hoje e ainda sem pagamento: o entregador NAO cobra —
@@ -1160,7 +1187,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
             <div>
               <p className="text-[10px] font-black text-gray-700 uppercase leading-none">Fila de entregas</p>
               <p className="text-[8px] font-bold text-gray-400 uppercase mt-0.5">
-                {modo === 'ADMIN' ? 'Continua — entra pedido, sai entregue' : modo === 'ENTREGADOR' ? 'Você recebe SÓ a carga carregada NO SEU NOME — as demais são conferência' : 'Você recebe SÓ a carga no SEU NOME — entregue você mesmo ou deixe com o entregador'}
+                {modo === 'ADMIN' ? 'Continua — entra pedido, sai entregue' : modo === 'ENTREGADOR' ? 'Você vê TODAS SEPARADAS — recebe SÓ a carga carregada NO SEU NOME' : 'Você vê TODAS SEPARADAS — recebe SÓ o que o admin/secretário carregou NO SEU NOME'}
               </p>
             </div>
           </div>
@@ -1189,19 +1216,39 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
           {modo !== 'VENDEDOR' && (
             <span className="text-slate-700"><i className="fa-solid fa-truck-fast mr-1"></i>No veículo: {carregadosCount}/{fila.length}</span>
           )}
+          {/* BLOCO 119.1: conferência rápida — quanto da fila é CARGA NO SEU NOME */}
+          {modo !== 'ADMIN' && podeEntregar && (
+            <span className="text-emerald-700"><i className="fa-solid fa-user-check mr-1"></i>Sua carga: {minhasNaFila.length} · {fmt(totalMinhasNaFila)}</span>
+          )}
         </div>
 
-        {/* BLOCO 119 (regra do dono): toggle SÓ MINHA CARGA — vendedor/entregador
-            escondem as entregas dos outros (a fila continua visível por padrão
-            para a conferência pedida pelo dono). */}
+        {/* BLOCO 119.1 (regra do dono): DUAS ABAS CLARAS — "SUAS ENTREGAS"
+            mostra APENAS o que foi carregado NO SEU NOME pelo admin/secretario
+            (ou venda própria); "TODAS" mostra a fila inteira SEPARADA — as
+            entregas dos outros ficam visíveis para conferência, porém SEM
+            receber (sem botões + servidor recusa com 403). */}
         {modo !== 'ADMIN' && podeEntregar && (
-          <button
-            onClick={() => setSoMinhaCarga(!soMinhaCarga)}
-            className={`w-full mt-2 py-2.5 rounded-xl text-[9px] font-black uppercase tracking-wide transition-all active:scale-95 border ${soMinhaCarga ? 'bg-emerald-600 text-white border-emerald-600 shadow' : 'bg-white text-gray-500 border-gray-200'}`}
-          >
-            <i className={`fa-solid ${soMinhaCarga ? 'fa-filter-circle-xmark' : 'fa-filter'} mr-1.5`}></i>
-            {soMinhaCarga ? 'Mostrando SÓ MINHA CARGA — toque para ver todas' : 'Mostrando TODAS as entregas — toque para ver SÓ MINHA CARGA'}
-          </button>
+          <div className="mt-2 print:hidden">
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={() => setSoMinhaCarga(true)}
+                className={`py-2.5 rounded-xl text-[9px] font-black uppercase tracking-wide transition-all active:scale-95 border ${soMinhaCarga ? 'bg-emerald-600 text-white border-emerald-600 shadow' : 'bg-white text-gray-500 border-gray-200'}`}
+              >
+                <i className="fa-solid fa-user-check mr-1.5"></i>Suas entregas ({minhasNaFila.length})
+              </button>
+              <button
+                onClick={() => setSoMinhaCarga(false)}
+                className={`py-2.5 rounded-xl text-[9px] font-black uppercase tracking-wide transition-all active:scale-95 border ${!soMinhaCarga ? 'bg-gray-800 text-white border-gray-800 shadow' : 'bg-white text-gray-500 border-gray-200'}`}
+              >
+                <i className="fa-solid fa-layer-group mr-1.5"></i>Todas ({(data?.fila || []).length})
+              </button>
+            </div>
+            <p className="text-[8px] font-bold text-slate-400 uppercase mt-1.5 leading-snug">
+              {soMinhaCarga
+                ? 'Mostrando APENAS o que foi carregado NO SEU NOME (check de carga do admin/secretário).'
+                : 'Fila inteira SEPARADA — as suas têm botão de receber; as dos outros são só conferência.'}
+            </p>
+          </div>
         )}
 
         {/* CAIXA DO DIA (entregador e admin) */}
@@ -1501,7 +1548,56 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
         onDragEnd={onDragEnd}
         measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}>
         <SortableContext items={listaOrdenada.map(p => p.saleId)} strategy={verticalListSortingStrategy}>
-          {ordemManualAtiva ? (
+          {modo !== 'ADMIN' && podeEntregar && !soMinhaCarga ? (
+            /* ===== BLOCO 119.1 (regra do dono): FILA DO VENDEDOR/ENTREGADOR
+               SEPARADA em dois blocos — SUAS ENTREGAS (carregadas NO SEU NOME
+               pelo admin/secretario, com botao ENTREGUE/FALHOU) e DEMAIS
+               ENTREGAS (so conferencia, AGRUPADAS por dono da carga, SEM
+               receber). A aba "SUAS ENTREGAS" acima mostra APENAS o primeiro
+               bloco. A ordem dentro de cada bloco segue a rota (manual do
+               admin quando houver; senao P1 -> P2 -> mais antigo). ===== */
+            <>
+              <div className="space-y-3">
+                <div className={`rounded-xl px-3 py-2.5 flex items-center justify-between gap-2 shadow-sm ${minhasNaFila.length > 0 ? 'bg-emerald-600' : 'bg-gray-100'}`}>
+                  <p className={`text-[10px] font-black uppercase leading-tight ${minhasNaFila.length > 0 ? 'text-white' : 'text-gray-400'}`}>
+                    <i className="fa-solid fa-user-check mr-1.5"></i>Suas entregas — carregadas no seu nome
+                  </p>
+                  {minhasNaFila.length > 0 && (
+                    <p className="text-[10px] font-black text-emerald-100 shrink-0">{minhasNaFila.length} · {fmt(totalMinhasNaFila)}</p>
+                  )}
+                </div>
+                {minhasNaFila.length === 0 && (
+                  <p className="text-[9px] font-bold text-slate-400 uppercase px-1 bg-slate-50 rounded-lg py-2.5 text-center leading-snug">
+                    Nenhuma entrega carregada para você ainda — o admin/secretário carrega no check de carga.
+                  </p>
+                )}
+                {minhasVisiveis.map(p => <SortableCard key={p.saleId} p={p} acento={p.prioridade === 1 ? 'p1' : p.prioridade === 2 ? 'p2' : 'normal'} posicao={listaOrdenada.findIndex(x => x.saleId === p.saleId) + 1} draggable={false} />)}
+              </div>
+              {outrasNaFila.length > 0 && (
+                <div className="space-y-2.5">
+                  <div className="rounded-xl bg-slate-200 px-3 py-2.5 flex items-center justify-between gap-2">
+                    <p className="text-[10px] font-black text-slate-600 uppercase leading-tight">
+                      <i className="fa-solid fa-eye mr-1.5"></i>Demais entregas — só conferência
+                    </p>
+                    <p className="text-[10px] font-black text-slate-500 shrink-0">{outrasNaFila.length} · {fmt(totalOutrasNaFila)}</p>
+                  </div>
+                  <p className="text-[8px] font-bold text-slate-400 uppercase px-1 leading-snug">
+                    O recebimento é de quem tem a carga no nome — estas você NÃO entrega (o sistema bloqueia).
+                  </p>
+                  {outrosAgrupados.map(g => (
+                    <div key={g.key} className="space-y-2.5">
+                      <p className="text-[9px] font-black text-slate-500 uppercase px-2 py-1.5 bg-white border border-slate-100 rounded-lg">
+                        <i className="fa-solid fa-truck-fast mr-1 text-teal-600"></i>Carga de {g.nome} — {g.itens.length} entrega(s) · {fmt(g.total)}
+                      </p>
+                      {[...g.itens].sort((a, b) => listaOrdenada.findIndex(x => x.saleId === a.saleId) - listaOrdenada.findIndex(x => x.saleId === b.saleId)).map(p => (
+                        <SortableCard key={p.saleId} p={p} acento={p.prioridade === 1 ? 'p1' : p.prioridade === 2 ? 'p2' : 'normal'} posicao={listaOrdenada.findIndex(x => x.saleId === p.saleId) + 1} draggable={false} />
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          ) : ordemManualAtiva ? (
             /* ===== BLOCO 31/61: ordem manual — UMA lista unica (a impressao segue esta ordem) ===== */
             <div className="space-y-3">
               <p className="text-[10px] font-black text-slate-700 uppercase px-1 flex items-center gap-1.5">

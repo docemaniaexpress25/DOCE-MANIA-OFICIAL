@@ -251,6 +251,21 @@ export async function POST(req: NextRequest) {
     doc = cpfCnpj === 'CNPJ' ? 'nfe' : 'nfce';
   }
 
+  // BLOCO 117 (doc reference/emitir_nfce.md — NFCeRequest required): a NFC-e
+  // EXIGE cnpj_emitente no payload (a NF-e cai no cadastro da conta). Sem
+  // CNPJ (nem na tela ERP Fiscal, nem no env), recusamos ANTES de marcar a
+  // venda EMITINDO — com instrucao clara, em vez de rejeicao criptica da Focus.
+  if (doc === 'nfce') {
+    const cnpjEmit =
+      String(erp.emitente.cnpj || '').replace(/\D/g, '') || String(cfg.cnpj || '').replace(/\D/g, '');
+    if (!cnpjEmit) {
+      return BAD(
+        503,
+        'A NFC-e exige o CNPJ do emitente. Cadastre em Configuracoes -> ERP Fiscal & Automacoes (Dados do emitente) ou defina FOCUS_NFE_CNPJ na Vercel.'
+      );
+    }
+  }
+
   // Itens + codigos fiscais (colunas ncm/cest/cfop se o Bloco 10 ja rodou)
   const fiscalCols = await hasProductFiscalColumns();
   const { data: items } = await db

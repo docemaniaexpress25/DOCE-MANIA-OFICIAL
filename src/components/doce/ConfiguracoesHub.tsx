@@ -32,11 +32,14 @@ interface BoletoConfig {
   autoBoletoAReceber: boolean;
 }
 
-// BLOCO 116 — webhook da Focus (status em tempo real, event 'nfe' via API /v2/hooks)
+// BLOCO 116/117 — webhook da Focus (status em tempo real via API /v2/hooks)
+// eventos: nfe (NF-e autorizada), nfce (NFC-e autorizada), nfce_contingencia
+// (desfecho da NFC-e offline) — doc docs/webhooks, cada gatilho monitora UM evento.
 interface FocoWebhook {
   url: string;
   instalado: boolean;
   id: string;
+  eventos: string[];
   segredoConfigurado: boolean;
   erro: string;
 }
@@ -148,6 +151,7 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
               url: d.focoWebhook.url || '',
               instalado: !!d.focoWebhook.instalado,
               id: d.focoWebhook.id || '',
+              eventos: Array.isArray(d.focoWebhook.eventos) ? d.focoWebhook.eventos : [],
               segredoConfigurado: !!d.focoWebhook.segredoConfigurado,
               erro: d.focoWebhook.erro || '',
             }
@@ -340,8 +344,13 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
                 )}
               </div>
               <p className="text-[9px] text-gray-400 font-semibold leading-snug">
-                Quando a SEFAZ autoriza/rejeita a nota, a Focus avisa o app na hora — o status atualiza sozinho na fila de entregas e no histórico (sem esperar o cron). Instalação feita aqui mesmo, sem tocar no painel da Focus.
+                Quando a SEFAZ autoriza/rejeita a nota, a Focus avisa o app na hora — o status atualiza sozinho na fila de entregas e no histórico (sem esperar o cron). Instala 3 gatilhos de uma vez: NF-e, NFC-e e contingência da NFC-e (doc oficial da Focus). Instalação feita aqui mesmo, sem tocar no painel da Focus.
               </p>
+              {focoWebhook.instalado && focoWebhook.eventos.length > 0 && (
+                <p className="text-[8px] font-black text-emerald-600 uppercase">
+                  Gatilhos ativos: {focoWebhook.eventos.join(' · ')}
+                </p>
+              )}
               <button
                 onClick={() => acaoWebhook(focoWebhook.instalado ? 'REMOVER_WEBHOOK' : 'INSTALAR_WEBHOOK')}
                 disabled={processandoHook || !fiscal.focusConfigurado || (!focoWebhook.instalado && !focoWebhook.segredoConfigurado)}

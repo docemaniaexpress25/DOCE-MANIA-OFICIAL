@@ -59,6 +59,21 @@
 export type FocusAmbiente = 'homologacao' | 'producao';
 export type FocusDoc = 'nfe' | 'nfce';
 
+/**
+ * BLOCO 117 (doc reference/webhooks + docs/webhooks): a Focus publica eventos
+ * SEPARADOS por tipo de documento — `nfe` dispara SÓ NF-e autorizada, `nfce`
+ * dispara SÓ NFC-e autorizada e `nfce_contingencia` fecha o ciclo da NFC-e
+ * emitida em contingência offline (efetivada/cancelada/inutilizada). Cada
+ * gatilho monitora UM evento, por isso o app instala os TRES — antes instalava
+ * so `nfe` e as NFC-e nunca avisavam o app (status ficava parado).
+ */
+export const HOOKS_DO_APP = ['nfe', 'nfce', 'nfce_contingencia'] as const;
+export type FocusHookEvent = (typeof HOOKS_DO_APP)[number];
+
+export function isEventoDoApp(event: unknown): boolean {
+  return (HOOKS_DO_APP as readonly string[]).includes(String(event || ''));
+}
+
 // ---------------------------------------------------------------------------
 // Config (env)
 // ---------------------------------------------------------------------------
@@ -558,18 +573,22 @@ export async function listarWebhooksFocus() {
 }
 
 /**
- * Cria o gatilho de mudanca de status de NF-e. `segredo` vai no header
+ * Cria o gatilho de mudanca de status. `segredo` vai no header
  * `authorizationHeader` (ex.: 'x-dm-token') de cada notificacao — o app
  * confere antes de reconsultar. `cnpj` opcional restringe ao emitente.
+ * BLOCO 117: `event` escolhe qual evento o gatilho monitora (doc reference/
+ * criar_webhook.md — cada gatilho monitora UM evento; o app instala nfe,
+ * nfce e nfce_contingencia apontando para a MESMA URL).
  */
 export async function criarWebhookFocus(opts: {
   url: string;
   segredo: string;
   authorizationHeader?: string;
   cnpj?: string;
+  event?: FocusHookEvent;
 }) {
   const body: Record<string, unknown> = {
-    event: 'nfe',
+    event: opts.event || 'nfe',
     url: opts.url,
     authorization: opts.segredo,
     authorization_header: opts.authorizationHeader || 'x-dm-token',

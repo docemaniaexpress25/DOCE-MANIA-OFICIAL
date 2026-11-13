@@ -1092,3 +1092,26 @@ QA E2E MOCK (127.0.0.1:3000, .env.local criado/removido; APIs por curl + UI por 
 - UI: login david-r5 -> HOME com CAIXA + LUCRO DA ROTA e SEM Financeiro; aba Caixa do David = subtitulo "CAIXA DO VENDEDOR DAVID (ROTA 5) · ABERTO DESDE... · FECHAMENTO PELO ADMIN" + banner da regra + SEM botao fechar; login vend01 (Rota 1) -> HOME SEM CAIXA e COM Financeiro; guard: localStorage v_activeTab=CAIXA no vend01 + reload -> cai na HOME (nenhuma tela de caixa); login admin (5 toques no logo) -> aba CAIXA com FECHAR CAIXA AGORA + mesmo subtitulo/banner + historico do QA. ZERO erros de pagina (so gps denied do browser headless).
 - LINT: 0 erros / 10 warnings (baseline exata).
 PENDENTE DO DONO: rodar sql/bloco118_3_caixa_david_apenas_avista.sql no Supabase (a linha do POSTO MODELO II e qualquer rastro fora da regra saem do caixa).
+
+## bloco118.4 — HOTFIX: sistema não abria no iPhone (tela branca / falha de acesso) (2026-11-13)
+
+DONO: "ESTOU TENDO PROBLEMAS PARA ACESSAR O SISTEMA VIA IPHONE! SERA QUE ACONTECEU ALGO! VERIFIQUE IMEDIATAMENTE E CORRIJA"
+
+DIAGNOSTICO (sondas de producao + E2E Chromium):
+- Backend 100% saudavel: / 200, /api/users 200 (lista de login), /api/login 200 com SECRETARIO/1234 (token ok), /api/caixa 401 sem token (esperado). HTML servido com viewport/manifest corretos. Headers Vercel ok (max-age=0 must-revalidate + etag — cache nao fica preso).
+- E2E Chromium na producao: login renderiza, lista de vendedores ok, tela de PIN ok, 401 com PIN errado tratado com mensagem inline, ZERO erros de console, zero tela branca, zero loop. Ou seja: o problema é especifico do Safari/iOS.
+- CAUSA RAIZ ENCONTRADA (bug latente): src/utils/persistence.ts loadLocalState() fazia localStorage.getItem() FORA de try/catch e roda SINCRONAMENTE no primeiro render (useState do doce-app). No iPhone, quando o Safari bloqueia o storage (Ajustes > Safari > Bloquear todos os cookies; modo privado em iOS antigo; quota estourada), o getItem lanca SecurityError DURANTE O RENDER e derruba o React inteiro = TELA BRANCA sem recuperacao. Qualquer accesso desprotegido nesse caminho reproduz o mesmo sintoma.
+
+CORRECOES 118.4 (defesa em profundidade — storage nunca mais derruba o app):
+- persistence.ts: loadLocalState com try/catch TOTAL (SecurityError/parse/quota -> devolve default e segue vivo; removeItem protegido); saveLocalState ja protegido.
+- page.tsx: ErrorBoundary global (SafeBoundary) em volta do app — QUALQUER crash de render agora mostra tela clara "O sistema não conseguiu abrir" com botao RECARREGAR + instrucao de limpeza no iPhone (Ajustes > Safari > Avancado > Dados do site), em vez de tela branca eterna; dynamic() ganhou SPLASH "Carregando o sistema..." (fundo azul, spinner) para rede lenta/chunk carregando.
+- offlineSync.ts saveQueue: try/catch (fila offline segue em memoria).
+- locationService.savePreferences: try/catch.
+- bluetoothPrinterService (4 pontos): constructor/getSavedPrinterName/installPrinter/forgetPrinter protegidos (impressora segue funcionando na sessao mesmo com storage bloqueado).
+- PDV.tsx (3 pontos removeItem do carrinho anti-duplicacao): protegidos — finalizar venda nunca quebra por storage.
+
+QA:
+- LINT: 0 erros / 10 warnings (baseline exata).
+- E2E local com agent-browser (localhost:3000): login renderiza com lista completa, ZERO erros de console, tela de PIN ok apos clicar em Deivid, NENHUM error boundary, NENHUM splash infinito, NENHUM regressao.
+- Producao re-sondada apos deploy: / 200, login ok, E2E Chromium sem erros de console.
+ORIENTACAO AO DONO (se o iPhone ainda falhar): (1) abrir no Safari e recarregar a pagina (o novo code fica no ar apos o deploy); (2) se abrir pelo icone da tela inicial (PWA), fechar e abrir de novo 2x; (3) se persistir: Ajustes > Safari > Avancado > Dados do site > sistema-doce-mania1 > apagar, e Ajustes > Safari > Privacidade: NAO bloquear todos os cookies; (4) testar tambem no modo normal (nao privado).

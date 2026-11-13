@@ -9,14 +9,19 @@ import { authHeaders } from '@/services/userService';
  *  dinheiro recebido assim como o pix recebido com comprovantes! esse caixa
  *  podera ser fechado a qualquer instante pelo admin, e sera persistido ate o
  *  fechamento assim como gerara log de pagamentos etc para ter rastreio!"
+ * BLOCO 118.3 (regra do dono): o CAIXA é EXCLUSIVO do DAVID (Rota 5) e só
+ * registra À VISTA: "vendas realizados a prazo deverao entrar no caixa de
+ * forma separada de venda a vista... o que me interessa sao as vendas com
+ * dinheiro e pix que ele recebe a vista! as vendas a prazo que ele recebe no
+ * contas a receber nao precisam constar nessa tela!" — boleto/contas a
+ * receber/portal não entram.
  *
- * - Mostra o CAIXA ABERTO: dinheiro recebido, pix recebido (com comprovante
- *   foto) e depositos, com o log completo de cada pagamento (origem, cliente,
- *   vendedor, hora).
- * - O ADMIN fecha a qualquer instante: snapshot persistido em caixa_fechamentos
- *   + pagamentos "presos" no fechamento (rastreio imutavel).
+ * - Mostra o CAIXA ABERTO: dinheiro e pix recebidos À VISTA (com comprovante
+ *   foto) com o log completo de cada pagamento (origem, cliente, vendedor, hora).
+ * - O ADMIN fecha a qualquer instante: snapshot persistido em
+ *   caixa_fechamentos_geral + pagamentos "presos" no fechamento (rastreio imutavel).
  * - Historico de fechamentos passados com detalhe expandivel.
- * - Vendedor/secretario veem em leitura — fechamento é do admin.
+ * - No app do David (R5) fica o caixa DELE; o admin usa esta tela para fechar.
  */
 
 interface PagamentoCaixa {
@@ -219,8 +224,16 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
       <div className="px-2">
         <h2 className="text-2xl font-black text-gray-800 tracking-tight">Fechamento de Caixa</h2>
         <p className="text-[10px] text-gray-400 font-bold uppercase mt-1">
-          {desde ? `Caixa aberto desde ${new Date(desde).toLocaleDateString('pt-BR')} ${new Date(desde).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}` : 'Caixa aberto — primeiro período'}
+          Caixa do vendedor David (Rota 5) · {desde ? `aberto desde ${new Date(desde).toLocaleDateString('pt-BR')} ${new Date(desde).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}` : 'caixa aberto — primeiro período'}
           {!isAdmin && ' · fechamento pelo admin'}
+        </p>
+      </div>
+
+      {/* BLOCO 118.3 (regra do dono): o que entra e o que NAO entra no caixa */}
+      <div className="bg-gray-50 border border-gray-100 rounded-2xl p-3 mx-1">
+        <p className="text-[8px] font-black text-gray-500 uppercase leading-relaxed">
+          <i className="fa-solid fa-circle-info text-gray-400 mr-1"></i>
+          Mostra SÓ dinheiro e Pix recebidos À VISTA pelo David. Vendas a prazo, boletos que caem na conta da empresa e Contas a Receber NÃO entram nesta tela.
         </p>
       </div>
 
@@ -290,7 +303,7 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
                 <div className="text-center py-10 px-4">
                   <i className="fa-solid fa-inbox text-3xl text-gray-200"></i>
                   <p className="text-[9px] font-black uppercase text-gray-400 mt-2 tracking-widest">Nenhum pagamento no caixa aberto</p>
-                  <p className="text-[8px] font-bold text-gray-300 uppercase mt-1">Vendas a vista, entregas, recebimentos e pix do portal entram aqui</p>
+                  <p className="text-[8px] font-bold text-gray-300 uppercase mt-1">Só entra À VISTA: venda à vista e entrega cobrada (dinheiro/pix) do David</p>
                 </div>
               )}
               {pagamentos.slice().reverse().map((p) => renderPagamento(p))}

@@ -3,14 +3,18 @@ import { salvarFotoSupabase } from '@/lib/fotoStorage';
 
 /**
  * BLOCO 118 — LEDGER DO CAIXA (Fechamento de Caixa)
- * =================================================
- * Cada dinheiro/pix/deposito recebido vira UMA linha em caixa_pagamentos
- * (fechamento_id NULL = caixa aberto). Os pontos de entrada do app:
+ * BLOCO 118.3 (regra do dono): o CAIXA é EXCLUSIVO do DAVID (Rota 5) e só
+ * registra À VISTA. Cada dinheiro/pix recebido à vista vira UMA linha em
+ * caixa_pagamentos (fechamento_id NULL = caixa aberto). Pontos de entrada:
  *
- *   VENDA       -> PDV salva venda a vista (dinheiro/pix)           [client]
- *   ENTREGA     -> /api/pre-venda acao ENTREGUE (DINHEIRO/PIX/MISTO) [server]
- *   RECEBIMENTO -> receiveAccount: conta a receber paga (admin/ven.) [client]
- *   PORTAL      -> /api/comprovantes/revisar CONFIRMAR (pix portal)  [server]
+ *   VENDA       -> PDV salva venda à vista do David (dinheiro/pix)   [client]
+ *   ENTREGA     -> /api/pre-venda acao ENTREGUE de venda DO DAVID
+ *                  cobrada na entrega (DINHEIRO/PIX/MISTO)           [server]
+ *   AJUSTE      -> correção manual do admin                          [server]
+ *
+ * NÃO entram (a prazo / conta da empresa): RECEBIMENTO de contas a receber
+ * (boletos que caem na conta, recebimentos manuais) e PORTAL (pix confirmado
+ * no portal) — a API /api/caixa RECUSA essas origens (400).
  *
  * O admin fecha o caixa a qualquer instante: a API /api/caixa acao FECHAR
  * cria o snapshot em caixa_fechamentos_geral e "prende" os pagamentos abertos

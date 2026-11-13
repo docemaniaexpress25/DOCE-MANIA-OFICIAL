@@ -1635,7 +1635,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             <MenuCard icon="fa-truck-ramp-box" title="Cargas" tab="CARGAS" color="bg-orange-50 text-orange-600" />
             <MenuCard icon="fa-users" title="Clientes" tab="CLIENTES" color="bg-green-50 text-green-600" />
             <MenuCard icon="fa-coins" title="Comissoes" tab="COMISSOES" color="bg-yellow-50 text-yellow-600" />
-            {/* BLOCO 118: nova aba — fechamento de caixa do dono */}
+            {/* BLOCO 118.3: aba do admin — o CAIXA (exclusivo do David R5) que o admin fecha a qualquer instante */}
             <MenuCard icon="fa-cash-register" title="Caixa" tab="CAIXA" color="bg-emerald-50 text-emerald-600" />
             <MenuCard icon="fa-users-gear" title="Vendedores" tab="VENDEDORES" color="bg-purple-50 text-purple-600" />
             <MenuCard icon="fa-receipt" title="Vendas Realizadas" tab="HISTORY" color="bg-red-50 text-red-600" />
@@ -2003,7 +2003,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         );
       })()}
 
-      {/* BLOCO 118: FECHAMENTO DE CAIXA — dinheiro/pix recebidos com comprovantes; o admin fecha a qualquer instante */}
+      {/* BLOCO 118.3: FECHAMENTO DE CAIXA — caixa exclusivo do David (R5), só dinheiro/pix À VISTA; o admin fecha a qualquer instante */}
       {activeTab === 'CAIXA' && <CaixaFechamento user={props.adminUser} showToast={showToast} />}
 
       {activeTab === 'VENDEDORES' && (

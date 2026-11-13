@@ -23,6 +23,9 @@ import { categoryService } from '@/services/categoryService';
 import { supabase } from '@/lib/supabaseClient';
 import { loadLocalState, saveLocalState, DailyRouteState } from '@/utils/persistence';
 import { pushService } from '@/services/pushNotificationService';
+// BLOCO 118.3 (regra do dono): o CAIXA é EXCLUSIVO do David (Rota 5) — os
+// demais vendedores ganham comissão e não têm caixa.
+import { isDavidVendedor } from '@/lib/equipe';
 
 const getTodayDateString = () => {
   const now = new Date();
@@ -745,12 +748,14 @@ const App: React.FC = () => {
       const res = await saleService.insertSale(saleData);
       if (res) {
         fetchTransactionalData();
-        // BLOCO 118 — CAIXA: venda à vista (dinheiro/pix) entra no ledger do
-        // Fechamento de Caixa na hora. Best-effort: nunca trava a venda.
+        // BLOCO 118.3 — CAIXA (regra do dono): o caixa é EXCLUSIVO do David
+        // (Rota 5) e só recebe À VISTA. Venda à vista (dinheiro/pix) do David
+        // entra no ledger do Fechamento de Caixa na hora; dos DEMAIS vendedores
+        // NÃO entra (a compensação deles é comissão). Best-effort: nunca trava.
         try {
           const metodoCaixa = String(saleData.metodoPagamento || '').toUpperCase();
           const pagoCaixa = String(saleData.statusPagamento || 'PAGO').toUpperCase();
-          if ((metodoCaixa === 'DINHEIRO' || metodoCaixa === 'PIX') && pagoCaixa === 'PAGO') {
+          if (isDavidVendedor(currentUser as any) && (metodoCaixa === 'DINHEIRO' || metodoCaixa === 'PIX') && pagoCaixa === 'PAGO') {
             const { authHeaders } = await import('@/services/userService');
             fetch('/api/caixa', {
               method: 'POST',
@@ -940,26 +945,10 @@ const App: React.FC = () => {
     const success = await saleService.updateSale(saleId, updates);
 
     if (success) {
-      // BLOCO 118 — CAIXA: recebimento manual (conta a receber) entra no ledger
-      // do Fechamento de Caixa. Best-effort: nunca trava o recebimento.
-      try {
-        if (['DINHEIRO', 'PIX', 'DEPOSITO'].includes(String(method))) {
-          const { authHeaders } = await import('@/services/userService');
-          fetch('/api/caixa', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...authHeaders() },
-            body: JSON.stringify({
-              acao: 'REGISTRAR',
-              origem: 'RECEBIMENTO',
-              saleId,
-              metodo: String(method),
-              valor: valorRecebido,
-              cliente: (clients || []).find((c: any) => c.id === sale.clientId)?.nomeFantasia || null,
-              detalhe: novoLog,
-            }),
-          }).catch(() => {});
-        }
-      } catch { /* caixa nunca trava o recebimento */ }
+      // BLOCO 118.3 (regra do dono): RECEBIMENTO de contas a receber NÃO entra
+      // mais no caixa — a tela mostra SÓ o dinheiro/pix À VISTA que o David
+      // (Rota 5) recebe. Vendas a prazo/boleto ficam no Contas a Receber e no
+      // webhook do banco. (Antes: origem RECEBIMENTO no ledger — removido.)
       if (statusPagamento === 'PAGO') {
         const comm = commissions.find(c => c.saleId === saleId);
         if (comm && comm.status === 'A_RECEBER') {

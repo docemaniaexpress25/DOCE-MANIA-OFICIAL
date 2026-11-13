@@ -2,9 +2,19 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/serverSupabase';
 import { sessionFromRequest, isAdminSession } from '@/lib/session';
 import { registrarPagamentoCaixa, type CaixaMetodo, type CaixaOrigem } from '@/lib/caixaLedger';
+// BLOCO 118.3: caixa exclusivo do David (Rota 5) — casamento por nome server-side
+import { isDavidNome } from '@/lib/equipe';
 
 /**
  * BLOCO 118 — CAIXA: FECHAMENTO PERSISTIDO + LEDGER DE PAGAMENTOS
+ * BLOCO 118.3 (regra do dono): o CAIXA é EXCLUSIVO do DAVID (Rota 5) e só
+ * recebe À VISTA. "O que me interessa sao as vendas com dinheiro e pix que
+ * ele recebe a vista! as vendas a prazo que ele recebe no contas a receber
+ * nao precisam constar nessa tela!" — recebimentos de contas a receber
+ * (boletos que caem na conta da empresa, pix do portal, recebimentos manuais)
+ * NÃO entram; vendas de OUTROS vendedores não entram (compensação deles é
+ * comissão). Somente: venda à vista do David + entrega cobrada (dinheiro/pix)
+ * de venda do David + ajuste manual do admin.
  *
  * GET  /api/caixa                      [ADMIN | SECRETARIO | VENDEDOR]
  *   Caixa corrente (aberto) + histórico de fechamentos:
@@ -14,10 +24,10 @@ import { registrarPagamentoCaixa, type CaixaMetodo, type CaixaOrigem } from '@/l
  *
  * POST /api/caixa                      body { acao: 'REGISTRAR' | 'FECHAR' }
  *   REGISTRAR [ADMIN | SECRETARIO | VENDEDOR]:
- *     { origem, metodo, valor, saleId?, cliente?, vendedor?, comprovante?, detalhe? }
+ *     { origem VENDA|ENTREGA|AJUSTE, metodo, valor, saleId?, cliente?, vendedor?, comprovante?, detalhe? }
  *     Grava 1 linha no ledger (dataURL de comprovante vai ao Storage). Idempotente
- *     por venda+método+valor ainda abertos. Usado pelo PDV (venda à vista) e pelo
- *     recebimento manual de contas a receber (fluxos server-side têm gancho direto).
+ *     por venda+método+valor ainda abertos. VENDA/ENTREGA só para vendedor David.
+ *     RECEBIMENTO/PORTAL recusados (a prazo não entra no caixa).
  *   FECHAR [ADMIN]:
  *     { observacao? } — cria o snapshot em caixa_fechamentos_geral (totais + jsonb dos
  *     pagamentos) e prende os pagamentos abertos (fechamento_id = id). O caixa
@@ -160,8 +170,18 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: false, error: 'Valor invalido.' }, { status: 400 });
       }
       const origem = String(body.origem || 'AJUSTE').toUpperCase() as CaixaOrigem;
-      if (!['VENDA', 'ENTREGA', 'RECEBIMENTO', 'PORTAL', 'AJUSTE'].includes(origem)) {
-        return NextResponse.json({ ok: false, error: 'Origem invalida.' }, { status: 400 });
+      // BLOCO 118.3 (regra do dono): a prazo NÃO entra no caixa — contas a
+      // receber (boletos/pix do portal/recebimentos manuais) ficam nas telas
+      // próprias. Só VENDA/ENTREGA (à vista) e AJUSTE (manual do admin).
+      if (!['VENDA', 'ENTREGA', 'AJUSTE'].includes(origem)) {
+        return NextResponse.json({ ok: false, error: 'Origem invalida: a prazo (recebimento/portal) NAO entra no caixa.' }, { status: 400 });
+      }
+      // BLOCO 118.3: VENDA/ENTREGA só do DAVID (Rota 5) — os demais vendedores
+      // ganham comissão e não têm caixa. Defesa server-side (protege de front
+      // antigo em cache).
+      const vendNome118 = String(body.vendedor || '').trim();
+      if (origem !== 'AJUSTE' && vendNome118 && !isDavidNome(vendNome118)) {
+        return NextResponse.json({ ok: false, error: 'Caixa e exclusivo do vendedor David (Rota 5).' }, { status: 403 });
       }
       const comprovante =
         typeof body.comprovante === 'string' && body.comprovante.startsWith('data:image') && body.comprovante.length > 3_500_000

@@ -10,6 +10,9 @@ import { buildPixPayload, generateTxid, lerChavePixEntrega } from '@/lib/pix';
 import { comissaoPvDeItens, comissaoPeDeItens, COMISSAO_PV_DEFAULT, round2 } from '@/lib/comissaoPv';
 // BLOCO 118: caixa (fechamento) — dinheiro/pix recebido na entrega entra no ledger
 import { registrarPagamentoCaixa } from '@/lib/caixaLedger';
+// BLOCO 118.3 (regra do dono): o CAIXA é EXCLUSIVO do David (Rota 5) — os
+// demais vendedores ganham comissão e NÃO têm caixa.
+import { isDavidNome } from '@/lib/equipe';
 
 /**
  * PRÉ-VENDA / ROTAS DE ENTREGA (estilo Shopee)
@@ -1958,10 +1961,12 @@ export async function POST(req: NextRequest) {
       // dedicado mantém a comissão de PRÉ-VENDA.
       await registrarComissaoPreVenda(supabase, saleRow, comissaoQuitada, entregaPropria);
 
-      // BLOCO 118 — CAIXA: dinheiro/pix recebido NA ENTREGA entra no ledger do
-      // Fechamento de Caixa (a parte do Pix leva o comprovante/foto). Best-effort:
-      // o caixa NUNCA trava a entrega. JA_PAGO nao entra aqui — o dinheiro entrou
-      // antes (portal/recebimento manual) e duplicaria; boleto/nao-pago nao e dinheiro.
+      // BLOCO 118.3 — CAIXA (regra do dono): o caixa é EXCLUSIVO do David
+      // (Rota 5). Dinheiro/pix recebido NA ENTREGA de uma venda DO DAVID entra
+      // no ledger (a parte do Pix leva o comprovante/foto) — é o À VISTA dele
+      // na rota. Vendas de OUTROS vendedores NÃO entram (compensação deles é
+      // comissão); boleto/nao-pago/JA_PAGO não entram (a prazo ou já entraram
+      // por outro canal). Best-effort: o caixa NUNCA trava a entrega.
       try {
         const nomeCli118 = saleRow.client_id
           ? ((await supabase.from('clients').select('nome_fantasia').eq('id', saleRow.client_id).limit(1).maybeSingle()).data as any)?.nome_fantasia || null
@@ -1969,6 +1974,7 @@ export async function POST(req: NextRequest) {
         const vdNome118 = saleRow.vendedor_id
           ? ((await supabase.from('app_users').select('nome').eq('id', saleRow.vendedor_id).limit(1).maybeSingle()).data as any)?.nome || null
           : null;
+        const eDavid118 = isDavidNome(vdNome118);
         const partes118: { metodo: 'DINHEIRO' | 'PIX'; valor: number; comprovante?: string | null }[] = [];
         if (pagamento === 'DINHEIRO') partes118.push({ metodo: 'DINHEIRO', valor: recebido });
         else if (pagamento === 'PIX') partes118.push({ metodo: 'PIX', valor: recebido, comprovante: eventoFoto });
@@ -1976,7 +1982,7 @@ export async function POST(req: NextRequest) {
           if (mistoDin > 0) partes118.push({ metodo: 'DINHEIRO', valor: mistoDin });
           if (mistoPix > 0) partes118.push({ metodo: 'PIX', valor: mistoPix, comprovante: eventoFoto });
         }
-        for (const p118 of partes118) {
+        for (const p118 of eDavid118 ? partes118 : []) {
           await registrarPagamentoCaixa(supabase, {
             origem: 'ENTREGA',
             metodo: p118.metodo,

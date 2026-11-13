@@ -73,12 +73,19 @@ type TabType = 'HOME' | 'ROTEIRO' | 'CARGA' | 'HISTORY' | 'FINANCE' | 'CREDIT' |
 // BLOCO 92 — Aba LUCRO DA ROTA: EXCLUSIVA do vendedor David (R5).
 // BLOCO 118 — regra do dono: comissao DESATIVADA para o David (R5): a aba
 // Financeiro sai do app dele e NENHUMA comissao nova e calculada/gravada para
-// ele (gate nas APIs + trigger no SQL 118 no banco). O caixa (Fechamento de
-// Caixa) vale para TODOS, inclusive ele.
+// ele (gate nas APIs + trigger no SQL 118 no banco).
+// BLOCO 118.3 — regra do dono: o CAIXA (Fechamento de Caixa) e EXCLUSIVO do
+// David (R5): "verifique de nao ter criado essa aba caixa para outros
+// vendedores! pois o sistema fluxo de trabalho e diferente para o david!
+// outros vendedores recebem comissao! somente a rota 5 devera ter caixa".
+// A compensacao dos demais vendedores e a COMISSAO — eles NAO tem caixa.
 const podeVerLucroRota = (u: any): boolean =>
   !!u && String(u.role || '').toUpperCase() === 'VENDEDOR' && isDavidVendedor(u);
 // BLOCO 118: Financeiro (comissoes) nao existe para o David — os demais veem.
 const podeVerFinanceiro = (u: any): boolean => !!u && !isDavidVendedor(u);
+// BLOCO 118.3: Caixa existe SOMENTE para o David (R5) — nenhum outro vendedor.
+const podeVerCaixa = (u: any): boolean =>
+  !!u && String(u.role || '').toUpperCase() === 'VENDEDOR' && isDavidVendedor(u);
 
 // Helpers para comprovante
 const compressImage = (file: File): Promise<string> => new Promise((resolve) => {
@@ -118,7 +125,11 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<TabType>(() => loadLocalState('v_activeTab', 'HOME'));
   // BLOCO 118: se o estado guardado apontava para FINANCE e o vendedor é o David (comissao desativada), volta pra HOME
-  useEffect(() => { if (activeTab === 'FINANCE' && !podeVerFinanceiro(user)) setActiveTab('HOME'); }, [activeTab, user]);
+  // BLOCO 118.3: idem para CAIXA (exclusivo do David) — vendedor sem caixa cai na HOME
+  useEffect(() => {
+    if (activeTab === 'FINANCE' && !podeVerFinanceiro(user)) setActiveTab('HOME');
+    if (activeTab === 'CAIXA' && !podeVerCaixa(user)) setActiveTab('HOME');
+  }, [activeTab, user]);
   const [selectedClient, setSelectedClient] = useState<Client | null>(() => loadLocalState('v_selectedClient', null));
   // Pre-venda: modo de atendimento escolhido ao abrir o cliente (Edipo)
   const [modoSheet, setModoSheet] = useState<Client | null>(null);
@@ -1315,8 +1326,8 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
           {podeVerFinanceiro(user) && <MenuCard icon="fa-wallet" title="Financeiro" tab="FINANCE" color="bg-emerald-50 text-[#1F7A4D]" badge={(messages || []).some(m => !m.lida && m.type === 'COMMISSION_CONFIRMATION')} />}
           {/* BLOCO 92: aba exclusiva do David (R5) — lucro da rota na mão do vendedor */}
           {podeVerLucroRota(user) && <MenuCard icon="fa-chart-line" title="Lucro da Rota" tab="LUCRO_ROTA" color="bg-teal-50 text-teal-600" />}
-          {/* BLOCO 118: caixa da casa — dinheiro/pix recebidos com comprovantes (fechamento é do admin) */}
-          <MenuCard icon="fa-cash-register" title="Caixa" tab="CAIXA" color="bg-gray-100 text-gray-700" />
+          {/* BLOCO 118.3 (regra do dono): CAIXA EXCLUSIVO do David (R5) — os demais vendedores recebem comissao e NAO tem caixa */}
+          {podeVerCaixa(user) && <MenuCard icon="fa-cash-register" title="Caixa" tab="CAIXA" color="bg-gray-100 text-gray-700" />}
           <MenuCard icon="fa-file-invoice-dollar" title="Contas a Receber" tab="CREDIT" color="bg-rose-50 text-rose-600" />
           <MenuCard icon="fa-users" title="Clientes" tab="CLIENTES" color="bg-green-50 text-green-600" />
           <MenuCard icon="fa-calendar-days" title="Roteiro Semanal" tab="WEEKLY" color="bg-indigo-50 text-indigo-600" />
@@ -1789,8 +1800,8 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         </div>
       )}
 
-      {/* BLOCO 118: Caixa da casa — totais + log de pagamentos com comprovantes; fechamento só admin */}
-      {activeTab === 'CAIXA' && <CaixaFechamento user={user} showToast={showToast} />}
+      {/* BLOCO 118.3: Caixa EXCLUSIVO do David (R5) — render protegido mesmo que o estado guarde a aba */}
+      {activeTab === 'CAIXA' && podeVerCaixa(user) && <CaixaFechamento user={user} showToast={showToast} />}
 
       {activeTab === 'CREDIT' && (
         <div className="space-y-4">

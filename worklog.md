@@ -974,3 +974,16 @@ QA E2E (agent-browser 390x844 e 1280x800, ponte dev -> producao, SOMENTE leitura
 LINT: 0 erros / 10 warnings (baseline exata). tsc: zero erros nos 2 arquivos tocados (restantes pre-existentes do 108).
 POS-DEPLOY (verificar depois do push): GET entregadores chega no login secretario; botao Confirmar marca de verdade (chefe testa no campo).
 POS-DEPLOY BLOCO 114 (verificado em producao via ponte dev, login SECRETARIO real): (1) GET entregadores chegou — sheet mostra "ENTREGADOR 1 PRINCIPAL" gigante + chips "OU UM VENDEDOR LEVA:" (Daniel Gomes, Deivid, Edipo Pena, Gil pantoja); (2) CHECK_CARGA carregado:true com entregadorId -> 200, banco: PV-C22CB2 carregado:true ent:"Entregador 1", card virou "NO VEICULO — ENTREGADOR 1 · TOCAR P/ TROCAR/DESCARREGAR"; (3) Remover do veiculo -> banco carregado:false (entregador_id fica alocado — design 58/96, desalocacao segue ADMIN-only); (4) zero erros de console/pagina/dev.log. Ciclo carregar+descarregar do SECRETARIO operacional em producao.
+## bloco108.1 — FIX KARDEX GET + diagnóstico do check-up SQL do dono (2026-11-12)
+
+DONO: mandou o resultado do check-up SQL — unico item false: "tabela spedy_webhook_events false".
+
+INTERPRETACAO: esperado — spedy_webhook_events e da integracao SPEDY que ficou DORMANT (dono decidiu Focus NFe, bloco 108). Nada no app depende dela (webhook /api/spedy/webhook responde 200 configurado:false — sondado ao vivo). Quando (se) assinar Spedy p/ puxar XMLs recebidas automaticamente: rodar sql/bloco95_spedy_foundation.sql + envs SPEDY_API_KEY/WEBHOOK_SECRET na Vercel. Nao e pendencia dos SQLs 95/95.1/108 (que rodaram).
+
+SONDAGENS AO VIVO (producao, curl direto, somente leitura):
+- GET /api/webhooks/inter -> configurado:FALSE — envs INTER_* AUSENTES na Vercel hoje (no dia 07/10 o OAuth+mTLS autenticou bem; algo mudou no painel). PENDENCIA REAL DO DONO: recolocar INTER_CLIENT_ID/INTER_CLIENT_SECRET/INTER_CERT/INTER_KEY (ou INTER_P12/INTER_P12_SENHA) + Redeploy.
+- GET /api/estoque/movimentos (token SECRETARIO fixo) -> ok:false "Could not find a relationship between 'estoque_movimentos' and 'products' in the schema cache" — PROVA de que o SQL 108 RODOU (tabela existe), com BUG REAL: o GET usava embed products(nome) que EXIGE FK, e o SQL 108 cria estoque_movimentos sem foreign key -> o GET do kardex quebrava SEMPRE em producao (no mock e2e o embed e aceito, por isso o QA do 108 nao pegou).
+
+FIX (src/app/api/estoque/movimentos/route.ts): select SEM embed; nomes de produto resolvidos em memoria (ids unicos -> products select id,nome -> Map); busca filtra pelo nome resolvido; falha na busca de nomes NAO derruba a lista (fallback "Produto"). POST/RPC intocado.
+
+QA: lint 0 erros/10 warnings (baseline). Commit f5d8fc2 push 88786ab..f5d8fc2; deploy verde ~80s. Sondagem pos-deploy com token SECRETARIO: ok:true disponivel:true resumo {entradas:0, saidas:8} — 8 SAIDAS reais de vendas de hoje gravadas AUTOMATICAMENTE pelo trigger trg_kardex_sale_items (Cheetos onda 160g x5, Doritos 75g x5, Batata Wanflo lisa x10, Fandangos pres x5 etc., 20:49). Kardex observador funcionando em producao: toda venda nova grava SAIDA, exclusao grava ESTORNO. Entradas=0 esperado (XML->Produtos ainda sem entrada dada).

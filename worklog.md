@@ -1219,6 +1219,6 @@ IMPLEMENTACAO (src/app/api/pre-venda/route.ts):
 
 QA:
 - LINT: 0 erros / 10 warnings (baseline exata).
-- SONDA POS-DEPLOY (planejada): entregador fixo — as 4 cargas dele continuam minhaCarga=true (regra 119 intacta) e as do Daniel false; e o bundle com a nova conta no ar. Teste do vendedor real: mensagem 403 nova exige login de vendedor (PIN so do dono) — validar com o dono na folha dele.
+- SONDA POS-DEPLOY (commit 9484021 no ar): (1) marca do novo codigo no bundle de producao — string nova do banner "Sua venda ainda" encontrada em /_next/static/immutable/chunks/18x6mqhuvodyp.js; (2) entregador fixo intacto — fila 9 (o dono entregou cargas no meio do teste): MINHAS=2 (PV-E12167, PV-B22FF4, ambas carregadas no nome dele, minhaCarga=true), outras=7 false; (3) sanity SECRETARIO — fila 9, sem erro, flags undefined (caminho admin-like ok). Teste do vendedor real (403 novo): exige login de vendedor (PIN so do dono) — validar com o dono na folha dele.
 
 SEM SQL — nenhuma mudanca de schema.

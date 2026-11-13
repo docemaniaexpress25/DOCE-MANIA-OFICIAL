@@ -1179,7 +1179,8 @@ IMPLEMENTACAO:
 
 QA:
 - SONDA PRE-DEPLOY (producao, login ENTREGADOR PIN 1234): fila=12; 5 entregas com entregador_id=e6e10000-...0e6e1 ("Entregador 1") e carregadoEm=true; minhaCarga AUSENTE (bug confirmado no ar); caixasPorEntregador ok (Entregador 1 R$ 203,75 em aberto).
-- SONDA POS-DEPLOY: rodar apos o deploy verde (mesma rota) — esperar minhaCarga=true nas 5 alocadas ao Entregador 1 e false nas demais.
+- SONDA POS-DEPLOY (producao, commit d4165b1 no ar): fila=12 -> MINHAS=4 (PV-E12167, PV-807C16, PV-D11577, PV-B22FF4 — todas "Entregador 1" carregadas, minhaCarga=true, total R$ 1.630,78 sobem no bloco verde com ENTREGUE/FALHOU) | OUTRAS=8 (vendas do Daniel Gomes, com e sem alocacao, minhaCarga=false, so conferencia). PV-ACA68F alocada ao Daniel permanece fora da carga do entregador (correto).
+- SONDA 403 POS-DEPLOY: entregador tentou ENTREGUE na carga alheia PV-ACA68F (c3b0cdb7...a68f, alocada a Daniel) -> 403 "Essa entrega foi CARREGADA para Daniel Gomes. So ele recebe — nada de dinheiro por conta de outro." Nenhuma mutacao. Caixa de cada um continua estanque.
 - LINT: 0 erros / 10 warnings (baseline exata).
 
 SEM SQL — nenhuma mudanca de schema (a regra usa entregador_id/carga_confirmada_em que ja existem).

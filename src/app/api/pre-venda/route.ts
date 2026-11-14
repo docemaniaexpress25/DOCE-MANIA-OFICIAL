@@ -13,6 +13,9 @@ import { registrarPagamentoCaixa } from '@/lib/caixaLedger';
 // BLOCO 118.3 (regra do dono): o CAIXA é EXCLUSIVO do David (Rota 5) — os
 // demais vendedores ganham comissão e NÃO têm caixa.
 import { isDavidNome } from '@/lib/equipe';
+// BLOCO 123: regras fiscais ARMADAS porém DESLIGADAS (FISCAL_OBRIGATORIO=false
+// até o dono implantar a API fiscal) — bloqueio de carga sem nota batida.
+import { FISCAL_OBRIGATORIO, cargaBloqueadaPorNota } from '@/lib/regras-fiscais';
 
 /**
  * PRÉ-VENDA / ROTAS DE ENTREGA (estilo Shopee)
@@ -1381,6 +1384,20 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: false, error: 'Banco desatualizado: rode o Bloco 58 do SQL (check de carga).' }, { status: 503 });
       }
       const carregado = !!body.carregado;
+      // BLOCO 123 (regra do dono — ARMADA mas DESLIGADA até a API fiscal entrar):
+      // pedido de pré-venda com NF-e/NFC-e escolhido SÓ CARREGA com a nota
+      // BATIDA (nota_status = AUTORIZADA). Cupom carrega livre. Enquanto
+      // FISCAL_OBRIGATORIO=false (src/lib/regras-fiscais.ts) nada muda.
+      if (carregado && FISCAL_OBRIGATORIO) {
+        const colsNotaCarga = ['id'];
+        if (await hasModoVendaColumn()) colsNotaCarga.push('modo_nota');
+        if (await hasNotaColumns()) colsNotaCarga.push('nota_status');
+        const { data: sNotaCarga } = await supabase.from('sales').select(colsNotaCarga.join(', ')).eq('id', saleIdCarga).maybeSingle();
+        const bloqCarga = cargaBloqueadaPorNota((sNotaCarga as any)?.modo_nota, (sNotaCarga as any)?.nota_status);
+        if (bloqCarga) {
+          return NextResponse.json({ ok: false, error: bloqCarga }, { status: 409 });
+        }
+      }
       // BLOCO 96 (regra do dono): ANTES de carregar o veiculo o admin escolhe
       // QUEM e o entregador daquela venda/cliente. O entregador vai para
       // sales.entregador_id — cada entregador ve so a propria carga e tem o
@@ -1719,6 +1736,61 @@ export async function POST(req: NextRequest) {
 
       await logEventoSeguro(supabase, saleRow.route_id || null, saleId, userId, 'PEDIDO_EDITADO', `Pedido editado pelo admin: ${itens.length} itens, total R$ ${valorTotal.toFixed(2)}`);
       return NextResponse.json({ ok: true, valorTotal });
+    }
+
+    // ---------- TROCAR_DOC_FISCAL (BLOCO 123: o admin manda no documento) ----------
+    // Regra do dono: na fila de entrega o ADMIN pode, mesmo que o vendedor tenha
+    // escolhido NF-e, optar por NFC-e (COM ou SEM CPF) e vice-versa — ou voltar
+    // para só cupom. O vendedor SÓ ESCOLHE; quem BATE a nota é o admin.
+    // Grava: sales.modo_nota (quando a coluna existe) + reescreve o sufixo
+    // " | COM NOTA: ..." do detalhe — MESMO contrato que EDITAR_PEDIDO preserva
+    // e que /api/pre-venda/venda grava (a fila parseia o documento daí).
+    // Nota AUTORIZADA/EMITINDO trava a troca (cancele a nota primeiro — Cupom).
+    if (acao === 'TROCAR_DOC_FISCAL') {
+      if (!admin && session.perfil !== 'SECRETARIO') {
+        return NextResponse.json({ ok: false, error: 'Somente o admin (ou secretario) troca o documento fiscal do pedido.' }, { status: 403 });
+      }
+      if (saleRow.entrega_status === 'ENTREGUE') {
+        return NextResponse.json({ ok: false, error: 'Pedido ja entregue — documento nao muda mais.' }, { status: 409 });
+      }
+      const docNovo = String(body.documento || '').toUpperCase();
+      if (!['NFE', 'NFCE', 'CUPOM'].includes(docNovo)) {
+        return NextResponse.json({ ok: false, error: 'Documento invalido (NFE, NFCE ou CUPOM).' }, { status: 400 });
+      }
+      const cpfBruto = String(body.nfcCpf || '').trim();
+      const cpfDig = cpfBruto.replace(/\D/g, '');
+      if (docNovo === 'NFCE' && cpfDig && cpfDig.length !== 11) {
+        return NextResponse.json({ ok: false, error: 'CPF da NFC-e invalido — informe os 11 digitos ou deixe vazio (nota anonima).' }, { status: 400 });
+      }
+      // Nota em andamento/autorizada NAO troca (a SEFAZ ja deu numero/cancela)
+      if (await hasNotaColumns()) {
+        const { data: sNotaDoc } = await supabase.from('sales').select('nota_status').eq('id', saleId).maybeSingle();
+        const stNotaDoc = String((sNotaDoc as any)?.nota_status || '').toUpperCase();
+        if (stNotaDoc === 'AUTORIZADA' || stNotaDoc === 'EMITINDO') {
+          return NextResponse.json({ ok: false, error: `Nota ${stNotaDoc === 'AUTORIZADA' ? 'ja AUTORIZADA' : 'em emissao'} na SEFAZ — cancele a nota antes de trocar o documento.` }, { status: 409 });
+        }
+      }
+      // Base do detalhe SEM o sufixo fiscal + sufixo novo (mesma gramática da
+      // gravação do pedido: " | COM NOTA: NF-e" / "NFC-e (CPF xxx)" / vazio).
+      const detBase = String(saleRow.detalhe_pagamento || '').replace(/ \| COM NOTA:[\s\S]*/, '');
+      const sufixoDoc = docNovo === 'NFE'
+        ? ' | COM NOTA: NF-e'
+        : docNovo === 'NFCE'
+          ? ` | COM NOTA: NFC-e${cpfBruto ? ` (CPF ${cpfBruto.slice(0, 20)})` : ''}`
+          : '';
+      const updDoc: Record<string, unknown> = { detalhe_pagamento: detBase + sufixoDoc };
+      if (await hasModoVendaColumn()) updDoc.modo_nota = docNovo;
+      const rDoc = await updateSaleFlex(supabase, saleId, updDoc);
+      if (!rDoc.ok) {
+        return NextResponse.json({ ok: false, error: rDoc.erro || 'Erro ao gravar o documento.' }, { status: rDoc.sem13 ? 503 : 500 });
+      }
+      const docLabel = docNovo === 'NFE'
+        ? 'NF-e'
+        : docNovo === 'NFCE'
+          ? (cpfDig ? `NFC-e com CPF ${cpfBruto.slice(0, 20)}` : 'NFC-e (anonima)')
+          : 'So cupom (sem nota)';
+      await logEventoSeguro(supabase, saleRow.route_id || null, saleId, userId, 'DOC_TROCADO', `Documento fiscal definido pelo admin: ${docLabel}`);
+      return NextResponse.json({ ok: true, documento: docNovo });
     }
 
     // ---------- EXCLUIR_VENDA ----------

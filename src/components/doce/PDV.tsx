@@ -16,6 +16,10 @@ import { saleService } from '@/services/saleService';
 import { notaService } from '@/services/notaService';
 import { danfeMiniTexto } from '@/lib/danfeTexto';
 import { clienteAptoNfe, mascararCpf, validaCpf } from '@/lib/cnpjAutocomplete';
+// BLOCO 123: regras fiscais ARMADAS porém DESLIGADAS (FISCAL_OBRIGATORIO=false
+// até o dono implantar a API fiscal) — pronta entrega só conclui com NF-e/NFC-e
+// BATIDA (+ boleto do prazo). Pré-venda: vendedor SÓ escolhe (nada muda aqui).
+import { FISCAL_OBRIGATORIO, docExigeNota, notaBatida, pendenciasFinaProntaEntrega } from '@/lib/regras-fiscais';
 
 interface PDVProps {
   client: Client;
@@ -288,11 +292,29 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   // ============================================================
   const [notaResult, setNotaResult] = useState<{ status: string; numero?: string; pdfUrl?: string; erro?: string; chave?: string; serie?: string; protocolo?: string; dataAutorizacao?: string; qrCode?: string; emitente?: { nome?: string; cnpj?: string; ie?: string } } | null>(null);
   const [notaEmitindo, setNotaEmitindo] = useState(false);
+  // BLOCO 123: status do BOLETO reportado pelo BoletoCard (gate fiscal da
+  // pronta entrega a prazo). 'INDISPONIVEL' = Inter sem credenciais (não bloqueia).
+  const [boletoStatusSucesso, setBoletoStatusSucesso] = useState<string | null>(null);
+  const handleBoletoStatus = React.useCallback((s: string) => { setBoletoStatusSucesso(s); }, []);
   // BLOCO 122: estado da nota emitida NA TELA 8 (após gravar a venda) —
   // mostrado na tela de SUCESSO. Limpa quando a tela de sucesso fecha.
   useEffect(() => {
-    if (!sucessoData) setNotaResult(null);
+    if (!sucessoData) { setNotaResult(null); setBoletoStatusSucesso(null); }
   }, [sucessoData]);
+
+  // BLOCO 123 (ARMADA/DESLIGADA): pendências fiscais da PRONTA ENTREGA para
+  // CONCLUIR a venda — nota BATIDA (doc NFE/NFCE) + boleto do prazo gerado.
+  // Com FISCAL_OBRIGATORIO=false devolve SEMPRE [] — nada muda hoje.
+  const pendFiscalSucesso = useMemo(() => {
+    if (!sucessoData || sucessoData.isPreVenda) return [];
+    const saldoAberto = Number(sucessoData.sale.valorTotal ?? 0) - Number(sucessoData.sale.valorPago ?? 0);
+    return pendenciasFinaProntaEntrega({
+      docEscolhido,
+      notaStatus: notaResult?.status,
+      exigeBoleto: sucessoData.isPrazo && sucessoData.formaAtraso !== 'CHEQUE' && saldoAberto > 0,
+      boletoStatus: boletoStatusSucesso,
+    });
+  }, [sucessoData, docEscolhido, notaResult, boletoStatusSucesso]);
 
   // BLOCO 122: emissão da nota na TELA 8 — roda logo após gravar a venda
   // pronta entrega com documento NFE/NFCE. A venda já está SALVA: se a SEFAZ
@@ -1980,6 +2002,20 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
             </p>
           </div>
 
+          {/* BLOCO 123 (ARMADA/DESLIGADA): quando a regra fiscal estiver LIGADA,
+              a pronta entrega SÓ finaliza com o documento BATIDO (+ boleto do
+              prazo). Com a flag desligada isso nunca aparece. */}
+          {FISCAL_OBRIGATORIO && !isPreVenda && (docExigeNota(docEscolhido) || (condicaoDoc === 'APRAZO' && formaDoc !== 'CHEQUE')) && (
+            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3">
+              <p className="text-[9px] font-black text-amber-700 uppercase leading-snug">
+                <i className="fa-solid fa-lock mr-1"></i>Regra fiscal ativa:
+                {docExigeNota(docEscolhido) ? ` a ${docEscolhido === 'NFE' ? 'NF-e' : 'NFC-e'} precisa SAIR (autorizada) para concluir` : ''}
+                {docExigeNota(docEscolhido) && condicaoDoc === 'APRAZO' && formaDoc !== 'CHEQUE' ? ' + ' : ''}
+                {condicaoDoc === 'APRAZO' && formaDoc !== 'CHEQUE' ? 'boleto do prazo gerado antes de concluir' : ''}
+              </p>
+            </div>
+          )}
+
           <p className="text-[9px] font-black text-gray-400 uppercase text-center">Documento escolhido</p>
           {([
             { tipo: 'NFE' as const, rotulo: isPreVenda ? 'Registrar pedido + NF-e' : 'Gerar NF-e e finalizar', sub: 'Nota para empresa (CNPJ)' },
@@ -2084,6 +2120,27 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               <p className="text-[9px] text-rose-500 font-bold mt-1 uppercase">A venda JÁ ESTÁ gravada e segura — emita novamente pelo histórico da venda.</p>
             </div>
           )}
+          {/* BLOCO 123 (ARMADA/DESLIGADA): regra do dono — pronta entrega SÓ
+              conclui com NF-e/NFC-e BATIDA (+ boleto do prazo gerado). A venda
+              já está gravada: resolve aqui e o "Concluir" libera. Com a flag
+              desligada (FISCAL_OBRIGATORIO=false) este card NUNCA aparece. */}
+          {!sucessoData.isPreVenda && pendFiscalSucesso.length > 0 && (
+            <div className="bg-rose-50 border border-rose-200 p-3 rounded-2xl space-y-2">
+              <p className="text-[10px] font-black text-rose-700 uppercase leading-snug"><i className="fa-solid fa-lock mr-1"></i>Venda gravada — pendência para CONCLUIR:</p>
+              {pendFiscalSucesso.map((pp, i) => (
+                <p key={i} className="text-[9px] font-black text-rose-600 uppercase leading-snug">• {pp}</p>
+              ))}
+              {docExigeNota(docEscolhido) && !notaBatida(notaResult?.status) && (docEscolhido === 'NFE' || docEscolhido === 'NFCE') && (
+                <button
+                  onClick={() => emitirNotaFluxo(docEscolhido, sucessoData.sale, docEscolhido === 'NFCE' ? (nfcCpfDoc || undefined) : undefined)}
+                  disabled={notaEmitindo}
+                  className="w-full bg-slate-900 text-white font-black py-3.5 rounded-2xl shadow-lg active:scale-95 uppercase text-[11px] tracking-widest disabled:opacity-60"
+                >
+                  <i className={`fa-solid ${notaEmitindo ? 'fa-spinner fa-spin' : 'fa-arrows-rotate'} mr-2`}></i>Emitir {docEscolhido === 'NFE' ? 'NF-e' : 'NFC-e'} novamente
+                </button>
+              )}
+            </div>
+          )}
           {sucessoData.isPreVenda && (docEscolhido === 'NFE' || docEscolhido === 'NFCE') && (
             <div className="bg-violet-50 border border-violet-200 p-3 rounded-2xl flex items-center gap-3">
               <i className="fa-solid fa-file-invoice text-violet-500"></i>
@@ -2111,6 +2168,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               clienteTelefone={client.telefone}
               clienteNome={client.nomeFantasia || client.nome}
               abertoInicial
+              onStatusChange={handleBoletoStatus}
             />
           )}
 
@@ -2126,7 +2184,11 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         </div>
         <div className="p-4 pb-8 border-t border-gray-100 bg-white space-y-2 max-w-lg w-full mx-auto">
           <button onClick={() => setCupomPosRegistro(sucessoData.sale)} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest"><i className="fa-solid fa-receipt mr-2"></i>Ver cupom da venda</button>
-          <button onClick={() => onFinish(sucessoData.sale)} className="w-full bg-gray-900 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest"><i className="fa-solid fa-check mr-2"></i>Concluir</button>
+          {/* BLOCO 123 (ARMADA/DESLIGADA): Concluir bloqueia enquanto existir
+              pendência fiscal (nota batida / boleto do prazo). Flag off = sempre livre. */}
+          <button onClick={() => onFinish(sucessoData.sale)} disabled={pendFiscalSucesso.length > 0} className={`w-full font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest ${pendFiscalSucesso.length > 0 ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-gray-900 text-white'}`}>
+            {pendFiscalSucesso.length > 0 ? <><i className="fa-solid fa-lock mr-2"></i>Resolva a pendência fiscal</> : <><i className="fa-solid fa-check mr-2"></i>Concluir</>}
+          </button>
         </div>
       </div>
     )}

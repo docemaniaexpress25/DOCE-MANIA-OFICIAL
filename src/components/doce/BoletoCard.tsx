@@ -35,6 +35,9 @@ interface BoletoCardProps {
   /** BLOCO 67: abrir ja expandido (modal de venda finalizada). No cupom
    *  reaberto o padrao e DOBRADO — o card nao pode cobrir a tela. */
   abertoInicial?: boolean;
+  /** BLOCO 123: reporta o status do boleto ao pai ('A_RECEBER', 'NAO_GERADO',
+   *  'INDISPONIVEL'...) — gate fiscal da pronta entrega a prazo. */
+  onStatusChange?: (status: string) => void;
 }
 
 interface InterStatus {
@@ -48,7 +51,7 @@ const dataBR = (iso?: string) => {
   return `${d}/${m}/${a}`;
 };
 
-const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, notaStatus, notaNumero, clienteDoc, clienteCep, clienteTelefone, clienteNome, showToast, abertoInicial }) => {
+const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, notaStatus, notaNumero, clienteDoc, clienteCep, clienteTelefone, clienteNome, showToast, abertoInicial, onStatusChange }) => {
   const [boleto, setBoleto] = useState<BoletoInfo | null>(null);
   const [indisponivel, setIndisponivel] = useState(false);
   const [inter, setInter] = useState<InterStatus | null>(null); // BLOCO 85: env do Inter visivel
@@ -82,6 +85,14 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
     })();
     return () => { vivo = false; };
   }, [saleId]);
+
+  // BLOCO 123: reporta o status do boleto ao pai (gate fiscal da pronta
+  // entrega a prazo). Card indisponível (Inter sem credenciais) reporta
+  // 'INDISPONIVEL' — o pai decide o que fazer (não bloqueia o impossível).
+  useEffect(() => {
+    if (!onStatusChange) return;
+    onStatusChange(indisponivel ? 'INDISPONIVEL' : (boleto?.status || 'NAO_GERADO'));
+  }, [boleto?.status, indisponivel, onStatusChange]);
 
   const handleGerar = async () => {
     if (busy || !saleId) return;

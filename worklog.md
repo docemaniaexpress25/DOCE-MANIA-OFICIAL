@@ -1265,3 +1265,26 @@ QA:
 - Fluxo real (telas 1-8 com PIN de vendedor) — teste do dono na folha dele: exige PIN real; sandbox não tem credenciais de banco do vendedor.
 
 SEM SQL — nenhuma mudança de schema/API. Ponto de atenção pós-deploy: primeira venda real das telas 4-8 com o dono.
+
+## bloco123 — REGRAS FISCAIS ARMADAS (DESLIGADAS) + TROCA DE DOCUMENTO PELO ADMIN NA FILA (2026-11-13)
+
+PEDIDO DO DONO: "na pronta entrega é obrigatório bater a NF-e ou NFC gerar o boleto casos seja a prazo antes de finalizar a venda, na pré venda o vendedor não bate NF-e e NFC ele só escolhe e a nota é batida na fila de entrega pelo admin, esse pedido não poderá ser carregado sem a NFe e NFC batida, essas regras implementar apenas após eu conseguir implantar a API fiscal. Por enquanto deixe liberado, na fila de entrega o admin poderá mesmo que escolhido NF-e optar por NFC com ou sem CPF e vice versa. O admin tem poder de editar tudo".
+
+DECISÃO DE ARQUITETURA: regras CRIADAS mas INERTES — flag única FISCAL_OBRIGATORIO=false em src/lib/regras-fiscais.ts (fonte única usada pelo FRONT e pelo SERVIDOR; sem divergência). Ligar = trocar false->true quando a API fiscal (Focus NFe/SEFAZ) estiver implantada. Nada muda no ar até lá.
+
+O QUE ENTROU:
+- NOVO src/lib/regras-fiscais.ts: FISCAL_OBRIGATORIO (false), docExigeNota, notaBatida (AUTORIZADA), cargaBloqueadaPorNota (regra pré-venda: sem nota batida NÃO carrega — null sempre com flag off), pendenciasFinaProntaEntrega (regra pronta entrega: nota BATIDA + boleto do prazo gerado antes de CONCLUIR), boletoGeradoOk (A_RECEBER/ATRASADO/RECEBIDO/MARCADO_RECEBIDO/EM_PROCESSAMENTO ok; INDISPONIVEL não bloqueia o impossível).
+- REGRA 1 PRONTA ENTREGA (armada): PDV SUCESSO passou a ter gate — pendFiscalSucesso (useMemo) monta pendências; card rosa "Venda gravada — pendência para CONCLUIR" com botão "Emitir NF-e/NFC-e novamente"; botão CONCLUIR desabilita ("Resolva a pendência fiscal") até nota AUTORIZADA + boleto a prazo gerado; tela 8 ganhou banner âmbar "Regra fiscal ativa" (só com flag ON). BoletoCard ganhou prop onStatusChange (reporta A_RECEBER/NAO_GERADO/INDISPONIVEL) conectada ao gate via handleBoletoStatus.
+- REGRA 2 PRÉ-VENDA (mantida confirmada): vendedor SÓ ESCOLHE (nada é emitido no PDV desde o 122); a nota é batida na fila pelo ADMIN (AcaoFiscalAdmin do 109) — agora com poder de ESCOLHER o documento.
+- REGRA 3 CARGA SEM NOTA (armada): servidor CHECK_CARGA — quando carregado=true e FISCAL_OBRIGATORIO, lê modo_nota/nota_status (sondas) e devolve 409 "Pedido NÃO pode ser CARREGADO sem a nota batida..."; FilaEntregas sheet de carga ganhou banner rosa com o mesmo texto e botão Confirmar desabilitado (inert hoje).
+- REGRA 4 TROCA DE DOCUMENTO (ativa JÁ — não depende da API fiscal): nova ação POST /api/pre-venda TROCAR_DOC_FISCAL (guard admin ou SECRETARIO; bloqueia ENTREGUE; 400 doc inválido; valida CPF 11 dig; 409 se nota AUTORIZADA/EMITINDO — cancele antes): grava sales.modo_nota + reescreve o sufixo " | COM NOTA: NF-e" / "NFC-e (CPF xxx)" / vazio do detalhe (MESMA gramática da gravação do pedido e do contrato que EDITAR_PEDIDO preserva) + log DOC_TROCADO.
+- FILA (FilaEntregas.tsx): AcaoFiscalAdmin agora aceita emitir(tipo, cpf) e ganhou botão DOCUMENTO (violeta) nos estados NAO_EMITIDA/CANCELADA e REJEITADA -> sheet "Documento fiscal do pedido" com "Vendedor pediu: X" + 3 opções (NF-e 55 / NFC-e 65 com CPF opcional inline / Só cupom) + SALVAR DOCUMENTO + SALVAR E EMITIR NF-e/NFC-e AGORA (troca e já bate a nota com o documento escolhido); card do admin ganhou selo do documento pedido (NF-e/NFC-e/Cupom); recarregar={() => load(true)} atualiza a fila após troca. Admin mantém poder total: Emitir NF automático, Documento fino, Editar, Trocas, Carga, Desalocar, Excluir.
+
+QA:
+- LINT: 0 erros / 10 warnings (baseline exata). TSC nos arquivos alterados: limpo (erros pré-existentes fora do escopo).
+- Dev server compilou limpo (6x GET / 200), zero erro de console.
+- QA browser (ponte de produção — SÓ LEITURA): login ENTREGADOR PIN 1234 -> fila renderiza intacta (SUAS 0 / TODAS 7, cards Mapa/Zap/Cupom/P1/P2, sem bloco fiscal — correto), zero erro de página; TROCAR_DOC_FISCAL e CHECK_CARGA sem sessão -> 401 (nenhuma mutação).
+- Marcas do novo código confirmadas nos chunks: "Documento fiscal do pedido" + TROCAR_DOC_FISCAL (client e server) + "Resolva a pendência fiscal" (PDV) + FISCAL_OBRIGATORIO.
+- Fluxo real com nota (SEFAZ rejeita/autoriza) e ligar a flag: teste do dono depois de implantar a API fiscal (sandbox não emite nota).
+
+SEM SQL — nenhuma mudança de schema (reusa modo_nota/nota_status/nota_emitida_em e o sufixo | COM NOTA:).

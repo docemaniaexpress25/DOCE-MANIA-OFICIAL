@@ -13,6 +13,11 @@ import { danfeMiniTexto } from '@/lib/danfeTexto';
 import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
 // BLOCO 111: impressão térmica USB do PC — canal BT x USB persistente por dispositivo
 import { imprimirViaUsb, lerCanalImpressao, dispositivoIOS } from '@/lib/usbPrint';
+// BLOCO 123: regras fiscais ARMADAS porém DESLIGADAS (flag em
+// src/lib/regras-fiscais.ts) + troca do documento fiscal pelo ADMIN na fila
+// (NF-e <-> NFC-e com/sem CPF <-> só cupom) — "o admin tem poder de editar tudo".
+import { FISCAL_OBRIGATORIO, cargaBloqueadaPorNota } from '@/lib/regras-fiscais';
+import { validaCpfCnpj } from '@/lib/validaDoc';
 // BLOCO 61: arrastar-e-soltar estilo kanban para ordenar a rota (dnd-kit).
 // Funciona com mouse, TOQUE (celular do admin) e teclado (espaco pega, setas
 // movem, espaco solta) — substitui as setas de cima/baixo do Bloco 31.
@@ -232,14 +237,35 @@ function compararOrdemEntrega(a: FilaItem, b: FilaItem): number {
 // VENDEDOR/ENTREGADOR: nada fiscal aqui (so o admin mexe na nota da pre-venda).
 // ============================================================================
 interface NotaLocal { status: string; numero?: string; pdfUrl?: string; chave?: string; erro?: string }
-const AcaoFiscalAdmin: React.FC<{ p: FilaItem; showToast: (m: string, t?: 'success' | 'error') => void }> = ({ p, showToast }) => {
+const AcaoFiscalAdmin: React.FC<{ p: FilaItem; showToast: (m: string, t?: 'success' | 'error') => void; recarregar?: () => void }> = ({ p, showToast, recarregar }) => {
   const [nota, setNota] = useState<NotaLocal>({ status: (p.notaStatus || 'NAO_EMITIDA').toUpperCase() });
   const [busy, setBusy] = useState(false);
+  // BLOCO 123 (regra do dono): o ADMIN manda no documento — mesmo que o
+  // vendedor tenha pedido NF-e, pode optar por NFC-e (COM ou SEM CPF) e
+  // vice-versa, ou voltar para só cupom. A troca grava sales.modo_nota + o
+  // sufixo " | COM NOTA: ..." (mesmo contrato da gravação do pedido). Nota
+  // AUTORIZADA/EMITINDO trava (o servidor responde 409 — cancele antes).
+  const [sheetDoc, setSheetDoc] = useState(false);
+  const [docSel, setDocSel] = useState<'NFE' | 'NFCE' | 'CUPOM' | ''>('');
+  const [docCpf, setDocCpf] = useState('');
+  const [busyDoc, setBusyDoc] = useState(false);
 
-  const emitir = async () => {
+  // Documento atual do pedido: 1º modo_nota, 2º texto " | COM NOTA: ..."
+  const docAtual: 'NFE' | 'NFCE' | 'CUPOM' =
+    p.modoNota === 'NFE' ? 'NFE'
+      : p.modoNota === 'NFCE' ? 'NFCE'
+        : /COM NOTA:\s*NF-e/i.test(String(p.detalhePagamento || '')) ? 'NFE'
+          : /COM NOTA:\s*NFC-e/i.test(String(p.detalhePagamento || '')) ? 'NFCE'
+            : 'CUPOM';
+  const cpfDoTexto = (): string => {
+    const m = String(p.detalhePagamento || '').match(/COM NOTA:\s*NFC-e\s*\(CPF\s+([^)]+)\)/i);
+    return m ? m[1].trim() : '';
+  };
+
+  const emitir = async (tipo?: 'NFE' | 'NFCE', cpfNaNota?: string) => {
     if (busy) return;
     setBusy(true);
-    const r = await notaService.emitir(p.saleId);
+    const r = await notaService.emitir(p.saleId, tipo, cpfNaNota);
     setBusy(false);
     if (r.nota) setNota({ status: r.nota.status, numero: r.nota.numero, pdfUrl: r.nota.pdfUrl, chave: r.nota.chave, erro: r.nota.erro });
     if (r.nota?.status === 'AUTORIZADA') showToast(`NF autorizada! ${r.nota.numero || ''}`, 'success');
@@ -325,8 +351,61 @@ const AcaoFiscalAdmin: React.FC<{ p: FilaItem; showToast: (m: string, t?: 'succe
     else showToast('PDF do DANFE ainda não disponível na SEFAZ.', 'error');
   };
 
+  // BLOCO 123: abre o sheet já com o documento atual pre-selecionado
+  const abrirDoc = () => {
+    setDocSel(docAtual);
+    setDocCpf(cpfDoTexto());
+    setSheetDoc(true);
+  };
+
+  // BLOCO 123: salva a escolha do documento (TROCAR_DOC_FISCAL) e, opcional,
+  // emite JÁ com o documento escolhido (o vendedor só escolhe — quem bate é o admin).
+  const salvarDoc = async (emitirDepois: boolean) => {
+    if (busyDoc || !docSel) return;
+    if (docSel === 'NFCE') {
+      const dig = docCpf.replace(/\D/g, '');
+      if (dig && (dig.length !== 11 || !validaCpfCnpj(dig))) {
+        showToast('CPF inválido — confira os 11 dígitos ou deixe vazio (nota anônima).', 'error');
+        return;
+      }
+    }
+    setBusyDoc(true);
+    try {
+      const r = await fetch('/api/pre-venda', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({
+          acao: 'TROCAR_DOC_FISCAL',
+          saleId: p.saleId,
+          documento: docSel,
+          nfcCpf: docSel === 'NFCE' && docCpf.trim() ? docCpf.trim() : undefined,
+        }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) {
+        showToast(j.error || 'Não foi possível trocar o documento.', 'error');
+        return;
+      }
+      setSheetDoc(false);
+      recarregar?.();
+      if (emitirDepois && (docSel === 'NFE' || docSel === 'NFCE')) {
+        showToast('Documento trocado — emitindo nota na SEFAZ...', 'success');
+        await emitir(docSel, docSel === 'NFCE' ? (docCpf.trim() || undefined) : undefined);
+      } else {
+        showToast('Documento do pedido atualizado!', 'success');
+      }
+    } catch {
+      showToast('Falha de conexão ao trocar o documento.', 'error');
+    } finally {
+      setBusyDoc(false);
+    }
+  };
+
   const st = nota.status;
+  const docOptionCls = (on: boolean) =>
+    `w-full py-3.5 px-3 rounded-2xl text-[11px] font-black uppercase text-left border-2 transition-colors flex items-center ${on ? 'bg-violet-600 border-violet-600 text-white shadow' : 'bg-white border-gray-200 text-gray-600'}`;
   return (
+    <>
     <div className="flex flex-wrap items-center gap-2 mt-2 pt-2 border-t border-gray-50" data-bloco="109-fiscal">
       {st === 'AUTORIZADA' && (
         <>
@@ -352,18 +431,81 @@ const AcaoFiscalAdmin: React.FC<{ p: FilaItem; showToast: (m: string, t?: 'succe
       {st === 'REJEITADA' && (
         <>
           <span className="text-[8px] font-black uppercase px-2 py-1 rounded-md bg-rose-100 text-rose-700 shrink-0" title={nota.erro || 'Rejeitada'}><i className="fa-solid fa-circle-xmark mr-1"></i>Rejeitada</span>
-          <button onClick={emitir} disabled={busy} className="flex-1 min-w-[64px] py-2.5 rounded-xl bg-slate-800 text-white text-[9px] font-black uppercase text-center active:scale-95 transition-transform disabled:opacity-60">
+          <button onClick={() => emitir()} disabled={busy} className="flex-1 min-w-[64px] py-2.5 rounded-xl bg-slate-800 text-white text-[9px] font-black uppercase text-center active:scale-95 transition-transform disabled:opacity-60">
             <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-file-invoice-dollar'} mr-1`}></i>Tentar de novo
+          </button>
+          <button onClick={abrirDoc} disabled={busyDoc} title="Trocar o documento (NF-e <-> NFC-e com/sem CPF <-> só cupom) e reemitir"
+            className="flex-1 min-w-[58px] py-2.5 rounded-xl bg-violet-50 text-violet-600 text-[9px] font-black uppercase text-center active:scale-95 transition-transform disabled:opacity-60">
+            <i className={`fa-solid ${busyDoc ? 'fa-spinner fa-spin' : 'fa-file-pen'} mr-1`}></i>Documento
           </button>
         </>
       )}
       {(st === 'NAO_EMITIDA' || st === 'CANCELADA' || !st) && (
-        <button onClick={emitir} disabled={busy} title="Emite agora: cliente com CNPJ -> NF-e; sem documento -> NFC-e de consumidor"
-          className="flex-1 min-w-[96px] py-2.5 rounded-xl bg-slate-100 text-slate-700 text-[9px] font-black uppercase text-center active:scale-95 transition-transform disabled:opacity-60 hover:bg-slate-200">
-          <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-file-invoice-dollar'} mr-1`}></i>Emitir NF
-        </button>
+        <>
+          <button onClick={() => emitir()} disabled={busy} title="Emite agora: cliente com CNPJ -> NF-e; sem documento -> NFC-e de consumidor"
+            className="flex-1 min-w-[80px] py-2.5 rounded-xl bg-slate-100 text-slate-700 text-[9px] font-black uppercase text-center active:scale-95 transition-transform disabled:opacity-60 hover:bg-slate-200">
+            <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-file-invoice-dollar'} mr-1`}></i>Emitir NF
+          </button>
+          {/* BLOCO 123 (regra do dono): o admin decide o documento FINAL do
+              pedido — NF-e, NFC-e com/sem CPF ou só cupom, independente do que
+              o vendedor escolheu na tela 4. */}
+          <button onClick={abrirDoc} disabled={busyDoc} title="Escolher o documento final do pedido (admin)"
+            className="flex-1 min-w-[80px] py-2.5 rounded-xl bg-violet-50 text-violet-600 text-[9px] font-black uppercase text-center active:scale-95 transition-transform disabled:opacity-60 hover:bg-violet-100">
+            <i className={`fa-solid ${busyDoc ? 'fa-spinner fa-spin' : 'fa-file-pen'} mr-1`}></i>Documento
+          </button>
+        </>
       )}
     </div>
+
+    {/* ===== BLOCO 123: SHEET DOCUMENTO FISCAL (ADMIN) — troca NF-e <->
+        NFC-e (com ou sem CPF) <-> só cupom, com opção de salvar e já emitir ===== */}
+    {sheetDoc && (
+      <div className="fixed inset-0 z-[160] bg-black/60 backdrop-blur-sm flex items-end justify-center" onClick={() => !busyDoc && setSheetDoc(false)}>
+        <div className="bg-white w-full max-w-md rounded-t-3xl p-6 animate-in slide-in-from-bottom duration-300 max-h-[92vh] overflow-y-auto overscroll-contain" onClick={e => e.stopPropagation()}>
+          <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-4"></div>
+          <h3 className="text-sm font-black text-gray-800 uppercase text-center">
+            <i className="fa-solid fa-file-pen text-violet-600 mr-1"></i>Documento fiscal do pedido
+          </h3>
+          <p className="text-[10px] font-bold text-gray-500 capitalize text-center mt-1">{p.cliente.nome} · {p.numero}</p>
+          <p className="text-[9px] font-black text-gray-400 uppercase text-center mt-2">
+            Vendedor pediu: {docAtual === 'NFE' ? 'NF-e' : docAtual === 'NFCE' ? (cpfDoTexto() ? `NFC-e (CPF ${cpfDoTexto()})` : 'NFC-e') : 'Só cupom'}
+          </p>
+          <p className="text-[9px] font-black text-gray-500 uppercase text-center mt-3 leading-snug">O ADMIN define o documento final:</p>
+          <div className="mt-2 space-y-2">
+            <button onClick={() => setDocSel('NFE')} className={docOptionCls(docSel === 'NFE')}>
+              <i className="fa-solid fa-file-invoice-dollar mr-2"></i>NF-e 55 — nota de empresa (CNPJ)
+            </button>
+            <button onClick={() => setDocSel('NFCE')} className={docOptionCls(docSel === 'NFCE')}>
+              <i className="fa-solid fa-file-lines mr-2"></i>NFC-e 65 — consumidor (CPF opcional)
+            </button>
+            {docSel === 'NFCE' && (
+              <div className="bg-white border border-gray-200 rounded-xl p-2.5">
+                <span className="text-[8px] font-black uppercase text-gray-500">CPF na nota (opcional — vazio = anônima)</span>
+                <input inputMode="numeric" value={docCpf} onChange={e => setDocCpf(e.target.value)}
+                  placeholder="000.000.000-00"
+                  className="w-full border border-gray-200 rounded-lg px-2 py-2 text-[12px] font-bold text-gray-800 mt-1 focus:outline-none focus:border-gray-400" />
+              </div>
+            )}
+            <button onClick={() => setDocSel('CUPOM')} className={docOptionCls(docSel === 'CUPOM')}>
+              <i className="fa-solid fa-receipt mr-2"></i>Só cupom — sem nota (nada na SEFAZ)
+            </button>
+          </div>
+          <p className="text-[8px] font-bold text-gray-400 mt-2 leading-snug text-center">Trocar o documento NÃO emite nada — a nota sai no "Emitir NF" (ou no botão verde abaixo). Nota já autorizada não troca (cancele antes).</p>
+          <button onClick={() => salvarDoc(false)} disabled={busyDoc || !docSel}
+            className="w-full mt-3 py-4 rounded-2xl bg-violet-600 text-white text-xs font-black uppercase tracking-wider shadow-lg active:scale-[0.98] transition-transform disabled:opacity-50">
+            <i className={`fa-solid ${busyDoc ? 'fa-spinner fa-spin' : 'fa-file-pen'} mr-1`}></i>Salvar documento
+          </button>
+          {docSel === 'NFE' || docSel === 'NFCE' ? (
+            <button onClick={() => salvarDoc(true)} disabled={busyDoc}
+              className="w-full mt-2 py-4 rounded-2xl bg-emerald-600 text-white text-xs font-black uppercase tracking-wider shadow-lg active:scale-[0.98] transition-transform disabled:opacity-50">
+              <i className={`fa-solid ${busyDoc ? 'fa-spinner fa-spin' : 'fa-bolt'} mr-1`}></i>Salvar e EMITIR {docSel === 'NFE' ? 'NF-e' : 'NFC-e'} agora
+            </button>
+          ) : null}
+          <button onClick={() => setSheetDoc(false)} className="w-full mt-2 py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Cancelar</button>
+        </div>
+      </div>
+    )}
+    </>
   );
 };
 
@@ -1080,6 +1222,13 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
               <div className="flex items-center gap-2 mt-1.5 flex-wrap">
                 <span className="text-[13px] font-black text-gray-800">{fmt(p.valorTotal)}</span>
                 <span className={`text-[9px] font-black px-2 py-0.5 rounded-md uppercase ${pg.chip}`}><i className={`${pg.icon} mr-1`}></i>{pg.label}</span>
+                {/* BLOCO 123: documento PEDIDO pelo vendedor (tela 4) — o admin
+                    enxerga e pode trocar pelo botao Documento (AcaoFiscalAdmin). */}
+                {modo === 'ADMIN' && p.modoNota && (
+                  <span className={`text-[8px] font-black px-1.5 py-0.5 rounded-md uppercase ${p.modoNota === 'CUPOM' ? 'bg-gray-100 text-gray-500' : 'bg-violet-50 text-violet-600'}`}>
+                    <i className="fa-solid fa-file-invoice mr-1"></i>{p.modoNota === 'NFE' ? 'NF-e' : p.modoNota === 'NFCE' ? 'NFC-e' : 'Cupom'}
+                  </span>
+                )}
                 {p.condicao === 'APRAZO' && <span className="text-[8px] font-black px-1.5 py-0.5 rounded-md bg-indigo-50 text-indigo-600 uppercase">A prazo</span>}
                 {p.valorPago > 0 && p.valorPago < p.valorTotal && (
                   <span className="text-[8px] font-black px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-700 uppercase">Falta {fmt(p.valorTotal - p.valorPago)}</span>
@@ -1138,7 +1287,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
               NF-e/NFC-e com 1 clique, DANFE 80mm ou PDF A4. Vendedor/entregador
               nao ve (na pre-venda quem emite a nota e o admin). */}
           {modo === 'ADMIN' && p.saleId && (
-            <AcaoFiscalAdmin p={p} showToast={showToast} />
+            <AcaoFiscalAdmin p={p} showToast={showToast} recarregar={() => { void load(true); }} />
           )}
 
           {/* entregador/admin: entrega e falha com botoes grandes */}
@@ -2165,6 +2314,15 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
               {sheetCarga.carregadoEm ? 'Trocar entregador da carga' : 'Carregar no veículo'}
             </h3>
             <p className="text-[11px] font-bold text-gray-600 capitalize text-center mt-1">{sheetCarga.cliente.nome} · {fmt(sheetCarga.valorTotal)}</p>
+            {/* BLOCO 123 (ARMADA/DESLIGADA): regra do dono — pedido de pré-venda
+                com NF-e/NFC-e escolhido SÓ carrega com a nota BATIDA. Com a flag
+                desligada (FISCAL_OBRIGATORIO=false) isso nunca aparece. */}
+            {cargaBloqueadaPorNota(sheetCarga.modoNota, sheetCarga.notaStatus) && (
+              <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 mt-2">
+                <p className="text-[9px] font-black text-rose-700 uppercase leading-snug"><i className="fa-solid fa-lock mr-1"></i>{cargaBloqueadaPorNota(sheetCarga.modoNota, sheetCarga.notaStatus)}</p>
+                <p className="text-[8px] font-bold text-rose-500 mt-0.5 leading-snug">Bata a nota no card (Documento / Emitir NF) e volte aqui.</p>
+              </div>
+            )}
             <p className="text-[9px] font-black text-gray-400 uppercase text-center mt-3 leading-snug">Quem CARREGOU esta entrega? <span className="text-gray-300">(entregador da venda)</span></p>
             {(data?.entregadores || []).length > 0 ? (
               <div className="mt-2 space-y-2">
@@ -2202,7 +2360,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                 <i className="fa-solid fa-circle-check mr-1"></i>Entregador: {(data?.entregadores || []).find(e => e.id === cargaEntId)?.nome || 'Entregador'} — essa entrega alimenta o caixa DELE
               </p>
             )}
-            <button onClick={confirmarCarga} disabled={!!busy}
+            <button onClick={confirmarCarga} disabled={!!busy || !!cargaBloqueadaPorNota(sheetCarga.modoNota, sheetCarga.notaStatus)}
               className={`w-full mt-4 py-4 rounded-2xl text-xs font-black uppercase tracking-wider shadow-lg active:scale-[0.98] transition-transform disabled:opacity-50 ${cargaEntId || (data?.entregadores || []).length === 0 ? 'bg-emerald-600 text-white' : 'bg-gray-200 text-gray-400'}`}>
               <i className="fa-solid fa-truck-fast mr-1"></i>{sheetCarga.carregadoEm ? 'Salvar entregador' : 'Confirmar carga no veículo'}
             </button>

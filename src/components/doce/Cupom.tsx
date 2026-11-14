@@ -37,9 +37,16 @@ interface CupomProps {
   conferencia?: boolean;
   onFinalizar?: () => void;
   finalizando?: boolean;
+  /** BLOCO 122 (fluxo de 8 telas): rótulo do botão da conferência —
+   *  "Continuar" (tela 7 do fluxo novo, finaliza na tela seguinte) ou
+   *  "Finalizar venda" (fluxo legado). */
+  labelFinalizar?: string;
+  /** BLOCO 122: título do banner da conferência — "Resumo do pedido" na
+   *  pré-venda (a venda ainda não existe, é conferência do pedido). */
+  conferenciaTitulo?: string;
 }
 
-const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, onDeleteSale, allowDelete, showToast, closeLabel, allowNota, conferencia, onFinalizar, finalizando }) => {
+const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, onDeleteSale, allowDelete, showToast, closeLabel, allowNota, conferencia, onFinalizar, finalizando, labelFinalizar, conferenciaTitulo }) => {
   const [printWidth, setPrintWidth] = useState<PrinterWidth>('56MM');
   // BLOCO 111: canal de impressão do dispositivo (Bluetooth térmica x USB do PC).
   // Default inteligente: desktop sem Web Bluetooth começa no USB.
@@ -546,10 +553,11 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
         )}
 
         {/* BLOCO 100: banner da CONFERÊNCIA — imprima antes de finalizar */}
+        {/* BLOCO 122: título/rótulo configuráveis (pré-venda = "Resumo do pedido") */}
         {conferencia && (
           <div className="mx-4 mt-3 bg-amber-50 border border-amber-300 rounded-2xl px-3.5 py-3">
-            <p className="text-[10px] font-black text-amber-700 uppercase tracking-wide"><i className="fa-solid fa-clipboard-check mr-1"></i>Conferência da venda</p>
-            <p className="text-[9px] font-semibold text-amber-600 leading-snug mt-1">Confira os itens, IMPRIMA este cupom para a conferência e toque em FINALIZAR VENDA. O cupom já sai com cliente, forma de pagamento e total — antes de fechar a venda.</p>
+            <p className="text-[10px] font-black text-amber-700 uppercase tracking-wide"><i className="fa-solid fa-clipboard-check mr-1"></i>{conferenciaTitulo || 'Conferência da venda'}</p>
+            <p className="text-[9px] font-semibold text-amber-600 leading-snug mt-1">Confira os itens, IMPRIMA se quiser e toque em {labelFinalizar ? labelFinalizar.toUpperCase() : 'FINALIZAR VENDA'}. O cupom já sai com cliente, forma de pagamento e total — antes de fechar a venda.</p>
           </div>
         )}
 
@@ -587,8 +595,8 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
               disabled={finalizando}
               className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest flex items-center justify-center disabled:opacity-60"
             >
-              <i className={`fa-solid ${finalizando ? 'fa-spinner fa-spin' : 'fa-circle-check'} mr-2`}></i>
-              {finalizando ? 'Finalizando...' : 'Finalizar venda'}
+              <i className={`fa-solid ${finalizando ? 'fa-spinner fa-spin' : 'fa-arrow-right'} mr-2`}></i>
+              {finalizando ? 'Preparando...' : (labelFinalizar || 'Finalizar venda')}
             </button>
           )}
           {/* ================================================================

@@ -134,14 +134,14 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   // Pre-venda: modo de atendimento escolhido ao abrir o cliente (Edipo)
   const [modoSheet, setModoSheet] = useState<Client | null>(null);
   const [modoAtendimento, setModoAtendimento] = useState<'PRONTA' | 'PRE_VENDA'>('PRONTA');
-  // BLOCO 29 (ROTA 2): pergunta do atendimento — deseja emitir nota? (fixa o estoque do pedido)
-  const [notaSheet, setNotaSheet] = useState<{ client: Client; vendaModo: 'PRONTA' | 'PRE_VENDA' } | null>(null);
+  // BLOCO 122 (fluxo de 8 telas): o documento (NF-e/NFC-e/cupom) passou a ser
+  // escolhido DENTRO do PDV (tela 4) — o notaSheet/painéis antigos saíram.
+  // notaModo/nfcCpfModo sobrevivem só para o caso da van SEM NF (cupom forçado).
   const [notaModo, setNotaModo] = useState<'NFE' | 'NFCE' | 'CUPOM' | null>(null);
   const [nfcCpfModo, setNfcCpfModo] = useState('');
-  const [nfcCpfModoPanel, setNfcCpfModoPanel] = useState(false);
-  // BLOCO 36 (regra do dono): cliente com CNPJ -> ABRE o painel de CNPJ nota
-  // (dados fiscais do cadastro, como o painel de CPF da NFC-e)
-  const [nfeCnpjPanel, setNfeCnpjPanel] = useState(false);
+  // BLOCO 122 (tela 4): "Completar cadastro agora" — guarda o atendimento para
+  // voltar direto à tela do modo depois de salvar o CNPJ/email.
+  const [reabrirModoAposSalvar, setReabrirModoAposSalvar] = useState<Client | null>(null);
   const [viewingSale, setViewingSale] = useState<Sale | null>(() => loadLocalState('v_viewingSale', null));
 
   const [viewingClientHistory, setViewingClientHistory] = useState<Client | null>(null);
@@ -149,6 +149,9 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const [creditTypeFilter, setCreditTypeFilter] = useState<'TODOS' | 'COMUM' | 'CHEQUE' | 'BOLETO'>('TODOS');
   const [creditSearch, setCreditSearch] = useState('');
   const [clientSearch, setClientSearch] = useState(''); // NOVO: busca na aba clientes
+  // BLOCO 122 (TELA 1): busca de TODOS os clientes na Rota do Dia — quem não
+  // é do dia aparece na seção "Fora da rota de hoje" e pode ser atendido igual
+  const [rotaBusca, setRotaBusca] = useState('');
 
   // Comprovante: estado para modal de foto em contas a receber
   const [comprovanteModalSale, setComprovanteModalSale] = useState<Sale | null>(null);
@@ -305,6 +308,18 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     setModoSheet(client);
   };
 
+  // BLOCO 122 (tela 4 do PDV): cliente pediu NF-e sem CNPJ/email — fecha o PDV,
+  // abre o cadastro; ao salvar, volta direto para a tela do modo (o carrinho
+  // persiste no aparelho por cliente — nada se perde).
+  const completarCadastroDoPDV = (c: Client) => {
+    const alvo = clients.find(x => x.id === c.id) || c;
+    setReabrirModoAposSalvar(alvo);
+    setSelectedClient(null);
+    setModoSheet(null);
+    handleOpenEditClient(alvo);
+    showToast('Complete o cadastro (CNPJ/email) e salve — seu carrinho está guardado.', 'success');
+  };
+
   // BLOCO 72: abre o modal de WhatsApp/Localizacao de forma VOLUNTARIA (botao
   // 'Atualizar' / 'Completar cadastro agora' da tela do modo). Vem pre-
   // preenchido com o que ja esta no banco — pode salvar so um campo.
@@ -336,69 +351,31 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const fluxoNovoAtivo = temDualEstoque;
 
   // Abre o PDV no modo escolhido no sheet (so para pre-vendedor).
-  // BLOCO 29: nota/nfcCpf = modo fixado na pergunta do atendimento (null = fluxo legado).
+  // BLOCO 122: nota só vem fixada quando a VAN do dia é SEM NF (cupom forçado).
   const abrirNoModo = (client: Client, modo: 'PRONTA' | 'PRE_VENDA', nota?: 'NFE' | 'NFCE' | 'CUPOM' | null, nfcCpf?: string) => {
     setModoAtendimento(modo);
     setModoSheet(null);
-    setNotaSheet(null);
-    setNfcCpfModoPanel(false);
-    setNfeCnpjPanel(false);
     setNotaModo(nota ?? null);
     setNfcCpfModo(nfcCpf || '');
     setSelectedClient(client);
   };
 
   /**
-   * BLOCO 29 (ROTA 2) — fluxo do dono, tela a tela:
-   * 1) clicou no cliente -> PRONTA ENTREGA ou PRÉ-VENDA
-   * 2) pergunta: "deseja emitir nota?"
-   *    - PRONTA: a VAN é 1 modo só (definido na CARGA) — SEM NF = cupom direto;
-   *      COM NF = pergunta (cliente pode não querer nota)
-   *    - PRÉ-VENDA: casa tem os 2 estoques -> pergunta sempre
-   *    SIM -> NF-e (só com CNPJ completo) ou NFC-e (CPF opcional) -> ESTOQUE COM NF
-   *    NÃO -> cupom -> ESTOQUE SEM NF
+   * BLOCO 122 — fluxo de 8 telas do dono, tela a tela:
+   * 1) clicou no cliente -> PRONTA ENTREGA ou PRÉ-VENDA (tela 2)
+   * 2) PDV produtos e quantidades (tela 3)
+   * 3) documento cupom/NF-e/NFC-e DENTRO do PDV (tela 4)
+   * 4) à vista / a prazo (tela 5) + forma (tela 6)
+   * 5) cupom de conferência / resumo (tela 7) + documento verde (tela 8)
+   * Única exceção: VAN do dia SEM NF — cupom forçado, sem pergunta.
    */
   const escolherModoVenda = (client: Client, modo: 'PRONTA' | 'PRE_VENDA') => {
-    if (!fluxoNovoAtivo) {
-      abrirNoModo(client, modo);
+    if (fluxoNovoAtivo && modo === 'PRONTA' && vanModo === 'SEM_NF') {
+      abrirNoModo(client, modo, 'CUPOM');
+      showToast('VAN DE HOJE: MERCADORIA SEM NF — venda em cupom.', 'success');
       return;
     }
-    if (modo === 'PRONTA') {
-      if (vanModo === 'SEM_NF') {
-        abrirNoModo(client, modo, 'CUPOM');
-        showToast('VAN DE HOJE: MERCADORIA SEM NF — venda em cupom.', 'success');
-        return;
-      }
-      if (vanModo === 'COM_NF') {
-        setNotaSheet({ client, vendaModo: modo });
-        return;
-      }
-      // carga sem modo (legado/pre-SQL): fluxo antigo
-      abrirNoModo(client, modo);
-      return;
-    }
-    // PRÉ-VENDA: casa tem os dois estoques — pergunta sempre
-    setNotaSheet({ client, vendaModo: modo });
-  };
-
-  /** BLOCO 29: confirma o documento escolhido na pergunta do atendimento */
-  const confirmarNotaSheet = (doc: 'NFE' | 'NFCE' | 'CUPOM') => {
-    if (!notaSheet) return;
-    const { client, vendaModo } = notaSheet;
-    // BLOCO 77 (regra do dono): a NF-e NAO e batida por este app (sistema
-    // externo) — por enquanto o cadastro so precisa de CNPJ + email. A
-    // barreira antiga ('Cliente sem CNPJ no cadastro — use NFC-e ou cupom')
-    // saiu: abrir o painel agora SEMPRE guia — mostra o que falta (CNPJ e/
-    // ou email) e o botao 'Completar' abre o cadastro na hora.
-    if (doc === 'NFE') {
-      setNfeCnpjPanel(true); // abre o painel de CNPJ nota
-      return;
-    }
-    if (doc === 'NFCE' && !nfcCpfModoPanel) {
-      setNfcCpfModoPanel(true); // mostra o campo de CPF (opcional) antes de abrir
-      return;
-    }
-    abrirNoModo(client, vendaModo, doc, nfcCpfModoPanel ? nfcCpfModo : '');
+    abrirNoModo(client, modo);
   };
 
   const handleGetGPS = () => {
@@ -926,6 +903,12 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       if (!ok) { showToast('Não gravou no banco — verifique a conexão e tente de novo.', 'error'); return; }
       showToast('Cliente salvo no banco ✓', 'success');
     }
+    // BLOCO 122: veio da TELA 4 do PDV ("Completar cadastro agora") — volta
+    // direto para a tela do modo. O carrinho segue guardado no aparelho.
+    if (reabrirModoAposSalvar) {
+      setModoSheet(clients.find(x => x.id === reabrirModoAposSalvar.id) || reabrirModoAposSalvar);
+      setReabrirModoAposSalvar(null);
+    }
     setEditingClient(null);
   };
 
@@ -1250,6 +1233,8 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
   return (
       <PDV
+        /* BLOCO 122: key por cliente+modo — cada atendimento nasce limpo e no modo certo */
+        key={`${pdvClient.id}_${modoAtendimento}`}
         client={pdvClient} products={products} minhaCarga={minhaCarga} vendedorId={user.id} onCancel={() => setSelectedClient(null)}
         onFinish={(finishedSale) => {
           // BLOCO 35: cliente ATENDIDO — card cinza na rota na hora (inclusive pre-venda)
@@ -1259,17 +1244,14 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
           showToast(modoAtendimento === 'PRE_VENDA' ? "Pedido de pre-venda registrado!" : "Venda realizada com sucesso!", 'success');
         }}
         processSale={processSale} processPreVenda={processPreVenda} modoVenda={modoAtendimento} margemMinima={margemMinima} margemMinimaAtiva={margemMinimaAtiva} pix1Name={pix1Name} pix1Code={pix1Code} pix2Name={pix2Name} pix2Code={pix2Code}
-        wizardPagamento={fluxoNovoAtivo}
         /* BLOCO 29/64: catálogo pelo estoque do modo — fluxo novo geral (todos os
            vendedores). Produtos de TESTE continuam só para quem tem a flag rota2. */
         rota2={fluxoNovoAtivo}
         verProdutosTeste={user.rota2 === true}
         modoAtendimento={notaModo}
-        // BLOCO 52: CPF capturado no painel NFC-e do atendimento — vai na venda
-        // ("COM NOTA: NFC-e (CPF ...)") e sai impresso no rodapé do cupom.
-        // Antes passava SO com nfcCpfModoPanel=true, mas o painel fecha antes
-        // do PDV montar e o CPF se perdia — NFC-e com CPF saia sem CPF.
         nfcCpfInicial={nfcCpfModo}
+        /* BLOCO 122 (tela 4): NF-e sem CNPJ/email → "Completar cadastro agora" */
+        onCompletarCadastro={completarCadastroDoPDV}
         sales={sales} 
         onNavigateToCredit={handleNavigateToCredit}
         categories={categories}
@@ -1388,13 +1370,54 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         </div>
       )}
 
-      {activeTab === 'ROTEIRO' && (
+      {activeTab === 'ROTEIRO' && (() => {
+        // BLOCO 122 (TELA 1 do fluxo de 8 telas): busca de TODOS os clientes —
+        // quem não está na rota de hoje aparece embaixo e pode ser atendido do
+        // mesmo jeito. Novo cliente direto daqui (antes: sair do fluxo).
+        const q = rotaBusca.trim().toLowerCase();
+        const qDig = rotaBusca.replace(/\D/g, '');
+        const bate = (c: Client) =>
+          (c.nomeFantasia || '').toLowerCase().includes(q) ||
+          (c.nome || '').toLowerCase().includes(q) ||
+          (qDig.length > 0 && (c.telefone || '').replace(/\D/g, '').includes(qDig)) ||
+          (q.length > 1 && (c.bairro || '').toLowerCase().includes(q));
+        const rotaNaBusca = q ? rotaDeHoje.filter(bate) : rotaDeHoje;
+        const idsHoje = new Set(rotaDeHoje.map(c => c.id));
+        const foraDaRota = q
+          ? clients.filter(c => (c.ativo ?? true) && c.rota === (user.rota || 'ROTA_01') && !idsHoje.has(c.id) && bate(c))
+          : [];
+        return (
         <div className="space-y-4">
           <header className="flex justify-between items-center px-1">
             <div className="flex flex-col items-start"><h2 className="text-xl font-black text-gray-800 tracking-tight leading-none">{DIAS_SEMANA[diaAtual] ?? 'N/D'}</h2><span className="text-[10px] font-black uppercase text-gray-400 mt-1">{new Date().toLocaleDateString()}</span></div>
-            <span className="bg-blue-100 text-blue-600 text-[10px] px-2 py-1 rounded-lg font-black uppercase">{rotaDeHoje.length} VISITAS</span>
+            <div className="flex items-center gap-2">
+              <span className="bg-blue-100 text-blue-600 text-[10px] px-2 py-1 rounded-lg font-black uppercase">{rotaNaBusca.length} VISITAS</span>
+              <button onClick={() => handleOpenEditClient('NEW')} className="bg-green-600 text-white px-3 py-2 rounded-xl font-black text-[10px] uppercase shadow-md active:scale-95">
+                <i className="fa-solid fa-user-plus mr-1.5"></i>Novo
+              </button>
+            </div>
           </header>
-          {rotaDeHoje.map(c => {
+
+          {/* BLOCO 122: busca de todos os clientes (nome, telefone, bairro) */}
+          <div className="px-1 relative">
+            <div className="relative">
+              <i className="fa-solid fa-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-lg"></i>
+              <input
+                type="text"
+                value={rotaBusca}
+                onChange={e => setRotaBusca(e.target.value)}
+                placeholder="Buscar cliente (nome, telefone, bairro)..."
+                className="w-full pl-12 pr-10 py-3 bg-white border border-gray-200 rounded-2xl shadow-sm text-sm outline-none focus:ring-2 focus:ring-blue-100"
+              />
+              {rotaBusca && (
+                <button onClick={() => setRotaBusca('')} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 active:text-gray-600" aria-label="Limpar busca">
+                  <i className="fa-solid fa-xmark text-lg"></i>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {rotaNaBusca.map(c => {
             const isSold = (sales || []).some(s => s.clientId === c.id && isSameDay(s.data));
             const isSkipped = (dailyRouteState?.skippedClientIds || []).includes(c.id) || optimisticSkipped.includes(c.id);
             // BLOCO 35: atendidosHoje cobre PRE-VENDA (que nao entra em sales ate a entrega)
@@ -1439,8 +1462,36 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
               </div>
             );
           })}
+
+          {/* BLOCO 122: clientes FORA da rota de hoje — busca global completa.
+              Tudo que casou e não é do dia aparece aqui, com Atender igual. */}
+          {foraDaRota.length > 0 && (
+            <div className="space-y-2 pt-1">
+              <p className="text-[10px] font-black text-gray-400 uppercase px-1 tracking-wider">Fora da rota de hoje ({foraDaRota.length})</p>
+              {foraDaRota.map(c => (
+                <div key={c.id} className="bg-white p-4 rounded-3xl border border-amber-200 shadow-sm flex items-center justify-between">
+                  <div className="flex-1 min-w-0 pr-3">
+                    <p className="font-bold text-gray-800 leading-tight uppercase truncate">{c.nomeFantasia ?? 'Cliente'}</p>
+                    <p className="text-[9px] text-gray-400 font-semibold uppercase mt-0.5 truncate">
+                      {c.endereco || '—'}{c.bairro ? ` — ${c.bairro}` : ''}{c.telefone ? ` · ${c.telefone}` : ''}
+                    </p>
+                  </div>
+                  <button onClick={() => handleAtenderClient(c)} className="bg-blue-600 text-white px-4 py-2 rounded-2xl font-black text-xs uppercase shadow-lg whitespace-nowrap">Atender</button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {q && rotaNaBusca.length === 0 && foraDaRota.length === 0 && (
+            <div className="py-14 text-center opacity-50 flex flex-col items-center gap-3">
+              <i className="fa-solid fa-magnifying-glass-minus text-4xl"></i>
+              <p className="font-black uppercase tracking-widest text-[10px]">Nada encontrado para "{rotaBusca}".</p>
+              <p className="text-[9px] font-bold text-gray-400 uppercase">Se for novo, toque em Novo lá em cima.</p>
+            </div>
+          )}
         </div>
-      )}
+        );
+      })()}
 
       {activeTab === 'CLIENTES' && (
         <div className="space-y-4">
@@ -2093,7 +2144,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 </div>
 
                 <button onClick={handlePinLocation} className="w-full bg-indigo-50 text-indigo-600 font-black py-3 rounded-2xl uppercase text-[10px] tracking-widest flex items-center justify-center gap-2 mb-2"><i className="fa-solid fa-location-dot"></i> Capturar Localização Atual</button>
-                <div className="flex flex-col gap-2 mt-4"><button onClick={handleSaveClientBasic} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-lg uppercase text-xs">Salvar Alterações</button><button onClick={() => setEditingClient(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px]">Cancelar</button></div>
+                <div className="flex flex-col gap-2 mt-4"><button onClick={handleSaveClientBasic} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-lg uppercase text-xs">Salvar Alterações</button><button onClick={() => { setEditingClient(null); setReabrirModoAposSalvar(null); }} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px]">Cancelar</button></div>
              </div>
           </div>
         </div>
@@ -2272,122 +2323,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         );
       })()}
 
-      {/* ===== BLOCO 29 (ROTA 2): PERGUNTA DO ATENDIMENTO — DESEJA EMITIR NOTA? ===== */}
-      {notaSheet && (() => {
-        // BLOCO 36: client MAIS RECENTE (editou o cadastro -> painel CNPJ nota reflete na hora)
-        const notaClient = clients.find(c => c.id === notaSheet.client.id) || notaSheet.client;
-        const temCnpj = (notaClient.cnpj || '').replace(/\D/g, '').length === 14;
-        // BLOCO 77 (regra do dono): por enquanto a NF-e so precisa de CNPJ +
-        // email do cadastro (a nota e batida no sistema externo). O que falta
-        // disso e mostrado aqui com botao para completar na hora.
-        const aptoNfe = clienteAptoNfe(notaClient);
-        const faltantes: string[] = [];
-        if (!temCnpj) faltantes.push('CNPJ');
-        if (!notaClient.email?.trim()) faltantes.push('email');
-        return (
-        <div className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-sm flex items-end justify-center" onClick={() => { setNotaSheet(null); setNfcCpfModoPanel(false); setNfeCnpjPanel(false); }}>
-          <div className="bg-white w-full max-w-md rounded-t-3xl p-6 animate-in slide-in-from-bottom duration-300 max-h-[92vh] overflow-y-auto overscroll-contain" onClick={e => e.stopPropagation()}>
-            <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-4"></div>
-            <p className="text-[9px] font-black text-violet-500 uppercase text-center tracking-widest">
-              {notaSheet.vendaModo === 'PRONTA' ? 'Pronta entrega' : 'Pré-venda'} — Iniciando atendimento
-            </p>
-            <h3 className="text-sm font-black text-gray-800 uppercase text-center mt-1 capitalize">{notaClient.nomeFantasia}</h3>
-            <p className="text-[11px] text-gray-600 font-black text-center mt-2">Deseja emitir nota para este cliente?</p>
-
-            {!nfcCpfModoPanel && !nfeCnpjPanel ? (
-              <>
-                <div className="space-y-2.5 mt-5">
-                  {/* BLOCO 35 (regra do dono): CUPOM = botao principal — grande e destacado */}
-                  <button onClick={() => confirmarNotaSheet('CUPOM')}
-                    className="w-full py-6 rounded-2xl bg-gradient-to-br from-gray-900 to-gray-600 text-white shadow-lg active:scale-[0.98] transition-transform text-center">
-                    <i className="fa-solid fa-receipt text-2xl block mb-2"></i>
-                    <span className="text-sm font-black uppercase tracking-widest block">Só cupom</span>
-                    <span className="block text-[8px] font-bold text-gray-300 mt-1">Vende do ESTOQUE 2 (sem NF) — cupom não fiscal</span>
-                  </button>
-                  {/* BLOCO 35: NF-e / NFC-e = secundárias — discretas, menos destaque */}
-                  {/* BLOCO 36: cliente COM CNPJ -> NF-e vira 'CNPJ nota' habilitada e ABRE o painel com os dados do cadastro */}
-                  <div className="rounded-2xl bg-gray-50 border border-gray-100 p-3">
-                    <p className="text-[8px] font-bold text-gray-400 uppercase text-center mb-2">Cliente pediu nota? (vende do ESTOQUE 1)</p>
-                    <div className="grid grid-cols-2 gap-2">
-                      <button onClick={() => confirmarNotaSheet('NFE')}
-                        className={`py-2.5 rounded-xl text-[8px] font-bold uppercase transition-all active:scale-95 border bg-white border-violet-300 text-violet-700`}>
-                        <i className="fa-solid fa-file-invoice-dollar block mb-0.5 text-[11px]"></i>{temCnpj ? 'CNPJ nota' : 'NF-e'}
-                        <span className="block text-[7px] font-bold mt-0.5">{temCnpj ? 'abre os dados do cadastro' : 'pede CNPJ + email'}</span>
-                      </button>
-                      <button onClick={() => confirmarNotaSheet('NFCE')}
-                        className="py-2.5 rounded-xl text-[8px] font-bold uppercase bg-white border border-gray-200 text-gray-600 active:scale-95 transition-transform">
-                        <i className="fa-solid fa-file-lines block mb-0.5 text-[11px]"></i>NFC-e
-                        <span className="block text-[7px] font-bold mt-0.5">CPF opcional</span>
-                      </button>
-                    </div>
-                  </div>
-                </div>
-                <button onClick={() => { setNotaSheet(null); setNfcCpfModoPanel(false); setNfeCnpjPanel(false); }} className="w-full mt-3 py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Cancelar</button>
-              </>
-            ) : nfeCnpjPanel ? (
-              /* BLOCO 36: PAINEL CNPJ NOTA — dados fiscais do cadastro do cliente */
-              <div className="mt-4 space-y-2.5 animate-in fade-in duration-200">
-                <p className="text-[9px] font-black text-slate-500 uppercase text-center">CNPJ nota — dados do cadastro</p>
-                <div className="rounded-2xl bg-gray-50 border border-gray-100 p-4 text-center">
-                  <p className="text-sm font-black text-gray-800 tracking-tight">{mascararCnpj(notaClient.cnpj || '')}</p>
-                  {notaClient.razaoSocial ? (
-                    <p className="text-[10px] font-bold text-gray-500 mt-1 leading-snug">{notaClient.razaoSocial}</p>
-                  ) : null}
-                  {(notaClient.endereco || notaClient.bairro || notaClient.enderecoMunicipio) ? (
-                    <p className="text-[9px] font-bold text-gray-400 mt-1 leading-snug">
-                      {[notaClient.endereco, notaClient.enderecoNumero].filter(s => !!s?.trim()).join(', ')}
-                      {notaClient.bairro ? ` — ${notaClient.bairro}` : ''}
-                      {notaClient.enderecoMunicipio ? ` — ${notaClient.enderecoMunicipio}${notaClient.enderecoUf ? '/' + notaClient.enderecoUf : ''}` : ''}
-                    </p>
-                  ) : null}
-                </div>
-                {aptoNfe ? (
-                  <button onClick={() => abrirNoModo(notaClient, notaSheet.vendaModo, 'NFE')}
-                    className="w-full py-4 rounded-2xl bg-emerald-600 text-white text-[11px] font-black uppercase shadow-md active:scale-95">
-                    <i className="fa-solid fa-circle-check mr-1.5"></i>Confirmar NF-e
-                  </button>
-                ) : (
-                  <div className="rounded-2xl bg-amber-50 border-2 border-dashed border-amber-300 p-3">
-                    <p className="text-[9px] font-black text-amber-700 uppercase"><i className="fa-solid fa-triangle-exclamation mr-1"></i>Falta completar o cadastro</p>
-                    <p className="text-[9px] font-bold text-amber-600 mt-1">Falta: {faltantes.join(', ')}. Por enquanto só precisa de CNPJ + email (a nota é batida no sistema externo).</p>
-                    <button onClick={() => { setNotaSheet(null); setNfeCnpjPanel(false); handleOpenEditClient(notaClient); }}
-                      className="w-full mt-2 bg-amber-500 text-white text-[9px] font-black uppercase py-3 rounded-xl active:scale-95">
-                      <i className="fa-solid fa-circle-plus mr-1.5"></i>Completar cadastro agora
-                    </button>
-                  </div>
-                )}
-                {/* BLOCO 47 (regra do dono): no painel do CNPJ nota o vendedor
-                    JA decidiu que quer nota — o botao "So cupom" daqui so
-                    confundia (cancelava a escolha). Sobe pelo Voltar e, se
-                    mudar de ideia, escolhe cupom la na tela anterior. */}
-                <button onClick={() => setNfeCnpjPanel(false)}
-                  className="w-full py-3.5 rounded-2xl bg-gray-100 text-gray-500 text-[10px] font-black uppercase active:scale-95">
-                  <i className="fa-solid fa-arrow-left mr-1"></i>Voltar
-                </button>
-              </div>
-            ) : (
-              /* NFC-e: CPF do consumidor OPCIONAL */
-              <div className="mt-4 space-y-2.5 animate-in fade-in duration-200">
-                <p className="text-[9px] font-black text-slate-500 uppercase text-center">CPF na nota? (opcional — pode pular)</p>
-                <input value={nfcCpfModo} onChange={e => setNfcCpfModo(mascararCpf(e.target.value))} placeholder="000.000.000-00" inputMode="numeric"
-                  className="w-full p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-black text-center outline-none" />
-                <div className="grid grid-cols-2 gap-2">
-                  <button onClick={() => abrirNoModo(notaClient, notaSheet.vendaModo, 'NFCE', nfcCpfModo)}
-                    className="py-3.5 rounded-2xl bg-slate-700 text-white text-[10px] font-black uppercase shadow-md active:scale-95">
-                    Confirmar NFC-e
-                  </button>
-                  <button onClick={() => abrirNoModo(notaClient, notaSheet.vendaModo, 'NFCE', '')}
-                    className="py-3.5 rounded-2xl bg-gray-100 text-gray-500 text-[10px] font-black uppercase active:scale-95">
-                    Sem CPF
-                  </button>
-                </div>
-                <button onClick={() => setNfcCpfModoPanel(false)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase tracking-widest"><i className="fa-solid fa-arrow-left mr-1"></i>Voltar</button>
-              </div>
-            )}
-          </div>
-        </div>
-        );
-      })()}
 </div>
   );
 };

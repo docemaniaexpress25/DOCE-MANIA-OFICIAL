@@ -1238,3 +1238,30 @@ ENTREGA: relatorio mestre no chat com (1) inventario de telas por perfil, (2) fl
 ACHADOS-CHAVE (para o backlog): QR Pix na entrega da para VENDEDOR mas API barra com 403 (bug real); busca de produto NAO existe no PDV; excluir produto sem gatilho na UI; RelatorioFiscal.tsx e EntregasView.tsx sao codigo morto; origem AJUSTE do caixa sem botao; duas experiencias de pagamento vivas (wizard x legado); 5 telas por venda; fonte 8px em avisos criticos; sem busca na fila de entregas; PINs fixos 1234 em pseudo-acessos; aba ativa persistida sem escopo por usuario.
 
 SEM SQL — nenhuma mudanca de schema/API. Nenhum deploy necessario (estudo).
+
+## bloco122 — FLUXO DE 8 TELAS DO ATENDIMENTO (PDV) — desenhado e aprovado pelo dono (2026-11-13)
+
+PEDIDO DO DONO: "vamos organizar o fluxo de telas do atendimento ao cliente PDV" — 8 telas lineares com botão de voltar: 1 Rota do Dia · 2 pronta entrega/pré-venda · 3 produtos e quantidades · 4 documento (cupom/NF-e/NFC-e) · 5 à vista/a prazo · 6 forma (depende do modo) · 7 cupom (conferência) · 8 gerar o documento escolhido (verde) e finalizar. "Mesmo vale pra pré venda e pronta entrega. Sempre com botão de voltar."
+
+O QUE ENTROU (PDV.tsx, ~2700 l.):
+- NOVAS TELAS CHEIAS no PDV: DOC (4: Só cupom/NF-e/NFC-e com CPF opcional inline; NF-e só habilita com clienteAptoNfe — senão card âmbar "Completar cadastro agora" via nova prop onCompletarCadastro), CONDICAO (5: À vista/A prazo + aviso da regra NF-e a prazo = só boleto/cheque), FORMA (6: Dinheiro com troco + atalhos R$50/100/200, Pix com QR por valor + copiar, Misto com indicador FECHA O TOTAL; a prazo: Boleto/Cheque/Pix na data/Dinheiro na data com atalhos 7/14/21/30 e UMA data única; pré-venda à vista = informativo "Entregador recebe na entrega" com escolha Dinheiro/Pix), FINALIZAR (8: 3 botões de documento — o ESCOLHIDO VERDE gigante, os outros cinza desabilitados; confirmação leve "Ponto sem volta" via ConfirmModal; gerando = finaliza), SUCESSO (conclusão mínima: total, troca, comissão, resultado da nota gerada na tela 8 — AUTORIZADA com DANFE A4/PDF+80mm / REJEITADA com "a venda JÁ ESTÁ gravada", boleto quando há saldo e não-cheque, foto de comprovante a prazo, Ver cupom + Concluir).
+- TELA 3 ganhou BUSCA DE PRODUTO no header (antes: girava abas caçando item) — filtra produtosNaTela por nome, estado vazio dedicado.
+- TELA 1 (VendedorDashboard/ROTEIRO): busca de TODOS os clientes (nome/telefone/bairro) — quem não é do dia aparece na seção "Fora da rota de hoje" com botão Atender igual; botão Novo cliente direto no header da rota.
+- NOTA deixou de ser perguntada ANTES do carrinho (notaSheet/painéis CNPJ/CPF do dashboard REMOVIDOS): agora é a TELA 4 do PDV. Única exceção mantida: van SEM NF → cupom forçado com toast (vanModo SEM_NF fixa modoAtendimento='CUPOM' e a tela 4 é pulada).
+- Selo do modo no carrinho mostra o documento escolhido (ou "escolher no final do pedido" enquanto nulo).
+- TELA 7: Cupom de conferência (pronta entrega) / "Resumo do pedido" (pré-venda) com botão "Continuar" (novas props labelFinalizar/conferenciaTitulo no Cupom.tsx) → leva à tela 8.
+
+REMOVIDO (fluxo antigo unificado): tela PAYMENT legada + WizardPagamento (2 experiências vivas divergentes) + handleConfirmFinalize/handleConfirmWizard + estados metodo/detalheMetodo/tipoPrazo/prazoData/prazoDays/selectedPixSlot/condicaoPv/vencimentoPv/metodoEntrega/wizardErro/saleResultModal (modal gigante de resultado) — tudo substituído pelo fluxo único de 8 telas.
+
+PAYLOADS INTACTOS (dinheiro não muda): pronta entrega continua no RPC processar_venda_v2 via pendRegistro + finalizarAposConferencia (anti-duplicação isFinalizingRef + carrinho sai antes do envio, volta em falha); pré-venda continua no POST /api/pre-venda/venda com notaIntencao/nfcCpf/modo; comissões iguais (pronta = % do produto, pré-venda = servidor com fallback 5%); NFC-e automática/aviso van SEM NF preservados; emissão NF-e/NFC-e agora AUTOMÁTICA na tela 8 após gravar (notaService.emitir) — SEFAZ rejeita → venda gravada + aviso na SUCESSO.
+
+Dashboard: escolherModoVenda abre PDV direto (sem notaSheet); completarCadastroDoPDV fecha PDV, abre cadastro e volta à tela do modo ao salvar (carrinho persiste por cliente); PDV com key por cliente+modo.
+
+QA:
+- LINT: 0 erros / 10 warnings (baseline exata).
+- TSC nos arquivos alterados: limpo (4 erros pré-existentes do VendedorDashboard mantidos fora do escopo).
+- Dev server: compilação limpa, GET / 200, página renderiza sem erro de console (agent-browser).
+- Marcas do fluxo confirmadas nos chunks locais (PDV + VendedorDashboard).
+- Fluxo real (telas 1-8 com PIN de vendedor) — teste do dono na folha dele: exige PIN real; sandbox não tem credenciais de banco do vendedor.
+
+SEM SQL — nenhuma mudança de schema/API. Ponto de atenção pós-deploy: primeira venda real das telas 4-8 com o dono.

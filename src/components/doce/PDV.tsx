@@ -3,7 +3,6 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Product, Client, Carga, Sale, SaleItem, PaymentMethod, Category, Subcategory } from '@/lib/types';
 import Cupom from '@/components/doce/Cupom';
 import BoletoCard from '@/components/doce/BoletoCard';
-import WizardPagamento, { WizardPayload } from '@/components/doce/WizardPagamento';
 import ConfirmModal from '@/components/doce/ConfirmModal';
 import PrinterSelector from '@/components/doce/PrinterSelector';
 import { loadLocalState, saveLocalState } from '@/utils/persistence';
@@ -39,19 +38,26 @@ interface PDVProps {
   /** Pre-venda: quando definido, o PDV registra PEDIDO (estoque principal, entrega na rota) */
   modoVenda?: 'PRONTA' | 'PRE_VENDA';
   processPreVenda?: (data: any) => Promise<{ pedido: Sale | null; erro?: string; comissaoPrevista?: number }>;
-  /** BLOCO 27 (ROTA 2): usa o wizard guiado de pagamento em vez da tela antiga */
-  wizardPagamento?: boolean;
-  /** BLOCO 29/64 (ROTA 2): catálogo por modo + wizard — agora GERAL (todos os vendedores) */
+  /** BLOCO 27 (ROTA 2): GERAL desde o Bloco 64 — hoje controla catálogo dual e
+   *  modo de nota no payload. (O wizard legado de pagamento SAIU — Bloco 122.) */
   rota2?: boolean;
   /** BLOCO 64: produtos de TESTE continuam visíveis só para quem tem a flag rota2 (piloto) */
   verProdutosTeste?: boolean;
-  /** BLOCO 29 (ROTA 2): modo fixado na PERGUNTA DO ATENDIMENTO — NFE/NFCE = estoque COM NF; CUPOM = SEM NF */
+  /** BLOCO 29 (ROTA 2): documento vem FIXADO só quando a van do dia é SEM NF
+   *  (CUPOM direto, sem pergunta). Nas demais rotas o PDV pergunta na TELA 4. */
   modoAtendimento?: 'NFE' | 'NFCE' | 'CUPOM' | null;
-  /** BLOCO 29: CPF capturado no atendimento para o NFC-e (opcional) */
+  /** BLOCO 29: CPF capturado para o NFC-e (opcional) */
   nfcCpfInicial?: string;
+  /** BLOCO 122 (fluxo de 8 telas, tela 4): "Completar cadastro agora" quando
+   *  o cliente pede NF-e sem CNPJ/email — fecha o PDV e abre o cadastro. */
+  onCompletarCadastro?: (c: Client) => void;
 }
 
-type PDVView = 'CART' | 'PAYMENT' | 'PRE_PEDIDO_PREVIEW';
+// BLOCO 122 (fluxo de 8 telas do dono): CART=3 produtos · DOC=4 documento ·
+// CONDICAO=5 à vista/a prazo · FORMA=6 forma de pagamento · FINALIZAR=8 gerar
+// documento e concluir · SUCESSO=conclusão mínima · PRE_PEDIDO_PREVIEW=rascunho
+// (fora do fluxo) · PAYMENT=fluxo legado (SAIU — unificado no fluxo de 8 telas).
+type PDVView = 'CART' | 'DOC' | 'CONDICAO' | 'FORMA' | 'FINALIZAR' | 'SUCESSO' | 'PRE_PEDIDO_PREVIEW';
 
 // Tipo do item do carrinho
 type CartItem = { quantidade: number; precoVenda: string };
@@ -69,18 +75,34 @@ const SwitchChip: React.FC<{ ligado: boolean; onClick: () => void; cor: 'violet'
   </button>
 );
 
-const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onCancel, onFinish, processSale, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, sales, onNavigateToCredit, categories, subcategories, modoVenda, processPreVenda, wizardPagamento, rota2, verProdutosTeste, modoAtendimento, nfcCpfInicial }) => {
+const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onCancel, onFinish, processSale, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, sales, onNavigateToCredit, categories, subcategories, modoVenda, processPreVenda, rota2, verProdutosTeste, modoAtendimento, nfcCpfInicial, onCompletarCadastro }) => {
   const [view, setView] = useState<PDVView>('CART');
+  // ============================================================
+  // BLOCO 122 (fluxo de 8 telas do dono) — ESTADOS DAS TELAS 3/4/5/6/8
+  // (declarados no TOPO: modoAtivo/formaOk dependem deles)
+  // ============================================================
+  // TELA 4 — documento (NF-e/NFC-e/cupom). Se o dashboard fixou (van SEM NF),
+  // já nasce escolhido e a tela 4 é pulada:
+  const [docEscolhido, setDocEscolhido] = useState<'NFE' | 'NFCE' | 'CUPOM' | null>(modoAtendimento || null);
+  const [nfcCpfDoc, setNfcCpfDoc] = useState<string>(nfcCpfInicial || '');
+  // TELA 5 — condição; TELA 6 — forma:
+  const [condicaoDoc, setCondicaoDoc] = useState<'AVISTA' | 'APRAZO' | null>(null);
+  const [formaDoc, setFormaDoc] = useState<'DINHEIRO' | 'PIX' | 'MISTO' | 'BOLETO' | 'CHEQUE' | 'DINHEIRO_DATA' | 'PIX_DATA' | null>(null);
+  const [mistoDinDoc, setMistoDinDoc] = useState('');
+  const [mistoPixDoc, setMistoPixDoc] = useState('');
+  const [pixSlotDoc, setPixSlotDoc] = useState<1 | 2>(1);
+  // A prazo: UMA data só (boleto / cheque "bom para" / pix na data / dinheiro na data)
+  const [vencimentoDoc, setVencimentoDoc] = useState<string>(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 7);
+    return d.toISOString().split('T')[0];
+  });
+  // TELA 3 — busca de produto no carrinho (antes: girava abas caçando item)
+  const [buscaProduto, setBuscaProduto] = useState('');
   const [isPrePedido, setIsPrePedido] = useState(false);
   const isPreVenda = modoVenda === 'PRE_VENDA' && !!processPreVenda;
-  // Pre-venda: forma de pagamento que o CLIENTE escolheu pagar na entrega
-  const [metodoEntrega, setMetodoEntrega] = useState<'DINHEIRO' | 'PIX' | 'BOLETO' | 'CHEQUE'>('DINHEIRO');
-  // BLOCO 13: condicao combinada — A VISTA (Dinheiro|Pix) ou A PRAZO (Dinheiro|Pix|Boleto|Cheque)
-  const [condicaoPv, setCondicaoPv] = useState<'AVISTA' | 'APRAZO'>('AVISTA');
-  const [vencimentoPv, setVencimentoPv] = useState<string>(() => {
-    const d = new Date(); d.setDate(d.getDate() + 7);
-    return d.toISOString().slice(0, 10);
-  });
+  // BLOCO 122: condição/forma agora vivem nos states das telas 5/6
+  // (condicaoDoc/formaDoc) — os antigos condicaoPv/metodoEntrega saíram.
   // BLOCO 13: trocas anotadas pelo vendedor (sai no cupom) com autocomplete de produto
   const [trocasTexto, setTrocasTexto] = useState('');
   const [trocasSugestao, setTrocasSugestao] = useState(false);
@@ -230,7 +252,9 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   // ============================================================
   const rota2Ativo = !!rota2; // BLOCO 64: fluxo novo da ROTA 2 — geral (todos os vendedores)
   const temDualEstoque = React.useMemo(() => products.some(p => p.estoqueNota !== undefined), [products]);
-  const modoAtivo = rota2Ativo && temDualEstoque ? (modoAtendimento || null) : null;
+  // BLOCO 122: modo fiscal EFETIVO = fixado pelo dashboard (van SEM NF) OU o
+  // documento escolhido na TELA 4. Enquanto ninguém escolheu, null.
+  const modoAtivo = rota2Ativo && temDualEstoque ? (modoAtendimento || docEscolhido || null) : null;
 
   /** Saldo que o PDV usa para o produto — BLOCO 75: pre-venda consulta o
    *  ESTOQUE TOTAL unico; o modo do atendimento so alimenta o contador. */
@@ -252,7 +276,10 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   // ============================================================
   // BLOCO 50: formaAtraso = forma escolhida no A PRAZO ('CHEQUE' etc.) —
   // pagamento confirmado em CHEQUE NAO gera botão de boleto no resultado.
-  const [saleResultModal, setSaleResultModal] = useState<{ total: number; comissao: number; troca: number; isPrazo: boolean; isPreVenda?: boolean; clientName: string; sale: Sale; formaAtraso?: string } | null>(null);
+  // BLOCO 122: TELA DE SUCESSO substitui o modal gigante — dados mínimos da
+  // venda concluída (total, comissão, prazo, venda gravada). A nota emitida
+  // na hora vive em notaResult; boleto/foto de comprovante ficam aqui.
+  const [sucessoData, setSucessoData] = useState<{ total: number; comissao: number; troca: number; isPrazo: boolean; isPreVenda: boolean; sale: Sale; formaAtraso?: string } | null>(null);
 
   // ============================================================
   // Bloco 10/12: emissao de NF-e/NFC-e direto no fechamento da venda.
@@ -261,27 +288,26 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   // ============================================================
   const [notaResult, setNotaResult] = useState<{ status: string; numero?: string; pdfUrl?: string; erro?: string; chave?: string; serie?: string; protocolo?: string; dataAutorizacao?: string; qrCode?: string; emitente?: { nome?: string; cnpj?: string; ie?: string } } | null>(null);
   const [notaEmitindo, setNotaEmitindo] = useState(false);
-  const [nfcCpfPanel, setNfcCpfPanel] = useState(false);
-  const [nfcCpfInput, setNfcCpfInput] = useState('');
-  // BLOCO 27: erro de validacao/ salvamento do wizard ROTA 2 (mostrado dentro dele)
-  const [wizardErro, setWizardErro] = useState<string | null>(null);
+  // BLOCO 122: estado da nota emitida NA TELA 8 (após gravar a venda) —
+  // mostrado na tela de SUCESSO. Limpa quando a tela de sucesso fecha.
   useEffect(() => {
-    if (!saleResultModal) { setNotaResult(null); setNfcCpfPanel(false); setNfcCpfInput(''); }
-  }, [saleResultModal]);
+    if (!sucessoData) setNotaResult(null);
+  }, [sucessoData]);
 
-  const handleEmitirNotaModal = async (tipo: 'NFE' | 'NFCE', cpfNaNota?: string) => {
-    const s = saleResultModal?.sale;
-    if (!s || notaEmitindo || saleResultModal?.isPreVenda) return;
+  // BLOCO 122: emissão da nota na TELA 8 — roda logo após gravar a venda
+  // pronta entrega com documento NFE/NFCE. A venda já está SALVA: se a SEFAZ
+  // rejeitar, o erro aparece na tela de SUCESSO com "emitir novamente".
+  const handleEmitirNotaModal = async (tipo: 'NFE' | 'NFCE', sale: Sale, cpfNaNota?: string) => {
+    if (!sale || !sale.id || sale.id === 'preview' || notaEmitindo) return;
     if (tipo === 'NFCE' && cpfNaNota && !validaCpf(cpfNaNota)) {
       setAppModal({ title: 'NFC-e', message: 'CPF invalido (digitos verificadores nao conferem). Corrija o CPF ou deixe vazio para emitir sem identificacao.', icon: 'fa-solid fa-triangle-exclamation', iconColor: 'text-rose-500', type: 'error' });
       return;
     }
     setNotaEmitindo(true);
-    const r = await notaService.emitir(s.id, tipo, cpfNaNota || undefined);
+    const r = await notaService.emitir(sale.id, tipo, cpfNaNota || undefined);
     setNotaEmitindo(false);
     if (!r.ok) {
-      setAppModal({ title: tipo === 'NFE' ? 'NF-e' : 'NFC-e', message: r.erro || 'Nao foi possivel emitir a nota.', icon: 'fa-solid fa-triangle-exclamation', iconColor: 'text-rose-500', type: 'error' });
-      if (r.nota) setNotaResult({ status: r.nota.status || 'REJEITADA', erro: r.nota.erro });
+      setNotaResult({ status: r.nota?.status || 'REJEITADA', erro: r.nota?.erro || r.erro });
       return;
     }
     // BLOCO 82: guarda chave/serie/protocolo/emitente p/ imprimir o mini DANFE na hora
@@ -297,7 +323,6 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       qrCode: r.nota?.qrCode || '',
       emitente: r.nota?.emitente,
     });
-    setNfcCpfPanel(false);
   };
 
   // ==================================================================
@@ -305,7 +330,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   // DANFE simplificado assim que a nota autoriza, direto na rua.
   // ==================================================================
   const handleImprimirDanfeModal = async () => {
-    const s = saleResultModal?.sale;
+    const s = sucessoData?.sale;
     if (!s || notaEmitindo) return;
     setNotaEmitindo(true);
     try {
@@ -490,17 +515,10 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     loadLocalState(cartKey, {})
   );
 
-  const [metodo, setMetodo] = useState<PaymentMethod>('DINHEIRO');
-  const [detalheMetodo, setDetalheMetodo] = useState<string>('Dinheiro');
-  const [tipoPrazo, setTipoPrazo] = useState<'PRAZO_COMUM' | 'CHEQUE' | 'BOLETO'>('PRAZO_COMUM');
-  const [prazoData, setPrazoData] = useState<string>(() => {
-    const d = new Date();
-    d.setDate(d.getDate() + 7);
-    return d.toISOString().split('T')[0];
-  });
-  const [prazoDays, setPrazoDays] = useState<number>(7);
+  // BLOCO 122: os estados do fluxo legado (metodo/detalheMetodo/tipoPrazo/
+  // prazoData/prazoDays/selectedPixSlot) SAÍRAM — as telas 5/6 usam condicaoDoc
+  // + formaDoc + vencimentoDoc. O valor recebido do DINHEIRO continua aqui:
   const [valorRecebido, setValorRecebido] = useState<string>('');
-  const [selectedPixSlot, setSelectedPixSlot] = useState<1 | 2>(1);
   const [isTrocaActive, setIsTrocaActive] = useState(false);
   const [valorTroca, setValorTroca] = useState('');
   const [printWidth, setPrintWidth] = useState<'56MM' | '80MM'>('56MM');
@@ -679,14 +697,32 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     return Math.max(0, rec - total);
   }, [valorRecebido, total]);
 
+  // BLOCO 122 (tela 4): aptidão de NF-e do cliente (CNPJ + email) e o que falta
+  const temCnpjApto = (client.cnpj || '').replace(/\D/g, '').length === 14;
+  const faltantesNfe: string[] = [];
+  if (!temCnpjApto) faltantesNfe.push('CNPJ');
+  if (!client.email?.trim()) faltantesNfe.push('email');
+  // BLOCO 122 (tela 6): forma de pagamento válida — habilita o botão Continuar
+  // (depois de total/valorRecebido existirem — ordem das declarações importa)
+  const formaOk = (() => {
+    if (!condicaoDoc || !formaDoc) return false;
+    if (condicaoDoc === 'AVISTA') {
+      if (isPreVenda) return formaDoc === 'DINHEIRO' || formaDoc === 'PIX';
+      if (formaDoc === 'DINHEIRO') { const rec = parseFloat(valorRecebido) || 0; return rec > 0 && rec + 0.001 >= total; }
+      if (formaDoc === 'MISTO') { const soma = (parseFloat(mistoDinDoc) || 0) + (parseFloat(mistoPixDoc) || 0); return soma > 0 && soma + 0.001 >= total; }
+      return formaDoc === 'PIX';
+    }
+    return !!vencimentoDoc;
+  })();
+
   // ============================================================
   // BLOCO 100 (regra do dono): QR DO PIX gerado com o VALOR DA VENDA —
   // BR Code (Pix Copia e Cola) atrelado a chave Pix configurada nas
   // Configurações (app_settings.pix_chave_entrega, lida no servidor).
-  // O cliente escaneia e o valor já vem preenchido no app do banco.
+  // BLOCO 122: roda na TELA 6 (FORMA) — à vista + Pix na pronta entrega.
   // ============================================================
   useEffect(() => {
-    if (view !== 'PAYMENT' || isPreVenda || metodo !== 'PIX' || !(total > 0)) {
+    if (view !== 'FORMA' || isPreVenda || condicaoDoc !== 'AVISTA' || formaDoc !== 'PIX' || !(total > 0)) {
       setPixGerado(null);
       setPixFalhou(false);
       return;
@@ -709,14 +745,10 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       }
     })();
     return () => { vivo = false; };
-  }, [view, isPreVenda, metodo, total]);
+  }, [view, isPreVenda, condicaoDoc, formaDoc, total]);
 
-  const handlePrazoDays = (days: number) => {
-    setPrazoDays(days);
-    const d = new Date();
-    d.setDate(d.getDate() + days);
-    setPrazoData(d.toISOString().split('T')[0]);
-  };
+  // BLOCO 122: os atalhos 7D/14D/21D/30D da tela 6 escrevem direto o
+  // vencimentoDoc — sem estado extra de "dias".
 
   // ============================================================
   // BLOQUEIO INQUEBRÁVEL - CHAMADO ANTES DE QUALQUER FINALIZAÇÃO
@@ -741,114 +773,81 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     return true; // LIBERA
   };
 
-  const handleConfirmFinalize = async () => {
-    if (isFinalizingRef.current) return; // BLOQUEIO: evita venda duplicada
+  // ============================================================
+  // BLOCO 122 (fluxo de 8 telas do dono) — HANDLERS DAS TELAS 6/7/8
+  // ============================================================
+  // TELA 6 → TELA 7: valida a forma e monta o RESUMO/CONFERÊNCIA (Cupom).
+  //  - PRONTA ENTREGA: payload completo + cupom de conferência (imprime e
+  //    confere ANTES de gravar — o registro continua rodando só na tela 8).
+  //  - PRÉ-VENDA: preview do pedido (venda ainda NÃO existe na fila).
+  const continuarDaForma = () => {
+    if (!formaOk || isFinalizingRef.current) return;
     if (total <= 0 && getOrderedItems().length === 0) return;
-    
-    // TRAVA ABSOLUTA - não passa daqui se houver violação
     if (!validateAndBlockIfNeeded()) return;
+    if (isPreVenda) montarResumoPreVenda();
+    else montarConferenciaPronta();
+  };
 
-    // VALIDAÇÃO: DINHEIRO exige valor recebido (na pre-venda o pagamento e na entrega)
-    if (!isPreVenda && metodo === 'DINHEIRO') {
-      const rec = parseFloat(valorRecebido) || 0;
-      if (rec <= 0) {
-        setAppModal({ title: 'Valor Obrigatorio', message: 'Digite o valor recebido pelo cliente antes de concluir a venda.', icon: 'fa-solid fa-money-bill-wave', iconColor: 'text-amber-500', type: 'error' });
-        return;
-      }
-      if (rec < total) {
-        setAppModal({ title: 'Valor Insuficiente', message: `O valor recebido (R$ ${rec.toFixed(2)}) e menor que o total da venda (R$ ${total.toFixed(2)}).`, icon: 'fa-solid fa-triangle-exclamation', iconColor: 'text-rose-500', type: 'error' });
-        return;
-      }
-    }
-
+  // ===== PRONTA ENTREGA: monta o payload e abre a CONFERÊNCIA (tela 7) =====
+  const montarConferenciaPronta = () => {
     const itens = getOrderedItems();
     const vt = parseFloat(valorTroca) || 0;
     const descontoInfo = isTrocaActive && vt > 0 ? ` (Troca: R$ ${vt.toFixed(2)})` : '';
+    // Documento escolhido na tela 4 (ou fixado pela van SEM NF)
+    const notaTxt = docEscolhido === 'NFE'
+      ? ' | COM NOTA: NF-e'
+      : docEscolhido === 'NFCE'
+        ? ` | COM NOTA: NFC-e${nfcCpfDoc ? ` (CPF ${nfcCpfDoc})` : ''}`
+        : '';
 
-    // BLOCO 100 (regra do dono): na PRE-VENDA o registro continua DIRETO (o
-    // pedido vai para a fila/separação — não há entrega na hora). Na PRONTA
-    // ENTREGA o fluxo para no CUPOM DE CONFERÊNCIA antes de registrar.
-    if (isPreVenda) {
-      isFinalizingRef.current = true;
-      setFinalizando(true);
-
-      // BLOCO 44 (anti-duplicação): o carrinho sai da tela ANTES do envio — se o
-      // vendedor recarregar/desistir durante a demora, o pedido não se repete.
-      // Em falha, o carrinho volta para a tela.
-      const carrinhoPrev = cart;
-      try { localStorage.removeItem(cartKey); } catch { /* storage bloqueado */ }
-      setCart({});
-
-      // ===== PRE-VENDA: registra o PEDIDO (sem cobranca, sem baixa de carga) =====
-      const formaFinal = condicaoPv === 'AVISTA' && (metodoEntrega === 'BOLETO' || metodoEntrega === 'CHEQUE') ? 'DINHEIRO' : metodoEntrega;
-      const r = await processPreVenda!({ clientId: client.id, valorTotal: total, itens, formaPagamento: formaFinal, condicao: condicaoPv, vencimento: condicaoPv === 'APRAZO' ? vencimentoPv : undefined, trocas: trocasComObs, trocasValor: trocasValorNum || undefined });
-      if (r.pedido) {
-        const pedido = r.pedido;
-        limparAnotacoes();
-        setFinalizando(false);
-        lastFinishedSaleRef.current = pedido;
-        // BLOCO 21: comissão de PRÉ-VENDA — o valor OFICIAL vem do SERVIDOR
-        // (mesma regra que gera a comissão na entrega: % de PRÉ-VENDA do
-        // produto; só usa a taxa padrão quando o produto não tem % própria).
-        // ANTES: o browser recalculava com a % de PRONTA ENTREGA — errado.
-        let comissaoTotal = Number(r.comissaoPrevista);
-        if (!isFinite(comissaoTotal) || comissaoTotal <= 0) {
-          const PV_PADRAO = 5; // Bloco 23: pré-venda sem % no produto = 5% fixo (lib/comissaoPv)
-          comissaoTotal = 0;
-          itens.forEach(item => {
-            const prod = products.find(p => p.id === item.produtoId);
-            if (prod) {
-              const pv = prod.comissaoPvPercentual;
-              const pct = (pv !== undefined && pv !== null) ? pv : PV_PADRAO;
-              comissaoTotal += (item.quantidade * item.precoVenda) * (pct / 100);
-            }
-          });
-          comissaoTotal = Math.round(comissaoTotal * 100) / 100;
-        }
-        setSaleResultModal({ total, comissao: comissaoTotal, troca: isTrocaActive ? vt : 0, isPrazo: false, isPreVenda: true, clientName: client.nomeFantasia, sale: pedido, formaAtraso: condicaoPv === 'APRAZO' && metodoEntrega === 'CHEQUE' ? 'CHEQUE' : undefined });
-      } else {
-        isFinalizingRef.current = false;
-        setCart(carrinhoPrev);
-        setFinalizando(false);
-        // Falha SEM silencio: mostra o motivo REAL vindo da API (sessao expirada, banco desatualizado, etc.)
-        setAppModal({ title: 'Falha ao Registrar', message: r.erro || 'Nao foi possivel registrar o pedido.\nVerifique sua conexao e tente novamente.', icon: 'fa-solid fa-circle-exclamation', iconColor: 'text-rose-500', type: 'error' });
-      }
-      return;
-    }
-    
-    // ============================================================
-    // BLOCO 100 (regra do dono): PRONTA ENTREGA — NÃO registra aqui.
-    // Monta o payload completo (cliente, forma de pagamento, itens, total)
-    // e abre o CUPOM DE CONFERÊNCIA: o vendedor imprime, confere os itens
-    // e só então toca em FINALIZAR VENDA (finalizarAposConferencia).
-    // ============================================================
+    let metodoP: PaymentMethod;
     let finalDetalhe = '';
-    if (metodo === 'PIX') {
-      finalDetalhe = selectedPixSlot === 1 ? pix1Name : pix2Name;
-    } else if (metodo === 'A_PRAZO') {
-      const tipoLabel = tipoPrazo === 'PRAZO_COMUM' ? 'Prazo Comum' : tipoPrazo === 'CHEQUE' ? 'Cheque' : 'Boleto';
-      finalDetalhe = tipoLabel;
+    if (condicaoDoc === 'AVISTA') {
+      if (formaDoc === 'DINHEIRO') {
+        metodoP = 'DINHEIRO';
+        const rec = parseFloat(valorRecebido) || 0;
+        const trocoVal = Math.max(0, rec - total);
+        finalDetalhe = `DINHEIRO${trocoVal > 0 ? ` — troco R$ ${trocoVal.toFixed(2)}` : ''}`;
+      } else if (formaDoc === 'PIX') {
+        metodoP = 'PIX';
+        finalDetalhe = pixSlotDoc === 1 ? pix1Name : pix2Name;
+      } else {
+        // MISTO: o banco legado só grava DINHEIRO/PIX/A_PRAZO — grava como
+        // DINHEIRO com o detalhe explícito (mesmo padrão de sempre)
+        metodoP = 'DINHEIRO';
+        finalDetalhe = `MISTO: Dinheiro R$ ${(parseFloat(mistoDinDoc) || 0).toFixed(2)} + Pix R$ ${(parseFloat(mistoPixDoc) || 0).toFixed(2)}`;
+      }
     } else {
-      finalDetalhe = detalheMetodo;
+      metodoP = 'A_PRAZO';
+      // BLOCO 60: a prazo = Boleto, Cheque (bom para), Pix na data, Dinheiro na data
+      finalDetalhe = formaDoc === 'BOLETO'
+        ? 'Boleto'
+        : formaDoc === 'CHEQUE'
+          ? `Cheque (bom para ${vencimentoDoc.split('-').reverse().join('/')})`
+          : formaDoc === 'DINHEIRO_DATA'
+            ? 'Dinheiro na data'
+            : 'Pix na data';
     }
-    finalDetalhe += descontoInfo;
+    finalDetalhe += descontoInfo + notaTxt;
 
-    const salePayload: any = { 
-      vendedorId, 
-      clientId: client.id, 
-      valorTotal: total, 
-      valorPago: metodo === 'A_PRAZO' ? 0 : total,
-      metodoPagamento: metodo, 
-      detalhePagamento: finalDetalhe, 
+    const salePayload: any = {
+      vendedorId,
+      clientId: client.id,
+      valorTotal: total,
+      valorPago: metodoP === 'A_PRAZO' ? 0 : total,
+      metodoPagamento: metodoP,
+      detalhePagamento: finalDetalhe,
       itens,
-      data: new Date() 
+      data: new Date(),
+      // BLOCO 29 (ROTA 2): modo do atendimento — grava sales.modo_nota (baixa/margem real)
+      modoNota: rota2Ativo && modoAtivo ? modoAtivo : undefined,
     };
-
-    if (metodo === 'A_PRAZO') { 
-      salePayload.statusPagamento = 'PENDENTE'; 
-      salePayload.dataVencimento = new Date(prazoData); 
-    } else { 
-      salePayload.statusPagamento = 'PAGO'; 
+    if (metodoP === 'A_PRAZO') {
+      salePayload.statusPagamento = 'PENDENTE';
+      // meio-dia local: evita a data cair no dia anterior (meia-noite UTC em TZ -3)
+      salePayload.dataVencimento = new Date(`${vencimentoDoc}T12:00:00`);
+    } else {
+      salePayload.statusPagamento = 'PAGO';
     }
 
     setPendRegistro({
@@ -856,11 +855,43 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       trocasTxt: trocasComObs,
       trocasVal: trocasValorNum,
       trocaDesconto: isTrocaActive ? vt : 0,
-      isPrazo: metodo === 'A_PRAZO',
+      isPrazo: metodoP === 'A_PRAZO',
       // BLOCO 50: a prazo em CHEQUE não tem botão de boleto no resultado
-      formaAtraso: metodo === 'A_PRAZO' && tipoPrazo === 'CHEQUE' ? 'CHEQUE' : undefined,
+      formaAtraso: metodoP === 'A_PRAZO' && formaDoc === 'CHEQUE' ? 'CHEQUE' : undefined,
     });
     setCupomConferencia(vendaConferenciaDe(salePayload));
+  };
+
+  // ===== PRÉ-VENDA: monta o RESUMO do pedido (tela 7) — nada é gravado aqui =====
+  const montarResumoPreVenda = () => {
+    const itens = getOrderedItems();
+    const vt = parseFloat(valorTroca) || 0;
+    const descontoInfo = isTrocaActive && vt > 0 ? ` (Troca: R$ ${vt.toFixed(2)})` : '';
+    const formaApi = condicaoDoc === 'AVISTA'
+      ? (formaDoc === 'PIX' ? 'PIX' : 'DINHEIRO')
+      : (formaDoc === 'PIX_DATA' ? 'PIX' : formaDoc === 'DINHEIRO_DATA' ? 'DINHEIRO' : (formaDoc || 'BOLETO') as string);
+    const finalDetalhe = (condicaoDoc === 'AVISTA'
+      ? `Entregador recebe ${formaApi === 'PIX' ? 'Pix' : 'dinheiro'} na entrega (A VISTA)`
+      : formaDoc === 'BOLETO'
+        ? 'Boleto'
+        : formaDoc === 'CHEQUE'
+          ? `Cheque (bom para ${vencimentoDoc.split('-').reverse().join('/')})`
+          : formaDoc === 'DINHEIRO_DATA'
+            ? 'Dinheiro na data'
+            : 'Pix na data') + descontoInfo;
+    const previewPayload: any = {
+      vendedorId,
+      clientId: client.id,
+      valorTotal: total,
+      valorPago: 0, // pré-venda NUNCA recebe na visita (regra do Bloco 39)
+      metodoPagamento: formaApi as PaymentMethod,
+      detalhePagamento: finalDetalhe,
+      statusPagamento: 'PENDENTE',
+      dataVencimento: condicaoDoc === 'APRAZO' ? new Date(`${vencimentoDoc}T12:00:00`) : undefined,
+      itens,
+      data: new Date(),
+    };
+    setCupomConferencia(vendaConferenciaDe(previewPayload));
   };
 
   // BLOCO 100: venda provisória (id 'preview') que alimenta o cupom de
@@ -882,8 +913,9 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   } as unknown as Sale);
 
   // ============================================================
-  // BLOCO 100: registro da PRONTA ENTREGA — roda quando o vendedor toca
-  // em FINALIZAR VENDA dentro do cupom de conferência.
+  // BLOCO 122: registro da PRONTA ENTREGA — roda na TELA 8 (o vendedor já
+  // passou pela conferência da tela 7). Sucesso → TELA DE SUCESSO + emissão
+  // automática do documento escolhido (NF-e/NFC-e).
   // ============================================================
   const finalizarAposConferencia = async () => {
     const pend = pendRegistro;
@@ -905,7 +937,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       lastFinishedSaleRef.current = newSale;
       setFinalizando(false);
 
-      // Calcula comissao e abre modal bonito
+      // Calcula comissao
       let comissaoTotal = 0;
       (pend.payload.itens || []).forEach((item: any) => {
         const prod = products.find(p => p.id === item.produtoId);
@@ -913,16 +945,20 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           comissaoTotal += (item.quantidade * item.precoVenda) * ((prod.comissaoPercentual || 0) / 100);
         }
       });
+      comissaoTotal = Math.round(comissaoTotal * 100) / 100;
 
-      setSaleResultModal({
+      const saleFinal = { ...newSale, trocas: pend.trocasTxt || undefined, trocasValor: pend.trocasVal || undefined };
+      setSucessoData({
         total: pend.payload.valorTotal,
         comissao: comissaoTotal,
         troca: pend.trocaDesconto,
         isPrazo: pend.isPrazo,
-        clientName: client.nomeFantasia,
-        sale: { ...newSale, trocas: pend.trocasTxt || undefined, trocasValor: pend.trocasVal || undefined },
+        isPreVenda: false,
+        sale: saleFinal,
         formaAtraso: pend.formaAtraso,
       });
+      setView('SUCESSO');
+
       // BLOCO 13/41/98: persiste as TROCAS (+ valor de custo) + OBSERVAÇÃO da pronta entrega (best-effort)
       if (pend.trocasTxt || pend.trocasVal > 0) {
         try {
@@ -935,6 +971,13 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         } catch {}
         limparAnotacoes();
       }
+
+      // BLOCO 122 (tela 8 do dono): GERAR o documento escolhido aqui = finalizar.
+      // A venda já está salva — se a SEFAZ rejeitar, o erro aparece na tela de
+      // sucesso com "emitir novamente" (nada se perde).
+      if (docEscolhido === 'NFE' || docEscolhido === 'NFCE') {
+        emitirNotaFluxo(docEscolhido, saleFinal, docEscolhido === 'NFCE' ? (nfcCpfDoc || undefined) : undefined);
+      }
     } else {
       isFinalizingRef.current = false; // Libera se falhou
       setCart(carrinhoPrev);
@@ -944,159 +987,96 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   };
 
   // ============================================================
-  // BLOCO 27 (ROTA 2): fechamento da venda pelo wizard guiado.
-  // Mesmos canais do fluxo antigo (RPC processar_venda_v2 /
-  // processPreVenda), mesmas travas (duplo clique, margem minima).
-  // Regra do dono: na PRONTA ENTREGA a prazo NAO tem dinheiro na entrega —
-  // quem cobra e o vendedor; a vista = cliente ja pagou na visita.
-  // BLOCO 39 (regra do dono): na PRÉ-VENDA NINGUÉM recebe na visita — a
-  // vista = ENTREGADOR recebe na entrega (pedido nasce PENDENTE "cobrar X
-  // na entrega (A VISTA)"); a prazo = VENDEDOR cobra na proxima visita ou
-  // data. SEM pagoNaVisita pelo wizard (toggle manual do EditorPedido segue).
+  // BLOCO 122: emissão do documento da TELA 8 (wrapper do handleEmitirNotaModal)
   // ============================================================
-  const handleConfirmWizard = async (w: WizardPayload) => {
-    setWizardErro(null);
-    if (isFinalizingRef.current) return; // BLOQUEIO: evita venda duplicada
-    if (total <= 0 && getOrderedItems().length === 0) return;
-    if (!validateAndBlockIfNeeded()) return; // trava de margem
+  const emitirNotaFluxo = (tipo: 'NFE' | 'NFCE', sale: Sale, cpf?: string) => {
+    void handleEmitirNotaModal(tipo, sale, cpf);
+  };
 
-    if (!isPreVenda && w.condicao === 'AVISTA' && w.forma === 'DINHEIRO') {
-      const rec = w.valorRecebido || 0;
-      if (rec <= 0) { setWizardErro('Digite o valor recebido do cliente.'); return; }
-      if (rec + 0.001 < total) { setWizardErro(`Valor recebido (R$ ${rec.toFixed(2)}) e menor que o total da venda (R$ ${total.toFixed(2)}).`); return; }
-    }
+  // ============================================================
+  // BLOCO 122: registro da PRÉ-VENDA — roda na TELA 8. Mesmo payload do
+  // wizard (BLOCO 39: pré-venda NUNCA recebe na visita; a vista = entregador
+  // cobra na entrega; a prazo = vendedor cobra na data). A nota é INTENÇÃO:
+  // sai depois (na entrega/pelo admin) — nada é emitido aqui.
+  // ============================================================
+  const registrarPreVendaFluxo = async () => {
+    if (isFinalizingRef.current) return; // BLOQUEIO: evita pedido duplicado
+    if (total <= 0 && getOrderedItems().length === 0) return;
+    if (!validateAndBlockIfNeeded()) return;
 
     const itens = getOrderedItems();
     const vt = parseFloat(valorTroca) || 0;
-    const descontoInfo = isTrocaActive && vt > 0 ? ` (Troca: R$ ${vt.toFixed(2)})` : '';
-    const notaTxt = w.notaIntencao === 'NFE'
-      ? ' | COM NOTA: NF-e'
-      : w.notaIntencao === 'NFCE'
-        ? ` | COM NOTA: NFC-e${w.nfcCpf ? ` (CPF ${w.nfcCpf})` : ''}`
-        : '';
 
-    // BLOCO 100: PRE-VENDA registra direto; PRONTA ENTREGA para no CUPOM DE
-    // CONFERÊNCIA (o vendedor imprime e finaliza dentro dele).
-    if (isPreVenda) {
-      isFinalizingRef.current = true;
-      setFinalizando(true);
-      // BLOCO 44 (anti-duplicação): o carrinho sai da tela ANTES do envio —
-      // recarregou/desistiu durante a demora = pedido não se repete. Falha volta.
-      const carrinhoPrev = cart;
-      try { localStorage.removeItem(cartKey); } catch { /* storage bloqueado */ }
-      setCart({});
-      const formaApi = w.condicao === 'AVISTA'
-        ? (w.forma === 'MISTO' ? 'DINHEIRO' : w.forma)
-        : (w.forma === 'PIX_DATA' ? 'PIX' : w.forma);
-      const r = await processPreVenda!({
-        clientId: client.id, valorTotal: total, itens,
-        formaPagamento: formaApi, condicao: w.condicao,
-        vencimento: w.condicao === 'APRAZO' ? w.vencimento : undefined,
-        trocas: trocasComObs,
-        trocasValor: trocasValorNum || undefined,
-        // BLOCO 39 (regra do dono): pré-venda NUNCA recebe na visita —
-        // a vista = ENTREGADOR cobra na entrega (pedido PENDENTE);
-        // a prazo = VENDEDOR cobra na data/visita. Sem pagoNaVisita.
-        notaIntencao: w.notaIntencao,
-        nfcCpf: w.notaIntencao === 'NFCE' ? w.nfcCpf : undefined,
-        // BLOCO 29 (ROTA 2): modo do atendimento fixado no início (baixa na coluna certa)
-        modo: rota2Ativo ? (w.notaIntencao === 'NFE' ? 'NFE' : w.notaIntencao === 'NFCE' ? 'NFCE' : 'CUPOM') : undefined,
-      });
-      if (r.pedido) {
-        const pedido = r.pedido;
-        limparAnotacoes();
-        setFinalizando(false);
-        lastFinishedSaleRef.current = pedido;
-        let comissaoTotal = Number(r.comissaoPrevista);
-        if (!isFinite(comissaoTotal) || comissaoTotal <= 0) {
-          const PV_PADRAO = 5; // Bloco 23: pré-venda sem % no produto = 5% fixo (lib/comissaoPv)
-          comissaoTotal = 0;
-          itens.forEach(item => {
-            const prod = products.find(p => p.id === item.produtoId);
-            if (prod) {
-              const pv = prod.comissaoPvPercentual;
-              const pct = (pv !== undefined && pv !== null) ? pv : PV_PADRAO;
-              comissaoTotal += (item.quantidade * item.precoVenda) * (pct / 100);
-            }
-          });
-          comissaoTotal = Math.round(comissaoTotal * 100) / 100;
-        }
-        setSaleResultModal({ total, comissao: comissaoTotal, troca: isTrocaActive ? vt : 0, isPrazo: w.condicao === 'APRAZO', isPreVenda: true, clientName: client.nomeFantasia, sale: pedido, formaAtraso: w.condicao === 'APRAZO' && w.forma === 'CHEQUE' ? 'CHEQUE' : undefined });
-      } else {
-        isFinalizingRef.current = false;
-        setCart(carrinhoPrev);
-        setFinalizando(false);
-        setWizardErro(r.erro || 'Nao foi possivel registrar o pedido. Verifique sua conexao e tente novamente.');
-      }
-      return;
-    }
+    isFinalizingRef.current = true;
+    setFinalizando(true);
 
-    // ============================================================
-    // ===== PRONTA ENTREGA via wizard — BLOCO 100: CONFERÊNCIA ANTES
-    // DE FINALIZAR: monta o payload e abre o cupom (o registro roda no
-    // FINALIZAR VENDA do cupom, via finalizarAposConferencia).
-    // ============================================================
-    let metodo: PaymentMethod;
-    let finalDetalhe = '';
-    if (w.condicao === 'AVISTA') {
-      if (w.forma === 'DINHEIRO') {
-        metodo = 'DINHEIRO';
-        const rec = w.valorRecebido || 0;
-        const trocoVal = Math.max(0, rec - total);
-        finalDetalhe = `DINHEIRO${trocoVal > 0 ? ` — troco R$ ${trocoVal.toFixed(2)}` : ''}`;
-      } else if (w.forma === 'PIX') {
-        metodo = 'PIX';
-        finalDetalhe = w.pixSlot === 1 ? pix1Name : pix2Name;
-      } else {
-        // MISTO: o banco legado so grava DINHEIRO/PIX/A_PRAZO — grava como
-        // DINHEIRO com o detalhe explícito (mesmo padrão do fluxo antigo)
-        metodo = 'DINHEIRO';
-        finalDetalhe = `MISTO: Dinheiro R$ ${(w.mistoDinheiro || 0).toFixed(2)} + Pix R$ ${(w.mistoPix || 0).toFixed(2)}`;
-      }
-    } else {
-      metodo = 'A_PRAZO';
-      // BLOCO 60 (regra do dono): a prazo pode ser Boleto, Cheque (sem nº na
-      // tela — anota na entrega), Pix na data ou DINHEIRO na data.
-      finalDetalhe = w.forma === 'BOLETO'
-        ? 'Boleto'
-        : w.forma === 'CHEQUE'
-          ? `Cheque${w.chequeBomPara ? ` (bom para ${w.chequeBomPara.split('-').reverse().join('/')})` : ''}`
-          : w.forma === 'DINHEIRO'
-            ? 'Dinheiro na data'
-            : 'Pix na data';
-    }
-    finalDetalhe += descontoInfo + notaTxt;
+    // BLOCO 44 (anti-duplicação): o carrinho sai da tela ANTES do envio —
+    // recarregou/desistiu durante a demora = pedido não se repete. Falha volta.
+    const carrinhoPrev = cart;
+    try { localStorage.removeItem(cartKey); } catch { /* storage bloqueado */ }
+    setCart({});
 
-    const salePayload: any = {
-      vendedorId,
-      clientId: client.id,
-      valorTotal: total,
-      valorPago: metodo === 'A_PRAZO' ? 0 : total,
-      metodoPagamento: metodo,
-      detalhePagamento: finalDetalhe,
-      itens,
-      data: new Date(),
-      // BLOCO 29 (ROTA 2): modo do atendimento — grava sales.modo_nota (baixa da pré-venda/margem real)
-      modoNota: rota2Ativo && modoAtivo ? (w.notaIntencao === 'NFE' ? 'NFE' : w.notaIntencao === 'NFCE' ? 'NFCE' : 'CUPOM') : undefined,
-    };
-    if (metodo === 'A_PRAZO') {
-      salePayload.statusPagamento = 'PENDENTE';
-      // meio-dia local: evita a data cair no dia anterior (meia-noite UTC em TZ -3)
-      salePayload.dataVencimento = new Date(`${w.vencimento}T12:00:00`);
-    } else {
-      salePayload.statusPagamento = 'PAGO';
-    }
-
-    setPendRegistro({
-      payload: salePayload,
-      trocasTxt: trocasComObs,
-      trocasVal: trocasValorNum,
-      trocaDesconto: isTrocaActive ? vt : 0,
-      isPrazo: metodo === 'A_PRAZO',
-      // BLOCO 50: a prazo em CHEQUE não tem botão de boleto no resultado
-      formaAtraso: metodo === 'A_PRAZO' && w.forma === 'CHEQUE' ? 'CHEQUE' : undefined,
+    const formaApi = condicaoDoc === 'AVISTA'
+      ? (formaDoc === 'PIX' ? 'PIX' : 'DINHEIRO')
+      : (formaDoc === 'PIX_DATA' ? 'PIX' : formaDoc === 'DINHEIRO_DATA' ? 'DINHEIRO' : (formaDoc || 'BOLETO') as string);
+    const notaIntencao = docEscolhido === 'CUPOM' ? 'NENHUMA' : (docEscolhido || 'NENHUMA');
+    const r = await processPreVenda!({
+      clientId: client.id, valorTotal: total, itens,
+      formaPagamento: formaApi, condicao: condicaoDoc || 'AVISTA',
+      vencimento: condicaoDoc === 'APRAZO' ? vencimentoDoc : undefined,
+      trocas: trocasComObs,
+      trocasValor: trocasValorNum || undefined,
+      notaIntencao,
+      nfcCpf: docEscolhido === 'NFCE' && nfcCpfDoc ? nfcCpfDoc : undefined,
+      // BLOCO 29 (ROTA 2): modo do atendimento — baixa na coluna certa
+      modo: rota2Ativo && modoAtivo ? modoAtivo : undefined,
     });
-    setCupomConferencia(vendaConferenciaDe(salePayload));
+    if (r.pedido) {
+      const pedido = r.pedido;
+      limparAnotacoes();
+      setFinalizando(false);
+      lastFinishedSaleRef.current = pedido;
+      // BLOCO 21: comissão de PRÉ-VENDA — o valor OFICIAL vem do SERVIDOR
+      let comissaoTotal = Number(r.comissaoPrevista);
+      if (!isFinite(comissaoTotal) || comissaoTotal <= 0) {
+        const PV_PADRAO = 5; // Bloco 23: pré-venda sem % no produto = 5% fixo (lib/comissaoPv)
+        comissaoTotal = 0;
+        itens.forEach(item => {
+          const prod = products.find(p => p.id === item.produtoId);
+          if (prod) {
+            const pv = prod.comissaoPvPercentual;
+            const pct = (pv !== undefined && pv !== null) ? pv : PV_PADRAO;
+            comissaoTotal += (item.quantidade * item.precoVenda) * (pct / 100);
+          }
+        });
+        comissaoTotal = Math.round(comissaoTotal * 100) / 100;
+      }
+      setSucessoData({
+        total,
+        comissao: comissaoTotal,
+        troca: isTrocaActive ? vt : 0,
+        isPrazo: condicaoDoc === 'APRAZO',
+        isPreVenda: true,
+        sale: pedido,
+        formaAtraso: condicaoDoc === 'APRAZO' && formaDoc === 'CHEQUE' ? 'CHEQUE' : undefined,
+      });
+      setView('SUCESSO');
+    } else {
+      isFinalizingRef.current = false;
+      setCart(carrinhoPrev);
+      setFinalizando(false);
+      // Falha SEM silencio: mostra o motivo REAL vindo da API
+      setAppModal({ title: 'Falha ao Registrar', message: r.erro || 'Nao foi possivel registrar o pedido.\nVerifique sua conexao e tente novamente.', icon: 'fa-solid fa-circle-exclamation', iconColor: 'text-rose-500', type: 'error' });
+    }
+  };
+
+  // ============================================================
+  // BLOCO 122: TELA 8 — o toque no documento VERDE gera e finaliza.
+  // ============================================================
+  const executarFinalizacao = () => {
+    if (isFinalizingRef.current || finalizando) return;
+    if (isPreVenda) registrarPreVendaFluxo();
+    else finalizarAposConferencia();
   };
 
   const productIdsInCarga = useMemo(() => new Set(minhaCarga.map(c => c.produtoId)), [minhaCarga]);
@@ -1130,6 +1110,14 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     if (!activeCategoryId) return base;
     return base.filter(p => p.categoryId === activeCategoryId);
   }, [products, productIdsInCarga, activeCategoryId, sellFromCentral, modoAtivo, rota2Ativo, verProdutosTeste, minhaCarga, clienteGB]);
+
+  // BLOCO 122 (TELA 3): busca de produto — digita e acha na hora, ignora a
+  // categoria ativa (o vendedor não gira mais as abas caçando item).
+  const produtosNaTela = useMemo(() => {
+    const q = buscaProduto.trim().toLowerCase();
+    if (!q) return filteredProducts;
+    return filteredProducts.filter(p => p.nome.toLowerCase().includes(q));
+  }, [filteredProducts, buscaProduto]);
 
   const generatePrePedidoText = (width: '56MM' | '80MM') => {
     const totalWidth = width === '80MM' ? 48 : 32; 
@@ -1359,9 +1347,27 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
             );
           })}
         </div>
+
+        {/* BLOCO 122 (TELA 3): busca de produto — o achado da sonda de UX:
+            antes o vendedor girava as abas caçando item. Busca ignora categoria. */}
+        <div className="relative mt-2">
+          <i className="fa-solid fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-300 text-sm"></i>
+          <input
+            type="text"
+            value={buscaProduto}
+            onChange={e => setBuscaProduto(e.target.value)}
+            placeholder="Buscar produto..."
+            className="w-full pl-10 pr-9 py-2.5 bg-gray-50 border border-gray-100 rounded-xl text-[12px] font-bold outline-none focus:ring-2 focus:ring-blue-100"
+          />
+          {buscaProduto && (
+            <button onClick={() => setBuscaProduto('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-300 active:text-gray-500" aria-label="Limpar busca">
+              <i className="fa-solid fa-xmark"></i>
+            </button>
+          )}
+        </div>
       </header>
 
-      {/* ===== BLOCO 29 (ROTA 2): SELO FIXO DO MODO DO ATENDIMENTO ===== */}
+      {/* ===== BLOCO 29 (ROTA 2): SELO DO DOCUMENTO (tela 4 escolhe ou van fixa) ===== */}
       {modoAtivo && (
         <div className={`w-full px-3 py-2 flex items-center gap-2.5 border-b ${modoAtivo === 'CUPOM' ? 'bg-gray-100 border-gray-200' : 'bg-violet-50 border-violet-200'}`}>
           <i className={`fa-solid ${modoAtivo === 'CUPOM' ? 'fa-receipt text-gray-500' : modoAtivo === 'NFE' ? 'fa-file-invoice-dollar text-violet-600' : 'fa-file-lines text-violet-600'} text-sm`}></i>
@@ -1369,7 +1375,16 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
             <p className={`text-[10px] font-black uppercase tracking-wide ${modoAtivo === 'CUPOM' ? 'text-gray-600' : 'text-violet-700'}`}>
               {modoAtivo === 'CUPOM' ? 'CUPOM — sai do TOTAL, conta no ESTOQUE 2 (SEM NF)' : modoAtivo === 'NFE' ? 'NF-e — sai do TOTAL, conta no ESTOQUE 1 (COM NF)' : 'NFC-e — sai do TOTAL, conta no ESTOQUE 1 (COM NF)'}
             </p>
-            <p className={`text-[8px] font-bold ${modoAtivo === 'CUPOM' ? 'text-gray-400' : 'text-violet-400'}`}>Modo fixado no atendimento — baixa o Estoque Total e alimenta o contador</p>
+            <p className={`text-[8px] font-bold ${modoAtivo === 'CUPOM' ? 'text-gray-400' : 'text-violet-400'}`}>{modoAtendimento ? 'Fixado pelo carregamento da van' : 'Documento escolhido na tela 4'} — baixa o Estoque Total e alimenta o contador</p>
+          </div>
+        </div>
+      )}
+      {!modoAtivo && (
+        <div className="w-full px-3 py-2 flex items-center gap-2.5 border-b bg-gray-50 border-gray-200">
+          <i className="fa-solid fa-file-circle-question text-gray-400 text-sm"></i>
+          <div className="flex-1 min-w-0">
+            <p className="text-[10px] font-black uppercase tracking-wide text-gray-500">Documento fiscal: escolher no final do pedido</p>
+            <p className="text-[8px] font-bold text-gray-400">NF-e / NFC-e ou só cupom — logo depois do carrinho</p>
           </div>
         </div>
       )}
@@ -1410,7 +1425,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       {/* BLOCO 41: o padding acompanha o rodapé compacto (cresce só quando os
           campos de troca/observação estão abertos) — a grade mostra mais produtos */}
       <div className="flex-1 overflow-y-auto p-2 space-y-1.5" style={{ paddingBottom: `${(isTrocaActive ? 100 : 0) + (isObsActive ? 70 : 0) + 205}px` }}>
-        {filteredProducts.map(p => { 
+        {produtosNaTela.map(p => { 
           const item = cart[p.id];
           const cargaOriginal = saldoFonte(p);
           const minPrice = p.precoMinimo || 0;
@@ -1497,10 +1512,12 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
             </div>
           );
         })}
-        {filteredProducts.length === 0 && (
+        {produtosNaTela.length === 0 && (
           <div className="py-20 text-center opacity-40 flex flex-col items-center gap-4">
             <i className="fa-solid fa-box-open text-5xl"></i>
-            {clienteGB ? (
+            {buscaProduto ? (
+              <p className="font-black uppercase tracking-widest text-[10px]">Nada encontrado para "{buscaProduto}".</p>
+            ) : clienteGB ? (
               <>
                 <p className="font-black uppercase tracking-widest text-[10px]">Nenhum produto com Preço Especial GB aqui.</p>
                 <p className="text-[9px] font-bold text-gray-400 uppercase leading-snug px-6">No cliente especial só aparece o que tem preço GB cadastrado — peça ao admin para atualizar.</p>
@@ -1626,221 +1643,496 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               if (isPrePedido) {
                 setView('PRE_PEDIDO_PREVIEW');
               } else {
-                // BLOCO 88 (regra do dono): TODES as perguntas ANTES de gerar
-                // cupom — documento (cupom/NF-e/NFC-e), a vista/prazo,
-                // dinheiro/pix/boleto. O preview que mostrava defaults
-                // (DINHEIRO A VISTA) sumiu; o cupom REAL nasce depois de
-                // registrar (mesma ordem da pre-venda desde o Bloco 40).
-                setView('PAYMENT');
+                // BLOCO 122 (fluxo de 8 telas do dono): TELA 4 = documento —
+                // quando já vem fixado (van SEM NF), cai direto na condição.
+                setView(docEscolhido ? 'CONDICAO' : 'DOC');
               }
             }}
             disabled={(total <= 0 && getOrderedItems().length === 0) || hasMarginViolation || (!allCategoriesVisited && !sellFromCentral)}
             className={`px-6 py-4 rounded-2xl font-black uppercase text-xs ${(total > 0 || getOrderedItems().length > 0) && !hasMarginViolation && (allCategoriesVisited || sellFromCentral) ? (isPreVenda ? 'bg-emerald-600 text-white shadow-lg' : isPrePedido ? 'bg-indigo-600 text-white shadow-lg' : 'bg-blue-600 text-white shadow-lg') : 'bg-gray-200 text-gray-400'}`}
           >
-            {isPrePedido ? 'Gerar Rascunho' : 'Ir para pagamento'}
+            {isPrePedido ? 'Gerar Rascunho' : 'Continuar'}
           </button>
         </div>
       </footer>
 
-      {view === 'PAYMENT' && (
-        <div className="fixed inset-0 bg-black/60 z-[110] flex items-end justify-center p-4">
-           <div className="bg-white w-full max-sm rounded-[2.5rem] p-8 animate-in slide-in-from-bottom max-h-[95vh] overflow-y-auto">
-              <h3 className="font-black text-gray-800 text-lg mb-4 text-center uppercase tracking-tight">{isPreVenda ? 'Registrar Pedido' : 'Finalizar Pagamento'}</h3>
-              
-              <div className="bg-gray-50 p-4 rounded-2xl mb-6 text-center border border-gray-100">
-                <p className="text-[10px] font-black text-gray-400 uppercase mb-1">Valor Total Devido</p>
-                <p className="text-3xl font-black text-blue-600">R$ {total.toFixed(2)}</p>
-              </div>
 
-              {/* LEMBRETE DO DONO: cobre o a prazo ANTES de vender de novo */}
-              {clientDebt > 0 && !isPrePedido && (
-                <div className="bg-rose-50 border border-rose-200 rounded-2xl p-3.5 mb-5 text-center">
-                  <p className="text-[9px] font-black text-rose-700 uppercase"><i className="fa-solid fa-triangle-exclamation mr-1"></i>Lembrete — cliente com debito</p>
-                  <p className="text-[12px] font-black text-rose-600 mt-1">R$ {clientDebt.toFixed(2)} em aberto ({clientDebtQtd} venda(s))</p>
-                  <p className="text-[9px] text-rose-500 font-semibold mt-0.5">Cobre o a prazo ANTES de vender de novo. Toque no aviso vermelho no topo para receber agora.</p>
-                </div>
-              )}
-
-              {wizardPagamento ? (
-                <WizardPagamento
-                  total={total}
-                  isPreVenda={isPreVenda}
-                  clienteAptoNfe={clienteAptoNfe(client)}
-                  pix1Name={pix1Name} pix1Code={pix1Code}
-                  pix2Name={pix2Name} pix2Code={pix2Code}
-                  mascararCpf={mascararCpf}
-                  erro={wizardErro}
-                  enviando={finalizando}
-                  onConfirm={handleConfirmWizard}
-                  onVoltar={() => setView('CART')}
-                  /* BLOCO 29 (ROTA 2): modo fixado no atendimento — pula o passo NOTA */
-                  modoInicial={modoAtivo}
-                  nfcCpfInicial={nfcCpfInicial}
-                />
-              ) : isPreVenda ? (
-                <div className="mb-6 animate-in fade-in duration-300">
-                  <p className="text-[9px] font-black text-gray-400 uppercase text-center mb-2">Pagamento combinado com o cliente</p>
-                  {/* BLOCO 13: condicao — A VISTA ou A PRAZO (regra do dono) */}
-                  <div className="flex gap-1.5 mb-3 justify-center">
-                    <button onClick={() => { setCondicaoPv('AVISTA'); if (metodoEntrega === 'BOLETO' || metodoEntrega === 'CHEQUE') setMetodoEntrega('DINHEIRO'); }} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${condicaoPv === 'AVISTA' ? 'bg-emerald-600 text-white shadow-md' : 'bg-gray-50 text-gray-400'}`}>
-                      <i className="fa-solid fa-money-bill-wave mr-1"></i>À vista
-                    </button>
-                    <button onClick={() => setCondicaoPv('APRAZO')} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${condicaoPv === 'APRAZO' ? 'bg-indigo-600 text-white shadow-md' : 'bg-gray-50 text-gray-400'}`}>
-                      <i className="fa-regular fa-calendar mr-1"></i>A prazo
-                    </button>
-                  </div>
-                  <div className="flex gap-1.5 mb-4 justify-center">
-                    {(condicaoPv === 'AVISTA' ? ['DINHEIRO', 'PIX'] as const : ['DINHEIRO', 'PIX', 'BOLETO', 'CHEQUE'] as const).map(m => (
-                      <button key={m} onClick={() => setMetodoEntrega(m)} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${metodoEntrega === m ? 'bg-emerald-600 text-white shadow-md' : 'bg-gray-50 text-gray-400'}`}>{m === 'DINHEIRO' ? 'Dinheiro' : m.charAt(0) + m.slice(1).toLowerCase()}</button>
-                    ))}
-                  </div>
-                  {condicaoPv === 'APRAZO' && (
-                    <div className="mb-3">
-                      <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Vencimento do prazo</label>
-                      <input type="date" value={vencimentoPv} onChange={e => setVencimentoPv(e.target.value)}
-                        className="w-full p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-[12px] font-black text-gray-700 text-center outline-none focus:ring-2 focus:ring-indigo-100" />
-                    </div>
-                  )}
-                  <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 text-center">
-                    <i className="fa-solid fa-clipboard-list text-emerald-500 text-lg"></i>
-                    <p className="text-[10px] font-black text-emerald-700 uppercase mt-1">
-                      {condicaoPv === 'APRAZO'
-                        ? 'Entregador entrega e anexa a foto do comprovante'
-                        : `Entregador recebe ${metodoEntrega === 'PIX' ? 'Pix' : metodoEntrega.toLowerCase()} na entrega (à vista)`}
-                    </p>
-                    <p className="text-[9px] text-emerald-600/70 font-semibold mt-0.5">
-                      {condicaoPv === 'APRAZO'
-                        ? 'Quem cobra o a prazo é o VENDEDOR na próxima visita ou no prazo — o entregador NÃO recebe esse valor.'
-                        : 'O pedido entra na fila de entregas na hora — o entregador entrega quando puder.'}
-                    </p>
-                  </div>
-                </div>
-              ) : (
-              <>
-              <div className="flex gap-1.5 mb-6 justify-center">
-                {(['DINHEIRO', 'PIX', 'A_PRAZO'] as const).map(m => (
-                  <button key={m} onClick={() => setMetodo(m)} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${metodo === m ? 'bg-blue-600 text-white shadow-md' : 'bg-gray-50 text-gray-400'}`}>{m === 'A_PRAZO' ? 'PRAZO' : m}</button>
-                ))}
-              </div>
-
-              {metodo === 'DINHEIRO' && (
-                <div className="mb-6 space-y-4 animate-in fade-in duration-300">
-                   <div className="space-y-1">
-                      <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Valor Recebido R$</label>
-                      <input 
-                        type="number" 
-                        value={valorRecebido} 
-                        onChange={e => setValorRecebido(e.target.value)} 
-                        placeholder="0.00" 
-                        className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-2xl font-black text-center outline-none" 
-                        autoFocus
-                      />
-                   </div>
-                   {parseFloat(valorRecebido) > total && (
-                     <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100 text-center animate-in zoom-in-95">
-                        <p className="text-[10px] font-black text-emerald-600 uppercase mb-1">Troco a Devolver</p>
-                        <p className="text-2xl font-black text-emerald-700">R$ {troco.toFixed(2)}</p>
-                     </div>
-                   )}
-                </div>
-              )}
-
-              {metodo === 'A_PRAZO' && (
-                <div className="mb-6 space-y-4 animate-in fade-in duration-300">
-                   <p className="text-[9px] font-black text-gray-400 uppercase text-center mb-1">Tipo de Prazo</p>
-                   <div className="flex gap-1.5 mb-4 justify-center">
-                     {(['PRAZO_COMUM', 'CHEQUE', 'BOLETO'] as const).map(t => (
-                       <button 
-                         key={t} 
-                         onClick={() => setTipoPrazo(t)} 
-                         className={`flex-1 py-2 rounded-lg text-[8px] font-black uppercase transition-all ${tipoPrazo === t ? 'bg-indigo-600 text-white shadow-sm' : 'bg-gray-100 text-gray-400'}`}
-                       >
-                         {t === 'PRAZO_COMUM' ? 'Prazo Comum' : t === 'CHEQUE' ? 'Cheque' : 'Boleto'}
-                       </button>
-                     ))}
-                   </div>
-
-                   <div className="grid grid-cols-4 gap-2">
-                     {[7, 14, 21, 30].map(days => (
-                       <button key={days} onClick={() => handlePrazoDays(days)} className={`py-3 rounded-xl text-[10px] font-black transition-all ${prazoDays === days ? 'bg-blue-600 text-white border-2 border-blue-600 ring-2 ring-blue-300 scale-105 shadow-lg' : 'bg-gray-50 border-2 border-gray-100 text-gray-500'}`}>{days}D</button>
-                     ))}
-                   </div>
-                   <div className="space-y-1">
-                      <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Data de Vencimento</label>
-                      <input type="date" value={prazoData} onChange={e => setPrazoData(e.target.value)} className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-bold outline-none focus:ring-2 focus:ring-blue-100" />
-                   </div>
-                </div>
-              )}
-
-              {metodo === 'PIX' && (
-                <div className="mb-6 space-y-4 animate-in fade-in duration-300">
-                   <p className="text-[9px] font-black text-gray-400 uppercase text-center">Conta para registrar (anotação da venda)</p>
-                   <div className="grid grid-cols-2 gap-2">
-                     <button onClick={() => setSelectedPixSlot(1)} className={`p-3 rounded-xl border text-[10px] font-black uppercase transition-all ${selectedPixSlot === 1 ? 'border-blue-600 bg-blue-50 text-blue-600' : 'border-gray-100 text-gray-400'}`}>{pix1Name}</button>
-                     <button onClick={() => setSelectedPixSlot(2)} className={`p-3 rounded-xl border text-[10px] font-black uppercase transition-all ${selectedPixSlot === 2 ? 'border-blue-600 bg-blue-50 text-blue-600' : 'border-gray-100 text-gray-400'}`}>{pix2Name}</button>
-                   </div>
-
-                   {/* BLOCO 100 (regra do dono): QR DO PIX GERADO com o VALOR
-                       DA VENDA — BR Code atrelado a chave Pix configurada em
-                       Configurações (não é mais o QR fixo do banco). */}
-                   <div className="bg-teal-50/60 p-4 rounded-2xl flex flex-col items-center border border-teal-100">
-                     <p className="text-[8px] font-black text-teal-500 uppercase mb-1">PIX — QR com o valor da venda</p>
-                     <p className="text-2xl font-black text-teal-700 mb-2">R$ {total.toFixed(2)}</p>
-                     <div className="w-44 h-44 bg-white rounded-xl flex items-center justify-center border border-gray-200 overflow-hidden shadow-inner">
-                        {pixGerado ? (
-                          <img src={pixGerado.qrDataUrl} alt="QR Pix com o valor da venda" className="w-full h-full object-contain" />
-                        ) : pixFalhou ? (
-                          /* fallback: QR fixo do banco (sem valor) quando o gerador falha */
-                          selectedPixSlot === 1
-                            ? (pix1Code ? <img src={pix1Code} className="w-full h-full object-contain" /> : <i className="fa-solid fa-qrcode text-gray-200 text-3xl"></i>)
-                            : (pix2Code ? <img src={pix2Code} className="w-full h-full object-contain" /> : <i className="fa-solid fa-qrcode text-gray-200 text-3xl"></i>)
-                        ) : (
-                          <i className="fa-solid fa-spinner fa-spin text-teal-300 text-3xl"></i>
-                        )}
-                     </div>
-                     {pixGerado ? (
-                       <>
-                         <p className="text-[9px] font-bold text-gray-400 mt-2 text-center leading-snug">Chave Pix das Configurações: <span className="font-black text-gray-600">{pixGerado.chaveFormatada}</span></p>
-                         <button
-                           onClick={() => { navigator.clipboard?.writeText(pixGerado.payload).then(() => setAppModal({ title: 'Pix copiado', message: 'Código Copia e Cola na área de transferência — o cliente cola no app do banco e o valor já vem preenchido.', icon: 'fa-solid fa-copy', iconColor: 'text-teal-500', type: 'success' })).catch(() => {}); }}
-                           className="mt-2 px-4 py-2.5 rounded-xl bg-teal-600 text-white text-[9px] font-black uppercase active:scale-95 shadow"
-                         >
-                           <i className="fa-solid fa-copy mr-1"></i>Copiar código Pix (copia e cola)
-                         </button>
-                       </>
-                     ) : pixFalhou ? (
-                       <p className="text-[8px] font-bold text-rose-400 mt-2 text-center leading-snug">Não deu para gerar o QR com valor — mostre o QR fixo do banco (acima) e confira o valor com o cliente.</p>
-                     ) : (
-                       <p className="text-[8px] font-bold text-teal-400 mt-2">Gerando QR com o valor da venda...</p>
-                     )}
-                   </div>
-                </div>
-              )}
-              </>
-              )}
-
-              {!wizardPagamento && (
-                <>
-              <button 
-                onClick={handleConfirmFinalize} 
-                disabled={hasMarginViolation || finalizando}
-                className={`w-full bg-emerald-600 text-white py-5 rounded-2xl font-black uppercase text-xs shadow-xl active:scale-95 transition-all mb-2 tracking-widest ${(hasMarginViolation || finalizando) ? 'opacity-60 cursor-not-allowed' : ''}`}
-              >
-                {finalizando
-                  ? <><i className="fa-solid fa-spinner fa-spin mr-2"></i>{isPreVenda ? 'Registrando pedido...' : 'Abrindo conferência...'}</>
-                  : (isPreVenda ? 'Registrar Pedido (Pre-Venda)' : 'Revisar cupom e conferir')}
-              </button>
-              <button onClick={() => setView('CART')} className="w-full py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Voltar ao Carrinho</button>
-                </>
-              )}
-           </div>
-        </div>
-      )}
     </div>
 
-    {/* BLOCO 100 (regra do dono): CUPOM DE CONFERÊNCIA — na pronta entrega o
-        cupom (com cliente, forma de pagamento, itens e total) aparece ANTES
-        de registrar a venda: imprime, confere e finaliza dentro dele. */}
+    {/* ============================================================
+        BLOCO 122 — FLUXO DE 8 TELAS DO DONO
+        TELA 4 = DOC · TELA 5 = CONDICAO · TELA 6 = FORMA ·
+        TELA 7 = cupom/resumo (Cupom conferência abaixo) ·
+        TELA 8 = FINALIZAR (documento verde) · SUCESSO = conclusão.
+        Telas cheias sobre o carrinho — voltar em TODAS, carrinho intocado.
+        ============================================================ */}
+    {view === 'DOC' && (
+      <div className="fixed inset-0 bg-gray-50 z-[120] flex flex-col overflow-hidden">
+        <header className="bg-white border-b border-gray-100 p-3 flex items-center gap-3 shadow-sm">
+          <button onClick={() => setView('CART')} className="w-9 h-9 bg-gray-50 text-gray-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-arrow-left"></i></button>
+          <div className="flex-1 min-w-0 text-center">
+            <p className="text-[9px] text-violet-400 uppercase font-black tracking-tighter">Tela 4 de 8 — Documento</p>
+            <h2 className="font-black text-xs text-gray-800 uppercase truncate">Que documento sai?</h2>
+          </div>
+          <div className="w-9 h-9"></div>
+        </header>
+        <div className="flex-1 overflow-y-auto p-4 space-y-3 max-w-lg w-full mx-auto">
+          <div className="bg-white p-4 rounded-2xl border border-gray-100 text-center">
+            <p className="text-2xl font-black text-gray-800">R$ {total.toFixed(2)}</p>
+            <p className="text-[9px] font-black text-gray-400 uppercase mt-1 truncate">{getOrderedItems().length} item(ns) · {client.nomeFantasia}</p>
+          </div>
+
+          {/* SÓ CUPOM — o principal (regra do Bloco 35) */}
+          <button onClick={() => { setDocEscolhido('CUPOM'); setView('CONDICAO'); }}
+            className="w-full py-7 rounded-3xl bg-gradient-to-br from-gray-900 to-gray-600 text-white shadow-lg active:scale-[0.98] transition-transform text-center">
+            <i className="fa-solid fa-receipt text-2xl block mb-2"></i>
+            <span className="text-sm font-black uppercase tracking-widest block">Só cupom</span>
+            <span className="block text-[9px] font-bold text-gray-300 mt-1">Cupom não fiscal — nada na SEFAZ</span>
+          </button>
+
+          {/* NF-e — só com CNPJ + email no cadastro (BLOCO 77) */}
+          <div className="rounded-3xl bg-white border border-gray-100 p-3.5 space-y-2">
+            <div className="flex items-center gap-2">
+              <i className="fa-solid fa-file-invoice-dollar text-violet-600"></i>
+              <p className="text-[11px] font-black text-gray-700 uppercase flex-1">NF-e — nota para empresa</p>
+            </div>
+            {clienteAptoNfe(client) ? (
+              <button onClick={() => { setDocEscolhido('NFE'); setView('CONDICAO'); }}
+                className="w-full py-4 rounded-2xl bg-violet-600 text-white text-xs font-black uppercase shadow-md active:scale-95 flex items-center justify-center">
+                <i className="fa-solid fa-file-invoice-dollar mr-2"></i>Escolher NF-e
+              </button>
+            ) : (
+              <div className="rounded-2xl bg-amber-50 border-2 border-dashed border-amber-300 p-3">
+                <p className="text-[9px] font-black text-amber-700 uppercase"><i className="fa-solid fa-triangle-exclamation mr-1"></i>Falta completar o cadastro</p>
+                <p className="text-[9px] font-bold text-amber-600 mt-1">Falta: {faltantesNfe.join(', ')}. Por enquanto só precisa de CNPJ + email (a nota é batida no sistema externo).</p>
+                {onCompletarCadastro && (
+                  <button onClick={() => onCompletarCadastro(client)}
+                    className="w-full mt-2 bg-amber-500 text-white text-[9px] font-black uppercase py-3 rounded-xl active:scale-95">
+                    <i className="fa-solid fa-circle-plus mr-1.5"></i>Completar cadastro agora
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* NFC-e — CPF opcional */}
+          <div className="rounded-3xl bg-white border border-gray-100 p-3.5 space-y-2">
+            <div className="flex items-center gap-2">
+              <i className="fa-solid fa-file-lines text-blue-500"></i>
+              <p className="text-[11px] font-black text-gray-700 uppercase flex-1">NFC-e — consumidor final</p>
+            </div>
+            <input value={nfcCpfDoc} onChange={e => setNfcCpfDoc(mascararCpf(e.target.value))} placeholder="CPF na nota (opcional) — 000.000.000-00" inputMode="numeric"
+              className="w-full p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-black text-center outline-none" />
+            <button onClick={() => { setDocEscolhido('NFCE'); setView('CONDICAO'); }}
+              className="w-full py-4 rounded-2xl bg-slate-700 text-white text-xs font-black uppercase shadow-md active:scale-95 flex items-center justify-center">
+              <i className="fa-solid fa-file-lines mr-2"></i>Escolher NFC-e
+            </button>
+            <p className="text-[8px] font-bold text-gray-400 leading-snug">Com CPF → nota identificada. Sem CPF → anônima. Pode mudar até a tela final.</p>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {view === 'CONDICAO' && (
+      <div className="fixed inset-0 bg-gray-50 z-[120] flex flex-col overflow-hidden">
+        <header className="bg-white border-b border-gray-100 p-3 flex items-center gap-3 shadow-sm">
+          <button onClick={() => setView(modoAtendimento ? 'CART' : 'DOC')} className="w-9 h-9 bg-gray-50 text-gray-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-arrow-left"></i></button>
+          <div className="flex-1 min-w-0 text-center">
+            <p className="text-[9px] text-emerald-400 uppercase font-black tracking-tighter">Tela 5 de 8 — Pagamento</p>
+            <h2 className="font-black text-xs text-gray-800 uppercase truncate">À vista ou a prazo?</h2>
+          </div>
+          <div className="w-9 h-9"></div>
+        </header>
+        <div className="flex-1 overflow-y-auto p-4 space-y-3 max-w-lg w-full mx-auto">
+          <div className="bg-white p-4 rounded-2xl border border-gray-100 text-center">
+            <p className="text-2xl font-black text-gray-800">R$ {total.toFixed(2)}</p>
+            <p className="text-[9px] font-black text-gray-400 uppercase mt-1">
+              {docEscolhido === 'NFE' ? 'Documento: NF-e' : docEscolhido === 'NFCE' ? 'Documento: NFC-e' : 'Documento: cupom não fiscal'}
+              {clientDebt > 0 && !isPrePedido ? ` · dívida: R$ ${clientDebt.toFixed(2)}` : ''}
+            </p>
+          </div>
+
+          {docEscolhido === 'NFE' && (
+            <div className="bg-violet-50 border border-violet-200 rounded-2xl p-3">
+              <p className="text-[9px] font-black text-violet-700 uppercase leading-snug"><i className="fa-solid fa-circle-info mr-1"></i>NF-e a prazo: só Boleto ou Cheque — regra da SEFAZ.</p>
+            </div>
+          )}
+
+          <button onClick={() => { setCondicaoDoc('AVISTA'); if (formaDoc && formaDoc !== 'DINHEIRO' && formaDoc !== 'PIX' && formaDoc !== 'MISTO') setFormaDoc('DINHEIRO'); setView('FORMA'); }}
+            className="w-full py-7 rounded-3xl bg-gradient-to-br from-emerald-600 to-teal-600 text-white shadow-lg active:scale-[0.98] transition-transform text-center">
+            <i className="fa-solid fa-money-bill-wave text-2xl block mb-2"></i>
+            <span className="text-sm font-black uppercase tracking-widest block">À vista</span>
+            <span className="block text-[9px] font-bold text-emerald-100 mt-1">{isPreVenda ? 'Entregador recebe na entrega' : 'Cliente paga agora com você'}</span>
+          </button>
+
+          <button onClick={() => { setCondicaoDoc('APRAZO'); if (docEscolhido === 'NFE' && formaDoc && formaDoc !== 'BOLETO' && formaDoc !== 'CHEQUE') setFormaDoc('BOLETO'); setView('FORMA'); }}
+            className="w-full py-7 rounded-3xl bg-gradient-to-br from-indigo-600 to-blue-600 text-white shadow-lg active:scale-[0.98] transition-transform text-center">
+            <i className="fa-regular fa-calendar text-2xl block mb-2"></i>
+            <span className="text-sm font-black uppercase tracking-widest block">A prazo</span>
+            <span className="block text-[9px] font-bold text-indigo-100 mt-1">Você cobra na data combinada</span>
+          </button>
+        </div>
+      </div>
+    )}
+
+    {view === 'FORMA' && (
+      <div className="fixed inset-0 bg-gray-50 z-[120] flex flex-col overflow-hidden">
+        <header className="bg-white border-b border-gray-100 p-3 flex items-center gap-3 shadow-sm">
+          <button onClick={() => setView('CONDICAO')} className="w-9 h-9 bg-gray-50 text-gray-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-arrow-left"></i></button>
+          <div className="flex-1 min-w-0 text-center">
+            <p className="text-[9px] text-blue-400 uppercase font-black tracking-tighter">Tela 6 de 8 — Forma</p>
+            <h2 className="font-black text-xs text-gray-800 uppercase truncate">{condicaoDoc === 'AVISTA' ? 'Como o cliente paga?' : 'Prazo combinado'}</h2>
+          </div>
+          <div className="w-9 h-9"></div>
+        </header>
+        <div className="flex-1 overflow-y-auto p-4 space-y-3 max-w-lg w-full mx-auto">
+          <div className="bg-white p-4 rounded-2xl border border-gray-100 text-center">
+            <p className="text-2xl font-black text-gray-800">R$ {total.toFixed(2)}</p>
+            <p className={`text-[9px] font-black uppercase mt-1 ${clientDebt > 0 && !isPrePedido ? 'text-rose-500' : 'text-gray-400'}`}>
+              {clientDebt > 0 && !isPrePedido ? `Atenção: R$ ${clientDebt.toFixed(2)} em aberto (${clientDebtQtd})` : (condicaoDoc === 'AVISTA' ? 'À vista' : 'A prazo')}
+            </p>
+          </div>
+
+          {/* PRÉ-VENDA À VISTA: ninguém recebe na visita (BLOCO 39) */}
+          {condicaoDoc === 'AVISTA' && isPreVenda && (
+            <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 text-center">
+              <i className="fa-solid fa-truck-fast text-emerald-500 text-lg"></i>
+              <p className="text-[10px] font-black text-emerald-700 uppercase mt-1">Entregador recebe na entrega — nada a receber agora</p>
+              <p className="text-[9px] text-emerald-600/70 font-semibold mt-0.5">Escolha com o cliente COMO ele vai pagar na entrega:</p>
+            </div>
+          )}
+
+          {condicaoDoc === 'AVISTA' && (
+            <>
+              <div className="grid grid-cols-3 gap-2">
+                {(['DINHEIRO', 'PIX', 'MISTO'] as const).map(f => (
+                  <button key={f} disabled={isPreVenda && f === 'MISTO'}
+                    onClick={() => setFormaDoc(f)}
+                    className={`py-4 rounded-2xl text-[10px] font-black uppercase border-2 transition-all ${formaDoc === f ? 'bg-emerald-600 text-white border-emerald-600 shadow-md' : 'bg-white border-gray-100 text-gray-500'} disabled:opacity-40`}>
+                    {f === 'DINHEIRO' ? 'Dinheiro' : f === 'PIX' ? 'Pix' : 'Misto'}
+                  </button>
+                ))}
+              </div>
+              {isPreVenda && <p className="text-[8px] font-bold text-gray-400 text-center leading-snug">Misto na entrega: o entregador informa na hora (dinheiro + Pix).</p>}
+
+              {/* DINHEIRO */}
+              {formaDoc === 'DINHEIRO' && !isPreVenda && (
+                <div className="bg-white rounded-3xl border border-gray-100 p-4 space-y-3">
+                  <label className="text-[9px] font-black text-gray-400 uppercase">Valor recebido R$</label>
+                  <input type="number" inputMode="decimal" value={valorRecebido} onChange={e => setValorRecebido(e.target.value)} placeholder="0.00"
+                    className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-2xl font-black text-center outline-none" />
+                  <div className="grid grid-cols-3 gap-2">
+                    {[50, 100, 200].map(v => (
+                      <button key={v} onClick={() => setValorRecebido(String(v))} className="py-2.5 rounded-xl bg-gray-50 border border-gray-100 text-[10px] font-black text-gray-600 active:scale-95">R$ {v}</button>
+                    ))}
+                  </div>
+                  {(parseFloat(valorRecebido) || 0) > 0 && (parseFloat(valorRecebido) || 0) < total && (
+                    <p className="text-[9px] font-black text-rose-500 uppercase text-center">Faltam R$ {(total - (parseFloat(valorRecebido) || 0)).toFixed(2)} para fechar</p>
+                  )}
+                  {(parseFloat(valorRecebido) || 0) > total && (
+                    <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100 text-center">
+                      <p className="text-[10px] font-black text-emerald-600 uppercase mb-1">Troco a devolver</p>
+                      <p className="text-2xl font-black text-emerald-700">R$ {troco.toFixed(2)}</p>
+                    </div>
+                  )}
+                </div>
+              )}
+              {formaDoc === 'DINHEIRO' && isPreVenda && (
+                <div className="bg-white rounded-3xl border border-gray-100 p-4 text-center">
+                  <i className="fa-solid fa-hand-holding-dollar text-emerald-500 text-lg"></i>
+                  <p className="text-[10px] font-black text-emerald-700 uppercase mt-1">Entregador cobra R$ {total.toFixed(2)} em DINHEIRO na entrega</p>
+                </div>
+              )}
+
+              {/* PIX */}
+              {formaDoc === 'PIX' && !isPreVenda && (
+                <div className="bg-white rounded-3xl border border-gray-100 p-4 space-y-3">
+                  <p className="text-[9px] font-black text-gray-400 uppercase text-center">Conta para registrar (anotação da venda)</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button onClick={() => setPixSlotDoc(1)} className={`p-3 rounded-xl border text-[10px] font-black uppercase ${pixSlotDoc === 1 ? 'border-teal-600 bg-teal-50 text-teal-600' : 'border-gray-100 text-gray-400'}`}>{pix1Name}</button>
+                    <button onClick={() => setPixSlotDoc(2)} className={`p-3 rounded-xl border text-[10px] font-black uppercase ${pixSlotDoc === 2 ? 'border-teal-600 bg-teal-50 text-teal-600' : 'border-gray-100 text-gray-400'}`}>{pix2Name}</button>
+                  </div>
+                  <div className="bg-teal-50/60 p-4 rounded-2xl flex flex-col items-center border border-teal-100">
+                    <p className="text-[8px] font-black text-teal-500 uppercase mb-1">PIX — QR com o valor da venda</p>
+                    <p className="text-2xl font-black text-teal-700 mb-2">R$ {total.toFixed(2)}</p>
+                    <div className="w-44 h-44 bg-white rounded-xl flex items-center justify-center border border-gray-200 overflow-hidden shadow-inner">
+                      {pixGerado ? (
+                        <img src={pixGerado.qrDataUrl} alt="QR Pix com o valor da venda" className="w-full h-full object-contain" />
+                      ) : pixFalhou ? (
+                        pixSlotDoc === 1
+                          ? (pix1Code ? <img src={pix1Code} className="w-full h-full object-contain" /> : <i className="fa-solid fa-qrcode text-gray-200 text-3xl"></i>)
+                          : (pix2Code ? <img src={pix2Code} className="w-full h-full object-contain" /> : <i className="fa-solid fa-qrcode text-gray-200 text-3xl"></i>)
+                      ) : (
+                        <i className="fa-solid fa-spinner fa-spin text-teal-300 text-3xl"></i>
+                      )}
+                    </div>
+                    {pixGerado ? (
+                      <>
+                        <p className="text-[9px] font-bold text-gray-400 mt-2 text-center leading-snug">Chave Pix das Configurações: <span className="font-black text-gray-600">{pixGerado.chaveFormatada}</span></p>
+                        <button
+                          onClick={() => { navigator.clipboard?.writeText(pixGerado.payload).then(() => setAppModal({ title: 'Pix copiado', message: 'Código Copia e Cola na área de transferência — o cliente cola no app do banco e o valor já vem preenchido.', icon: 'fa-solid fa-copy', iconColor: 'text-teal-500', type: 'success' })).catch(() => {}); }}
+                          className="mt-2 px-4 py-2.5 rounded-xl bg-teal-600 text-white text-[9px] font-black uppercase active:scale-95 shadow"
+                        >
+                          <i className="fa-solid fa-copy mr-1"></i>Copiar código Pix (copia e cola)
+                        </button>
+                      </>
+                    ) : pixFalhou ? (
+                      <p className="text-[8px] font-bold text-rose-400 mt-2 text-center leading-snug">Não deu para gerar o QR com valor — mostre o QR fixo do banco (acima) e confira o valor com o cliente.</p>
+                    ) : (
+                      <p className="text-[8px] font-bold text-teal-400 mt-2">Gerando QR com o valor da venda...</p>
+                    )}
+                  </div>
+                </div>
+              )}
+              {formaDoc === 'PIX' && isPreVenda && (
+                <div className="bg-white rounded-3xl border border-gray-100 p-4 text-center">
+                  <i className="fa-solid fa-qrcode text-teal-500 text-lg"></i>
+                  <p className="text-[10px] font-black text-teal-700 uppercase mt-1">Entregador cobra R$ {total.toFixed(2)} via PIX na entrega (com foto do comprovante)</p>
+                </div>
+              )}
+
+              {/* MISTO */}
+              {formaDoc === 'MISTO' && !isPreVenda && (
+                <div className="bg-white rounded-3xl border border-gray-100 p-4 space-y-3">
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-black text-gray-400 uppercase">Dinheiro R$</label>
+                    <input type="number" inputMode="decimal" value={mistoDinDoc} onChange={e => setMistoDinDoc(e.target.value)} placeholder="0.00" className="w-full p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-lg font-black text-center outline-none" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-black text-gray-400 uppercase">Pix R$</label>
+                    <input type="number" inputMode="decimal" value={mistoPixDoc} onChange={e => setMistoPixDoc(e.target.value)} placeholder="0.00" className="w-full p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-lg font-black text-center outline-none" />
+                  </div>
+                  {((parseFloat(mistoDinDoc) || 0) + (parseFloat(mistoPixDoc) || 0)) > 0 && (() => {
+                    const soma = (parseFloat(mistoDinDoc) || 0) + (parseFloat(mistoPixDoc) || 0);
+                    return (
+                      <p className={`text-[10px] font-black uppercase text-center ${soma + 0.001 >= total ? 'text-emerald-600' : 'text-amber-500'}`}>
+                        {soma + 0.001 >= total ? 'FECHA O TOTAL ✓' : `Falta: R$ ${(total - soma).toFixed(2)}`}
+                      </p>
+                    );
+                  })()}
+                </div>
+              )}
+            </>
+          )}
+
+          {condicaoDoc === 'APRAZO' && (
+            <div className="bg-white rounded-3xl border border-gray-100 p-4 space-y-3">
+              <p className="text-[9px] font-black text-gray-400 uppercase text-center">Forma do prazo</p>
+              <div className="grid grid-cols-2 gap-2">
+                {(['BOLETO', 'CHEQUE', ...(docEscolhido === 'NFE' ? [] : ['DINHEIRO_DATA', 'PIX_DATA'])] as Array<'BOLETO' | 'CHEQUE' | 'DINHEIRO_DATA' | 'PIX_DATA'>).map(f => (
+                  <button key={f} onClick={() => setFormaDoc(f)}
+                    className={`py-3.5 rounded-xl text-[10px] font-black uppercase border-2 transition-all ${formaDoc === f ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' : 'bg-white border-gray-100 text-gray-500'}`}>
+                    {f === 'BOLETO' ? 'Boleto' : f === 'CHEQUE' ? 'Cheque' : f === 'DINHEIRO_DATA' ? 'Dinheiro na data' : 'Pix na data'}
+                  </button>
+                ))}
+              </div>
+              {docEscolhido === 'NFE' && (
+                <p className="text-[8px] font-black text-violet-500 uppercase text-center">NF-e a prazo: só Boleto e Cheque (regra da SEFAZ)</p>
+              )}
+              {formaDoc && (
+                <div className="space-y-2">
+                  <label className="text-[9px] font-black text-gray-400 uppercase">{formaDoc === 'CHEQUE' ? 'Bom para (data do cheque)' : 'Data de vencimento / cobrança'}</label>
+                  <input type="date" value={vencimentoDoc} onChange={e => setVencimentoDoc(e.target.value)}
+                    className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-black text-center outline-none focus:ring-2 focus:ring-indigo-100" />
+                  <div className="grid grid-cols-4 gap-2">
+                    {[7, 14, 21, 30].map(days => {
+                      const d = new Date(); d.setDate(d.getDate() + days);
+                      const target = d.toISOString().split('T')[0];
+                      return (
+                        <button key={days} onClick={() => setVencimentoDoc(target)}
+                          className={`py-3 rounded-xl text-[10px] font-black transition-all ${vencimentoDoc === target ? 'bg-indigo-600 text-white border-2 border-indigo-600 shadow-lg' : 'bg-gray-50 border-2 border-gray-100 text-gray-500'}`}>{days}D</button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        <div className="p-4 border-t border-gray-100 bg-white pb-8 max-w-lg w-full mx-auto">
+          <button onClick={continuarDaForma}
+            disabled={!formaOk}
+            className={`w-full py-4 rounded-2xl font-black uppercase text-xs shadow-lg active:scale-95 tracking-widest ${formaOk ? 'bg-emerald-600 text-white' : 'bg-gray-200 text-gray-400'}`}>
+            {isPreVenda ? 'Ver resumo do pedido' : 'Conferir cupom'}
+          </button>
+        </div>
+      </div>
+    )}
+
+    {view === 'FINALIZAR' && (
+      <div className="fixed inset-0 bg-gray-50 z-[120] flex flex-col overflow-hidden">
+        <header className="bg-white border-b border-gray-100 p-3 flex items-center gap-3 shadow-sm">
+          <button onClick={() => setView('FORMA')} className="w-9 h-9 bg-gray-50 text-gray-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-arrow-left"></i></button>
+          <div className="flex-1 min-w-0 text-center">
+            <p className="text-[9px] text-gray-400 uppercase font-black tracking-tighter">Tela 8 de 8 — Concluir</p>
+            <h2 className="font-black text-xs text-gray-800 uppercase truncate">Toque no VERDE para gerar e finalizar</h2>
+          </div>
+          <div className="w-9 h-9"></div>
+        </header>
+        <div className="flex-1 overflow-y-auto p-4 space-y-3 max-w-lg w-full mx-auto">
+          <div className="bg-white p-4 rounded-2xl border border-gray-100 text-center">
+            <p className="text-3xl font-black text-gray-800">R$ {total.toFixed(2)}</p>
+            <p className="text-[9px] font-black text-gray-400 uppercase mt-1">
+              {condicaoDoc === 'APRAZO'
+                ? `A prazo — vence ${vencimentoDoc.split('-').reverse().join('/')}`
+                : isPreVenda ? 'À vista — entregador recebe na entrega' : 'À vista'}
+              {' · '}{isPreVenda ? 'resumo conferido' : 'cupom conferido'}
+            </p>
+          </div>
+
+          <p className="text-[9px] font-black text-gray-400 uppercase text-center">Documento escolhido</p>
+          {([
+            { tipo: 'NFE' as const, rotulo: isPreVenda ? 'Registrar pedido + NF-e' : 'Gerar NF-e e finalizar', sub: 'Nota para empresa (CNPJ)' },
+            { tipo: 'NFCE' as const, rotulo: isPreVenda ? 'Registrar pedido + NFC-e' : 'Gerar NFC-e e finalizar', sub: nfcCpfDoc ? `Nota com CPF ${nfcCpfDoc}` : 'Nota de consumidor (sem CPF)' },
+            { tipo: 'CUPOM' as const, rotulo: isPreVenda ? 'Registrar pedido (só cupom)' : 'Finalizar venda (só cupom)', sub: 'Cupom não fiscal — nada na SEFAZ' },
+          ]).map(o => {
+            const escolhido = docEscolhido === o.tipo;
+            return (
+              <button key={o.tipo}
+                onClick={() => escolhido && setConfirmModal({
+                  title: 'Ponto sem volta',
+                  message: `${o.rotulo.toUpperCase()}?\n\nTotal R$ ${total.toFixed(2)} para ${client.nomeFantasia}. Depois disso o documento é gerado com esses dados.`,
+                  icon: 'fa-solid fa-triangle-exclamation',
+                  iconColor: 'text-amber-500',
+                  onConfirm: () => { setConfirmModal(null); executarFinalizacao(); },
+                })}
+                disabled={!escolhido || finalizando}
+                className={`w-full py-7 rounded-3xl text-center shadow-lg transition-transform active:scale-[0.98] ${escolhido ? (o.tipo === 'CUPOM' ? 'bg-gradient-to-br from-gray-900 to-gray-600 text-white' : 'bg-gradient-to-br from-emerald-600 to-emerald-500 text-white') : 'bg-gray-200 text-gray-400 cursor-not-allowed opacity-60'}`}>
+                <i className={`fa-solid ${o.tipo === 'NFE' ? 'fa-file-invoice-dollar' : o.tipo === 'NFCE' ? 'fa-file-lines' : 'fa-receipt'} text-2xl block mb-2 ${escolhido ? '' : 'text-gray-300'}`}></i>
+                <span className="text-sm font-black uppercase tracking-widest block">{o.rotulo}</span>
+                <span className={`block text-[9px] font-bold mt-1 ${escolhido ? (o.tipo === 'CUPOM' ? 'text-gray-300' : 'text-emerald-100') : 'text-gray-400'}`}>{o.sub}</span>
+              </button>
+            );
+          })}
+          {finalizando && (
+            <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 text-center">
+              <i className="fa-solid fa-spinner fa-spin text-blue-500 text-xl"></i>
+              <p className="text-[10px] font-black text-blue-700 uppercase mt-1">Gravando — NÃO feche a tela</p>
+            </div>
+          )}
+        </div>
+      </div>
+    )}
+
+    {view === 'SUCESSO' && sucessoData && (
+      <div className="fixed inset-0 bg-gray-50 z-[120] flex flex-col overflow-hidden">
+        <div className="bg-gradient-to-br from-emerald-600 to-teal-600 p-8 text-center">
+          <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-3">
+            <i className="fa-solid fa-circle-check text-white text-3xl"></i>
+          </div>
+          <h2 className="font-black text-white text-lg uppercase tracking-tight">{sucessoData.isPreVenda ? 'Pedido registrado!' : 'Venda finalizada!'}</h2>
+          <p className="text-white/80 text-[10px] font-bold uppercase mt-1">{client.nomeFantasia}</p>
+        </div>
+        <div className="flex-1 overflow-y-auto p-4 space-y-3 max-w-lg w-full mx-auto">
+          <div className="bg-white p-4 rounded-2xl border border-gray-100 flex items-center justify-between">
+            <span className="text-[10px] font-black text-gray-400 uppercase">Total</span>
+            <span className="text-lg font-black text-gray-800">R$ {sucessoData.total.toFixed(2)}</span>
+          </div>
+
+          {sucessoData.troca > 0 && (
+            <div className="bg-orange-50 p-3 rounded-2xl flex items-center justify-between border border-orange-100">
+              <span className="text-[10px] font-black text-orange-400 uppercase">Desconto Troca</span>
+              <span className="text-sm font-black text-orange-600">- R$ {sucessoData.troca.toFixed(2)}</span>
+            </div>
+          )}
+
+          {sucessoData.isPreVenda && (
+            <div className="bg-emerald-50 p-3 rounded-2xl flex items-center gap-3 border border-emerald-100">
+              <i className="fa-solid fa-truck text-emerald-500"></i>
+              <span className="text-[10px] font-black text-emerald-700 uppercase leading-snug">Entra na rota de entrega de hoje — acompanhe no menu Entregas</span>
+            </div>
+          )}
+          {sucessoData.isPreVenda && !sucessoData.isPrazo && (
+            <div className="bg-emerald-50 p-3 rounded-2xl flex items-center gap-3 border border-emerald-100">
+              <i className="fa-solid fa-truck-fast text-emerald-500"></i>
+              <span className="text-[10px] font-black text-emerald-700 uppercase leading-snug">Entregador recebe na entrega</span>
+            </div>
+          )}
+          {sucessoData.isPrazo && (
+            <div className="bg-amber-50 p-3 rounded-2xl flex items-center gap-3 border border-amber-100">
+              <i className="fa-solid fa-user-clock text-amber-500"></i>
+              <span className="text-[10px] font-black text-amber-700 uppercase leading-snug">Você recebe na data combinada</span>
+            </div>
+          )}
+
+          {/* BLOCO 122: resultado do documento GERADO na tela 8 (pronta entrega) */}
+          {!sucessoData.isPreVenda && notaEmitindo && (
+            <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 text-center">
+              <i className="fa-solid fa-spinner fa-spin text-blue-500 text-xl"></i>
+              <p className="text-[10px] font-black text-blue-700 uppercase mt-1">Emitindo nota na SEFAZ — não feche a tela</p>
+            </div>
+          )}
+          {!sucessoData.isPreVenda && notaResult?.status === 'AUTORIZADA' && (
+            <div className="space-y-2">
+              <div className="bg-emerald-50 border border-emerald-200 p-3 rounded-2xl flex items-center gap-2">
+                <i className="fa-solid fa-circle-check text-emerald-600"></i>
+                <span className="text-[10px] font-black text-emerald-700 uppercase flex-1">{notaResult.numero ? `Nota ${notaResult.numero} ` : ''}Autorizada</span>
+              </div>
+              {notaResult.pdfUrl && (
+                <a href={notaResult.pdfUrl} target="_blank" rel="noopener noreferrer" className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest flex items-center justify-center">
+                  <i className="fa-solid fa-file-pdf mr-2"></i>Abrir DANFE e Enviar ao Cliente
+                </a>
+              )}
+              <button onClick={handleImprimirDanfeModal} disabled={notaEmitindo} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest disabled:opacity-60 flex items-center justify-center">
+                <i className={`fa-solid ${notaEmitindo ? 'fa-spinner fa-spin' : 'fa-print'} mr-2`}></i>{notaEmitindo ? 'Imprimindo...' : 'Imprimir DANFE (80mm)'}
+              </button>
+            </div>
+          )}
+          {!sucessoData.isPreVenda && notaResult?.status === 'REJEITADA' && (
+            <div className="bg-rose-50 border border-rose-200 p-3 rounded-2xl">
+              <p className="text-[10px] font-black text-rose-700 uppercase leading-snug break-words"><i className="fa-solid fa-circle-xmark mr-1"></i>{notaResult.erro || 'Nota rejeitada'}</p>
+              <p className="text-[9px] text-rose-500 font-bold mt-1 uppercase">A venda JÁ ESTÁ gravada e segura — emita novamente pelo histórico da venda.</p>
+            </div>
+          )}
+          {sucessoData.isPreVenda && (docEscolhido === 'NFE' || docEscolhido === 'NFCE') && (
+            <div className="bg-violet-50 border border-violet-200 p-3 rounded-2xl flex items-center gap-3">
+              <i className="fa-solid fa-file-invoice text-violet-500"></i>
+              <span className="text-[10px] font-black text-violet-700 uppercase leading-snug">Nota marcada ({docEscolhido === 'NFE' ? 'NF-e' : 'NFC-e'}) — sai com a entrega</span>
+            </div>
+          )}
+
+          {sucessoData.comissao > 0 && (
+            <div className="bg-emerald-50 p-4 rounded-2xl border-2 border-emerald-200 text-center">
+              <p className="text-[10px] font-black text-emerald-600 uppercase mb-1">{sucessoData.isPreVenda ? 'Comissão da Pré-Venda (gera na entrega)' : 'Comissão Gerada'}</p>
+              <p className="text-2xl font-black text-emerald-700">R$ {sucessoData.comissao.toFixed(2)}</p>
+            </div>
+          )}
+
+          {/* BOLETO: saldo em aberto e não-cheque (BLOCO 25/41/50) */}
+          {sucessoData.sale?.id && (Number(sucessoData.sale.valorTotal ?? 0) - Number(sucessoData.sale.valorPago ?? 0) > 0) && !(sucessoData.isPreVenda && !sucessoData.isPrazo) && sucessoData.formaAtraso !== 'CHEQUE' && (
+            <BoletoCard
+              saleId={String(sucessoData.sale.id)}
+              valorTotal={Number(sucessoData.total) || 0}
+              valorPago={Number(sucessoData.sale.valorPago) || 0}
+              notaStatus={notaResult?.status}
+              notaNumero={notaResult?.numero}
+              clienteDoc={client.cnpj}
+              clienteCep={client.enderecoCep}
+              clienteTelefone={client.telefone}
+              clienteNome={client.nomeFantasia || client.nome}
+              abertoInicial
+            />
+          )}
+
+          {/* BLOCO 40: foto do comprovante — pronta entrega a prazo */}
+          {sucessoData.isPrazo && !sucessoData.isPreVenda && !sucessoData.sale.comprovanteFoto && (
+            <button
+              onClick={() => openComprovanteFlow(sucessoData.sale)}
+              className="w-full bg-amber-500 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest"
+            >
+              <i className="fa-solid fa-camera mr-2"></i>Tirar Foto do Comprovante (obrigatória)
+            </button>
+          )}
+        </div>
+        <div className="p-4 pb-8 border-t border-gray-100 bg-white space-y-2 max-w-lg w-full mx-auto">
+          <button onClick={() => setCupomPosRegistro(sucessoData.sale)} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest"><i className="fa-solid fa-receipt mr-2"></i>Ver cupom da venda</button>
+          <button onClick={() => onFinish(sucessoData.sale)} className="w-full bg-gray-900 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest"><i className="fa-solid fa-check mr-2"></i>Concluir</button>
+        </div>
+      </div>
+    )}
+
+        {/* BLOCO 100/122 — TELA 7: cupom de conferência (pronta entrega) ou resumo
+        do pedido (pré-venda). "Continuar" leva à tela 8 (documento verde). */}
     {cupomConferencia && (
       <Cupom
         sale={cupomConferencia}
@@ -1849,188 +2141,12 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         onClose={() => setCupomConferencia(null)}
         conferencia
         finalizando={finalizando}
-        onFinalizar={finalizarAposConferencia}
+        onFinalizar={() => { setCupomConferencia(null); setView('FINALIZAR'); }}
+        labelFinalizar="Continuar"
+        conferenciaTitulo={isPreVenda ? 'Resumo do pedido' : 'Conferência da venda'}
       />
     )}
 
-    {/* MODAL: Venda finalizada com comissao */}
-    {saleResultModal && (
-      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
-        <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden flex flex-col max-h-[92vh]">
-          <div className="bg-gradient-to-br from-emerald-500 to-teal-600 p-6 text-center shrink-0">
-            <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-3">
-              <i className="fa-solid fa-circle-check text-white text-3xl"></i>
-            </div>
-            <h3 className="font-black text-white text-lg uppercase tracking-tight">{saleResultModal.isPreVenda ? 'Pedido Registrado!' : 'Venda Finalizada'}</h3>
-            <p className="text-white/80 text-[10px] font-bold uppercase mt-1">{saleResultModal.clientName}</p>
-          </div>
-
-          <div className="p-6 space-y-3 overflow-y-auto">
-            <div className="bg-gray-50 p-4 rounded-2xl flex items-center justify-between">
-              <span className="text-[10px] font-black text-gray-400 uppercase">Total da Venda</span>
-              <span className="text-lg font-black text-gray-800">R$ {saleResultModal.total.toFixed(2)}</span>
-            </div>
-
-            {saleResultModal.troca > 0 && (
-              <div className="bg-orange-50 p-3 rounded-2xl flex items-center justify-between border border-orange-100">
-                <span className="text-[10px] font-black text-orange-400 uppercase">Desconto Troca</span>
-                <span className="text-sm font-black text-orange-600">- R$ {saleResultModal.troca.toFixed(2)}</span>
-              </div>
-            )}
-
-            {saleResultModal.isPreVenda && (
-              <div className="bg-emerald-50 p-3 rounded-2xl flex items-center gap-3 border border-emerald-100">
-                <i className="fa-solid fa-truck text-emerald-500"></i>
-                <span className="text-[10px] font-black text-emerald-700 uppercase">Entra na rota de entrega de hoje — finalize o dia no menu Entregas</span>
-              </div>
-            )}
-
-            {/* BLOCO 54 (regra do dono): nada de "Aguardando Pagamento" — a
-                mensagem diz QUEM recebe e QUANDO. A VISTA: o ENTREGADOR recebe
-                na entrega. A PRAZO: o proprio VENDEDOR recebe no dia da visita
-                ou na data de recebimento (na pronta entrega, so a data). */}
-            {saleResultModal.isPreVenda && !saleResultModal.isPrazo && (
-              <div className="bg-emerald-50 p-3 rounded-2xl flex items-center gap-3 border border-emerald-100">
-                <i className="fa-solid fa-truck-fast text-emerald-500"></i>
-                <span className="text-[10px] font-black text-emerald-700 uppercase leading-snug">Entregador recebe na entrega</span>
-              </div>
-            )}
-
-            {saleResultModal.isPrazo && (
-              <div className="bg-amber-50 p-3 rounded-2xl flex items-center gap-3 border border-amber-100">
-                <i className="fa-solid fa-user-clock text-amber-500"></i>
-                <span className="text-[10px] font-black text-amber-700 uppercase leading-snug">{saleResultModal.isPreVenda ? 'Você recebe na próxima visita ou na data de recebimento' : 'Você recebe na data de recebimento'}</span>
-              </div>
-            )}
-
-            {saleResultModal.comissao > 0 && (
-              <div className="bg-emerald-50 p-4 rounded-2xl border-2 border-emerald-200 text-center">
-                <p className="text-[10px] font-black text-emerald-600 uppercase mb-1">{saleResultModal.isPreVenda ? 'Comissão da Pré-Venda (gera na entrega)' : 'Comissão Gerada'}</p>
-                <p className="text-2xl font-black text-emerald-700">R$ {saleResultModal.comissao.toFixed(2)}</p>
-              </div>
-            )}
-          </div>
-
-          <div className="p-5 pt-0 space-y-2 shrink-0">
-            {/* BLOCO 12: escolha da forma de venda — NF-e / NFC-e / cupom nao fiscal */}
-            {!saleResultModal.isPreVenda && (
-              <>
-                {notaResult?.status === 'AUTORIZADA' ? (
-                  <div className="space-y-2">
-                    <div className="bg-emerald-50 border border-emerald-200 p-3 rounded-2xl flex items-center gap-2">
-                      <i className="fa-solid fa-circle-check text-emerald-600"></i>
-                      <span className="text-[10px] font-black text-emerald-700 uppercase flex-1">{notaResult.numero ? `Nota ${notaResult.numero} ` : ''}Autorizada</span>
-                    </div>
-                    {notaResult.pdfUrl && (
-                      <a href={notaResult.pdfUrl} target="_blank" rel="noopener noreferrer" className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest flex items-center justify-center">
-                        <i className="fa-solid fa-file-pdf mr-2"></i>Abrir DANFE e Enviar ao Cliente
-                      </a>
-                    )}
-                    {/* BLOCO 82: mini DANFE na térmica 80mm — na rua, na hora */}
-                    <button onClick={handleImprimirDanfeModal} disabled={notaEmitindo} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest disabled:opacity-60 flex items-center justify-center">
-                      <i className={`fa-solid ${notaEmitindo ? 'fa-spinner fa-spin' : 'fa-print'} mr-2`}></i>{notaEmitindo ? 'Imprimindo...' : 'Imprimir DANFE (80mm)'}
-                    </button>
-                  </div>
-                ) : notaResult?.status === 'REJEITADA' ? (
-                  <div className="bg-rose-50 border border-rose-200 p-3 rounded-2xl">
-                    <p className="text-[10px] font-black text-rose-700 uppercase leading-snug break-words"><i className="fa-solid fa-circle-xmark mr-1"></i>{notaResult.erro || 'Nota rejeitada'}</p>
-                    <p className="text-[9px] text-rose-500 font-bold mt-1 uppercase">Voce pode emitir novamente pelo historico da venda.</p>
-                  </div>
-                ) : (
-                  <>
-                    {clienteAptoNfe(client) ? (
-                      <button
-                        onClick={() => handleEmitirNotaModal('NFE')}
-                        disabled={notaEmitindo}
-                        className="w-full bg-slate-800 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest disabled:opacity-60 flex items-center justify-center"
-                      >
-                        <i className={`fa-solid ${notaEmitindo ? 'fa-spinner fa-spin' : 'fa-file-invoice-dollar'} mr-2`}></i>
-                        {notaEmitindo ? 'Emitindo Nota...' : 'Emitir NF-e (CNPJ do cliente)'}
-                      </button>
-                    ) : (
-                      <p className="text-[9px] font-bold text-gray-400 text-center leading-snug bg-gray-50 border border-gray-100 rounded-2xl px-3 py-2"><i className="fa-solid fa-circle-info mr-1"></i>NF-e indisponivel: complete os dados fiscais do cliente no Admin &gt; Clientes (CNPJ, razao social, endereco, bairro, municipio e UF).</p>
-                    )}
-                    {!nfcCpfPanel ? (
-                      <button
-                        onClick={() => setNfcCpfPanel(true)}
-                        disabled={notaEmitindo}
-                        className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest disabled:opacity-60 flex items-center justify-center"
-                      >
-                        <i className="fa-solid fa-receipt mr-2"></i>Emitir NFC-e
-                      </button>
-                    ) : (
-                      <div className="bg-blue-50 border border-blue-100 rounded-2xl p-3 space-y-2">
-                        <p className="text-[9px] font-black text-blue-600 uppercase">NFC-e — Cliente quer CPF na nota? (opcional)</p>
-                        <input
-                          value={nfcCpfInput}
-                          onChange={e => setNfcCpfInput(mascararCpf(e.target.value))}
-                          placeholder="000.000.000-00"
-                          inputMode="numeric"
-                          className="w-full p-3 bg-white border rounded-xl font-bold text-sm"
-                        />
-                        <div className="flex gap-2">
-                          <button onClick={() => handleEmitirNotaModal('NFCE', nfcCpfInput.replace(/\D/g, ''))} disabled={notaEmitindo} className="flex-1 bg-blue-600 text-white font-black py-3 rounded-xl uppercase text-[10px] tracking-widest disabled:opacity-60"><i className={`fa-solid ${notaEmitindo ? 'fa-spinner fa-spin' : 'fa-receipt'} mr-1`}></i>{notaEmitindo ? 'Emitindo...' : 'Emitir'}</button>
-                          <button onClick={() => { setNfcCpfPanel(false); setNfcCpfInput(''); }} className="flex-1 bg-gray-100 text-gray-500 font-black py-3 rounded-xl uppercase text-[10px] tracking-widest">Cancelar</button>
-                        </div>
-                        <p className="text-[8px] font-bold text-blue-400 leading-snug">Com CPF → NFC-e identificada. Sem CPF → NFC-e sem identificacao. Nenhuma nota = fluxo comum do cupom nao fiscal.</p>
-                      </div>
-                    )}
-                  </>
-                )}
-              </>
-            )}
-
-            {/* ===== Bloco 25 (ajuste): BOLETO INTER direto na venda finalizada —
-                 a venda JA ESTA SALVA aqui, entao o dono gera o boleto na hora,
-                 sem precisar reabrir o cupom pelo historico. Aparece tambem no
-                 PEDIDO REGISTRADO (pre-venda) — boleto a prazo na entrega.
-                 BLOCO 27: so quando ha SALDO em aberto (a vista pago na visita
-                 nao tem boleto para gerar).
-                 BLOCO 41 (regra do dono): na PRE-VENDA A VISTA NAO TEM BOLETO —
-                 o saldo ali é a cobrança do ENTREGADOR na entrega (dinheiro/pix);
-                 boleto nesse lugar só confundia o vendedor.
-                 BLOCO 50 (regra do dono): pagamento confirmado em CHEQUE — sem
-                 botão de gerar boleto (o recebimento já é o cheque). ===== */}
-            {saleResultModal.sale?.id && (Number(saleResultModal.sale.valorTotal ?? 0) - Number(saleResultModal.sale.valorPago ?? 0) > 0) && !(saleResultModal.isPreVenda && !saleResultModal.isPrazo) && saleResultModal.formaAtraso !== 'CHEQUE' && (
-              <BoletoCard
-                saleId={String(saleResultModal.sale.id)}
-                valorTotal={Number(saleResultModal.total) || 0}
-                valorPago={Number(saleResultModal.sale.valorPago) || 0}
-                notaStatus={notaResult?.status}
-                notaNumero={notaResult?.numero}
-                clienteDoc={client.cnpj}
-                clienteCep={client.enderecoCep}
-                clienteTelefone={client.telefone}
-                clienteNome={client.nomeFantasia || client.nome}
-                // BLOCO 67: no modal de venda finalizada o card JA ABRE expandido
-                // (regra do Bloco 25: o dono precisa achar o botao de gerar na
-                // hora). No cupom reaberto ele fica dobrado para nao cobrir a tela.
-                abertoInicial
-              />
-            )}
-
-            {/* BLOCO 40 (regra do dono): foto do comprovante SO na PRONTA ENTREGA
-                a prazo (cliente levou a mercadoria agora e assinou o cupom — a foto
-                e a prova). Na PRE-VENDA ninguem recebe nada e nada e assinado na
-                visita (pedido so anota) — NAO pode pedir foto: travava o vendedor
-                na tela da camera sem nem deixar fechar o modal. */}
-            {saleResultModal.isPrazo && !saleResultModal.isPreVenda && !saleResultModal.sale.comprovanteFoto && (
-              <button
-                onClick={() => { const s = saleResultModal!.sale; setSaleResultModal(null); openComprovanteFlow(s); }}
-                className="w-full bg-amber-500 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest"
-              >
-                <i className="fa-solid fa-camera mr-2"></i>Tirar Foto do Comprovante
-              </button>
-            )}
-            {!(saleResultModal.isPrazo && !saleResultModal.isPreVenda && !saleResultModal.sale.comprovanteFoto) && (
-              <button onClick={() => { const s = saleResultModal.sale; setSaleResultModal(null); setView('CART'); setCupomPosRegistro(s); }} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest"><i className="fa-solid fa-check mr-2"></i>{saleResultModal.isPreVenda ? 'Ver cupom do pedido' : 'OK — Ver cupom da venda'}</button>
-            )}
-          </div>
-        </div>
-      </div>
-    )}
-
-    {/* ============================================================ */}
     {/* MODAL: App-like genérico (substitui window.alert) */}
     {/* ============================================================ */}
     {appModal && (

@@ -1838,3 +1838,33 @@ QA:
 - Teste do dono: (1) venda a prazo com NFC anônima -> boleto sai com valor X (da venda) e nota na mensagem do boleto; (2) "Ver Danfe" abre o PDF da nota 27; (3) "Imprimir Cupom Fiscal (80mm)" sai idêntico aos valores do PDF 27; (4) cupom não fiscal de conferência continua com o valor da venda (maior).
 
 DÚVIDA DO DONO RESPONDIDA (baixa automática do Inter): SIM — boleto registrado no Inter (BOLETO+PIX) é dado como RECEBIDO e baixado AUTOMATICAMENTE quando pago (boleto em qualquer banco ou PIX do QRCode do boleto). Não depende de estar atrelado à NF. No app, o status atualizado aparece no card do boleto ("Atualizar situação no Inter"); o Inter também oferece webhook de pagamento para baixa automática NO sistema (pode ser implementado depois).
+
+## bloco152 — MINI BOLETO EXCLUÍDO (boleto = PDF original do Inter) + TEXTO PADRÃO do boleto na seção "Responsabilidade do Beneficiário" (config no hub ERP) + VENDA À VISTA na pronta entrega nasce PAGO (fim do "ficando em aberto") (2026-11-15)
+
+DONO PEDIU (verbatim): "exclua aquele sistema de mini boleto! deixe somente o pdf do boleto original e me diga como eu posso fazer pra criar um texto padrao que fica no boleto abaixo de informaçoes de responsabilidade do beneficiario! veja tbm pq venda a vista no dinheiro na pronta entrega esta ficando em aberto"
+
+FEITO (BLOCO 152):
+1. MINI BOLETO 80mm EXCLUÍDO de ponta a ponta — o boleto do app é o PDF ORIGINAL do Inter (botão PDF + WhatsApp):
+   - src/lib/miniBoleto.ts DELETADO (canvas paisagem deitado, ITF, rotação);
+   - API /api/boletos: ação MINI excluída; service boletoService.mini() excluído;
+   - BoletoCard: botão "Mini boleto deitado" removido — restam PDF | Enviar | Comprovante (80mm, largura inteira);
+   - ModelosImpressao: aba do boleto removida — sobrou só o MINI DANFE (retrato);
+   - bluetoothPrinterService: printImage/_printImage/bufferImagemEscpos removidos (impressão por imagem servia só ao mini boleto); usbPrint.imprimirImagemViaUsb removido;
+   - ConfiguracoesHub: botão passa a ser "Ver modelo de impressão 80mm" (Mini DANFE).
+2. TEXTO PADRÃO DO BOLETO (dono escreve UMA vez, sai em TODO boleto): o campo `mensagem` da API Cobranca v3 do Inter tem LINHA1..LINHA5 (até 78 caracteres cada) e é exatamente o texto impresso pelo Inter na seção INFORMAÇÕES DE RESPONSABILIDADE DO BENEFICIÁRIO do PDF. Fluxo implementado:
+   - app_settings.erp_config ganhou `boletoMensagemPadrao` (erpConfig.ts — ler/salvar, máx 78);
+   - GET/POST /api/configuracoes passam a devolver/aceitar boleto.mensagemPadrao / boletoMensagemPadrao;
+   - Card "Boletos (Banco Inter)" no hub ERP Fiscal ganhou o campo "Mensagem padrão do boleto" (com contador 0/78, salvar/cancelar);
+   - EMITIR da cobranca monta: linha1 = "Venda XXXXXXXX - Doce Mania" (sempre), linha2 = TEXTO PADRÃO do dono (fallback env INTER_MENSAGEM_PADRAO), linha3 = mensagem avulsa da tela, linha4 = NF não atrelada (quando couber); fallback do BLOCO 151 (emissão sem notaFiscal) passou da linha3 para a linha5 para não sobrescrever nada.
+   - COMO USAR: Configurações > ERP Fiscal & Automações > Boletos > digite o texto padrão > SALVAR. Todo boleto gerado DEPOIS disso já sai com o texto no PDF do Inter (boletos já existentes não mudam).
+3. BUG "VENDA À VISTA NO DINHEIRO NA PRONTA ENTREGA FICANDO EM ABERTO": causa = BLOCO 139 (venda à vista nascia PENDENTE com valor_pago 0 e só virava PAGO no CONFIRMO dentro da janela de imprimir o cupom — quando o vendedor não confirmava, a venda ficava em aberto). AGORA: à vista (Dinheiro/Pix/Misto) na pronta entrega NASCE PAGO com valor_pago = total (o cliente pagou na entrega — cai direto no caixa à vista); a prazo continua PENDENTE (Contas a Receber). A janela CONFIRMO/NÃO RECEBI do cupom continua existindo SÓ para as vendas à vista LEGADAS que ficaram com saldo (dá para fechar por lá). Tela de sucesso: "À vista: recebido na entrega — R$ X no caixa".
+
+SQL PARA O DONO RODAR: NENHUM — tudo dentro do jsonb app_settings.erp_config (coluna já existe) e código.
+
+ARQUIVOS: src/lib/miniBoleto.ts (deletado), src/services/boletoService.ts, src/app/api/boletos/route.ts, src/lib/erpConfig.ts, src/app/api/configuracoes/route.ts, src/components/doce/BoletoCard.tsx, src/components/doce/ModelosImpressao.tsx, src/components/doce/ConfiguracoesHub.tsx, src/components/doce/PDV.tsx, src/components/doce/Cupom.tsx, src/lib/usbPrint.ts, src/services/bluetoothPrinterService.ts, worklog.md.
+
+QA:
+- LINT: 0 erros / 10 warnings (baseline exata).
+- Grep sem referências vivas ao miniBoleto (só comentários históricos BLOCO 152).
+- Boleto EMITIR payload: mensagem linha1 venda + linha2 padrão do dono + linha3 avulsa + linha4 NF não atrelada + fallback linha5.
+- À vista pronta entrega: payload nasce valorPago=total/PAGO; prazo mantém PENDENTE; cupom de conferência mostra o estado certo.

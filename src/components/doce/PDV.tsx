@@ -818,15 +818,19 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     }
     finalDetalhe += descontoInfo + notaTxt;
 
-    // BLOCO 139 (regra do dono): O RECEBIMENTO REAL é confirmado DEPOIS, na
-    // tela de imprimir o cupom/nota ("você recebeu R$ X? CONFIRMO / Não recebi").
-    // A venda à vista também nasce PENDENTE (valorPago 0) — CONFIRMO fecha o
-    // saldo (PAGO, entra no caixa à vista); NÃO RECEBI fica em Contas a Receber.
+    // BLOCO 152 (correção do dono: "venda à vista no dinheiro na pronta entrega
+    // está ficando em aberto"): À VISTA (Dinheiro/Pix/Misto) o cliente PAGOU na
+    // entrega — a venda nasce PAGO (valorPago = total) e entra direto no caixa
+    // à vista. O BLOCO 139 (nascer PENDENTE e confirmar depois na janela do
+    // cupom) fazia a venda ficar em aberto quando o vendedor não tocava em
+    // CONFIRMO. A PRAZO continua PENDENTE (Contas a Receber).
+    // A janela do cupom (Cupom.tsx) mantém o CONFIRMO/NÃO RECEBI só para as
+    // vendas à vista LEGADAS que ficaram com saldo em aberto.
     const salePayload: any = {
       vendedorId,
       clientId: client.id,
       valorTotal: total,
-      valorPago: 0,
+      valorPago: condicaoDoc === 'AVISTA' ? total : 0,
       metodoPagamento: metodoP,
       detalhePagamento: finalDetalhe,
       itens,
@@ -834,7 +838,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       // BLOCO 29 (ROTA 2): modo do atendimento — grava sales.modo_nota (baixa/margem real)
       modoNota: rota2Ativo && modoAtivo ? modoAtivo : undefined,
     };
-    salePayload.statusPagamento = 'PENDENTE';
+    salePayload.statusPagamento = condicaoDoc === 'AVISTA' ? 'PAGO' : 'PENDENTE';
     if (metodoP === 'A_PRAZO') {
       // meio-dia local: evita a data cair no dia anterior (meia-noite UTC em TZ -3)
       salePayload.dataVencimento = new Date(`${vencimentoDoc}T12:00:00`);
@@ -2055,11 +2059,12 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               <span className="text-[10px] font-black text-emerald-700 uppercase leading-snug">Entregador recebe na entrega</span>
             </div>
           )}
-          {/* BLOCO 139: à vista — o saldo só fecha na confirmação do recebimento real (janela de impressão do cupom) */}
+          {/* BLOCO 152: à vista na pronta entrega = RECEBIDO na entrega (nasce PAGO,
+              cai no caixa à vista) — sem mais confirmação pendente no cupom */}
           {!sucessoData.isPreVenda && !sucessoData.isPrazo && (
             <div className="bg-emerald-50 p-3 rounded-2xl flex items-center gap-3 border border-emerald-100">
               <i className="fa-solid fa-hand-holding-dollar text-emerald-500"></i>
-              <span className="text-[10px] font-black text-emerald-700 uppercase leading-snug">À vista: confirme o recebimento real no cupom da venda (Ver cupom da venda → Imprimir cupom)</span>
+              <span className="text-[10px] font-black text-emerald-700 uppercase leading-snug">À vista: recebido na entrega — R$ {sucessoData.total.toFixed(2)} no caixa</span>
             </div>
           )}
           {sucessoData.isPrazo && (

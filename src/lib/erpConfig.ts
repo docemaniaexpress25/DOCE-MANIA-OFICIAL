@@ -38,6 +38,10 @@ export interface ErpConfig {
   boletoAutoAReceber: boolean;
   /** BLOCO 125: QR do catalogo do cliente impresso no cupom (default LIGADO). */
   qrCatalogoNoCupom: boolean;
+  /** BLOCO 152: texto padrao do boleto — vai na LINHA 2 do campo mensagem
+   *  da cobranca do Inter (PDF na seção "INFORMAÇÕES DE RESPONSABILIDADE DO
+   *  BENEFICIÁRIO", ate 78 caracteres). Vazio = nao envia linha 2. */
+  boletoMensagemPadrao: string;
   emitente: ErpEmitente;
 }
 
@@ -46,6 +50,7 @@ export const ERP_CONFIG_DEFAULT: ErpConfig = {
   cupomDuploNfc: false,
   boletoAutoAReceber: false,
   qrCatalogoNoCupom: true,
+  boletoMensagemPadrao: '',
   emitente: { cnpj: '', ie: '', razao: '', fantasia: '', logradouro: '', numero: '', bairro: '', municipio: '', uf: 'RS', cep: '', regime: 1 },
 };
 
@@ -86,6 +91,8 @@ export async function lerErpConfig(supabase?: any): Promise<ErpConfig> {
       boletoAutoAReceber: raw.boletoAutoAReceber === true,
       // BLOCO 125: ausente no jsonb (flag novo) = LIGADO (regra do dono)
       qrCatalogoNoCupom: raw.qrCatalogoNoCupom !== false,
+      // BLOCO 152: texto padrao do boleto (linha 2 da mensagem da cobranca)
+      boletoMensagemPadrao: String(raw.boletoMensagemPadrao || '').slice(0, 78),
       emitente: raw.emitente ? sanitizaEmitente(raw.emitente as Record<string, unknown>) : { ...ERP_CONFIG_DEFAULT.emitente },
     };
   } catch {
@@ -103,6 +110,8 @@ export async function salvarErpConfig(parcial: Partial<ErpConfig>, supabase?: an
       cupomDuploNfc: typeof parcial.cupomDuploNfc === 'boolean' ? parcial.cupomDuploNfc : atual.cupomDuploNfc,
       boletoAutoAReceber: typeof parcial.boletoAutoAReceber === 'boolean' ? parcial.boletoAutoAReceber : atual.boletoAutoAReceber,
       qrCatalogoNoCupom: typeof parcial.qrCatalogoNoCupom === 'boolean' ? parcial.qrCatalogoNoCupom : atual.qrCatalogoNoCupom,
+      // BLOCO 152: texto padrao do boleto (vazio = limpa a linha 2)
+      boletoMensagemPadrao: parcial.boletoMensagemPadrao !== undefined ? String(parcial.boletoMensagemPadrao || '').trim().slice(0, 78) : atual.boletoMensagemPadrao,
       emitente: parcial.emitente ? sanitizaEmitente(parcial.emitente as unknown as Record<string, unknown>) : atual.emitente,
     };
     const { error } = await db

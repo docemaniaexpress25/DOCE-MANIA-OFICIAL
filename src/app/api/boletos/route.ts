@@ -5,7 +5,7 @@ import { hasBoletoColumns } from '@/lib/serverSchema';
 import { isFocusConfigured, consultarNota, FocusDoc } from '@/lib/focusNfe';
 // BLOCO 147: nota cancelada + boleto cancelado = venda sai do sistema (e a nota fica no portal em CANCELADAS)
 import { finalizarVendaCancelada } from '@/lib/cascataCancelamento';
-import { lerEmitentePayload } from '@/lib/erpConfig';
+import { lerErpConfig } from '@/lib/erpConfig';
 import { validaCpfCnpj, mascaraCpfCnpj } from '@/lib/validaDoc';
 import {
   isInterConfigured,
@@ -31,6 +31,13 @@ import {
  *      /api/boletos { acao: 'CONSULTAR', saleId }
  *      /api/boletos { acao: 'PDF', saleId }        -> { pdfBase64 }
  *      /api/boletos { acao: 'CANCELAR', saleId, motivo }   [ADMIN]
+ *
+ * BLOCO 152: acao MINI (mini boleto 80mm) EXCLUIDA — o boleto do app e o
+ * PDF ORIGINAL do Inter (acao PDF). O texto padrao do dono entra na LINHA 2
+ * da mensagem da cobranca (o Inter imprime as linhas 1..5 do campo mensagem
+ * no PDF, secao INFORMAÇÕES DE RESPONSABILIDADE DO BENEFICIÁRIO) — o texto
+ * é configurado no hub ERP Fiscal (app_settings.erp_config) e cai em TODO
+ * boleto novo, sem mexer em nada na tela do vendedor.
  *
  * Regras:
  * - Vendedor so mexe nas PROPRIAS vendas; admin em qualquer uma.
@@ -215,94 +222,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, boleto: { ...cobrancaPublica(sale as Record<string, unknown>), status: 'CANCELADO' } });
   }
 
-  // ---------- MINI BOLETO (80mm paisagem — dados completos p/ desenho) ----------
-  // O dono pediu o mini boleto deitado na termica 80mm (modelo do PDF A4 do
-  // Inter). Este acao devolve TUDO que o canvas precisa em 1 chamada:
-  // boleto (linha/barras/pix atualizados na hora) + pagador (cadastro) +
-  // beneficiario (emitente do ERP) + nota (numero/chave) + msgs do boleto.
-  if (acao === 'MINI') {
-    // consulta no Inter para linha digitavel/barras/pix frescos (idempotente)
-    if (sale.inter_boleto_codigo && isInterConfigured()) {
-      try {
-        const c = await recuperarCobranca(String(sale.inter_boleto_codigo));
-        if (c.ok && c.data) {
-          const cob = interpretarCobranca(c.data as Record<string, unknown>);
-          await atualizar(saleId, {
-            inter_boleto_status: cob.status,
-            inter_boleto_linha: cob.linhaDigitavel || sale.inter_boleto_linha || null,
-            inter_boleto_barras: cob.codigoBarras || sale.inter_boleto_barras || null,
-            inter_boleto_pix: cob.pixCopiaECola || sale.inter_boleto_pix || null,
-          });
-          Object.assign(sale, {
-            inter_boleto_status: cob.status,
-            inter_boleto_linha: cob.linhaDigitavel || sale.inter_boleto_linha,
-            inter_boleto_barras: cob.codigoBarras || sale.inter_boleto_barras,
-            inter_boleto_pix: cob.pixCopiaECola || sale.inter_boleto_pix,
-          });
-        }
-      } catch { /* rede — segue com os dados gravados */ }
-    }
-
-    const { data: client } = await db
-      .from('clients')
-      .select('nome_fantasia, nome, cnpj, endereco, bairro, razao_social, endereco_numero, endereco_cep, endereco_municipio, endereco_uf')
-      .eq('id', sale.client_id)
-      .single();
-    const cli = (client || {}) as Record<string, unknown>;
-    const emit = (await lerEmitentePayload()) as Record<string, unknown>;
-
-    const soDig = (v: unknown) => String(v ?? '').replace(/\D/g, '');
-    const txt = (v: unknown) => String(v ?? '').trim();
-
-    // Beneficiario = emitente fiscal (Doce Mania) — mesmos dados que vao na NF
-    const emitCnpj = soDig(emit.cnpj_emitente);
-    const logEmit = [txt(emit.logradouro_emitente), txt(emit.numero_emitente) ? `, ${txt(emit.numero_emitente)}` : ''].join('').trim();
-    const beneficiario = {
-      nome: txt(emit.nome_emitente) || 'DOCE MANIA EXPRESS LTDA',
-      cnpj: emitCnpj,
-      endereco: logEmit || undefined,
-      cidadeUf: [txt(emit.municipio_emitente), txt(emit.uf_emitente)].filter(Boolean).join('/') || undefined,
-    };
-
-    // Pagador = cliente da venda (mesma origem do boleto do Inter)
-    const docPag = soDig(cli.cnpj);
-    const pagador = {
-      nome: txt(cli.razao_social) || txt(cli.nome_fantasia) || txt(cli.nome) || 'PAGADOR',
-      doc: docPag || undefined,
-      endereco: [txt(cli.endereco), txt(cli.endereco_numero) ? `, ${txt(cli.endereco_numero)}` : ''].join('').trim() || undefined,
-      cidadeUf: [txt(cli.endereco_municipio), txt(cli.endereco_uf)].filter(Boolean).join('/') || undefined,
-      cep: soDig(cli.endereco_cep) ? `${soDig(cli.endereco_cep).slice(0, 5)}-${soDig(cli.endereco_cep).slice(5)}` : undefined,
-    };
-
-    const s = sale as Record<string, unknown>;
-    const vendaCurta = String(saleId).slice(0, 8).toUpperCase();
-    const notaNumero = txt(s.nota_numero);
-    const notaAtrelada = txt(s.nota_chave).length === 44;
-
-    return NextResponse.json({
-      ok: true,
-      mini: {
-        beneficiario,
-        pagador,
-        valor: s.inter_boleto_valor === null || s.inter_boleto_valor === undefined ? Number(sale.valor_total) || 0 : Number(s.inter_boleto_valor),
-        vencimento: txt(s.inter_boleto_vencimento),
-        dataDocumento: txt(s.data_venda) ? String(s.data_venda).slice(0, 10) : '',
-        numeroDocumento: txt(s.inter_boleto_seu_numero),
-        nossoNumero: txt(s.inter_boleto_codigo) || '',
-        agenciaCodigo: process.env.INTER_CODIGO_BENEFICIARIO || '',
-        linhaDigitavel: txt(s.inter_boleto_linha),
-        codigoBarras: txt(s.inter_boleto_barras),
-        pixCopiaECola: txt(s.inter_boleto_pix),
-        mensagem1: `Venda ${vendaCurta} - Doce Mania`,
-        mensagem2: notaNumero ? `NF-e/NFC-e ${notaNumero}${notaAtrelada ? '' : ' (nao atrelada)'}` : '',
-        mensagem3: txt(s.inter_boleto_vencimento) ? `Data Limite para pagamento: ${txt(s.inter_boleto_vencimento).slice(0, 10).split('-').reverse().join('/')}` : '',
-      },
-      boleto: cobrancaPublica(sale as Record<string, unknown>),
-      inter: { configurado: isInterConfigured(), ambiente: getInterConfig().ambiente },
-      nota: { status: txt(s.nota_status), numero: notaNumero, chave: txt(s.nota_chave) },
-    });
-  }
-
   // ---------- EMITIR ----------
   if (acao !== 'EMITIR') return BAD(400, `Acao desconhecida: ${acao}`);
 
@@ -382,6 +301,17 @@ export async function POST(req: NextRequest) {
   const seuNumero = seuNumeroBoleto(saleId, (sale.inter_boleto_seu_numero as string) || undefined);
   const vendaCurta = String(saleId).slice(0, 8).toUpperCase();
 
+  // ------------------------------------------------------------------
+  // BLOCO 152 — TEXTO PADRÃO DO BOLETO (pedido do dono): as linhas do
+  // campo `mensagem` da API do Inter (linha1..linha5, ate 78 chars cada)
+  // saem no PDF na seção "INFORMAÇÕES DE RESPONSABILIDADE DO BENEFICIÁRIO".
+  // linha1 = venda (sempre) | linha2 = texto padrao do dono (config no hub
+  // ERP Fiscal / env INTER_MENSAGEM_PADRAO) | linha3 = mensagem avulsa da
+  // tela | linha4 = nota nao atrelada (quando couber).
+  // ------------------------------------------------------------------
+  const erpCfg = await lerErpConfig();
+  const msgPadrao = (erpCfg.boletoMensagemPadrao || process.env.INTER_MENSAGEM_PADRAO || '').trim().slice(0, 78);
+
   const payload = {
     seuNumero,
     valorNominal: Math.round(valor * 100) / 100,
@@ -390,8 +320,9 @@ export async function POST(req: NextRequest) {
     pagador,
     mensagem: {
       linha1: `Venda ${vendaCurta} - Doce Mania`,
-      ...(body.mensagem ? { linha2: String(body.mensagem).slice(0, 70) } : {}),
-      ...(notaFiscal ? {} : sale.nota_status === 'AUTORIZADA' ? { linha3: `NF ${String(sale.nota_numero)} (nao atrelada)` } : {}),
+      ...(msgPadrao ? { linha2: msgPadrao } : {}),
+      ...(body.mensagem ? { linha3: String(body.mensagem).slice(0, 78) } : {}),
+      ...(notaFiscal ? {} : sale.nota_status === 'AUTORIZADA' ? { linha4: `NF ${String(sale.nota_numero)} (nao atrelada)` } : {}),
     },
     formasRecebimento: ['BOLETO', 'PIX'],
     notaFiscal,
@@ -424,7 +355,7 @@ export async function POST(req: NextRequest) {
       notaFiscal: undefined,
       mensagem: {
         ...payload.mensagem,
-        linha3: `${String(sale.nota_tipo || '').toUpperCase() === 'NFE' ? 'NF-e' : 'NFC-e'} ${String(sale.nota_numero || '')} atrelada a esta cobranca`,
+        linha5: `${String(sale.nota_tipo || '').toUpperCase() === 'NFE' ? 'NF-e' : 'NFC-e'} ${String(sale.nota_numero || '')} atrelada a esta cobranca`,
       },
     };
     r = await emitirCobranca(semNota as never);

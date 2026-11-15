@@ -4,10 +4,9 @@ import { authHeaders } from '@/services/userService';
  * Servico de BOLETO BANCARIO INTER (Bloco 25) — conversa com /api/boletos.
  * As credenciais do Inter (client_id/secret/certificado mTLS) ficam no
  * servidor; aqui so vai o token de sessao do app.
+ * BLOCO 152: mini boleto 80mm EXCLUIDO — o boleto do app e o PDF ORIGINAL
+ * do Inter (acao PDF) enviado ao cliente/WhatsApp.
  */
-
-// MINI BOLETO 80mm PAISAGEM (deitado): dados completos para o canvas
-export type MiniBoletoDados = import('@/lib/miniBoleto').MiniBoletoData;
 
 export interface BoletoInfo {
   status: string;            // NAO_GERADO | EM_PROCESSAMENTO | A_RECEBER | RECEBIDO | ATRASADO | CANCELADO | EXPIRADO | FALHA_EMISSAO | PROTESTO | MARCADO_RECEBIDO
@@ -126,23 +125,6 @@ export const boletoService = {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}`, boleto: data.boleto };
       return { ok: true, boleto: data.boleto };
-    } catch (e: unknown) {
-      return { ok: false, erro: e instanceof Error ? e.message : 'Falha de conexao' };
-    }
-  },
-
-  /** MINI BOLETO 80mm paisagem: dados completos p/ desenhar o boleto deitado
-   *  (cobranca fresca do Inter + pagador + emitente fiscal + nota da venda). */
-  async mini(saleId: string): Promise<{ ok: boolean; mini?: MiniBoletoDados; erro?: string }> {
-    try {
-      const res = await fetch('/api/boletos', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify({ acao: 'MINI', saleId }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}` };
-      return { ok: true, mini: data.mini as MiniBoletoDados };
     } catch (e: unknown) {
       return { ok: false, erro: e instanceof Error ? e.message : 'Falha de conexao' };
     }

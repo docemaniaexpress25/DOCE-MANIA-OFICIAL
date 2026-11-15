@@ -5,9 +5,6 @@ import { boletoService, BoletoInfo } from '@/services/boletoService';
 import { comprovanteBoletoTexto } from '@/lib/danfeTexto';
 import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
 import { validaCpfCnpj } from '@/lib/validaDoc';
-// MINI BOLETO 80mm PAISAGEM (deitado) — modal de visualizacao + impressao
-import ModelosImpressao from './ModelosImpressao';
-import { MiniBoletoData } from '@/lib/miniBoleto';
 
 /**
  * BLOCO 25 (ajuste "o dono nao achou o botao"): card do BOLETO BANCARIO INTER
@@ -22,6 +19,11 @@ import { MiniBoletoData } from '@/lib/miniBoleto';
  * ATRELAR NF-e quando a nota esta AUTORIZADA), linha digitavel e PIX copia-e-
  * cola tocaveis, PDF (blob) e WhatsApp. Renderiza NULL quando o SQL do Bloco
  * 25 / credenciais do Inter nao estao configurados (API responde 503).
+ *
+ * BLOCO 152: mini boleto 80mm (canvas paisagem) EXCLUIDO pelo dono — o
+ * boleto do app e o PDF ORIGINAL do Inter (botao PDF) enviado ao cliente.
+ * O texto padrao do beneficiario agora e configurado no hub ERP Fiscal
+ * (linha 2 da mensagem da cobranca) e sai no PDF do Inter.
  */
 
 interface BoletoCardProps {
@@ -69,9 +71,6 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
   const [doc, setDoc] = useState('');
   const [cep, setCep] = useState('');
   const [erroLocal, setErroLocal] = useState('');
-  // MINI BOLETO 80mm PAISAGEM (deitado): dados carregados da API + modal
-  const [miniModal, setMiniModal] = useState(false);
-  const [miniDados, setMiniDados] = useState<MiniBoletoData | null>(null);
 
   useEffect(() => {
     if (!saleId) return;
@@ -172,21 +171,8 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
     if (r.boleto) setBoleto(r.boleto);
   };
 
-  // ==================================================================
-  // MINI BOLETO 80mm PAISAGEM (deitado) — busca os dados completos na
-  // API (acao MINI: cobranca fresca do Inter + pagador + emitente + nota)
-  // e abre o modal de VISUALIZACAO + impressao (BT/USB).
-  // ==================================================================
-  const handleMiniBoleto = async () => {
-    if (busy || !saleId) return;
-    setBusy(true);
-    const r = await boletoService.mini(saleId);
-    setBusy(false);
-    if (!r.ok || !r.mini) { showToast?.(r.erro || 'Falha ao carregar o mini boleto.', 'error'); return; }
-    setMiniDados(r.mini);
-    setMiniModal(true);
-  };
-
+  // BLOCO 152: PDF ORIGINAL do Inter — único documento do boleto no app
+  // (mini boleto 80mm foi excluido pelo dono).
   const handlePdf = async () => {
     if (busy || !saleId) return;
     setBusy(true);
@@ -339,21 +325,14 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
               </button>
             </div>
           )}
-          {/* BLOCO 82: comprovante na térmica 80mm (linha digitável + código de barras + QR PIX) */}
+          {/* BLOCO 82: comprovante na térmica 80mm (linha digitável + código de barras + QR PIX).
+              BLOCO 152: mini boleto EXCLUÍDO — o documento do boleto é o PDF ORIGINAL do Inter. */}
           {['A_RECEBER', 'ATRASADO', 'RECEBIDO', 'MARCADO_RECEBIDO'].includes(boleto.status) && (boleto.linhaDigitavel || boleto.pixCopiaECola) && (
-            <div className="grid grid-cols-2 gap-2">
-              <button onClick={handleImprimirComprovante} disabled={busy}
-                className="bg-blue-600 text-white font-black py-2.5 rounded-xl text-[9px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
-                <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-print'} mr-1`}></i>
-                Comprovante (80mm)
-              </button>
-              {/* MINI BOLETO 80mm PAISAGEM (deitado) — modelo do PDF A4 do Inter */}
-              <button onClick={handleMiniBoleto} disabled={busy}
-                className="bg-slate-900 text-white font-black py-2.5 rounded-xl text-[9px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
-                <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-file-invoice'} mr-1`}></i>
-                Mini boleto deitado
-              </button>
-            </div>
+            <button onClick={handleImprimirComprovante} disabled={busy}
+              className="w-full bg-blue-600 text-white font-black py-2.5 rounded-xl text-[9px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
+              <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-print'} mr-1`}></i>
+              Comprovante (80mm)
+            </button>
           )}
           {form && (
             <div className="space-y-2 bg-white/70 rounded-xl p-2.5">
@@ -401,15 +380,6 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
           )}
         </div>
       )}
-
-      {/* MINI BOLETO 80mm PAISAGEM — visualização + impressão (BT/USB) */}
-      <ModelosImpressao
-        abrir={miniModal}
-        onClose={() => setMiniModal(false)}
-        abaInicial="boleto"
-        boleto={miniDados}
-        showToast={showToast}
-      />
     </div>
   );
 };

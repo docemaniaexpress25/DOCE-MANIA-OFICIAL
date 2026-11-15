@@ -4,14 +4,14 @@ import { authHeaders } from '@/services/userService';
 // BLOCO 112: reforço de impressão (config POR DISPOSITIVO em localStorage —
 // não vai para o banco: cada aparelho/impressora tem sua calibração)
 import { lerReforcoImpressao, salvarReforcoImpressao } from '@/lib/usbPrint';
-// MINI DANFE + MINI BOLETO (80mm) — janela de visualização dos modelos
+// MINI DANFE (80mm) — janela de visualização do modelo
 import ModelosImpressao from './ModelosImpressao';
 
 /**
  * ERP FISCAL & AUTOMAÇÕES — hub de configurações organizado em cards que expandem.
  * Nada amontoado numa tela só: Nota Fiscal (Focus NFe), Boletos (Banco Inter) e Estoque.
  * GET  /api/configuracoes  → { ok, fiscal, boleto, pix }
- * POST /api/configuracoes  → envia SOMENTE o que mudou: { emitente?, nfeAutoPe?, cupomDuploNfc?, boletoAutoAReceber? }
+ * POST /api/configuracoes  → envia SOMENTE o que mudou: { emitente?, nfeAutoPe?, cupomDuploNfc?, boletoAutoAReceber?, boletoMensagemPadrao? }
  */
 
 interface Emitente {
@@ -32,6 +32,8 @@ interface FiscalConfig {
 interface BoletoConfig {
   interConfigurado: boolean;
   autoBoletoAReceber: boolean;
+  /** BLOCO 152: texto padrao na seção "responsabilidade do beneficiário" do PDF */
+  mensagemPadrao: string;
 }
 
 // BLOCO 116/117 — webhook da Focus (status em tempo real via API /v2/hooks)
@@ -118,8 +120,12 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
   const [reforco, setReforco] = useState(true);
   useEffect(() => { setReforco(lerReforcoImpressao()); }, []);
 
-  // MINI DANFE + MINI BOLETO (80mm) — janela de visualização dos modelos
+  // MINI DANFE (80mm) — janela de visualização do modelo
   const [modelosAberto, setModelosAberto] = useState(false);
+
+  // BLOCO 152 — texto padrao do boleto (mensagem do beneficiário no PDF do Inter)
+  const [msgPadraoInput, setMsgPadraoInput] = useState('');
+  const [salvandoMsgPadrao, setSalvandoMsgPadrao] = useState(false);
 
   const [toast, setToast] = useState<{ msg: string; tipo: 'success' | 'error' } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -151,7 +157,10 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
       setBoleto({
         interConfigurado: !!d.boleto?.interConfigurado,
         autoBoletoAReceber: !!d.boleto?.autoBoletoAReceber,
+        // BLOCO 152: texto padrao do boleto (linha 2 da mensagem da cobranca)
+        mensagemPadrao: String(d.boleto?.mensagemPadrao || ''),
       });
+      setMsgPadraoInput(String(d.boleto?.mensagemPadrao || ''));
       // BLOCO 125: flag do QR do catálogo (geral.qrCatalogoNoCupom)
       setQrCat(d.geral?.qrCatalogoNoCupom !== false);
       setFocoWebhook(
@@ -204,6 +213,15 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
     const ok = await postConfig({ [campo]: novo }, 'Preferência salva!');
     if (!ok) { setFiscal(prevFiscal); setBoleto(prevBoleto); }
     setSalvandoSwitch(null);
+  };
+
+  /* ===== BLOCO 152 — salva o texto padrao do boleto ===== */
+  const salvarMensagemPadrao = async () => {
+    if (salvandoMsgPadrao) return;
+    if (msgPadraoInput.trim() === (boleto?.mensagemPadrao || '')) return;
+    setSalvandoMsgPadrao(true);
+    await postConfig({ boletoMensagemPadrao: msgPadraoInput }, 'Mensagem padrão do boleto salva!');
+    setSalvandoMsgPadrao(false);
   };
 
   /* ===== BLOCO 125 — switch do QR do catálogo no cupom (otimista) ===== */
@@ -496,6 +514,40 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
             </div>
             <Switch on={boleto.autoBoletoAReceber} disabled={salvandoSwitch !== null} onClick={() => alternarSwitch('boletoAutoAReceber', !boleto.autoBoletoAReceber)} />
           </div>
+
+          {/* ===== BLOCO 152 — TEXTO PADRÃO DO BOLETO (mensagem do beneficiário) ===== */}
+          <div className="border-t border-gray-50 pt-3 space-y-2">
+            <div className="flex items-start gap-3">
+              <i className="fa-solid fa-comment-dots text-teal-500 mt-1"></i>
+              <div className="flex-1">
+                <p className="text-[11px] font-bold text-gray-600 uppercase">Mensagem padrão do boleto</p>
+                <p className="text-[9px] text-gray-400 font-semibold leading-snug mt-0.5">Texto fixo impresso pelo Inter no PDF de TODO boleto novo, na seção <strong className="text-gray-500">Informações de Responsabilidade do Beneficiário</strong> (vai junto com “Venda XXX - Doce Mania”). Máx. 78 caracteres.</p>
+              </div>
+            </div>
+            <input
+              type="text"
+              value={msgPadraoInput}
+              maxLength={78}
+              onChange={(e) => setMsgPadraoInput(e.target.value.slice(0, 78))}
+              placeholder="Ex.: Pague via PIX e ganhe 5% de desconto na próxima compra"
+              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-[11px] font-bold text-gray-800 focus:outline-none focus:border-teal-400"
+            />
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[9px] font-black text-gray-400">{msgPadraoInput.length}/78</span>
+              <div className="flex gap-2">
+                {msgPadraoInput !== (boleto.mensagemPadrao || '') && (
+                  <button onClick={() => setMsgPadraoInput(boleto.mensagemPadrao || '')} className="text-[9px] font-black uppercase text-gray-400 underline active:scale-95 px-2 py-1.5">Cancelar</button>
+                )}
+                <button
+                  onClick={salvarMensagemPadrao}
+                  disabled={salvandoMsgPadrao || msgPadraoInput === (boleto.mensagemPadrao || '')}
+                  className="bg-teal-600 text-white font-black px-4 py-2 rounded-xl text-[9px] uppercase tracking-widest active:scale-95 disabled:opacity-50 flex items-center gap-1.5"
+                >
+                  <i className={`fa-solid ${salvandoMsgPadrao ? 'fa-spinner fa-spin' : 'fa-check'}`}></i>Salvar
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -571,12 +623,12 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
             <Switch on={reforco} onClick={() => { const v = !reforco; setReforco(v); salvarReforcoImpressao(v); mostrarToast(v ? 'Reforço LIGADO neste aparelho' : 'Reforço DESLIGADO neste aparelho', 'success'); }} />
           </div>
 
-          {/* MINI DANFE + MINI BOLETO — visualizar os modelos antes de imprimir */}
+          {/* MINI DANFE — visualizar o modelo antes de imprimir (BLOCO 152: mini boleto excluído — boleto = PDF original do Inter) */}
           <button onClick={() => setModelosAberto(true)} className="w-full flex items-center gap-3 p-3.5 rounded-xl bg-slate-900 text-white active:scale-[0.98] transition-transform">
             <div className="w-9 h-9 rounded-xl bg-white/15 flex items-center justify-center flex-shrink-0"><i className="fa-solid fa-file-receipt"></i></div>
             <div className="flex-1 text-left min-w-0">
-              <p className="text-[11px] font-black uppercase tracking-wide">Ver modelos de impressão 80mm</p>
-              <p className="text-[9px] font-bold text-white/60 normal-case leading-snug">Mini DANFE (retrato) e mini boleto (deitado) — como sai na térmica Bluetooth ou USB</p>
+              <p className="text-[11px] font-black uppercase tracking-wide">Ver modelo de impressão 80mm</p>
+              <p className="text-[9px] font-bold text-white/60 normal-case leading-snug">Mini DANFE (retrato) — como sai na térmica Bluetooth ou USB</p>
             </div>
             <i className="fa-solid fa-chevron-right text-[10px] opacity-60"></i>
           </button>
@@ -599,7 +651,7 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
         </div>
       )}
 
-      {/* ===== MINI DANFE + MINI BOLETO — MODELOS DE IMPRESSÃO 80mm ===== */}
+      {/* ===== MINI DANFE — MODELO DE IMPRESSÃO 80mm ===== */}
       <ModelosImpressao abrir={modelosAberto} onClose={() => setModelosAberto(false)} showToast={mostrarToast} />
     </div>
   );

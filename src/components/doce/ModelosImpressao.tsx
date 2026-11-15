@@ -2,32 +2,23 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { DanfeFiscalData, danfeFiscal80 } from '@/lib/danfe80';
-import {
-  MiniBoletoData,
-  desenharMiniBoletoPaisagem,
-  rotacionar90,
-  canvasParaPng,
-  DEMO_BOLETO,
-} from '@/lib/miniBoleto';
 import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
-import { imprimirViaUsb, imprimirImagemViaUsb, lerCanalImpressao, dispositivoIOS } from '@/lib/usbPrint';
+import { imprimirViaUsb, lerCanalImpressao, dispositivoIOS } from '@/lib/usbPrint';
 
 /**
- * MODELOS DE IMPRESSAO 80mm — VISUALIZACAO + IMPRESSAO.
+ * MODELOS DE IMPRESSAO 80mm — VISUALIZACAO + IMPRESSAO do MINI DANFE.
  *
  * "vou anexar aqui um pdf da nfe e um pdf do boleto! esses sao os modelos
  *  padrao para imprimir a4 na impressora comum, porem tbm precisamos de
  *  modelos menores ou seja mini danfe e mini boleto para ser impressos tanto
  *  na 80mm pelo bluetooth ou pelo 80mm usb!"
  *
- * O dono aprova os modelos NA TELA antes de mandar para a termica:
+ * BLOCO 152: o MINI BOLETO (80mm paisagem) foi EXCLUIDO pelo dono — o boleto
+ * do app e o PDF ORIGINAL do Inter. Este modal sobra apenas com o:
  *  - MINI DANFE (80mm RETRATO): papel renderizado com o texto do cupom fiscal
- *    (danfeFiscal80) — mesma folha que sai no rolo;
- *  - MINI BOLETO (80mm PAISAGEM/DEITADO): o boleto desenhado (canvas) EXIBIDO
- *    EM PE (como se le na tela) e, na impressao, mandado ROTACIONADO — o papel
- *    sai deitado igual a folha A4 em modo paisagem.
+ *    (danfeFiscal80) — mesma folha que sai no rolo.
  *
- * Canais: Bluetooth (Web Bluetooth, raster GS v 0) e USB do PC (papel virtual
+ * Canais: Bluetooth (Web Bluetooth, raster) e USB do PC (papel virtual
  * do navegador). O canal padrao do dispositivo e o mesmo do cupom.
  */
 
@@ -36,10 +27,6 @@ interface ModelosImpressaoProps {
   onClose: () => void;
   /** Dados reais do cupom fiscal (quando veem do portal/venda); demo quando ausente */
   cupom?: DanfeFiscalData | null;
-  /** Dados reais do boleto (API MINI); demo quando ausente */
-  boleto?: MiniBoletoData | null;
-  /** Aba inicial ('danfe' | 'boleto') */
-  abaInicial?: 'danfe' | 'boleto';
   showToast?: (msg: string, tipo?: 'success' | 'error') => void;
 }
 
@@ -113,10 +100,7 @@ const Papel80: React.FC<{ texto: string }> = ({ texto }) => (
   </div>
 );
 
-const ModelosImpressao: React.FC<ModelosImpressaoProps> = ({ abrir, onClose, cupom, boleto, abaInicial = 'danfe', showToast }) => {
-  const [aba, setAba] = useState<'danfe' | 'boleto'>(abaInicial);
-  const [pngBoleto, setPngBoleto] = useState<string>('');
-  const [pngDeitado, setPngDeitado] = useState<string>('');
+const ModelosImpressao: React.FC<ModelosImpressaoProps> = ({ abrir, onClose, cupom, showToast }) => {
   const [ocupado, setOcupado] = useState<'bt' | 'usb' | ''>('');
   // canal atual / iOS so existem no navegador — estado pos-montagem evita
   // mismatch de hidratacao (lerCanalImpressao le localStorage do dispositivo)
@@ -131,32 +115,12 @@ const ModelosImpressao: React.FC<ModelosImpressaoProps> = ({ abrir, onClose, cup
   }, [abrir]);
 
   const cupomFinal = cupom || DEMO_CUPOM;
-  const boletoFinal = boleto || DEMO_BOLETO;
-  const ehDemo = !cupom || !boleto;
+  const ehDemo = !cupom;
 
   // texto do mini DANFE (48 colunas) — renderizado no papel
   const textoDanfe = useMemo(() => {
     try { return danfeFiscal80(cupomFinal); } catch { return ''; }
   }, [cupomFinal]);
-
-  // desenha o mini boleto (paisagem em pe + rotacionado p/ impressao)
-  useEffect(() => {
-    if (!abrir) return;
-    let vivo = true;
-    (async () => {
-      try {
-        const c = await desenharMiniBoletoPaisagem(boletoFinal);
-        if (!vivo) return;
-        setPngBoleto(canvasParaPng(c));
-        setPngDeitado(canvasParaPng(rotacionar90(c)));
-      } catch {
-        if (vivo) { setPngBoleto(''); setPngDeitado(''); }
-      }
-    })();
-    return () => { vivo = false; };
-  }, [abrir, boletoFinal]);
-
-  useEffect(() => { if (abrir) setAba(abaInicial); }, [abrir, abaInicial]);
 
   if (!abrir) return null;
 
@@ -183,29 +147,6 @@ const ModelosImpressao: React.FC<ModelosImpressaoProps> = ({ abrir, onClose, cup
     }
   };
 
-  // ---------- impressao do mini boleto (imagem deitada) ----------
-  const imprimirBoleto = async (canal: 'bt' | 'usb') => {
-    if (!pngDeitado) { showToast?.('Boleto ainda desenhando — aguarde 1 segundo.', 'error'); return; }
-    setOcupado(canal);
-    try {
-      if (canal === 'usb' || lerCanalImpressao() === 'USB') {
-        imprimirImagemViaUsb(pngDeitado, 76, 'Mini boleto', (m) => showToast?.(`Falha na janela USB: ${m}`, 'error'));
-        showToast?.('Janela de impressão aberta — escolha a térmica USB.', 'success');
-        return;
-      }
-      const ok = await bluetoothPrinter.printImage(pngDeitado, '80MM', { skipConfirm: true });
-      if (ok) showToast?.('Mini boleto enviado à impressora Bluetooth!', 'success');
-      else showToast?.('Impressão não realizada — conecte a impressora.', 'error');
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      showToast?.(msg === 'BLUETOOTH_NAO_SUPORTADO'
-        ? 'Bluetooth indisponível aqui — use o canal USB do PC.'
-        : `Erro: ${msg}`, 'error');
-    } finally {
-      setOcupado('');
-    }
-  };
-
   const canalAtualSel = canalAtual;
   const iosSel = montado && ios;
 
@@ -218,64 +159,21 @@ const ModelosImpressao: React.FC<ModelosImpressaoProps> = ({ abrir, onClose, cup
         </button>
         <div className="flex-1 min-w-0">
           <p className="text-[10px] font-black uppercase tracking-widest">Modelos de impressão 80mm</p>
-          <p className="text-[9px] font-bold text-white/60 truncate">Mini DANFE retrato · Mini boleto paisagem (deitado)</p>
+          <p className="text-[9px] font-bold text-white/60 truncate">Mini DANFE (retrato) — como sai na térmica</p>
         </div>
         {ehDemo && (
-          <span className="text-[8px] font-black uppercase bg-amber-400 text-amber-950 px-2 py-1 rounded-md shrink-0">Exemplo NF-e 139 / Boleto 153</span>
+          <span className="text-[8px] font-black uppercase bg-amber-400 text-amber-950 px-2 py-1 rounded-md shrink-0">Exemplo NF-e 139</span>
         )}
-      </div>
-
-      {/* ABAS */}
-      <div className="bg-slate-800 px-4 py-2 flex gap-2 shrink-0">
-        <button onClick={() => setAba('danfe')}
-          className={`flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-wide transition-all ${aba === 'danfe' ? 'bg-white text-slate-900' : 'bg-white/10 text-white/70 active:scale-95'}`}>
-          <i className="fa-solid fa-receipt mr-1.5"></i>Mini DANFE (retrato)
-        </button>
-        <button onClick={() => setAba('boleto')}
-          className={`flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-wide transition-all ${aba === 'boleto' ? 'bg-white text-slate-900' : 'bg-white/10 text-white/70 active:scale-95'}`}>
-          <i className="fa-solid fa-barcode mr-1.5"></i>Mini boleto (deitado)
-        </button>
       </div>
 
       {/* CONTEUDO — PREVIEW */}
       <div className="flex-1 overflow-y-auto bg-slate-950/60 p-4">
-        {aba === 'danfe' ? (
-          <div className="space-y-3">
-            <p className="text-[9px] font-black text-white/50 uppercase tracking-wide text-center">
-              Papel térmico 80mm — como sai da impressora
-            </p>
-            <Papel80 texto={textoDanfe || 'Cupom indisponível'} />
-          </div>
-        ) : (
-          <div className="space-y-5">
-            {pngBoleto ? (
-              <>
-                <div>
-                  <p className="text-[9px] font-black text-white/50 uppercase tracking-wide text-center mb-2">
-                    O boleto na tela (para conferir os dados)
-                  </p>
-                  <img src={pngBoleto} alt="Mini boleto paisagem" className="w-full max-w-[680px] mx-auto rounded-xl bg-white shadow-lg" />
-                </div>
-                <div className="flex items-start gap-4 justify-center">
-                  <div>
-                    <p className="text-[9px] font-black text-white/50 uppercase tracking-wide text-center mb-2">
-                      Saindo da impressora (deitado)
-                    </p>
-                    <img src={pngDeitado} alt="Mini boleto deitado no rolo 80mm" className="h-[380px] rounded-xl bg-white shadow-lg" />
-                  </div>
-                </div>
-                <p className="text-[9px] font-bold text-white/40 text-center max-w-[560px] mx-auto leading-snug">
-                  A impressora manda o papel com o boleto DEITADO: a altura ocupa os 80mm do rolo e o comprimento corre no papel — vire a folha no sentido horário para ler, igual folha A4 em modo paisagem.
-                </p>
-              </>
-            ) : (
-              <div className="py-16 text-center text-white/60 text-[11px] font-bold uppercase tracking-wide">
-                <i className="fa-solid fa-spinner fa-spin text-2xl mb-3 block"></i>
-                Desenhando o mini boleto...
-              </div>
-            )}
-          </div>
-        )}
+        <div className="space-y-3">
+          <p className="text-[9px] font-black text-white/50 uppercase tracking-wide text-center">
+            Papel térmico 80mm — como sai da impressora
+          </p>
+          <Papel80 texto={textoDanfe || 'Cupom indisponível'} />
+        </div>
       </div>
 
       {/* RODAPE — ACOES DE IMPRESSAO */}
@@ -285,29 +183,16 @@ const ModelosImpressao: React.FC<ModelosImpressaoProps> = ({ abrir, onClose, cup
             Canal atual: {canalAtualSel === 'USB' ? 'USB do PC' : 'Bluetooth'}
           </p>
         )}
-        {aba === 'danfe' ? (
-          <div className="flex gap-2 max-w-[520px] mx-auto">
-            {!iosSel && (
-              <button onClick={() => void imprimirDanfe('bt')} disabled={ocupado !== ''} className="flex-1 bg-indigo-600 text-white font-black py-3.5 rounded-2xl text-[10px] uppercase tracking-widest active:scale-95 disabled:opacity-60 flex items-center justify-center gap-2">
-                <i className={`fa-solid ${ocupado === 'bt' ? 'fa-spinner fa-spin' : 'fa-bluetooth-b'}`}></i> Bluetooth
-              </button>
-            )}
-            <button onClick={() => void imprimirDanfe('usb')} disabled={ocupado !== ''} className="flex-1 bg-emerald-600 text-white font-black py-3.5 rounded-2xl text-[10px] uppercase tracking-widest active:scale-95 disabled:opacity-60 flex items-center justify-center gap-2">
-              <i className={`fa-solid ${ocupado === 'usb' ? 'fa-spinner fa-spin' : 'fa-print'}`}></i> USB do PC
+        <div className="flex gap-2 max-w-[520px] mx-auto">
+          {!iosSel && (
+            <button onClick={() => void imprimirDanfe('bt')} disabled={ocupado !== ''} className="flex-1 bg-indigo-600 text-white font-black py-3.5 rounded-2xl text-[10px] uppercase tracking-widest active:scale-95 disabled:opacity-60 flex items-center justify-center gap-2">
+              <i className={`fa-solid ${ocupado === 'bt' ? 'fa-spinner fa-spin' : 'fa-bluetooth-b'}`}></i> Bluetooth
             </button>
-          </div>
-        ) : (
-          <div className="flex gap-2 max-w-[520px] mx-auto">
-            {!iosSel && (
-              <button onClick={() => void imprimirBoleto('bt')} disabled={ocupado !== '' || !pngDeitado} className="flex-1 bg-indigo-600 text-white font-black py-3.5 rounded-2xl text-[10px] uppercase tracking-widest active:scale-95 disabled:opacity-60 flex items-center justify-center gap-2">
-                <i className={`fa-solid ${ocupado === 'bt' ? 'fa-spinner fa-spin' : 'fa-bluetooth-b'}`}></i> Bluetooth
-              </button>
-            )}
-            <button onClick={() => void imprimirBoleto('usb')} disabled={ocupado !== '' || !pngDeitado} className="flex-1 bg-emerald-600 text-white font-black py-3.5 rounded-2xl text-[10px] uppercase tracking-widest active:scale-95 disabled:opacity-60 flex items-center justify-center gap-2">
-              <i className={`fa-solid ${ocupado === 'usb' ? 'fa-spinner fa-spin' : 'fa-print'}`}></i> USB do PC
-            </button>
-          </div>
-        )}
+          )}
+          <button onClick={() => void imprimirDanfe('usb')} disabled={ocupado !== ''} className="flex-1 bg-emerald-600 text-white font-black py-3.5 rounded-2xl text-[10px] uppercase tracking-widest active:scale-95 disabled:opacity-60 flex items-center justify-center gap-2">
+            <i className={`fa-solid ${ocupado === 'usb' ? 'fa-spinner fa-spin' : 'fa-print'}`}></i> USB do PC
+          </button>
+        </div>
       </div>
     </div>
   );

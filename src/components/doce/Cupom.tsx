@@ -98,11 +98,12 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
   const [maisAberto, setMaisAberto] = useState<boolean>(false);
 
   // ============================================================
-  // BLOCO 139 (regra do dono): RECEBIMENTO REAL na janela de impressão.
-  // A tela de pagamento só diz COMO o cliente vai pagar — o recebimento é
-  // confirmado DEPOIS, na tela de imprimir o cupom/nota ("Essa venda foi à
-  // vista — você recebeu R$ X? [CONFIRMO] / [NÃO RECEBI]"). CONFIRMO fecha
-  // o saldo (PAGO); NÃO RECEBI deixa em aberto (Contas a Receber).
+  // BLOCO 139 -> BLOCO 152: RECEBIMENTO REAL na janela de impressão.
+  // DESDE O BLOCO 152 a venda À VISTA na pronta entrega NASCE PAGO (o cliente
+  // pagou na entrega — cai direto no caixa à vista). Esta janela de confirmação
+  // fica agora para as vendas à vista LEGADAS que ficaram com saldo em aberto
+  // (o vendedor esquecia o CONFIRMO e a venda ficava "em aberto"): Confirmo
+  // fecha o saldo (PAGO); NÃO RECEBI deixa em aberto (Contas a Receber).
   // ============================================================
   const [saleLocal, setSaleLocal] = useState<Sale>(sale);
   useEffect(() => { setSaleLocal(sale); }, [sale]);
@@ -848,10 +849,12 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
               </button>
 
               {/* ================================================================
-                  BLOCO 139: RECEBIMENTO REAL — depois do cupom não fiscal, ANTES
-                  de finalizar: "Essa venda foi à vista — você recebeu R$ X?
-                  [CONFIRMO] / [NÃO RECEBI]". CONFIRMO fecha o saldo no banco
-                  (caixa à vista); NÃO RECEBI deixa em aberto (Contas a Receber).
+                  BLOCO 139 -> 152: RECEBIMENTO REAL — desde o 152 a venda à vista
+                  nasce PAGO (recebido na entrega). Este card só aparece para as
+                  vendas à vista LEGADAS com saldo em aberto: "Essa venda foi à
+                  vista — você recebeu R$ X? [CONFIRMO] / [NÃO RECEBI]". CONFIRMO
+                  fecha o saldo no banco (caixa à vista); NÃO RECEBI deixa em
+                  aberto (Contas a Receber).
                   ================================================================ */}
               {mostraRecebimento && (
                 <div className="rounded-2xl border-2 border-emerald-300 bg-white p-3.5 space-y-2.5">

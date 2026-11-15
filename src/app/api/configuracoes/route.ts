@@ -122,6 +122,9 @@ export async function GET(req: NextRequest) {
     boleto: {
       interConfigurado: isInterConfigured(),
       autoBoletoAReceber: erp.boletoAutoAReceber,
+      // BLOCO 152: texto padrao impresso pelo Inter na seção "INFORMAÇÕES DE
+      // RESPONSABILIDADE DO BENEFICIÁRIO" do PDF (linha 2 da mensagem)
+      mensagemPadrao: erp.boletoMensagemPadrao,
       webhookUrl: `${origin}/api/webhooks/inter`,
     },
     geral: {
@@ -214,6 +217,8 @@ export async function POST(req: NextRequest) {
   if (typeof body.boletoAutoAReceber === 'boolean') parcial.boletoAutoAReceber = body.boletoAutoAReceber;
   // BLOCO 125: switch do QR do catalogo no cupom (card proprio no hub)
   if (typeof body.qrCatalogoNoCupom === 'boolean') parcial.qrCatalogoNoCupom = body.qrCatalogoNoCupom;
+  // BLOCO 152: texto padrao do boleto (mensagem do beneficiario no PDF do Inter)
+  if (typeof body.boletoMensagemPadrao === 'string') parcial.boletoMensagemPadrao = body.boletoMensagemPadrao;
   if (body.emitente && typeof body.emitente === 'object') {
     const e = body.emitente as Record<string, unknown>;
     const cnpj = String(e.cnpj || '').replace(/\D/g, '');

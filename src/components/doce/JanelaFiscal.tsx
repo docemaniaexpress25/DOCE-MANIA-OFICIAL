@@ -225,6 +225,11 @@ const JanelaFiscal: React.FC<JanelaFiscalProps> = ({ sale, client, nota, focus, 
   };
 
   // ---------- IMPRIMIR CUPOM FISCAL 80mm ----------
+  // BLOCO 150 (dono: "os valores nao fecham" / "ta gerando nota nova"):
+  // o cupom 80mm só sai do DOCUMENTO AUTORIZADO (XML da nota já emitida —
+  // mesmos valores do PDF A4). NUNCA com os dados da venda: a NFC-e anônima
+  // sai no preço cupom (menor que X) e o cupom com valores da venda parecia
+  // uma "nota nova". XML indisponível = aviso e tentar de novo.
   const imprimirCupomFiscal = async () => {
     if (busy || !sale.id) return;
     setBusy(true);
@@ -236,7 +241,11 @@ const JanelaFiscal: React.FC<JanelaFiscalProps> = ({ sale, client, nota, focus, 
         return;
       }
       if (!(c.ok && cup?.autorizada && cup.chave)) {
-        setErro('Cupom fiscal ainda não disponível — confirme a autorização da SEFAZ (Atualizar situação).');
+        setErro(c.erro || 'Cupom fiscal ainda não disponível — confirme a autorização da SEFAZ (Atualizar situação).');
+        return;
+      }
+      if (cup.fonte !== 'XML') {
+        setErro('O XML da nota ainda não baixou da SEFAZ — o cupom 80mm é fiel ao documento autorizado (mesmos valores do PDF). Aguarde uns instantes e toque de novo.');
         return;
       }
       const texto = danfeFiscal80(cup);
@@ -259,6 +268,7 @@ const JanelaFiscal: React.FC<JanelaFiscalProps> = ({ sale, client, nota, focus, 
   };
 
   // ---------- VER MINI DANFE (80mm retrato) — visualizar antes de imprimir ----------
+  // BLOCO 150: o preview também só mostra o DOCUMENTO AUTORIZADO (XML).
   const verMiniDanfe = async () => {
     if (busy || !sale.id) return;
     setBusy(true);
@@ -267,6 +277,10 @@ const JanelaFiscal: React.FC<JanelaFiscalProps> = ({ sale, client, nota, focus, 
       const cup = c.cupom;
       if (!c.ok || !cup?.chave) {
         setErro('Cupom fiscal ainda não disponível — confirme a autorização da SEFAZ.');
+        return;
+      }
+      if (cup.fonte !== 'XML') {
+        setErro('O XML da nota ainda não baixou da SEFAZ — o preview é fiel ao documento autorizado. Aguarde uns instantes e toque de novo.');
         return;
       }
       setPreviewCupom(cup);

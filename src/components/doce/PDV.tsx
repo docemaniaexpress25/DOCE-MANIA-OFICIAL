@@ -14,7 +14,6 @@ import { isIOSDevice, TEXTO_IMPRESSAO_IOS, TITULO_IMPRESSAO_IOS } from '@/lib/io
 import { imprimirViaUsb, lerCanalImpressao, salvarCanalImpressao, CanalImpressao } from '@/lib/usbPrint';
 import { saleService } from '@/services/saleService';
 import { notaService } from '@/services/notaService';
-import { danfeMiniTexto } from '@/lib/danfeTexto';
 // BLOCO 131: cupom fiscal PERFEITO 80mm — dados do XML autorizado pela SEFAZ
 import { danfeFiscal80 } from '@/lib/danfe80';
 import { clienteAptoNfe, mascararCpf, validaCpf } from '@/lib/cnpjAutocomplete';
@@ -350,103 +349,43 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   };
 
   // ==================================================================
-  // BLOCO 131: CUPOM FISCAL 80mm PERFEITO no modal de venda finalizada —
-  // busca o documento AUTORIZADO (XML da SEFAZ via /api/notas/cupom) e
-  // imprime o DANFE completo no layout oficial. Fallback: mini DANFE
-  // local (BLOCO 82) quando a SEFAZ/Focus nao responde.
+  // BLOCO 131/150: CUPOM FISCAL 80mm no modal de venda finalizada — sai
+  // SEMPRE do DOCUMENTO AUTORIZADO (XML da nota já emitida — a MESMA
+  // fonte do PDF "Ver Danfe"). NUNCA mais monta com os dados da venda:
+  // como a NFC-e anônima sai no preço cupom (menor que X), o cupom com
+  // valores da venda parecia "uma nota nova" e os valores não fechavam.
+  // XML indisponível = aviso claro e tentar de novo em instantes.
   // ==================================================================
   const handleImprimirDanfeModal = async () => {
     const s = sucessoData?.sale;
     if (!s || notaEmitindo) return;
     setNotaEmitindo(true);
     try {
-      let texto = '';
       const c = await notaService.cupom80(String(s.id));
       const cup = c.cupom;
       if (c.ok && cup?.cancelada) {
         setAppModal({ title: 'Cupom Fiscal', message: 'Nota CANCELADA na SEFAZ — não pode ser impressa.', icon: 'fa-solid fa-ban', iconColor: 'text-rose-500', type: 'error' });
         return;
       }
-      if (c.ok && cup?.autorizada && cup.chave) {
-        // Caminho NOVO: cupom fiscal fiel ao documento autorizado
-        texto = danfeFiscal80(cup);
-        setNotaResult(prev => prev ? {
-          ...prev,
-          numero: cup.numero || prev.numero,
-          pdfUrl: cup.pdfUrl || prev.pdfUrl,
-          chave: cup.chave || prev.chave,
-          serie: cup.serie || prev.serie,
-          protocolo: cup.protocolo || prev.protocolo,
-          dataAutorizacao: cup.dataAutorizacao || prev.dataAutorizacao,
-          qrCode: cup.qrCode || prev.qrCode,
-        } : prev);
-      } else {
-        // ----- FALLBACK: mini DANFE local (BLOCO 82) -----
-        let d = {
-          chave: notaResult?.chave || '',
-          numero: notaResult?.numero || '',
-          serie: notaResult?.serie || '',
-          protocolo: notaResult?.protocolo || '',
-          dataAutorizacao: notaResult?.dataAutorizacao || '',
-          qrCode: notaResult?.qrCode || '',
-          emitente: notaResult?.emitente,
-        };
-        if (!d.chave || !d.emitente?.cnpj) {
-          const r = await notaService.consultar(s.id);
-          if (r.ok && r.nota) {
-            setNotaResult(prev => prev ? {
-              ...prev,
-              numero: r.nota?.numero || prev.numero,
-              pdfUrl: r.nota?.pdfUrl || prev.pdfUrl,
-              chave: r.nota?.chave || prev.chave,
-              serie: r.nota?.serie || prev.serie,
-              protocolo: r.nota?.protocolo || prev.protocolo,
-              dataAutorizacao: r.nota?.dataAutorizacao || prev.dataAutorizacao,
-              qrCode: r.nota?.qrCode || prev.qrCode,
-              emitente: r.nota?.emitente || prev.emitente,
-            } : prev);
-            d = {
-              chave: r.nota?.chave || d.chave,
-              numero: r.nota?.numero || d.numero,
-              serie: r.nota?.serie || d.serie,
-              protocolo: r.nota?.protocolo || d.protocolo,
-              dataAutorizacao: r.nota?.dataAutorizacao || d.dataAutorizacao,
-              qrCode: r.nota?.qrCode || d.qrCode,
-              emitente: r.nota?.emitente || d.emitente,
-            };
-          }
-        }
-        if (!d.chave) {
-          setAppModal({ title: 'Cupom Fiscal', message: 'Nota sem chave de acesso ainda — aguarde a autorizacao da SEFAZ e tente de novo.', icon: 'fa-solid fa-triangle-exclamation', iconColor: 'text-rose-500', type: 'error' });
-          return;
-        }
-        const prods = new Map(products.map(p => [p.id, p.nome] as const));
-        const itens = (s.itens || []).map(i => ({
-          descricao: prods.get(i.produtoId) || 'ITEM',
-          quantidade: Number(i.quantidade) || 0,
-          valorUnitario: Number(i.precoVenda) || 0,
-        }));
-        texto = danfeMiniTexto({
-          tipo: (s.modoNota === 'NFCE' ? 'NFCE' : 'NFE') as 'NFE' | 'NFCE',
-          chave: d.chave,
-          numero: d.numero,
-          serie: d.serie,
-          protocolo: d.protocolo,
-          dataAutorizacao: d.dataAutorizacao,
-          emitente: d.emitente,
-          qrCode: d.qrCode,
-          dataVenda: s.data,
-          cliente: { nome: client.nomeFantasia || client.nome || '', doc: client.cnpj || '' },
-          itens,
-          valorTotal: Number(s.valorTotal) || 0,
-          metodoPagamento: s.metodoPagamento,
-          detalhePagamento: s.detalhePagamento,
-          statusPagamento: s.statusPagamento,
-          dataVencimento: s.dataVencimento,
-          entregaStatus: s.entregaStatus,
-          tipoVenda: s.tipoVenda,
-        });
+      if (!c.ok || !cup?.autorizada || !cup.chave) {
+        setAppModal({ title: 'Cupom Fiscal', message: c.erro || 'Cupom fiscal ainda não disponível — confirme a autorização da SEFAZ e tente de novo.', icon: 'fa-solid fa-hourglass-half', iconColor: 'text-amber-500', type: 'info' });
+        return;
       }
+      if (cup.fonte !== 'XML') {
+        setAppModal({ title: 'Cupom Fiscal', message: 'O XML da nota ainda não baixou da SEFAZ — o cupom 80mm é fiel ao documento autorizado (mesmos valores do PDF). Aguarde uns instantes e toque de novo.', icon: 'fa-solid fa-hourglass-half', iconColor: 'text-amber-500', type: 'info' });
+        return;
+      }
+      const texto = danfeFiscal80(cup);
+      setNotaResult(prev => prev ? {
+        ...prev,
+        numero: cup.numero || prev.numero,
+        pdfUrl: cup.pdfUrl || prev.pdfUrl,
+        chave: cup.chave || prev.chave,
+        serie: cup.serie || prev.serie,
+        protocolo: cup.protocolo || prev.protocolo,
+        dataAutorizacao: cup.dataAutorizacao || prev.dataAutorizacao,
+        qrCode: cup.qrCode || prev.qrCode,
+      } : prev);
       // BLOCO 111: canal USB do PC — DANFE 80mm sai pela janela de impressão
       if (lerCanalImpressao() === 'USB') {
         imprimirViaUsb(texto, '80MM', (m) => {
@@ -2143,14 +2082,18 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                 <i className="fa-solid fa-circle-check text-emerald-600"></i>
                 <span className="text-[10px] font-black text-emerald-700 uppercase flex-1">{notaResult.numero ? `Nota ${notaResult.numero} ` : ''}Autorizada</span>
               </div>
+              {/* BLOCO 150: "Ver Danfe" PEQUENO (só abre o PDF da nota JÁ emitida,
+                  para enviar ao cliente) — o botão de IMPRIMIR E GUARDAR é o
+                  Cupom Fiscal 80mm, fiel ao documento autorizado */}
               {notaResult.pdfUrl && (
-                <a href={notaResult.pdfUrl} target="_blank" rel="noopener noreferrer" className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest flex items-center justify-center">
-                  <i className="fa-solid fa-file-pdf mr-2"></i>Abrir DANFE e Enviar ao Cliente
+                <a href={notaResult.pdfUrl} target="_blank" rel="noopener noreferrer" className="w-full bg-white border border-emerald-300 text-emerald-700 font-black py-2.5 rounded-xl active:scale-95 uppercase text-[9px] tracking-widest flex items-center justify-center">
+                  <i className="fa-solid fa-file-pdf mr-1.5"></i>Ver Danfe{notaResult.numero ? ` — Nota ${notaResult.numero}` : ''}
                 </a>
               )}
-              <button onClick={handleImprimirDanfeModal} disabled={notaEmitindo} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest disabled:opacity-60 flex items-center justify-center">
-                <i className={`fa-solid ${notaEmitindo ? 'fa-spinner fa-spin' : 'fa-print'} mr-2`}></i>{notaEmitindo ? 'Imprimindo...' : 'Cupom Fiscal (80mm)'}
+              <button onClick={handleImprimirDanfeModal} disabled={notaEmitindo} className="w-full bg-blue-600 text-white font-black py-3.5 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest disabled:opacity-60 flex items-center justify-center">
+                <i className={`fa-solid ${notaEmitindo ? 'fa-spinner fa-spin' : 'fa-print'} mr-2`}></i>{notaEmitindo ? 'Imprimindo...' : 'Imprimir Cupom Fiscal (80mm)'}
               </button>
+              <p className="text-[8px] font-bold text-gray-400 uppercase text-center leading-snug">80mm = cupom da NOTA autorizada (imprimir e guardar) · o boleto segue o valor X da venda</p>
             </div>
           )}
           {!sucessoData.isPreVenda && notaResult?.status === 'REJEITADA' && (

@@ -9,7 +9,6 @@ import TrocasBox from '@/components/doce/TrocasBox';
 // direto no card (regra do dono: na pre-venda quem emite e o admin), imprime
 // o DANFE simplificado na termica 80mm ou abre o PDF A4 (DANFE oficial Focus).
 import { notaService } from '@/services/notaService';
-import { danfeMiniTexto } from '@/lib/danfeTexto';
 // BLOCO 131: cupom fiscal PERFEITO 80mm — dados do XML autorizado pela SEFAZ
 import { danfeFiscal80 } from '@/lib/danfe80';
 import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
@@ -289,9 +288,12 @@ const AcaoFiscalAdmin: React.FC<{ p: FilaItem; showToast: (m: string, t?: 'succe
     else showToast('Sem novidade na SEFAZ.', 'success');
   };
 
-  // BLOCO 131: CUPOM FISCAL 80mm PERFEITO — busca o documento AUTORIZADO
-  // (XML da SEFAZ via /api/notas/cupom) e imprime o DANFE completo no layout
-  // oficial. Fallback: mini DANFE local (BLOCO 82) se a SEFAZ nao responder.
+  // BLOCO 131/150: CUPOM FISCAL 80mm — sai SEMPRE do DOCUMENTO AUTORIZADO
+  // (XML da nota já emitida — mesmos valores do PDF). NÃO existe mais o
+  // fallback com os dados da pré-venda/venda: como a NFC-e anônima sai no
+  // preço cupom (menor que X), o cupom com valores da venda parecia "uma
+  // nota nova" e os valores não fechavam. XML indisponível = aviso e
+  // tentar de novo.
   const imprimir80 = async () => {
     if (busy) return;
     setBusy(true);
@@ -304,49 +306,26 @@ const AcaoFiscalAdmin: React.FC<{ p: FilaItem; showToast: (m: string, t?: 'succe
         setBusy(false);
         return;
       }
-      if (c.ok && cup?.autorizada && cup.chave) {
-        // Caminho NOVO: cupom fiscal fiel ao documento autorizado
-        texto = danfeFiscal80(cup);
-        setNota({
-          status: 'AUTORIZADA',
-          numero: cup.numero || nota.numero,
-          pdfUrl: cup.pdfUrl || nota.pdfUrl,
-          chave: cup.chave || nota.chave,
-          erro: undefined,
-          // BLOCO 135: modelo do cupom (NFCE|NFE) — badge certo no card
-          tipo: cup.modelo,
-        });
-      } else {
-        // ----- FALLBACK: mini DANFE local (BLOCO 82) -----
-        let d: NotaLocal & { serie?: string; protocolo?: string; dataAutorizacao?: string; qrCode?: string; emitente?: any } = { ...nota };
-        if (!d.chave) {
-          const r = await notaService.consultar(p.saleId);
-          if (r.ok && r.nota) {
-            d = { ...d, ...r.nota };
-            setNota({ status: r.nota.status, numero: r.nota.numero, pdfUrl: r.nota.pdfUrl, chave: r.nota.chave, erro: r.nota.erro, tipo: r.nota.tipo });
-          }
-        }
-        if (!d.chave) { showToast('Nota sem chave de acesso — consulte a SEFAZ e tente de novo.', 'error'); setBusy(false); return; }
-        texto = danfeMiniTexto({
-          chave: d.chave,
-          numero: d.numero || '',
-          serie: d.serie || '',
-          protocolo: d.protocolo || '',
-          dataAutorizacao: d.dataAutorizacao || '',
-          emitente: d.emitente,
-          qrCode: d.qrCode || '',
-          dataVenda: p.dataVenda,
-          cliente: { nome: p.cliente.nome, doc: p.cliente.cnpj || '' },
-          itens: p.itens.map(i => ({ descricao: i.nome, quantidade: i.quantidade, valorUnitario: i.precoVenda })),
-          valorTotal: p.valorTotal,
-          metodoPagamento: p.metodoPagamento || undefined,
-          detalhePagamento: p.detalhePagamento || undefined,
-          statusPagamento: p.statusPagamento,
-          dataVencimento: p.dataVencimento || undefined,
-          entregaStatus: p.entregaStatus,
-          tipoVenda: 'PRE_VENDA',
-        });
+      if (!(c.ok && cup?.autorizada && cup.chave)) {
+        showToast(c.erro || 'Cupom fiscal ainda não disponível — confirme a autorização da SEFAZ e tente de novo.', 'error');
+        setBusy(false);
+        return;
       }
+      if (cup.fonte !== 'XML') {
+        showToast('O XML da nota ainda não baixou da SEFAZ — o cupom 80mm é fiel ao documento autorizado (mesmos valores do PDF). Tente de novo em instantes.', 'error');
+        setBusy(false);
+        return;
+      }
+      texto = danfeFiscal80(cup);
+      setNota({
+        status: 'AUTORIZADA',
+        numero: cup.numero || nota.numero,
+        pdfUrl: cup.pdfUrl || nota.pdfUrl,
+        chave: cup.chave || nota.chave,
+        erro: undefined,
+        // BLOCO 135: modelo do cupom (NFCE|NFE) — badge certo no card
+        tipo: cup.modelo,
+      });
       showToast('Enviando cupom fiscal à impressora...', 'success');
       // BLOCO 111: canal USB do PC — DANFE sai pela janela de impressão
       if (lerCanalImpressao() === 'USB') {

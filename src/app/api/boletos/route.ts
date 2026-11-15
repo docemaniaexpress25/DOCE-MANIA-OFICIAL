@@ -49,7 +49,7 @@ import {
 const BAD = (status: number, erro: string, extra: Record<string, unknown> = {}) =>
   NextResponse.json({ ok: false, erro, ...extra }, { status });
 
-const COLS = 'id, vendedor_id, client_id, valor_total, valor_pago, metodo_pagamento, status_pagamento, data_venda, nota_status, nota_chave, nota_numero, inter_boleto_status, inter_boleto_codigo, inter_boleto_seu_numero, inter_boleto_linha, inter_boleto_barras, inter_boleto_pix, inter_boleto_vencimento, inter_boleto_valor, inter_boleto_erro';
+const COLS = 'id, vendedor_id, client_id, valor_total, valor_pago, metodo_pagamento, status_pagamento, data_venda, nota_status, nota_tipo, nota_chave, nota_numero, nota_ref, inter_boleto_status, inter_boleto_codigo, inter_boleto_seu_numero, inter_boleto_linha, inter_boleto_barras, inter_boleto_pix, inter_boleto_vencimento, inter_boleto_valor, inter_boleto_erro';
 
 function cobrancaPublica(s: Record<string, unknown>): CobrancaPublica {
   return {
@@ -77,6 +77,9 @@ async function atualizar(saleId: string, patch: Record<string, unknown>) {
  * SEMPRE o endpoint /v2/nfe/{ref} — para venda com NFC-e a nota nunca era
  * encontrada (NFC-e vive em /v2/nfce) e o boleto saía sem notaFiscal.
  * Agora o doc segue nota_tipo (NFCE -> 'nfce').
+ * BLOCO 150: nota_ref ENTROU no COLS — antes a busca na Focus usava
+ * nota_numero (que não é a referência do documento na Focus) e a chave
+ * nunca chegava; agora usa a MESMA referência gravada na emissão.
  */
 async function chaveDaNota(sale: Record<string, unknown>): Promise<string> {
   const chave = String((sale.nota_chave as string) || '').replace(/\D/g, '');
@@ -403,7 +406,30 @@ export async function POST(req: NextRequest) {
     inter_boleto_erro: null,
   });
 
-  const r = await emitirCobranca(payload as never);
+  let r = await emitirCobranca(payload as never);
+  // -----------------------------------------------------------------
+  // BLOCO 150 (dono: "ESTA DANDO FALHA AO GERAR BOLETO ATRELADO A NF").
+  // O POST da cobranca v3 pode recusar o objeto notaFiscal (campo não
+  // aceito em todas as contas/ambiente) e aí o boleto do prazo morria
+  // INTEIRO. Agora: retenta SEM o vínculo formal e leva a NFC-e/NF-e
+  // para a MENSAGEM do boleto (aparece no PDF do Inter e no comprovante
+  // 80mm). O boleto NUNCA mais falha por causa da nota — e o VALOR
+  // segue sendo X (saldo da VENDA): a NFC-e anônima sai no preço cupom
+  // e pode ter valor menor — isso NÃO interfere no boleto.
+  // -----------------------------------------------------------------
+  let fallbackSemNota = false;
+  if (!r.ok && notaFiscal) {
+    const semNota = {
+      ...payload,
+      notaFiscal: undefined,
+      mensagem: {
+        ...payload.mensagem,
+        linha3: `${String(sale.nota_tipo || '').toUpperCase() === 'NFE' ? 'NF-e' : 'NFC-e'} ${String(sale.nota_numero || '')} atrelada a esta cobranca`,
+      },
+    };
+    r = await emitirCobranca(semNota as never);
+    fallbackSemNota = r.ok;
+  }
   if (!r.ok || !r.data || !(r.data as Record<string, unknown>).codigoSolicitacao) {
     const erro = r.erro || `HTTP ${r.status}`;
     await atualizar(saleId, { inter_boleto_status: 'FALHA_EMISSAO', inter_boleto_erro: erro });
@@ -429,7 +455,9 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({
     ok: true,
     boleto,
-    ...(notaFiscal ? { notaAtrelada: true } : {}),
-    ...(avisoAtrelamento ? { avisoAtrelamento } : {}),
+    ...(notaFiscal && !fallbackSemNota ? { notaAtrelada: true } : {}),
+    ...(fallbackSemNota
+      ? { avisoAtrelamento: `Boleto GERADO com o valor da venda. O Inter não aceitou o vínculo formal da nota agora — a ${String(sale.nota_tipo || '').toUpperCase() === 'NFE' ? 'NF-e' : 'NFC-e'} ${String(sale.nota_numero || '')} ficou escrita na mensagem do boleto (aparece no PDF e no comprovante).` }
+      : avisoAtrelamento ? { avisoAtrelamento } : {}),
   });
 }

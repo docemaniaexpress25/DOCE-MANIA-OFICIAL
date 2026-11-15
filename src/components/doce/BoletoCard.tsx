@@ -359,9 +359,10 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
             <div className="space-y-2 bg-white/70 rounded-xl p-2.5">
               <div className="grid grid-cols-2 gap-2">
                 <label className="block">
-                  <span className="text-[8px] font-black uppercase text-gray-500">Valor (R$)</span>
+                  <span className="text-[8px] font-black uppercase text-gray-500">Valor (R$) — já vem com o VALOR DA VENDA (X)</span>
                   <input type="number" step="0.01" min="2.5" value={valor} onChange={e => setValor(e.target.value)}
                     className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-[11px] font-bold text-gray-800 focus:outline-none focus:border-gray-400" />
+                  <span className="block text-[7.5px] font-bold text-gray-400 mt-0.5">O boleto segue o valor da venda — a NFC-e anônima (preço cupom) não interfere.</span>
                 </label>
                 <label className="block">
                   <span className="text-[8px] font-black uppercase text-gray-500">Vencimento</span>

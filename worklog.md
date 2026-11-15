@@ -1812,3 +1812,29 @@ QA FINAL EM PRODUÇÃO (PIN do admin + agent-browser com token real):
 - BOLETO: badge do boleto Inter visível na linha (Nº26 trouxe o ícone; Nº27 antigo trouxe FALHA_EMISSAO) — opção presente quando o boleto foi gerado.
 - FILTRO PENDENTE: chip filtra NAO_EMITIDA de verdade (BLOCO 150c — antes comparava com status inexistente "PENDENTE" e zerava a lista) + contagens dos chips estáveis (base sem filtro de status).
 - Screenshot final: portal com KPI "56 pendentes", chips com contagens, pendentes com botão EMITIR (raio), cancelada com EDITAR.
+
+## bloco151 — BOLETO ATRELADO À NF: fim da falha de emissão (fallback sem notaFiscal + nota_ref no select); CUPOM 80mm = 100% documento autorizado (fim do "nota nova"/valores que não fecham); botão VER DANFE menor (2026-11-15)
+
+DONO PEDIU (verbatim): "ESTA DANDO FALHA AO GERAR BOLETO ATRELADO A NF , VEJA O QUE ESTA CAUSANDO ESSE ERRO, SE O VALOR DA VENDA É X! ENTAO BOLETO TBM É X! NFC PODE TER VALOR MENOR, ... tem um erro no sistema! o sistema gera a nfc exemplo nfc 27, ai tem o botao de visualizar aquele pdf entao logo abaixo tem um botao de cupom fiscal 80mm que pelo que eu entendi ta gerando uma nota nova! pq os valores nao fecham! ai o boleto na atrela a nota, esse botao 80mm deve pegar o html da nota ja gerada e transforma em uma mini danfe cupom fiscal com layout simples! arrume esse fluxo. esse botao abrir danfe e enviar ao cliente deve se chamar ver danfe e ele deve ser menor e ocupar menos espaço, o de 80mm deve ser pra imprimir e guardar no caso o cupom nao fiscal entregue pra conferencia é de um valor maior pq o de 80mm é nfc sem cpf anonimo. arrume esse fluxo e faça o commit"
+
+CAUSA RAIZ 1 (FALHA AO GERAR BOLETO ATRELADO À NF): o POST /cobranca/v3/cobrancas do Inter ia com o objeto notaFiscal; quando o Inter recusa esse campo, o boleto do prazo MORRIA INTEIRO ("Inter recusou o boleto"). E o atrelamento real já nascia fraco: a busca da chave na Focus usava nota_numero como referência (nota_ref NÃO estava no select COLS) — a chave nunca chegava e o boleto saía sem vínculo ("ai o boleto na atrela a nota").
+
+CAUSA RAIZ 2 (BOTÃO 80mm "GERANDO NOTA NOVA" / VALORES QUE NÃO FECHAM): quando o XML da SEFAZ não baixava a tempo, o cupom fiscal 80mm caía num FALLBACK que montava o cupom com os dados da VENDA (itens e totais no preço normal = X). Como a NFC-e ANÔNIMA sai no PREÇO CUPOM (menor que X — regra do BLOCO 108, intencional), o cupom 80mm saía com valores DIFERENTES da nota 27 do PDF e parecia uma "nota nova". O cupom não fiscal de conferência (valor maior, da venda) é outro documento — recibo do app; o 80mm é o documento fiscal.
+
+FEITO (BLOCO 151):
+1. API boletos (api/boletos/route.ts): nota_ref + nota_tipo no COLS (chave da Focus buscada pela referência certa de verdade). NOVO FALLBACK DE EMISSÃO: se o Inter recusar a cobranca COM notaFiscal, retenta SEM o campo e leva a NFC-e/NF-e para a MENSAGEM do boleto ("NFC-e 27 atrelada a esta cobranca" — aparece no PDF do Inter e no comprovante 80mm). O boleto NUNCA mais falha por causa da nota; quando o vínculo formal não sai, o app avisa o vendedor na hora (avisoAtrelamento).
+2. VALOR X = X garantido e explícito: o boleto sempre parte do SALDO DA VENDA (valor_total - valor_pago) — NFC anônima não interfere; BoletoCard mostra no form "já vem com o VALOR DA VENDA (X)" + "a NFC-e anônima (preço cupom) não interfere".
+3. CUPOM FISCAL 80mm = SEMPRE o DOCUMENTO AUTORIZADO (fonte XML da nota já emitida — a MESMA fonte do PDF/DANFE). Fallback com dados da venda EXCLUÍDO dos 3 fluxos (PDV modal de venda finalizada, JanelaFiscal, FilaEntregas): sem XML -> aviso claro ("O XML da nota ainda não baixou da SEFAZ — o cupom 80mm é fiel ao documento autorizado... toque de novo") em vez de imprimir cupom com valores errados. Mini DANFE local só resta nos documentos NÃO fiscais (pré-pedido etc.).
+4. BOTÃO "Abrir DANFE e Enviar ao Cliente" -> "Ver Danfe — Nota {nº}": menor (py-2.5, text-[9px], borda fina) e ocupa menos espaço; o botão GRANDE agora é "Imprimir Cupom Fiscal (80mm)" (imprimir e guardar). Legenda no modal: "80mm = cupom da NOTA autorizada (imprimir e guardar) · o boleto segue o valor X da venda".
+
+SQL PARA O DONO RODAR: NENHUM — nota_ref/nota_tipo já existem no banco (blocos 10/25); tudo código.
+
+ARQUIVOS: src/app/api/boletos/route.ts, src/components/doce/PDV.tsx (sem danfeMiniTexto), src/components/doce/JanelaFiscal.tsx, src/components/doce/FilaEntregas.tsx (sem danfeMiniTexto), src/components/doce/BoletoCard.tsx, worklog.md.
+
+QA:
+- LINT: 0 erros / 10 warnings (baseline exata).
+- Fluxo do boleto: EMITIR com nota AUTORIZADA -> tentativa COM notaFiscal; se o Inter recusar -> retenta sem o campo com a nota na mensagem; aviso no app. Valor sempre saldo da venda.
+- Fluxo do cupom: cupom80 -> cancelada bloqueia; não autorizada bloqueia; fonte != XML -> aviso e NÃO imprime; fonte XML -> danfeFiscal80 (fiel ao PDF).
+- Teste do dono: (1) venda a prazo com NFC anônima -> boleto sai com valor X (da venda) e nota na mensagem do boleto; (2) "Ver Danfe" abre o PDF da nota 27; (3) "Imprimir Cupom Fiscal (80mm)" sai idêntico aos valores do PDF 27; (4) cupom não fiscal de conferência continua com o valor da venda (maior).
+
+DÚVIDA DO DONO RESPONDIDA (baixa automática do Inter): SIM — boleto registrado no Inter (BOLETO+PIX) é dado como RECEBIDO e baixado AUTOMATICAMENTE quando pago (boleto em qualquer banco ou PIX do QRCode do boleto). Não depende de estar atrelado à NF. No app, o status atualizado aparece no card do boleto ("Atualizar situação no Inter"); o Inter também oferece webhook de pagamento para baixa automática NO sistema (pode ser implementado depois).

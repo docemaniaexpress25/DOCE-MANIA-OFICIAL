@@ -129,7 +129,7 @@ interface AdminDashboardProps {
 }
 
 // BLOCO 118: 'CAIXA' agora é o FECHAMENTO DE CAIXA — as comissões viram aba 'COMISSOES'
-type TabType = 'HOME' | 'CATALOGO' | 'CATALOGO_PORTAL' | 'FISCAL_XML' | 'CATEGORIAS' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'COMISSOES' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'COMPROVANTES' | 'ENTREGAS' | 'LUCRO' | 'BACKUP' | 'SETTINGS' | 'CONFIG_ERP' | 'ESTOQUE_MOV' | 'NOTAS_PENDENTES';
+type TabType = 'HOME' | 'CATALOGO' | 'CATALOGO_PORTAL' | 'FISCAL_XML' | 'ENTRADAS' | 'CATEGORIAS' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'COMISSOES' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'COMPROVANTES' | 'ENTREGAS' | 'LUCRO' | 'BACKUP' | 'SETTINGS' | 'CONFIG_ERP' | 'ESTOQUE_MOV' | 'NOTAS_PENDENTES';
 
 type ReportType = 'RESUMO' | 'TOP_CLIENTES' | 'TOP_PRODUTOS' | 'CLIENTES_RISCO' | 'VENDAS_CATEGORIAS' | 'PRODUTOS_RENTAVEIS' | null;
 type ReportFilterType = 'RESUMO' | 'TOP_PRODUTOS' | 'TOP_CLIENTES' | 'CATEGORIAS' | 'VENDEDORES' | 'DIVIDAS' | 'PRODUTOS_RENTAVEIS';
@@ -1753,7 +1753,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           <div className="grid grid-cols-2 gap-4">
             <MenuCard icon="fa-boxes-stacked" title="Estoque" tab="CATALOGO" color="bg-blue-50 text-blue-600" />
             <MenuCard icon="fa-file-invoice" title="Portal Fiscal" tab="NOTAS_PENDENTES" color="bg-emerald-50 text-emerald-600" />
-            <MenuCard icon="fa-file-code" title="XML → Produtos" tab="FISCAL_XML" color="bg-teal-50 text-teal-600" />
+            {/* BLOCO 149: Portal de Entradas — notas XML de fornecedores (migra a antiga aba XML → Produtos) */}
+            <MenuCard icon="fa-file-import" title="Portal de Entradas" tab="ENTRADAS" color="bg-teal-50 text-teal-600" />
             <MenuCard icon="fa-store" title="Catalogo Portal" tab="CATALOGO_PORTAL" color="bg-emerald-50 text-emerald-600" />
             <MenuCard icon="fa-tags" title="Categorias" tab="CATEGORIAS" color="bg-indigo-50 text-indigo-600" />
             <MenuCard icon="fa-truck-ramp-box" title="Cargas" tab="CARGAS" color="bg-orange-50 text-orange-600" />
@@ -1798,6 +1799,30 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             <i className="fa-solid fa-up-right-from-square text-xs opacity-70"></i>
           </a>
           <p className="text-[9px] font-bold text-gray-400 leading-snug px-1">As notas pendentes saíram do app: as notas de saída que estavam em outros sistemas JÁ FORAM BATIDAS lá. O cancelamento na SEFAZ exclui a venda, repõe o estoque e cancela o boleto automaticamente.</p>
+        </div>
+      )}
+
+      {/* ====================================================================
+          BLOCO 149 (regra do dono): PORTAL DE ENTRADAS — mesmo padrão do
+          Portal Fiscal. A aba XML → Produtos migrou para o portal /entradas:
+          entrada por LOTE de XMLs, organização por nota e vinculação com
+          produtos existentes + entrada no estoque com 1 clique.
+          ==================================================================== */}
+      {activeTab === 'ENTRADAS' && (
+        <div className="space-y-4">
+          <header className="px-1 flex flex-col gap-1">
+            <h2 className="text-xl font-black text-gray-800 tracking-tight leading-none">Portal de Entradas</h2>
+            <p className="text-[10px] font-black uppercase text-gray-400">Notas XML de fornecedores — lote, vinculação e estoque</p>
+          </header>
+          <a href="/entradas" target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 bg-teal-600 text-white rounded-3xl px-5 py-6 shadow-lg active:scale-[0.98] transition-transform">
+            <span className="w-12 h-12 rounded-2xl bg-white/15 flex items-center justify-center shrink-0"><i className="fa-solid fa-file-import text-xl"></i></span>
+            <span className="flex-1 flex flex-col items-start">
+              <span className="text-sm font-black uppercase tracking-widest">Acessar o Portal de Entradas</span>
+              <span className="text-[9px] font-bold opacity-80 leading-snug">XML de fornecedores · entrada por lote · vincular produtos · dar entrada no estoque</span>
+            </span>
+            <i className="fa-solid fa-up-right-from-square text-xs opacity-70"></i>
+          </a>
+          <p className="text-[9px] font-bold text-gray-400 leading-snug px-1">Arraste vários XMLs (ou .zip) de uma vez — cada nota vira UMA linha. Expanda a linha para conferir os itens, vincule aos produtos do catálogo e dê entrada no estoque com 1 clique.</p>
         </div>
       )}
 

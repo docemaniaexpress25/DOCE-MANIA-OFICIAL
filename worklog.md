@@ -1799,3 +1799,16 @@ QA:
 - TSC --noEmit: nenhum erro NOVO nos arquivos tocados (baseline do portado preservada; focusNfe.ts(579) já existia antes — provado por git stash).
 - PRODUÇÃO REAL (PIN do admin): AUTH 200; cancelamento Nº27 -> cascade 3 etapas OK e nota em CANCELADAS na lista (avulsa com DANFE/XML); EDITAR de venda real 200; AVULSAS -> totalNaFocus=5, hooksFalhas=['nfce: HTTP 400'] (o motivo real só aparece com este deploy — o reparo por evento resolve o caso de URL obsoleta).
 - Teste do dono após deploy: (1) Abrir o portal -> PENDENTES voltam a aparecer (chip Pendente com contagem) e EMITIR funciona nelas; (2) IMPORTAR XML EM LOTE/BUSCAR TODAS -> se o gatilho nfce era duplicado obsoleto, agora é recriado (toast avisa se ainda houver falha, com o motivo REAL da Focus); (3) cancelar uma nota de teste -> ela FICA em CANCELADAS com EDITAR funcionando; (4) notas emitidas pelo painel da Focus passam a chegar em tempo real (webhook nfce reparado).
+
+## bloco150b/150c — CAUSA RAIZ FINAL do gatilho nfce (schema oficial da API) + filtro Pendente E2E + contagens estáveis (2026-11-15)
+
+POÓS-DEPLOY (Vercel) — o erro REAL da Focus apareceu com o BLOCO 150: "O valor informado para o parâmetro 'event' é inválido". FONTE OFICIAL (doc.focusnfe.com.br/reference/criar_webhook.md — enum do schema POST /v2/hooks): `nfce` NÃO está no enum (nfe, nfse, nfsen, nfce_contingencia, nfe_recebida, ..., nfce_consulta_automatica). A tabela em prosa da doc menciona `nfce`, mas o SERVIDOR rejeita. CONCLUSÃO: o gatilho nfce nunca poderá existir nesta API — o app agora instala SOMENTE nfe + nfce_contingencia (HOOKS_DO_APP 150b) e o reparo para de falhar para sempre.
+
+QA FINAL EM PRODUÇÃO (PIN do admin + agent-browser com token real):
+- LISTA: 63 linhas = 6 AUTORIZADA + 1 CANCELADA (Nº27) + 56 PENDENTES (intenção NF-e/NFC-e de volta — regra "todas as notas criadas pelo app").
+- AVULSAS: hooksFalhas=[] (fim do 400 eterno).
+- CANCELAMENTO Nº27 (venda de teste do dono): cascade completa provada — arquivada em CANCELADAS com DANFE+XML, estoque corrigido, venda excluída.
+- EDITAR: (1) venda do app — 200; (2) avulsa CANCELADA via UI do portal — modal abre, troca A_PRAZO -> PIX, SALVAR, lista atualiza (PIX na linha), restaurado A_PRAZO. Botão lápis agora aparece TAMBÉM na avulsa (cancelada arquivada / XML terceiro).
+- BOLETO: badge do boleto Inter visível na linha (Nº26 trouxe o ícone; Nº27 antigo trouxe FALHA_EMISSAO) — opção presente quando o boleto foi gerado.
+- FILTRO PENDENTE: chip filtra NAO_EMITIDA de verdade (BLOCO 150c — antes comparava com status inexistente "PENDENTE" e zerava a lista) + contagens dos chips estáveis (base sem filtro de status).
+- Screenshot final: portal com KPI "56 pendentes", chips com contagens, pendentes com botão EMITIR (raio), cancelada com EDITAR.

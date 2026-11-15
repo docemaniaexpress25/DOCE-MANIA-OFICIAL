@@ -1,0 +1,686 @@
+     1→/**
+     2→ * Cliente Focus NFe (https://focusnfe.com.br) — emissao de NF-e (modelo 55)
+     3→ * e NFC-e (modelo 65) via API REST v2.0 (payload "flat").
+     4→ *
+     5→ * BLOCO 85: a Focus publicou a referencia v2.0 (doc.focusnfe.com.br,
+     6→ * atualizada ago/2026) com campos RASOS e novos nomes — o formato antigo
+     7→ * (objeto "cliente", razao_social, tributacao_icms) saiu da referencia.
+     8→ * Payload/resposta agora (exemplos reais da docs):
+     9→ *   envia:  cnpj_destinatario, nome_destinatario, valor_bruto (item),
+    10→ *           icms_situacao_tributaria, regime_tributario_emitente...
+    11→ *   volta:  status ('autorizado'|'processando_autorizacao'|'erro_autorizacao'|
+    12→ *           'cancelado'), chave_nfe ('NFe4119...'), caminho_danfe,
+    13→ *           qrcode_url (NFC-e), erros[{mensagem,campo}]
+    14→ *
+    15→ * SOMENTE SERVER-SIDE: o token e segredo e vive em env var (Vercel).
+    16→ *   FOCUS_NFE_TOKEN       -> token da empresa (obrigatorio p/ emitir)
+    17→ *   FOCUS_NFE_AMBIENTE    -> 'homologacao' (default) | 'producao'
+    18→ *   FOCUS_NFE_NATUREZA    -> natureza da operacao (default 'Venda de mercadoria')
+    19→ *   FOCUS_NFE_UF_EMITENTE -> UF do emitente (default 'RS') — decide CFOP 5102/6102
+    20→ *
+    21→ * DADOS DO EMITENTE (v2.0 pede no payload; NFC-e exige ao menos o CNPJ):
+    22→ *   FOCUS_NFE_CNPJ / FOCUS_NFE_IE / FOCUS_NFE_RAZAO / FOCUS_NFE_FANTASIA
+    23→ *   FOCUS_NFE_LOGRADOURO / FOCUS_NFE_NUMERO / FOCUS_NFE_BAIRRO
+    24→ *   FOCUS_NFE_MUNICIPIO / FOCUS_NFE_CEP
+    25→ *   FOCUS_NFE_REGIME     -> 1 Simples Nacional (default) | 2 excesso sublimite | 3 normal
+    26→ *
+    27→ * ENDPOINTS:
+    28→ *   POST   /v2/nfe?ref=...  /v2/nfce?ref=...   (201 autorizado sincrono |
+    29→ *                                              202 processando assincrono)
+    30→ *   GET    /v2/nfe/{ref}      /v2/nfce/{ref}
+    31→ *   DELETE /v2/nfe/{ref}      (justificativa >= 15 chars, regra SEFAZ)
+    32→ *
+    33→ * AUTENTICACAO: HTTP Basic — usuario = token, senha vazia. Homologacao usa
+    34→ * host separado (homologacao.focusnfe.com.br) e token proprio do dashboard.
+    35→ *
+    36→ * REGRAS v2.0 importantes:
+    37→ * - NFC-e: data_emissao com timezone e diferenca maxima de 5 min do relogio
+    38→ *   (por isso a emissao usa SEMPRE "agora", nunca a data da venda).
+    39→ * - formas_pagamento (tPag): 01 dinheiro, 02 cheque, 03/04 cartao, 15 boleto,
+    40→ *   17 PIX (16 = deposito bancario — armadilha comum), 91 pagamento posterior.
+    41→ * - NFC-e nao aceita 13/14/15 (duplicata/boleto) — venda a prazo vai de NF-e.
+    42→ * - NF-e cancelavel em ate 24h; NFC-e em ate 30 MINUTOS (regra SEFAZ, doc
+    43→ *   reference/cancelar_nfce.md).
+    44→ * - STATUS v2.0 (doc consultar_nfe/emitir_nfce): autorizado | cancelado |
+    45→ *   processando_autorizacao (NF-e assincrona, segue fila) | erro_autorizacao
+    46→ *   (REJEICAO DEFINITIVA da SEFAZ — nao e processando!).
+    47→ * - Rate limit: 100 req/min por token (doc cuidado-com-o-rate-limit) — por
+    48→ *   isso o app usa WEBHOOK de status em vez de polling (doc utilizando-
+    49→ *   webhooks: eventos reenviados por 48h com backoff).
+    50→ * - Webhooks da Focus: POST/GET/DELETE /v2/hooks (doc reference/webhooks).
+    51→ *   Evento 'nfe' notifica mudanca de status; `authorization` +
+    52→ *   `authorization_header` definem o header de segredo que a Focus envia.
+    53→ * - Contingencia: NF-e tem chaveamento automatico SVC transparente (doc
+    54→ *   mecanismo-de-contingencia-automatica-svc — nada a fazer no app); NFC-e
+    55→ *   offline exige Comunicador Offline (app de PC) — fora de escopo do app
+    56→ *   mobile hoje.
+    57→ */
+    58→
+    59→export type FocusAmbiente = 'homologacao' | 'producao';
+    60→export type FocusDoc = 'nfe' | 'nfce';
+    61→
+    62→/**
+    63→ * BLOCO 117 (doc reference/webhooks + docs/webhooks): a Focus publica eventos
+    64→ * SEPARADOS por tipo de documento — `nfe` dispara SÓ NF-e autorizada, `nfce`
+    65→ * dispara SÓ NFC-e autorizada e `nfce_contingencia` fecha o ciclo da NFC-e
+    66→ * emitida em contingência offline (efetivada/cancelada/inutilizada). Cada
+    67→ * gatilho monitora UM evento, por isso o app instala os TRES — antes instalava
+    68→ * so `nfe` e as NFC-e nunca avisavam o app (status ficava parado).
+    69→ */
+    70→export const HOOKS_DO_APP = ['nfe', 'nfce', 'nfce_contingencia'] as const;
+    71→export type FocusHookEvent = (typeof HOOKS_DO_APP)[number];
+    72→
+    73→export function isEventoDoApp(event: unknown): boolean {
+    74→  return (HOOKS_DO_APP as readonly string[]).includes(String(event || ''));
+    75→}
+    76→
+    77→// ---------------------------------------------------------------------------
+    78→// Config (env)
+    79→// ---------------------------------------------------------------------------
+    80→export function getFocusConfig() {
+    81→  const token = process.env.FOCUS_NFE_TOKEN || '';
+    82→  const ambiente = (process.env.FOCUS_NFE_AMBIENTE as FocusAmbiente) || 'homologacao';
+    83→  return {
+    84→    token,
+    85→    ambiente,
+    86→    baseUrl: ambiente === 'producao' ? 'https://api.focusnfe.com.br' : 'https://homologacao.focusnfe.com.br',
+    87→    natureza: process.env.FOCUS_NFE_NATUREZA || 'Venda de mercadoria',
+    88→    ufEmitente: (process.env.FOCUS_NFE_UF_EMITENTE || 'RS').toUpperCase(),
+    89→    // dados do emitente (v2.0)
+    90→    cnpj: process.env.FOCUS_NFE_CNPJ || '',
+    91→    ie: process.env.FOCUS_NFE_IE || '',
+    92→    razao: process.env.FOCUS_NFE_RAZAO || '',
+    93→    fantasia: process.env.FOCUS_NFE_FANTASIA || '',
+    94→    logradouro: process.env.FOCUS_NFE_LOGRADOURO || '',
+    95→    numeroEndereco: process.env.FOCUS_NFE_NUMERO || '',
+    96→    bairro: process.env.FOCUS_NFE_BAIRRO || '',
+    97→    municipio: process.env.FOCUS_NFE_MUNICIPIO || '',
+    98→    cep: process.env.FOCUS_NFE_CEP || '',
+    99→    regime: Number(process.env.FOCUS_NFE_REGIME || '1') || 1, // 1 = Simples Nacional
+   100→  };
+   101→}
+   102→
+   103→export function isFocusConfigured(): boolean {
+   104→  return !!getFocusConfig().token;
+   105→}
+   106→
+   107→/** NFC-e v2.0 exige cnpj_emitente no payload; NF-e cai no padrao da conta. */
+   108→export function emitenteMinimoOk(): boolean {
+   109→  return !!soDigitos(getFocusConfig().cnpj);
+   110→}
+   111→
+   112→function authHeader(): string {
+   113→  const { token } = getFocusConfig();
+   114→  return 'Basic ' + Buffer.from(`${token}:`).toString('base64');
+   115→}
+   116→
+   117→async function focusRequest<T = FocusNotaResultado>(
+   118→  method: 'GET' | 'POST' | 'DELETE',
+   119→  path: string,
+   120→  body?: unknown
+   121→): Promise<{ ok: boolean; status: number; data: T | { erro: string } }> {
+   122→  const { baseUrl } = getFocusConfig();
+   123→  try {
+   124→    const res = await fetch(`${baseUrl}${path}`, {
+   125→      method,
+   126→      headers: {
+   127→        Authorization: authHeader(),
+   128→        'Content-Type': 'application/json',
+   129→      },
+   130→      body: body ? JSON.stringify(body) : undefined,
+   131→      signal: AbortSignal.timeout(45_000),
+   132→    });
+   133→    const text = await res.text();
+   134→    let data: unknown;
+   135→    try {
+   136→      data = text ? JSON.parse(text) : {};
+   137→    } catch {
+   138→      data = { erro: `Resposta nao-JSON da Focus: ${text.slice(0, 200)}` };
+   139→    }
+   140→    return { ok: res.ok, status: res.status, data: data as T };
+   141→  } catch (e: unknown) {
+   142→    const msg = e instanceof Error ? e.message : String(e);
+   143→    return { ok: false, status: 0, data: { erro: `Falha de rede com a Focus NFe: ${msg}` } };
+   144→  }
+   145→}
+   146→
+   147→/** Ref idempotente por venda; reemissao pos-rejeicao usa sufixo -r2, -r3... */
+   148→export function refForSale(saleId: string, tentativa: number): string {
+   149→  return tentativa <= 1 ? `VENDA-${saleId}` : `VENDA-${saleId}-r${tentativa}`;
+   150→}
+   151→
+   152→/** Extrai a proxima tentativa a partir da ref anterior (VENDA-x -> 2, VENDA-x-r2 -> 3) */
+   153→export function nextTentativa(refAnterior?: string | null): number {
+   154→  if (!refAnterior) return 1;
+   155→  const m = refAnterior.match(/-r(\d+)$/);
+   156→  return m ? parseInt(m[1], 10) + 1 : 2;
+   157→}
+   158→
+   159→function normalizaTexto(v?: string | null, max = 120): string {
+   160→  return (v || '').replace(/\s+/g, ' ').trim().slice(0, max);
+   161→}
+   162→
+   163→/** So digitos — CPF/CNPJ/CEP/IE */
+   164→function soDigitos(v?: string | null): string {
+   165→  return (v || '').replace(/\D/g, '');
+   166→}
+   167→
+   168→/** 'S/N' quando o numero nao esta preenchido; tenta extrair do logradouro */
+   169→export function numeroDoEndereco(numero?: string | null, logradouro?: string | null): string {
+   170→  const n = soDigitos(numero);
+   171→  if (n) return n;
+   172→  const m = (logradouro || '').trim().match(/(\d+)\s*$/);
+   173→  return m ? m[1] : 'S/N';
+   174→}
+   175→
+   176→/** Valida CPF (11 digitos) ou CNPJ (14 digitos) por digitos verificadores */
+   177→export function validaCpfCnpj(v?: string | null): 'CPF' | 'CNPJ' | null {
+   178→  const s = soDigitos(v);
+   179→  if (s.length === 11) {
+   180→    if (/^(\d)\1{10}$/.test(s)) return null;
+   181→    let soma = 0;
+   182→    for (let i = 0; i < 9; i++) soma += parseInt(s[i]) * (10 - i);
+   183→    let d1 = (soma * 10) % 11;
+   184→    if (d1 === 10) d1 = 0;
+   185→    if (d1 !== parseInt(s[9])) return null;
+   186→    soma = 0;
+   187→    for (let i = 0; i < 10; i++) soma += parseInt(s[i]) * (11 - i);
+   188→    let d2 = (soma * 10) % 11;
+   189→    if (d2 === 10) d2 = 0;
+   190→    return d2 === parseInt(s[10]) ? 'CPF' : null;
+   191→  }
+   192→  if (s.length === 14) {
+   193→    if (/^(\d)\1{13}$/.test(s)) return null;
+   194→    const calc = (len: number): number => {
+   195→      let soma = 0;
+   196→      let peso = len - 7;
+   197→      for (let i = 0; i < len; i++) {
+   198→        soma += parseInt(s[i]) * peso--;
+   199→        if (peso < 2) peso = 9;
+   200→      }
+   201→      const r = soma % 11;
+   202→      return r < 2 ? 0 : 11 - r;
+   203→    };
+   204→    return calc(12) === parseInt(s[12]) && calc(13) === parseInt(s[13]) ? 'CNPJ' : null;
+   205→  }
+   206→  return null;
+   207→}
+   208→
+   209→// ---------------------------------------------------------------------------
+   210→// tPag / indPag — tabela oficial (campos.focusnfe.com.br, NF-e 4.00)
+   211→// 01 dinheiro, 02 cheque, 03 cartao credito, 04 cartao debito, 15 boleto,
+   212→// 16 DEPOSITO BANCARIO (nao e PIX!), 17 PIX dinamico, 91 pagamento posterior.
+   213→// ---------------------------------------------------------------------------
+   214→export function tpagDeMetodo(metodo?: string | null): { forma: string; indicador: 0 | 1 } {
+   215→  const m = String(metodo || '').toUpperCase();
+   216→  if (m === 'PIX') return { forma: '17', indicador: 0 };
+   217→  if (m === 'CHEQUE') return { forma: '02', indicador: 1 };
+   218→  if (m === 'A_PRAZO') return { forma: '15', indicador: 1 }; // boleto bancario
+   219→  if (m === 'CARTAO_CREDITO' || m === 'CREDITO') return { forma: '03', indicador: 0 };
+   220→  if (m === 'CARTAO_DEBITO' || m === 'DEBITO') return { forma: '04', indicador: 0 };
+   221→  return { forma: '01', indicador: 0 }; // DINHEIRO e padrao
+   222→}
+   223→
+   224→// ---------------------------------------------------------------------------
+   225→// Payload v2.0
+   226→// ---------------------------------------------------------------------------
+   227→export interface FocusFormaPagamento {
+   228→  indicador_pagamento: 0 | 1;  // 0 = a vista, 1 = a prazo
+   229→  forma_pagamento: string;     // tPag (ver tpagDeMetodo)
+   230→  valor_pagamento: number;
+   231→}
+   232→
+   233→export interface FocusItemV2 {
+   234→  numero_item: number;
+   235→  codigo_produto: string;
+   236→  descricao: string;
+   237→  codigo_ncm: string;
+   238→  codigo_barras_comercial?: string;  // cEAN (EAN do produto)
+   239→  codigo_barras_tributavel?: string; // cEANT — BLOCO 130: obrigatorio quando o comercial e informado (regra SEFAZ)
+   240→  cfop: string;
+   241→  unidade_comercial: string;
+   242→  unidade_tributavel: string;
+   243→  quantidade_comercial: number;
+   244→  quantidade_tributavel: number;
+   245→  valor_unitario_comercial: number;
+   246→  valor_unitario_tributavel: number;
+   247→  valor_bruto: number;
+   248→  valor_desconto?: number;
+   249→  inclui_no_total: 0 | 1;
+   250→  icms_origem: number;               // 0 nacional, 1/2 estrangeira...
+   251→  icms_situacao_tributaria: string;  // CSOSN 102 (Simples Nacional sem credito)
+   252→  pis_situacao_tributaria: string;   // 49 = outras saidas (Simples Nacional)
+   253→  cofins_situacao_tributaria: string;
+   254→}
+   255→
+   256→export interface FocusDestinatarioV2 {
+   257→  nome?: string;
+   258→  cpf_cnpj?: string;             // so digitos (CPF 11 / CNPJ 14)
+   259→  inscricao_estadual?: string;   // presente => indicador 1
+   260→  logradouro?: string;
+   261→  numero?: string;
+   262→  bairro?: string;
+   263→  municipio?: string;
+   264→  uf?: string;
+   265→  cep?: string;
+   266→  email?: string;
+   267→  telefone?: string;
+   268→}
+   269→
+   270→export interface FocusNfePayloadV2 {
+   271→  natureza_operacao: string;
+   272→  data_emissao: string;            // ISO com timezone (NFC-e: max 5 min atras)
+   273→  tipo_documento: number;          // 1 = saida (NF-e)
+   274→  local_destino: number;           // 1 interna / 2 interestadual
+   275→  finalidade_emissao: number;      // 1 normal
+   276→  consumidor_final: number;        // 1
+   277→  presenca_comprador: number;      // 1 presencial
+   278→  modalidade_frete: number;        // 9 sem frete
+   279→  // emitente (v2.0 — cai no cadastro da conta quando ausente)
+   280→  cnpj_emitente?: string;
+   281→  nome_emitente?: string;
+   282→  nome_fantasia_emitente?: string;
+   283→  logradouro_emitente?: string;
+   284→  numero_emitente?: string;
+   285→  bairro_emitente?: string;
+   286→  municipio_emitente?: string;
+   287→  uf_emitente?: string;
+   288→  cep_emitente?: string;
+   289→  inscricao_estadual_emitente?: string;
+   290→  regime_tributario_emitente?: number; // 1 Simples Nacional
+   291→  // destinatario (flat)
+   292→  nome_destinatario?: string;
+   293→  cnpj_destinatario?: string;
+   294→  cpf_destinatario?: string;
+   295→  inscricao_estadual_destinatario?: string;
+   296→  indicador_inscricao_estadual_destinatario?: number; // 1 contribuinte / 9 nao
+   297→  logradouro_destinatario?: string;
+   298→  numero_destinatario?: string;
+   299→  bairro_destinatario?: string;
+   300→  municipio_destinatario?: string;
+   301→  uf_destinatario?: string;
+   302→  cep_destinatario?: string;
+   303→  email_destinatario?: string;
+   304→  telefone_destinatario?: string;
+   305→  // totais
+   306→  valor_produtos?: number;
+   307→  valor_desconto?: number;
+   308→  valor_total?: number;
+   309→  items: FocusItemV2[];
+   310→  formas_pagamento?: FocusFormaPagamento[];
+   311→  informacoes_adicionais_contribuinte?: string;
+   312→}
+   313→
+   314→export interface FocusNotaResultado {
+   315→  ref?: string;
+   316→  status?: string;              // autorizado | processando_autorizacao | erro_autorizacao | cancelado | erro_cancelamento
+   317→  status_sefaz?: string;        // '100' = autorizado
+   318→  mensagem_sefaz?: string;
+   319→  chave_nfe?: string;           // 'NFe4119...' / 'NFCe...' + 44 digitos
+   320→  numero?: string;
+   321→  serie?: string;
+   322→  caminho_danfe?: string;       // NF-e PDF / NFC-e DANFCe .html
+   323→  caminho_xml_nota_fiscal?: string;
+   324→  caminho_xml_cancelamento?: string;
+   325→  qrcode_url?: string;          // NFC-e: QR de consulta
+   326→  url_consulta_nf?: string;
+   327→  contingencia_offline?: boolean;
+   328→  contingencia_offline_efetivada?: boolean;
+   329→  // webhooks v2.0 (doc reference/criar_webhook.md): POST /v2/hooks
+   330→  id?: string;
+   331→  url?: string;
+   332→  authorization?: string;
+   333→  authorization_header?: string;
+   334→  event?: string;
+   335→  // erros v2.0: { codigo, mensagem, erros: [{mensagem, campo}] }
+   336→  codigo?: string;
+   337→  mensagem?: string;
+   338→  erros?: { mensagem?: string; campo?: string }[];
+   339→  // legado (fallback — contas antigas podem responder no formato anterior)
+   340→  chave?: string;
+   341→  danfe_url?: string;
+   342→  pdf_url?: string;
+   343→  url_danfe?: string;
+   344→  arquivo_url?: string;
+   345→  erro?: string;
+   346→  erro_sefaz?: string;
+   347→  motivos?: string | string[];
+   348→  protocolo?: string;
+   349→  razao_social_emitente?: string;
+   350→  nome_emitente?: string;
+   351→  cnpj_emitente?: string;
+   352→  ie_emitente?: string;
+   353→  data_autorizacao?: string;
+   354→  total?: string | number;
+   355→  qr_code?: string;
+   356→  url_consulta?: string;
+   357→}
+   358→
+   359→const round2 = (v: number) => Math.round(v * 100) / 100;
+   360→
+   361→/** ISO com fuso de SP ("2026-11-01T10:30:00-03:00") — a referencia v2.0 usa
+   362→ *  data-hora com timezone (sem horario de verao no BR desde 2019, offset
+   363→ *  fixo -03:00). toISOString() ("...Z") tambem e ISO, mas o exemplo oficial
+   364→ *  da docs e com offset — mandamos igual ao exemplo. */
+   365→function isoComFuso(d: Date): string {
+   366→  const p = new Intl.DateTimeFormat('sv-SE', {
+   367→    timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit',
+   368→    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+   369→  }).format(d);
+   370→  return `${p.replace(' ', 'T')}-03:00`;
+   371→}
+   372→
+   373→/** Emitente a partir das env vars (v2.0 pede os dados no payload). */
+   374→export function emitenteDaConfig(): Partial<FocusNfePayloadV2> {
+   375→  const cfg = getFocusConfig();
+   376→  const cnpj = soDigitos(cfg.cnpj);
+   377→  const out: Partial<FocusNfePayloadV2> = {
+   378→    uf_emitente: cfg.ufEmitente,
+   379→    regime_tributario_emitente: cfg.regime,
+   380→  };
+   381→  if (cnpj) out.cnpj_emitente = cnpj;
+   382→  if (cfg.razao) out.nome_emitente = normalizaTexto(cfg.razao, 60);
+   383→  if (cfg.fantasia) out.nome_fantasia_emitente = normalizaTexto(cfg.fantasia, 60);
+   384→  if (cfg.logradouro) out.logradouro_emitente = normalizaTexto(cfg.logradouro, 60);
+   385→  if (cfg.numeroEndereco) out.numero_emitente = cfg.numeroEndereco.slice(0, 60);
+   386→  if (cfg.bairro) out.bairro_emitente = normalizaTexto(cfg.bairro, 60);
+   387→  if (cfg.municipio) out.municipio_emitente = normalizaTexto(cfg.municipio, 60);
+   388→  if (soDigitos(cfg.cep)) out.cep_emitente = soDigitos(cfg.cep);
+   389→  if (cfg.ie) out.inscricao_estadual_emitente = cfg.ie.trim().slice(0, 20);
+   390→  return out;
+   391→}
+   392→
+   393→interface ItemVendaInput {
+   394→  codigo?: string;
+   395→  descricao: string;
+   396→  ncm?: string;
+   397→  cfop?: string;
+   398→  ean?: string;
+   399→  unidade?: string;
+   400→  origem?: string;
+   401→  quantidade: number;
+   402→  valorUnitario: number;
+   403→}
+   404→
+   405→/** Itens v2.0 — valores NUMERICOS (a API v2.0 nao aceita mais string). */
+   406→function montarItensV2(opts: {
+   407→  itens: ItemVendaInput[];
+   408→  valorTotalVenda: number;
+   409→  ufDestino: string;
+   410→  ufEmitente: string;
+   411→  doc: FocusDoc;
+   412→}): { items: FocusItemV2[]; valorProdutos: number; descontoTotal: number } {
+   413→  const itensTotal = round2(opts.itens.reduce((acc, it) => acc + it.quantidade * it.valorUnitario, 0));
+   414→  // Desconto (troca/desconto geral) entra concentrado no primeiro item
+   415→  const descontoTotal = round2(Math.max(0, itensTotal - opts.valorTotalVenda));
+   416→
+   417→  const items: FocusItemV2[] = opts.itens.map((it, i) => {
+   418→    const bruto = round2(it.quantidade * it.valorUnitario);
+   419→    const desconto = i === 0 ? descontoTotal : 0;
+   420→    const item: FocusItemV2 = {
+   421→      // NFe v2.0 pede numero_item integer; NFC-e v2.0 pede string
+   422→      numero_item: (opts.doc === 'nfe' ? i + 1 : String(i + 1)) as unknown as number,
+   423→      codigo_produto: (it.codigo || `P${i + 1}`).slice(0, 60),
+   424→      descricao: normalizaTexto(it.descricao, 120),
+   425→      codigo_ncm: soDigitos(it.ncm) || '21069090',
+   426→      cfop: soDigitos(it.cfop) || (opts.ufDestino === opts.ufEmitente ? '5102' : '6102'),
+   427→      unidade_comercial: it.unidade || 'UN',
+   428→      unidade_tributavel: it.unidade || 'UN',
+   429→      quantidade_comercial: it.quantidade,
+   430→      quantidade_tributavel: it.quantidade,
+   431→      valor_unitario_comercial: round2(it.valorUnitario),
+   432→      valor_unitario_tributavel: round2(it.valorUnitario),
+   433→      valor_bruto: bruto,
+   434→      inclui_no_total: 1,
+   435→      icms_origem: Number(soDigitos(it.origem) || '0') || 0,
+   436→      icms_situacao_tributaria: '102', // CSOSN 102 — Simples Nacional, sem ICMS
+   437→      pis_situacao_tributaria: '49',   // Simples Nacional: outras saidas
+   438→      cofins_situacao_tributaria: '49',
+   439→    };
+   440→    const ean = soDigitos(it.ean);
+   441→    if (ean.length === 8 || ean.length === 12 || ean.length === 13 || ean.length === 14) {
+   442→      item.codigo_barras_comercial = ean;
+   443→      // BLOCO 130 (rejeicao "GTIN informado, mas nao informado o GTIN da unidade
+   444→      // tributavel"): regra SEFAZ exige cEANT quando cEAN existe. O app sempre
+   445→      // vende 1:1 (unidade/valor tributavel = comercial), entao o GTIN da
+   446→      // unidade tributavel e o MESMO codigo de barras.
+   447→      item.codigo_barras_tributavel = ean;
+   448→    }
+   449→    if (desconto > 0) item.valor_desconto = desconto;
+   450→    return item;
+   451→  });
+   452→
+   453→  return { items, valorProdutos: itensTotal, descontoTotal };
+   454→}
+   455→
+   456→function destinatarioV2(d: FocusDestinatarioV2, doc: FocusDoc): Partial<FocusNfePayloadV2> {
+   457→  const docDigitos = soDigitos(d.cpf_cnpj);
+   458→  const out: Partial<FocusNfePayloadV2> = {};
+   459→  if (d.nome) out.nome_destinatario = normalizaTexto(d.nome, 60);
+   460→  if (docDigitos.length === 14) out.cnpj_destinatario = docDigitos;
+   461→  else if (docDigitos.length === 11) out.cpf_destinatario = docDigitos;
+   462→  const ie = (d.inscricao_estadual || '').trim();
+   463→  if (ie && !/^isen/i.test(ie)) {
+   464→    out.inscricao_estadual_destinatario = ie.slice(0, 20);
+   465→    out.indicador_inscricao_estadual_destinatario = 1;
+   466→  } else if (docDigitos) {
+   467→    out.indicador_inscricao_estadual_destinatario = 9; // nao contribuinte
+   468→  }
+   469→  if (d.logradouro) out.logradouro_destinatario = normalizaTexto(d.logradouro, 60);
+   470→  if (d.numero) out.numero_destinatario = d.numero.slice(0, 60);
+   471→  if (d.bairro) out.bairro_destinatario = normalizaTexto(d.bairro, 60);
+   472→  if (d.municipio) out.municipio_destinatario = normalizaTexto(d.municipio, 60);
+   473→  if (d.uf) out.uf_destinatario = d.uf.toUpperCase().slice(0, 2);
+   474→  if (soDigitos(d.cep)) out.cep_destinatario = soDigitos(d.cep);
+   475→  if (d.email) out.email_destinatario = d.email.trim().slice(0, 60);
+   476→  const tel = soDigitos(d.telefone);
+   477→  if (tel.length >= 6) out.telefone_destinatario = tel;
+   478→  return out;
+   479→}
+   480→
+   481→/** Monta o payload NF-e (modelo 55) v2.0 a partir da venda.
+   482→ *  BLOCO 108: `emitente` opcional SOBRESCREVE os dados do emitente das env
+   483→ *  vars (campos gravados na tela ERP Fiscal & Automações — campo vazio
+   484→ *  volta pro env). */
+   485→export function montarPayloadNfe(opts: {
+   486→  dataEmissao: Date;
+   487→  natureza?: string;
+   488→  ufEmitente?: string;
+   489→  destinatario: FocusDestinatarioV2;
+   490→  itens: ItemVendaInput[];
+   491→  valorTotalVenda: number;
+   492→  pagamento: FocusFormaPagamento;
+   493→  informacoesAdicionais?: string;
+   494→  emitente?: Partial<FocusNfePayloadV2>;
+   495→}): FocusNfePayloadV2 {
+   496→  const ufEmit = opts.ufEmitente || getFocusConfig().ufEmitente;
+   497→  const ufDestino = (opts.destinatario.uf || '').toUpperCase();
+   498→  const { items, valorProdutos, descontoTotal } = montarItensV2({
+   499→    itens: opts.itens, valorTotalVenda: opts.valorTotalVenda, ufDestino, ufEmitente: ufEmit, doc: 'nfe',
+   500→  });
+   501→
+   502→  return {
+   503→    natureza_operacao: opts.natureza || 'Venda de mercadoria',
+   504→    data_emissao: isoComFuso(opts.dataEmissao),
+   505→    tipo_documento: 1,   // saida
+   506→    local_destino: ufDestino === ufEmit ? 1 : 2,
+   507→    finalidade_emissao: 1,
+   508→    consumidor_final: 1,
+   509→    presenca_comprador: 1,
+   510→    modalidade_frete: 9,
+   511→    ...emitenteDaConfig(),
+   512→    ...(opts.emitente || {}),
+   513→    ...destinatarioV2(opts.destinatario, 'nfe'),
+   514→    valor_produtos: valorProdutos,
+   515→    valor_desconto: descontoTotal > 0 ? descontoTotal : undefined,
+   516→    valor_total: round2(opts.valorTotalVenda),
+   517→    items,
+   518→    formas_pagamento: [opts.pagamento],
+   519→    informacoes_adicionais_contribuinte: opts.informacoesAdicionais || undefined,
+   520→  };
+   521→}
+   522→
+   523→/** Monta o payload NFC-e (modelo 65) v2.0 — data_emissao SEMPRE agora
+   524→ *  (a SEFAZ recusa dhEmi com mais de 5 min de diferenca).
+   525→ *  BLOCO 108: `emitente` opcional idem NF-e. */
+   526→export function montarPayloadNfce(opts: {
+   527→  dataEmissao: Date;
+   528→  natureza?: string;
+   529→  ufEmitente?: string;
+   530→  destinatario?: FocusDestinatarioV2;   // opcional: NFC-e anonima
+   531→  itens: ItemVendaInput[];
+   532→  valorTotalVenda: number;
+   533→  pagamento: FocusFormaPagamento;
+   534→  informacoesAdicionais?: string;
+   535→  emitente?: Partial<FocusNfePayloadV2>;
+   536→}): FocusNfePayloadV2 {
+   537→  const cfg = getFocusConfig();
+   538→  const ufEmit = opts.ufEmitente || cfg.ufEmitente;
+   539→  const ufDestino = (opts.destinatario?.uf || '').toUpperCase();
+   540→  const { items } = montarItensV2({
+   541→    itens: opts.itens, valorTotalVenda: opts.valorTotalVenda, ufDestino, ufEmitente: ufEmit, doc: 'nfce',
+   542→  });
+   543→
+   544→  return {
+   545→    natureza_operacao: opts.natureza || 'VENDA DE MERCADORIA ACQR',
+   546→    data_emissao: isoComFuso(opts.dataEmissao),
+   547→    presenca_comprador: 1,
+   548→    modalidade_frete: 9,
+   549→    local_destino: ufDestino && ufDestino !== ufEmit ? 2 : 1,
+   550→    ...emitenteDaConfig(),
+   551→    ...(opts.emitente || {}),
+   552→    ...(opts.destinatario ? destinatarioV2(opts.destinatario, 'nfce') : {}),
+   553→    items,
+   554→    formas_pagamento: [opts.pagamento],
+   555→    informacoes_adicionais_contribuinte: opts.informacoesAdicionais || undefined,
+   556→  };
+   557→}
+   558→
+   559→/** POST para autorizar a nota. 201 = autorizado (sincrono); 202 = processando. */
+   560→export async function emitirNfe(doc: FocusDoc, ref: string, payload: FocusNfePayloadV2) {
+   561→  return focusRequest<FocusNotaResultado>('POST', `/v2/${doc}?ref=${encodeURIComponent(ref)}`, payload);
+   562→}
+   563→
+   564→/** Consulta situacao atual da nota pela ref (ou pela CHAVE de acesso 44 dig —
+   565→ *  BLOCO 141: a Focus aceita os dois; `completa=1` traz destinatario/valor/
+   566→ *  pagamento que a avulsa importada precisa para virar linha do portal). */
+   567→export async function consultarNota(doc: FocusDoc, ref: string, completa = false) {
+   568→  const sufixo = completa ? '?completa=1' : '';
+   569→  return focusRequest<FocusNotaResultado>('GET', `/v2/${doc}/${encodeURIComponent(ref)}${sufixo}`);
+   570→}
+   571→
+   572→// ---------------------------------------------------------------------------
+   573→// WEBHOOKS (doc reference/criar_webhook.md — POST /v2/hooks; listar GET
+   574→// /v2/hooks; excluir DELETE /v2/hooks/{id}). A Focus recomenda webhook em vez
+   575→// de polling (doc utilizando-webhooks: processamento em tempo real, menos
+   576→// consumo de quota — limite e 100 req/min por token).
+   577→// ---------------------------------------------------------------------------
+   578→
+   579→/** Lista os gatilhos cadastrados no token. */
+   580→export async function listarWebhooksFocus() {
+   581→  return focusRequest<FocusNotaResultado[]>('GET', '/v2/hooks');
+   582→}
+   583→
+   584→/**
+   585→ * Cria o gatilho de mudanca de status. `segredo` vai no header
+   586→ * `authorizationHeader` (ex.: 'x-dm-token') de cada notificacao — o app
+   587→ * confere antes de reconsultar. `cnpj` opcional restringe ao emitente.
+   588→ * BLOCO 117: `event` escolhe qual evento o gatilho monitora (doc reference/
+   589→ * criar_webhook.md — cada gatilho monitora UM evento; o app instala nfe,
+   590→ * nfce e nfce_contingencia apontando para a MESMA URL).
+   591→ */
+   592→export async function criarWebhookFocus(opts: {
+   593→  url: string;
+   594→  segredo: string;
+   595→  authorizationHeader?: string;
+   596→  cnpj?: string;
+   597→  event?: FocusHookEvent;
+   598→}) {
+   599→  const body: Record<string, unknown> = {
+   600→    event: opts.event || 'nfe',
+   601→    url: opts.url,
+   602→    authorization: opts.segredo,
+   603→    authorization_header: opts.authorizationHeader || 'x-dm-token',
+   604→  };
+   605→  const cnpj = soDigitos(opts.cnpj);
+   606→  if (cnpj) body.cnpj = cnpj;
+   607→  return focusRequest<FocusNotaResultado>('POST', '/v2/hooks', body);
+   608→}
+   609→
+   610→/** Exclui um gatilho pelo id (GET /v2/hooks devolve os ids). */
+   611→export async function excluirWebhookFocus(id: string) {
+   612→  return focusRequest<FocusNotaResultado>('DELETE', `/v2/hooks/${encodeURIComponent(id)}`);
+   613→}
+   614→
+   615→/** Cancela a nota (requer justificativa >= 15 chars, regra da SEFAZ). */
+   616→export async function cancelarNota(doc: FocusDoc, ref: string, justificativa: string) {
+   617→  return focusRequest<FocusNotaResultado>('DELETE', `/v2/${doc}/${encodeURIComponent(ref)}`, {
+   618→    justificativa: normalizaTexto(justificativa, 255),
+   619→  });
+   620→}
+   621→
+   622→/** Caminho de arquivo da Focus pode vir relativo ("/arquivos/...") — vira URL absoluta. */
+   623→function urlFocus(caminho?: string): string {
+   624→  const c = (caminho || '').trim();
+   625→  if (!c) return '';
+   626→  if (/^https?:\/\//i.test(c)) return c;
+   627→  const { baseUrl } = getFocusConfig();
+   628→  return `${baseUrl}${c.startsWith('/') ? '' : '/'}${c}`;
+   629→}
+   630→
+   631→/**
+   632→ * Interpreta a resposta v2.0 da Focus num resultado normalizado do app.
+   633→ * status possiveis: autorizado | processando_autorizacao | erro_autorizacao |
+   634→ *                   cancelado | erro_cancelamento
+   635→ */
+   636→export function interpretarResultado(data: FocusNotaResultado) {
+   637→  const status = (data.status || '').toLowerCase();
+   638→  // Erros v2.0: erros[{mensagem, campo}] — mensagem legivel campo a campo
+   639→  const errosV2 = (Array.isArray(data.erros) ? data.erros : [])
+   640→    .map(e => [e?.campo, e?.mensagem].filter(Boolean).join(': '))
+   641→    .filter(Boolean);
+   642→  const isErro = status.startsWith('erro') || status === 'reprovado';
+   643→  const motivo = errosV2.join('; ')
+   644→    || (Array.isArray(data.motivos) ? data.motivos.join('; ') : data.motivos || '')
+   645→    || data.erro_sefaz || ''
+   646→    || (isErro ? (data.mensagem || data.mensagem_sefaz || data.erro || '') : (data.erro || ''));
+   647→  const pdf = urlFocus(data.caminho_danfe) || urlFocus(data.danfe_url) || urlFocus(data.pdf_url) || urlFocus(data.url_danfe);
+   648→  // BLOCO 82: dados para o mini DANFE 80mm (emitente real da SEFAZ, QR de
+   649→  // consulta NFC-e quando a Focus devolve)
+   650→  const emitenteNome = String(data.razao_social_emitente || data.nome_emitente || '').trim();
+   651→  const emitenteCnpj = String(data.cnpj_emitente || '').replace(/\D/g, '');
+   652→  return {
+   653→    autorizada: status === 'autorizado',
+   654→    cancelada: status.startsWith('cancelado'),
+   655→    // FIX bloco 116 (doc v2.0): 'erro_autorizacao' e REJEICAO DEFINITIVA da
+   656→    // SEFAZ (ex.: "Rejeição: Total da NF difere..."), NAO e processamento.
+   657→    // Antes isso mapeava rejeitada como EMITINDO e a venda ficava presa.
+   658→    processando: status === 'processando_autorizacao',
+   659→    rejeitada: status === 'erro_autorizacao',
+   660→    numero: data.numero || '',
+   661→    cStatus: data.status_sefaz || '',
+   662→    motivo,
+   663→    pdfUrl: pdf,
+   664→    xmlUrl: urlFocus(data.caminho_xml_nota_fiscal) || urlFocus(data.arquivo_url),
+   665→    statusBruto: status,
+   666→    // chave_nfe vem com prefixo ("NFe4119...") — fica so os 44 digitos
+   667→    chave: soDigitos(data.chave_nfe || data.chave).slice(-44) || '',
+   668→    serie: String(data.serie || ''),
+   669→    protocolo: String(data.protocolo || ''),
+   670→    dataAutorizacao: String(data.data_autorizacao || ''),
+   671→    total: Number(data.total) || 0,
+   672→    qrCode: String(data.qrcode_url || data.url_consulta_nf || data.qr_code || data.url_consulta || ''),
+   673→    // Contingencia (doc emitir_nfce.md): NFC-e emitida offline nasce
+   674→    // 'autorizado' com contingencia_offline=true e efetiva sozinha depois —
+   675→    // o app avisa o usuario que o espelho/DANFE e valido mas o QR so
+   676→    // consulta apos a efetivacao.
+   677→    contingenciaOffline: data.contingencia_offline === true,
+   678→    contingenciaEfetivada: data.contingencia_offline !== true ? null : data.contingencia_offline_efetivada !== false,
+   679→    emitente: {
+   680→      nome: emitenteNome,
+   681→      cnpj: emitenteCnpj,
+   682→      ie: String(data.ie_emitente || '').trim(),
+   683→    },
+   684→  };
+   685→}
+   686→

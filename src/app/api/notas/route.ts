@@ -24,6 +24,8 @@ import {
   FocusNfePayloadV2,
 } from '@/lib/focusNfe';
 import { arquivarDaConsulta, invalidaPresenca } from '@/lib/focusArquivos';
+// BLOCO 142: prazo SEFAZ de cancelamento (NFC-e 30min / NF-e 24h) — fonte única front+servidor
+import { prazoCancelamentoNota } from '@/lib/regras-fiscais';
 
 /**
  * NOTAS FISCAIS (Bloco 10) — emissao de NF-e / NFC-e na venda de pronta entrega.
@@ -59,6 +61,8 @@ interface NotaPublica {
   erro: string;
   /** BLOCO 135: tipo real do documento ('NFE'|'NFCE') — rotula badge NFC/NF-e */
   tipo: string;
+  /** BLOCO 142: quando a SEFAZ autorizou (ISO) — base do prazo de cancelamento */
+  emitidaEm: string | null;
 }
 
 const BAD = (status: number, erro: string, extra: Record<string, unknown> = {}) =>
@@ -85,10 +89,25 @@ function notaPublica(s: Record<string, unknown>): NotaPublica {
     // BLOCO 135: o front precisa saber se o documento é NFC-e ou NF-e
     // ("NF 17" virava NFC/NF-e errado no card quando a consulta não dizia o tipo)
     tipo: (s.nota_tipo as string) || '',
+    // BLOCO 142: data de autorização da SEFAZ — o front usa para o prazo de cancelar
+    emitidaEm: (s.nota_emitida_em as string) || null,
   };
 }
 
-const COLS_NOTA = 'id, vendedor_id, client_id, valor_total, metodo_pagamento, detalhe_pagamento, status_pagamento, data_venda, nota_status, nota_tipo, nota_numero, nota_ref, nota_pdf_url, nota_xml_url, nota_erro';
+// BLOCO 142: nota_emitida_em entra SÓ quando a coluna existe (SQL do Bloco 108);
+// sem ela a leitura inteira quebraria (mesmo padrão de probe do projeto).
+const COLS_NOTA_BASE = 'id, vendedor_id, client_id, valor_total, metodo_pagamento, detalhe_pagamento, status_pagamento, data_venda, nota_status, nota_tipo, nota_numero, nota_ref, nota_pdf_url, nota_xml_url, nota_erro';
+const colsNota = async () => ((await hasNotaEmitidaEm()) ? `${COLS_NOTA_BASE}, nota_emitida_em` : COLS_NOTA_BASE);
+
+/** Data-hora legível pt-BR p/ as mensagens de prazo (mesmo formato do carimbo). */
+function fmtDataBR(iso: string): string {
+  try {
+    return new Intl.DateTimeFormat('pt-BR', {
+      timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    }).format(new Date(iso));
+  } catch { return iso; }
+}
 
 export async function GET(req: NextRequest) {
   const bridged = await devBridge(req);
@@ -113,7 +132,7 @@ export async function GET(req: NextRequest) {
   }
 
   const db = getServiceClient();
-  const { data: sale, error } = await db.from('sales').select(COLS_NOTA).eq('id', saleId).single();
+  const { data: sale, error } = await db.from('sales').select(await colsNota()).eq('id', saleId).single();
   if (error || !sale) return BAD(404, 'Venda nao encontrada.');
   if (session.perfil !== 'ADMIN' && session.sub !== sale.vendedor_id) {
     return BAD(403, 'Voce so pode ver a nota das suas proprias vendas.');
@@ -141,7 +160,7 @@ export async function POST(req: NextRequest) {
   // Carrega a venda e valida permissao
   const { data: sale, error: saleErr } = await db
     .from('sales')
-    .select(COLS_NOTA)
+    .select(await colsNota())
     .eq('id', saleId)
     .single();
 
@@ -170,6 +189,12 @@ export async function POST(req: NextRequest) {
     };
     // Bloco 25: guarda a chave de acesso (44 dig) p/ atrelar a NF-e ao boleto Inter
     if (res.chave && (await hasBoletoColumns())) patch.nota_chave = res.chave;
+    // BLOCO 142: primeira vez que a SEFAZ confirma a autorização, grava a
+    // data-hora oficial — é a BASE do prazo de cancelamento (NFC-e 30min/NF-e 24h)
+    if (res.autorizada && res.dataAutorizacao && (await hasNotaEmitidaEm()) && !(sale as Record<string, unknown>).nota_emitida_em) {
+      const dAuto = new Date(res.dataAutorizacao);
+      if (!isNaN(dAuto.getTime())) patch.nota_emitida_em = dAuto.toISOString();
+    }
     await atualizarNota(saleId, patch);
     return NextResponse.json({ ok: true, nota: { ...notaPublica(sale as Record<string, unknown>), ...res } });
   }
@@ -183,6 +208,44 @@ export async function POST(req: NextRequest) {
     if (!isFocusConfigured()) return BAD(503, 'Focus NFe nao configurada (env FOCUS_NFE_TOKEN no Vercel).');
 
     const doc: FocusDoc = sale.nota_tipo === 'NFCE' ? 'nfce' : 'nfe';
+
+    // ---------------------------------------------------------------
+    // BLOCO 142 — GUARDA DO PRAZO SEFAZ (NFC-e 30min / NF-e 24h após a
+    // autorização). Passado o prazo a SEFAZ RECUSA o evento — o servidor
+    // recusa antes com mensagem clara. Usa a data-hora REAL de autorização:
+    // sales.nota_emitida_em; quando ela não existe (venda antiga) consulta
+    // a Focus UMA vez (data_autorizacao) e grava. Sem timestamp real o
+    // julgamento fica com a SEFAZ — nunca bloqueia por chute (a NF-e pode
+    // ter sido batida DIAS depois da venda).
+    // ---------------------------------------------------------------
+    let prazo: ReturnType<typeof prazoCancelamentoNota> | null = null;
+    if (String(sale.nota_status).toUpperCase() === 'AUTORIZADA') {
+      let baseAutorizacao = (await hasNotaEmitidaEm()) ? ((sale as Record<string, unknown>).nota_emitida_em as string) || null : null;
+      if (!baseAutorizacao && sale.nota_ref) {
+        try {
+          const c = await consultarNota(doc, sale.nota_ref as string);
+          if (c.ok && c.data && !('erro' in c.data)) {
+            const ci = interpretarResultado(c.data as Record<string, unknown>);
+            if (ci.autorizada && ci.dataAutorizacao) {
+              const dAuto = new Date(ci.dataAutorizacao);
+              if (!isNaN(dAuto.getTime())) {
+                baseAutorizacao = dAuto.toISOString();
+                if (await hasNotaEmitidaEm()) await atualizarNota(saleId, { nota_emitida_em: baseAutorizacao });
+              }
+            }
+          }
+        } catch { /* Focus indisponível -> a SEFAZ decide no cancelamento */ }
+      }
+      prazo = prazoCancelamentoNota({ tipo: sale.nota_tipo as string, status: 'AUTORIZADA', emitidaEm: baseAutorizacao });
+      if (prazo.expirado && baseAutorizacao) {
+        return BAD(
+          422,
+          `Cancelamento FORA DO PRAZO da SEFAZ — ${doc === 'nfce' ? 'NFC-e' : 'NF-e'} autorizada em ${fmtDataBR(baseAutorizacao)} e o prazo de ${prazo.prazoLabel} já venceu. O evento de cancelamento seria recusado.`,
+          { nota: notaPublica(sale as Record<string, unknown>), prazo: { expiraEm: prazo.expiraEm, expirado: true, prazoLabel: prazo.prazoLabel } },
+        );
+      }
+    }
+
     const r = await cancelarNota(doc, sale.nota_ref as string, just);
     if (!r.ok || !r.data || 'erro' in r.data) {
       return BAD(502, (r.data as { erro?: string }).erro || 'Falha ao cancelar na Focus NFe.', { nota: notaPublica(sale as Record<string, unknown>) });
@@ -201,6 +264,7 @@ export async function POST(req: NextRequest) {
         doc === 'nfce'
           ? 'NFC-e so pode ser cancelada em ate 30 minutos apos a emissao (regra da SEFAZ).'
           : undefined,
+      prazo: prazo ? { expiraEm: prazo.expiraEm, prazoLabel: prazo.prazoLabel, textoRestante: prazo.textoRestante } : undefined,
       nota: { ...notaPublica(sale as Record<string, unknown>), ...res },
     });
   }

@@ -152,3 +152,93 @@ export function vendaNotaPendente(sale: {
   const st = String(sale.notaStatus || '').toUpperCase();
   return st === 'NAO_EMITIDA' || st === 'REJEITADA' || st === '' || st === 'CANCELADA';
 }
+
+// =====================================================================
+// BLOCO 142 — PRAZO SEFAZ DE CANCELAMENTO DE NOTA (regra da SEFAZ):
+//   NFC-e (modelo 65): até 30 MINUTOS após a autorização;
+//   NF-e  (modelo 55): até 24 HORAS após a autorização.
+// Passado o prazo, o evento de cancelamento é RECUSADO pela SEFAZ —
+// os botões de cancelar ficam INATIVOS/SOMEM (portal /notas, Vendas
+// Realizadas e Janela Fiscal). Fonte ÚNICA usada pelo front e pelo
+// servidor (/api/notas acao CANCELAR) para nunca divergir.
+// =====================================================================
+
+export const PRAZO_CANCELAMENTO_MINUTOS: Record<'NFE' | 'NFCE', number> = {
+  NFE: 24 * 60, // 24 horas
+  NFCE: 30,     // 30 minutos
+};
+
+export interface PrazoCancelamento {
+  /** true = a SEFAZ ainda aceita o evento de cancelamento */
+  dentroDoPrazo: boolean;
+  /** true = prazo vencido — o botão de cancelar deve ficar inativo/sumir */
+  expirado: boolean;
+  /** milissegundos restantes (0 quando expirado) */
+  msRestantes: number;
+  /** texto humanizado do que resta: "29min", "23h 12min", "45s" */
+  textoRestante: string;
+  /** rótulo do prazo total: "30 minutos" / "24 horas" */
+  prazoLabel: string;
+  /** instante ISO em que o prazo vence — null quando sem base confiável */
+  expiraEm: string | null;
+}
+
+/**
+ * Calcula o prazo de cancelamento de UMA nota.
+ * - `emitidaEm`: data de autorização (sales.nota_emitida_em) — fonte real.
+ * - `fallbackData`: data da venda, usada SÓ para exibição quando a data de
+ *   autorização não existe (vendas antigas). A emissão acontece DEPOIS da
+ *   venda, então o fallback subestima o tempo passado — direção segura:
+ *   pior caso o botão aparece e a SEFAZ recusa com a mensagem oficial.
+ */
+export function prazoCancelamentoNota(opts: {
+  tipo?: string | null;
+  status?: string | null;
+  emitidaEm?: string | Date | null;
+  fallbackData?: string | Date | null;
+  agora?: Date;
+}): PrazoCancelamento {
+  const tipo = String(opts.tipo || '').toUpperCase();
+  const prazoMin = tipo === 'NFCE' ? PRAZO_CANCELAMENTO_MINUTOS.NFCE : PRAZO_CANCELAMENTO_MINUTOS.NFE;
+  const prazoLabel = prazoMin >= 60
+    ? `${Math.round(prazoMin / 60)} horas`
+    : `${prazoMin} minutos`;
+
+  const bruta = opts.emitidaEm || opts.fallbackData;
+  const base = bruta ? new Date(bruta as string | Date) : null;
+  const valida = !!base && !isNaN(base.getTime());
+  const agora = opts.agora || new Date();
+
+  const expira = valida ? new Date((base as Date).getTime() + prazoMin * 60 * 1000) : null;
+  const msRestantes = expira ? Math.max(0, expira.getTime() - agora.getTime()) : 0;
+
+  let textoRestante = '—';
+  if (expira) {
+    if (msRestantes <= 0) textoRestante = 'prazo vencido';
+    else if (msRestantes < 60_000) textoRestante = `${Math.ceil(msRestantes / 1000)}s`;
+    else if (msRestantes < 3_600_000) textoRestante = `${Math.floor(msRestantes / 60_000)}min`;
+    else textoRestante = `${Math.floor(msRestantes / 3_600_000)}h ${Math.floor((msRestantes % 3_600_000) / 60_000)}min`;
+  }
+
+  return {
+    dentroDoPrazo: !expira || msRestantes > 0,
+    expirado: !!expira && msRestantes <= 0,
+    msRestantes,
+    textoRestante,
+    prazoLabel,
+    expiraEm: expira ? expira.toISOString() : null,
+  };
+}
+
+/** A nota pode ser cancelada (status autorizada/emitindo, dentro do prazo)? */
+export function notaCancelavel(opts: {
+  status?: string | null;
+  tipo?: string | null;
+  emitidaEm?: string | Date | null;
+  fallbackData?: string | Date | null;
+  agora?: Date;
+}): boolean {
+  const st = String(opts.status || '').toUpperCase();
+  if (st !== 'AUTORIZADA' && st !== 'EMITINDO') return false;
+  return prazoCancelamentoNota(opts).dentroDoPrazo;
+}

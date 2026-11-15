@@ -16,7 +16,7 @@ import { imprimirViaUsb, lerCanalImpressao } from '@/lib/usbPrint';
 import { tipoDocDigitos, validaCpfOuCnpj } from '@/lib/cnpjAutocomplete';
 // BLOCO 134 (regra do dono): preço anônimo SÓ na NFC-e anônima; o cupom
 // (não fiscal) segue o preço digitado pelo vendedor.
-import { intencaoNotaDaVenda } from '@/lib/regras-fiscais';
+import { intencaoNotaDaVenda, prazoCancelamentoNota, PrazoCancelamento } from '@/lib/regras-fiscais';
 
 interface JanelaFiscalProps {
   sale: Sale;
@@ -28,6 +28,10 @@ interface JanelaFiscalProps {
   /** Devolve o status atualizado da nota pro Cupom (banner pendente muda ao vivo) */
   onNotaChange: (n: NotaInfo) => void;
   onClose: () => void;
+  /** BLOCO 142: ADMIN pode cancelar a nota (vendas realizadas / cupom do admin) */
+  podeCancelar?: boolean;
+  /** BLOCO 142: disparado após cancelar com sucesso (recarregar vendas) */
+  onNotaCancelada?: () => void;
 }
 
 type OpcaoFiscal = 'NFE' | 'NFCE_IDENTIFICADA' | 'NFCE_ANONIMA';
@@ -48,11 +52,64 @@ type OpcaoFiscal = 'NFE' | 'NFCE_IDENTIFICADA' | 'NFCE_ANONIMA';
  * A venda pode ficar SEM nota (fechar e emitir depois) — o Cupom mostra o
  * banner "NOTA PENDENTE" e esta janela resolve quando o dono quiser.
  */
-const JanelaFiscal: React.FC<JanelaFiscalProps> = ({ sale, client, nota, focus, showToast, onNotaChange, onClose }) => {
+const JanelaFiscal: React.FC<JanelaFiscalProps> = ({ sale, client, nota, focus, showToast, onNotaChange, onClose, podeCancelar, onNotaCancelada }) => {
   const [busy, setBusy] = useState(false);
   const [aberta, setAberta] = useState<OpcaoFiscal | null>(null);
   const [erro, setErro] = useState<string>('');
   const [info, setInfo] = useState<string>('');
+
+  // ====================================================================
+  // BLOCO 142 — CANCELAR NOTA (ADMIN): dentro do prazo SEFAZ (NFC-e 30min
+  // / NF-e 24h após a autorização) o botão aparece com a contagem ao
+  // vivo; venceu = botão fica INATIVO/SOME. O servidor (/api/notas) aplica
+  // a MESMA regra — fonte única em regras-fiscais.ts.
+  // ====================================================================
+  const [cancelAberto, setCancelAberto] = useState(false);
+  const [justificativa, setJustificativa] = useState('');
+  const [agora, setAgora] = useState(() => new Date());
+  useEffect(() => {
+    if (!podeCancelar || nota.status !== 'AUTORIZADA') return;
+    const iv = setInterval(() => setAgora(new Date()), 10_000);
+    return () => clearInterval(iv);
+  }, [podeCancelar, nota.status]);
+
+  const prazoNota: PrazoCancelamento | null = nota.status === 'AUTORIZADA'
+    ? prazoCancelamentoNota({
+        tipo: nota.tipo,
+        status: nota.status,
+        emitidaEm: sale.notaEmitidaEm || nota.dataAutorizacao || null,
+        fallbackData: sale.data,
+        agora,
+      })
+    : null;
+
+  const cancelar = async () => {
+    if (busy || !sale.id) return;
+    const just = justificativa.trim();
+    if (just.length < 15) {
+      setErro('Justificativa obrigatória (mínimo 15 caracteres — regra da SEFAZ).');
+      return;
+    }
+    if (prazoNota?.expirado) {
+      setErro(`Prazo SEFAZ de cancelamento vencido (${prazoNota.prazoLabel} após a autorização).`);
+      return;
+    }
+    setErro(''); setBusy(true);
+    const r = await notaService.cancelar(String(sale.id), just);
+    setBusy(false);
+    if (r.erro && !r.nota) { setErro(r.erro); return; }
+    if (r.nota) {
+      onNotaChange({ ...nota, ...r.nota });
+      setCancelAberto(false); setJustificativa('');
+      if (r.nota.status === 'CANCELADA') {
+        setInfo('Nota CANCELADA na SEFAZ — o XML original continua existindo (evento de cancelamento).');
+        showToast?.('Nota cancelada na SEFAZ!', 'success');
+        onNotaCancelada?.();
+      } else {
+        setInfo('Cancelamento enviado — toque em "Atualizar situação" em alguns segundos.');
+      }
+    }
+  };
 
   const docCadastro = String(client?.cnpj || '').replace(/\D/g, '');
   const docTipo = tipoDocDigitos(docCadastro);
@@ -313,6 +370,42 @@ const JanelaFiscal: React.FC<JanelaFiscalProps> = ({ sale, client, nota, focus, 
                       className="block w-full bg-emerald-600 text-white font-black py-3.5 rounded-2xl text-center text-[10px] uppercase tracking-widest active:scale-95">
                       <i className="fa-solid fa-file-pdf mr-1"></i> Abrir DANFE A4 (Focus)
                     </a>
+                  )}
+                  {/* BLOCO 142: CANCELAR NOTA — só dentro do prazo SEFAZ; venceu = some/inativo */}
+                  {podeCancelar && prazoNota && (
+                    <div className="rounded-2xl border border-rose-100 bg-rose-50 p-3 space-y-2">
+                      {!cancelAberto ? (
+                        <>
+                          <button onClick={() => { setCancelAberto(true); setJustificativa(''); setErro(''); }} disabled={busy || prazoNota.expirado}
+                            className="w-full bg-rose-600 text-white font-black py-3.5 rounded-2xl text-[10px] uppercase tracking-widest active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2">
+                            <i className="fa-solid fa-ban"></i> Cancelar nota na SEFAZ
+                          </button>
+                          <p className="text-[8px] font-bold text-rose-500 leading-snug px-1">
+                            {prazoNota.expirado
+                              ? `Prazo vencido — a janela de ${prazoNota.prazoLabel} após a autorização acabou.`
+                              : `Restam ${prazoNota.textoRestante} para cancelar (regra SEFAZ: ${prazoNota.prazoLabel}).`}
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          <p className="text-[9px] font-black text-rose-700 uppercase tracking-wide">
+                            <i className="fa-solid fa-stopwatch mr-1"></i>
+                            {prazoNota.expirado ? `Prazo vencido (${prazoNota.prazoLabel})` : `Restam ${prazoNota.textoRestante}`}
+                          </p>
+                          <textarea value={justificativa} onChange={e => setJustificativa(e.target.value)} rows={3} maxLength={255}
+                            placeholder="Justificativa (mínimo 15 caracteres) — ex.: erro na emissão, valores divergentes."
+                            className="w-full p-3 bg-white rounded-xl font-semibold text-[12px] outline-none focus:ring-2 focus:ring-rose-200 resize-none border border-rose-100" />
+                          <div className="flex gap-2">
+                            <button onClick={() => { setCancelAberto(false); setJustificativa(''); }} disabled={busy}
+                              className="flex-1 bg-white text-gray-500 border border-gray-200 rounded-xl py-3 text-[10px] font-black uppercase active:scale-95">Voltar</button>
+                            <button onClick={() => void cancelar()} disabled={busy || justificativa.trim().length < 15 || prazoNota.expirado}
+                              className="flex-1 bg-rose-600 text-white rounded-xl py-3 text-[10px] font-black uppercase active:scale-95 disabled:opacity-60">
+                              {busy ? <i className="fa-solid fa-spinner fa-spin"></i> : 'Confirmar cancelamento'}
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
                   )}
                 </>
               )}

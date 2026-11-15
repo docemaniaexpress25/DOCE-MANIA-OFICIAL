@@ -184,6 +184,10 @@ export interface Sale {
   notaErro?: string;
   /** BLOCO 82: chave de acesso (44 dig) — fonte do mini DANFE 80mm */
   notaChave?: string;
+  /** BLOCO 142: ref da nota na Focus — usada pelo fluxo de CANCELAMENTO */
+  notaRef?: string;
+  /** BLOCO 142: quando a SEFAZ AUTORIZOU (ISO) — base do prazo de cancelamento */
+  notaEmitidaEm?: string;
   /** Bloco 29 (ROTA 2): modo do atendimento — define o estoque de casa da baixa e a margem real */
   modoNota?: ModoNota;
 }

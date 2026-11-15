@@ -11,7 +11,9 @@ import { mascararCep, buscarCep, cidadeDeEstado, ufDeEstado, cepDeEstado } from 
 // BLOCO 71: cliente ESPECIAL GB só existe nas rotas liberadas (Rota 03 Edipo Pena / Rota 04 Gil Pantoja)
 import { podeClienteEspecialGB } from '@/lib/regraClienteGB';
 // BLOCO 134: fluxo "não pode esquecer de bater a nota" — painel de vendas com nota pendente
-import { vendaNotaPendente, intencaoNotaDaVenda, rotuloDocumentoNota } from '@/lib/regras-fiscais';
+// BLOCO 142: prazo SEFAZ de cancelamento (NFC-e 30min / NF-e 24h) — botão some quando vence
+import { vendaNotaPendente, intencaoNotaDaVenda, rotuloDocumentoNota, prazoCancelamentoNota, PrazoCancelamento } from '@/lib/regras-fiscais';
+import { notaService } from '@/services/notaService';
 import { buscarEanProduto, soDigitosEan, eanCompleto, mensagemEan, EanBusca } from '@/lib/eanAutocomplete';
 import Cupom from '@/components/doce/Cupom';
 import ClientHistory from '@/components/doce/ClientHistory';
@@ -81,6 +83,8 @@ interface AdminDashboardProps {
   updateEstoqueCentral: any;
   reinforceCarga: any;
   deleteSale: (id: string) => void;
+  /** BLOCO 142: recarrega as vendas do servidor (após cancelar nota) */
+  reloadSales?: () => Promise<void>;
   receiveAccount: (saleId: string, method: ReceiveMethod, amount?: number) => void;
   logo: string | null;
   setLogo: (logo: string | null) => void;
@@ -186,6 +190,59 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
+  };
+
+  // ====================================================================
+  // BLOCO 142 — CANCELAR NOTA (Vendas Realizadas): o card mostra o prazo
+  // SEFAZ AO VIVO (NFC-e 30min / NF-e 24h após a autorização) e o botão
+  // de cancelar SUMI quando vence — sem precisar recarregar nada. O
+  // servidor (/api/notas acao CANCELAR) aplica a MESMA regra (fonte
+  // única: regras-fiscais.ts).
+  // ====================================================================
+  const [agoraFiscal, setAgoraFiscal] = useState(() => new Date());
+  useEffect(() => {
+    if (activeTab !== 'HISTORY' && activeTab !== 'NOTAS_PENDENTES') return;
+    const iv = setInterval(() => setAgoraFiscal(new Date()), 15_000);
+    return () => clearInterval(iv);
+  }, [activeTab]);
+
+  /** Prazo de cancelamento da nota da venda — null quando não há nota cancelável */
+  const prazoCancelSale = (s: Sale): PrazoCancelamento | null => {
+    const st = String(s.notaStatus || '').toUpperCase();
+    if (st !== 'AUTORIZADA' && st !== 'EMITINDO') return null;
+    if (!s.notaRef) return null;
+    return prazoCancelamentoNota({ tipo: s.notaTipo, status: s.notaStatus, emitidaEm: s.notaEmitidaEm, fallbackData: s.data, agora: agoraFiscal });
+  };
+
+  const [cancelNotaModal, setCancelNotaModal] = useState<{ sale: Sale; prazo: PrazoCancelamento } | null>(null);
+  const [cancelNotaJust, setCancelNotaJust] = useState('');
+  const [cancelNotaBusy, setCancelNotaBusy] = useState(false);
+
+  const abrirCancelNota = (s: Sale) => {
+    const pz = prazoCancelSale(s);
+    if (!pz || pz.expirado) { showToast('Prazo SEFAZ de cancelamento vencido.', 'error'); return; }
+    setCancelNotaJust('');
+    setCancelNotaModal({ sale: s, prazo: pz });
+  };
+
+  const confirmarCancelNota = async () => {
+    if (!cancelNotaModal) return;
+    const just = cancelNotaJust.trim();
+    if (just.length < 15) { showToast('Justificativa obrigatória (mínimo 15 caracteres — regra da SEFAZ).', 'error'); return; }
+    setCancelNotaBusy(true);
+    try {
+      const r = await notaService.cancelar(cancelNotaModal.sale.id, just);
+      if (!r.ok) { showToast(r.erro || 'Falha ao cancelar na SEFAZ.', 'error'); return; }
+      showToast('Nota cancelada na SEFAZ!');
+      setCancelNotaModal(null);
+      // selectedSale aberto nesta venda? fecha — o badge do card vai atualizar no reload
+      setSelectedSale(prev => (prev && prev.id === cancelNotaModal.sale.id ? null : prev));
+      await props.reloadSales?.();
+    } catch {
+      showToast('Falha de conexão ao cancelar.', 'error');
+    } finally {
+      setCancelNotaBusy(false);
+    }
   };
 
   useEffect(() => {
@@ -2157,8 +2214,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
              </div>
           </div>
           <div className="grid gap-3 px-1">
-            {filteredHistory.map(s => (
-              <button key={s.id} onClick={() => setSelectedSale(s)} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex flex-col text-left transition-all hover:border-blue-200">
+            {filteredHistory.map(s => {
+              // BLOCO 142: prazo SEFAZ da nota desta venda (null = sem nota cancelável)
+              const pz = prazoCancelSale(s);
+              return (
+              <div key={s.id} role="button" tabIndex={0} onClick={() => setSelectedSale(s)} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedSale(s); } }} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex flex-col text-left transition-all hover:border-blue-200 cursor-pointer outline-none focus:ring-2 focus:ring-blue-100">
                 <div className="flex justify-between items-start mb-2"><span className="text-[9px] font-black text-gray-400 uppercase">{s.data.toLocaleDateString()} {s.data.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span><span className="flex items-center gap-1.5">
                   {/* BLOCO 109 (regra do dono): situacao fiscal VISIVEL na lista —
                       o admin ve de cara qual venda ainda falta emitir nota (clique
@@ -2169,8 +2229,27 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                   {s.notaStatus === 'EMITINDO' && <span className="text-[9px] font-black px-1.5 py-0.5 rounded uppercase bg-amber-50 text-amber-600" title="Nota processando na SEFAZ">{rotuloDocumentoNota(s.notaTipo)}…</span>}
                   <span className={`text-[9px] font-black px-2 py-0.5 rounded uppercase ${s.statusPagamento === 'PAGO' ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>{s.statusPagamento === 'PAGO' ? 'RECEBIDA' : 'EM ABERTO'}</span></span></div>
                 <div className="flex justify-between items-end gap-2 min-w-0"><div className="min-w-0"><h4 className="font-bold text-gray-800 text-sm leading-tight break-words">{props.clients.find(c => c.id === s.clientId)?.nomeFantasia || 'Cliente'}</h4><p className="text-[10px] text-gray-400 font-bold uppercase mt-1 break-words">Vend: {props.users.find(u => u.id === s.vendedorId)?.nome ?? 'Desc.'}</p></div><p className="text-sm font-black text-gray-800 tabular-nums whitespace-nowrap shrink-0">R$ {s.valorTotal.toFixed(2)}</p></div>
-              </button>
-            ))}
+                {/* BLOCO 142: CANCELAR NOTA — só DENTRO do prazo SEFAZ;
+                    venceu = o botão SOME do card (regra pedida pelo dono) */}
+                {pz && (
+                  <div className="mt-3 pt-3 border-t border-gray-100 flex items-center justify-between gap-2">
+                    <span className="text-[8px] font-bold text-gray-400 uppercase leading-tight min-w-0">
+                      {pz.expirado ? (
+                        <><i className="fa-solid fa-clock mr-1 text-gray-300"></i>Prazo de cancelamento SEFAZ vencido</>
+                      ) : (
+                        <><i className="fa-solid fa-stopwatch mr-1 text-amber-500"></i>Restam <b className="text-amber-600">{pz.textoRestante}</b> p/ cancelar a {rotuloDocumentoNota(s.notaTipo)}</>
+                      )}
+                    </span>
+                    <button onClick={e => { e.stopPropagation(); abrirCancelNota(s); }} disabled={pz.expirado}
+                      className="h-9 px-3 rounded-xl bg-rose-50 text-rose-600 border border-rose-100 text-[9px] font-black uppercase flex items-center gap-1.5 active:scale-95 transition-transform disabled:opacity-50 disabled:bg-gray-50 disabled:text-gray-400 disabled:border-gray-100 shrink-0"
+                      title={pz.expirado ? 'Prazo SEFAZ vencido' : `Cancelar ${rotuloDocumentoNota(s.notaTipo)} na SEFAZ`}>
+                      <i className="fa-solid fa-ban text-[10px]"></i> {pz.expirado ? 'Prazo vencido' : 'Cancelar nota'}
+                    </button>
+                  </div>
+                )}
+              </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -3134,7 +3213,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
            animacao com transform, que prendia o Cupom (fixed) dentro da caixa:
            IMPRIMIR/COPIAR/FECHAR ficavam fora da vista ("botoes nao aparecem").
            O Cupom ja e tela cheia com rolagem propria e botao FECHAR. */
-        <Cupom sale={selectedSale} client={props.clients.find(c => c.id === selectedSale.clientId) || {} as Client} products={props.products} onClose={() => setSelectedSale(null)} onDeleteSale={props.deleteSale} allowDelete={true} allowNota />
+        <Cupom sale={selectedSale} client={props.clients.find(c => c.id === selectedSale.clientId) || {} as Client} products={props.products} onClose={() => setSelectedSale(null)} onDeleteSale={props.deleteSale} allowDelete={true} allowNota podeCancelarNota onNotaCancelada={() => { void props.reloadSales?.(); }} />
       )}
 
       {viewingClientHistory && <ClientHistory client={viewingClientHistory} sales={props.sales} products={props.products} onClose={() => setViewingClientHistory(null)} />}
@@ -3291,6 +3370,51 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           </div>
         </div>
       )}
+
+      {/* ============================================================
+          BLOCO 142 — MODAL CANCELAR NOTA (Vendas Realizadas): justificativa
+          obrigatória (regra SEFAZ, min. 15) + contagem do prazo AO VIVO;
+          venceu durante a digitação = botão fica INATIVO na hora.
+          ============================================================ */}
+      {cancelNotaModal && (() => {
+        const pzAgora = prazoCancelamentoNota({ tipo: cancelNotaModal.sale.notaTipo, status: cancelNotaModal.sale.notaStatus, emitidaEm: cancelNotaModal.sale.notaEmitidaEm, fallbackData: cancelNotaModal.sale.data, agora: agoraFiscal });
+        return (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[260] flex items-end sm:items-center justify-center p-4" onClick={() => !cancelNotaBusy && setCancelNotaModal(null)}>
+          <div className="bg-white w-full max-w-md rounded-t-[2rem] sm:rounded-[2rem] max-h-[90dvh] overflow-y-auto pb-[env(safe-area-inset-bottom)] shadow-2xl animate-in slide-in-from-bottom duration-300" onClick={e => e.stopPropagation()}>
+            <div className="bg-gradient-to-br from-rose-500 to-red-600 p-5 flex items-center justify-between">
+              <div>
+                <h3 className="font-black text-white text-sm uppercase">Cancelar nota na SEFAZ</h3>
+                <p className="text-white/70 text-[9px] font-bold mt-1">{rotuloDocumentoNota(cancelNotaModal.sale.notaTipo, 'NF')} {cancelNotaModal.sale.notaNumero || ''} · {props.clients.find(c => c.id === cancelNotaModal.sale.clientId)?.nomeFantasia || 'Cliente'}</p>
+              </div>
+              <button onClick={() => !cancelNotaBusy && setCancelNotaModal(null)} className="text-white/70 active:scale-90" aria-label="Fechar"><i className="fa-solid fa-xmark text-lg"></i></button>
+            </div>
+            <div className="p-5 space-y-4">
+              {/* Contagem AO VIVO do prazo (tick 15s) */}
+              <div className={`rounded-2xl border px-3 py-2.5 ${pzAgora.expirado ? 'bg-gray-50 border-gray-200' : 'bg-amber-50 border-amber-200'}`}>
+                {pzAgora.expirado ? (
+                  <p className="text-[9px] font-bold text-gray-500 leading-snug"><i className="fa-solid fa-clock mr-1"></i>Prazo SEFAZ VENCIDO — a janela de {pzAgora.prazoLabel} após a autorização acabou e o evento seria recusado.</p>
+                ) : (
+                  <p className="text-[9px] font-black text-amber-700 uppercase tracking-wide"><i className="fa-solid fa-stopwatch mr-1"></i>Restam {pzAgora.textoRestante} para cancelar (regra SEFAZ: {pzAgora.prazoLabel})</p>
+                )}
+              </div>
+              <div className="bg-rose-50 border border-rose-100 rounded-2xl p-3">
+                <p className="text-[9px] font-bold text-rose-600 leading-snug"><i className="fa-solid fa-triangle-exclamation mr-1"></i>O cancelamento é IRREVERSÍVEL e enviado à SEFAZ com justificativa. O XML original continua existindo (evento de cancelamento). NFC-e: até 30 min · NF-e: até 24h.</p>
+              </div>
+              <div>
+                <label className="block text-[9px] font-black text-gray-400 uppercase ml-1 mb-1">Justificativa (mínimo 15 caracteres)</label>
+                <textarea value={cancelNotaJust} onChange={e => setCancelNotaJust(e.target.value)} rows={3} maxLength={255} placeholder="Ex.: Erro na emissão — valores divergentes." className="w-full p-4 bg-gray-50 rounded-2xl font-semibold text-sm outline-none focus:ring-2 focus:ring-rose-100 resize-none" />
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => setCancelNotaModal(null)} disabled={cancelNotaBusy} className="flex-1 bg-gray-100 text-gray-500 rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95 disabled:opacity-60">Voltar</button>
+                <button onClick={() => void confirmarCancelNota()} disabled={cancelNotaBusy || cancelNotaJust.trim().length < 15 || pzAgora.expirado} className="flex-1 bg-rose-600 text-white rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95 disabled:opacity-60">
+                  {cancelNotaBusy ? <i className="fa-solid fa-spinner fa-spin"></i> : pzAgora.expirado ? 'Fora do prazo' : 'Cancelar nota'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        );
+      })()}
 
       {/* BLOCO 136: o SHEET antigo de notas pendentes foi substituído pela
           ABA NOTAS_PENDENTES (renderizada no fluxo de abas, acima). */}

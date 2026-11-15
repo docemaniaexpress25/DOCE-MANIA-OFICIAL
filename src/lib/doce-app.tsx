@@ -1060,6 +1060,7 @@ const App: React.FC = () => {
             setMargemMinima={(v)=>updateSetting('margemMinima', v)} setMargemMinimaAtiva={(v)=>updateSetting('margemMinimaAtiva', v)} setPix1Name={(v)=>updateSetting('pix1Name', v)} setPix1Code={(v)=>updateSetting('pix1Code', v)}
             setPix2Name={(v)=>updateSetting('pix2Name', v)} setPix2Code={(v)=>updateSetting('pix2Code', v)} clearAdminNotification={() => setAdminNotification(null)} setOrderedProductIds={(v)=>updateSetting('productOrder', v)} setPortalOrderIds={(v)=>updateSetting('catalogoOrder', v as string[])}
             setPixChave={(v)=>updateSetting('pixChave', v)}
+            reloadSales={fetchTransactionalData}
             setCompanyName={(v)=>updateSetting('companyName', v)} setCompanyCnpj={(v)=>updateSetting('companyCnpj', v)}
             setMelhorias={(v: MelhoriasFlags)=>updateSetting('melhorias', v)}
             activateAllProducts={activateAllProducts} addCategory={addCategory} updateCategory={updateCategory} deleteCategory={deleteCategory}

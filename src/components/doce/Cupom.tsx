@@ -55,9 +55,13 @@ interface CupomProps {
   /** BLOCO 122: título do banner da conferência — "Resumo do pedido" na
    *  pré-venda (a venda ainda não existe, é conferência do pedido). */
   conferenciaTitulo?: string;
+  /** BLOCO 142: ADMIN pode cancelar a nota (Janela Fiscal) dentro do prazo SEFAZ */
+  podeCancelarNota?: boolean;
+  /** BLOCO 142: disparado após cancelar a nota — o admin recarrega a lista de vendas */
+  onNotaCancelada?: () => void;
 }
 
-const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, onDeleteSale, allowDelete, showToast, closeLabel, allowNota, conferencia, onFinalizar, finalizando, labelFinalizar, conferenciaTitulo }) => {
+const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, onDeleteSale, allowDelete, showToast, closeLabel, allowNota, conferencia, onFinalizar, finalizando, labelFinalizar, conferenciaTitulo, podeCancelarNota, onNotaCancelada }) => {
   const [printWidth, setPrintWidth] = useState<PrinterWidth>('56MM');
   // BLOCO 111: canal de impressão do dispositivo (Bluetooth térmica x USB do PC).
   // Default inteligente: desktop sem Web Bluetooth começa no USB.
@@ -736,6 +740,8 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
           showToast={showToast}
           onNotaChange={(n) => setNota(n)}
           onClose={() => setFiscalAberto(false)}
+          podeCancelar={podeCancelarNota}
+          onNotaCancelada={onNotaCancelada}
         />
       )}
 

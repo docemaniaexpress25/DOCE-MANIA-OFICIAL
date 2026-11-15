@@ -16,6 +16,8 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+// BLOCO 142: prazo SEFAZ de cancelamento (NFC-e 30min / NF-e 24h) — fonte única com o servidor
+import { prazoCancelamentoNota } from '@/lib/regras-fiscais';
 
 // ---------------- tipos ----------------
 interface NotaRow {
@@ -161,7 +163,30 @@ export default function PortalNotasPage() {
   const [justificativa, setJustificativa] = useState('');
   const [cloneModal, setCloneModal] = useState<NotaRow | null>(null);
   const [emitModal, setEmitModal] = useState<NotaRow | null>(null);
-  const [emitTipo, setEmitTipo] = useState<'' | 'NFE' | 'NFCE'>('');
+  const [emitTipo, setEmitTipo] = useState<'' | 'NFE' | 'NFCE'>("");
+
+  // ------------------------------------------------------------------
+  // BLOCO 142 — relógio "agora": o prazo SEFAZ de cancelamento é RELATIVO
+  // (NFC-e 30min / NF-e 24h após a autorização). O botão de cancelar
+  // precisa SUMIR sozinho quando o prazo vence — sem precisar recarregar
+  // a lista. Tick de 15s enquanto o admin está logado (custo zero).
+  // ------------------------------------------------------------------
+  const [agora, setAgora] = useState(() => new Date());
+  useEffect(() => {
+    if (!token) return;
+    const iv = setInterval(() => setAgora(new Date()), 15_000);
+    return () => clearInterval(iv);
+  }, [token]);
+
+  /** Prazo de cancelamento de UMA linha (NFC-e 30min / NF-e 24h). */
+  const prazoCancelDe = useCallback((n: NotaRow) =>
+    prazoCancelamentoNota({ tipo: n.tipo, status: n.status, emitidaEm: n.emitidaEm, fallbackData: n.dataVenda, agora }), [agora]);
+
+  // Prazo da nota aberta no modal de cancelamento — re-render ao vivo (tick 15s)
+  const prazoCancelModal = useMemo(
+    () => (cancelModal ? prazoCancelamentoNota({ tipo: cancelModal.tipo, status: cancelModal.status, emitidaEm: cancelModal.emitidaEm, fallbackData: cancelModal.dataVenda, agora }) : null),
+    [cancelModal, agora],
+  );
 
   // Toast
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
@@ -853,8 +878,8 @@ export default function PortalNotasPage() {
                             {!n.avulsa && <button onClick={() => setCloneModal(n)} disabled={ocupado} className="w-8 h-8 rounded-xl bg-violet-50 text-violet-600 flex items-center justify-center active:scale-90 transition-transform" title="Clonar pedido (emite documento de novo)">
                               <i className="fa-solid fa-clone text-[11px]"></i>
                             </button>}
-                            {!n.avulsa && (n.status === 'AUTORIZADA' || n.status === 'EMITINDO') && n.ref && (
-                              <button onClick={() => { setCancelModal(n); setJustificativa(''); }} disabled={ocupado} className="w-8 h-8 rounded-xl bg-rose-50 text-rose-500 flex items-center justify-center active:scale-90 transition-transform" title="Cancelar nota na SEFAZ">
+                            {!n.avulsa && (n.status === 'AUTORIZADA' || n.status === 'EMITINDO') && n.ref && prazoCancelDe(n).dentroDoPrazo && (
+                              <button onClick={() => { setCancelModal(n); setJustificativa(''); }} disabled={ocupado} className="w-8 h-8 rounded-xl bg-rose-50 text-rose-500 flex items-center justify-center active:scale-90 transition-transform" title={`Cancelar na SEFAZ — restam ${prazoCancelDe(n).textoRestante} (prazo: ${prazoCancelDe(n).prazoLabel})`}>
                                 <i className="fa-solid fa-ban text-[11px]"></i>
                               </button>
                             )}
@@ -1042,6 +1067,16 @@ export default function PortalNotasPage() {
           <div className="bg-white w-full max-w-md rounded-[2rem] p-6 shadow-2xl overflow-y-auto max-h-[90dvh]" onClick={e => e.stopPropagation()}>
             <h3 className="font-black text-rose-600 uppercase text-sm mb-1"><i className="fa-solid fa-ban mr-1"></i>Cancelar nota</h3>
             <p className="text-[9px] font-bold text-gray-400 mb-4">{rotuloTipo(cancelModal.tipo, cancelModal.modoNota)} {cancelModal.numero} · {cancelModal.cliente} · {fmtBRL(cancelModal.valor)}</p>
+            {/* BLOCO 142: contagem regressiva AO VIVO do prazo SEFAZ — venceu = botão inativo */}
+            {prazoCancelModal && (
+              <div className={`rounded-2xl border p-3 mb-3 ${prazoCancelModal.expirado ? 'bg-gray-100 border-gray-200' : 'bg-amber-50 border-amber-200'}`}>
+                {prazoCancelModal.expirado ? (
+                  <p className="text-[9px] font-bold text-gray-500 leading-snug"><i className="fa-solid fa-clock mr-1"></i>Prazo SEFAZ VENCIDO — o evento de cancelamento seria recusado. A janela de {prazoCancelModal.prazoLabel} após a autorização acabou.</p>
+                ) : (
+                  <p className="text-[9px] font-black text-amber-700 uppercase tracking-wide leading-snug"><i className="fa-solid fa-stopwatch mr-1"></i>Restam {prazoCancelModal.textoRestante} para cancelar (regra SEFAZ: {prazoCancelModal.prazoLabel})</p>
+                )}
+              </div>
+            )}
             <div className="bg-rose-50 border border-rose-100 rounded-2xl p-3 mb-4">
               <p className="text-[9px] font-bold text-rose-600 leading-snug"><i className="fa-solid fa-triangle-exclamation mr-1"></i>Regra da SEFAZ: NFC-e pode ser cancelada até 30 MINUTOS após a emissão; NF-e até 24h. O cancelamento é enviado à SEFAZ e o XML original continua existindo (evento de cancelamento).</p>
             </div>
@@ -1049,8 +1084,9 @@ export default function PortalNotasPage() {
             <textarea value={justificativa} onChange={e => setJustificativa(e.target.value)} rows={3} maxLength={255} placeholder="Ex.: Erro na emissão — valores divergentes." className="w-full p-4 bg-gray-50 rounded-2xl font-semibold text-sm outline-none focus:ring-2 focus:ring-rose-100 resize-none" />
             <div className="flex gap-2 mt-4">
               <button onClick={() => setCancelModal(null)} className="flex-1 bg-gray-100 text-gray-500 rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95">Voltar</button>
-              <button onClick={() => void cancelarNota()} disabled={busyId === 'cancel'} className="flex-1 bg-rose-600 text-white rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95 disabled:opacity-60">
-                {busyId === 'cancel' ? <i className="fa-solid fa-spinner fa-spin"></i> : 'Cancelar nota'}
+              {/* BLOCO 142: prazo vencido DURANTE a digitação = botão inativa na hora */}
+              <button onClick={() => void cancelarNota()} disabled={busyId === 'cancel' || !prazoCancelModal || prazoCancelModal.expirado} className="flex-1 bg-rose-600 text-white rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95 disabled:opacity-60">
+                {busyId === 'cancel' ? <i className="fa-solid fa-spinner fa-spin"></i> : prazoCancelModal?.expirado ? 'Fora do prazo' : 'Cancelar nota'}
               </button>
             </div>
           </div>

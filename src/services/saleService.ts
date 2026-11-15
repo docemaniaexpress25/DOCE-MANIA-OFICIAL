@@ -8,6 +8,15 @@ const safeNumber = (value: any): number => Number(value || 0);
 // para nao pagar um request falho a CADA recarga enquanto o SQL do bloco 29
 // nao for rodado no SQL Editor. null = ainda nao sondado.
 let modoColCache: boolean | null = null;
+// BLOCO 142: lembra se a coluna sales.nota_emitida_em existe (SQL do Bloco 108).
+// Ela alimenta o PRAZO SEFAZ de cancelamento (NFC-e 30min / NF-e 24h). null = nao sondado.
+let emitidaColCache: boolean | null = null;
+
+// BLOCO 142: colunas-base das vendas (sem modo_nota / nota_emitida_em — entram
+// dinamicamente conforme as sondagens; nota_ref existe desde o SQL do Bloco 10).
+const SALES_BASE = 'id, vendedor_id, client_id, valor_total, valor_pago, metodo_pagamento, detalhe_pagamento, status_pagamento, data_vencimento, data_venda, nota_status, nota_tipo, nota_numero, nota_ref, nota_pdf_url, nota_erro, nota_chave, tipo_venda, entrega_status, trocas, prioridade, separado, entregador_id';
+const SALES_ITEMS = 'sale_items(produto_id, quantidade, preco_venda)';
+const salesCols = () => [SALES_BASE, modoColCache ? 'modo_nota' : '', emitidaColCache ? 'nota_emitida_em' : '', SALES_ITEMS].filter(Boolean).join(', ');
 
 export const saleService = {
   async getAllSales(): Promise<Sale[]> {
@@ -17,30 +26,26 @@ export const saleService = {
     // ate ~500KB por venda era baixado em TODA recarga por TODOS os aparelhos).
     // A foto agora le sob demanda via getComprovanteFoto(). Fallback '*' caso
     // alguma coluna ainda nao exista (SQL pendente).
-    // BLOCO 29: modo_nota entra no COLS com fallback dedicado (nao cai no '*',
-    // que traria comprovante_foto de volta e gastaria egress).
-    // BLOCO 135: nota_tipo entra na leitura — rotula o badge NFC/NF-e do
-    // historico ("onde tem NF 17 deve aparecer NFC 17"). Coluna existe no
-    // banco desde o SQL da API fiscal (mesma migração de nota_status).
-    const COLS = 'id, vendedor_id, client_id, valor_total, valor_pago, metodo_pagamento, detalhe_pagamento, status_pagamento, data_vencimento, data_venda, nota_status, nota_tipo, nota_numero, nota_pdf_url, nota_erro, nota_chave, tipo_venda, entrega_status, trocas, prioridade, separado, entregador_id, modo_nota, sale_items(produto_id, quantidade, preco_venda)';
-    const COLS_SEM_MODO = 'id, vendedor_id, client_id, valor_total, valor_pago, metodo_pagamento, detalhe_pagamento, status_pagamento, data_vencimento, data_venda, nota_status, nota_numero, nota_pdf_url, nota_erro, nota_chave, tipo_venda, entrega_status, trocas, prioridade, separado, entregador_id, sale_items(produto_id, quantidade, preco_venda)';
+    // BLOCO 29/142: modo_nota e nota_emitida_em entram por sondagem dedicada
+    // (cada uma tem fallback proprio — uma coluna ausente nao tira a outra).
     let data: any[];
-    if (modoColCache === true) {
-      data = await fetchAllPages<any>('sales', COLS);
-    } else if (modoColCache === false) {
-      data = await fetchAllPages<any>('sales', COLS_SEM_MODO);
+    if (modoColCache !== null && emitidaColCache !== null) {
+      data = await fetchAllPages<any>('sales', salesCols());
     } else {
       try {
-        data = await fetchAllPages<any>('sales', COLS);
-        modoColCache = true;
+        data = await fetchAllPages<any>('sales', salesCols());
+        if (modoColCache === null) modoColCache = true;
+        if (emitidaColCache === null) emitidaColCache = true;
       } catch (e: any) {
-        // BLOCO 30: qualquer falha (modo_nota inexistente antes do SQL, rede, RLS)
-        // cai no COLS_SEM_MODO — colunas antigas garantidas, SEM comprovante_foto
-        // (protege egress). '*' so como ultimo recurso absoluto.
-        console.error('[sales] leitura enriquecida falhou, usando fallback sem modo_nota:', e?.message);
+        // BLOCO 30/142: qualquer falha (coluna inexistente antes do SQL, rede, RLS)
+        // desliga SO a coluna culpada e tenta de novo — colunas antigas garantidas,
+        // SEM comprovante_foto (protege egress). '*' so como ultimo recurso absoluto.
+        const msg = String(e?.message || '');
+        console.error('[sales] leitura enriquecida falhou, ajustando sondagem:', msg);
+        if (/modo_nota/i.test(msg)) modoColCache = false;
+        if (/nota_emitida_em/i.test(msg)) emitidaColCache = false;
         try {
-          data = await fetchAllPages<any>('sales', COLS_SEM_MODO);
-          if (e && /modo_nota/i.test(e?.message || '')) modoColCache = false;
+          data = await fetchAllPages<any>('sales', salesCols());
         } catch (e2: any) {
           console.error('[sales] fallback final com *:', e2?.message);
           data = await fetchAllPages<any>('sales', '*, sale_items(*)');
@@ -74,6 +79,9 @@ export const saleService = {
       notaErro: s.nota_erro || undefined,
       // BLOCO 82: chave de acesso p/ o mini DANFE 80mm
       notaChave: s.nota_chave || undefined,
+      // BLOCO 142: ref da Focus + data de autorização — fluxo de CANCELAMENTO
+      notaRef: s.nota_ref || undefined,
+      notaEmitidaEm: s.nota_emitida_em || undefined,
       // Bloco 13: fila continua de pre-venda (colunas podem nao existir antes do SQL)
       tipoVenda: s.tipo_venda || undefined,
       entregaStatus: s.entrega_status || undefined,

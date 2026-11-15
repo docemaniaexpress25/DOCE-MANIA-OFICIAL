@@ -433,9 +433,11 @@ export default function PortalNotasPage() {
   // emissão do documento mesmo que a API venha com ordenação antiga.
   const listaFiltrada = useMemo(() => {
     const q = busca.trim().toLowerCase();
+    // BLOCO 150: o chip "Pendente" filtra pelo status real NAO_EMITIDA
+    const filtroStatus = filtro === 'PENDENTE' ? 'NAO_EMITIDA' : filtro;
     const base = notas.filter(n => {
       if (filtroTipo !== 'TODOS' && tipoDe(n.tipo, n.modoNota) !== filtroTipo) return false;
-      if (filtro !== 'TODAS' && String(n.status || '').toUpperCase() !== filtro) return false;
+      if (filtro !== 'TODAS' && String(n.status || '').toUpperCase() !== filtroStatus) return false;
       if (!dentroPeriodo(n.dataVenda, periodo)) return false;
       if (!q) return true;
       return (
@@ -468,11 +470,30 @@ export default function PortalNotasPage() {
     };
   }, [notas, periodo]);
 
+  // BLOCO 150: base SEM filtro de status — os chips contam sobre ela, então
+  // as contagens ficam estáveis mesmo com um filtro ativo (antes: filtrar por
+  // Pendente zerava as contagens dos outros chips).
+  const listaSemStatus = useMemo(() => {
+    const q = busca.trim().toLowerCase();
+    return notas.filter(n => {
+      if (filtroTipo !== 'TODOS' && tipoDe(n.tipo, n.modoNota) !== filtroTipo) return false;
+      if (!dentroPeriodo(n.dataVenda, periodo)) return false;
+      if (!q) return true;
+      return (
+        (n.numero || '').includes(q) ||
+        (n.cliente || '').toLowerCase().includes(q) ||
+        (n.clienteDoc || '').toLowerCase().includes(q) ||
+        (n.chave || '').includes(q) ||
+        (n.vendedor || '').toLowerCase().includes(q)
+      );
+    });
+  }, [notas, busca, filtroTipo, periodo]);
+
   const contagem = useCallback((f: FiltroStatus) => {
-    if (f === 'TODAS') return listaFiltrada.length;
-    if (f === 'PENDENTE') return listaFiltrada.filter(n => String(n.status || '').toUpperCase() === 'NAO_EMITIDA').length;
-    return listaFiltrada.filter(n => String(n.status || '').toUpperCase() === f).length;
-  }, [listaFiltrada]);
+    if (f === 'TODAS') return listaSemStatus.length;
+    const st = f === 'PENDENTE' ? 'NAO_EMITIDA' : f;
+    return listaSemStatus.filter(n => String(n.status || '').toUpperCase() === st).length;
+  }, [listaSemStatus]);
 
   // ---------- ações ----------
   const abrirDetalhe = async (n: NotaRow) => {

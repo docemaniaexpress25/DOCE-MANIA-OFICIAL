@@ -10,7 +10,7 @@ import {
   hasNotaEmitidaEm,
   hasEstoqueBaixadoColumn,
 } from '@/lib/serverSchema';
-import { presencaArquivos, listarMetasAvulsas, NotaAvulsaMeta } from '@/lib/focusArquivos';
+import { presencaArquivos, listarMetasAvulsas, lerMetaAvulsa, gravarMetaAvulsa, NotaAvulsaMeta } from '@/lib/focusArquivos';
 import { createShareToken } from '@/lib/shareLinks';
 
 /**
@@ -156,7 +156,8 @@ function linhaAvulsa(m: NotaAvulsaMeta, presenca?: { pdf: boolean; xml: boolean;
     valor: m.valor,
     valorPago: m.valor,
     metodo: m.pagamento,
-    detalhe: '',
+    // BLOCO 150: observação editada no portal (EDITAR avulsa)
+    detalhe: String(m.pagamentoDetalhe || ''),
     statusPagamento: '',
     dataVenda: m.dataEmissao || m.importadoEm,
     modoNota: '',
@@ -210,9 +211,19 @@ async function carregarVendasComNotas(): Promise<LinhaNota[]> {
   // cancelada, emitindo ou rejeitada — tudo passou pela API da Focus).
   // Venda sem emissão (NAO_EMITIDA, mera intenção) NÃO entra mais — quem
   // resolve pendência continua com a aba NOTAS PENDENTES do app.
+  //
+  // BLOCO 150 (regra do dono REFORÇADA — "PRECISO TER ACESSO A TODAS AS NOTAS
+  // CRIADAS PELO APP, O SISTEMA NAO PODE EXCLUIR DO PORTAL"): a lista volta a
+  // incluir a INTENÇÃO de nota criada pelo app (modo_nota NFE/NFCE, ainda sem
+  // emissão) como status PENDENTE com botão EMITIR. O portal é o inventário
+  // COMPLETO dos documentos de saída — nada criado pelo app pode sumir dele.
+  // E o teto sobe (400 -> 600 linhas) para as vendas de rota não empurrarem
+  // notas antigas para fora.
   void temModo;
-  let q = getServiceClient().from('sales').select(sel).order('data_venda', { ascending: false }).limit(400);
-  q = q.not('nota_ref', 'is', null);
+  let q = getServiceClient().from('sales').select(sel).order('data_venda', { ascending: false }).limit(600);
+  q = temModo
+    ? q.or('nota_ref.not.is.null,modo_nota.in.(NFE,NFCE)')
+    : q.not('nota_ref', 'is', null);
   const { data, error } = await q;
   if (error || !data) return [];
 
@@ -415,6 +426,34 @@ export async function POST(req: NextRequest) {
       patch.detalhe_pagamento = body.detalhe.trim().slice(0, 500) || null;
     }
     if (Object.keys(patch).length === 0) return BAD(422, 'Nada para editar.');
+
+    // ---------------------------------------------------------------
+    // BLOCO 150 (regra do dono — "a opção de EDITAR forma de pagamento
+    // não está funcionando"): notas CANCELADAS arquivadas e XMLs de
+    // terceiro viram AVULSA (a venda original foi apagada pelo
+    // cancelamento / não existe no app) — o EDITAR agora atualiza o
+    // REGISTRO ARQUIVADO (JSON de metadados no Storage) em vez de
+    // procurar uma venda que não existe mais (era aqui que o botão
+    // "não funcionava": antes ele nem aparecia na avulsa).
+    // ---------------------------------------------------------------
+    if (saleId.startsWith('AVULSA-')) {
+      const refAvulsa = saleId.slice('AVULSA-'.length);
+      const meta = await lerMetaAvulsa(refAvulsa);
+      if (!meta) return BAD(404, 'Registro arquivado da nota não encontrado.');
+      const metaNova: NotaAvulsaMeta = {
+        ...meta,
+        pagamento: patch.metodo_pagamento
+          ? String(patch.metodo_pagamento)
+          : meta.pagamento,
+        pagamentoDetalhe:
+          typeof patch.detalhe_pagamento === 'string'
+            ? String(patch.detalhe_pagamento)
+            : meta.pagamentoDetalhe || '',
+      };
+      const salvo = await gravarMetaAvulsa(metaNova);
+      if (!salvo) return BAD(500, 'Falha ao salvar o registro arquivado (Storage).');
+      return NextResponse.json({ ok: true, avulsa: true, venda: { id: saleId, metodo_pagamento: metaNova.pagamento, detalhe_pagamento: metaNova.pagamentoDetalhe || '' } });
+    }
 
     const { data: upd, error } = await db
       .from('sales')

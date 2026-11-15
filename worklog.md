@@ -1770,3 +1770,32 @@ QA:
 - agent-browser (sessão ADMIN de dev injetada em localStorage): card "PORTAL DE ENTRADAS" visível no grid do Painel Administrativo; clique abre a aba com header + botão; botão abre /entradas em NOVA ABA (t2 confirmada); a página renderiza o portão de PIN completo (teclado numérico 0-9, apagar, ENTRAR desabilitado até digitar); console sem erros de página (só warning de permissão de push, esperado).
 - LIMITAÇÃO HONESTA: o portão de PIN do /entradas valida o PIN REAL do admin no bcrypt de produção (mesmo PIN do Portal Fiscal) — o QA local não passa do portão sem o PIN do dono (por design). Interior do portal validado no BLOCO 148.
 - Teste do dono: Painel Administrativo → card "Portal de Entradas" → botão teal → PIN do admin → portal abre.
+
+## bloco150 — PORTAL DE NOTAS: TODAS as notas do app (incl. PENDENTES), canceladas provadas E2E, EDITAR na avulsa, gatilho NFC-e reparado de verdade (2026-11-15)
+
+DONO PEDIU (verbatim): "NOSSO PORTAL DE NOTAS NAO ESTA BUSCANDO AS NOTAS CANCELADAS E NAO ESTA BUSCANDO AS ULTIMAS NOTAS! VERIFIQUE SE FALTA ALGO PARA ISSO FUNCIONAR! PRECISO TER ACESSO A TODAS AS NOTAS CRIADAS PELO APP, O SISTEMA NAO PODE EXCLUIR DO PORTAL, APENAS CANCELAR A NOTA E EXCLUIR A VENDA, ATE MESMO AS CANCELADAS DEVEM APARECER, TANTO NFC COMO NFE! JUNTO DISSO A OPÇAO DE BOLETO QUANDO ELE FOI GERADO! A OPÇAO DE EDIOTAR FORMA DE PAGAMENTO NAO ESTA FUNCIONANDO."
+
+DIAGNÓSTICO EM PRODUÇÃO (com PIN do admin, curl na API real):
+- Lista tinha só 6 linhas: 5 avulsas (do backup parcial da Focus) + 1 venda do app. ZERO canceladas.
+- As PENDENTES intencionais (~56 vendas com modo_nota NFE/NFCE) estavam FORA do portal — o BLOCO 144 as removeu a pedido antigo do dono ("deixe somente o que vc buscou pela api"); agora ele reforça o contrário.
+- Cancelamento real testado E2E (Nº27, venda de teste "TESTE nfc"): a CASCATA DO BLOCO 147 FUNCIONA — nota cancelada arquivada como avulsa CANCELADA com DANFE+XML, estoque corrigido, venda excluída; apareceu no chip CANCELADAS na hora. As canceladas antigas (Nº21-25) sumiram ANTES do deploy do 147 (canceladas sem arquivamento, venda apagada) — sem ref/chave conhecida e com a listagem /v2/nfes 404 nesta conta, só voltam pelo backup mensal (sábado) ou importação manual (ref/chave do painel da Focus).
+- GATILHO `nfce` da Focus: criação falhava com HTTP 400 SEM mensagem — hipótese forte: gatilho antigo do MESMO evento com URL obsoleta (o reparo antigo só enxergava gatilho com a URL certa; o CREATE de novo morria por evento já ocupado). FONTE OFICIAL (backup) confirmou totalNaFocus=5 — o buraco de notas novas era 100% o gatilho.
+- EDITAR forma de pagamento: a API FUNCIONA (testado em produção, update real). O "não funciona" do dono = notas CANCELADAS arquivadas/XML de terceiro não tinham botão (e a API procurava venda que não existe mais).
+
+FEITO (BLOCO 150):
+1. TODAS AS NOTAS CRIADAS PELO APP no portal (api/notas-admin): a lista volta a incluir a INTENÇÃO de nota (modo_nota NFE/NFCE sem emissão) como PENDENTE com botão EMITIR; `.or('nota_ref.not.is.null,modo_nota.in.(NFE,NFCE))'` com probe; teto 400 -> 600 linhas. Front: filtro NAO_EMITIDA do front REMOVIDO, chip "Pendente" re-adicionado (com contagem), KPI "pendentes" na faixa, podeEmitir inclui NAO_EMITIDA.
+2. GATILHOS (lib/focusNfe): garantirHooksFocus agora mapeia TODOS os gatilhos por EVENTO (qualquer URL): gatilho do mesmo evento com URL antiga é APAGADO e recriado apontando para o webhook atual (era aqui que o nfce morria com 400); criarWebhookFocus extrai o motivo REAL do erro (message/mensagem/error/codigo/JSON cru) em vez de "HTTP 400" mudo.
+3. EDITAR na AVULSA (api/notas-admin + portal): id começando com AVULSA- atualiza o REGISTRO ARQUIVADO (JSON de metadados: pagamento + pagamentoDetalhe novo na NotaAvulsaMeta); o botão EDITAR (lápis) agora aparece TAMBÉM nas avulsas (canceladas arquivadas e XML de terceiro). linhaAvulsa mostra o detalhe editado.
+4. BOLETOS: confirmado funcionando em produção (badge do boleto Inter aparece na linha — Nº27 trouxe FALHA_EMISSAO; botão código de barras para boleto vivo) — nada a mudar, ficou provado pelo teste real.
+5. listarMetasAvulsas: downloads em LOTES PARALELOS de 10 (antes 1 por vez sequencial) — com dezenas de avulsas a lista não estoura mais o timeout da serverless (causa provável da lista velha do dono).
+6. Portal avisa o dono quando um gatilho da Focus está com falha (toast vermelho "ATENÇÃO — gatilho da Focus com falha..." no importar).
+
+SQL PARA O DONO RODAR: NENHUM — tudo com colunas existentes + probes.
+
+ARQUIVOS: src/app/api/notas-admin/route.ts (lista completa + EDITAR avulsa), src/app/notas/page.tsx (chips/KPI/EMITIR pendente + EDITAR avulsa + aviso de gatilho), src/lib/focusNfe.ts (reparo de gatilho por evento + erro real), src/lib/focusArquivos.ts (pagamentoDetalhe + metas em lotes paralelos), worklog.md.
+
+QA:
+- LINT: 0 erros / 10 warnings (baseline exata).
+- TSC --noEmit: nenhum erro NOVO nos arquivos tocados (baseline do portado preservada; focusNfe.ts(579) já existia antes — provado por git stash).
+- PRODUÇÃO REAL (PIN do admin): AUTH 200; cancelamento Nº27 -> cascade 3 etapas OK e nota em CANCELADAS na lista (avulsa com DANFE/XML); EDITAR de venda real 200; AVULSAS -> totalNaFocus=5, hooksFalhas=['nfce: HTTP 400'] (o motivo real só aparece com este deploy — o reparo por evento resolve o caso de URL obsoleta).
+- Teste do dono após deploy: (1) Abrir o portal -> PENDENTES voltam a aparecer (chip Pendente com contagem) e EMITIR funciona nelas; (2) IMPORTAR XML EM LOTE/BUSCAR TODAS -> se o gatilho nfce era duplicado obsoleto, agora é recriado (toast avisa se ainda houver falha, com o motivo REAL da Focus); (3) cancelar uma nota de teste -> ela FICA em CANCELADAS com EDITAR funcionando; (4) notas emitidas pelo painel da Focus passam a chegar em tempo real (webhook nfce reparado).

@@ -164,7 +164,7 @@ function tipoDe(tipo: string, modoNota: string): 'NFE' | 'NFCE' {
   return String(modoNota || '').toUpperCase() === 'NFCE' ? 'NFCE' : 'NFE';
 }
 
-type FiltroStatus = 'TODAS' | 'AUTORIZADA' | 'EMITINDO' | 'REJEITADA' | 'CANCELADA';
+type FiltroStatus = 'TODAS' | 'AUTORIZADA' | 'EMITINDO' | 'PENDENTE' | 'REJEITADA' | 'CANCELADA';
 type FiltroPeriodo = 'TUDO' | 'HOJE' | '7D' | '30D' | 'MES';
 type FiltroTipo = 'TODOS' | 'NFE' | 'NFCE';
 
@@ -363,10 +363,10 @@ export default function PortalNotasPage() {
         return;
       }
       if (!res.ok || !data.ok) { setErroLista(data.erro || `Erro ${res.status}`); return; }
-      // BLOCO 143: defesa extra no front — só documentos reais (a API já
-      // devolve sem vendas sem emissão; aqui filtramos NAO_EMITIDA de novo).
-      const lista = ((data.notas || []) as NotaRow[]).filter(n => String(n.status || '').toUpperCase() !== 'NAO_EMITIDA');
-      setNotas(lista);
+      // BLOCO 150 (regra do dono): a lista agora inclui TODAS as notas criadas
+      // pelo app — pendentes intencionais (NAO_EMITIDA) entram como PENDENTE
+      // com botão EMITIR; nada criado pelo app pode sumir do portal.
+      setNotas(((data.notas || []) as NotaRow[]));
     } catch {
       setErroLista('Falha de conexão. Toque em ATUALIZAR.');
     } finally {
@@ -455,11 +455,13 @@ export default function PortalNotasPage() {
     const autorizadas = visiveis.filter(n => n.status === 'AUTORIZADA');
     const canceladas = visiveis.filter(n => n.status === 'CANCELADA');
     const rejeitadas = visiveis.filter(n => n.status === 'REJEITADA');
+    const pendentes = visiveis.filter(n => n.status === 'NAO_EMITIDA');
     return {
       total: visiveis.length,
       autorizadas: autorizadas.length,
       canceladas: canceladas.length,
       rejeitadas: rejeitadas.length,
+      pendentes: pendentes.length,
       valor: autorizadas.reduce((a, n) => a + (Number(n.valor) || 0), 0),
       pdfLocal: visiveis.filter(n => n.pdfLocal).length,
       xmlLocal: visiveis.filter(n => n.xmlLocal).length,
@@ -468,6 +470,7 @@ export default function PortalNotasPage() {
 
   const contagem = useCallback((f: FiltroStatus) => {
     if (f === 'TODAS') return listaFiltrada.length;
+    if (f === 'PENDENTE') return listaFiltrada.filter(n => String(n.status || '').toUpperCase() === 'NAO_EMITIDA').length;
     return listaFiltrada.filter(n => String(n.status || '').toUpperCase() === f).length;
   }, [listaFiltrada]);
 
@@ -609,6 +612,7 @@ export default function PortalNotasPage() {
       // Varredura dos BACKUPS MENSAIS oficiais da Focus (app + painel).
       setImportProg({ fase: 'Varredura da Focus', done: 0, total: 0 });
       let avulsasMsg = '';
+      let hooksFalhaMsg = '';
       for (let i = 0; i < 20; i++) {
         const res = await fetch('/api/notas-importar', {
           method: 'POST',
@@ -619,6 +623,10 @@ export default function PortalNotasPage() {
         if (!res.ok || !data.ok) break;
         avulsasNovas += Number(data.novas) || 0;
         if (data.suportado === false) avulsasMsg = String(data.msg || '');
+        // BLOCO 150: gatilho quebrado na Focus = notas novas NUNCA chegam em
+        // tempo real — o dono precisa ver isso na hora (era o buraco NFC-e).
+        const hf = Array.isArray(data.hooksFalhas) ? (data.hooksFalhas as string[]).filter(Boolean) : [];
+        if (hf.length > 0) hooksFalhaMsg = `ATENÇÃO — gatilho da Focus com falha: ${hf.join('; ')}. Notas novas podem NÃO chegar em tempo real.`;
         if (data.fim) break;
       }
       const partes = [`${okCount} nota(s) arquivada(s)`];
@@ -626,6 +634,7 @@ export default function PortalNotasPage() {
       if (semArq > 0) partes.push(`${semArq} sem arquivo ainda`);
       if (falhas > 0) partes.push(`${falhas} com falha`);
       showToast(avulsasMsg && avulsasNovas === 0 ? `Arquivamento concluído (${partes.join(' · ')}). ${avulsasMsg}` : `Importação concluída: ${partes.join(' · ')}.`);
+      if (hooksFalhaMsg) showToast(hooksFalhaMsg, false);
       void carregar(token);
     } catch {
       showToast('Falha de conexão na importação.', false);
@@ -1057,6 +1066,7 @@ export default function PortalNotasPage() {
             <span className="text-emerald-300"><b>{kpis.autorizadas}</b> autorizadas</span>
             <span className="text-gray-400"><b>{kpis.canceladas}</b> canceladas</span>
             <span className="text-rose-300"><b>{kpis.rejeitadas}</b> rejeitadas</span>
+            {kpis.pendentes > 0 && <span className="text-blue-200"><b>{kpis.pendentes}</b> pendentes</span>}
             <span className="text-amber-300"><b>{fmtBRL(kpis.valor)}</b> autorizado</span>
             <span className="text-blue-300/60">|</span>
             <span className="text-emerald-200/80">{kpis.pdfLocal} DANFE · {kpis.xmlLocal} XML no sistema</span>
@@ -1103,7 +1113,7 @@ export default function PortalNotasPage() {
           <option value="NFCE">Só NFC-e</option>
         </select>
         <div className="flex gap-1.5 overflow-x-auto">
-          {(['TODAS', 'AUTORIZADA', 'EMITINDO', 'REJEITADA', 'CANCELADA'] as FiltroStatus[]).map(f => {
+          {(['TODAS', 'AUTORIZADA', 'PENDENTE', 'EMITINDO', 'REJEITADA', 'CANCELADA'] as FiltroStatus[]).map(f => {
             const meta = metaStatus(f);
             const ativo = filtro === f;
             return (
@@ -1112,7 +1122,7 @@ export default function PortalNotasPage() {
                 onClick={() => setFiltro(f)}
                 className={`shrink-0 rounded-xl px-3 py-2 text-[9px] font-black uppercase tracking-wider border transition-all active:scale-95 ${ativo ? 'bg-blue-600 text-white border-blue-600 shadow-sm' : `bg-white ${meta.cls} border-gray-200`}`}
               >
-                {f === 'TODAS' ? 'Todas' : meta.label} ({contagem(f)})
+                {f === 'TODAS' ? 'Todas' : f === 'PENDENTE' ? 'Pendente' : meta.label} ({contagem(f)})
               </button>
             );
           })}
@@ -1196,7 +1206,7 @@ export default function PortalNotasPage() {
                 <tbody>
                   {listaFiltrada.map(n => {
                     const meta = metaStatus(n.status);
-                    const podeEmitir = n.status === 'REJEITADA' || n.status === 'CANCELADA';
+                    const podeEmitir = n.status === 'REJEITADA' || n.status === 'CANCELADA' || n.status === 'NAO_EMITIDA';
                     const ocupado = busyId === n.id;
                     const prazo = prazoCancelDe(n);
                     const podeCancelar = !n.avulsa && (n.status === 'AUTORIZADA' || n.status === 'EMITINDO') && !!n.ref && prazo.dentroDoPrazo;
@@ -1322,16 +1332,16 @@ export default function PortalNotasPage() {
                                 <i className="fa-solid fa-bolt text-[10px]"></i>
                               </button>
                             )}
-                            {!n.avulsa && (
-                              <button
-                                onClick={() => { setEditModal(n); setEditMetodo(n.metodo || ''); setEditDetalhe(n.detalhe || ''); }}
-                                disabled={ocupado}
-                                className="w-7 h-7 rounded-lg bg-sky-50 text-sky-600 flex items-center justify-center hover:bg-sky-100 active:scale-90 transition-transform"
-                                title="Editar registro (pagamento/observação)"
-                              >
-                                <i className="fa-solid fa-pen text-[10px]"></i>
-                              </button>
-                            )}
+                            {/* BLOCO 150: EDITAR também na AVULSA (nota cancelada arquivada / XML de terceiro) —
+                                a API atualiza o registro arquivado (JSON) quando o id começa com AVULSA- */}
+                            <button
+                              onClick={() => { setEditModal(n); setEditMetodo(n.metodo || ''); setEditDetalhe(n.detalhe || ''); }}
+                              disabled={ocupado}
+                              className="w-7 h-7 rounded-lg bg-sky-50 text-sky-600 flex items-center justify-center hover:bg-sky-100 active:scale-90 transition-transform"
+                              title={n.avulsa ? 'Editar registro arquivado (pagamento/observação)' : 'Editar registro (pagamento/observação)'}
+                            >
+                              <i className="fa-solid fa-pen text-[10px]"></i>
+                            </button>
                             {!n.avulsa && <button onClick={() => setCloneModal(n)} disabled={ocupado} className="w-7 h-7 rounded-lg bg-violet-50 text-violet-600 flex items-center justify-center hover:bg-violet-100 active:scale-90 transition-transform" title="Clonar pedido (emite documento de novo)">
                               <i className="fa-solid fa-clone text-[10px]"></i>
                             </button>}

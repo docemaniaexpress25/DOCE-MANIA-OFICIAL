@@ -350,6 +350,9 @@ export interface NotaAvulsaMeta {
    *  avulsa nasce do CANCELAMENTO de uma venda do app (a nota cancelada
    *  sobrevive no Portal Fiscal com o vendedor real, não como "fora do app"). */
   vendedor?: string;
+  /** BLOCO 150: observação do pagamento editável no Portal (EDITAR avulsa —
+   *  notas canceladas arquivadas e XMLs de terceiro não têm venda interna). */
+  pagamentoDetalhe?: string;
 }
 
 function pastaAvulsa(): string {
@@ -841,7 +844,11 @@ export async function lerMetaAvulsa(ref: string): Promise<NotaAvulsaMeta | null>
   }
 }
 
-/** Lista as avulsas ja importadas (metadados). */
+/** Lista as avulsas ja importadas (metadados).
+ *  BLOCO 150: downloads em LOTES PARALELOS de 10 — antes era 1 por vez
+ *  sequencial; com dezenas de avulsas (cada cancelamento cria uma) a rota
+ *  da lista podia estourar o timeout da serverless e o portal ficava com
+ *  lista velha (dono: "não está buscando as últimas notas/canceladas"). */
 export async function listarMetasAvulsas(): Promise<NotaAvulsaMeta[]> {
   try {
     const db = getServiceClient();
@@ -849,9 +856,10 @@ export async function listarMetasAvulsas(): Promise<NotaAvulsaMeta[]> {
     if (error || !data) return [];
     const refs = data.filter(f => f.name.endsWith('.json')).map(f => f.name.replace(/\.json$/, ''));
     const metas: NotaAvulsaMeta[] = [];
-    for (const ref of refs) {
-      const m = await lerMetaAvulsa(ref);
-      if (m) metas.push(m);
+    const LOTE = 10;
+    for (let i = 0; i < refs.length; i += LOTE) {
+      const pedaco = await Promise.all(refs.slice(i, i + LOTE).map(ref => lerMetaAvulsa(ref)));
+      for (const m of pedaco) if (m) metas.push(m);
     }
     return metas;
   } catch {

@@ -639,7 +639,18 @@ export async function criarWebhookFocus(opts: {
   };
   const cnpj = soDigitos(opts.cnpj);
   if (cnpj) body.cnpj = cnpj;
-  return focusRequest<FocusNotaResultado>('POST', '/v2/hooks', body);
+  const r = await focusRequest<FocusNotaResultado>('POST', '/v2/hooks', body);
+  // BLOCO 150: a Focus devolve 400 com o motivo em campos variados
+  // (erro/message/mensagem/error/codigo) ou texto puro — sem isso o
+  // diagnóstico do gatilho quebrado morria como "HTTP 400" sem explicação.
+  if (!r.ok && r.data && !('erro' in (r.data as Record<string, unknown>))) {
+    const d = (r.data as Record<string, unknown>) || {};
+    const msg =
+      String(d.message || d.mensagem || d.error || d.codigo || '') ||
+      (r.data && Object.keys(d).length === 0 ? '' : JSON.stringify(d).slice(0, 300));
+    if (msg) return { ...r, data: { erro: msg } as unknown as FocusNotaResultado };
+  }
+  return r;
 }
 
 /** Exclui um gatilho pelo id (GET /v2/hooks devolve os ids). */
@@ -687,14 +698,17 @@ export async function garantirHooksFocus(urlWebhook: string): Promise<GarantiaHo
     const erro = 'erro' in lista.data ? String((lista.data as { erro?: string }).erro) : `HTTP ${lista.status}`;
     return { ...vazio, motivo: `LISTAGEM_FALHOU: ${erro}` };
   }
-  const instalados = new Set(
-    (lista.data as FocusNotaResultado[])
-      .filter((h) => isEventoDoApp(h.event) && String(h.url || '').includes(urlWebhook))
-      .map((h) => String(h.event || ''))
-  );
-  const faltam = (HOOKS_DO_APP as readonly string[]).filter((ev) => !instalados.has(ev));
-  if (faltam.length === 0) {
-    return { ok: true, eventos: [...instalados], criados: [], falhas: [] };
+  // BLOCO 150: mapa evento -> TODOS os gatilhos daquele evento (qualquer URL).
+  // Antes so contava gatilho cuja URL batesse — um `nfce` antigo com URL
+  // obsoleta ficava invisivel para o reparo e o CREATE de novo morria com
+  // HTTP 400 (evento ja ocupado): NFC-e nunca avisou o sistema de novo.
+  const porEvento = new Map<string, { id: string; url: string }[]>();
+  for (const h of (lista.data as FocusNotaResultado[]) as unknown as Record<string, unknown>[]) {
+    const ev = String(h.event || '');
+    if (!isEventoDoApp(ev)) continue;
+    const arr = porEvento.get(ev) || [];
+    arr.push({ id: String(h.id || ''), url: String(h.url || '') });
+    porEvento.set(ev, arr);
   }
 
   // CNPJ do emitente: app_settings sobrescreve env (mesma fonte do INSTALAR_WEBHOOK)
@@ -707,7 +721,22 @@ export async function garantirHooksFocus(urlWebhook: string): Promise<GarantiaHo
 
   const criados: string[] = [];
   const falhas: string[] = [];
-  for (const ev of faltam) {
+  const instaladosOk: string[] = [];
+  for (const ev of HOOKS_DO_APP as readonly string[]) {
+    const existentes = porEvento.get(ev) || [];
+    const certo = existentes.find((h) => String(h.url || '') === urlWebhook);
+    if (certo) {
+      instaladosOk.push(ev);
+      continue;
+    }
+    // gatilho do MESMO evento com URL ANTIGA → apaga (as notificações iam
+    // para lugar nenhum) e recria apontando para o webhook atual.
+    for (const velho of existentes) {
+      if (velho.id) {
+        const rd = await excluirWebhookFocus(velho.id);
+        if (!rd.ok) falhas.push(`${ev}: gatilho antigo (URL obsoleta) não pôde ser apagado — HTTP ${rd.status}`);
+      }
+    }
     const r = await criarWebhookFocus({
       url: urlWebhook,
       segredo,
@@ -720,7 +749,7 @@ export async function garantirHooksFocus(urlWebhook: string): Promise<GarantiaHo
   }
   return {
     ok: criados.length > 0 || falhas.length === 0,
-    eventos: [...new Set([...instalados, ...criados])],
+    eventos: [...new Set([...instaladosOk, ...criados])],
     criados,
     falhas,
     motivo: falhas.length > 0 ? falhas.join('; ') : undefined,

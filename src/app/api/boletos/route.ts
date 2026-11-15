@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServiceClient, devBridge } from '@/lib/serverSupabase';
 import { sessionFromRequest } from '@/lib/session';
 import { hasBoletoColumns } from '@/lib/serverSchema';
-import { isFocusConfigured, consultarNota } from '@/lib/focusNfe';
+import { isFocusConfigured, consultarNota, FocusDoc } from '@/lib/focusNfe';
 import { validaCpfCnpj, mascaraCpfCnpj } from '@/lib/validaDoc';
 import {
   isInterConfigured,
@@ -60,6 +60,7 @@ function cobrancaPublica(s: Record<string, unknown>): CobrancaPublica {
     pixCopiaECola: (s.inter_boleto_pix as string) || '',
     valorRecebido: null,
     erro: (s.inter_boleto_erro as string) || '',
+    notaFiscalChave: '',
   };
 }
 
@@ -67,15 +68,22 @@ async function atualizar(saleId: string, patch: Record<string, unknown>) {
   await getServiceClient().from('sales').update(patch).eq('id', saleId);
 }
 
-/** Busca a chave da NF-e: coluna nota_chave ou consulta Focus uma vez. */
+/**
+ * Busca a chave da NF-e/NFC-e: coluna nota_chave ou consulta Focus uma vez.
+ * FIX "erro para atrelar NFe OU NFC ao boleto": a consulta na Focus usava
+ * SEMPRE o endpoint /v2/nfe/{ref} — para venda com NFC-e a nota nunca era
+ * encontrada (NFC-e vive em /v2/nfce) e o boleto saía sem notaFiscal.
+ * Agora o doc segue nota_tipo (NFCE -> 'nfce').
+ */
 async function chaveDaNota(sale: Record<string, unknown>): Promise<string> {
   const chave = String((sale.nota_chave as string) || '').replace(/\D/g, '');
   if (chave.length === 44) return chave;
   if (sale.nota_status !== 'AUTORIZADA' || !isFocusConfigured()) return '';
   const ref = String(sale.nota_ref || sale.nota_numero || '');
   if (!ref) return '';
+  const doc: FocusDoc = String(sale.nota_tipo || '').toUpperCase() === 'NFCE' ? 'nfce' : 'nfe';
   try {
-    const r = await consultarNota('nfe', ref);
+    const r = await consultarNota(doc, ref);
     if (!r.ok || !r.data || 'erro' in r.data) return '';
     const data = r.data as Record<string, unknown>;
     const c = String(data.chave || '').replace(/\D/g, '');
@@ -105,10 +113,17 @@ export async function GET(req: NextRequest) {
   }
   // BLOCO 85: status das credenciais Inter visivel no app — o dono para de
   // adivinhar "pode ser o env na vercel": o card AVISA quando falta env.
+  // FIX atrelamento: devolve o estado da NOTA da venda para o portal/card
+  // mostrar se a NF-e/NFC-e está atrelada ao boleto (ou deveria estar).
   return NextResponse.json({
     ok: true,
     boleto: cobrancaPublica(sale as Record<string, unknown>),
     inter: { configurado: isInterConfigured(), ambiente: getInterConfig().ambiente },
+    nota: {
+      status: String(sale.nota_status || ''),
+      numero: String(sale.nota_numero || ''),
+      chave: String(sale.nota_chave || ''),
+    },
   });
 }
 
@@ -230,17 +245,24 @@ export async function POST(req: NextRequest) {
 
   // Nota fiscal atrelada (opcional): chave de 44 digitos
   let notaFiscal: Record<string, unknown> | undefined;
+  let avisoAtrelamento = '';
   const atrelar = body.atrelarNFe !== false && sale.nota_status === 'AUTORIZADA';
-  if (atrelar) {
+  if (sale.nota_status === 'AUTORIZADA') {
     const chave = await chaveDaNota(sale as Record<string, unknown>);
     if (chave) {
-      notaFiscal = {
-        chaveNFe: chave,
-        numero: Number(sale.nota_numero) || undefined,
-        dataEmissao: hojeSp(),
-        parcela: 1,
-        naturezaOperacao: 'Venda de mercadoria',
-      };
+      if (atrelar) {
+        notaFiscal = {
+          chaveNFe: chave,
+          numero: Number(sale.nota_numero) || undefined,
+          dataEmissao: hojeSp(),
+          parcela: 1,
+          naturezaOperacao: 'Venda de mercadoria',
+        };
+      } else {
+        avisoAtrelamento = 'A venda tem nota autorizada — ative "Atrelar NF-e/NFC-e" para vinculá-la ao boleto.';
+      }
+    } else {
+      avisoAtrelamento = 'Nota autorizada, mas a chave de acesso ainda não chegou (SEFAZ/Focus). O boleto sai sem nota atrelada — consulte o boleto depois para conferir.';
     }
   }
 
@@ -256,7 +278,7 @@ export async function POST(req: NextRequest) {
     mensagem: {
       linha1: `Venda ${vendaCurta} - Doce Mania`,
       ...(body.mensagem ? { linha2: String(body.mensagem).slice(0, 70) } : {}),
-      ...(notaFiscal ? {} : sale.nota_status === 'AUTORIZADA' ? { linha3: `NF-e ${String(sale.nota_numero)} (nao atrelada)` } : {}),
+      ...(notaFiscal ? {} : sale.nota_status === 'AUTORIZADA' ? { linha3: `NF ${String(sale.nota_numero)} (nao atrelada)` } : {}),
     },
     formasRecebimento: ['BOLETO', 'PIX'],
     notaFiscal,
@@ -282,7 +304,7 @@ export async function POST(req: NextRequest) {
   await atualizar(saleId, { inter_boleto_codigo: codigo, inter_boleto_em: new Date().toISOString() });
 
   // A emissao e assincrona: consulta em seguida pra pegar linha digitavel se ja processou
-  let boleto: CobrancaPublica = { status: 'EM_PROCESSAMENTO', codigo, seuNumero, vencimento: venc, valor: payload.valorNominal, linhaDigitavel: '', codigoBarras: '', pixCopiaECola: '', valorRecebido: null, erro: '' };
+  let boleto: CobrancaPublica = { status: 'EM_PROCESSAMENTO', codigo, seuNumero, vencimento: venc, valor: payload.valorNominal, linhaDigitavel: '', codigoBarras: '', pixCopiaECola: '', valorRecebido: null, erro: '', notaFiscalChave: '' };
   const c = await recuperarCobranca(codigo);
   if (c.ok && c.data) {
     boleto = interpretarCobranca(c.data as Record<string, unknown>);
@@ -294,5 +316,10 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  return NextResponse.json({ ok: true, boleto });
+  return NextResponse.json({
+    ok: true,
+    boleto,
+    ...(notaFiscal ? { notaAtrelada: true } : {}),
+    ...(avisoAtrelamento ? { avisoAtrelamento } : {}),
+  });
 }

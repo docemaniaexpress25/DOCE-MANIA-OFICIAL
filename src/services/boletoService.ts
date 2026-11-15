@@ -17,6 +17,14 @@ export interface BoletoInfo {
   pixCopiaECola?: string;
   valorRecebido?: number | null;
   erro?: string;
+  /** FIX atrelamento: chave 44 dig da NF-e/NFC-e atrelada à cobrança no Inter. */
+  notaFiscalChave?: string;
+}
+
+export interface NotaDaVendaInfo {
+  status?: string;
+  numero?: string;
+  chave?: string;
 }
 
 export interface GerarBoletoParams {
@@ -35,7 +43,7 @@ export interface InterStatusInfo {
 
 export const boletoService = {
   /** Estado atual do boleto da venda (leitura barata). */
-  async status(saleId: string): Promise<{ ok: boolean; boleto?: BoletoInfo; inter?: InterStatusInfo; erro?: string }> {
+  async status(saleId: string): Promise<{ ok: boolean; boleto?: BoletoInfo; inter?: InterStatusInfo; nota?: NotaDaVendaInfo; erro?: string }> {
     try {
       const res = await fetch(`/api/boletos?saleId=${encodeURIComponent(saleId)}`, {
         method: 'GET',
@@ -43,14 +51,14 @@ export const boletoService = {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}` };
-      return { ok: true, boleto: data.boleto, inter: data.inter };
+      return { ok: true, boleto: data.boleto, inter: data.inter, nota: data.nota };
     } catch (e: unknown) {
       return { ok: false, erro: e instanceof Error ? e.message : 'Falha de conexao' };
     }
   },
 
   /** Gera a cobranca (boleto+pix) no Inter para o saldo da venda. */
-  async gerar(saleId: string, p: GerarBoletoParams): Promise<{ ok: boolean; jaGerado?: boolean; boleto?: BoletoInfo; erro?: string }> {
+  async gerar(saleId: string, p: GerarBoletoParams): Promise<{ ok: boolean; jaGerado?: boolean; boleto?: BoletoInfo; erro?: string; avisoAtrelamento?: string; notaAtrelada?: boolean }> {
     try {
       const res = await fetch('/api/boletos', {
         method: 'POST',
@@ -59,7 +67,7 @@ export const boletoService = {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}`, boleto: data.boleto };
-      return { ok: true, jaGerado: data.jaGerado, boleto: data.boleto };
+      return { ok: true, jaGerado: data.jaGerado, boleto: data.boleto, avisoAtrelamento: data.avisoAtrelamento, notaAtrelada: data.notaAtrelada };
     } catch (e: unknown) {
       return { ok: false, erro: e instanceof Error ? e.message : 'Falha de conexao' };
     }

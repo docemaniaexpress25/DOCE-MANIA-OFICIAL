@@ -1,0 +1,1728 @@
+     1→"use client";
+     2→
+     3→/**
+     4→ * BLOCO 143 — PORTAL DE NOTAS (admin, fora do app) — MEGA OTIMIZAÇÃO PC:
+     5→ * "na imagem em anexo temos o portal da IOB emissor! junto com o nosso portal
+     6→ * vamos otimizar todos os fluxos e botões para que fique 100% funcional
+     7→ * acessando pelo PC. precisamos que tudo caiba em uma linha só, otimize os
+     8→ * espaços a direita e esquerda! ações sempre devem vir com pergunta de
+     9→ * confirmar! crie um botão para importar XML em lote... nesse portal também
+    10→ * devem ter em ações os boletos gerados!"
+    11→ *
+    12→ * O que mudou no 143:
+    13→ *  - TABELA IOB: cada nota = UMA linha compacta (documento, cliente, emissão,
+    14→ *    valor, pagamento, vendedor, situação, ações) — página larga (1600px),
+    15→ *    paddings apertados, sem quebra de linha;
+    16→ *  - TODA ação que muda estado pede CONFIRMAÇÃO (modal unificado de pergunta);
+    17→ *  - IMPORTAR XML EM LOTE: botão no cabeçalho — arrasta/seleciona vários XMLs
+    18→ *    (ou .zip) de sistemas de terceiros; notas de SAÍDA autorizadas/canceladas
+    19→ *    entram arquivadas com DANFE imprimível gerado do XML (origem "XML");
+    20→ *  - BOLETOS: linha com boleto Inter mostra o botão de código de barras —
+    21→ *    abre o modal com linha digitável, PIX, PDF do boleto, consultar e
+    22→ *    cancelar (com motivo e confirmação);
+    23→ *  - SEM "FALTA NF A BATER": a lista tem SOMENTE documentos que vieram da API
+    24→ *    (venda com nota_ref / avulsas Focus / XMLs importados). Venda sem emissão
+    25→ *    não aparece mais (quem resolve pendência usa a aba NOTAS PENDENTES do app);
+    26→ *  - CANCELAR NA SEFAZ: botão só aparece DENTRO do prazo (NFC-e 30min /
+    27→ *    NF-e 24h) e some sozinho quando vence (relógio vivo de 15s).
+    28→ *
+    29→ * Auth: POST /api/notas-admin {acao:'AUTH', pin} valida o PIN com bcrypt
+    30→ * contra os usuários ADMIN e devolve token de sessão ADMIN (mesmo formato das
+    31→ * rotas fiscais /api/notas) — EMITIR/CONSULTAR/CANCELAR reutilizam o fluxo.
+    32→ */
+    33→
+    34→import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+    35→import { unzipSync } from 'fflate';
+    36→// BLOCO 142: prazo SEFAZ de cancelamento (NFC-e 30min / NF-e 24h) — fonte única com o servidor
+    37→import { prazoCancelamentoNota } from '@/lib/regras-fiscais';
+    38→
+    39→// ---------------- tipos ----------------
+    40→interface NotaRow {
+    41→  id: string;
+    42→  numero: string;
+    43→  tipo: string;
+    44→  status: string;
+    45→  ref: string;
+    46→  pdfUrl: string;
+    47→  xmlUrl: string;
+    48→  erro: string;
+    49→  chave: string;
+    50→  emitidaEm: string | null;
+    51→  valor: number;
+    52→  valorPago: number;
+    53→  metodo: string;
+    54→  detalhe: string;
+    55→  statusPagamento: string;
+    56→  dataVenda: string;
+    57→  modoNota: string;
+    58→  cliente: string;
+    59→  clienteDoc: string;
+    60→  clienteId: string;
+    61→  vendedor: string;
+    62→  // arquivos arquivados DENTRO do sistema (bucket notas-fiscais)
+    63→  pdfLocal: boolean;
+    64→  xmlLocal: boolean;
+    65→  // nota avulsa (emitida fora do app — importada da Focus ou XML de terceiro)
+    66→  avulsa?: boolean;
+    67→  origem?: string;
+    68→  // boleto Inter da venda (BLOCO 143)
+    69→  boletoStatus?: string;
+    70→  boletoVencimento?: string;
+    71→}
+    72→
+    73→interface ItemDetalhe { produto: string; quantidade: number; preco: number; }
+    74→
+    75→interface ClienteDetalhe {
+    76→  nome_fantasia: string; nome: string; cnpj: string; razao_social: string;
+    77→  inscricao_estadual: string; telefone: string; endereco: string; bairro: string;
+    78→  endereco_numero: string; endereco_cep: string; endereco_municipio: string;
+    79→  endereco_uf: string; email: string;
+    80→}
+    81→
+    82→interface BoletoInfo {
+    83→  status: string;
+    84→  codigo: string;
+    85→  seuNumero: string;
+    86→  vencimento: string;
+    87→  valor: number | null;
+    88→  linhaDigitavel: string;
+    89→  codigoBarras: string;
+    90→  pixCopiaECola: string;
+    91→  valorRecebido: number | null;
+    92→  erro: string;
+    93→}
+    94→
+    95→// ---------------- helpers ----------------
+    96→const TOKEN_KEY = 'dm_notas_admin_token';
+    97→const NOME_KEY = 'dm_notas_admin_nome';
+    98→
+    99→const fmtBRL = (v: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(v) || 0);
+   100→
+   101→const fmtData = (iso: string) => {
+   102→  if (!iso) return '—';
+   103→  try {
+   104→    return new Intl.DateTimeFormat('pt-BR', {
+   105→      timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: '2-digit',
+   106→      hour: '2-digit', minute: '2-digit', hour12: false,
+   107→    }).format(new Date(iso));
+   108→  } catch { return '—'; }
+   109→};
+   110→
+   111→const fmtDia = (iso: string) => {
+   112→  if (!iso) return '—';
+   113→  try {
+   114→    const d = new Date(iso);
+   115→    if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(2, 4);
+   116→    return new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: '2-digit', hour12: false }).format(d);
+   117→  } catch { return '—'; }
+   118→};
+   119→
+   120→const STATUS_META: Record<string, { label: string; cls: string; dot: string }> = {
+   121→  AUTORIZADA: { label: 'Autorizada', cls: 'bg-emerald-50 text-emerald-600 border-emerald-200', dot: 'bg-emerald-500' },
+   122→  EMITINDO: { label: 'Emitindo', cls: 'bg-amber-50 text-amber-600 border-amber-200', dot: 'bg-amber-500' },
+   123→  REJEITADA: { label: 'Rejeitada', cls: 'bg-rose-50 text-rose-600 border-rose-200', dot: 'bg-rose-500' },
+   124→  CANCELADA: { label: 'Cancelada', cls: 'bg-gray-100 text-gray-500 border-gray-200', dot: 'bg-gray-400' },
+   125→  NAO_EMITIDA: { label: 'Pendente', cls: 'bg-blue-50 text-blue-600 border-blue-200', dot: 'bg-blue-500' },
+   126→};
+   127→
+   128→function metaStatus(st: string) {
+   129→  return STATUS_META[String(st || '').toUpperCase()] || { label: st || '—', cls: 'bg-gray-100 text-gray-500 border-gray-200', dot: 'bg-gray-300' };
+   130→}
+   131→
+   132→/** Rótulo certo do documento: NFCE -> "NFC-e", NFE -> "NF-e" (regra BLOCO 135). */
+   133→function rotuloTipo(tipo: string, modoNota: string): string {
+   134→  const t = String(tipo || '').toUpperCase();
+   135→  if (t === 'NFCE') return 'NFC-e';
+   136→  if (t === 'NFE') return 'NF-e';
+   137→  const m = String(modoNota || '').toUpperCase();
+   138→  if (m === 'NFE') return 'NF-e';
+   139→  if (m === 'NFCE') return 'NFC-e';
+   140→  return 'NF';
+   141→}
+   142→
+   143→type FiltroStatus = 'TODAS' | 'AUTORIZADA' | 'EMITINDO' | 'REJEITADA' | 'CANCELADA';
+   144→type FiltroPeriodo = 'TUDO' | 'HOJE' | '7D' | '30D' | 'MES';
+   145→
+   146→const PERIODO_META: { key: FiltroPeriodo; label: string }[] = [
+   147→  { key: 'HOJE', label: 'Hoje' },
+   148→  { key: '7D', label: '7 dias' },
+   149→  { key: '30D', label: '30 dias' },
+   150→  { key: 'MES', label: 'Este mês' },
+   151→  { key: 'TUDO', label: 'Tudo' },
+   152→];
+   153→
+   154→function dentroPeriodo(dataVenda: string, p: FiltroPeriodo): boolean {
+   155→  if (p === 'TUDO' || !dataVenda) return true;
+   156→  const d = new Date(dataVenda);
+   157→  if (!isFinite(d.getTime())) return true;
+   158→  const agora = new Date();
+   159→  const tz = 'America/Sao_Paulo';
+   160→  const diaStr = (x: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(x);
+   161→  if (p === 'HOJE') return diaStr(d) === diaStr(agora);
+   162→  if (p === 'MES') return diaStr(d).slice(0, 7) === diaStr(agora).slice(0, 7);
+   163→  const dias = p === '7D' ? 7 : 30;
+   164→  return d.getTime() >= agora.getTime() - dias * 24 * 60 * 60 * 1000;
+   165→}
+   166→
+   167→const FORMAS = ['DINHEIRO', 'PIX', 'BOLETO', 'CHEQUE', 'A_PRAZO'] as const;
+   168→
+   169→// Boleto Inter (BLOCO 143) — rótulo/cor por status
+   170→const BOLETO_META: Record<string, { label: string; cls: string }> = {
+   171→  A_RECEBER: { label: 'A receber', cls: 'bg-blue-50 text-blue-700 border-blue-200' },
+   172→  EM_PROCESSAMENTO: { label: 'Processando', cls: 'bg-amber-50 text-amber-700 border-amber-200' },
+   173→  ATRASADO: { label: 'Atrasado', cls: 'bg-rose-50 text-rose-700 border-rose-200' },
+   174→  RECEBIDO: { label: 'Recebido', cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+   175→  MARCADO_RECEBIDO: { label: 'Recebido', cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+   176→  CANCELADO: { label: 'Cancelado', cls: 'bg-gray-100 text-gray-500 border-gray-200' },
+   177→  EXPIRADO: { label: 'Expirado', cls: 'bg-gray-100 text-gray-500 border-gray-200' },
+   178→  FALHA_EMISSAO: { label: 'Falha', cls: 'bg-rose-50 text-rose-600 border-rose-200' },
+   179→};
+   180→
+   181→function metaBoleto(st: string) {
+   182→  const key = String(st || '').toUpperCase();
+   183→  return BOLETO_META[key] || { label: key.replace(/_/g, ' ').toLowerCase() || '—', cls: 'bg-gray-100 text-gray-500 border-gray-200' };
+   184→}
+   185→
+   186→const BOLETO_VIVO = ['A_RECEBER', 'EM_PROCESSAMENTO', 'ATRASADO', 'RECEBIDO', 'MARCADO_RECEBIDO', 'FALHA_EMISSAO'];
+   187→
+   188→/** ArrayBuffer -> base64 (chunks para não estourar a pilha com XMLs grandes). */
+   189→function bytesToBase64(u8: Uint8Array): string {
+   190→  let bin = '';
+   191→  const CH = 0x8000;
+   192→  for (let i = 0; i < u8.length; i += CH) {
+   193→    bin += String.fromCharCode(...Array.from(u8.subarray(i, i + CH)));
+   194→  }
+   195→  return btoa(bin);
+   196→}
+   197→
+   198→// ---------------- página ----------------
+   199→export default function PortalNotasPage() {
+   200→  const [token, setToken] = useState<string | null>(null);
+   201→  const [nomeAdmin, setNomeAdmin] = useState('');
+   202→  const [booting, setBooting] = useState(true);
+   203→
+   204→  // PIN gate
+   205→  const [pin, setPin] = useState('');
+   206→  const [pinErro, setPinErro] = useState('');
+   207→  const [pinBusy, setPinBusy] = useState(false);
+   208→  const [pinShake, setPinShake] = useState(false);
+   209→
+   210→  // Lista
+   211→  const [notas, setNotas] = useState<NotaRow[]>([]);
+   212→  const [carregando, setCarregando] = useState(false);
+   213→  const [erroLista, setErroLista] = useState('');
+   214→  const [busca, setBusca] = useState('');
+   215→  const [filtro, setFiltro] = useState<FiltroStatus>('TODAS');
+   216→  const [periodo, setPeriodo] = useState<FiltroPeriodo>('TUDO');
+   217→  const [busyId, setBusyId] = useState<string | null>(null);
+   218→
+   219→  // Importação da Focus (PDF/XML dentro do sistema)
+   220→  const [importBusy, setImportBusy] = useState(false);
+   221→  const [importProg, setImportProg] = useState<{ fase: string; done: number; total: number } | null>(null);
+   222→
+   223→  // Importação por ref/chave colada do painel da Focus
+   224→  const [pasteOpen, setPasteOpen] = useState(false);
+   225→  const [pasteText, setPasteText] = useState('');
+   226→  const [pasteBusy, setPasteBusy] = useState(false);
+   227→
+   228→  // Modais
+   229→  const [detalhe, setDetalhe] = useState<{ nota: NotaRow; cliente: ClienteDetalhe | null; itens: ItemDetalhe[] } | null>(null);
+   230→  const [detalheLoading, setDetalheLoading] = useState(false);
+   231→  const [editModal, setEditModal] = useState<NotaRow | null>(null);
+   232→  const [editMetodo, setEditMetodo] = useState('');
+   233→  const [editDetalhe, setEditDetalhe] = useState('');
+   234→  const [cancelModal, setCancelModal] = useState<NotaRow | null>(null);
+   235→  const [justificativa, setJustificativa] = useState('');
+   236→  const [cloneModal, setCloneModal] = useState<NotaRow | null>(null);
+   237→  const [emitModal, setEmitModal] = useState<NotaRow | null>(null);
+   238→  const [emitTipo, setEmitTipo] = useState<'' | 'NFE' | 'NFCE'>("");
+   239→
+   240→  // ------------------------------------------------------------------
+   241→  // BLOCO 143 — CONFIRMAÇÃO UNIFICADA: TODA ação que muda estado passa
+   242→  // por esta pergunta antes de executar ("ações sempre devem vir com
+   243→  // pergunta de confirmar!").
+   244→  // ------------------------------------------------------------------
+   245→  interface Conf {
+   246→    titulo: string;
+   247→    texto: string;
+   248→    detalhe?: string;
+   249→    icone?: string;
+   250→    perigo?: boolean;
+   251→    botao?: string;
+   252→    run: () => Promise<void> | void;
+   253→  }
+   254→  const [conf, setConf] = useState<Conf | null>(null);
+   255→  const [confBusy, setConfBusy] = useState(false);
+   256→  const executarConf = async () => {
+   257→    if (!conf || confBusy) return;
+   258→    setConfBusy(true);
+   259→    try { await conf.run(); } finally { setConfBusy(false); setConf(null); }
+   260→  };
+   261→
+   262→  // BLOCO 143 — IMPORTAR XML EM LOTE
+   263→  const [xmlOpen, setXmlOpen] = useState(false);
+   264→  const [xmlArquivos, setXmlArquivos] = useState<{ nome: string; base64: string; tamanho: number }[]>([]);
+   265→  const [xmlBusy, setXmlBusy] = useState(false);
+   266→  const [xmlProg, setXmlProg] = useState<{ done: number; total: number } | null>(null);
+   267→  const [xmlRes, setXmlRes] = useState<{ importados: number; cancelamentos: number; duplicados: number; entradas: number; ilegiveis: number; erros: { nome: string; mensagem: string }[] } | null>(null);
+   268→  const [xmlDrag, setXmlDrag] = useState(false);
+   269→  const xmlInput = useRef<HTMLInputElement | null>(null);
+   270→
+   271→  // BLOCO 143 — BOLETO (modal + cancelamento com motivo)
+   272→  const [boletoModal, setBoletoModal] = useState<{ n: NotaRow } | null>(null);
+   273→  const [boleto, setBoleto] = useState<BoletoInfo | null>(null);
+   274→  const [boletoBusy, setBoletoBusy] = useState(false);
+   275→  const [boletoMsg, setBoletoMsg] = useState('');
+   276→  const [cancelBoleto, setCancelBoleto] = useState<{ n: NotaRow } | null>(null);
+   277→  const [cancelBoletoMotivo, setCancelBoletoMotivo] = useState('');
+   278→
+   279→  // relógio "agora": o prazo SEFAZ de cancelamento é RELATIVO — o botão
+   280→  // de cancelar precisa SUMIR sozinho quando o prazo vence (tick 15s).
+   281→  const [agora, setAgora] = useState(() => new Date());
+   282→  useEffect(() => {
+   283→    if (!token) return;
+   284→    const iv = setInterval(() => setAgora(new Date()), 15_000);
+   285→    return () => clearInterval(iv);
+   286→  }, [token]);
+   287→
+   288→  /** Prazo de cancelamento de UMA linha (NFC-e 30min / NF-e 24h). */
+   289→  const prazoCancelDe = useCallback((n: NotaRow) =>
+   290→    prazoCancelamentoNota({ tipo: n.tipo, status: n.status, emitidaEm: n.emitidaEm, fallbackData: n.dataVenda, agora }), [agora]);
+   291→
+   292→  // Prazo da nota aberta no modal de cancelamento — re-render ao vivo (tick 15s)
+   293→  const prazoCancelModal = useMemo(
+   294→    () => (cancelModal ? prazoCancelamentoNota({ tipo: cancelModal.tipo, status: cancelModal.status, emitidaEm: cancelModal.emitidaEm, fallbackData: cancelModal.dataVenda, agora }) : null),
+   295→    [cancelModal, agora],
+   296→  );
+   297→
+   298→  // Toast
+   299→  const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
+   300→  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+   301→  const showToast = useCallback((msg: string, ok = true) => {
+   302→    setToast({ msg, ok });
+   303→    if (toastTimer.current) clearTimeout(toastTimer.current);
+   304→    toastTimer.current = setTimeout(() => setToast(null), 4200);
+   305→  }, []);
+   306→
+   307→  const headers = (t: string): HeadersInit => ({ 'Content-Type': 'application/json', Authorization: `Bearer ${t}` });
+   308→
+   309→  // ---------- boot: retomar sessão ----------
+   310→  useEffect(() => {
+   311→    try {
+   312→      const t = localStorage.getItem(TOKEN_KEY);
+   313→      const n = localStorage.getItem(NOME_KEY) || '';
+   314→      if (t) { setToken(t); setNomeAdmin(n); }
+   315→    } catch { /* storage bloqueado */ }
+   316→    setBooting(false);
+   317→  }, []);
+   318→
+   319→  // ---------- carregar lista ----------
+   320→  const carregar = useCallback(async (t: string) => {
+   321→    setCarregando(true);
+   322→    setErroLista('');
+   323→    try {
+   324→      const res = await fetch('/api/notas-admin?acao=lista', { headers: headers(t) });
+   325→      const data = await res.json().catch(() => ({}));
+   326→      if (res.status === 401 || res.status === 403) {
+   327→        try { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(NOME_KEY); } catch {}
+   328→        setToken(null); setNomeAdmin('');
+   329→        setErroLista('Sessão expirada. Entre com o PIN novamente.');
+   330→        return;
+   331→      }
+   332→      if (!res.ok || !data.ok) { setErroLista(data.erro || `Erro ${res.status}`); return; }
+   333→      // BLOCO 143: defesa extra no front — só documentos reais (a API já
+   334→      // devolve sem vendas sem emissão; aqui filtramos NAO_EMITIDA de novo).
+   335→      const lista = ((data.notas || []) as NotaRow[]).filter(n => String(n.status || '').toUpperCase() !== 'NAO_EMITIDA');
+   336→      setNotas(lista);
+   337→    } catch {
+   338→      setErroLista('Falha de conexão. Toque em ATUALIZAR.');
+   339→    } finally {
+   340→      setCarregando(false);
+   341→    }
+   342→  }, []);
+   343→
+   344→  useEffect(() => {
+   345→    if (token) void carregar(token);
+   346→  }, [token, carregar]);
+   347→
+   348→  // ---------- PIN ----------
+   349→  const entrarComPin = useCallback(async (pinFinal: string) => {
+   350→    if (pinBusy) return;
+   351→    setPinBusy(true);
+   352→    setPinErro('');
+   353→    try {
+   354→      const res = await fetch('/api/notas-admin', {
+   355→        method: 'POST',
+   356→        headers: { 'Content-Type': 'application/json' },
+   357→        body: JSON.stringify({ acao: 'AUTH', pin: pinFinal }),
+   358→      });
+   359→      const data = await res.json().catch(() => ({}));
+   360→      if (res.ok && data.ok && data.token) {
+   361→        try {
+   362→          localStorage.setItem(TOKEN_KEY, data.token);
+   363→          localStorage.setItem(NOME_KEY, data.nome || '');
+   364→        } catch {}
+   365→        setToken(data.token);
+   366→        setNomeAdmin(data.nome || '');
+   367→        setPin('');
+   368→      } else {
+   369→        setPinErro(data.erro || 'PIN incorreto. Tente novamente.');
+   370→        setPin('');
+   371→        setPinShake(true);
+   372→        setTimeout(() => setPinShake(false), 500);
+   373→      }
+   374→    } catch {
+   375→      setPinErro('Falha de conexão. Tente novamente.');
+   376→      setPin('');
+   377→    } finally {
+   378→      setPinBusy(false);
+   379→    }
+   380→  }, [pinBusy]);
+   381→
+   382→  const digitar = (d: string) => {
+   383→    if (pinBusy) return;
+   384→    setPinErro('');
+   385→    const proximo = (pin + d).slice(0, 8);
+   386→    setPin(proximo);
+   387→    if (proximo.length === 6) void entrarComPin(proximo);
+   388→  };
+   389→
+   390→  const apagar = () => { setPinErro(''); setPin(p => p.slice(0, -1)); };
+   391→
+   392→  const sair = () => {
+   393→    try { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(NOME_KEY); } catch {}
+   394→    setToken(null); setNomeAdmin(''); setNotas([]); setBusca(''); setFiltro('TODAS'); setPeriodo('TUDO');
+   395→  };
+   396→
+   397→  // ---------- lista filtrada ----------
+   398→  const listaFiltrada = useMemo(() => {
+   399→    const q = busca.trim().toLowerCase();
+   400→    return notas.filter(n => {
+   401→      if (filtro !== 'TODAS' && String(n.status || '').toUpperCase() !== filtro) return false;
+   402→      if (!dentroPeriodo(n.dataVenda, periodo)) return false;
+   403→      if (!q) return true;
+   404→      return (
+   405→        (n.numero || '').includes(q) ||
+   406→        (n.cliente || '').toLowerCase().includes(q) ||
+   407→        (n.clienteDoc || '').toLowerCase().includes(q) ||
+   408→        (n.chave || '').includes(q) ||
+   409→        (n.vendedor || '').toLowerCase().includes(q)
+   410→      );
+   411→    });
+   412→  }, [notas, busca, filtro, periodo]);
+   413→
+   414→  const kpis = useMemo(() => {
+   415→    const visiveis = notas.filter(n => dentroPeriodo(n.dataVenda, periodo));
+   416→    const autorizadas = visiveis.filter(n => n.status === 'AUTORIZADA');
+   417→    const canceladas = visiveis.filter(n => n.status === 'CANCELADA');
+   418→    const rejeitadas = visiveis.filter(n => n.status === 'REJEITADA');
+   419→    return {
+   420→      total: visiveis.length,
+   421→      autorizadas: autorizadas.length,
+   422→      canceladas: canceladas.length,
+   423→      rejeitadas: rejeitadas.length,
+   424→      valor: autorizadas.reduce((a, n) => a + (Number(n.valor) || 0), 0),
+   425→      pdfLocal: visiveis.filter(n => n.pdfLocal).length,
+   426→      xmlLocal: visiveis.filter(n => n.xmlLocal).length,
+   427→    };
+   428→  }, [notas, periodo]);
+   429→
+   430→  const contagem = useCallback((f: FiltroStatus) => {
+   431→    if (f === 'TODAS') return listaFiltrada.length;
+   432→    return listaFiltrada.filter(n => String(n.status || '').toUpperCase() === f).length;
+   433→  }, [listaFiltrada]);
+   434→
+   435→  // ---------- ações ----------
+   436→  const abrirDetalhe = async (n: NotaRow) => {
+   437→    if (!token) return;
+   438→    setBusyId(`det:${n.id}`);
+   439→    setDetalheLoading(true);
+   440→    setDetalhe(null);
+   441→    try {
+   442→      if (n.avulsa) {
+   443→        // avulsa: detalhe vem dos metadados (sem pedido interno)
+   444→        setDetalhe({ nota: n, cliente: null, itens: [] });
+   445→        return;
+   446→      }
+   447→      const res = await fetch(`/api/notas-admin?acao=detalhe&id=${encodeURIComponent(n.id)}`, { headers: headers(token) });
+   448→      const data = await res.json().catch(() => ({}));
+   449→      if (!res.ok || !data.ok) { showToast(data.erro || 'Falha ao abrir o pedido.', false); return; }
+   450→      setDetalhe({ nota: (data.nota || n) as NotaRow, cliente: (data.cliente || null) as ClienteDetalhe | null, itens: (data.itens || []) as ItemDetalhe[] });
+   451→    } catch {
+   452→      showToast('Falha de conexão ao abrir o pedido.', false);
+   453→    } finally {
+   454→      setDetalheLoading(false);
+   455→      setBusyId(null);
+   456→    }
+   457→  };
+   458→
+   459→  const salvarEdicao = async () => {
+   460→    if (!token || !editModal) return;
+   461→    setBusyId('edit');
+   462→    try {
+   463→      const res = await fetch('/api/notas-admin', {
+   464→        method: 'POST',
+   465→        headers: headers(token),
+   466→        body: JSON.stringify({ acao: 'EDITAR', saleId: editModal.id, metodoPagamento: editMetodo, detalhe: editDetalhe }),
+   467→      });
+   468→      const data = await res.json().catch(() => ({}));
+   469→      if (!res.ok || !data.ok) { showToast(data.erro || 'Falha ao salvar a edição.', false); return; }
+   470→      showToast('Registro atualizado (o XML fiscal já autorizado não muda).');
+   471→      setEditModal(null);
+   472→      void carregar(token);
+   473→    } catch {
+   474→      showToast('Falha de conexão ao salvar.', false);
+   475→    } finally { setBusyId(null); }
+   476→  };
+   477→
+   478→  const cancelarNota = async () => {
+   479→    if (!token || !cancelModal) return;
+   480→    if (justificativa.trim().length < 15) { showToast('Justificativa obrigatória (mínimo 15 caracteres — regra da SEFAZ).', false); return; }
+   481→    setBusyId('cancel');
+   482→    try {
+   483→      const res = await fetch('/api/notas', {
+   484→        method: 'POST',
+   485→        headers: headers(token),
+   486→        body: JSON.stringify({ acao: 'CANCELAR', saleId: cancelModal.id, justificativa: justificativa.trim() }),
+   487→      });
+   488→      const data = await res.json().catch(() => ({}));
+   489→      if (!res.ok) { showToast(data.erro || 'Falha ao cancelar na SEFAZ.', false); return; }
+   490→      showToast(data.ok ? 'Nota cancelada na SEFAZ.' : 'Cancelamento em processamento — consulte em alguns segundos.', !!data.ok);
+   491→      setCancelModal(null); setJustificativa('');
+   492→      void carregar(token);
+   493→    } catch {
+   494→      showToast('Falha de conexão ao cancelar.', false);
+   495→    } finally { setBusyId(null); }
+   496→  };
+   497→
+   498→  const clonarVenda = async () => {
+   499→    if (!token || !cloneModal) return;
+   500→    setBusyId('clone');
+   501→    try {
+   502→      const res = await fetch('/api/notas-admin', {
+   503→        method: 'POST',
+   504→        headers: headers(token),
+   505→        body: JSON.stringify({ acao: 'CLONAR', saleId: cloneModal.id }),
+   506→      });
+   507→      const data = await res.json().catch(() => ({}));
+   508→      if (!res.ok || !data.ok) { showToast(data.erro || 'Falha ao clonar a venda.', false); return; }
+   509→      showToast('Cópia criada como venda pendente no app — emita a NF pela aba NOTAS PENDENTES.');
+   510→      setCloneModal(null);
+   511→      void carregar(token);
+   512→    } catch {
+   513→      showToast('Falha de conexão ao clonar.', false);
+   514→    } finally { setBusyId(null); }
+   515→  };
+   516→
+   517→  const emitirNota = async () => {
+   518→    if (!token || !emitModal) return;
+   519→    setBusyId('emit');
+   520→    try {
+   521→      const res = await fetch('/api/notas', {
+   522→        method: 'POST',
+   523→        headers: headers(token),
+   524→        body: JSON.stringify({ acao: 'EMITIR', saleId: emitModal.id, tipo: emitTipo || undefined }),
+   525→      });
+   526→      const data = await res.json().catch(() => ({}));
+   527→      const nota = data.nota || {};
+   528→      if (!res.ok) {
+   529→        showToast(data.erro || 'Falha ao emitir na SEFAZ.', false);
+   530→        void carregar(token);
+   531→        return;
+   532→      }
+   533→      if (nota.status === 'AUTORIZADA') showToast(`Documento autorizado — nº ${nota.numero || '?'}`);
+   534→      else if (nota.status === 'EMITINDO') showToast('Enviada à SEFAZ — aguardando autorização (use CONSULTAR).');
+   535→      else showToast(nota.erro || 'SEFAZ rejeitou a emissão — veja o motivo na linha.', false);
+   536→      setEmitModal(null);
+   537→      void carregar(token);
+   538→    } catch {
+   539→      showToast('Falha de conexão ao emitir.', false);
+   540→    } finally { setBusyId(null); }
+   541→  };
+   542→
+   543→  // ---------- IMPORTAR DA FOCUS ----------
+   544→  // Loop de lotes: o servidor processa 6 notas por chamada (rate limit da
+   545→  // Focus) e devolve done=true quando não sobra nada sem arquivo local.
+   546→  const importarTudo = async () => {
+   547→    if (!token || importBusy) return;
+   548→    setImportBusy(true);
+   549→    let okCount = 0, falhas = 0, semArq = 0, avulsasNovas = 0;
+   550→    try {
+   551→      setImportProg({ fase: 'Notas do app', done: 0, total: 0 });
+   552→      for (let i = 0; i < 50; i++) {
+   553→        const res = await fetch('/api/notas-importar', {
+   554→          method: 'POST',
+   555→          headers: headers(token),
+   556→          body: JSON.stringify({ acao: 'IMPORTAR' }),
+   557→        });
+   558→        const data = await res.json().catch(() => ({}));
+   559→        if (!res.ok || !data.ok) { showToast(data.erro || 'Falha ao importar da Focus.', false); break; }
+   560→        okCount += Number(data.feitos) || 0;
+   561→        falhas += Number(data.comFalha) || 0;
+   562→        semArq += Number(data.semArquivo) || 0;
+   563→        setImportProg({ fase: 'Notas do app', done: (Number(data.total) || 0) - (Number(data.faltando) || 0), total: Number(data.total) || 0 });
+   564→        if (data.done) break;
+   565→      }
+   566→      // Varredura dos BACKUPS MENSAIS oficiais da Focus (app + painel).
+   567→      setImportProg({ fase: 'Varredura da Focus', done: 0, total: 0 });
+   568→      let avulsasMsg = '';
+   569→      for (let i = 0; i < 20; i++) {
+   570→        const res = await fetch('/api/notas-importar', {
+   571→          method: 'POST',
+   572→          headers: headers(token),
+   573→          body: JSON.stringify({ acao: 'AVULSAS' }),
+   574→        });
+   575→        const data = await res.json().catch(() => ({}));
+   576→        if (!res.ok || !data.ok) break;
+   577→        avulsasNovas += Number(data.novas) || 0;
+   578→        if (data.suportado === false) avulsasMsg = String(data.msg || '');
+   579→        if (data.fim) break;
+   580→      }
+   581→      const partes = [`${okCount} nota(s) arquivada(s)`];
+   582→      if (avulsasNovas > 0) partes.push(`${avulsasNovas} do painel da Focus`);
+   583→      if (semArq > 0) partes.push(`${semArq} sem arquivo ainda`);
+   584→      if (falhas > 0) partes.push(`${falhas} com falha`);
+   585→      showToast(avulsasMsg && avulsasNovas === 0 ? `Arquivamento concluído (${partes.join(' · ')}). ${avulsasMsg}` : `Importação concluída: ${partes.join(' · ')}.`);
+   586→      void carregar(token);
+   587→    } catch {
+   588→      showToast('Falha de conexão na importação.', false);
+   589→    } finally {
+   590→      setImportBusy(false);
+   591→      setImportProg(null);
+   592→    }
+   593→  };
+   594→
+   595→  /** Importa notas coladas do painel da Focus (ref OU chave de acesso). */
+   596→  const importarColadas = async () => {
+   597→    if (!token || pasteBusy) return;
+   598→    if (!pasteText.trim()) { showToast('Cole a referência ou a chave de acesso (44 dígitos) copiada do painel da Focus.', false); return; }
+   599→    setPasteBusy(true);
+   600→    try {
+   601→      const res = await fetch('/api/notas-importar', {
+   602→        method: 'POST',
+   603→        headers: headers(token),
+   604→        body: JSON.stringify({ acao: 'IMPORTAR_POR_REF', texto: pasteText }),
+   605→      });
+   606→      const data = await res.json().catch(() => ({}));
+   607→      if (!res.ok || !data.ok) { showToast(data.erro || 'Falha ao importar.', false); return; }
+   608→      const falhas = (data.resultados || []).filter((r: { ok: boolean }) => !r.ok);
+   609→      showToast(data.msg || 'Importação concluída.', !falhas.length);
+   610→      if (falhas.length) {
+   611→        setPasteText(falhas.map((f: { token: string }) => f.token).join('\n'));
+   612→      } else {
+   613→        setPasteText('');
+   614→        setPasteOpen(false);
+   615→      }
+   616→      void carregar(token);
+   617→    } catch {
+   618→      showToast('Falha de conexão ao importar.', false);
+   619→    } finally { setPasteBusy(false); }
+   620→  };
+   621→
+   622→  const atualizarAvulsa = async (n: NotaRow) => {
+   623→    if (!token) return;
+   624→    setBusyId(n.id);
+   625→    try {
+   626→      const res = await fetch('/api/notas-importar', {
+   627→        method: 'POST',
+   628→        headers: headers(token),
+   629→        body: JSON.stringify({ acao: 'ATUALIZAR_AVULSA', ref: n.ref }),
+   630→      });
+   631→      const data = await res.json().catch(() => ({}));
+   632→      showToast(data.ok ? 'Avulsa re-consultada na SEFAZ e arquivada.' : data.erro || 'Falha ao atualizar.', !!data.ok);
+   633→      void carregar(token);
+   634→    } catch {
+   635→      showToast('Falha de conexão ao atualizar.', false);
+   636→    } finally { setBusyId(null); }
+   637→  };
+   638→
+   639→  const excluirAvulsa = async (n: NotaRow) => {
+   640→    if (!token) return;
+   641→    setBusyId(n.id);
+   642→    try {
+   643→      const res = await fetch('/api/notas-importar', {
+   644→        method: 'POST',
+   645→        headers: headers(token),
+   646→        body: JSON.stringify({ acao: 'EXCLUIR_AVULSA', ref: n.ref }),
+   647→      });
+   648→      const data = await res.json().catch(() => ({}));
+   649→      showToast(data.ok ? 'Cópia interna apagada.' : data.erro || 'Falha ao apagar.', !!data.ok);
+   650→      void carregar(token);
+   651→    } catch {
+   652→      showToast('Falha de conexão ao apagar.', false);
+   653→    } finally { setBusyId(null); }
+   654→  };
+   655→
+   656→  /** Link do arquivo pela NOSSA rota (storage próprio → cai na Focus ao vivo).
+   657→   *  Token na query — o <a> de download não carrega header de auth. */
+   658→  const linkArquivo = (n: NotaRow, tipo: 'pdf' | 'xml'): string => {
+   659→    const t = token ? `&token=${encodeURIComponent(token)}` : '';
+   660→    if (n.avulsa) {
+   661→      const doc = String(n.tipo || '').toUpperCase() === 'NFCE' ? 'nfce' : 'nfe';
+   662→      return `/api/notas-arquivo?ref=${encodeURIComponent(n.ref)}&doc=${doc}&tipo=${tipo}${t}`;
+   663→    }
+   664→    return `/api/notas-arquivo?saleId=${encodeURIComponent(n.id)}&tipo=${tipo}${t}`;
+   665→  };
+   666→
+   667→  // ---------- BLOCO 143: XML EM LOTE ----------
+   668→  const pegarArquivos = async (files: FileList | File[]) => {
+   669→    const add: { nome: string; base64: string; tamanho: number }[] = [];
+   670→    const zipTravados: string[] = [];
+   671→    for (const f of Array.from(files).slice(0, 200)) {
+   672→      try {
+   673→        if (/\.zip$/i.test(f.name)) {
+   674→          const zipped = unzipSync(new Uint8Array(await f.arrayBuffer()));
+   675→          for (const [nome, u8] of Object.entries(zipped)) {
+   676→            if (!/\.xml$/i.test(nome) || nome.startsWith('__MACOSX')) continue;
+   677→            add.push({ nome: `${f.name}/${nome}`, base64: bytesToBase64(u8), tamanho: u8.length });
+   678→          }
+   679→        } else if (/\.xml$/i.test(f.name) || f.type === 'text/xml' || f.type === 'application/xml') {
+   680→          const u8 = new Uint8Array(await f.arrayBuffer());
+   681→          add.push({ nome: f.name, base64: bytesToBase64(u8), tamanho: u8.length });
+   682→        } else {
+   683→          zipTravados.push(f.name);
+   684→        }
+   685→      } catch {
+   686→        zipTravados.push(f.name);
+   687→      }
+   688→    }
+   689→    setXmlArquivos(atuais => {
+   690→      const nomes = new Set(atuais.map(a => a.nome));
+   691→      const novos = add.filter(a => !nomes.has(a.nome) && a.tamanho > 0);
+   692→      return [...atuais, ...novos];
+   693→    });
+   694→    if (zipTravados.length) showToast(`${zipTravados.length} arquivo(s) ignorado(s) — só aceito .xml e .zip.`, false);
+   695→    if (xmlRes) setXmlRes(null);
+   696→  };
+   697→
+   698→  const importarXmlLote = async () => {
+   699→    if (!token || xmlBusy || xmlArquivos.length === 0) return;
+   700→    setXmlBusy(true);
+   701→    setXmlRes(null);
+   702→    const total = xmlArquivos.length;
+   703→    setXmlProg({ done: 0, total });
+   704→    const erros: { nome: string; mensagem: string }[] = [];
+   705→    let importados = 0, cancelamentos = 0, duplicados = 0, entradas = 0, ilegiveis = 0;
+   706→    try {
+   707→      const CH = 8;
+   708→      for (let i = 0; i < total; i += CH) {
+   709→        const lote = xmlArquivos.slice(i, i + CH);
+   710→        const res = await fetch('/api/notas-importar', {
+   711→          method: 'POST',
+   712→          headers: headers(token),
+   713→          body: JSON.stringify({ acao: 'XML_LOTE', arquivos: lote.map(a => ({ nome: a.nome, base64: a.base64 })) }),
+   714→        });
+   715→        const data = await res.json().catch(() => ({}));
+   716→        if (!res.ok || !data.ok) {
+   717→          showToast(data.erro || 'Falha ao importar o lote de XMLs.', false);
+   718→          break;
+   719→        }
+   720→        importados += Number(data.importados) || 0;
+   721→        cancelamentos += Number(data.cancelamentos) || 0;
+   722→        duplicados += Number(data.duplicados) || 0;
+   723→        entradas += Number(data.entradas) || 0;
+   724→        ilegiveis += Number(data.ilegiveis) || 0;
+   725→        for (const r of (data.resultados || []) as { nome: string; ok: boolean; mensagem: string }[]) {
+   726→          if (!r.ok) erros.push({ nome: r.nome, mensagem: r.mensagem });
+   727→        }
+   728→        setXmlProg({ done: Math.min(i + CH, total), total });
+   729→      }
+   730→      setXmlRes({ importados, cancelamentos, duplicados, entradas, ilegiveis, erros });
+   731→      showToast(`${importados} nota(s) importada(s) do XML — a lista já está atualizada.`);
+   732→      setXmlArquivos([]);
+   733→      void carregar(token);
+   734→    } catch {
+   735→      showToast('Falha de conexão na importação de XMLs.', false);
+   736→    } finally {
+   737→      setXmlBusy(false);
+   738→      setXmlProg(null);
+   739→    }
+   740→  };
+   741→
+   742→  // ---------- BLOCO 143: BOLETO ----------
+   743→  const copiar = async (texto: string, rotulo: string) => {
+   744→    try {
+   745→      await navigator.clipboard.writeText(texto);
+   746→      showToast(`${rotulo} copiado.`);
+   747→    } catch {
+   748→      showToast('Não foi possível copiar — selecione e copie manualmente.', false);
+   749→    }
+   750→  };
+   751→
+   752→  const abrirBoleto = async (n: NotaRow) => {
+   753→    if (!token) return;
+   754→    setBoletoModal({ n });
+   755→    setBoleto(null);
+   756→    setBoletoMsg('');
+   757→    setBoletoBusy(true);
+   758→    try {
+   759→      const res = await fetch(`/api/boletos?saleId=${encodeURIComponent(n.id)}`, { headers: headers(token) });
+   760→      const data = await res.json().catch(() => ({}));
+   761→      if (!res.ok || !data.ok) { setBoletoMsg(data.erro || 'Falha ao carregar o boleto.'); return; }
+   762→      setBoleto(data.boleto as BoletoInfo);
+   763→    } catch {
+   764→      setBoletoMsg('Falha de conexão ao carregar o boleto.');
+   765→    } finally { setBoletoBusy(false); }
+   766→  };
+   767→
+   768→  const pdfBoleto = async () => {
+   769→    if (!token || !boletoModal) return;
+   770→    setBoletoBusy(true);
+   771→    try {
+   772→      const res = await fetch('/api/boletos', {
+   773→        method: 'POST',
+   774→        headers: headers(token),
+   775→        body: JSON.stringify({ acao: 'PDF', saleId: boletoModal.n.id }),
+   776→      });
+   777→      const data = await res.json().catch(() => ({}));
+   778→      if (!res.ok || !data.ok || !data.pdfBase64) { showToast(data.erro || 'Falha ao buscar o PDF no Inter.', false); return; }
+   779→      const bin = atob(data.pdfBase64);
+   780→      const u8 = new Uint8Array(bin.length);
+   781→      for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+   782→      const url = URL.createObjectURL(new Blob([u8], { type: 'application/pdf' }));
+   783→      const a = document.createElement('a');
+   784→      a.href = url;
+   785→      a.download = `boleto-${boletoModal.n.numero || boletoModal.n.id.slice(0, 8)}.pdf`;
+   786→      document.body.appendChild(a);
+   787→      a.click();
+   788→      a.remove();
+   789→      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+   790→      showToast('PDF do boleto baixado.');
+   791→    } catch {
+   792→      showToast('Falha ao gerar o PDF do boleto.', false);
+   793→    } finally { setBoletoBusy(false); }
+   794→  };
+   795→
+   796→  const consultarBoleto = async () => {
+   797→    if (!token || !boletoModal) return;
+   798→    setBoletoBusy(true);
+   799→    try {
+   800→      const res = await fetch('/api/boletos', {
+   801→        method: 'POST',
+   802→        headers: headers(token),
+   803→        body: JSON.stringify({ acao: 'CONSULTAR', saleId: boletoModal.n.id }),
+   804→      });
+   805→      const data = await res.json().catch(() => ({}));
+   806→      if (!res.ok || !data.ok) { showToast(data.erro || 'Falha ao consultar o Inter.', false); return; }
+   807→      setBoleto(data.boleto as BoletoInfo);
+   808→      showToast('Boleto consultado no Inter.');
+   809→      void carregar(token);
+   810→    } catch {
+   811→      showToast('Falha de conexão ao consultar o boleto.', false);
+   812→    } finally { setBoletoBusy(false); }
+   813→  };
+   814→
+   815→  const cancelarBoleto = async () => {
+   816→    if (!token || !cancelBoleto) return;
+   817→    const motivo = cancelBoletoMotivo.trim();
+   818→    if (!motivo) { showToast('Informe o motivo do cancelamento (obrigatório no Inter).', false); return; }
+   819→    setBoletoBusy(true);
+   820→    try {
+   821→      const res = await fetch('/api/boletos', {
+   822→        method: 'POST',
+   823→        headers: headers(token),
+   824→        body: JSON.stringify({ acao: 'CANCELAR', saleId: cancelBoleto.n.id, motivo }),
+   825→      });
+   826→      const data = await res.json().catch(() => ({}));
+   827→      if (!res.ok || !data.ok) { showToast(data.erro || 'Falha ao cancelar o boleto no Inter.', false); return; }
+   828→      showToast('Boleto cancelado no Inter.');
+   829→      setCancelBoleto(null);
+   830→      setCancelBoletoMotivo('');
+   831→      setBoletoModal(null);
+   832→      void carregar(token);
+   833→    } catch {
+   834→      showToast('Falha de conexão ao cancelar o boleto.', false);
+   835→    } finally { setBoletoBusy(false); }
+   836→  };
+   837→
+   838→  // ---------- tela: boot ----------
+   839→  if (booting) {
+   840→    return (
+   841→      <div className="min-h-screen bg-blue-600 flex items-center justify-center">
+   842→        <div className="w-10 h-10 border-4 border-blue-200 border-t-white rounded-full animate-spin" />
+   843→      </div>
+   844→    );
+   845→  }
+   846→
+   847→  // ---------- tela: PIN ----------
+   848→  if (!token) {
+   849→    return (
+   850→      <div className="min-h-dvh flex flex-col items-center justify-center bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-800 p-6">
+   851→        <div className={`bg-white p-8 rounded-3xl shadow-2xl w-full max-w-md text-center ${pinShake ? 'animate-shake' : ''}`}>
+   852→          <div className="w-20 h-20 bg-blue-50 rounded-full flex items-center justify-center mx-auto mb-6 shadow-inner">
+   853→            <i className="fa-solid fa-file-invoice-dollar text-blue-600 text-3xl"></i>
+   854→          </div>
+   855→          <h1 className="text-xl font-black text-gray-800 mb-1">Portal de Notas Fiscais</h1>
+   856→          <p className="text-gray-400 text-sm mb-8 font-medium">Acesso restrito — mesmo PIN do admin</p>
+   857→
+   858→          <div className="flex justify-center gap-3 mb-6" aria-label="PIN digitado">
+   859→            {[0, 1, 2, 3, 4, 5].map(i => (
+   860→              <div key={i} className={`w-4 h-4 rounded-full border-2 transition-colors ${pin.length > i ? 'bg-blue-600 border-blue-600' : 'border-gray-200'}`} />
+   861→            ))}
+   862→          </div>
+   863→          {pinErro && <p className="text-rose-500 text-xs font-bold mb-4">{pinErro}</p>}
+   864→
+   865→          <div className="grid grid-cols-3 gap-3 mb-4">
+   866→            {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(d => (
+   867→              <button key={d} type="button" onClick={() => digitar(d)} className="h-14 rounded-2xl bg-gray-50 text-lg font-black text-gray-700 active:scale-95 transition-transform" aria-label={`Digitar ${d}`}>{d}</button>
+   868→            ))}
+   869→            <button type="button" onClick={apagar} className="h-14 rounded-2xl bg-rose-50 text-rose-500 active:scale-95 transition-transform" aria-label="Apagar dígito">
+   870→              <i className="fa-solid fa-delete-left"></i>
+   871→            </button>
+   872→            <button type="button" onClick={() => digitar('0')} className="h-14 rounded-2xl bg-gray-50 text-lg font-black text-gray-700 active:scale-95 transition-transform" aria-label="Digitar 0">0</button>
+   873→            <button type="button" onClick={() => void entrarComPin(pin)} disabled={pinBusy || pin.length === 0} className="h-14 rounded-2xl bg-blue-600 text-white text-[11px] font-black uppercase tracking-wider active:scale-95 transition-transform disabled:opacity-50">
+   874→              {pinBusy ? <i className="fa-solid fa-spinner fa-spin"></i> : 'Entrar'}
+   875→            </button>
+   876→          </div>
+   877→          <p className="text-[9px] font-bold text-gray-300 uppercase tracking-wider">DOCE MANIA · Administração de notas de saída</p>
+   878→        </div>
+   879→        <style>{`@keyframes shake { 10%, 90% { transform: translateX(-1px);} 20%, 80% { transform: translateX(2px);} 30%, 50%, 70% { transform: translateX(-4px);} 40%, 60% { transform: translateX(4px);} } .animate-shake { animation: shake 0.5s; }`}</style>
+   880→      </div>
+   881→    );
+   882→  }
+   883→
+   884→  // ---------- tela: lista (PC otimizado — BLOCO 143) ----------
+   885→  return (
+   886→    <div className="min-h-screen bg-gray-100 flex flex-col">
+   887→      {/* ================= HEADER compacto (1 linha de título + 1 de KPIs) ================= */}
+   888→      <header className="sticky top-0 z-40 shadow-lg shadow-blue-900/10">
+   889→        <div className="bg-gradient-to-r from-blue-700 via-blue-800 to-indigo-900 text-white">
+   890→          <div className="max-w-[1600px] mx-auto px-4 py-2.5 flex items-center gap-3">
+   891→            <div className="w-9 h-9 rounded-xl bg-white/10 border border-white/10 flex items-center justify-center shrink-0">
+   892→              <i className="fa-solid fa-file-invoice-dollar text-blue-100"></i>
+   893→            </div>
+   894→            <div className="min-w-0">
+   895→              <h1 className="text-[15px] font-black uppercase tracking-tight leading-none whitespace-nowrap">Portal de Notas Fiscais <span className="text-blue-300">NF-e · NFC-e</span></h1>
+   896→              <p className="text-[10px] text-blue-200/70 font-semibold mt-1 leading-none truncate">
+   897→                {nomeAdmin ? <><i className="fa-solid fa-user-shield mr-1 text-[8px]"></i>{nomeAdmin} · </> : null}
+   898→                <span className="uppercase tracking-wide">administração de saída</span>
+   899→              </p>
+   900→            </div>
+   901→            <div className="flex-1" />
+   902→            <div className="flex items-center gap-2 shrink-0">
+   903→              <button
+   904→                onClick={() => { setXmlOpen(true); setXmlRes(null); }}
+   905→                className="bg-teal-400 hover:bg-teal-300 text-teal-950 rounded-xl px-3.5 h-9 text-[10px] font-black uppercase tracking-wider active:scale-95 transition-all shadow-lg shadow-teal-900/30 flex items-center gap-1.5"
+   906→                title="Importar XMLs de notas de SAÍDA emitidas em sistemas de terceiros — aceita vários arquivos e .zip; entra arquivado com DANFE imprimível"
+   907→              >
+   908→                <i className="fa-solid fa-file-import"></i>Importar XML em lote
+   909→              </button>
+   910→              <button
+   911→                onClick={() => setConf({
+   912→                  titulo: 'Buscar TODAS na Focus?',
+   913→                  texto: 'A varredura busca TODAS as notas do CNPJ na API da Focus (do app e do painel), baixa PDF e XML e arquiva tudo dentro do sistema. Pode demorar alguns minutos.',
+   914→                  detalhe: 'Notas que já estão arquivadas são puladas (nunca duplica).',
+   915→                  icone: 'fa-cloud-arrow-down',
+   916→                  botao: 'Buscar agora',
+   917→                  run: importarTudo,
+   918→                })}
+   919→                disabled={importBusy}
+   920→                className="bg-emerald-400 hover:bg-emerald-300 disabled:opacity-60 text-emerald-950 rounded-xl px-3.5 h-9 text-[10px] font-black uppercase tracking-wider active:scale-95 transition-all shadow-lg shadow-emerald-900/30 flex items-center gap-1.5"
+   921→                title="Varre a API da Focus (NF-e + NFC-e do CNPJ) e grava PDF (DANFE) e XML de TODAS as notas DENTRO do sistema"
+   922→              >
+   923→                <i className={`fa-solid fa-cloud-arrow-down ${importBusy ? 'fa-bounce' : ''}`}></i>{importBusy ? 'Importando...' : 'Buscar TODAS na Focus'}
+   924→              </button>
+   925→              <button
+   926→                onClick={() => void carregar(token)}
+   927→                className="bg-white/15 hover:bg-white/25 text-white rounded-xl px-3.5 h-9 text-[10px] font-black uppercase tracking-wider active:scale-95 transition-all flex items-center gap-1.5"
+   928→                title="Atualizar lista"
+   929→              >
+   930→                <i className={`fa-solid fa-rotate ${carregando ? 'fa-spin' : ''}`}></i>Atualizar
+   931→              </button>
+   932→              <button
+   933→                onClick={sair}
+   934→                className="bg-white/10 hover:bg-white/20 text-blue-100 rounded-xl px-3.5 h-9 text-[10px] font-black uppercase tracking-wider active:scale-95 transition-all flex items-center gap-1.5"
+   935→                title="Sair do portal"
+   936→              >
+   937→                <i className="fa-solid fa-right-from-bracket"></i>Sair
+   938→              </button>
+   939→            </div>
+   940→          </div>
+   941→        </div>
+   942→        {/* faixa de KPIs — uma linha só */}
+   943→        <div className="bg-blue-950 text-blue-100">
+   944→          <div className="max-w-[1600px] mx-auto px-4 py-1.5 flex items-center gap-4 text-[10px] font-bold whitespace-nowrap overflow-x-auto" role="status">
+   945→            <span><b className="text-white">{kpis.total}</b> no período</span>
+   946→            <span className="text-emerald-300"><b>{kpis.autorizadas}</b> autorizadas</span>
+   947→            <span className="text-gray-400"><b>{kpis.canceladas}</b> canceladas</span>
+   948→            <span className="text-rose-300"><b>{kpis.rejeitadas}</b> rejeitadas</span>
+   949→            <span className="text-amber-300"><b>{fmtBRL(kpis.valor)}</b> autorizado</span>
+   950→            <span className="text-blue-300/60">|</span>
+   951→            <span className="text-emerald-200/80">{kpis.pdfLocal} DANFE · {kpis.xmlLocal} XML no sistema</span>
+   952→            {importBusy && importProg && (
+   953→              <span className="ml-auto flex items-center gap-2 text-emerald-300">
+   954→                <i className="fa-solid fa-cloud-arrow-down animate-bounce"></i>
+   955→                {importProg.fase}
+   956→                {importProg.total > 0 && <span className="tabular-nums">{importProg.done}/{importProg.total}</span>}
+   957→              </span>
+   958→            )}
+   959→          </div>
+   960→        </div>
+   961→      </header>
+   962→
+   963→      {/* ================= FILTROS — uma linha (busca + período + chips) ================= */}
+   964→      <div className="max-w-[1600px] w-full mx-auto px-4 mt-3 flex items-center gap-2 flex-wrap lg:flex-nowrap">
+   965→        <div className="relative flex-1 min-w-[220px]">
+   966→          <i className="fa-solid fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-300 text-xs"></i>
+   967→          <input
+   968→            value={busca}
+   969→            onChange={e => setBusca(e.target.value)}
+   970→            placeholder="Buscar por número, cliente, CNPJ, chave ou vendedor..."
+   971→            className="w-full pl-9 pr-3 py-2.5 bg-white border border-gray-200 rounded-xl shadow-sm text-xs font-semibold outline-none focus:ring-2 focus:ring-blue-100"
+   972→            aria-label="Buscar nota"
+   973→          />
+   974→        </div>
+   975→        <select
+   976→          value={periodo}
+   977→          onChange={e => setPeriodo(e.target.value as FiltroPeriodo)}
+   978→          className="bg-white border border-gray-200 rounded-xl shadow-sm px-3 py-2.5 text-[10px] font-black uppercase text-gray-600 outline-none"
+   979→          aria-label="Período"
+   980→        >
+   981→          {PERIODO_META.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
+   982→        </select>
+   983→        <div className="flex gap-1.5 overflow-x-auto">
+   984→          {(['TODAS', 'AUTORIZADA', 'EMITINDO', 'REJEITADA', 'CANCELADA'] as FiltroStatus[]).map(f => {
+   985→            const meta = metaStatus(f);
+   986→            const ativo = filtro === f;
+   987→            return (
+   988→              <button
+   989→                key={f}
+   990→                onClick={() => setFiltro(f)}
+   991→                className={`shrink-0 rounded-xl px-3 py-2 text-[9px] font-black uppercase tracking-wider border transition-all active:scale-95 ${ativo ? 'bg-blue-600 text-white border-blue-600 shadow-sm' : `bg-white ${meta.cls} border-gray-200`}`}
+   992→              >
+   993→                {f === 'TODAS' ? 'Todas' : meta.label} ({contagem(f)})
+   994→              </button>
+   995→            );
+   996→          })}
+   997→        </div>
+   998→      </div>
+   999→
+  1000→      {/* ================= IMPORTAR NOTA ESPECÍFICA (ref/chave colada) ================= */}
+  1001→      <div className="max-w-[1600px] w-full mx-auto px-4 mt-2">
+  1002→        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+  1003→          <button
+  1004→            onClick={() => setPasteOpen(o => !o)}
+  1005→            className="w-full flex items-center justify-between gap-3 px-4 py-2 text-left"
+  1006→            aria-expanded={pasteOpen}
+  1007→          >
+  1008→            <span className="text-[10px] font-black uppercase tracking-wider text-gray-500">
+  1009→              <i className="fa-solid fa-clipboard-paste mr-2 text-blue-500"></i>
+  1010→              Importar nota específica (ref ou chave) — manual
+  1011→            </span>
+  1012→            <i className={`fa-solid fa-chevron-down text-gray-300 text-[10px] transition-transform ${pasteOpen ? 'rotate-180' : ''}`}></i>
+  1013→          </button>
+  1014→          {pasteOpen && (
+  1015→            <div className="px-4 pb-4 space-y-2">
+  1016→              <p className="text-[9px] font-bold text-gray-400 leading-snug">
+  1017→                Para trazer UMA nota específica da Focus na hora: copie no painel da Focus a <b>referência</b> ou a <b>chave de acesso (44 dígitos)</b>, cole aqui (uma por linha). Para trazer todas de uma vez, use <b>Buscar TODAS na Focus</b>; para notas de sistemas de terceiros, use <b>Importar XML em lote</b>.
+  1018→              </p>
+  1019→              <textarea
+  1020→                value={pasteText}
+  1021→                onChange={e => setPasteText(e.target.value)}
+  1022→                rows={3}
+  1023→                placeholder={'41190612345678000123550010000000221923094166\nVENDA-0001  NFe411906...'}
+  1024→                className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-[11px] font-mono font-semibold outline-none focus:ring-2 focus:ring-blue-100"
+  1025→                aria-label="Referências ou chaves de acesso"
+  1026→              />
+  1027→              <div className="flex items-center justify-between gap-3">
+  1028→                <p className="text-[8px] font-black uppercase text-gray-300 tracking-wider">máx. 20 por vez</p>
+  1029→                <button
+  1030→                  onClick={() => void importarColadas()}
+  1031→                  disabled={pasteBusy || !pasteText.trim()}
+  1032→                  className="bg-blue-600 disabled:opacity-50 text-white rounded-xl px-4 py-2 text-[10px] font-black uppercase tracking-wider active:scale-95 transition-all"
+  1033→                >
+  1034→                  {pasteBusy ? <><i className="fa-solid fa-spinner fa-spin mr-1.5"></i>Importando...</> : <><i className="fa-solid fa-cloud-arrow-down mr-1.5"></i>Importar coladas</>}
+  1035→                </button>
+  1036→              </div>
+  1037→            </div>
+  1038→          )}
+  1039→        </div>
+  1040→      </div>
+  1041→
+  1042→      {/* ================= TABELA (estilo IOB — 1 linha por nota) ================= */}
+  1043→      <main className="max-w-[1600px] w-full mx-auto px-4 mt-2 flex-1 pb-6">
+  1044→        {carregando && notas.length === 0 && (
+  1045→          <div className="py-16 flex justify-center"><div className="w-10 h-10 border-4 border-blue-100 border-t-blue-600 rounded-full animate-spin" /></div>
+  1046→        )}
+  1047→
+  1048→        {!carregando && erroLista && (
+  1049→          <div className="bg-white rounded-2xl border border-rose-100 p-6 text-center mt-2">
+  1050→            <i className="fa-solid fa-triangle-exclamation text-rose-400 text-xl"></i>
+  1051→            <p className="text-xs font-bold text-gray-600 mt-2">{erroLista}</p>
+  1052→            <button onClick={() => void carregar(token)} className="mt-3 bg-blue-600 text-white rounded-xl px-4 py-2 text-[10px] font-black uppercase active:scale-95">Tentar novamente</button>
+  1053→          </div>
+  1054→        )}
+  1055→
+  1056→        {!carregando && !erroLista && listaFiltrada.length === 0 && (
+  1057→          <div className="text-center py-16 opacity-40 flex flex-col items-center gap-3">
+  1058→            <i className="fa-solid fa-file-circle-xmark text-4xl"></i>
+  1059→            <p className="font-black uppercase tracking-widest text-[10px]">Nenhuma nota neste filtro</p>
+  1060→          </div>
+  1061→        )}
+  1062→
+  1063→        {!carregando && !erroLista && listaFiltrada.length > 0 && (
+  1064→          <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+  1065→            <div className="overflow-x-auto">
+  1066→              <table className="w-full min-w-[1180px] text-left">
+  1067→                <thead>
+  1068→                  <tr className="bg-gray-50 border-b border-gray-200">
+  1069→                    {['Documento', 'Cliente', 'Emissão', 'Valor', 'Pagamento', 'Vendedor', 'Situação', 'Ações'].map(h => (
+  1070→                      <th key={h} className={`px-3 py-2 text-[8px] font-black uppercase text-gray-400 tracking-wider whitespace-nowrap ${h === 'Ações' ? 'text-center' : ''}`}>{h}</th>
+  1071→                    ))}
+  1072→                  </tr>
+  1073→                </thead>
+  1074→                <tbody>
+  1075→                  {listaFiltrada.map(n => {
+  1076→                    const meta = metaStatus(n.status);
+  1077→                    const podeEmitir = n.status === 'REJEITADA' || n.status === 'CANCELADA';
+  1078→                    const ocupado = busyId === n.id;
+  1079→                    const prazo = prazoCancelDe(n);
+  1080→                    const podeCancelar = !n.avulsa && (n.status === 'AUTORIZADA' || n.status === 'EMITINDO') && !!n.ref && prazo.dentroDoPrazo;
+  1081→                    const temBoletoVivo = !n.avulsa && !!n.boletoStatus && BOLETO_VIVO.includes(String(n.boletoStatus).toUpperCase());
+  1082→                    const bm = temBoletoVivo ? metaBoleto(n.boletoStatus as string) : null;
+  1083→                    return (
+  1084→                      <tr key={n.id} className="border-b border-gray-100 last:border-0 hover:bg-blue-50/40 transition-colors group">
+  1085→                        {/* Documento */}
+  1086→                        <td className="px-3 py-1.5 whitespace-nowrap">
+  1087→                          <span className="text-xs font-black text-gray-800 tabular-nums">{n.numero ? `Nº ${n.numero}` : '—'}</span>
+  1088→                          <span className="ml-1.5 inline-block align-middle text-[8px] font-black uppercase px-1.5 py-0.5 rounded bg-violet-50 text-violet-600">{rotuloTipo(n.tipo, n.modoNota)}</span>
+  1089→                          {n.avulsa && (
+  1090→                            <span className={`ml-1 inline-block align-middle text-[8px] font-black uppercase px-1.5 py-0.5 rounded ${n.origem === 'XML' ? 'bg-teal-50 text-teal-600' : 'bg-amber-50 text-amber-600'}`} title={n.origem === 'XML' ? 'Importada por XML de sistema de terceiros' : 'Nota emitida fora do app — importada da Focus'}>
+  1091→                              {n.origem === 'XML' ? 'XML' : 'Focus'}
+  1092→                            </span>
+  1093→                          )}
+  1094→                        </td>
+  1095→                        {/* Cliente */}
+  1096→                        <td className="px-3 py-1.5 max-w-[230px]">
+  1097→                          <p className="text-[11px] font-bold text-gray-700 truncate" title={`${n.cliente}${n.clienteDoc ? ` · ${n.clienteDoc}` : ''}`}>{n.cliente}</p>
+  1098→                        </td>
+  1099→                        {/* Emissão */}
+  1100→                        <td className="px-3 py-1.5 whitespace-nowrap text-[11px] font-semibold text-gray-600 tabular-nums" title={`venda: ${fmtData(n.dataVenda)}`}>
+  1101→                          {fmtData(n.emitidaEm || n.dataVenda)}
+  1102→                        </td>
+  1103→                        {/* Valor */}
+  1104→                        <td className="px-3 py-1.5 whitespace-nowrap">
+  1105→                          <span className="text-[11px] font-black text-gray-800 tabular-nums">{fmtBRL(n.valor)}</span>
+  1106→                          <span className={`ml-1.5 text-[8px] font-black uppercase ${n.statusPagamento === 'PAGO' ? 'text-emerald-500' : 'text-amber-500'}`}>{n.statusPagamento === 'PAGO' ? 'pago' : n.avulsa ? '' : 'em aberto'}</span>
+  1107→                        </td>
+  1108→                        {/* Pagamento */}
+  1109→                        <td className="px-3 py-1.5 whitespace-nowrap max-w-[150px]">
+  1110→                          <p className="text-[10px] font-bold text-gray-600 uppercase truncate" title={n.detalhe}>{(n.metodo || '—').replace('_', ' ')}</p>
+  1111→                        </td>
+  1112→                        {/* Vendedor */}
+  1113→                        <td className="px-3 py-1.5 whitespace-nowrap max-w-[120px]">
+  1114→                          <p className="text-[10px] font-semibold text-gray-500 truncate">{n.vendedor || '—'}</p>
+  1115→                        </td>
+  1116→                        {/* Situação */}
+  1117→                        <td className="px-3 py-1.5 whitespace-nowrap">
+  1118→                          <span className={`inline-flex items-center gap-1.5 text-[9px] font-black uppercase px-2 py-0.5 rounded-lg border ${meta.cls}`}>
+  1119→                            <span className={`w-1.5 h-1.5 rounded-full ${meta.dot}`}></span>{meta.label}
+  1120→                          </span>
+  1121→                          {n.erro && <i className="fa-solid fa-triangle-exclamation text-rose-400 text-[9px] ml-1" title={`SEFAZ: ${n.erro}`}></i>}
+  1122→                        </td>
+  1123→                        {/* Ações — tudo em UMA linha */}
+  1124→                        <td className="px-3 py-1.5">
+  1125→                          <div className="flex items-center justify-center gap-1">
+  1126→                            {!n.avulsa && (
+  1127→                              <button onClick={() => void abrirDetalhe(n)} disabled={ocupado} className="w-7 h-7 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center hover:bg-blue-100 active:scale-90 transition-transform" title="Ver o que foi pedido (itens, cliente, pagamento)">
+  1128→                                {busyId === `det:${n.id}` ? <i className="fa-solid fa-spinner fa-spin text-[10px]"></i> : <i className="fa-solid fa-eye text-[10px]"></i>}
+  1129→                              </button>
+  1130→                            )}
+  1131→                            {n.ref && (
+  1132→                              <a href={linkArquivo(n, 'pdf')} target="_blank" rel="noopener noreferrer" className={`w-7 h-7 rounded-lg flex items-center justify-center hover:brightness-95 active:scale-90 transition-transform ${n.pdfLocal ? 'bg-rose-100 text-rose-600 shadow-sm' : 'bg-rose-50 text-rose-400'}`} title={n.pdfLocal ? 'Abrir/baixar DANFE — arquivo salvo NO NOSSO sistema' : 'Abrir/baixar DANFE (busca na Focus ou usa o DANFE gerado do XML)'}>
+  1133→                                <i className="fa-solid fa-file-pdf text-[10px]"></i>
+  1134→                              </a>
+  1135→                            )}
+  1136→                            {n.ref && (
+  1137→                              <a href={linkArquivo(n, 'xml')} target="_blank" rel="noopener noreferrer" className={`w-7 h-7 rounded-lg flex items-center justify-center hover:brightness-95 active:scale-90 transition-transform ${n.xmlLocal ? 'bg-gray-800 text-white shadow-sm' : 'bg-gray-100 text-gray-400'}`} title={n.xmlLocal ? 'Abrir/baixar XML — arquivo salvo NO NOSSO sistema' : 'Abrir/baixar XML (busca na Focus e arquiva no sistema)'}>
+  1138→                                <i className="fa-solid fa-code text-[10px]"></i>
+  1139→                              </a>
+  1140→                            )}
+  1141→                            {temBoletoVivo && (
+  1142→                              <button onClick={() => void abrirBoleto(n)} disabled={ocupado} className={`w-7 h-7 rounded-lg flex items-center justify-center hover:brightness-95 active:scale-90 transition-transform border ${bm?.cls}`} title={`Boleto bancário (${bm?.label}${n.boletoVencimento ? ` · venc. ${fmtDia(n.boletoVencimento)}` : ''}) — PDF, linha digitável, consultar e cancelar`}>
+  1143→                                <i className="fa-solid fa-barcode text-[10px]"></i>
+  1144→                              </button>
+  1145→                            )}
+  1146→                            {!n.avulsa && n.ref && (
+  1147→                              <button
+  1148→                                onClick={() => setConf({
+  1149→                                  titulo: 'Consultar na SEFAZ?',
+  1150→                                  texto: `Consulta a situação atual do documento ${n.numero ? `Nº ${n.numero}` : ''} na SEFAZ e sincroniza o status aqui no portal.`,
+  1151→                                  icone: 'fa-rotate',
+  1152→                                  botao: 'Consultar',
+  1153→                                  run: async () => {
+  1154→                                    if (!token) return;
+  1155→                                    setBusyId(n.id);
+  1156→                                    try {
+  1157→                                      const res = await fetch('/api/notas', { method: 'POST', headers: headers(token), body: JSON.stringify({ acao: 'CONSULTAR', saleId: n.id }) });
+  1158→                                      const data = await res.json().catch(() => ({}));
+  1159→                                      showToast(data.ok ? 'Consultado na SEFAZ — situação sincronizada.' : data.erro || 'Falha ao consultar.', !!data.ok);
+  1160→                                      void carregar(token);
+  1161→                                    } catch { showToast('Falha de conexão ao consultar.', false); }
+  1162→                                    finally { setBusyId(null); }
+  1163→                                  },
+  1164→                                })}
+  1165→                                disabled={ocupado}
+  1166→                                className="w-7 h-7 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center hover:bg-amber-100 active:scale-90 transition-transform"
+  1167→                                title="Consultar situação na SEFAZ"
+  1168→                              >
+  1169→                                {ocupado ? <i className="fa-solid fa-spinner fa-spin text-[10px]"></i> : <i className="fa-solid fa-rotate text-[10px]"></i>}
+  1170→                              </button>
+  1171→                            )}
+  1172→                            {n.avulsa && (
+  1173→                              <button
+  1174→                                onClick={() => setConf({
+  1175→                                  titulo: 'Re-consultar na SEFAZ?',
+  1176→                                  texto: `Re-consulta a nota ${n.numero ? `Nº ${n.numero}` : 'avulsa'} na SEFAZ e atualiza os arquivos arquivados.`,
+  1177→                                  icone: 'fa-rotate',
+  1178→                                  botao: 'Re-consultar',
+  1179→                                  run: () => atualizarAvulsa(n),
+  1180→                                })}
+  1181→                                disabled={ocupado}
+  1182→                                className="w-7 h-7 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center hover:bg-amber-100 active:scale-90 transition-transform"
+  1183→                                title="Re-consultar na SEFAZ e atualizar arquivos"
+  1184→                              >
+  1185→                                {ocupado ? <i className="fa-solid fa-spinner fa-spin text-[10px]"></i> : <i className="fa-solid fa-rotate text-[10px]"></i>}
+  1186→                              </button>
+  1187→                            )}
+  1188→                            {!n.avulsa && podeEmitir && (
+  1189→                              <button
+  1190→                                onClick={() => { setEmitModal(n); setEmitTipo(''); }}
+  1191→                                disabled={ocupado}
+  1192→                                className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center hover:bg-emerald-100 active:scale-90 transition-transform"
+  1193→                                title="Emitir documento fiscal (NF-e/NFC-e)"
+  1194→                              >
+  1195→                                <i className="fa-solid fa-bolt text-[10px]"></i>
+  1196→                              </button>
+  1197→                            )}
+  1198→                            {!n.avulsa && (
+  1199→                              <button
+  1200→                                onClick={() => { setEditModal(n); setEditMetodo(n.metodo || ''); setEditDetalhe(n.detalhe || ''); }}
+  1201→                                disabled={ocupado}
+  1202→                                className="w-7 h-7 rounded-lg bg-sky-50 text-sky-600 flex items-center justify-center hover:bg-sky-100 active:scale-90 transition-transform"
+  1203→                                title="Editar registro (pagamento/observação)"
+  1204→                              >
+  1205→                                <i className="fa-solid fa-pen text-[10px]"></i>
+  1206→                              </button>
+  1207→                            )}
+  1208→                            {!n.avulsa && <button onClick={() => setCloneModal(n)} disabled={ocupado} className="w-7 h-7 rounded-lg bg-violet-50 text-violet-600 flex items-center justify-center hover:bg-violet-100 active:scale-90 transition-transform" title="Clonar pedido (emite documento de novo)">
+  1209→                              <i className="fa-solid fa-clone text-[10px]"></i>
+  1210→                            </button>}
+  1211→                            {podeCancelar && (
+  1212→                              <button onClick={() => { setCancelModal(n); setJustificativa(''); }} disabled={ocupado} className="w-7 h-7 rounded-lg bg-rose-50 text-rose-500 flex items-center justify-center hover:bg-rose-100 active:scale-90 transition-transform" title={`Cancelar na SEFAZ — restam ${prazo.textoRestante} (prazo: ${prazo.prazoLabel})`}>
+  1213→                                <i className="fa-solid fa-ban text-[10px]"></i>
+  1214→                              </button>
+  1215→                            )}
+  1216→                            {n.avulsa && (
+  1217→                              <button
+  1218→                                onClick={() => setConf({
+  1219→                                  titulo: 'Apagar a cópia interna?',
+  1220→                                  texto: `A cópia interna da nota ${n.numero || n.ref} será apagada DO NOSSO SISTEMA (arquivos e registro). A nota continua existindo na Focus/SEFAZ.`,
+  1221→                                  detalhe: 'Se ela veio por XML, pode ser importada de novo com o mesmo arquivo.',
+  1222→                                  icone: 'fa-trash',
+  1223→                                  perigo: true,
+  1224→                                  botao: 'Apagar',
+  1225→                                  run: () => excluirAvulsa(n),
+  1226→                                })}
+  1227→                                disabled={ocupado}
+  1228→                                className="w-7 h-7 rounded-lg bg-gray-50 text-gray-500 flex items-center justify-center hover:bg-gray-100 active:scale-90 transition-transform"
+  1229→                                title="Apagar a cópia interna (a nota continua na Focus/SEFAZ)"
+  1230→                              >
+  1231→                                <i className="fa-solid fa-trash text-[10px]"></i>
+  1232→                              </button>
+  1233→                            )}
+  1234→                          </div>
+  1235→                        </td>
+  1236→                      </tr>
+  1237→                    );
+  1238→                  })}
+  1239→                </tbody>
+  1240→              </table>
+  1241→            </div>
+  1242→            <div className="px-4 py-2 bg-gray-50 border-t border-gray-200 flex items-center justify-between flex-wrap gap-2">
+  1243→              <p className="text-[9px] font-bold text-gray-400 uppercase tracking-wider">
+  1244→                {listaFiltrada.length} nota(s) — mais recentes primeiro
+  1245→              </p>
+  1246→              <p className="text-[9px] font-bold uppercase tracking-wider">
+  1247→                <span className="text-emerald-500">{listaFiltrada.filter(n => n.pdfLocal).length} DANFE no sistema</span>
+  1248→                <span className="text-gray-300"> · </span>
+  1249→                <span className="text-emerald-500">{listaFiltrada.filter(n => n.xmlLocal).length} XML no sistema</span>
+  1250→                <span className="text-gray-300"> · </span>
+  1251→                <span className="text-teal-500">{listaFiltrada.filter(n => n.origem === 'XML').length} via XML</span>
+  1252→                <span className="text-gray-300"> · </span>
+  1253→                <span className="text-gray-400">{listaFiltrada.filter(n => n.avulsa).length} fora do app</span>
+  1254→                <span className="text-gray-300"> · </span>
+  1255→                <span className="text-blue-500">{listaFiltrada.filter(n => !n.avulsa && n.boletoStatus && BOLETO_VIVO.includes(String(n.boletoStatus).toUpperCase())).length} com boleto</span>
+  1256→              </p>
+  1257→            </div>
+  1258→          </div>
+  1259→        )}
+  1260→      </main>
+  1261→
+  1262→      {/* Footer */}
+  1263→      <footer className="mt-auto py-4 text-center">
+  1264→        <p className="text-[9px] font-black uppercase tracking-[0.2em] text-gray-300">DOCE MANIA · Portal de Notas Fiscais</p>
+  1265→      </footer>
+  1266→
+  1267→      {/* Toast */}
+  1268→      {toast && (
+  1269→        <div className={`fixed bottom-5 left-1/2 -translate-x-1/2 z-[300] max-w-[92vw] rounded-2xl px-5 py-3 shadow-2xl text-center text-[11px] font-bold ${toast.ok ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white'}`} role="status">
+  1270→          {toast.msg}
+  1271→        </div>
+  1272→      )}
+  1273→
+  1274→      {/* Progresso da importação Focus */}
+  1275→      {importBusy && importProg && (
+  1276→        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-[280] bg-gray-900/95 text-white rounded-2xl px-5 py-3.5 shadow-2xl flex items-center gap-3 min-w-[240px]" role="status">
+  1277→          <i className="fa-solid fa-cloud-arrow-down text-emerald-400 text-lg animate-bounce"></i>
+  1278→          <div className="flex-1 min-w-0">
+  1279→            <p className="text-[10px] font-black uppercase tracking-wider">{importProg.fase}</p>
+  1280→            <div className="w-full h-1.5 bg-white/15 rounded-full mt-1.5 overflow-hidden">
+  1281→              <div className="h-full bg-emerald-400 rounded-full transition-all duration-500" style={{ width: `${importProg.total > 0 ? Math.min(100, Math.round((100 * importProg.done) / importProg.total)) : 30}%` }} />
+  1282→            </div>
+  1283→            {importProg.total > 0 && <p className="text-[8px] font-bold text-gray-400 mt-1">{importProg.done}/{importProg.total} arquivadas</p>}
+  1284→          </div>
+  1285→        </div>
+  1286→      )}
+  1287→
+  1288→      {/* Loading do detalhe */}
+  1289→      {detalheLoading && (
+  1290→        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[200] flex items-center justify-center">
+  1291→          <div className="w-12 h-12 border-4 border-white/30 border-t-white rounded-full animate-spin" />
+  1292→        </div>
+  1293→      )}
+  1294→
+  1295→      {/* ===== MODAL: CONFIRMAÇÃO UNIFICADA (BLOCO 143) ===== */}
+  1296→      {conf && (
+  1297→        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[260] flex items-center justify-center p-6" onClick={() => !confBusy && setConf(null)}>
+  1298→          <div className="bg-white w-full max-w-sm rounded-[2rem] p-6 shadow-2xl text-center" onClick={e => e.stopPropagation()} role="alertdialog" aria-modal="true" aria-label={conf.titulo}>
+  1299→            <div className={`w-14 h-14 mx-auto rounded-2xl flex items-center justify-center ${conf.perigo ? 'bg-rose-50 text-rose-600' : 'bg-blue-50 text-blue-600'}`}>
+  1300→              <i className={`fa-solid ${conf.icone || 'fa-circle-question'} text-xl`}></i>
+  1301→            </div>
+  1302→            <h3 className="font-black text-gray-800 uppercase text-sm mt-3">{conf.titulo}</h3>
+  1303→            <p className="text-[11px] text-gray-500 font-semibold mt-1.5 leading-snug">{conf.texto}</p>
+  1304→            {conf.detalhe && <p className="text-[10px] text-gray-400 font-semibold mt-1.5 leading-snug">{conf.detalhe}</p>}
+  1305→            <div className="flex gap-2 mt-5">
+  1306→              <button onClick={() => setConf(null)} disabled={confBusy} className="flex-1 bg-gray-100 text-gray-500 rounded-2xl py-3 text-[11px] font-black uppercase active:scale-95 disabled:opacity-50">Voltar</button>
+  1307→              <button onClick={() => void executarConf()} disabled={confBusy} className={`flex-1 ${conf.perigo ? 'bg-rose-600' : 'bg-blue-600'} text-white rounded-2xl py-3 text-[11px] font-black uppercase active:scale-95 disabled:opacity-60`}>
+  1308→                {confBusy ? <i className="fa-solid fa-spinner fa-spin"></i> : (conf.botao || 'Confirmar')}
+  1309→              </button>
+  1310→            </div>
+  1311→          </div>
+  1312→        </div>
+  1313→      )}
+  1314→
+  1315→      {/* ===== MODAL: IMPORTAR XML EM LOTE (BLOCO 143) ===== */}
+  1316→      {xmlOpen && (
+  1317→        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[240] flex items-center justify-center p-6" onClick={() => !xmlBusy && setXmlOpen(false)}>
+  1318→          <div className="bg-white w-full max-w-lg rounded-[2rem] p-6 shadow-2xl overflow-y-auto max-h-[90dvh]" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Importar XML em lote">
+  1319→            <div className="flex items-start justify-between gap-3">
+  1320→              <div>
+  1321→                <h3 className="font-black text-gray-800 uppercase text-sm"><i className="fa-solid fa-file-import mr-1.5 text-teal-500"></i>Importar XML em lote</h3>
+  1322→                <p className="text-[10px] font-bold text-gray-400 mt-0.5">Notas de SAÍDA emitidas em outros sistemas</p>
+  1323→              </div>
+  1324→              <button onClick={() => !xmlBusy && setXmlOpen(false)} className="w-9 h-9 rounded-xl bg-gray-100 text-gray-400 flex items-center justify-center active:scale-90" aria-label="Fechar importação de XML">
+  1325→                <i className="fa-solid fa-xmark"></i>
+  1326→              </button>
+  1327→            </div>
+  1328→            <div className="bg-teal-50 border border-teal-100 rounded-2xl p-3 mt-3">
+  1329→              <p className="text-[9px] font-bold text-teal-700 leading-snug"><i className="fa-solid fa-circle-info mr-1"></i>Cada XML autorizado/cancelado entra ARQUIVADO no sistema (XML + DANFE imprimível gerado do XML) e aparece na lista com o selo <b>XML</b>. Notas de <b>ENTRADA</b> e XMLs sem protocolo da SEFAZ são ignorados. Duplicado nunca entra de novo.</p>
+  1330→            </div>
+  1331→            {/* zona de drop */}
+  1332→            <label
+  1333→              onDragOver={e => { e.preventDefault(); setXmlDrag(true); }}
+  1334→              onDragLeave={() => setXmlDrag(false)}
+  1335→              onDrop={e => { e.preventDefault(); setXmlDrag(false); if (!xmlBusy) void pegarArquivos(e.dataTransfer.files); }}
+  1336→              className={`mt-3 flex flex-col items-center justify-center gap-2 border-2 border-dashed rounded-2xl px-4 py-6 text-center cursor-pointer transition-colors ${xmlDrag ? 'border-teal-400 bg-teal-50' : 'border-gray-200 bg-gray-50 hover:border-teal-300'}`}
+  1337→            >
+  1338→              <input ref={xmlInput} type="file" multiple accept=".xml,.zip,text/xml,application/xml,application/zip" className="hidden" onChange={e => { if (e.target.files) void pegarArquivos(e.target.files); e.target.value = ''; }} />
+  1339→              <i className={`fa-solid ${xmlBusy ? 'fa-spinner fa-spin' : 'fa-file-arrow-up'} text-2xl ${xmlBusy ? 'text-gray-400' : 'text-teal-500'}`}></i>
+  1340→              <p className="text-[11px] font-black text-gray-600 uppercase tracking-wide">{xmlBusy ? 'Importando...' : 'Clique ou arraste os XMLs aqui'}</p>
+  1341→              <p className="text-[9px] font-bold text-gray-400">aceita vários .xml e .zip de uma vez</p>
+  1342→            </label>
+  1343→            {/* lista de arquivos */}
+  1344→            {xmlArquivos.length > 0 && (
+  1345→              <div className="mt-3">
+  1346→                <div className="flex items-center justify-between mb-1.5">
+  1347→                  <p className="text-[9px] font-black uppercase text-gray-400 tracking-wider">{xmlArquivos.length} arquivo(s) pronto(s)</p>
+  1348→                  {!xmlBusy && <button onClick={() => setXmlArquivos([])} className="text-[9px] font-black uppercase text-rose-500 active:scale-95">Limpar</button>}
+  1349→                </div>
+  1350→                <div className="max-h-36 overflow-y-auto space-y-1 pr-1 dm-thin-scroll">
+  1351→                  {xmlArquivos.map((a, i) => (
+  1352→                    <div key={`${a.nome}-${i}`} className="flex items-center gap-2 bg-gray-50 rounded-lg px-2.5 py-1.5">
+  1353→                      <i className="fa-solid fa-file-code text-teal-500 text-[10px]"></i>
+  1354→                      <p className="text-[10px] font-bold text-gray-600 flex-1 min-w-0 truncate" title={a.nome}>{a.nome}</p>
+  1355→                      <span className="text-[9px] font-bold text-gray-400 tabular-nums">{(a.tamanho / 1024).toFixed(0)} KB</span>
+  1356→                      {!xmlBusy && (
+  1357→                        <button onClick={() => setXmlArquivos(atuais => atuais.filter((_, j) => j !== i))} className="text-gray-300 hover:text-rose-500" aria-label={`Remover ${a.nome}`}>
+  1358→                          <i className="fa-solid fa-xmark text-[10px]"></i>
+  1359→                        </button>
+  1360→                      )}
+  1361→                    </div>
+  1362→                  ))}
+  1363→                </div>
+  1364→              </div>
+  1365→            )}
+  1366→            {/* progresso */}
+  1367→            {xmlBusy && xmlProg && (
+  1368→              <div className="mt-3">
+  1369→                <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
+  1370→                  <div className="h-full bg-teal-500 rounded-full transition-all duration-300" style={{ width: `${Math.round((100 * xmlProg.done) / xmlProg.total)}%` }} />
+  1371→                </div>
+  1372→                <p className="text-[9px] font-bold text-gray-400 mt-1 uppercase">{xmlProg.done}/{xmlProg.total} XML(s) enviados</p>
+  1373→              </div>
+  1374→            )}
+  1375→            {/* resultado */}
+  1376→            {xmlRes && (
+  1377→              <div className="mt-3 bg-gray-50 border border-gray-100 rounded-2xl p-3 space-y-1.5">
+  1378→                <p className="text-[10px] font-black uppercase text-gray-600 tracking-wide">Resultado</p>
+  1379→                <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] font-bold">
+  1380→                  <span className="text-emerald-600">{xmlRes.importados} importada(s)</span>
+  1381→                  <span className="text-rose-500">{xmlRes.cancelamentos} cancelamento(s)</span>
+  1382→                  <span className="text-gray-500">{xmlRes.duplicados} duplicada(s)</span>
+  1383→                  <span className="text-amber-600">{xmlRes.entradas} entrada(s)</span>
+  1384→                  <span className="text-rose-600">{xmlRes.ilegiveis} ilegível(is)</span>
+  1385→                </div>
+  1386→                {xmlRes.erros.length > 0 && (
+  1387→                  <div className="max-h-24 overflow-y-auto space-y-1 pt-1 border-t border-gray-200 dm-thin-scroll">
+  1388→                    {xmlRes.erros.slice(0, 10).map((e, i) => (
+  1389→                      <p key={i} className="text-[9px] font-semibold text-gray-500 truncate" title={`${e.nome}: ${e.mensagem}`}>
+  1390→                        <i className="fa-solid fa-circle-exclamation text-rose-400 mr-1"></i>{e.nome}: {e.mensagem}
+  1391→                      </p>
+  1392→                    ))}
+  1393→                  </div>
+  1394→                )}
+  1395→              </div>
+  1396→            )}
+  1397→            <div className="flex gap-2 mt-4">
+  1398→              <button onClick={() => setXmlOpen(false)} disabled={xmlBusy} className="flex-1 bg-gray-100 text-gray-500 rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95 disabled:opacity-50">Fechar</button>
+  1399→              <button
+  1400→                onClick={() => setConf({
+  1401→                  titulo: `Importar ${xmlArquivos.length} XML(s)?`,
+  1402→                  texto: 'As notas de SAÍDA autorizadas/canceladas entram arquivadas no sistema com DANFE imprimível. Entradas e duplicados são ignorados.',
+  1403→                  icone: 'fa-file-import',
+  1404→                  botao: 'Importar',
+  1405→                  run: importarXmlLote,
+  1406→                })}
+  1407→                disabled={xmlBusy || xmlArquivos.length === 0}
+  1408→                className="flex-1 bg-teal-600 text-white rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95 disabled:opacity-50"
+  1409→              >
+  1410→                {xmlBusy ? <i className="fa-solid fa-spinner fa-spin"></i> : `Importar ${xmlArquivos.length} XML(s)`}
+  1411→              </button>
+  1412→            </div>
+  1413→          </div>
+  1414→        </div>
+  1415→      )}
+  1416→
+  1417→      {/* ===== MODAL: BOLETO (BLOCO 143) ===== */}
+  1418→      {boletoModal && (
+  1419→        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[240] flex items-center justify-center p-6" onClick={() => !boletoBusy && setBoletoModal(null)}>
+  1420→          <div className="bg-white w-full max-w-md rounded-[2rem] p-6 shadow-2xl overflow-y-auto max-h-[90dvh]" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Boleto bancário">
+  1421→            <div className="flex items-start justify-between gap-3">
+  1422→              <div>
+  1423→                <h3 className="font-black text-gray-800 uppercase text-sm"><i className="fa-solid fa-barcode mr-1.5 text-blue-600"></i>Boleto bancário</h3>
+  1424→                <p className="text-[9px] font-bold text-gray-400 mt-0.5">{boletoModal.n.cliente} · {rotuloTipo(boletoModal.n.tipo, boletoModal.n.modoNota)} {boletoModal.n.numero} · {fmtBRL(boletoModal.n.valor)}</p>
+  1425→              </div>
+  1426→              <button onClick={() => setBoletoModal(null)} className="w-9 h-9 rounded-xl bg-gray-100 text-gray-400 flex items-center justify-center active:scale-90" aria-label="Fechar boleto">
+  1427→                <i className="fa-solid fa-xmark"></i>
+  1428→              </button>
+  1429→            </div>
+  1430→
+  1431→            {boletoBusy && !boleto && (
+  1432→              <div className="py-10 flex justify-center"><div className="w-10 h-10 border-4 border-blue-100 border-t-blue-600 rounded-full animate-spin" /></div>
+  1433→            )}
+  1434→
+  1435→            {boletoMsg && !boleto && (
+  1436→              <div className="bg-amber-50 border border-amber-100 rounded-2xl p-3 mt-3">
+  1437→                <p className="text-[10px] font-bold text-amber-700 leading-snug"><i className="fa-solid fa-circle-info mr-1"></i>{boletoMsg}</p>
+  1438→              </div>
+  1439→            )}
+  1440→
+  1441→            {boleto && (() => {
+  1442→              const bm = metaBoleto(boleto.status);
+  1443→              return (
+  1444→                <div className="mt-4 space-y-3">
+  1445→                  <div className="flex items-center justify-between">
+  1446→                    <span className={`text-[10px] font-black uppercase px-2.5 py-1 rounded-lg border ${bm.cls}`}>{bm.label}</span>
+  1447→                    {boleto.vencimento && <span className="text-[10px] font-bold text-gray-500 uppercase">Venc.: {fmtDia(boleto.vencimento)}</span>}
+  1448→                    <span className="text-sm font-black text-gray-800 tabular-nums">{boleto.valor !== null ? fmtBRL(boleto.valor) : '—'}</span>
+  1449→                  </div>
+  1450→                  {boleto.linhaDigitavel && (
+  1451→                    <div className="bg-gray-50 rounded-2xl p-3">
+  1452→                      <p className="text-[8px] font-black uppercase text-gray-400 tracking-wider mb-1">Linha digitável</p>
+  1453→                      <p className="text-[11px] font-mono font-bold text-gray-700 break-all">{boleto.linhaDigitavel}</p>
+  1454→                      <button onClick={() => void copiar(boleto.linhaDigitavel, 'Linha digitável')} className="mt-2 w-full bg-blue-600 text-white rounded-xl py-2 text-[10px] font-black uppercase active:scale-95"><i className="fa-solid fa-copy mr-1"></i>Copiar linha</button>
+  1455→                    </div>
+  1456→                  )}
+  1457→                  {boleto.pixCopiaECola && (
+  1458→                    <div className="bg-gray-50 rounded-2xl p-3">
+  1459→                      <p className="text-[8px] font-black uppercase text-gray-400 tracking-wider mb-1">PIX cobrança (copia e cola)</p>
+  1460→                      <p className="text-[9px] font-mono font-semibold text-gray-500 break-all max-h-14 overflow-y-auto dm-thin-scroll">{boleto.pixCopiaECola}</p>
+  1461→                      <button onClick={() => void copiar(boleto.pixCopiaECola, 'PIX copia e cola')} className="mt-2 w-full bg-emerald-600 text-white rounded-xl py-2 text-[10px] font-black uppercase active:scale-95"><i className="fa-solid fa-copy mr-1"></i>Copiar PIX</button>
+  1462→                    </div>
+  1463→                  )}
+  1464→                  {boleto.erro && <p className="text-[10px] font-bold text-rose-500">{boleto.erro}</p>}
+  1465→                  <div className="grid grid-cols-2 gap-2">
+  1466→                    <button onClick={() => void pdfBoleto()} disabled={boletoBusy} className="bg-blue-600 disabled:opacity-60 text-white rounded-2xl py-3 text-[10px] font-black uppercase active:scale-95 transition-transform"><i className="fa-solid fa-file-pdf mr-1"></i>{boletoBusy ? 'Buscando...' : 'Abrir PDF'}</button>
+  1467→                    <button
+  1468→                      onClick={() => setConf({
+  1469→                        titulo: 'Consultar no Inter?',
+  1470→                        texto: 'Sincroniza a situação atual do boleto (recebido, atrasado, cancelado...) com o banco Inter.',
+  1471→                        icone: 'fa-rotate',
+  1472→                        botao: 'Consultar',
+  1473→                        run: consultarBoleto,
+  1474→                      })}
+  1475→                      disabled={boletoBusy}
+  1476→                      className="bg-amber-500 disabled:opacity-60 text-white rounded-2xl py-3 text-[10px] font-black uppercase active:scale-95 transition-transform"><i className="fa-solid fa-rotate mr-1"></i>Consultar</button>
+  1477→                  </div>
+  1478→                  {['A_RECEBER', 'ATRASADO', 'EM_PROCESSAMENTO'].includes(String(boleto.status).toUpperCase()) && (
+  1479→                    <button
+  1480→                      onClick={() => { setCancelBoleto(boletoModal ? { n: boletoModal.n } : null); setCancelBoletoMotivo(''); }}
+  1481→                      className="w-full bg-rose-50 text-rose-600 border border-rose-100 rounded-2xl py-3 text-[10px] font-black uppercase active:scale-95 transition-transform"
+  1482→                    >
+  1483→                      <i className="fa-solid fa-ban mr-1"></i>Cancelar boleto no Inter
+  1484→                    </button>
+  1485→                  )}
+  1486→                  <p className="text-[8px] font-bold text-gray-300 uppercase tracking-wider text-center">boleto gerado pela API do Inter · sale {boletoModal.n.id.slice(0, 8).toUpperCase()}</p>
+  1487→                </div>
+  1488→              );
+  1489→            })()}
+  1490→          </div>
+  1491→        </div>
+  1492→      )}
+  1493→
+  1494→      {/* ===== MODAL: CANCELAR BOLETO (motivo + confirmação) ===== */}
+  1495→      {cancelBoleto && boletoModal && (
+  1496→        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[260] flex items-center justify-center p-6" onClick={() => !boletoBusy && setCancelBoleto(null)}>
+  1497→          <div className="bg-white w-full max-w-md rounded-[2rem] p-6 shadow-2xl overflow-y-auto max-h-[90dvh]" onClick={e => e.stopPropagation()} role="alertdialog" aria-modal="true" aria-label="Cancelar boleto">
+  1498→            <h3 className="font-black text-rose-600 uppercase text-sm mb-1"><i className="fa-solid fa-ban mr-1"></i>Cancelar boleto</h3>
+  1499→            <p className="text-[9px] font-bold text-gray-400 mb-4">{boletoModal.n.cliente} · {fmtBRL(boletoModal.n.valor)}</p>
+  1500→            <div className="bg-rose-50 border border-rose-100 rounded-2xl p-3 mb-4">
+  1501→              <p className="text-[9px] font-bold text-rose-600 leading-snug"><i className="fa-solid fa-triangle-exclamation mr-1"></i>O boleto é CANCELADO no banco Inter e deixa de ser pago. Quem já recebeu a linha digitável não consegue mais quitar. Ação não pode ser desfeita.</p>
+  1502→            </div>
+  1503→            <label className="block text-[9px] font-black text-gray-400 uppercase ml-1 mb-1">Motivo (obrigatório, máx. 50 caracteres)</label>
+  1504→            <textarea value={cancelBoletoMotivo} onChange={e => setCancelBoletoMotivo(e.target.value.slice(0, 50))} rows={2} maxLength={50} placeholder="Ex.: Venda cancelada pelo cliente." className="w-full p-4 bg-gray-50 rounded-2xl font-semibold text-sm outline-none focus:ring-2 focus:ring-rose-100 resize-none" />
+  1505→            <div className="flex gap-2 mt-4">
+  1506→              <button onClick={() => setCancelBoleto(null)} disabled={boletoBusy} className="flex-1 bg-gray-100 text-gray-500 rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95 disabled:opacity-50">Voltar</button>
+  1507→              <button onClick={() => void cancelarBoleto()} disabled={boletoBusy || !cancelBoletoMotivo.trim()} className="flex-1 bg-rose-600 text-white rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95 disabled:opacity-60">
+  1508→                {boletoBusy ? <i className="fa-solid fa-spinner fa-spin"></i> : 'Confirmar cancelamento'}
+  1509→              </button>
+  1510→            </div>
+  1511→          </div>
+  1512→        </div>
+  1513→      )}
+  1514→
+  1515→      {/* ===== Modal: DETALHE (o que foi pedido) ===== */}
+  1516→      {detalhe && (() => {
+  1517→        const n = detalhe.nota;
+  1518→        const meta = metaStatus(n.status);
+  1519→        const c = detalhe.cliente;
+  1520→        return (
+  1521→          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-4" onClick={() => setDetalhe(null)}>
+  1522→            <div className="bg-white w-full max-w-lg rounded-[2rem] shadow-2xl overflow-y-auto max-h-[90dvh]" onClick={e => e.stopPropagation()}>
+  1523→              <div className="bg-gradient-to-br from-blue-600 to-indigo-700 text-white p-5 sticky top-0">
+  1524→                <div className="flex items-start justify-between gap-3">
+  1525→                  <div>
+  1526→                    <p className="text-[9px] font-black uppercase tracking-widest text-blue-200">{rotuloTipo(n.tipo, n.modoNota)} {n.numero ? `Nº ${n.numero}` : '(sem número)'}{n.avulsa ? ` · ${n.origem === 'XML' ? 'XML de terceiro' : 'Focus'}` : ''}</p>
+  1527→                    <p className="text-lg font-black mt-0.5">{n.cliente}</p>
+  1528→                    <span className={`inline-flex items-center gap-1.5 text-[9px] font-black uppercase px-2 py-1 rounded-lg mt-2 bg-white/15`}>
+  1529→                      <span className={`w-1.5 h-1.5 rounded-full ${meta.dot}`}></span>{meta.label}
+  1530→                    </span>
+  1531→                  </div>
+  1532→                  <button onClick={() => setDetalhe(null)} className="w-9 h-9 rounded-xl bg-white/15 text-white flex items-center justify-center active:scale-90" aria-label="Fechar detalhes">
+  1533→                    <i className="fa-solid fa-xmark"></i>
+  1534→                  </button>
+  1535→                </div>
+  1536→              </div>
+  1537→              <div className="p-5 space-y-4">
+  1538→                {n.erro && (
+  1539→                  <div className="bg-rose-50 border border-rose-100 rounded-2xl p-3">
+  1540→                    <p className="text-[9px] font-black uppercase text-rose-500 tracking-wider">Motivo da SEFAZ</p>
+  1541→                    <p className="text-[10px] font-bold text-rose-600 mt-1 leading-snug">{n.erro}</p>
+  1542→                  </div>
+  1543→                )}
+  1544→                {/* Itens */}
+  1545→                {detalhe.itens.length > 0 ? (
+  1546→                  <div>
+  1547→                    <p className="text-[9px] font-black uppercase text-gray-400 tracking-wider mb-2"><i className="fa-solid fa-basket-shopping mr-1"></i>O que foi pedido ({detalhe.itens.length} item(ns))</p>
+  1548→                    <div className="max-h-56 overflow-y-auto space-y-1.5 dm-thin-scroll">
+  1549→                      {detalhe.itens.map((it, idx) => (
+  1550→                        <div key={idx} className="flex items-center justify-between gap-3 bg-gray-50 rounded-xl px-3 py-2">
+  1551→                          <p className="text-[11px] font-bold text-gray-700 flex-1 min-w-0 truncate">{it.produto}</p>
+  1552→                          <p className="text-[10px] font-black text-gray-500 whitespace-nowrap">{it.quantidade} × {fmtBRL(it.preco)}</p>
+  1553→                          <p className="text-[11px] font-black text-gray-800 whitespace-nowrap">{fmtBRL(it.quantidade * it.preco)}</p>
+  1554→                        </div>
+  1555→                      ))}
+  1556→                    </div>
+  1557→                  </div>
+  1558→                ) : (
+  1559→                  <div className="bg-gray-50 rounded-2xl p-3 text-center">
+  1560→                    <p className="text-[10px] font-bold text-gray-400">{n.avulsa ? 'Nota importada sem pedido interno no app — itens no XML/DANFE.' : 'Venda sem itens gravados.'}</p>
+  1561→                  </div>
+  1562→                )}
+  1563→                <div className="flex justify-between items-center px-3">
+  1564→                  <p className="text-[10px] font-black uppercase text-gray-500">Total do documento</p>
+  1565→                  <p className="text-sm font-black text-blue-600">{fmtBRL(n.valor)}</p>
+  1566→                </div>
+  1567→                {/* Cliente */}
+  1568→                {c && (
+  1569→                  <div className="bg-blue-50/60 border border-blue-100 rounded-2xl p-4">
+  1570→                    <p className="text-[9px] font-black uppercase text-blue-500 tracking-wider mb-2"><i className="fa-solid fa-user mr-1"></i>Cliente</p>
+  1571→                    <div className="grid grid-cols-1 gap-1 text-[10px] font-bold text-gray-600">
+  1572→                      <p>{c.razao_social || c.nome_fantasia || c.nome || '—'}</p>
+  1573→                      {c.cnpj && <p className="text-gray-400">DOC: {c.cnpj}</p>}
+  1574→                      {c.inscricao_estadual && <p className="text-gray-400">IE: {c.inscricao_estadual}</p>}
+  1575→                      {(c.endereco || c.bairro || c.endereco_municipio) && (
+  1576→                        <p className="text-gray-400">{[c.endereco, c.endereco_numero].filter(Boolean).join(', ')}{c.bairro ? ` - ${c.bairro}` : ''}{c.endereco_municipio ? ` - ${c.endereco_municipio}/${c.endereco_uf || ''}` : ''}</p>
+  1577→                      )}
+  1578→                      {c.email && <p className="text-gray-400"><i className="fa-solid fa-envelope text-[8px] mr-1"></i>{c.email}</p>}
+  1579→                      {c.telefone && <p className="text-gray-400"><i className="fa-solid fa-phone text-[8px] mr-1"></i>{c.telefone}</p>}
+  1580→                    </div>
+  1581→                  </div>
+  1582→                )}
+  1583→                {/* Pagamento */}
+  1584→                <div className="bg-gray-50 rounded-2xl p-4">
+  1585→                  <p className="text-[9px] font-black uppercase text-gray-400 tracking-wider mb-2"><i className="fa-solid fa-wallet mr-1"></i>Pagamento</p>
+  1586→                  <div className="flex items-center justify-between">
+  1587→                    <p className="text-xs font-black text-gray-700 uppercase">{(n.metodo || '—').replace('_', ' ')}</p>
+  1588→                    <span className={`text-[9px] font-black uppercase px-2 py-1 rounded-lg ${n.statusPagamento === 'PAGO' ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600'}`}>{n.statusPagamento === 'PAGO' ? 'Pago' : n.avulsa ? '—' : 'Pendente'}</span>
+  1589→                  </div>
+  1590→                  {n.detalhe && <p className="text-[9px] font-bold text-gray-400 mt-1 leading-snug">{n.detalhe}</p>}
+  1591→                  <p className="text-[9px] font-bold text-gray-400 mt-1">Pago registrado: {fmtBRL(n.valorPago)} · Vendedor: {n.vendedor || '—'}</p>
+  1592→                  {!n.avulsa && n.boletoStatus && (
+  1593→                    <p className="text-[9px] font-bold text-blue-500 mt-1 uppercase">Boleto Inter: {metaBoleto(n.boletoStatus).label}{n.boletoVencimento ? ` · venc. ${fmtDia(n.boletoVencimento)}` : ''}</p>
+  1594→                  )}
+  1595→                </div>
+  1596→                {/* Documento */}
+  1597→                <div className="bg-gray-50 rounded-2xl p-4">
+  1598→                  <p className="text-[9px] font-black uppercase text-gray-400 tracking-wider mb-2"><i className="fa-solid fa-receipt mr-1"></i>Documento fiscal</p>
+  1599→                  {n.chave && <p className="text-[9px] font-bold text-gray-500 break-all leading-snug">Chave: {n.chave}</p>}
+  1600→                  <p className="text-[9px] font-bold text-gray-400 mt-1">Emissão: {fmtData(n.emitidaEm || n.dataVenda)} · Venda: {fmtData(n.dataVenda)}</p>
+  1601→                  {n.ref && <p className="text-[9px] font-bold text-gray-400">Referência: {n.ref}</p>}
+  1602→                  {n.ref && (
+  1603→                    <div className="flex gap-2 mt-3">
+  1604→                      <a href={linkArquivo(n, 'pdf')} target="_blank" rel="noopener noreferrer" className="flex-1 text-center bg-rose-600 text-white rounded-xl px-3 py-2.5 text-[10px] font-black uppercase tracking-wider active:scale-95 transition-transform"><i className="fa-solid fa-file-pdf mr-1"></i>DANFE</a>
+  1605→                      <a href={linkArquivo(n, 'xml')} target="_blank" rel="noopener noreferrer" className="flex-1 text-center bg-gray-800 text-white rounded-xl px-3 py-2.5 text-[10px] font-black uppercase tracking-wider active:scale-95 transition-transform"><i className="fa-solid fa-code mr-1"></i>XML</a>
+  1606→                    </div>
+  1607→                  )}
+  1608→                </div>
+  1609→              </div>
+  1610→            </div>
+  1611→          </div>
+  1612→        );
+  1613→      })()}
+  1614→
+  1615→      {/* ===== Modal: EDITAR ===== */}
+  1616→      {editModal && (
+  1617→        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6" onClick={() => setEditModal(null)}>
+  1618→          <div className="bg-white w-full max-w-md rounded-[2rem] p-6 shadow-2xl overflow-y-auto max-h-[90dvh]" onClick={e => e.stopPropagation()}>
+  1619→            <h3 className="font-black text-gray-800 uppercase text-sm mb-1">Editar registro</h3>
+  1620→            <p className="text-[9px] font-bold text-gray-400 mb-4">{editModal.cliente} · {rotuloTipo(editModal.tipo, editModal.modoNota)} {editModal.numero}</p>
+  1621→            <div className="bg-amber-50 border border-amber-100 rounded-2xl p-3 mb-4">
+  1622→              <p className="text-[9px] font-bold text-amber-600 leading-snug"><i className="fa-solid fa-circle-info mr-1"></i>Isso atualiza o registro INTERNO da venda (controle do sistema). O XML/PDF já autorizado pela SEFAZ não muda.</p>
+  1623→            </div>
+  1624→            <label className="block text-[9px] font-black text-gray-400 uppercase ml-1 mb-1">Forma de pagamento</label>
+  1625→            <select value={editMetodo} onChange={e => setEditMetodo(e.target.value)} className="w-full p-4 bg-gray-50 rounded-2xl font-bold text-sm mb-3 outline-none focus:ring-2 focus:ring-blue-100">
+  1626→              {FORMAS.map(f => <option key={f} value={f}>{f.replace('_', ' ')}</option>)}
+  1627→            </select>
+  1628→            <label className="block text-[9px] font-black text-gray-400 uppercase ml-1 mb-1">Detalhe do pagamento</label>
+  1629→            <textarea value={editDetalhe} onChange={e => setEditDetalhe(e.target.value)} rows={3} maxLength={500} placeholder="Observação do pagamento (ex.: PAGO NA VISITA...)" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold text-sm outline-none focus:ring-2 focus:ring-blue-100 resize-none" />
+  1630→            <div className="flex gap-2 mt-4">
+  1631→              <button onClick={() => setEditModal(null)} className="flex-1 bg-gray-100 text-gray-500 rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95">Voltar</button>
+  1632→              <button onClick={() => void salvarEdicao()} disabled={busyId === 'edit'} className="flex-1 bg-blue-600 text-white rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95 disabled:opacity-60">
+  1633→                {busyId === 'edit' ? <i className="fa-solid fa-spinner fa-spin"></i> : 'Salvar'}
+  1634→              </button>
+  1635→            </div>
+  1636→          </div>
+  1637→        </div>
+  1638→      )}
+  1639→
+  1640→      {/* ===== Modal: CANCELAR NOTA (prazo SEFAZ ao vivo) ===== */}
+  1641→      {cancelModal && (
+  1642→        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6" onClick={() => setCancelModal(null)}>
+  1643→          <div className="bg-white w-full max-w-md rounded-[2rem] p-6 shadow-2xl overflow-y-auto max-h-[90dvh]" onClick={e => e.stopPropagation()}>
+  1644→            <h3 className="font-black text-rose-600 uppercase text-sm mb-1"><i className="fa-solid fa-ban mr-1"></i>Cancelar nota</h3>
+  1645→            <p className="text-[9px] font-bold text-gray-400 mb-4">{rotuloTipo(cancelModal.tipo, cancelModal.modoNota)} {cancelModal.numero} · {cancelModal.cliente} · {fmtBRL(cancelModal.valor)}</p>
+  1646→            {/* contagem regressiva AO VIVO do prazo SEFAZ — venceu = botão inativo */}
+  1647→            {prazoCancelModal && (
+  1648→              <div className={`rounded-2xl border p-3 mb-3 ${prazoCancelModal.expirado ? 'bg-gray-100 border-gray-200' : 'bg-amber-50 border-amber-200'}`}>
+  1649→                {prazoCancelModal.expirado ? (
+  1650→                  <p className="text-[9px] font-bold text-gray-500 leading-snug"><i className="fa-solid fa-clock mr-1"></i>Prazo SEFAZ VENCIDO — o evento de cancelamento seria recusado. A janela de {prazoCancelModal.prazoLabel} após a autorização acabou.</p>
+  1651→                ) : (
+  1652→                  <p className="text-[9px] font-black text-amber-700 uppercase tracking-wide leading-snug"><i className="fa-solid fa-stopwatch mr-1"></i>Restam {prazoCancelModal.textoRestante} para cancelar (regra SEFAZ: {prazoCancelModal.prazoLabel})</p>
+  1653→                )}
+  1654→              </div>
+  1655→            )}
+  1656→            <div className="bg-rose-50 border border-rose-100 rounded-2xl p-3 mb-4">
+  1657→              <p className="text-[9px] font-bold text-rose-600 leading-snug"><i className="fa-solid fa-triangle-exclamation mr-1"></i>Regra da SEFAZ: NFC-e pode ser cancelada até 30 MINUTOS após a emissão; NF-e até 24h. O cancelamento é enviado à SEFAZ e o XML original continua existindo (evento de cancelamento).</p>
+  1658→            </div>
+  1659→            <label className="block text-[9px] font-black text-gray-400 uppercase ml-1 mb-1">Justificativa (mínimo 15 caracteres)</label>
+  1660→            <textarea value={justificativa} onChange={e => setJustificativa(e.target.value)} rows={3} maxLength={255} placeholder="Ex.: Erro na emissão — valores divergentes." className="w-full p-4 bg-gray-50 rounded-2xl font-semibold text-sm outline-none focus:ring-2 focus:ring-rose-100 resize-none" />
+  1661→            <div className="flex gap-2 mt-4">
+  1662→              <button onClick={() => setCancelModal(null)} className="flex-1 bg-gray-100 text-gray-500 rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95">Voltar</button>
+  1663→              {/* prazo vencido DURANTE a digitação = botão inativa na hora */}
+  1664→              <button onClick={() => void cancelarNota()} disabled={busyId === 'cancel' || !prazoCancelModal || prazoCancelModal.expirado} className="flex-1 bg-rose-600 text-white rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95 disabled:opacity-60">
+  1665→                {busyId === 'cancel' ? <i className="fa-solid fa-spinner fa-spin"></i> : prazoCancelModal?.expirado ? 'Fora do prazo' : 'Cancelar nota'}
+  1666→              </button>
+  1667→            </div>
+  1668→          </div>
+  1669→        </div>
+  1670→      )}
+  1671→
+  1672→      {/* ===== Modal: CLONAR ===== */}
+  1673→      {cloneModal && (
+  1674→        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6" onClick={() => setCloneModal(null)}>
+  1675→          <div className="bg-white w-full max-w-md rounded-[2rem] p-6 shadow-2xl overflow-y-auto max-h-[90dvh]" onClick={e => e.stopPropagation()}>
+  1676→            <h3 className="font-black text-gray-800 uppercase text-sm mb-1"><i className="fa-solid fa-clone mr-1 text-violet-500"></i>Clonar pedido</h3>
+  1677→            <p className="text-[9px] font-bold text-gray-400 mb-4">{cloneModal.cliente} · {fmtBRL(cloneModal.valor)}</p>
+  1678→            <div className="bg-violet-50 border border-violet-100 rounded-2xl p-3 mb-4 space-y-1">
+  1679→              <p className="text-[9px] font-bold text-violet-700 leading-snug"><i className="fa-solid fa-circle-info mr-1"></i>Cria uma NOVA venda com o mesmo cliente, itens e valores (não entra na fila de entrega, não baixa estoque de novo).</p>
+  1680→              <p className="text-[9px] font-bold text-violet-700 leading-snug">A cópia fica como venda PENDENTE no app — emita a NF dela pela aba NOTAS PENDENTES (este portal mostra somente notas já emitidas).</p>
+  1681→            </div>
+  1682→            <div className="flex gap-2 mt-4">
+  1683→              <button onClick={() => setCloneModal(null)} className="flex-1 bg-gray-100 text-gray-500 rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95">Voltar</button>
+  1684→              <button onClick={() => void clonarVenda()} disabled={busyId === 'clone'} className="flex-1 bg-violet-600 text-white rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95 disabled:opacity-60">
+  1685→                {busyId === 'clone' ? <i className="fa-solid fa-spinner fa-spin"></i> : 'Clonar agora'}
+  1686→              </button>
+  1687→            </div>
+  1688→          </div>
+  1689→        </div>
+  1690→      )}
+  1691→
+  1692→      {/* ===== Modal: EMITIR ===== */}
+  1693→      {emitModal && (
+  1694→        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6" onClick={() => setEmitModal(null)}>
+  1695→          <div className="bg-white w-full max-w-md rounded-[2rem] p-6 shadow-2xl overflow-y-auto max-h-[90dvh]" onClick={e => e.stopPropagation()}>
+  1696→            <h3 className="font-black text-gray-800 uppercase text-sm mb-1"><i className="fa-solid fa-bolt mr-1 text-emerald-500"></i>Emitir documento fiscal</h3>
+  1697→            <p className="text-[9px] font-bold text-gray-400 mb-4">{emitModal.cliente} · {fmtBRL(emitModal.valor)}</p>
+  1698→            <label className="block text-[9px] font-black text-gray-400 uppercase ml-1 mb-1">Documento</label>
+  1699→            <div className="grid grid-cols-3 gap-2 mb-4">
+  1700→              {[['', 'Automático'], ['NFE', 'NF-e'], ['NFCE', 'NFC-e']].map(([v, label]) => (
+  1701→                <button key={v} type="button" onClick={() => setEmitTipo(v as '' | 'NFE' | 'NFCE')} className={`rounded-2xl py-3 text-[10px] font-black uppercase border-2 transition-all active:scale-95 ${emitTipo === v ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-gray-500 border-gray-100'}`}>
+  1702→                  {label}
+  1703→                </button>
+  1704→              ))}
+  1705→            </div>
+  1706→            <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-3 mb-4">
+  1707→              <p className="text-[9px] font-bold text-emerald-700 leading-snug"><i className="fa-solid fa-circle-info mr-1"></i>Automático: cliente com CNPJ válido → NF-e; consumidor → NFC-e. A emissão usa os mesmos dados da venda (itens, pagamento, cadastro).</p>
+  1708→            </div>
+  1709→            <div className="flex gap-2">
+  1710→              <button onClick={() => setEmitModal(null)} className="flex-1 bg-gray-100 text-gray-500 rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95">Voltar</button>
+  1711→              <button onClick={() => void emitirNota()} disabled={busyId === 'emit'} className="flex-1 bg-emerald-600 text-white rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95 disabled:opacity-60">
+  1712→                {busyId === 'emit' ? <i className="fa-solid fa-spinner fa-spin"></i> : 'Emitir'}
+  1713→              </button>
+  1714→            </div>
+  1715→          </div>
+  1716→        </div>
+  1717→      )}
+  1718→
+  1719→      <style>{`
+  1720→        .dm-thin-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+  1721→        .dm-thin-scroll::-webkit-scrollbar-track { background: transparent; }
+  1722→        .dm-thin-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 999px; }
+  1723→        .dm-thin-scroll::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+  1724→      `}</style>
+  1725→    </div>
+  1726→  );
+  1727→}
+  1728→

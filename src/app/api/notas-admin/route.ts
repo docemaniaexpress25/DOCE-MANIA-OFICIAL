@@ -11,6 +11,7 @@ import {
   hasEstoqueBaixadoColumn,
 } from '@/lib/serverSchema';
 import { presencaArquivos, listarMetasAvulsas, NotaAvulsaMeta } from '@/lib/focusArquivos';
+import { createShareToken } from '@/lib/shareLinks';
 
 /**
  * BLOCO 140 — PORTAL DE NOTAS (admin, fora do app) — administração completa
@@ -232,10 +233,17 @@ async function carregarVendasComNotas(): Promise<LinhaNota[]> {
 
   // BLOCO 141: notas AVULSAS (emitidas fora do app — importadas da Focus)
   const metas = await listarMetasAvulsas();
-  const avulsas = metas
-    .map(m => linhaAvulsa(m, presenca.get(`${m.doc}/${m.ref}`)))
-    .sort((a, b) => String(b.dataVenda || '').localeCompare(String(a.dataVenda || '')));
-  return [...avulsas, ...rowsLinha];
+  const avulsas = metas.map(m => linhaAvulsa(m, presenca.get(`${m.doc}/${m.ref}`)));
+
+  // REGRA DO DONO ("de cima pra baixo sempre deixaremos a ULTIMA NOTA BATIDA
+  // em primeiro lugar"): a lista mistura vendas do app e avulsas (Focus/XML)
+  // ordenadas pelo momento em que a nota foi BATIDA na SEFAZ (nota_emitida_em;
+  // fallback: data da venda / emissão da avulsa). Antes as avulsas entravam
+  // sempre em cima — uma nota velha importada hoje ficava no topo da lista.
+  const tudo = [...avulsas, ...rowsLinha];
+  const batidaEm = (n: LinhaNota): string => String(n.emitidaEm || n.dataVenda || '');
+  tudo.sort((a, b) => batidaEm(b).localeCompare(batidaEm(a)));
+  return tudo;
 }
 
 export async function GET(req: NextRequest) {
@@ -256,6 +264,35 @@ export async function GET(req: NextRequest) {
   if (acao === 'lista') {
     const notas = await carregarVendasComNotas();
     return NextResponse.json({ ok: true, notas });
+  }
+
+  // ---------- LINKS DE COMPARTILHAMENTO (WhatsApp — BLOCO 146) ----------
+  // Gera links assinados + expirantes (7 dias) do DANFE/XML para ENVIAR AO
+  // CLIENTE: não expõem a sessão do admin — só baixam o arquivo daquela nota.
+  if (acao === 'links') {
+    const id = req.nextUrl.searchParams.get('id') || '';
+    const refParam = req.nextUrl.searchParams.get('ref') || '';
+    const docParam = (req.nextUrl.searchParams.get('doc') || '').toLowerCase();
+    const origem = req.nextUrl.origin;
+    const fazer = (t: { saleId?: string; ref?: string; doc?: 'nfe' | 'nfce' }): Record<string, string> => {
+      const tok = createShareToken(t);
+      const q = `token=${encodeURIComponent(tok)}`;
+      return {
+        pdf: `${origem}/api/notas-compartilhar?${q}&tipo=pdf`,
+        xml: `${origem}/api/notas-compartilhar?${q}&tipo=xml`,
+      };
+    };
+    if (id) {
+      const { data: sale, error } = await db.from('sales').select('id, nota_ref, nota_tipo').eq('id', id).single();
+      if (error || !sale) return BAD(404, 'Venda nao encontrada.');
+      if (!String(sale.nota_ref || '')) return BAD(422, 'Esta venda ainda nao tem nota emitida — nada para compartilhar.');
+      return NextResponse.json({ ok: true, links: fazer({ saleId: id }) });
+    }
+    if (refParam && (docParam === 'nfe' || docParam === 'nfce')) {
+      const doc: 'nfe' | 'nfce' = docParam === 'nfce' ? 'nfce' : 'nfe';
+      return NextResponse.json({ ok: true, links: fazer({ ref: refParam, doc }) });
+    }
+    return BAD(400, 'Parametros ausentes (id ou ref+doc).');
   }
 
   // ---------- DETALHE (venda + itens + cliente — "o que foi pedido") ----------

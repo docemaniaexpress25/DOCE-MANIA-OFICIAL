@@ -138,6 +138,13 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
     if (r.boleto) setBoleto(r.boleto);
     setForm(false);
     if (r.ok && r.boleto) {
+      // FIX atrelamento: o vendedor fica sabendo NA HORA se o boleto nasceu
+      // sem a nota (chave ainda nao sincronizada ou checkbox desligado).
+      if (r.avisoAtrelamento) {
+        showToast?.(r.avisoAtrelamento, 'error');
+      } else if (r.notaAtrelada) {
+        showToast?.('Boleto gerado com a NF-e/NFC-e atrelada (chave enviada ao Inter).', 'success');
+      }
       if (r.boleto.status === 'EM_PROCESSAMENTO') {
         showToast?.('Boleto gerado! O Inter esta processando...', 'success');
         setTimeout(async () => {
@@ -352,7 +359,7 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
               {notaStatus === 'AUTORIZADA' && (
                 <label className="flex items-center gap-2">
                   <input type="checkbox" checked={atrelar} onChange={e => setAtrelar(e.target.checked)} className="w-4 h-4 accent-emerald-600" />
-                  <span className="text-[9px] font-black uppercase text-gray-600">Atrelar NF-e {notaNumero || ''} ao boleto</span>
+                  <span className="text-[9px] font-black uppercase text-gray-600">Atrelar NF-e/NFC-e {notaNumero || ''} ao boleto</span>
                 </label>
               )}
               <button onClick={handleGerar} disabled={busy || !venc}

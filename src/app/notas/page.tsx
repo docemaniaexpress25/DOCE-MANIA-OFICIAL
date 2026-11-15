@@ -9,6 +9,19 @@
  * confirmar! crie um botão para importar XML em lote... nesse portal também
  * devem ter em ações os boletos gerados!"
  *
+ * BLOCO 146 — ajustes do portal fiscal pedidos pelo dono:
+ *  - "DE CIMA PRA BAIXO SEMPRE DEIXAREMOS A ULTIMA NOTA BATIDA EM PRIMEIRO
+ *    LUGAR": lista ordenada pelo momento da EMISSÃO (nota_emitida_em; fallback
+ *    data da venda) — vendas do app e avulsas Focus/XML misturadas na mesma
+ *    régua (antes as avulsas entravam sempre em cima);
+ *  - FILTRO NF-e / NFC-e: select ao lado do período;
+ *  - "VER O QUE FOI PEDIDO" emula o CUPOM NÃO FISCAL em IMAGEM (canvas 80mm,
+ *    itens em lista) — modal CupomNaoFiscal, com baixar/compartilhar;
+ *  - WHATSAPP: compartilha DANFE + XML com o cliente por LINK ASSINADO
+ *    (7 dias, sem expor a sessão do admin) + abre conversa pelo telefone;
+ *  - BOLETO ⇄ NF: o modal do boleto mostra se a NF-e/NFC-e está ATRELADA
+ *    (chave vem do Inter) e orienta quando o boleto ficou sem nota.
+ *
  * O que mudou no 143:
  *  - TABELA IOB: cada nota = UMA linha compacta (documento, cliente, emissão,
  *    valor, pagamento, vendedor, situação, ações) — página larga (1600px),
@@ -35,6 +48,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { unzipSync } from 'fflate';
 // BLOCO 142: prazo SEFAZ de cancelamento (NFC-e 30min / NF-e 24h) — fonte única com o servidor
 import { prazoCancelamentoNota } from '@/lib/regras-fiscais';
+// BLOCO 146: cupom não fiscal em IMAGEM + WhatsApp compartilhável
+import CupomNaoFiscal, { foneWhatsApp } from './CupomNaoFiscal';
 
 // ---------------- tipos ----------------
 interface NotaRow {
@@ -90,6 +105,8 @@ interface BoletoInfo {
   pixCopiaECola: string;
   valorRecebido: number | null;
   erro: string;
+  /** BLOCO 146: chave 44 dig da NF-e/NFC-e atrelada à cobrança no Inter. */
+  notaFiscalChave?: string;
 }
 
 // ---------------- helpers ----------------
@@ -140,8 +157,16 @@ function rotuloTipo(tipo: string, modoNota: string): string {
   return 'NF';
 }
 
+/** BLOCO 146: tipo cru do documento (NFE | NFCE) para o filtro do portal. */
+function tipoDe(tipo: string, modoNota: string): 'NFE' | 'NFCE' {
+  const t = String(tipo || '').toUpperCase();
+  if (t === 'NFCE' || t === 'NFE') return t;
+  return String(modoNota || '').toUpperCase() === 'NFCE' ? 'NFCE' : 'NFE';
+}
+
 type FiltroStatus = 'TODAS' | 'AUTORIZADA' | 'EMITINDO' | 'REJEITADA' | 'CANCELADA';
 type FiltroPeriodo = 'TUDO' | 'HOJE' | '7D' | '30D' | 'MES';
+type FiltroTipo = 'TODOS' | 'NFE' | 'NFCE';
 
 const PERIODO_META: { key: FiltroPeriodo; label: string }[] = [
   { key: 'HOJE', label: 'Hoje' },
@@ -213,6 +238,7 @@ export default function PortalNotasPage() {
   const [erroLista, setErroLista] = useState('');
   const [busca, setBusca] = useState('');
   const [filtro, setFiltro] = useState<FiltroStatus>('TODAS');
+  const [filtroTipo, setFiltroTipo] = useState<FiltroTipo>('TODOS');
   const [periodo, setPeriodo] = useState<FiltroPeriodo>('TUDO');
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -275,6 +301,13 @@ export default function PortalNotasPage() {
   const [boletoMsg, setBoletoMsg] = useState('');
   const [cancelBoleto, setCancelBoleto] = useState<{ n: NotaRow } | null>(null);
   const [cancelBoletoMotivo, setCancelBoletoMotivo] = useState('');
+
+  // BLOCO 146 — COMPARTILHAR NO WHATSAPP (DANFE/XML por link assinado)
+  const [waModal, setWaModal] = useState<{ nota: NotaRow } | null>(null);
+  const [waMsg, setWaMsg] = useState('');
+  const [waFone, setWaFone] = useState('');
+  const [waTemLinks, setWaTemLinks] = useState(false);
+  const [waBusy, setWaBusy] = useState(false);
 
   // relógio "agora": o prazo SEFAZ de cancelamento é RELATIVO — o botão
   // de cancelar precisa SUMIR sozinho quando o prazo vence (tick 15s).
@@ -395,9 +428,13 @@ export default function PortalNotasPage() {
   };
 
   // ---------- lista filtrada ----------
+  // BLOCO 146: filtro por TIPO (NF-e / NFC-e) + regra do dono "a última nota
+  // batida sempre em primeiro lugar (de cima pra baixo)" — reordena pela
+  // emissão do documento mesmo que a API venha com ordenação antiga.
   const listaFiltrada = useMemo(() => {
     const q = busca.trim().toLowerCase();
-    return notas.filter(n => {
+    const base = notas.filter(n => {
+      if (filtroTipo !== 'TODOS' && tipoDe(n.tipo, n.modoNota) !== filtroTipo) return false;
       if (filtro !== 'TODAS' && String(n.status || '').toUpperCase() !== filtro) return false;
       if (!dentroPeriodo(n.dataVenda, periodo)) return false;
       if (!q) return true;
@@ -409,7 +446,9 @@ export default function PortalNotasPage() {
         (n.vendedor || '').toLowerCase().includes(q)
       );
     });
-  }, [notas, busca, filtro, periodo]);
+    const batida = (n: NotaRow): string => String(n.emitidaEm || n.dataVenda || '');
+    return [...base].sort((a, b) => batida(b).localeCompare(batida(a)));
+  }, [notas, busca, filtro, filtroTipo, periodo]);
 
   const kpis = useMemo(() => {
     const visiveis = notas.filter(n => dentroPeriodo(n.dataVenda, periodo));
@@ -749,6 +788,74 @@ export default function PortalNotasPage() {
     }
   };
 
+  // ---------- BLOCO 146: COMPARTILHAR NO WHATSAPP ----------
+  /** Monta a mensagem com os links assinados do DANFE/XML (expiram em 7 dias). */
+  const montarMsgWhatsApp = (n: NotaRow, links: { pdf: string; xml: string } | null, temFone: boolean): string => {
+    const linhas = [
+      '*DOCE MANIA*',
+      `Documento: ${rotuloTipo(n.tipo, n.modoNota)}${n.numero ? ` n\u00ba ${n.numero}` : ''}`,
+      `Cliente: ${n.cliente}`,
+      `Valor: ${fmtBRL(n.valor)}`,
+    ];
+    if (n.chave) linhas.push(`Chave de acesso: ${n.chave}`);
+    if (links) {
+      linhas.push('', `DANFE (PDF): ${links.pdf}`, `XML: ${links.xml}`, '(links v\u00e1lidos por 7 dias)');
+    } else {
+      linhas.push('', 'O DANFE e o XML podem ser baixados no portal de notas.');
+    }
+    if (!temFone) linhas.push('', '(abre o WhatsApp sem contato definido \u2014 escolha o destinat\u00e1rio)');
+    linhas.push('', 'Obrigado pela compra!');
+    return linhas.join('\n');
+  };
+
+  /** Prepara e abre o modal de compartilhamento (busca telefone + links assinados). */
+  const abrirWhatsApp = async (n: NotaRow) => {
+    if (!token || waBusy) return;
+    setWaBusy(true);
+    setWaModal({ nota: n });
+    setWaMsg('');
+    try {
+      // telefone do cliente (cadastro) — só para vendas do app
+      let fone = '';
+      if (!n.avulsa) {
+        const res = await fetch(`/api/notas-admin?acao=detalhe&id=${encodeURIComponent(n.id)}`, { headers: headers(token) });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.ok && data.cliente?.telefone) {
+          fone = foneWhatsApp(String(data.cliente.telefone));
+        }
+      }
+      // links assinados do DANFE/XML (servidor devolve absoluto com a origem atual)
+      let links: { pdf: string; xml: string } | null = null;
+      if (n.ref) {
+        const q = n.avulsa
+          ? `ref=${encodeURIComponent(n.ref)}&doc=${String(n.tipo || '').toUpperCase() === 'NFCE' ? 'nfce' : 'nfe'}`
+          : `id=${encodeURIComponent(n.id)}`;
+        const res = await fetch(`/api/notas-admin?acao=links&${q}`, { headers: headers(token) });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.ok && data.links?.pdf) links = data.links as { pdf: string; xml: string };
+      }
+      setWaFone(fone);
+      setWaTemLinks(!!links);
+      setWaMsg(montarMsgWhatsApp(n, links, !!fone));
+    } catch {
+      setWaMsg(montarMsgWhatsApp(n, null, false));
+      setWaTemLinks(false);
+    } finally {
+      setWaBusy(false);
+    }
+  };
+
+  /** Abre o WhatsApp Web/app com a mensagem (e o contato, quando existe). */
+  const enviarWhatsApp = () => {
+    const fone = waFone.replace(/\D/g, '');
+    const texto = encodeURIComponent(waMsg);
+    const url = fone ? `https://wa.me/${fone}?text=${texto}` : `https://wa.me/?text=${texto}`;
+    window.open(url, '_blank', 'noopener,noreferrer');
+    setWaModal(null);
+    showToast('WhatsApp aberto — revise o destinatário e envie.');
+  };
+
+
   const abrirBoleto = async (n: NotaRow) => {
     if (!token) return;
     setBoletoModal({ n });
@@ -980,6 +1087,17 @@ export default function PortalNotasPage() {
         >
           {PERIODO_META.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
         </select>
+        {/* BLOCO 146: filtro por tipo de documento */}
+        <select
+          value={filtroTipo}
+          onChange={e => setFiltroTipo(e.target.value as FiltroTipo)}
+          className="bg-white border border-gray-200 rounded-xl shadow-sm px-3 py-2.5 text-[10px] font-black uppercase text-gray-600 outline-none"
+          aria-label="Tipo de documento"
+        >
+          <option value="TODOS">NF-e + NFC-e</option>
+          <option value="NFE">Só NF-e</option>
+          <option value="NFCE">Só NFC-e</option>
+        </select>
         <div className="flex gap-1.5 overflow-x-auto">
           {(['TODAS', 'AUTORIZADA', 'EMITINDO', 'REJEITADA', 'CANCELADA'] as FiltroStatus[]).map(f => {
             const meta = metaStatus(f);
@@ -1143,6 +1261,11 @@ export default function PortalNotasPage() {
                                 <i className="fa-solid fa-barcode text-[10px]"></i>
                               </button>
                             )}
+                            {n.ref && (
+                              <button onClick={() => void abrirWhatsApp(n)} disabled={ocupado || waBusy} className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center hover:bg-emerald-100 active:scale-90 transition-transform" title="Compartilhar documentos com o cliente por WhatsApp — DANFE + XML por link seguro que expira em 7 dias">
+                                <i className="fa-brands fa-whatsapp text-[11px]"></i>
+                              </button>
+                            )}
                             {!n.avulsa && n.ref && (
                               <button
                                 onClick={() => setConf({
@@ -1241,7 +1364,7 @@ export default function PortalNotasPage() {
             </div>
             <div className="px-4 py-2 bg-gray-50 border-t border-gray-200 flex items-center justify-between flex-wrap gap-2">
               <p className="text-[9px] font-bold text-gray-400 uppercase tracking-wider">
-                {listaFiltrada.length} nota(s) — mais recentes primeiro
+                {listaFiltrada.length} nota(s) — a última batida vem primeiro
               </p>
               <p className="text-[9px] font-bold uppercase tracking-wider">
                 <span className="text-emerald-500">{listaFiltrada.filter(n => n.pdfLocal).length} DANFE no sistema</span>
@@ -1440,6 +1563,8 @@ export default function PortalNotasPage() {
 
             {boleto && (() => {
               const bm = metaBoleto(boleto.status);
+              const nfAtrelada = !!boleto.notaFiscalChave;
+              const notaDeveriaEstar = !boletoModal.n.avulsa && (boletoModal.n.status === 'AUTORIZADA' || !!boletoModal.n.chave);
               return (
                 <div className="mt-4 space-y-3">
                   <div className="flex items-center justify-between">
@@ -1447,6 +1572,20 @@ export default function PortalNotasPage() {
                     {boleto.vencimento && <span className="text-[10px] font-bold text-gray-500 uppercase">Venc.: {fmtDia(boleto.vencimento)}</span>}
                     <span className="text-sm font-black text-gray-800 tabular-nums">{boleto.valor !== null ? fmtBRL(boleto.valor) : '—'}</span>
                   </div>
+                  {/* BLOCO 146 — FIX "erro para atrelar NFe ou NFC ao boleto":
+                      mostra o estado do atrelamento da nota na cobrança */}
+                  {notaDeveriaEstar && (
+                    <div className={`rounded-2xl border p-3 ${nfAtrelada ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200'}`} role="status">
+                      {nfAtrelada ? (
+                        <p className="text-[9px] font-black text-emerald-700 uppercase tracking-wide"><i className="fa-solid fa-link mr-1"></i>NF-e/NFC-e {boletoModal.n.numero ? `nº ${boletoModal.n.numero} ` : ''}ATRELADA ao boleto — chave {boleto.notaFiscalChave!.slice(0, 8)}...{boleto.notaFiscalChave!.slice(-6)}</p>
+                      ) : (
+                        <div className="text-[9px] font-bold text-amber-700 leading-snug">
+                          <p><i className="fa-solid fa-circle-info mr-1"></i>Boleto SEM nota fiscal atrelada {boletoModal.n.chave ? '(a venda tem chave autorizada no sistema)' : ''}. Boletos gerados ANTES da autorização da nota (ou com a chave ainda não sincronizada) saem assim — o Inter não permite atrelar depois.</p>
+                          <p className="mt-1 font-black uppercase">Para atrelar: gere um NOVO boleto com a nota AUTORIZADA (o sistema busca a chave NF-e/NFC-e automaticamente).</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
                   {boleto.linhaDigitavel && (
                     <div className="bg-gray-50 rounded-2xl p-3">
                       <p className="text-[8px] font-black uppercase text-gray-400 tracking-wider mb-1">Linha digitável</p>
@@ -1512,101 +1651,79 @@ export default function PortalNotasPage() {
         </div>
       )}
 
-      {/* ===== Modal: DETALHE (o que foi pedido) ===== */}
+      {/* ===== Modal: DETALHE — CUPOM NÃO FISCAL em imagem (BLOCO 146) ===== */}
       {detalhe && (() => {
         const n = detalhe.nota;
-        const meta = metaStatus(n.status);
-        const c = detalhe.cliente;
         return (
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-4" onClick={() => setDetalhe(null)}>
-            <div className="bg-white w-full max-w-lg rounded-[2rem] shadow-2xl overflow-y-auto max-h-[90dvh]" onClick={e => e.stopPropagation()}>
-              <div className="bg-gradient-to-br from-blue-600 to-indigo-700 text-white p-5 sticky top-0">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-[9px] font-black uppercase tracking-widest text-blue-200">{rotuloTipo(n.tipo, n.modoNota)} {n.numero ? `Nº ${n.numero}` : '(sem número)'}{n.avulsa ? ` · ${n.origem === 'XML' ? 'XML de terceiro' : 'Focus'}` : ''}</p>
-                    <p className="text-lg font-black mt-0.5">{n.cliente}</p>
-                    <span className={`inline-flex items-center gap-1.5 text-[9px] font-black uppercase px-2 py-1 rounded-lg mt-2 bg-white/15`}>
-                      <span className={`w-1.5 h-1.5 rounded-full ${meta.dot}`}></span>{meta.label}
-                    </span>
-                  </div>
-                  <button onClick={() => setDetalhe(null)} className="w-9 h-9 rounded-xl bg-white/15 text-white flex items-center justify-center active:scale-90" aria-label="Fechar detalhes">
-                    <i className="fa-solid fa-xmark"></i>
-                  </button>
+          <CupomNaoFiscal
+            nota={n}
+            itens={detalhe.itens}
+            cliente={detalhe.cliente}
+            rotulo={rotuloTipo(n.tipo, n.modoNota)}
+            urlPdf={linkArquivo(n, 'pdf')}
+            urlXml={linkArquivo(n, 'xml')}
+            onCompartilharDocumentos={() => { setDetalhe(null); void abrirWhatsApp(n); }}
+            showToast={showToast}
+            onFechar={() => setDetalhe(null)}
+          />
+        );
+      })()}
+
+      {/* ===== Modal: COMPARTILHAR NO WHATSAPP (BLOCO 146) ===== */}
+      {waModal && (() => {
+        const n = waModal.nota;
+        return (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[240] flex items-center justify-center p-6" onClick={() => !waBusy && setWaModal(null)}>
+            <div className="bg-white w-full max-w-md rounded-[2rem] p-6 shadow-2xl overflow-y-auto max-h-[90dvh]" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Compartilhar documentos no WhatsApp">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h3 className="font-black text-gray-800 uppercase text-sm"><i className="fa-brands fa-whatsapp mr-1.5 text-emerald-500"></i>Compartilhar documentos</h3>
+                  <p className="text-[9px] font-bold text-gray-400 mt-0.5 truncate">{rotuloTipo(n.tipo, n.modoNota)} {n.numero ? `nº ${n.numero}` : ''} · {n.cliente} · {fmtBRL(n.valor)}</p>
                 </div>
+                <button onClick={() => setWaModal(null)} className="w-9 h-9 rounded-xl bg-gray-100 text-gray-400 flex items-center justify-center active:scale-90" aria-label="Fechar compartilhamento">
+                  <i className="fa-solid fa-xmark"></i>
+                </button>
               </div>
-              <div className="p-5 space-y-4">
-                {n.erro && (
-                  <div className="bg-rose-50 border border-rose-100 rounded-2xl p-3">
-                    <p className="text-[9px] font-black uppercase text-rose-500 tracking-wider">Motivo da SEFAZ</p>
-                    <p className="text-[10px] font-bold text-rose-600 mt-1 leading-snug">{n.erro}</p>
+
+              {waBusy ? (
+                <div className="py-10 flex justify-center"><div className="w-10 h-10 border-4 border-emerald-100 border-t-emerald-600 rounded-full animate-spin" /></div>
+              ) : (
+                <div className="mt-4 space-y-3">
+                  <div className={`rounded-2xl border p-3 ${waTemLinks ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200'}`}>
+                    {waTemLinks ? (
+                      <p className="text-[9px] font-bold text-emerald-700 leading-snug"><i className="fa-solid fa-link mr-1"></i>Links seguros do DANFE e do XML prontos na mensagem — <b>valem 7 dias</b> e NÃO expõem a sessão do portal (só baixam os arquivos desta nota).</p>
+                    ) : (
+                      <p className="text-[9px] font-bold text-amber-700 leading-snug"><i className="fa-solid fa-circle-info mr-1"></i>Sem links agora (arquivos ainda não arquivados ou nota sem emissão) — a mensagem vai com a orientação para o cliente.</p>
+                    )}
                   </div>
-                )}
-                {/* Itens */}
-                {detalhe.itens.length > 0 ? (
-                  <div>
-                    <p className="text-[9px] font-black uppercase text-gray-400 tracking-wider mb-2"><i className="fa-solid fa-basket-shopping mr-1"></i>O que foi pedido ({detalhe.itens.length} item(ns))</p>
-                    <div className="max-h-56 overflow-y-auto space-y-1.5 dm-thin-scroll">
-                      {detalhe.itens.map((it, idx) => (
-                        <div key={idx} className="flex items-center justify-between gap-3 bg-gray-50 rounded-xl px-3 py-2">
-                          <p className="text-[11px] font-bold text-gray-700 flex-1 min-w-0 truncate">{it.produto}</p>
-                          <p className="text-[10px] font-black text-gray-500 whitespace-nowrap">{it.quantidade} × {fmtBRL(it.preco)}</p>
-                          <p className="text-[11px] font-black text-gray-800 whitespace-nowrap">{fmtBRL(it.quantidade * it.preco)}</p>
-                        </div>
-                      ))}
-                    </div>
+
+                  <label className="block text-[9px] font-black text-gray-400 uppercase ml-1">WhatsApp do cliente (com DDD — editável)</label>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-black text-gray-400 bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5">+55</span>
+                    <input
+                      value={waFone}
+                      onChange={e => setWaFone(e.target.value.replace(/\D/g, '').slice(0, 13))}
+                      placeholder="54 99999-9999"
+                      inputMode="tel"
+                      className="flex-1 px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-emerald-100"
+                      aria-label="Telefone do cliente no WhatsApp"
+                    />
                   </div>
-                ) : (
-                  <div className="bg-gray-50 rounded-2xl p-3 text-center">
-                    <p className="text-[10px] font-bold text-gray-400">{n.avulsa ? 'Nota importada sem pedido interno no app — itens no XML/DANFE.' : 'Venda sem itens gravados.'}</p>
+
+                  <label className="block text-[9px] font-black text-gray-400 uppercase ml-1">Mensagem (editável)</label>
+                  <textarea
+                    value={waMsg}
+                    onChange={e => setWaMsg(e.target.value)}
+                    rows={9}
+                    className="w-full p-3 bg-gray-50 rounded-2xl border border-gray-200 text-[11px] font-semibold outline-none focus:ring-2 focus:ring-emerald-100 resize-none font-mono leading-relaxed"
+                  />
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <button onClick={() => void copiar(waMsg, 'Mensagem')} className="bg-gray-100 text-gray-600 rounded-2xl py-3 text-[10px] font-black uppercase active:scale-95 transition-transform"><i className="fa-solid fa-copy mr-1"></i>Copiar mensagem</button>
+                    <button onClick={enviarWhatsApp} className="bg-emerald-600 text-white rounded-2xl py-3 text-[10px] font-black uppercase active:scale-95 transition-transform"><i className="fa-brands fa-whatsapp mr-1"></i>Abrir WhatsApp</button>
                   </div>
-                )}
-                <div className="flex justify-between items-center px-3">
-                  <p className="text-[10px] font-black uppercase text-gray-500">Total do documento</p>
-                  <p className="text-sm font-black text-blue-600">{fmtBRL(n.valor)}</p>
                 </div>
-                {/* Cliente */}
-                {c && (
-                  <div className="bg-blue-50/60 border border-blue-100 rounded-2xl p-4">
-                    <p className="text-[9px] font-black uppercase text-blue-500 tracking-wider mb-2"><i className="fa-solid fa-user mr-1"></i>Cliente</p>
-                    <div className="grid grid-cols-1 gap-1 text-[10px] font-bold text-gray-600">
-                      <p>{c.razao_social || c.nome_fantasia || c.nome || '—'}</p>
-                      {c.cnpj && <p className="text-gray-400">DOC: {c.cnpj}</p>}
-                      {c.inscricao_estadual && <p className="text-gray-400">IE: {c.inscricao_estadual}</p>}
-                      {(c.endereco || c.bairro || c.endereco_municipio) && (
-                        <p className="text-gray-400">{[c.endereco, c.endereco_numero].filter(Boolean).join(', ')}{c.bairro ? ` - ${c.bairro}` : ''}{c.endereco_municipio ? ` - ${c.endereco_municipio}/${c.endereco_uf || ''}` : ''}</p>
-                      )}
-                      {c.email && <p className="text-gray-400"><i className="fa-solid fa-envelope text-[8px] mr-1"></i>{c.email}</p>}
-                      {c.telefone && <p className="text-gray-400"><i className="fa-solid fa-phone text-[8px] mr-1"></i>{c.telefone}</p>}
-                    </div>
-                  </div>
-                )}
-                {/* Pagamento */}
-                <div className="bg-gray-50 rounded-2xl p-4">
-                  <p className="text-[9px] font-black uppercase text-gray-400 tracking-wider mb-2"><i className="fa-solid fa-wallet mr-1"></i>Pagamento</p>
-                  <div className="flex items-center justify-between">
-                    <p className="text-xs font-black text-gray-700 uppercase">{(n.metodo || '—').replace('_', ' ')}</p>
-                    <span className={`text-[9px] font-black uppercase px-2 py-1 rounded-lg ${n.statusPagamento === 'PAGO' ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600'}`}>{n.statusPagamento === 'PAGO' ? 'Pago' : n.avulsa ? '—' : 'Pendente'}</span>
-                  </div>
-                  {n.detalhe && <p className="text-[9px] font-bold text-gray-400 mt-1 leading-snug">{n.detalhe}</p>}
-                  <p className="text-[9px] font-bold text-gray-400 mt-1">Pago registrado: {fmtBRL(n.valorPago)} · Vendedor: {n.vendedor || '—'}</p>
-                  {!n.avulsa && n.boletoStatus && (
-                    <p className="text-[9px] font-bold text-blue-500 mt-1 uppercase">Boleto Inter: {metaBoleto(n.boletoStatus).label}{n.boletoVencimento ? ` · venc. ${fmtDia(n.boletoVencimento)}` : ''}</p>
-                  )}
-                </div>
-                {/* Documento */}
-                <div className="bg-gray-50 rounded-2xl p-4">
-                  <p className="text-[9px] font-black uppercase text-gray-400 tracking-wider mb-2"><i className="fa-solid fa-receipt mr-1"></i>Documento fiscal</p>
-                  {n.chave && <p className="text-[9px] font-bold text-gray-500 break-all leading-snug">Chave: {n.chave}</p>}
-                  <p className="text-[9px] font-bold text-gray-400 mt-1">Emissão: {fmtData(n.emitidaEm || n.dataVenda)} · Venda: {fmtData(n.dataVenda)}</p>
-                  {n.ref && <p className="text-[9px] font-bold text-gray-400">Referência: {n.ref}</p>}
-                  {n.ref && (
-                    <div className="flex gap-2 mt-3">
-                      <a href={linkArquivo(n, 'pdf')} target="_blank" rel="noopener noreferrer" className="flex-1 text-center bg-rose-600 text-white rounded-xl px-3 py-2.5 text-[10px] font-black uppercase tracking-wider active:scale-95 transition-transform"><i className="fa-solid fa-file-pdf mr-1"></i>DANFE</a>
-                      <a href={linkArquivo(n, 'xml')} target="_blank" rel="noopener noreferrer" className="flex-1 text-center bg-gray-800 text-white rounded-xl px-3 py-2.5 text-[10px] font-black uppercase tracking-wider active:scale-95 transition-transform"><i className="fa-solid fa-code mr-1"></i>XML</a>
-                    </div>
-                  )}
-                </div>
-              </div>
+              )}
             </div>
           </div>
         );

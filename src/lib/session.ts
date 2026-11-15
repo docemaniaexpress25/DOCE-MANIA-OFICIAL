@@ -15,7 +15,9 @@ export interface SessionPayload {
 
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7; // 7 dias
 
-function getSecret(): string {
+/** Segredo compartilhado (SESSION_SECRET ou derivado da service key).
+ *  Exportado também para libs irmãs (ex.: links de compartilhamento assinados). */
+export function getSecret(): string {
   // Usa SESSION_SECRET se definido; caso contrario deriva da service key.
   if (process.env.SESSION_SECRET) return process.env.SESSION_SECRET;
   return createHmac('sha256', 'docemania-session-v1')

@@ -1,0 +1,894 @@
+     1→"use client";
+     2→
+     3→import React, { useState, useEffect, useCallback } from 'react';
+     4→import { Sale, Client, Product } from '@/lib/types';
+     5→import { gerarCupomTexto, cupomSegmentos, cupomSemMarcadores } from '@/lib/cupomTexto';
+     6→// BLOCO 134: cupom fiscal PERFEITO 80mm e emissão agora vivem na JanelaFiscal
+     7→import { bluetoothPrinter, PrintJob } from '@/services/bluetoothPrinterService';
+     8→import { notaService, NotaInfo, FocusStatusInfo } from '@/services/notaService';
+     9→import BoletoCard from '@/components/doce/BoletoCard';
+    10→import ConfirmModal from '@/components/doce/ConfirmModal';
+    11→import PrinterSelector from '@/components/doce/PrinterSelector';
+    12→// BLOCO 134: JANELA FISCAL — o botão FISCAL abre esta janela dedicada (NF-e /
+    13→// NFC-e identificada / NFC-e anônima) e a tela do cupom fica limpa
+    14→import JanelaFiscal from '@/components/doce/JanelaFiscal';
+    15→// BLOCO 134: venda pode fechar SEM nota — mas o app não deixa esquecer
+    16→// BLOCO 145: os avisos de "NOTA PENDENTE" saíram — as notas de saída que
+    17→// estavam em outros sistemas JÁ FORAM BATIDAS lá (sem aviso vermelho no app).
+    18→// BLOCO 72: grava o contato via API server-side (service_role) — persistência garantida
+    19→import { authHeaders } from '@/services/userService';
+    20→// BLOCO 139: confirmação do RECEBIMENTO REAL na janela de impressão — grava valor_pago/status no banco
+    21→import { saleService } from '@/services/saleService';
+    22→// BLOCO 82: impressão no iPhone — Apple bloqueia Web Bluetooth no Safari/Chrome iOS;
+    23→// caminho que funciona: navegador Bluefy (App Store) com instruções passo a passo
+    24→import { isIOSDevice, TEXTO_IMPRESSAO_IOS, TITULO_IMPRESSAO_IOS } from '@/lib/iosPrint';
+    25→// BLOCO 111: impressão térmica USB do PC — canal BT x USB persistente por dispositivo
+    26→import { imprimirViaUsb, lerCanalImpressao, salvarCanalImpressao, CanalImpressao } from '@/lib/usbPrint';
+    27→// BLOCO 125: QR do CATÁLOGO do cliente no cupom (flag do admin no hub ERP Fiscal)
+    28→import QRCode from 'qrcode';
+    29→import { lerQrCatalogoCupom, urlCatalogoCliente } from '@/lib/qrCatalogo';
+    30→import { CUPOM_QR_LEGENDA } from '@/lib/cupomTexto';
+    31→
+    32→type PrinterWidth = '56MM' | '80MM';
+    33→
+    34→interface CupomProps {
+    35→  sale: Sale;
+    36→  client: Client;
+    37→  products: Product[];
+    38→  onClose: () => void;
+    39→  onBack?: () => void;
+    40→  onDeleteSale?: (saleId: string) => void;
+    41→  allowDelete?: boolean;
+    42→  showToast?: (msg: string, type?: 'success' | 'error') => void;
+    43→  closeLabel?: string; 
+    44→  /** Bloco 10: habilita emissao de NF-e/NFC-e nesta tela (so em venda salva) */
+    45→  allowNota?: boolean;
+    46→  /** BLOCO 100 (regra do dono): modo CONFERÊNCIA da pronta entrega — o
+    47→   *  vendedor imprime o cupom (com cliente/pagamento) ANTES de finalizar.
+    48→   *  Mostra o banner + o botao grande FINALIZAR VENDA. */
+    49→  conferencia?: boolean;
+    50→  onFinalizar?: () => void;
+    51→  finalizando?: boolean;
+    52→  /** BLOCO 122 (fluxo de 8 telas): rótulo do botão da conferência —
+    53→   *  "Continuar" (tela 7 do fluxo novo, finaliza na tela seguinte) ou
+    54→   *  "Finalizar venda" (fluxo legado). */
+    55→  labelFinalizar?: string;
+    56→  /** BLOCO 122: título do banner da conferência — "Resumo do pedido" na
+    57→   *  pré-venda (a venda ainda não existe, é conferência do pedido). */
+    58→  conferenciaTitulo?: string;
+    59→  /** BLOCO 142: ADMIN pode cancelar a nota (Janela Fiscal) dentro do prazo SEFAZ */
+    60→  podeCancelarNota?: boolean;
+    61→  /** BLOCO 142: disparado após cancelar a nota — o admin recarrega a lista de vendas */
+    62→  onNotaCancelada?: () => void;
+    63→}
+    64→
+    65→const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, onDeleteSale, allowDelete, showToast, closeLabel, allowNota, conferencia, onFinalizar, finalizando, labelFinalizar, conferenciaTitulo, podeCancelarNota, onNotaCancelada }) => {
+    66→  const [printWidth, setPrintWidth] = useState<PrinterWidth>('56MM');
+    67→  // BLOCO 111: canal de impressão do dispositivo (Bluetooth térmica x USB do PC).
+    68→  // Default inteligente: desktop sem Web Bluetooth começa no USB.
+    69→  const [canalImpr, setCanalImprState] = useState<CanalImpressao>(() => lerCanalImpressao());
+    70→  const trocarCanal = (c: CanalImpressao) => { setCanalImprState(c); salvarCanalImpressao(c); };
+    71→  const [printJob, setPrintJob] = useState<PrintJob>({ status: 'idle' });
+    72→  const [modal, setModal] = useState<{title:string;message:string;icon:string;iconColor?:string;onConfirm:()=>void;type?:string}|null>(null);
+    73→  const [isBluetoothAvailable] = useState(() => bluetoothPrinter.isAvailable());
+    74→
+    75→  // ===== Bloco 10: nota fiscal da venda =====
+    76→  const isVendaSalva = allowNota && !!sale.id && sale.id !== 'preview';
+    77→  const [nota, setNota] = useState<NotaInfo>(() => ({
+    78→    status: sale.notaStatus || 'NAO_EMITIDA',
+    79→    numero: sale.notaNumero,
+    80→    pdfUrl: sale.notaPdfUrl,
+    81→    erro: sale.notaErro,
+    82→    // BLOCO 82: chave de acesso vem do banco (saleService) — fonte do mini DANFE
+    83→    chave: sale.notaChave,
+    84→  }));
+    85→  // BLOCO 85: status da integracao Focus (env da Vercel) — a JanelaFiscal AVISA
+    86→  // quando o token nao esta configurado em vez de falhar generico no clique.
+    87→  const [focus, setFocus] = useState<FocusStatusInfo | null>(null);
+    88→  // BLOCO 134: JANELA FISCAL — um só botão FISCAL abre a janela dedicada;
+    89→  // nada mais de nota aparece solto nesta tela
+    90→  const [fiscalAberto, setFiscalAberto] = useState<boolean>(false);
+    91→  // BLOCO 136 (regra do dono): JANELA DE IMPRESSÃO — canal BT/USB, papel
+    92→  // 56/80mm, imprimir/copiar/WhatsApp moram atrás de UM botão "Imprimir cupom"
+    93→  // (com botão VOLTAR), igual à Janela Fiscal. A tela do cupom fica limpa.
+    94→  const [imprAberto, setImprAberto] = useState<boolean>(false);
+    95→  // BLOCO 136: selo "impresso ✓" no botão (troca o colapso do BLOCO 109)
+    96→  const [cupomImpresso, setCupomImpresso] = useState<boolean>(false);
+    97→  // BLOCO 134: "MAIS OPÇÕES" — WhatsApp/GPS e Estornar saem da cara da tela
+    98→  const [maisAberto, setMaisAberto] = useState<boolean>(false);
+    99→
+   100→  // ============================================================
+   101→  // BLOCO 139 (regra do dono): RECEBIMENTO REAL na janela de impressão.
+   102→  // A tela de pagamento só diz COMO o cliente vai pagar — o recebimento é
+   103→  // confirmado DEPOIS, na tela de imprimir o cupom/nota ("Essa venda foi à
+   104→  // vista — você recebeu R$ X? [CONFIRMO] / [NÃO RECEBI]"). CONFIRMO fecha
+   105→  // o saldo (PAGO); NÃO RECEBI deixa em aberto (Contas a Receber).
+   106→  // ============================================================
+   107→  const [saleLocal, setSaleLocal] = useState<Sale>(sale);
+   108→  useEffect(() => { setSaleLocal(sale); }, [sale]);
+   109→  const [respRecebimento, setRespRecebimento] = useState<'CONFIRMADO' | 'NAO' | null>(null);
+   110→  useEffect(() => { setRespRecebimento(null); }, [sale.id]);
+   111→  const saldoCupom = Math.max(0, (Number(saleLocal.valorTotal) || 0) - (Number(saleLocal.valorPago) || 0));
+   112→  const aPrazoCupom = (saleLocal.metodoPagamento || '') === 'A_PRAZO';
+   113→  const ePreVendaCupom = saleLocal.tipoVenda === 'PRE_VENDA';
+   114→  // Pergunta aparece para pronta-entrega À VISTA com saldo em aberto (ou já respondida nesta sessão)
+   115→  const mostraRecebimento = isVendaSalva && !conferencia && !aPrazoCupom && !ePreVendaCupom && (saldoCupom > 0.005 || respRecebimento !== null);
+   116→
+   117→  const confirmarRecebimentoCupom = async () => {
+   118→    if (!isVendaSalva || !saleLocal.id || saleLocal.id === 'preview') { setRespRecebimento('CONFIRMADO'); return; }
+   119→    const totalVenda = Number(saleLocal.valorTotal) || 0;
+   120→    const ok = await saleService.updateSale(String(saleLocal.id), { valorPago: totalVenda, statusPagamento: 'PAGO' });
+   121→    if (ok) {
+   122→      setSaleLocal((s) => ({ ...s, valorPago: totalVenda, statusPagamento: 'PAGO' }));
+   123→      setRespRecebimento('CONFIRMADO');
+   124→      if (showToast) showToast('Recebimento confirmado — R$ ' + totalVenda.toFixed(2) + ' ✓', 'success');
+   125→    } else {
+   126→      avisar('Não gravou no banco — verifique a conexão e tente de novo.');
+   127→    }
+   128→  };
+   129→
+   130→  const naoRecebiCupom = async () => {
+   131→    setRespRecebimento('NAO');
+   132→    if (!isVendaSalva || !saleLocal.id || saleLocal.id === 'preview') return;
+   133→    try {
+   134→      const detalhe = [saleLocal.detalhePagamento, 'NAO RECEBI na hora — fica a cobrar'].filter(Boolean).join(' | ');
+   135→      const ok = await saleService.updateSale(String(saleLocal.id), { detalhePagamento: detalhe });
+   136→      if (ok) setSaleLocal((s) => ({ ...s, detalhePagamento: detalhe }));
+   137→    } catch { /* o saldo já está em aberto — rastro best-effort */ }
+   138→    if (showToast) showToast('Venda em aberto — cobre pelo Contas a Receber.', 'error');
+   139→  };
+   140→
+   141→  // BLOCO 85: busca o status da integracao (barato, sem tocar a Focus) e
+   142→  // sincroniza a nota com o banco (ex.: venda registrada como NF no wizard)
+   143→  useEffect(() => {
+   144→    if (!isVendaSalva || !sale.id) return;
+   145→    let vivo = true;
+   146→    (async () => {
+   147→      const r = await notaService.statusIntegracao(String(sale.id));
+   148→      if (!vivo) return;
+   149→      if (r.ok && r.focus) setFocus(r.focus);
+   150→      if (r.ok && r.nota) setNota(n => ({ ...n, ...r.nota! }));
+   151→    })();
+   152→    return () => { vivo = false; };
+   153→  }, [isVendaSalva, sale.id]);
+   154→
+   155→  // ==================================================================
+   156→  // BLOCO 134: a impressão do CUPOM FISCAL 80mm PERFEITO (danfe80) e toda
+   157→  // a emissão de NF-e/NFC-e agora vivem na JANELA FISCAL (JanelaFiscal.tsx)
+   158→  // — aberta pelo botão FISCAL lá embaixo. Esta tela fica limpa.
+   159→  // ==================================================================
+   160→
+   161→  const notaBadge = () => {
+   162→    switch (nota.status) {
+   163→      case 'AUTORIZADA': return { cls: 'bg-emerald-50 text-emerald-700 border-emerald-200', icon: 'fa-circle-check', txt: `${nota.tipo === 'NFCE' ? 'NFC-e' : 'NF-e'} ${nota.numero || ''} AUTORIZADA` };
+   164→      case 'EMITINDO': return { cls: 'bg-amber-50 text-amber-700 border-amber-200', icon: 'fa-hourglass-half', txt: 'Processando na SEFAZ...' };
+   165→      case 'REJEITADA': return { cls: 'bg-rose-50 text-rose-700 border-rose-200', icon: 'fa-circle-xmark', txt: 'Rejeitada — abrir janela fiscal' };
+   166→      case 'CANCELADA': return { cls: 'bg-gray-100 text-gray-500 border-gray-200', icon: 'fa-ban', txt: 'Nota cancelada' };
+   167→      default: {
+   168→        // BLOCO 145: sem aviso de pendência — a intenção de documento vira
+   169→        // badge NEUTRO (as notas de terceiros foram batidas fora do sistema).
+   170→        const intencao = sale.modoNota === 'NFE' || String(sale.detalhePagamento || '').toUpperCase().includes('COM NOTA: NF-E')
+   171→          ? 'NFE'
+   172→          : sale.modoNota === 'NFCE' || String(sale.detalhePagamento || '').toUpperCase().includes('COM NOTA: NFC') ? 'NFCE' : null;
+   173→        if (intencao === 'NFE') return { cls: 'bg-gray-50 text-gray-600 border-gray-200', icon: 'fa-file-invoice', txt: 'NF-e escolhida — acompanhamento no Portal Fiscal' };
+   174→        if (intencao === 'NFCE') return { cls: 'bg-gray-50 text-gray-600 border-gray-200', icon: 'fa-file-invoice', txt: 'NFC-e escolhida — acompanhamento no Portal Fiscal' };
+   175→        return { cls: 'bg-gray-50 text-gray-500 border-gray-200', icon: 'fa-file-invoice', txt: 'Cupom simples — sem nota fiscal' };
+   176→      }
+   177→    }
+   178→  };
+   179→  const nb = notaBadge();
+   180→
+   181→  // Subscribe to print job status
+   182→  useEffect(() => {
+   183→    const unsubscribe = bluetoothPrinter.onStatus(setPrintJob);
+   184→    return () => unsubscribe();
+   185→  }, []);
+   186→
+   187→  // Check connection on mount
+   188→  useEffect(() => {
+   189→    if (isBluetoothAvailable) {
+   190→      bluetoothPrinter.reconnect();
+   191→    }
+   192→  }, [isBluetoothAvailable]);
+   193→
+   194→  // ============================================================
+   195→  // BLOCO 72: ATUALIZAR WHATSAPP / LOCALIZAÇÃO DO CLIENTE NO CUPOM
+   196→  // Regra nova do dono: a tela de dados NÃO trava mais a venda — e na tela do
+   197→  // cupom (NF-e/NFC-e/cupom) dá pra corrigir o número e o GPS quando precisar.
+   198→  // Gravação GARANTIDA: /api/clientes/contato roda no servidor com service_role
+   199→  // e devolve a linha gravada — o vendedor vê 'Gravado no banco ✓'.
+   200→  // ============================================================
+   201→  const [clientLocal, setClientLocal] = useState<Client>(client);
+   202→  useEffect(() => { setClientLocal(client); }, [client]);
+   203→
+   204→  // ============================================================
+   205→  // BLOCO 125 — QR DO CATALOGO DO CLIENTE NO CUPOM.
+   206→  // O admin liga/desliga no hub ERP Fiscal (erp_config). Com o flag ON e o
+   207→  // cliente com portal_code, o papel ganha o QR que abre o portal do cliente
+   208→  // (extrato, catálogo, pedido) — Bluetooth imprime QR nativo ESC/POS, USB
+   209→  // imprime imagem, copiar/WhatsApp levam o link clicável.
+   210→  // ============================================================
+   211→  const [qrCatalogoAtivo, setQrCatalogoAtivo] = useState<boolean>(false);
+   212→  useEffect(() => {
+   213→    let vivo = true;
+   214→    lerQrCatalogoCupom().then((v) => { if (vivo) setQrCatalogoAtivo(v); }).catch(() => { /* default OFF no erro */ });
+   215→    return () => { vivo = false; };
+   216→  }, []);
+   217→  const qrUrl = urlCatalogoCliente(clientLocal?.portalCodigo);
+   218→  const [qrImg, setQrImg] = useState<string>('');
+   219→  useEffect(() => {
+   220→    if (!qrUrl) { setQrImg(''); return; }
+   221→    let vivo = true;
+   222→    QRCode.toDataURL(qrUrl, { margin: 1, errorCorrectionLevel: 'M', width: 320 })
+   223→      .then((d) => { if (vivo) setQrImg(d); })
+   224→      .catch(() => { if (vivo) setQrImg(''); });
+   225→    return () => { vivo = false; };
+   226→  }, [qrUrl]);
+   227→  const qrLigado = qrCatalogoAtivo && !!qrUrl && !!qrImg;
+   228→
+   229→  const [contatoAberto, setContatoAberto] = useState(false);
+   230→  const [zapStr, setZapStr] = useState('');
+   231→  const [gpsSt, setGpsSt] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
+   232→  const [gpsPin, setGpsPin] = useState('');
+   233→  const [gpsEnd, setGpsEnd] = useState('');
+   234→  const [gpsBai, setGpsBai] = useState('');
+   235→  const [zapSaving, setZapSaving] = useState(false);
+   236→
+   237→  // mascara progressiva de telefone BR — igual ao modal do vendedor
+   238→  const formatarZapCupom = (v: string): string => {
+   239→    const d = (v || '').replace(/\D/g, '').slice(0, 11);
+   240→    if (d.length <= 2) return d;
+   241→    if (d.length <= 6) return `(${d.slice(0, 2)}) ${d.slice(2)}`;
+   242→    if (d.length <= 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
+   243→    return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
+   244→  };
+   245→  // telefone lixo ('0', '-', vazio) = campo nasce limpo pra digitar
+   246→  const zapVazio = (val: any): boolean => {
+   247→    const s = String(val ?? '').trim();
+   248→    if (!s) return true;
+   249→    return s.replace(/[^a-zA-Z0-9]/g, '').length < 3;
+   250→  };
+   251→
+   252→  const presetContato = () => {
+   253→    setZapStr(zapVazio(clientLocal.telefone) ? '' : (clientLocal.telefone || ''));
+   254→    const pin = clientLocal.pinLocalizacao || '';
+   255→    setGpsPin(pin);
+   256→    setGpsSt(pin.length >= 5 ? 'done' : 'idle');
+   257→    setGpsEnd('');
+   258→    setGpsBai('');
+   259→  };
+   260→
+   261→  const capturarGPSCupom = () => {
+   262→    if (!('geolocation' in navigator)) { avisar('GPS não suportado neste aparelho.'); return; }
+   263→    setGpsSt('loading');
+   264→    navigator.geolocation.getCurrentPosition(async (pos) => {
+   265→      const lat = pos.coords.latitude;
+   266→      const lng = pos.coords.longitude;
+   267→      setGpsPin(`${lat.toFixed(6)}, ${lng.toFixed(6)}`);
+   268→      setGpsEnd('');
+   269→      setGpsBai('');
+   270→      try {
+   271→        const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}`, { headers: { 'Accept-Language': 'pt-BR' } });
+   272→        const d = await r.json();
+   273→        if (d?.address) {
+   274→          const a = d.address;
+   275→          const rua = a.road || a.pedestrian || a.street || '';
+   276→          const num = a.house_number || '';
+   277→          setGpsEnd(`${rua}${num ? ', ' + num : ''}`);
+   278→          setGpsBai(a.suburb || a.neighbourhood || a.city_district || a.village || '');
+   279→        }
+   280→      } catch { /* salva só as coordenadas */ }
+   281→      setGpsSt('done');
+   282→    }, () => setGpsSt('error'), { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
+   283→  };
+   284→
+   285→  // BLOCO 72: o Cupom de preview nem sempre recebe showToast — quando falta,
+   286→  // usa o modal interno (a validação NUNCA fica muda).
+   287→  const avisar = (msg: string, tipo: 'success' | 'error' = 'error') => {
+   288→    if (showToast) { showToast(msg, tipo); return; }
+   289→    setModal({ title: tipo === 'error' ? 'Atenção' : 'Pronto!', message: msg, icon: tipo === 'error' ? 'fa-solid fa-triangle-exclamation' : 'fa-solid fa-circle-check', type: 'alert', onConfirm: () => setModal(null) });
+   290→  };
+   291→
+   292→  const salvarContatoCupom = async () => {
+   293→    if (zapSaving || !clientLocal?.id) return;
+   294→    const zapDigitado = !!zapStr.trim();
+   295→    if (zapDigitado && zapStr.replace(/\D/g, '').length < 10) {
+   296→      avisar('WhatsApp incompleto — digite DDD + número (ex: 54 99999-9999).');
+   297→      return;
+   298→    }
+   299→    const body: any = { clientId: clientLocal.id };
+   300→    if (zapDigitado) body.telefone = zapStr.trim();
+   301→    if (gpsPin && gpsPin.length >= 5) {
+   302→      body.pinLocalizacao = gpsPin;
+   303→      if (gpsEnd) body.endereco = gpsEnd;
+   304→      if (gpsBai) body.bairro = gpsBai;
+   305→    }
+   306→    if (!body.telefone && !body.pinLocalizacao) {
+   307→      avisar('Nada para salvar — capture a localização ou digite o WhatsApp.');
+   308→      return;
+   309→    }
+   310→    setZapSaving(true);
+   311→    try {
+   312→      const res = await fetch('/api/clientes/contato', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify(body) });
+   313→      const data = await res.json().catch(() => ({}));
+   314→      if (!res.ok || !data.ok) {
+   315→        avisar(data.erro || 'Não gravou no banco — tente de novo.');
+   316→      } else {
+   317→        // o servidor devolveu a LINHA gravada — persistência provada
+   318→        const row = data.cliente || {};
+   319→        setClientLocal((c: Client) => ({
+   320→          ...c,
+   321→          telefone: row.telefone ?? (body.telefone || c.telefone),
+   322→          pinLocalizacao: row.pin_localizacao ?? body.pinLocalizacao ?? c.pinLocalizacao,
+   323→          endereco: body.endereco ? (row.endereco ?? body.endereco) : c.endereco,
+   324→          bairro: body.bairro ? (row.bairro ?? body.bairro) : c.bairro,
+   325→        }));
+   326→        avisar('Gravado no banco ✓', 'success');
+   327→        setContatoAberto(false);
+   328→      }
+   329→    } catch {
+   330→      avisar('Falha de conexão ao gravar.');
+   331→    }
+   332→    setZapSaving(false);
+   333→  };
+   334→
+   335→  // BLOCO 13: texto do cupom vem do gerador COMPARTILHADO (cupomTexto.ts) —
+   336→  // vendedor, secretario, entregador e admin imprimem EXATAMENTE o mesmo cupom.
+   337→  // BLOCO 125: com o flag do admin ON + portal_code, o papel sai com o QR do
+   338→  // catálogo do cliente (BT = QR nativo, USB = imagem, copiar/WhatsApp = URL).
+   339→  const generateText = (width: PrinterWidth): string => {
+   340→    return gerarCupomTexto({
+   341→      sale: sale as any,
+   342→      client: clientLocal as any,
+   343→      products: products as any,
+   344→      width,
+   345→      qrCatalogo: qrLigado ? qrUrl : undefined,
+   346→    });
+   347→  };
+   348→
+   349→  // ============================================================
+   350→  // BLOCO 139: IMAGEM do cupom (emula o papel térmico impresso) — desenhada
+   351→  // no canvas com o MESMO texto que vai para a impressora (56mm = 384px,
+   352→  // 80mm = 576px @203dpi). O vendedor VÊ O QUE FOI PEDIDO antes de imprimir.
+   353→  // ============================================================
+   354→  const [cupomImg, setCupomImg] = useState<string>('');
+   355→  useEffect(() => {
+   356→    if (!imprAberto) return;
+   357→    const texto = cupomSemMarcadores(gerarCupomTexto({ sale: saleLocal as any, client: clientLocal as any, products: products as any, width: printWidth, qrCatalogo: qrLigado ? qrUrl : undefined }));
+   358→    const linhas = texto.split('\n').filter((l) => !l.includes('[['));
+   359→    const largura = printWidth === '80MM' ? 576 : 384;
+   360→    const fs = printWidth === '80MM' ? 15 : 14;
+   361→    const linhaH = Math.round(fs * 1.35);
+   362→    const canvas = document.createElement('canvas');
+   363→    canvas.width = largura;
+   364→    canvas.height = linhas.length * linhaH + 56;
+   365→    const ctx = canvas.getContext('2d');
+   366→    if (!ctx) return;
+   367→    ctx.fillStyle = '#ffffff';
+   368→    ctx.fillRect(0, 0, canvas.width, canvas.height);
+   369→    ctx.fillStyle = '#141414';
+   370→    ctx.font = `${fs}px ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace`;
+   371→    ctx.textBaseline = 'top';
+   372→    linhas.forEach((l, i) => ctx.fillText(l, 14, 20 + i * linhaH));
+   373→    setCupomImg(canvas.toDataURL('image/png'));
+   374→  }, [imprAberto, printWidth, saleLocal, clientLocal, products, qrLigado, qrUrl]);
+   375→
+   376→  const handlePrint = useCallback(async () => {
+   377→    const doPrint = async () => {
+   378→          const rawText = generateText(printWidth);
+   379→
+   380→          // ===== BLOCO 111: canal USB do PC — folha 58/80mm no diálogo de impressão =====
+   381→          if (canalImpr === 'USB') {
+   382→            imprimirViaUsb(rawText, printWidth, (m) => {
+   383→              setModal({title:'Falha na Impressão', message:'Não consegui abrir a janela de impressão: ' + m, icon:'fa-solid fa-triangle-exclamation', type:'alert', onConfirm:()=>setModal(null)});
+   384→              if (showToast) showToast('Erro na impressão.', 'error');
+   385→            });
+   386→            setModal({title:'Janela de impressão aberta', message:'Escolha a impressora térmica USB do computador e confirme.\n\nDica: o navegador memoriza a última impressora usada — nas próximas impressões sai com 1 clique.', icon:'fa-solid fa-desktop', type:'success', onConfirm:()=>setModal(null)});
+   387→            if (showToast) showToast('Cupom enviado à janela de impressão!', 'success');
+   388→            // BLOCO 136: impresso = selo ✓ no botão e a janela fecha sozinha
+   389→            // (voltando para o cupom, onde ficam FISCAL e Boleto)
+   390→            if (isVendaSalva) {
+   391→              setCupomImpresso(true);
+   392→              setImprAberto(false);
+   393→            }
+   394→            return;
+   395→          }
+   396→
+   397→          try {
+   398→            // bluetoothPrinter.print() handles the full flow:
+   399→            // 1. Checks Bluetooth availability
+   400→            // 2. If no printer connected, asks to scan (native picker)
+   401→            // 3. Connects, confirms, and prints
+   402→            if (showToast) showToast('Preparando impressao...');
+   403→            const success = await bluetoothPrinter.print(rawText, printWidth, { skipConfirm: true });
+   404→
+   405→            if (success) {
+   406→              setModal({title:'Impresso!', message:'Cupom impresso com sucesso!', icon:'fa-solid fa-circle-check', type:'success', onConfirm:()=>setModal(null)});
+   407→              if (showToast) showToast('Impresso com sucesso!', 'success');
+   408→              // BLOCO 136: impresso = selo ✓ no botão e a janela fecha sozinha
+   409→              if (isVendaSalva) {
+   410→                setCupomImpresso(true);
+   411→                setImprAberto(false);
+   412→              }
+   413→            } else {
+   414→              // print() retornou false: seletor cancelado ou impressora nao conectada
+   415→              setModal({
+   416→                title:'Impressao nao realizada',
+   417→                message:'Nenhuma impressora foi conectada.\n\n1. Ligue a impressora Bluetooth\n2. Toque em Imprimir novamente\n3. Selecione o aparelho na janela do Chrome',
+   418→                icon:'fa-solid fa-bluetooth-b', type:'alert', onConfirm:()=>setModal(null)
+   419→              });
+   420→              if (showToast) showToast('Impressao nao realizada.', 'error');
+   421→            }
+   422→          } catch (error: any) {
+   423→            const msg = error?.message || 'Erro desconhecido';
+   424→      
+   425→            if (msg === 'BLUETOOTH_NAO_SUPORTADO') {
+   426→              // BLOCO 82: no iPhone a Apple bloqueia Web Bluetooth — em vez do "use o Chrome do
+   427→              // Android" (que não ajuda quem está no iPhone), mostra o caminho que funciona: app Bluefy.
+   428→              if (isIOSDevice()) {
+   429→                setModal({title:TITULO_IMPRESSAO_IOS, message:TEXTO_IMPRESSAO_IOS, icon:'fa-brands fa-apple', type:'alert', onConfirm:()=>setModal(null)});
+   430→              } else {
+   431→                // BLOCO 111: desktop/Firefox sem Web Bluetooth — direciona pro canal USB que agora existe.
+   432→                setModal({title:'Bluetooth Indisponivel', message:'Neste aparelho não há Bluetooth para sites.\n\nToque em “USB do PC” (canal de impressão) para imprimir na térmica conectada ao computador.', icon:'fa-solid fa-desktop', type:'alert', onConfirm:()=>setModal(null)});
+   433→              }
+   434→            } else if (msg.includes('SERVICO_NAO_ENCONTRADO') || msg.includes('CARACTERISTICA')) {
+   435→              setModal({title:'Erro de Impressora', message:'Servico de impressao nao encontrado. Verifique se a impressora esta ligada e pareada.', icon:'fa-solid fa-triangle-exclamation', type:'alert', onConfirm:()=>setModal(null)});
+   436→              bluetoothPrinter.forgetPrinter();
+   437→            } else {
+   438→              setModal({title:'Falha na Impressao', message:'Falha: ' + msg, icon:'fa-solid fa-triangle-exclamation', type:'alert', onConfirm:()=>setModal(null)});
+   439→            }
+   440→            if (showToast) showToast('Erro na impressao.', 'error');
+   441→          }
+   442→    };
+   443→    const widthLabel = printWidth === '80MM' ? '80mm (Largo)' : '56mm (Estreito)';
+   444→    setModal({title:'Confirmar Impressao', message: `Modelo: ${widthLabel}
+   445→Itens: ${(sale.itens || []).length}
+   446→Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onConfirm: doPrint});
+   447→  }, [printWidth, sale, showToast, generateText, canalImpr, isVendaSalva]);
+   448→
+   449→  const handleCopy = async () => {
+   450→    // BLOCO 100: copia SEM os marcadores [[PEQ]] (texto limpo)
+   451→    const rawText = cupomSemMarcadores(generateText(printWidth));
+   452→    try {
+   453→      if (navigator.clipboard && navigator.clipboard.writeText) {
+   454→        await navigator.clipboard.writeText(rawText);
+   455→      } else {
+   456→        const ta = document.createElement('textarea');
+   457→        ta.value = rawText; ta.style.position = 'fixed'; ta.style.left = '-9999px'; ta.style.opacity = '0';
+   458→        document.body.appendChild(ta); ta.focus(); ta.select();
+   459→        document.execCommand('copy');
+   460→        document.body.removeChild(ta);
+   461→      }
+   462→      if (showToast) showToast('Copiado!', 'success');
+   463→    } catch (e) {
+   464→      if (showToast) showToast('Falha ao copiar.', 'error');
+   465→    }
+   466→  };
+   467→
+   468→  const handleWhatsApp = () => {
+   469→    // BLOCO 100: WhatsApp sem os marcadores [[PEQ]] (texto limpo)
+   470→    const rawText = cupomSemMarcadores(generateText(printWidth));
+   471→    const phone = (clientLocal.telefone || '').replace(/\D/g, '');
+   472→    window.open(`https://wa.me/55${phone}?text=${encodeURIComponent('*CUPOM DOCE MANIA*\n' + rawText)}`, '_blank');
+   473→  };
+   474→
+   475→  const handleDelete = () => {
+   476→    if (onDeleteSale) {
+   477→      setModal({title:'Excluir Venda', message:'Deseja EXCLUIR esta venda permanentemente? O estoque sera devolvido ao vendedor. Esta acao nao pode ser desfeita.', icon:'fa-solid fa-trash-can', type:'danger', onConfirm:()=>{setModal(null); onDeleteSale(sale.id); onClose();}});
+   478→    }
+   479→  };
+   480→
+   481→  const isConnected = bluetoothPrinter.isConnected();
+   482→  const printerName = bluetoothPrinter.getConnectedPrinterName();
+   483→
+   484→  // Status badge color & text
+   485→  const getStatusBadge = () => {
+   486→    switch (printJob.status) {
+   487→      case 'scanning':
+   488→        return { color: 'bg-amber-100 text-amber-700', icon: 'fa-magnifying-glass', text: 'Buscando impressora...' };
+   489→      case 'connecting':
+   490→        return { color: 'bg-amber-100 text-amber-700', icon: 'fa-link', text: `Conectando a ${printJob.printerName || 'impressora'}...` };
+   491→      case 'connected':
+   492→        return { color: 'bg-emerald-100 text-emerald-700', icon: 'fa-link', text: `${printJob.printerName || 'Impressora'} conectada` };
+   493→      case 'printing':
+   494→        return { color: 'bg-blue-100 text-blue-700', icon: 'fa-print', text: `Imprimindo... ${printJob.progress || 0}%` };
+   495→      case 'done':
+   496→        return { color: 'bg-emerald-100 text-emerald-700', icon: 'fa-check', text: 'Impresso!' };
+   497→      case 'error':
+   498→        return { color: 'bg-red-100 text-red-700', icon: 'fa-triangle-exclamation', text: printJob.error || 'Erro' };
+   499→      default:
+   500→        // BLOCO 111: canal USB — a impressora “vive” no diálogo de impressão do PC
+   501→        if (canalImpr === 'USB') {
+   502→          return { color: 'bg-violet-100 text-violet-700', icon: 'fa-desktop', text: 'Impressora do PC (USB) — janela de impressão' };
+   503→        }
+   504→        if (isConnected) {
+   505→          return { color: 'bg-emerald-100 text-emerald-700', icon: 'fa-bluetooth-b', text: printerName || 'Conectado' };
+   506→        }
+   507→        // BLOCO 82: no iPhone sem suporte, o badge já ensina o caminho (Bluefy)
+   508→        return { color: 'bg-gray-100 text-gray-500', icon: 'fa-bluetooth-b', text: isBluetoothAvailable ? 'Nenhuma impressora conectada' : (isIOSDevice() ? 'No iPhone: use o app Bluefy' : 'Bluetooth indisponivel') };
+   509→    }
+   510→  };
+   511→
+   512→  const badge = getStatusBadge();
+   513→  const isPrinting = printJob.status === 'printing' || printJob.status === 'scanning' || printJob.status === 'connecting';
+   514→
+   515→  return (
+   516→    // BLOCO 78 (responsividade): o container rola SEMPRE que o card for maior
+   517→    // que a tela. pb com env(safe-area-inset-bottom) para o iPhone (borda
+   518→    // inferior) — o FECHAR nunca fica colado na barra do aparelho.
+   519→    <div className="fixed inset-0 bg-black/90 z-[150] flex flex-col items-center p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] overflow-y-auto backdrop-blur-sm">
+   520→      {/* BLOCO 67: my-auto no lugar do justify-center — com cupom longo, o
+   521→          justify-center cortava o TOPO do card e a rolagem nao subia.
+   522→          BLOCO 78: shrink-0 OBRIGATORIO — sem ele o flex esmagava o card para
+   523→          caber na tela e o overflow-hidden cortava IMPRIMIR/COPIAR/FECHAR
+   524→          (invisiveis e intocaveis quando os paineis NF/Boleto/contato estavam
+   525→          abertos); com shrink-0 o container passa a rolar de verdade.
+   526→          Papel 80MM = card mais largo (420px), papel de verdade mais largo. */}
+   527→      <div className={`bg-white w-full shadow-2xl flex flex-col shrink-0 animate-in zoom-in-95 duration-300 relative rounded-t-3xl overflow-hidden my-auto ${printWidth === '80MM' ? 'max-w-[420px]' : 'max-w-[340px]'}`}>
+   528→        
+   529→        <button 
+   530→          onClick={onBack || onClose} 
+   531→          className="absolute top-4 right-4 w-10 h-10 bg-gray-100 text-gray-500 rounded-full flex items-center justify-center active:scale-90 transition-transform z-20 shadow-md"
+   532→        >
+   533→          <i className="fa-solid fa-arrow-left"></i>
+   534→        </button>
+   535→
+   536→        {/* Bluetooth Status Bar — BLOCO 136: foi para DENTRO da Janela de Impressão */}
+   537→
+   538→        {/* BLOCO 100: banner da CONFERÊNCIA — imprima antes de finalizar */}
+   539→        {/* BLOCO 122: título/rótulo configuráveis (pré-venda = "Resumo do pedido") */}
+   540→        {conferencia && (
+   541→          <div className="mx-4 mt-3 bg-amber-50 border border-amber-300 rounded-2xl px-3.5 py-3">
+   542→            <p className="text-[10px] font-black text-amber-700 uppercase tracking-wide"><i className="fa-solid fa-clipboard-check mr-1"></i>{conferenciaTitulo || 'Conferência da venda'}</p>
+   543→            <p className="text-[9px] font-semibold text-amber-600 leading-snug mt-1">Confira os itens, IMPRIMA se quiser e toque em {labelFinalizar ? labelFinalizar.toUpperCase() : 'FINALIZAR VENDA'}. O cupom já sai com cliente, forma de pagamento e total — antes de fechar a venda.</p>
+   544→          </div>
+   545→        )}
+   546→
+   547→        {/* BLOCO 67: o texto do cupom agora ROLA (max 38% da tela) com barra
+   548→            de rolagem visivel (.cupom-scroll) — cupom com muitos itens nao
+   549→            empurra mais os botoes para fora da tela.
+   550→            BLOCO 78: overflow-auto (y E x) — em aparelho pequeno (320px) o
+   551→            papel 80mm (48 colunas) nao cabe e passa a rolar em vez de cortar. */}
+   552→        <div className="px-4 pt-4 pb-3 bg-white">
+   553→          {/* BLOCO 100/101: os marcadores [[PEQ]]/[[FIMPEQ]] viram trecho em
+   554→              fonte MUITO MENOR no preview (na impressora vira font B ESC/POS de
+   555→              verdade — a menor que existe) — as TROCAS saem com bem menos
+   556→              ênfase, abaixo do total, em letra MENOR que a descrição dos
+   557→              produtos (regra do dono: "pequeno mesmo"). */}
+   558→          <div className={`font-mono text-[11px] leading-tight text-black bg-gray-50 rounded-xl border border-gray-100 pl-4 pr-3 py-2.5 whitespace-pre select-none overflow-auto cupom-scroll ${isVendaSalva ? 'max-h-[24vh]' : 'max-h-[38vh]'}`}>
+   559→            {cupomSegmentos(generateText(printWidth)).map((seg, i) => seg.pequeno ? (
+   560→              <span key={i} className="text-[8px] leading-[1.15] text-gray-400">{seg.txt}</span>
+   561→            ) : (
+   562→              <React.Fragment key={i}>{seg.txt}</React.Fragment>
+   563→            ))}
+   564→            {/* BLOCO 125: QR do catálogo — no papel sai depois do pagamento; no
+   565→                preview a imagem entra aqui (as linhas [[QR]]/legenda são
+   566→                puladas no texto para não duplicar). */}
+   567→            {qrLigado && (
+   568→              <span className="block text-center pt-1">
+   569→                <img src={qrImg} alt="QR Code do catálogo do cliente" className="w-24 h-24 mx-auto" />
+   570→                <span className="block text-[8px] font-black tracking-widest text-gray-500 uppercase mt-1">{CUPOM_QR_LEGENDA}</span>
+   571→              </span>
+   572→            )}
+   573→          </div>
+   574→          {(sale.itens || []).length > 5 && (
+   575→            <p className="text-[8px] text-gray-300 text-center mt-1.5 uppercase font-black tracking-widest">
+   576→              <i className="fa-solid fa-arrows-up-down mr-1"></i>role para ver todos os itens
+   577→            </p>
+   578→          )}
+   579→        </div>
+   580→
+   581→        <div className="bg-gray-100 p-5 flex flex-col gap-3 border-t border-gray-200">
+   582→          {/* BLOCO 100 (regra do dono): na CONFERÊNCIA o botao principal é
+   583→              FINALIZAR VENDA — a impressao fica em cima, o fechamento aqui. */}
+   584→          {conferencia && onFinalizar && (
+   585→            <button
+   586→              onClick={onFinalizar}
+   587→              disabled={finalizando}
+   588→              className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest flex items-center justify-center disabled:opacity-60"
+   589→            >
+   590→              <i className={`fa-solid ${finalizando ? 'fa-spinner fa-spin' : 'fa-arrow-right'} mr-2`}></i>
+   591→              {finalizando ? 'Preparando...' : (labelFinalizar || 'Finalizar venda')}
+   592→            </button>
+   593→          )}
+   594→          {/* ================================================================
+   595→              BLOCO 136 (regra do dono): TELA DO CUPOM LIMPA — a imagem do
+   596→              PASSO 1 tinha "um monte de informação". Agora UM botão abre a
+   597→              JANELA DE IMPRESSÃO (canal BT/USB, papel 56/80mm, imprimir,
+   598→              copiar, WhatsApp) e o "número 2" continua sendo UM botão FISCAL
+   599→              que abre a JANELA FISCAL. As duas janelas têm botão VOLTAR.
+   600→              ================================================================ */}
+   601→          <button onClick={() => setImprAberto(true)} aria-expanded={imprAberto}
+   602→            className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl text-[10px] uppercase tracking-widest active:scale-95 shadow-lg flex items-center justify-center gap-2">
+   603→            <i className="fa-solid fa-print"></i>
+   604→            {cupomImpresso ? 'Reimprimir cupom' : 'Imprimir cupom'}
+   605→            {cupomImpresso && (
+   606→              <span className="w-5 h-5 rounded-full bg-white/25 flex items-center justify-center" title="Já impresso nesta sessão"><i className="fa-solid fa-check text-[9px]"></i></span>
+   607→            )}
+   608→          </button>
+   609→
+   610→          {/* ============================================================
+   611→              BLOCO 145: o BANNER VERMELHO de "NOTA PENDENTE" foi EXCLUÍDO
+   612→              (regra do dono — as notas de saída de terceiros já foram
+   613→              batidas em outro sistema). O botão FISCAL único abaixo segue
+   614→              abrindo a Janela Fiscal (NF-e / NFC-e / NFC anônima).
+   615→              ============================================================ */}
+   616→          {isVendaSalva && (
+   617→            <button onClick={() => setFiscalAberto(true)} aria-expanded={fiscalAberto}
+   618→              className={`w-full rounded-2xl border-2 px-3 py-3.5 flex items-center gap-2.5 active:scale-[0.98] transition-all text-left ${nb.cls}`}>
+   619→              <i className={`fa-solid ${nb.icon} text-base`}></i>
+   620→              <span className="flex-1 min-w-0">
+   621→                <span className="block text-[10px] font-black uppercase">{nb.txt}</span>
+   622→                <span className="block text-[8px] font-bold opacity-70 leading-snug">Toque para abrir a Janela Fiscal (NF-e · NFC-e · NFC anônima)</span>
+   623→              </span>
+   624→              <i className="fa-solid fa-chevron-right text-[10px] opacity-50"></i>
+   625→            </button>
+   626→          )}
+   627→
+   628→          {/* ===== Bloco 25: Boleto bancario Inter (boleto + pix) ===== */}
+   629→          {/* BLOCO 139: boleto só para venda A PRAZO — à vista o recebimento é confirmado na janela de impressão */}
+   630→          {isVendaSalva && aPrazoCupom && (
+   631→            <BoletoCard
+   632→              saleId={String(saleLocal.id)}
+   633→              valorTotal={Number(saleLocal.valorTotal) || 0}
+   634→              valorPago={Number(saleLocal.valorPago) || 0}
+   635→              notaStatus={nota.status}
+   636→              notaNumero={nota.numero}
+   637→              clienteDoc={clientLocal.cnpj}
+   638→              clienteCep={clientLocal.enderecoCep}
+   639→              clienteTelefone={clientLocal.telefone}
+   640→              clienteNome={clientLocal.nomeFantasia || clientLocal.nome}
+   641→              showToast={showToast}
+   642→            />
+   643→          )}
+   644→
+   645→          {/* ============================================================
+   646→              BLOCO 134: MAIS OPÇÕES — WhatsApp/Localização e Estornar
+   647→              saem da cara da tela (o dono reclamou de botões demais);
+   648→              ficam atrás de UM toque, sem competir com FISCAL/BOLETO.
+   649→              ============================================================ */}
+   650→          {(clientLocal?.id || (allowDelete && onDeleteSale)) && (
+   651→            <div className="rounded-2xl border border-gray-200 bg-white overflow-hidden">
+   652→              <button onClick={() => setMaisAberto(!maisAberto)} className="w-full flex items-center gap-2 p-3 text-left" aria-expanded={maisAberto}>
+   653→                <i className="fa-solid fa-sliders text-gray-400 text-xs"></i>
+   654→                <span className="text-[9px] font-black uppercase text-gray-500 flex-1">Mais opções</span>
+   655→                <i className={`fa-solid fa-chevron-${maisAberto ? 'up' : 'down'} text-[9px] text-gray-300`}></i>
+   656→              </button>
+   657→              {maisAberto && (
+   658→                <div className="px-3 pb-3 space-y-3">
+   659→                  {/* ===== BLOCO 72: atualizar WhatsApp/Localização do cliente ===== */}
+   660→                  {clientLocal?.id && (
+   661→                    <div>
+   662→                      <button onClick={() => { if (!contatoAberto) presetContato(); setContatoAberto(!contatoAberto); }} className="w-full flex items-center gap-2 p-2.5 text-left" aria-expanded={contatoAberto}>
+   663→                        <i className="fa-solid fa-user-pen text-gray-400 text-xs"></i>
+   664→                        <span className="text-[9px] font-black uppercase text-gray-500 flex-1">Atualizar WhatsApp / Localização</span>
+   665→                        <i className={`fa-solid fa-chevron-${contatoAberto ? 'up' : 'down'} text-[9px] text-gray-300`}></i>
+   666→                      </button>
+   667→                      {contatoAberto && (
+   668→                        <div className="pb-1 space-y-2.5">
+   669→                          <div className="space-y-1">
+   670→                            <label className="text-[8px] font-black text-gray-400 uppercase ml-1">WhatsApp do cliente</label>
+   671→                            <div className="relative">
+   672→                              <i className="fa-brands fa-whatsapp absolute left-3 top-1/2 -translate-y-1/2 text-emerald-500"></i>
+   673→                              <input type="tel" value={zapStr} onChange={e => setZapStr(formatarZapCupom(e.target.value))} placeholder="(54) 99999-9999" inputMode="tel" className="w-full pl-9 pr-3 py-3 bg-gray-50 rounded-xl font-black text-base outline-none border-2 border-transparent focus:border-emerald-200" />
+   674→                            </div>
+   675→                          </div>
+   676→                          <div className={`p-3 rounded-xl border-2 border-dashed flex items-center gap-2 ${gpsSt === 'done' ? 'bg-emerald-50 border-emerald-200' : gpsSt === 'loading' ? 'bg-blue-50 border-blue-200 animate-pulse' : 'bg-amber-50 border-amber-200'}`}>
+   677→                            <i className={`fa-solid ${gpsSt === 'done' ? 'fa-check text-emerald-600' : gpsSt === 'loading' ? 'fa-spinner fa-spin text-blue-500' : 'fa-location-crosshairs text-amber-500'}`}></i>
+   678→                            <div className="flex-1 min-w-0">
+   679→                              <p className="text-[9px] font-black text-gray-700 uppercase leading-tight">Localização</p>
+   680→                              <p className="text-[8px] text-gray-400 leading-snug">
+   681→                                {gpsSt === 'done' ? ((gpsEnd || gpsBai) ? `${gpsEnd}${gpsEnd && gpsBai ? ' — ' : ''}${gpsBai}` : 'Capturada') : gpsSt === 'loading' ? 'Obtendo...' : gpsSt === 'error' ? 'GPS negado — tente de novo' : 'Toque em capturar'}
+   682→                              </p>
+   683→                            </div>
+   684→                            {gpsSt !== 'done' && (
+   685→                              <button onClick={capturarGPSCupom} disabled={gpsSt === 'loading'} className="bg-amber-500 text-white text-[9px] font-black uppercase px-3 py-2.5 rounded-lg active:scale-95 disabled:opacity-50 flex-shrink-0">Capturar</button>
+   686→                            )}
+   687→                          </div>
+   688→                          <button onClick={salvarContatoCupom} disabled={zapSaving} className="w-full bg-emerald-600 text-white font-black py-3 rounded-xl text-[9px] uppercase tracking-widest active:scale-95 disabled:opacity-60 flex items-center justify-center gap-1.5">
+   689→                            <i className={`fa-solid ${zapSaving ? 'fa-spinner fa-spin' : 'fa-floppy-disk'}`}></i>{zapSaving ? 'Gravando...' : 'Salvar no banco'}
+   690→                          </button>
+   691→                        </div>
+   692→                      )}
+   693→                    </div>
+   694→                  )}
+   695→
+   696→                  {allowDelete && onDeleteSale && (
+   697→                    <button onClick={handleDelete} className="w-full bg-white text-rose-600 border border-rose-100 font-black py-3.5 rounded-2xl active:scale-95 text-[10px] uppercase flex items-center justify-center gap-2 hover:bg-rose-50 transition-colors">
+   698→                      <i className="fa-solid fa-trash-can"></i> Estornar / Excluir Venda
+   699→                    </button>
+   700→                  )}
+   701→                </div>
+   702→              )}
+   703→            </div>
+   704→          )}
+   705→          
+   706→          <button onClick={onClose} className="w-full bg-slate-900 text-white font-black py-4 rounded-2xl active:scale-95 text-[10px] uppercase tracking-widest shadow-xl">
+   707→            {closeLabel || "FECHAR"}
+   708→          </button>
+   709→        </div>
+   710→      </div>
+   711→          {modal && (
+   712→        <ConfirmModal title={modal.title} message={modal.message} icon={modal.icon} iconColor={modal.iconColor} type={(modal.type as any) || 'confirm'} onConfirm={modal.onConfirm} onCancel={() => setModal(null)} />
+   713→      )}
+   714→      {/* BLOCO 134: JANELA FISCAL — NF-e / NFC-e identificada / NFC anônima,
+   715→          cupom fiscal 80mm e situação na SEFAZ, tudo em UMA janela. A nota
+   716→          atualizada volta para cá (banner pendente apaga ao autorizar).
+   717→          BLOCO 136: a parte fiscal é o "número 2" — botão FISCAL abre a
+   718→          janela com botão VOLTAR no cabeçalho. */}
+   719→      {fiscalAberto && (
+   720→        <JanelaFiscal
+   721→          sale={sale}
+   722→          client={clientLocal}
+   723→          nota={nota}
+   724→          focus={focus}
+   725→          showToast={showToast}
+   726→          onNotaChange={(n) => setNota(n)}
+   727→          onClose={() => setFiscalAberto(false)}
+   728→          podeCancelar={podeCancelarNota}
+   729→          onNotaCancelada={onNotaCancelada}
+   730→        />
+   731→      )}
+   732→
+   733→      {/* ================================================================
+   734→          BLOCO 136: JANELA DE IMPRESSÃO (o "número 1") — aberta pelo botão
+   735→          IMPRIMIR CUPOM. Todo o "monte de informação" da imagem do dono
+   736→          (canal Bluetooth x USB do PC, térmica, papel 56/80mm, imprimir,
+   737→          copiar, WhatsApp) mora AQUI, com botão VOLTAR no cabeçalho.
+   738→          Ao imprimir com sucesso a janela fecha sozinha (voltando ao cupom).
+   739→          ================================================================ */}
+   740→      {imprAberto && (
+   741→        <div className="fixed inset-0 bg-black/90 z-[165] flex flex-col items-center p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] overflow-y-auto backdrop-blur-sm">
+   742→          <div className="bg-white w-full max-w-[420px] shadow-2xl flex flex-col shrink-0 rounded-t-3xl overflow-hidden my-auto animate-in zoom-in-95 duration-300">
+   743→            {/* HEADER com VOLTAR */}
+   744→            <div className="bg-blue-600 text-white px-4 py-3 flex items-center gap-2">
+   745→              <button onClick={() => setImprAberto(false)} className="w-9 h-9 rounded-full bg-white/15 flex items-center justify-center active:scale-90" aria-label="Voltar">
+   746→                <i className="fa-solid fa-arrow-left"></i>
+   747→              </button>
+   748→              <div className="flex-1 min-w-0">
+   749→                <p className="text-[10px] font-black uppercase tracking-widest">Imprimir cupom</p>
+   750→                <p className="text-[9px] font-bold text-white/70 truncate">{clientLocal?.nomeFantasia || clientLocal?.nome || 'Cliente'} · R$ {(Number(sale.valorTotal) || 0).toFixed(2)}</p>
+   751→              </div>
+   752→            </div>
+   753→
+   754→            <div className="p-4 space-y-3 bg-gray-100">
+   755→              {/* BLOCO 139: IMAGEM DO CUPOM — o vendedor confere O QUE FOI PEDIDO emulando o papel impresso */}
+   756→              {cupomImg && (
+   757→                <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-3">
+   758→                  <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest mb-2 text-center"><i className="fa-solid fa-receipt mr-1"></i>Imagem do cupom — o que sai impresso</p>
+   759→                  <img src={cupomImg} alt="Imagem do cupom emulado — como sai na térmica" className="w-full rounded-lg border border-gray-100" />
+   760→                </div>
+   761→              )}
+   762→
+   763→              {/* Status da impressora (movido do topo do cupom — BLOCO 136) */}
+   764→              <div className={`px-3 py-2 rounded-xl flex items-center gap-2 text-[10px] font-bold ${badge.color}`}>
+   765→                <i className={`fa-solid ${badge.icon}`}></i>
+   766→                <span className="flex-1 break-words">{badge.text}</span>
+   767→                {isConnected && printJob.status === 'idle' && (
+   768→                  <button
+   769→                    onClick={() => setModal({title:'Desconectar', message:'Desconectar a impressora?', icon:'fa-solid fa-bluetooth-b', type:'danger', onConfirm:()=>{setModal(null); bluetoothPrinter.forgetPrinter();}})}
+   770→                    className="text-[9px] opacity-70 underline"
+   771→                  >
+   772→                    Desconectar
+   773→                  </button>
+   774→                )}
+   775→              </div>
+   776→
+   777→              {/* Print progress bar */}
+   778→              {printJob.status === 'printing' && (
+   779→                <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden">
+   780→                  <div
+   781→                    className="h-full bg-blue-600 rounded-full transition-all duration-300"
+   782→                    style={{ width: `${printJob.progress || 0}%` }}
+   783→                  />
+   784→                </div>
+   785→              )}
+   786→
+   787→              {/* BLOCO 111: canal de impressão — Bluetooth (celular) x USB do PC.
+   788→                  A escolha fica gravada no aparelho e vale para todo o sistema. */}
+   789→              <div className="flex bg-gray-200 p-1 rounded-2xl">
+   790→                <button
+   791→                  onClick={() => trocarCanal('BT')}
+   792→                  className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${canalImpr === 'BT' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500'}`}
+   793→                >
+   794→                  <i className="fa-brands fa-bluetooth-b mr-1"></i>Bluetooth
+   795→                </button>
+   796→                <button
+   797→                  onClick={() => trocarCanal('USB')}
+   798→                  className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${canalImpr === 'USB' ? 'bg-white shadow-sm text-violet-600' : 'text-gray-500'}`}
+   799→                >
+   800→                  <i className="fa-solid fa-desktop mr-1"></i>USB do PC
+   801→                </button>
+   802→              </div>
+   803→
+   804→              {canalImpr === 'BT' ? (
+   805→                <PrinterSelector accent="blue" />
+   806→              ) : (
+   807→                <p className="text-[9px] font-bold text-violet-600 bg-violet-50 border border-violet-100 rounded-xl px-3 py-2 leading-snug">
+   808→                  <i className="fa-solid fa-circle-info mr-1"></i>A janela de impressão do computador vai abrir — escolha a térmica USB. O navegador memoriza a escolhida.
+   809→                </p>
+   810→              )}
+   811→
+   812→              {/* Paper width selector */}
+   813→              <div className="flex bg-gray-200 p-1 rounded-2xl mb-1">
+   814→                <button
+   815→                  onClick={() => setPrintWidth('56MM')}
+   816→                  className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${printWidth === '56MM' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500'}`}
+   817→                >
+   818→                  <i className="fa-solid fa-receipt mr-1"></i>56mm
+   819→                </button>
+   820→                <button
+   821→                  onClick={() => setPrintWidth('80MM')}
+   822→                  className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${printWidth === '80MM' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-400'}`}
+   823→                >
+   824→                  <i className="fa-solid fa-receipt mr-1"></i>80mm
+   825→                </button>
+   826→              </div>
+   827→
+   828→              <div className="grid grid-cols-2 gap-2">
+   829→                <button
+   830→                  onClick={handlePrint}
+   831→                  disabled={isPrinting}
+   832→                  className={`font-black py-4 rounded-2xl flex items-center justify-center gap-2 active:scale-95 text-[10px] uppercase shadow-lg transition-all ${
+   833→                    isPrinting
+   834→                      ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+   835→                      : canalImpr === 'USB' ? 'bg-violet-600 text-white' : 'bg-blue-600 text-white'
+   836→                  }`}
+   837→                >
+   838→                  <i className={`fa-solid ${isPrinting ? 'fa-spinner fa-spin' : canalImpr === 'USB' ? 'fa-desktop' : 'fa-print'}`}></i>
+   839→                  {isPrinting ? 'Imprimindo...' : canalImpr === 'USB' ? 'Imprimir (USB)' : 'Imprimir'}
+   840→                </button>
+   841→                <button onClick={handleCopy} className="bg-emerald-600 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 active:scale-95 text-[10px] uppercase shadow-lg">
+   842→                  <i className="fa-solid fa-copy"></i> Copiar
+   843→                </button>
+   844→              </div>
+   845→
+   846→              <button onClick={() => { setModal({title:'Enviar WhatsApp', message:'Deseja enviar este cupom pelo WhatsApp para o cliente?', icon:'fa-brands fa-whatsapp', iconColor:'text-white', onConfirm:()=>{setModal(null); handleWhatsApp();}}) }} className="w-full bg-green-50 text-green-600 border border-green-100 font-black py-2.5 rounded-2xl flex items-center justify-center gap-2 active:scale-95 text-[9px] uppercase transition-colors hover:bg-green-100">
+   847→                <i className="fa-brands fa-whatsapp text-sm"></i> Enviar pelo WhatsApp
+   848→              </button>
+   849→
+   850→              {/* ================================================================
+   851→                  BLOCO 139: RECEBIMENTO REAL — depois do cupom não fiscal, ANTES
+   852→                  de finalizar: "Essa venda foi à vista — você recebeu R$ X?
+   853→                  [CONFIRMO] / [NÃO RECEBI]". CONFIRMO fecha o saldo no banco
+   854→                  (caixa à vista); NÃO RECEBI deixa em aberto (Contas a Receber).
+   855→                  ================================================================ */}
+   856→              {mostraRecebimento && (
+   857→                <div className="rounded-2xl border-2 border-emerald-300 bg-white p-3.5 space-y-2.5">
+   858→                  <p className="text-[10px] font-black text-emerald-700 uppercase flex items-center gap-1.5"><i className="fa-solid fa-hand-holding-dollar"></i>Recebimento real</p>
+   859→                  {respRecebimento === null && (
+   860→                    <>
+   861→                      <p className="text-[10px] font-black text-gray-700 leading-snug">Essa venda foi à vista — você recebeu os R$ {saldoCupom.toFixed(2)} da venda?</p>
+   862→                      <div className="grid grid-cols-2 gap-2">
+   863→                        <button onClick={confirmarRecebimentoCupom} className="py-3.5 rounded-xl bg-emerald-600 text-white text-[10px] font-black uppercase tracking-widest active:scale-95 shadow">Confirmo</button>
+   864→                        <button onClick={naoRecebiCupom} className="py-3.5 rounded-xl bg-white border-2 border-rose-200 text-rose-600 text-[10px] font-black uppercase tracking-widest active:scale-95">Não recebi</button>
+   865→                      </div>
+   866→                      <p className="text-[8px] font-bold text-gray-400 leading-snug">NÃO RECEBI fica em Contas a Receber — cobra depois.</p>
+   867→                    </>
+   868→                  )}
+   869→                  {respRecebimento === 'CONFIRMADO' && (
+   870→                    <p className="text-[10px] font-black text-emerald-700 leading-snug bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2.5"><i className="fa-solid fa-circle-check mr-1"></i>Recebido — R$ {(Number(saleLocal.valorTotal) || 0).toFixed(2)} no caixa à vista.</p>
+   871→                  )}
+   872→                  {respRecebimento === 'NAO' && (
+   873→                    <p className="text-[10px] font-black text-amber-700 leading-snug bg-amber-50 border border-amber-100 rounded-xl px-3 py-2.5"><i className="fa-solid fa-user-clock mr-1"></i>Registrado: fica em aberto — cobre depois no Contas a Receber.</p>
+   874→                  )}
+   875→                </div>
+   876→              )}
+   877→              {isVendaSalva && aPrazoCupom && saldoCupom > 0.005 && (
+   878→                <p className="text-[9px] font-bold text-gray-500 bg-white border border-gray-200 rounded-xl px-3 py-2.5 leading-snug"><i className="fa-solid fa-user-clock mr-1 text-amber-500"></i>Venda a prazo — o recebimento real entra na data combinada (Contas a Receber).</p>
+   879→              )}
+   880→              {isVendaSalva && ePreVendaCupom && saldoCupom > 0.005 && (
+   881→                <p className="text-[9px] font-bold text-gray-500 bg-white border border-gray-200 rounded-xl px-3 py-2.5 leading-snug"><i className="fa-solid fa-truck mr-1 text-emerald-500"></i>Pré-venda — o entregador recebe na entrega.</p>
+   882→              )}
+   883→
+   884→              <button onClick={() => setImprAberto(false)} className="w-full py-3.5 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Voltar ao cupom</button>
+   885→            </div>
+   886→          </div>
+   887→        </div>
+   888→      )}
+   889→</div>
+   890→  );
+   891→};
+   892→
+   893→export default Cupom;
+   894→

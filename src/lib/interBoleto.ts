@@ -263,12 +263,16 @@ export interface CobrancaPublica {
   pixCopiaECola: string;
   valorRecebido: number | null;
   erro: string;
+  /** FIX atrelamento: chave da NF-e/NFC-e atrelada à cobrança (o Inter devolve
+   *  em cobranca.notaFiscal.chaveNFe quando o boleto nasceu com a nota). */
+  notaFiscalChave: string;
 }
 
 export function interpretarCobranca(data: Record<string, unknown>): CobrancaPublica {
   const cob = (data.cobranca || {}) as Record<string, unknown>;
   const bol = (data.boleto || {}) as Record<string, unknown>;
   const pix = (data.pix || {}) as Record<string, unknown>;
+  const nf = (cob.notaFiscal || (data as Record<string, unknown>).notaFiscal || {}) as Record<string, unknown>;
   const num = (v: unknown) => (v === null || v === undefined || v === '' ? null : Number(v));
   return {
     status: String(cob.situacao || 'EM_PROCESSAMENTO'),
@@ -281,6 +285,7 @@ export function interpretarCobranca(data: Record<string, unknown>): CobrancaPubl
     pixCopiaECola: String(pix.pixCopiaECola || ''),
     valorRecebido: num(cob.valorTotalRecebido),
     erro: '',
+    notaFiscalChave: String(nf.chaveNFe || nf.chave || '').replace(/\D/g, ''),
   };
 }
 

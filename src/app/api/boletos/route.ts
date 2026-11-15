@@ -3,6 +3,8 @@ import { getServiceClient, devBridge } from '@/lib/serverSupabase';
 import { sessionFromRequest } from '@/lib/session';
 import { hasBoletoColumns } from '@/lib/serverSchema';
 import { isFocusConfigured, consultarNota, FocusDoc } from '@/lib/focusNfe';
+// BLOCO 147: nota cancelada + boleto cancelado = venda sai do sistema (e a nota fica no portal em CANCELADAS)
+import { finalizarVendaCancelada } from '@/lib/cascataCancelamento';
 import { lerEmitentePayload } from '@/lib/erpConfig';
 import { validaCpfCnpj, mascaraCpfCnpj } from '@/lib/validaDoc';
 import {
@@ -188,6 +190,25 @@ export async function POST(req: NextRequest) {
       return BAD(502, r.erro || 'Falha ao cancelar na API do Inter.', { boleto: cobrancaPublica(sale as Record<string, unknown>) });
     }
     await atualizar(saleId, { inter_boleto_status: 'CANCELADO', inter_boleto_erro: null });
+
+    // -----------------------------------------------------------------
+    // BLOCO 147 (regra do dono): nota CANCELADA + boleto CANCELADO = a
+    // venda termina de sair do sistema. Este caso nasce quando o
+    // cancelamento da NOTA parou porque o boleto estava vivo (Inter fora/
+    // sem config) — a venda ficou no portal em CANCELADAS justamente para
+    // o admin cancelar o boleto aqui. Agora que o boleto saiu, a cascata
+    // finaliza: arquiva a nota cancelada no portal + devolve estoque +
+    // exclui a venda. O portal passa a listar a nota no filtro CANCELADAS.
+    // -----------------------------------------------------------------
+    if (String(sale.nota_status || '').toUpperCase() === 'CANCELADA') {
+      const cascade = await finalizarVendaCancelada(saleId);
+      return NextResponse.json({
+        ok: true,
+        boleto: { ...cobrancaPublica(sale as Record<string, unknown>), status: 'CANCELADO' },
+        aviso: `Boleto cancelado no Inter. ${cascade.length > 0 ? cascade.join(' · ') + '.' : ''}`,
+        cascade,
+      });
+    }
     return NextResponse.json({ ok: true, boleto: { ...cobrancaPublica(sale as Record<string, unknown>), status: 'CANCELADO' } });
   }
 

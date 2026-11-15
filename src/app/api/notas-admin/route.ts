@@ -163,7 +163,7 @@ function linhaAvulsa(m: NotaAvulsaMeta, presenca?: { pdf: boolean; xml: boolean;
     cliente: m.cliente || 'CONSUMIDOR NAO IDENTIFICADO',
     clienteDoc: m.clienteDoc,
     clienteId: '',
-    vendedor: m.origem === 'XML' ? 'XML de terceiro' : '— fora do app —',
+    vendedor: m.vendedor || (m.origem === 'XML' ? 'XML de terceiro' : '— fora do app —'),
     pdfLocal: !!presenca?.pdf,
     xmlLocal: !!presenca?.xml,
     avulsa: true,

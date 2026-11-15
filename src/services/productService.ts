@@ -133,6 +133,13 @@ export const productService = {
     } else if (error && /\bobs\b/i.test(error.message || '')) {
       console.warn('Coluna obs ausente (Bloco 18 nao rodado). Salvando sem ela.');
       ({ data, error } = await supabase.from('products').insert({ ...payload, ...fiscal, ...extra14, ...b15 }).select().single());
+    } else if (error && /\bcodigo\b/i.test(error.message || '')) {
+      // BLOCO 147: SÓ o codigo está ausente (SQL do Bloco 145 não rodado) —
+      // salva sem ele mas PRESERVA ncm/cest/cfop/ean/unidade/origem.
+      console.warn('Coluna products.codigo ausente (Bloco 145). Salvando sem o código interno — rode o SQL do Bloco 145 no Supabase.');
+      const semCod: Record<string, unknown> = { ...payload, ...fiscal, ...extra14, ...b15, ...b18, ...b23, ...b29, ...b69, ...b108 };
+      delete (semCod as Record<string, unknown>).codigo;
+      ({ data, error } = await supabase.from('products').insert(semCod).select().single());
     } else if (error && /ncm|cest|cfop|\bean\b|unidade|origem|\bcodigo\b/i.test(error.message || '')) {
       console.warn('Colunas fiscais de produto ausentes (Bloco 12/145 nao rodado). Salvando sem elas.');
       ({ data, error } = await supabase.from('products').insert({ ...payload, ...extra14 }).select().single());
@@ -239,6 +246,12 @@ export const productService = {
       const fb18: Record<string, unknown> = { ...payload };
       delete fb18.obs;
       ({ data, error } = await supabase.from('products').update(fb18).eq('id', id).select().single());
+    } else if (error && /\bcodigo\b/i.test(error.message || '')) {
+      // BLOCO 147: SÓ o codigo está ausente — atualiza o resto (não derruba os demais fiscais)
+      console.warn('Coluna products.codigo ausente (Bloco 145). Atualizando sem o código interno — rode o SQL do Bloco 145 no Supabase.');
+      const fbCod: Record<string, unknown> = { ...payload };
+      delete fbCod.codigo;
+      ({ data, error } = await supabase.from('products').update(fbCod).eq('id', id).select().single());
     } else if (error && /ncm|cest|cfop|\bean\b|unidade|origem|\bcodigo\b/i.test(error.message || '')) {
       const fallback: Record<string, unknown> = { ...payload };
       delete fallback.ncm; delete fallback.cest; delete fallback.cfop;

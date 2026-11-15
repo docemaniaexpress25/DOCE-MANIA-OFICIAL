@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { after } from 'next/server';
 import { getServiceClient, devBridge } from '@/lib/serverSupabase';
 import { sessionFromRequest } from '@/lib/session';
-import { hasNotaColumns, hasProductFiscalColumns, hasBoletoColumns, hasPrecoCupom, hasNotaEmitidaEm, hasClientModoCupom, hasProductCodigoColumn, hasEstoquesNotaColumns, hasEstoqueBaixadoColumn, hasModoVendaColumn } from '@/lib/serverSchema';
+import { hasNotaColumns, hasProductFiscalColumns, hasBoletoColumns, hasPrecoCupom, hasNotaEmitidaEm, hasClientModoCupom, hasProductCodigoColumn } from '@/lib/serverSchema';
+// BLOCO 147: cascata do cancelamento (arquivar nota cancelada no portal + estoque + exclusão da venda)
+import { finalizarVendaCancelada } from '@/lib/cascataCancelamento';
 import { lerEmitentePayload, lerErpConfig } from '@/lib/erpConfig';
 import {
   getFocusConfig,
@@ -259,20 +261,28 @@ export async function POST(req: NextRequest) {
     });
 
     // -----------------------------------------------------------------
-    // BLOCO 145 — CASCATA AUTOMÁTICA DO CANCELAMENTO (regra do dono):
-    // nota cancelada na SEFAZ = a venda DEIXA DE EXISTIR no sistema:
-    //   1. BOLETO gerado no Inter é CANCELADO automaticamente;
-    //   2. produtos VOLTAM AO ESTOQUE (reserva de pré-venda no estoque
-    //      de casa, contadores de saída 1/2 e carga da van via RPC
-    //      excluir_venda_estornar_estoque);
+    // BLOCO 147 — CASCATA AUTOMÁTICA DO CANCELAMENTO (regra do dono):
+    // "QUANDO CANCELAR UMA NOTA JUNTO DEVEREMOS CANCELAR O BOLETO!" e
+    // "AS NOTAS CANCELADAS DEVEM APARECER EM CANCELADAS NO PORTAL!"
+    //   0. BOLETO INTER: cancelado JUNTO — e vem PRIMEIRO. Se o boleto está
+    //      vivo e NÃO conseguiu cancelar (Inter fora/sem config), a venda NÃO
+    //      é apagada: fica no Portal Fiscal em CANCELADAS com o boleto vivo
+    //      para o admin resolver (Ações > Boleto > Cancelar) — depois que o
+    //      boleto sai, a finalização acontece sozinha. Nada de boleto órfão.
+    //   1. Nota cancelada é ARQUIVADA como avulsa no Portal (filtro
+    //      CANCELADAS): DANFE + XML + XML do cancelamento + cliente, valor,
+    //      pagamento e vendedor da venda original — era EXATAMENTE aqui que
+    //      a nota cancelada sumia do portal (a venda apagava e nada restava).
+    //   2. produtos VOLTAM AO ESTOQUE (casa + contadores 1/2 + carga da van);
     //   3. a VENDA é EXCLUÍDA do sistema (itens, comissões, comprovantes,
     //      eventos de entrega).
-    // Falha de qualquer etapa NUNCA desfaz o cancelamento na SEFAZ —
-    // vira aviso na resposta para o admin resolver manualmente.
+    // Falha de qualquer etapa NUNCA desfaz o cancelamento na SEFAZ — vira
+    // aviso na resposta para o admin resolver manualmente.
     // -----------------------------------------------------------------
     const cascade: string[] = [];
+    let boletoBloqueado = false;
     if (res.cancelada) {
-      // ----- 1) BOLETO INTER -----
+      // ----- 0) BOLETO INTER (primeiro de tudo) -----
       try {
         if (await hasBoletoColumns()) {
           const { data: sB } = await db.from('sales')
@@ -283,110 +293,28 @@ export async function POST(req: NextRequest) {
           if (codigoB && !['CANCELADO', 'EXPIRADO', 'FALHA_EMISSAO'].includes(statusB)) {
             if (isInterConfigured()) {
               const rB = await cancelarCobranca(codigoB, `NF ${res.numero || ''} cancelada`.slice(0, 50));
-              if (rB.ok || rB.status === 202) {
+              if (rB.ok || rB.status === 202 || rB.status === 204) {
                 await db.from('sales').update({ inter_boleto_status: 'CANCELADO', inter_boleto_erro: null }).eq('id', saleId);
                 cascade.push('Boleto bancário cancelado no Inter');
               } else {
-                cascade.push(`Boleto NÃO cancelado (${rB.erro || 'falha no Inter'}) — cancele manualmente`);
+                cascade.push(`Boleto NÃO cancelado no Inter (${rB.erro || 'falha'}) — a venda fica no portal em CANCELADAS até o boleto ser cancelado (Ações > Boleto > Cancelar)`);
+                boletoBloqueado = true;
               }
             } else {
-              cascade.push('Boleto existe mas o Inter não está configurado — cancele manualmente');
+              cascade.push('Boleto vivo mas o Inter não está configurado — a venda fica no portal em CANCELADAS até o boleto ser cancelado');
+              boletoBloqueado = true;
             }
           }
         }
       } catch (eB) {
-        cascade.push(`Boleto não cancelado (${(eB as Error).message}) — cancele manualmente`);
+        cascade.push(`Boleto não cancelado (${(eB as Error).message}) — a venda fica no portal em CANCELADAS até resolver`);
+        boletoBloqueado = true;
       }
 
-      // ----- 2) ESTOQUE DE VOLTA + 3) EXCLUSÃO DA VENDA -----
-      try {
-        const [temBaixado, temModo, temEstoques] = await Promise.all([
-          hasEstoqueBaixadoColumn(), hasModoVendaColumn(), hasEstoquesNotaColumns(),
-        ]);
-        const selX = [
-          'id, route_id, nota_tipo',
-          temBaixado ? ', estoque_baixado' : '',
-          temModo ? ', modo_nota' : '',
-        ].join('');
-        const { data: sX } = await db.from('sales').select(selX).eq('id', saleId).single();
-        const sRow = (sX as Record<string, unknown>) || {};
-
-        // 2a) reserva da PRÉ-VENDA (estoque_baixado) → devolve ao ESTOQUE TOTAL de casa
-        if (temBaixado && sRow.estoque_baixado === true) {
-          await db.from('sales').update({ estoque_baixado: false }).eq('id', saleId);
-          const { data: itensRes } = await db.from('sale_items').select('produto_id, quantidade').eq('sale_id', saleId);
-          const devolve = new Map<string, number>();
-          for (const it of ((itensRes || []) as unknown) as Record<string, unknown>[]) {
-            const pid = String(it.produto_id || '');
-            if (pid) devolve.set(pid, (devolve.get(pid) || 0) + (Number(it.quantidade) || 0));
-          }
-          const idsDev = [...devolve.keys()];
-          if (idsDev.length > 0) {
-            const { data: prodsDev } = await db.from('products').select('id, estoque_principal').in('id', idsDev);
-            for (const p of ((prodsDev || []) as unknown) as Record<string, unknown>[]) {
-              await db.from('products').update({
-                estoque_principal: (Number(p.estoque_principal) || 0) + (devolve.get(String(p.id)) || 0),
-              }).eq('id', String(p.id));
-            }
-            cascade.push('Estoque TOTAL (casa) reposto');
-          }
-        }
-
-        // 2b) abate o CONTADOR DE SAÍDA (estoque 1 COM NF / estoque 2 SEM NF)
-        if (temEstoques) {
-          const modoVenda = String(sRow.modo_nota || sRow.nota_tipo || '').toUpperCase();
-          const colContador = modoVenda === 'CUPOM' ? 'estoque_semnf' : 'estoque_nota';
-          const { data: itensRes } = await db.from('sale_items').select('produto_id, quantidade').eq('sale_id', saleId);
-          const totais = new Map<string, number>();
-          for (const it of ((itensRes || []) as unknown) as Record<string, unknown>[]) {
-            const pid = String(it.produto_id || '');
-            if (pid) totais.set(pid, (totais.get(pid) || 0) + (Number(it.quantidade) || 0));
-          }
-          const idsC = [...totais.keys()];
-          if (idsC.length > 0) {
-            const { data: prodsC } = await db.from('products').select(`id, ${colContador}`).in('id', idsC);
-            for (const p of ((prodsC || []) as unknown) as Record<string, unknown>[]) {
-              const q = totais.get(String(p.id)) || 0;
-              if (q <= 0) continue;
-              await db.from('products').update({
-                [colContador]: Math.max(0, (Number(p[colContador]) || 0) - q),
-              }).eq('id', String(p.id));
-            }
-            cascade.push('Contador de saídas (estoque 1/2) corrigido');
-          }
-        }
-
-        // 2c) carga da VAN + 3) exclusão (comissões, comprovantes, itens, venda)
-        const rRpc = await db.rpc('excluir_venda_estornar_estoque', { p_sale_id: saleId });
-        if (rRpc.error) {
-          // fallback manual — mesmo contrato do RPC (padrão do projeto)
-          const { data: itensRes } = await db.from('sale_items').select('produto_id, quantidade').eq('sale_id', saleId);
-          const { data: sVend } = await db.from('sales').select('vendedor_id').eq('id', saleId).single();
-          const vendedorId = String((sVend as Record<string, unknown>)?.vendedor_id || '');
-          for (const it of ((itensRes || []) as unknown) as Record<string, unknown>[]) {
-            const { data: cRow } = await db.from('cargas').select('quantidade')
-              .eq('vendedor_id', vendedorId).eq('produto_id', String(it.produto_id)).maybeSingle();
-            await db.from('cargas').update({ quantidade: (Number((cRow as Record<string, unknown>)?.quantidade) || 0) + (Number(it.quantidade) || 0) })
-              .eq('vendedor_id', vendedorId).eq('produto_id', String(it.produto_id));
-          }
-          await db.from('commissions').delete().eq('sale_id', saleId);
-          await db.from('payment_comprovantes').delete().eq('sale_id', saleId);
-          await db.from('entrega_eventos').delete().eq('sale_id', saleId);
-          await db.from('sale_items').delete().eq('sale_id', saleId);
-          await db.from('sales').delete().eq('id', saleId);
-        }
-        cascade.push('Venda excluída do sistema — estoque devolvido (carga da van + casa)');
-
-        // 2d) rota de entrega: recalcula o total de paradas (best-effort)
-        const routeId = String(sRow.route_id || '');
-        if (routeId) {
-          try {
-            const { count } = await db.from('sales').select('id', { count: 'exact', head: true }).eq('route_id', routeId);
-            await db.from('entrega_rotas').update({ total_paradas: count || 0 }).eq('id', routeId);
-          } catch { /* rota já pode ter sido removida */ }
-        }
-      } catch (eC) {
-        cascade.push(`Exclusão/estoque não concluída (${(eC as Error).message}) — revise a venda manualmente`);
+      // ----- 1) ARQUIVA A NOTA NO PORTAL (CANCELADAS) + 2) ESTOQUE + 3) EXCLUSÃO -----
+      if (!boletoBloqueado) {
+        const msgs = await finalizarVendaCancelada(saleId);
+        cascade.push(...msgs);
       }
     }
 
@@ -401,6 +329,7 @@ export async function POST(req: NextRequest) {
           ? 'NFC-e so pode ser cancelada em ate 30 minutos apos a emissao (regra da SEFAZ).'
           : undefined),
       cascade,
+      bloqueioBoleto: boletoBloqueado,
       prazo: prazo ? { expiraEm: prazo.expiraEm, prazoLabel: prazo.prazoLabel, textoRestante: prazo.textoRestante } : undefined,
       nota: { ...notaPublica(sale as Record<string, unknown>), ...res },
     });

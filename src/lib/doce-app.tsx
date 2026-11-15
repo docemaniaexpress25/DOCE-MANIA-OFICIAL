@@ -579,17 +579,22 @@ const App: React.FC = () => {
     return success;
   };
 
-  const addProduct = async (nome: string, custo: number, venda: number, comissao: number, estoque: number = 0, categoryId?: string, subcategoryId?: string, precoMinimo?: number, fiscal?: Partial<Product>) => {
+  // BLOCO 147: devolve o produto gravado (ou null) — o modal de produtos usa
+  // isso para AVISAR quando o banco recusou (ex.: coluna codigo ausente —
+  // SQL do Bloco 145 não rodado) em vez de fingir que salvou.
+  const addProduct = async (nome: string, custo: number, venda: number, comissao: number, estoque: number = 0, categoryId?: string, subcategoryId?: string, precoMinimo?: number, fiscal?: Partial<Product>): Promise<Product | null> => {
     const res = await productService.insertProduct({ nome, precoCusto: custo, precoVenda: venda, precoMinimo: precoMinimo || 0, comissaoPercentual: comissao, estoquePrincipal: estoque, ativo: true, categoryId, subcategoryId, ...fiscal });
     if (res) {
       await appSettingsService.updateSettings({ productOrder: [...productOrder, res.id] });
       fetchCoreData();
     }
+    return res;
   };
 
-  const updateProduct = async (id: string, data: Partial<Product>) => {
-    await productService.updateProduct(id, data);
+  const updateProduct = async (id: string, data: Partial<Product>): Promise<Product | null> => {
+    const res = await productService.updateProduct(id, data);
     fetchCoreData();
+    return res;
   };
 
   const activateAllProducts = async () => {

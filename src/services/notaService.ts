@@ -91,8 +91,11 @@ export const notaService = {
     }
   },
 
-  /** [ADMIN] Cancela a nota com justificativa (min. 15 caracteres). */
-  async cancelar(saleId: string, justificativa: string): Promise<{ ok: boolean; nota?: NotaInfo; erro?: string }> {
+  /** [ADMIN] Cancela a nota com justificativa (min. 15 caracteres).
+   *  BLOCO 147: devolve cascade/aviso/bloqueioBoleto — o servidor cancela o
+   *  BOLETO junto; se o boleto não saiu no Inter, a venda fica no Portal
+   *  Fiscal em CANCELADAS para o admin resolver (Ações > Boleto > Cancelar). */
+  async cancelar(saleId: string, justificativa: string): Promise<{ ok: boolean; nota?: NotaInfo; erro?: string; aviso?: string; cascade?: string[]; bloqueioBoleto?: boolean }> {
     try {
       const res = await fetch('/api/notas', {
         method: 'POST',
@@ -101,7 +104,7 @@ export const notaService = {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}`, nota: data.nota };
-      return { ok: true, nota: data.nota };
+      return { ok: true, nota: data.nota, aviso: data.aviso, cascade: data.cascade, bloqueioBoleto: !!data.bloqueioBoleto };
     } catch (e: unknown) {
       return { ok: false, erro: e instanceof Error ? e.message : 'Falha de conexao' };
     }

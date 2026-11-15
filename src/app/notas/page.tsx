@@ -526,7 +526,11 @@ export default function PortalNotasPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { showToast(data.erro || 'Falha ao cancelar na SEFAZ.', false); return; }
-      showToast(data.ok ? 'Nota cancelada na SEFAZ.' : 'Cancelamento em processamento — consulte em alguns segundos.', !!data.ok);
+      // BLOCO 147: o servidor cancela o BOLETO junto — se o boleto não saiu
+      // (Inter fora), a venda fica na lista em CANCELADAS para resolver aqui.
+      const aviso: string = String(data.aviso || (data.ok ? 'Nota cancelada na SEFAZ.' : 'Cancelamento em processamento — consulte em alguns segundos.'));
+      showToast(aviso, !!data.ok);
+      if (data.bloqueioBoleto) showToast('ATENÇÃO: o BOLETO continua VIVO no banco! A venda segue na lista (CANCELADAS) — cancele o boleto em Ações > Boleto > Cancelar.', false);
       setCancelModal(null); setJustificativa('');
       void carregar(token);
     } catch {

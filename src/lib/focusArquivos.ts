@@ -346,6 +346,10 @@ export interface NotaAvulsaMeta {
    *  gerado usa; as da Focus não precisam porque o DANFE oficial vem da API). */
   emitente?: string;
   emitenteCnpj?: string;
+  /** BLOCO 147: nome do VENDEDOR da venda original — preenchido quando a
+   *  avulsa nasce do CANCELAMENTO de uma venda do app (a nota cancelada
+   *  sobrevive no Portal Fiscal com o vendedor real, não como "fora do app"). */
+  vendedor?: string;
 }
 
 function pastaAvulsa(): string {
@@ -906,6 +910,78 @@ export async function importarAvulsa(ref: string, docHint?: 'NFE' | 'NFCE'): Pro
   };
   const salvo = await gravarNoStorage(`${pastaAvulsa()}/${meta.ref}.json`, Buffer.from(JSON.stringify(meta, null, 2)), 'application/json');
   if (!salvo && !coleta.ok) return { ok: false, motivo: coleta.motivo || 'FALHA_GRAVACAO' };
+  return { ok: true, meta };
+}
+
+/**
+ * BLOCO 147 — ARQUIVA UMA NOTA CANCELADA COMO AVULSA (regra do dono:
+ * "as notas canceladas estao sumindo do portal, elas devem aparecer em
+ * CANCELADAS!").
+ *
+ * O cancelamento da venda apaga a linha `sales` — sem isso a nota CANCELADA
+ * desaparecia do Portal Fiscal. Aqui, ANTES da exclusao, a nota e congelada:
+ * consulta COMPLETA na Focus, arquiva XML + DANFE + XML do cancelamento no
+ * nosso Storage e grava o JSON de metadados com status CANCELADO — o portal
+ * lista ela no filtro CANCELADAS com DANFE/XML clicaveis, cliente, valor,
+ * pagamento e vendedor da venda original. Idempotente (mesma ref = mesmo
+ * arquivo; importes posteriores da Focus nao duplicam).
+ */
+export async function arquivarNotaCancelada(
+  doc: FocusDoc,
+  ref: string,
+  extra?: {
+    numero?: string;
+    chave?: string;
+    emitidaEm?: string;
+    valor?: number;
+    cliente?: string;
+    clienteDoc?: string;
+    pagamento?: string;
+    vendedor?: string;
+  },
+): Promise<{ ok: boolean; motivo?: string; meta?: NotaAvulsaMeta }> {
+  if (!getFocusConfig().token) return { ok: false, motivo: 'FOCUS_NAO_CONFIGURADA' };
+  const tokenNota = String(ref || '').trim().replace(/[^A-Za-z0-9_-]/g, '').slice(0, 60);
+  if (!tokenNota) return { ok: false, motivo: 'REF_INVALIDA' };
+
+  // Consulta COMPLETA (destinatario/valor/pagamento) — best-effort: se a Focus
+  // estiver fora, a meta nasce dos dados da venda (extra) e o admin reimporta
+  // depois (Ações > Importar avulsas atualiza os arquivos).
+  let data: Record<string, unknown> | null = null;
+  try {
+    const r = await consultarNota(doc, tokenNota, true);
+    const dd = (r.data || {}) as Record<string, unknown>;
+    if (r.ok && dd && !('erro' in dd) && Object.keys(dd).length > 0) data = dd;
+  } catch { /* Focus fora — segue com o extra */ }
+
+  if (data) await arquivarDaConsulta(doc, tokenNota, data);
+  invalidaPresenca();
+
+  const req = ((data?.requisicao_nota_fiscal || {}) as Record<string, unknown>);
+  const totais = ((req.totais || {}) as Record<string, unknown>);
+  const dest = String(req.nome_destinatario || req.razao_social_destinatario || '');
+  const meta: NotaAvulsaMeta = {
+    ref: tokenNota,
+    doc: doc === 'nfce' ? 'NFCE' : 'NFE',
+    numero: String(data?.numero || req.numero || extra?.numero || ''),
+    serie: String(data?.serie || req.serie || ''),
+    // O dono cancelou — o portal DEVE mostrar em CANCELADAS mesmo se a
+    // consulta chegar antes do evento propagar na Focus.
+    status: 'CANCELADO',
+    chave: String(data?.chave_nfe || extra?.chave || '').replace(/\D/g, '').slice(-44),
+    dataEmissao: String(req.data_emissao || data?.data_emissao || extra?.emitidaEm || ''),
+    dataAutorizacao: String(data?.data_autorizacao || (data?.protocolo_nota_fiscal as Record<string, unknown> | undefined)?.data_recebimento || extra?.emitidaEm || ''),
+    valor: Number(totais.valor_total ?? data?.total ?? data?.valor_total) || Number(extra?.valor) || 0,
+    cliente: String(extra?.cliente || dest || 'CONSUMIDOR NAO IDENTIFICADO').slice(0, 120),
+    clienteDoc: String(extra?.clienteDoc || req.cnpj_destinatario || req.cpf_destinatario || ''),
+    pagamento: String(extra?.pagamento || rotuloPagamento(req.formas_pagamento) || ''),
+    qrcodeUrl: String(data?.qrcode_url || ''),
+    importadoEm: new Date().toISOString(),
+    origem: 'FOCUS',
+    vendedor: extra?.vendedor || undefined,
+  };
+  const salvo = await gravarNoStorage(`${pastaAvulsa()}/${meta.ref}.json`, Buffer.from(JSON.stringify(meta, null, 2)), 'application/json');
+  if (!salvo) return { ok: false, motivo: 'FALHA_GRAVACAO' };
   return { ok: true, meta };
 }
 

@@ -1749,3 +1749,24 @@ QA:
 - TSC --noEmit: nenhum erro nos arquivos tocados (erros pré-existentes do código portado inalterados).
 - agent-browser E2E (rotas de rede mockadas, mesma técnica de e2e do repo): PIN -> lista real em 1 linha; CONFIRMAR consulta (toast "Consultado na SEFAZ"); BOLETO completo (modal A RECEBER com linha digitável/PIX, copiar, cancelar com motivo -> toast "Boleto cancelado no Inter"); CANCELAR NOTA com contagem correta ("RESTAM 18MIN — prazo 30 minutos" para NFC-e) -> toast "Nota cancelada na SEFAZ"; IMPORTAR XML EM LOTE: drop de 2 XMLs (nota + evento cancelamento) -> confirmação -> progresso -> resultado "1 importada, 1 cancelamento"; detalhe com itens/cliente/boleto; sem botão de cancelar fora do prazo (30h > 24h NF-e testado); badges XML/Focus corretos; screenshots 1600px/1280px/390px; 0 erros de console/página; dev.log 200 em todas as chamadas.
 - NOTA de numeracao: os comentarios no código deste bloco usam BLOCO 142 (prazo SEFAZ, feito antes do sync) e BLOCO 143 (XML em lote/portal); o commit é BLOCO 144 porque o 143 (infra: LEIA-ME) já foi registrado antes. Mesma feature, numeração única no histórico.
+
+## bloco149 — ACESSO AO PORTAL DE ENTRADAS no painel admin (card + aba + botão /entradas) (2026-11-15)
+
+DONO PEDIU (verbatim): "aonde eu clico para acessar o portal das xml de entrada.."
+
+CAUSA RAIZ: o Portal de Entradas (/entradas, BLOCO 148) existia e estava 100%, mas NÃO HAVIA NENHUM PONTO DE ACESSO no app — o card antigo "XML → Produtos" continuava apontando para a aba FISCAL_XML interna. Por isso o dono não achava onde clicar.
+
+FEITO (AdminDashboard.tsx):
+1. Card novo "Portal de Entradas" (ícone fa-file-import, teal) no grid do Painel Administrativo, NO LUGAR do antigo "XML → Produtos" (migração concluída).
+2. Aba nova ENTRADAS com header próprio ("Notas XML de fornecedores — lote, vinculação e estoque") — mesmo padrão do Portal Fiscal.
+3. Botão grande teal "ACESSAR O PORTAL DE ENTRADAS" que abre /entradas em nova aba, com subtítulo "XML de fornecedores · entrada por lote · vincular produtos · dar entrada no estoque" e texto de ajuda do fluxo (arrastar vários XMLs/.zip → cada nota UMA linha → expandir para conferir itens → vincular → dar entrada no estoque com 1 clique).
+
+SQL PARA O DONO RODAR: NENHUM novo. O único SQL dos blocos recentes é o do BLOCO 145 (products.codigo) — coluna + índice único products_codigo_uidx, IDEMPOTENTE (pode rodar de novo sem dano). Já rodado na produção (o erro real de "código duplicado" capturado no BLOCO 147b prova que o índice está ativo lá).
+
+ARQUIVOS: src/components/doce/AdminDashboard.tsx (TabType ENTRADAS + MenuCard + aba).
+
+QA:
+- LINT: 0 erros / 10 warnings (baseline exata).
+- agent-browser (sessão ADMIN de dev injetada em localStorage): card "PORTAL DE ENTRADAS" visível no grid do Painel Administrativo; clique abre a aba com header + botão; botão abre /entradas em NOVA ABA (t2 confirmada); a página renderiza o portão de PIN completo (teclado numérico 0-9, apagar, ENTRAR desabilitado até digitar); console sem erros de página (só warning de permissão de push, esperado).
+- LIMITAÇÃO HONESTA: o portão de PIN do /entradas valida o PIN REAL do admin no bcrypt de produção (mesmo PIN do Portal Fiscal) — o QA local não passa do portão sem o PIN do dono (por design). Interior do portal validado no BLOCO 148.
+- Teste do dono: Painel Administrativo → card "Portal de Entradas" → botão teal → PIN do admin → portal abre.

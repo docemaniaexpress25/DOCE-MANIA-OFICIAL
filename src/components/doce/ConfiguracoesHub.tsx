@@ -130,7 +130,7 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
   const [toast, setToast] = useState<{ msg: string; tipo: 'success' | 'error' } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const mostrarToast = (msg: string, tipo: 'success' | 'error') => {
+  const mostrarToast = (msg: string, tipo: 'success' | 'error' = 'success') => {
     setToast({ msg, tipo });
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(null), 2800);

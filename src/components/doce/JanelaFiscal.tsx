@@ -477,11 +477,11 @@ const JanelaFiscal: React.FC<JanelaFiscalProps> = ({ sale, client, nota, focus, 
         </div>
       </div>
 
-      {/* MINI DANFE 80mm — visualização + impressão (BT/USB) com os dados reais */}
+      {/* MINI DANFE 80mm — visualização + impressão (BT/USB) com os dados reais
+          (BLOCO 152: mini boleto excluído — o modelo sobrou só com o DANFE) */}
       <ModelosImpressao
         abrir={previewAberto}
         onClose={() => setPreviewAberto(false)}
-        abaInicial="danfe"
         cupom={previewCupom}
         showToast={showToast}
       />

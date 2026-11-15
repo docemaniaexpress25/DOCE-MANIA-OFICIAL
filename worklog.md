@@ -1861,7 +1861,7 @@ FEITO (BLOCO 152):
 
 SQL PARA O DONO RODAR: NENHUM — tudo dentro do jsonb app_settings.erp_config (coluna já existe) e código.
 
-ARQUIVOS: src/lib/miniBoleto.ts (deletado), src/services/boletoService.ts, src/app/api/boletos/route.ts, src/lib/erpConfig.ts, src/app/api/configuracoes/route.ts, src/components/doce/BoletoCard.tsx, src/components/doce/ModelosImpressao.tsx, src/components/doce/ConfiguracoesHub.tsx, src/components/doce/PDV.tsx, src/components/doce/Cupom.tsx, src/lib/usbPrint.ts, src/services/bluetoothPrinterService.ts, worklog.md.
+ARQUIVOS: src/lib/miniBoleto.ts (deletado), src/services/boletoService.ts, src/app/api/boletos/route.ts, src/lib/erpConfig.ts, src/app/api/configuracoes/route.ts, src/components/doce/BoletoCard.tsx, src/components/doce/ModelosImpressao.tsx, src/components/doce/ConfiguracoesHub.tsx, src/components/doce/PDV.tsx, src/components/doce/Cupom.tsx, src/components/doce/JanelaFiscal.tsx (abaInicial do modelo removido), src/lib/usbPrint.ts, src/services/bluetoothPrinterService.ts, worklog.md.
 
 QA:
 - LINT: 0 erros / 10 warnings (baseline exata).

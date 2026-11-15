@@ -303,6 +303,52 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     if (!sucessoData) { setNotaResult(null); setBoletoStatusSucesso(null); }
   }, [sucessoData]);
 
+  // ============================================================
+  // BLOCO 153 (regra do dono): CAIXA da pronta entrega À VISTA — o
+  // recebimento do dinheiro/Pix acontece DEPOIS da emissão da nota, aqui
+  // na tela de sucesso. A venda já nasce PAGO (BLOCO 152): o caixa só
+  // anota no detalhe o valor recebido, o troco e a conta do Pix — assim a
+  // venda à vista nunca fica "em aberto" e o vendedor recebe na hora certa.
+  // ============================================================
+  const [caixaConfirmado, setCaixaConfirmado] = useState(false);
+  const [caixaSalvando, setCaixaSalvando] = useState(false);
+  useEffect(() => {
+    if (view === 'SUCESSO') {
+      setValorRecebido('');
+      setMistoDinDoc('');
+      setMistoPixDoc('');
+      setCaixaConfirmado(false);
+    }
+  }, [view]);
+  const confirmarCaixaAvista = async (textoCaixa: string) => {
+    const s = sucessoData?.sale;
+    if (!s || caixaSalvando || caixaConfirmado) return;
+    setCaixaSalvando(true);
+    const base = String(s.detalhePagamento || '').replace(/ \| CAIXA:.*$/, '');
+    const novoDetalhe = `${base} | CAIXA: ${textoCaixa}`;
+    const ok = await saleService.updateSale(String(s.id), { detalhePagamento: novoDetalhe } as any);
+    setCaixaSalvando(false);
+    if (ok) {
+      setCaixaConfirmado(true);
+      setSucessoData(prev => prev ? { ...prev, sale: { ...prev.sale, detalhePagamento: novoDetalhe } } : prev);
+      setAppModal({ title: 'Caixa', message: 'Recebimento registrado!', icon: 'fa-solid fa-circle-check', iconColor: 'text-emerald-500', type: 'success' });
+    } else {
+      setAppModal({ title: 'Caixa', message: 'Não gravou o registro do caixa — a venda continua PAGA, tente de novo.', icon: 'fa-solid fa-triangle-exclamation', iconColor: 'text-rose-500', type: 'error' });
+    }
+  };
+
+  // BLOCO 153: vencimento combinado da venda (tela 6) — o boleto do prazo
+  // nasce com ESTA data (fim do +7d fixo desalinhado).
+  const vencVendaISO = (() => {
+    const v = sucessoData?.sale?.dataVencimento as Date | string | undefined | null;
+    if (!v) return undefined;
+    const s = v instanceof Date ? v.toISOString() : String(v);
+    return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10) : undefined;
+  })();
+  const vencVendaBR = vencVendaISO ? vencVendaISO.split('-').reverse().join('/') : '';
+  // BLOCO 153: CEP do cliente — o Inter EXIGE o CEP do pagador para gerar o boleto
+  const clienteCepOk = ((client.enderecoCep as string) || '').replace(/\D/g, '').length === 8;
+
   // BLOCO 123 (ARMADA/DESLIGADA): pendências fiscais da PRONTA ENTREGA para
   // CONCLUIR a venda — nota BATIDA (doc NFE/NFCE) + boleto do prazo gerado.
   // Com FISCAL_OBRIGATORIO=false devolve SEMPRE [] — nada muda hoje.
@@ -691,14 +737,13 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   if (!temCnpjApto) faltantesNfe.push('CNPJ');
   if (!client.email?.trim()) faltantesNfe.push('email');
   // BLOCO 122 (tela 6): forma de pagamento válida — habilita o botão Continuar
-  // (depois de total/valorRecebido existirem — ordem das declarações importa)
+  // BLOCO 153 (regra do dono): pronta entrega À VISTA na tela 6 = só SELECIONAR
+  // a forma (dinheiro/pix/misto). O CAIXA — valor recebido, troco, QR do Pix —
+  // aparece na TELA FINAL, DEPOIS da emissão da nota. A prazo exige a data.
   const formaOk = (() => {
     if (!condicaoDoc || !formaDoc) return false;
     if (condicaoDoc === 'AVISTA') {
-      if (isPreVenda) return formaDoc === 'DINHEIRO' || formaDoc === 'PIX';
-      if (formaDoc === 'DINHEIRO') { const rec = parseFloat(valorRecebido) || 0; return rec > 0 && rec + 0.001 >= total; }
-      if (formaDoc === 'MISTO') { const soma = (parseFloat(mistoDinDoc) || 0) + (parseFloat(mistoPixDoc) || 0); return soma > 0 && soma + 0.001 >= total; }
-      return formaDoc === 'PIX';
+      return formaDoc === 'DINHEIRO' || formaDoc === 'PIX' || formaDoc === 'MISTO';
     }
     return !!vencimentoDoc;
   })();
@@ -707,10 +752,14 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   // BLOCO 100 (regra do dono): QR DO PIX gerado com o VALOR DA VENDA —
   // BR Code (Pix Copia e Cola) atrelado a chave Pix configurada nas
   // Configurações (app_settings.pix_chave_entrega, lida no servidor).
-  // BLOCO 122: roda na TELA 6 (FORMA) — à vista + Pix na pronta entrega.
+  // BLOCO 153: roda na TELA DE SUCESSO — o Pix se RECEBE depois da emissão
+  // da nota (a tela 6 apenas seleciona a forma). O valor é o da venda
+  // gravada (sucessoData.total), não o do carrinho (que já foi limpo).
   // ============================================================
   useEffect(() => {
-    if (view !== 'FORMA' || isPreVenda || condicaoDoc !== 'AVISTA' || formaDoc !== 'PIX' || !(total > 0)) {
+    const valorPix = Number(sucessoData?.total ?? total) || 0;
+    const avistaPronta = !!sucessoData && !sucessoData.isPreVenda && !sucessoData.isPrazo && condicaoDoc === 'AVISTA' && formaDoc === 'PIX';
+    if (view !== 'SUCESSO' || !avistaPronta || !(valorPix > 0)) {
       setPixGerado(null);
       setPixFalhou(false);
       return;
@@ -720,7 +769,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     (async () => {
       try {
         const { authHeaders } = await import('@/services/userService');
-        const r = await fetch(`/api/pix/venda?valor=${total.toFixed(2)}`, { headers: authHeaders() });
+        const r = await fetch(`/api/pix/venda?valor=${valorPix.toFixed(2)}`, { headers: authHeaders() });
         const d = await r.json().catch(() => ({}));
         if (!vivo) return;
         if (r.ok && d.ok && d.qrDataUrl) {
@@ -733,7 +782,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       }
     })();
     return () => { vivo = false; };
-  }, [view, isPreVenda, condicaoDoc, formaDoc, total]);
+  }, [view, sucessoData, condicaoDoc, formaDoc, total]);
 
   // BLOCO 122: os atalhos 7D/14D/21D/30D da tela 6 escrevem direto o
   // vencimentoDoc — sem estado extra de "dias".
@@ -791,19 +840,19 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     let metodoP: PaymentMethod;
     let finalDetalhe = '';
     if (condicaoDoc === 'AVISTA') {
+      // BLOCO 153: a tela 6 só SELECIONA a forma — valor recebido/troco/conta
+      // Pix são registrados no CAIXA da tela final (depois da emissão da nota)
       if (formaDoc === 'DINHEIRO') {
         metodoP = 'DINHEIRO';
-        const rec = parseFloat(valorRecebido) || 0;
-        const trocoVal = Math.max(0, rec - total);
-        finalDetalhe = `DINHEIRO${trocoVal > 0 ? ` — troco R$ ${trocoVal.toFixed(2)}` : ''}`;
+        finalDetalhe = 'DINHEIRO — à vista';
       } else if (formaDoc === 'PIX') {
         metodoP = 'PIX';
-        finalDetalhe = pixSlotDoc === 1 ? pix1Name : pix2Name;
+        finalDetalhe = `PIX — à vista (${pixSlotDoc === 1 ? pix1Name : pix2Name})`;
       } else {
         // MISTO: o banco legado só grava DINHEIRO/PIX/A_PRAZO — grava como
         // DINHEIRO com o detalhe explícito (mesmo padrão de sempre)
         metodoP = 'DINHEIRO';
-        finalDetalhe = `MISTO: Dinheiro R$ ${(parseFloat(mistoDinDoc) || 0).toFixed(2)} + Pix R$ ${(parseFloat(mistoPixDoc) || 0).toFixed(2)}`;
+        finalDetalhe = 'MISTO: Dinheiro + Pix — à vista';
       }
     } else {
       metodoP = 'A_PRAZO';
@@ -1804,32 +1853,19 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                 ))}
               </div>
               {isPreVenda && <p className="text-[8px] font-bold text-gray-400 text-center leading-snug">Misto na entrega: o entregador informa na hora (dinheiro + Pix).</p>}
-              {/* BLOCO 139 (regra do dono): aqui só diz COMO o cliente vai pagar —
-                  o recebimento REAL é confirmado depois, na tela de imprimir o cupom/nota */}
+              {/* BLOCO 153 (regra do dono): a tela 6 só SELECIONA a forma —
+                  o CAIXA (dinheiro recebido/troco, QR do Pix) aparece na tela
+                  final, DEPOIS da emissão da nota */}
               {!isPreVenda && (
-                <p className="text-[8px] font-black text-blue-500 text-center leading-snug bg-blue-50 border border-blue-100 rounded-xl px-3 py-2"><i className="fa-solid fa-circle-info mr-1"></i>Aqui você só diz COMO o cliente vai pagar — o recebimento real é confirmado na tela de imprimir o cupom/nota.</p>
+                <p className="text-[8px] font-black text-blue-500 text-center leading-snug bg-blue-50 border border-blue-100 rounded-xl px-3 py-2"><i className="fa-solid fa-circle-info mr-1"></i>Você só seleciona COMO o cliente vai pagar — o CAIXA (dinheiro/troco, QR do Pix) aparece na tela final, depois da emissão da nota.</p>
               )}
 
-              {/* DINHEIRO */}
+              {/* DINHEIRO — BLOCO 153: informativo (o caixa com valor/troco fica na tela final) */}
               {formaDoc === 'DINHEIRO' && !isPreVenda && (
-                <div className="bg-white rounded-3xl border border-gray-100 p-4 space-y-3">
-                  <label className="text-[9px] font-black text-gray-400 uppercase">Valor recebido R$</label>
-                  <input type="number" inputMode="decimal" value={valorRecebido} onChange={e => setValorRecebido(e.target.value)} placeholder="0.00"
-                    className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-2xl font-black text-center outline-none" />
-                  <div className="grid grid-cols-3 gap-2">
-                    {[50, 100, 200].map(v => (
-                      <button key={v} onClick={() => setValorRecebido(String(v))} className="py-2.5 rounded-xl bg-gray-50 border border-gray-100 text-[10px] font-black text-gray-600 active:scale-95">R$ {v}</button>
-                    ))}
-                  </div>
-                  {(parseFloat(valorRecebido) || 0) > 0 && (parseFloat(valorRecebido) || 0) < total && (
-                    <p className="text-[9px] font-black text-rose-500 uppercase text-center">Faltam R$ {(total - (parseFloat(valorRecebido) || 0)).toFixed(2)} para fechar</p>
-                  )}
-                  {(parseFloat(valorRecebido) || 0) > total && (
-                    <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100 text-center">
-                      <p className="text-[10px] font-black text-emerald-600 uppercase mb-1">Troco a devolver</p>
-                      <p className="text-2xl font-black text-emerald-700">R$ {troco.toFixed(2)}</p>
-                    </div>
-                  )}
+                <div className="bg-white rounded-3xl border border-gray-100 p-4 text-center">
+                  <i className="fa-solid fa-hand-holding-dollar text-emerald-500 text-lg"></i>
+                  <p className="text-[10px] font-black text-emerald-700 uppercase mt-1">Cliente paga R$ {total.toFixed(2)} em DINHEIRO</p>
+                  <p className="text-[9px] text-gray-400 font-semibold mt-0.5">O campo de valor recebido e o cálculo do troco aparecem no CAIXA da tela final — depois da emissão da nota.</p>
                 </div>
               )}
               {formaDoc === 'DINHEIRO' && isPreVenda && (
@@ -1839,43 +1875,18 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                 </div>
               )}
 
-              {/* PIX */}
+              {/* PIX — BLOCO 153: conta aqui, QR na tela final (recebe depois da nota) */}
               {formaDoc === 'PIX' && !isPreVenda && (
                 <div className="bg-white rounded-3xl border border-gray-100 p-4 space-y-3">
-                  <p className="text-[9px] font-black text-gray-400 uppercase text-center">Conta para registrar (anotação da venda)</p>
+                  <p className="text-[9px] font-black text-gray-400 uppercase text-center">Conta do Pix (anotação da venda)</p>
                   <div className="grid grid-cols-2 gap-2">
                     <button onClick={() => setPixSlotDoc(1)} className={`p-3 rounded-xl border text-[10px] font-black uppercase ${pixSlotDoc === 1 ? 'border-teal-600 bg-teal-50 text-teal-600' : 'border-gray-100 text-gray-400'}`}>{pix1Name}</button>
                     <button onClick={() => setPixSlotDoc(2)} className={`p-3 rounded-xl border text-[10px] font-black uppercase ${pixSlotDoc === 2 ? 'border-teal-600 bg-teal-50 text-teal-600' : 'border-gray-100 text-gray-400'}`}>{pix2Name}</button>
                   </div>
                   <div className="bg-teal-50/60 p-4 rounded-2xl flex flex-col items-center border border-teal-100">
-                    <p className="text-[8px] font-black text-teal-500 uppercase mb-1">PIX — QR com o valor da venda</p>
-                    <p className="text-2xl font-black text-teal-700 mb-2">R$ {total.toFixed(2)}</p>
-                    <div className="w-44 h-44 bg-white rounded-xl flex items-center justify-center border border-gray-200 overflow-hidden shadow-inner">
-                      {pixGerado ? (
-                        <img src={pixGerado.qrDataUrl} alt="QR Pix com o valor da venda" className="w-full h-full object-contain" />
-                      ) : pixFalhou ? (
-                        pixSlotDoc === 1
-                          ? (pix1Code ? <img src={pix1Code} className="w-full h-full object-contain" /> : <i className="fa-solid fa-qrcode text-gray-200 text-3xl"></i>)
-                          : (pix2Code ? <img src={pix2Code} className="w-full h-full object-contain" /> : <i className="fa-solid fa-qrcode text-gray-200 text-3xl"></i>)
-                      ) : (
-                        <i className="fa-solid fa-spinner fa-spin text-teal-300 text-3xl"></i>
-                      )}
-                    </div>
-                    {pixGerado ? (
-                      <>
-                        <p className="text-[9px] font-bold text-gray-400 mt-2 text-center leading-snug">Chave Pix das Configurações: <span className="font-black text-gray-600 break-all">{pixGerado.chaveFormatada}</span></p>
-                        <button
-                          onClick={() => { navigator.clipboard?.writeText(pixGerado.payload).then(() => setAppModal({ title: 'Pix copiado', message: 'Código Copia e Cola na área de transferência — o cliente cola no app do banco e o valor já vem preenchido.', icon: 'fa-solid fa-copy', iconColor: 'text-teal-500', type: 'success' })).catch(() => {}); }}
-                          className="mt-2 px-4 py-2.5 rounded-xl bg-teal-600 text-white text-[9px] font-black uppercase active:scale-95 shadow"
-                        >
-                          <i className="fa-solid fa-copy mr-1"></i>Copiar código Pix (copia e cola)
-                        </button>
-                      </>
-                    ) : pixFalhou ? (
-                      <p className="text-[8px] font-bold text-rose-400 mt-2 text-center leading-snug">Não deu para gerar o QR com valor — mostre o QR fixo do banco (acima) e confira o valor com o cliente.</p>
-                    ) : (
-                      <p className="text-[8px] font-bold text-teal-400 mt-2">Gerando QR com o valor da venda...</p>
-                    )}
+                    <i className="fa-solid fa-qrcode text-teal-500 text-2xl"></i>
+                    <p className="text-[10px] font-black text-teal-700 uppercase mt-2">Pix de R$ {total.toFixed(2)}</p>
+                    <p className="text-[9px] text-teal-600/70 font-semibold mt-0.5 text-center">O QR com o valor da venda aparece no CAIXA da tela final — depois da emissão da nota.</p>
                   </div>
                 </div>
               )}
@@ -1886,25 +1897,12 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                 </div>
               )}
 
-              {/* MISTO */}
+              {/* MISTO — BLOCO 153: informativo (valores de cada parte no caixa da tela final) */}
               {formaDoc === 'MISTO' && !isPreVenda && (
-                <div className="bg-white rounded-3xl border border-gray-100 p-4 space-y-3">
-                  <div className="space-y-1">
-                    <label className="text-[9px] font-black text-gray-400 uppercase">Dinheiro R$</label>
-                    <input type="number" inputMode="decimal" value={mistoDinDoc} onChange={e => setMistoDinDoc(e.target.value)} placeholder="0.00" className="w-full p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-lg font-black text-center outline-none" />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[9px] font-black text-gray-400 uppercase">Pix R$</label>
-                    <input type="number" inputMode="decimal" value={mistoPixDoc} onChange={e => setMistoPixDoc(e.target.value)} placeholder="0.00" className="w-full p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-lg font-black text-center outline-none" />
-                  </div>
-                  {((parseFloat(mistoDinDoc) || 0) + (parseFloat(mistoPixDoc) || 0)) > 0 && (() => {
-                    const soma = (parseFloat(mistoDinDoc) || 0) + (parseFloat(mistoPixDoc) || 0);
-                    return (
-                      <p className={`text-[10px] font-black uppercase text-center ${soma + 0.001 >= total ? 'text-emerald-600' : 'text-amber-500'}`}>
-                        {soma + 0.001 >= total ? 'FECHA O TOTAL ✓' : `Falta: R$ ${(total - soma).toFixed(2)}`}
-                      </p>
-                    );
-                  })()}
+                <div className="bg-white rounded-3xl border border-gray-100 p-4 text-center">
+                  <i className="fa-solid fa-money-bill-transfer text-slate-600 text-lg"></i>
+                  <p className="text-[10px] font-black text-slate-700 uppercase mt-1">Misto: parte DINHEIRO + parte PIX (total R$ {total.toFixed(2)})</p>
+                  <p className="text-[9px] text-gray-400 font-semibold mt-0.5">Os valores de cada parte você informa no CAIXA da tela final — depois da emissão da nota.</p>
                 </div>
               )}
             </>
@@ -1940,6 +1938,22 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                     })}
                   </div>
                 </div>
+              )}
+              {/* BLOCO 153 (regra do dono): boleto EXIGE CEP — aviso aqui, na tela
+                  da forma, para o vendedor completar o cadastro ANTES de sair */}
+              {formaDoc === 'BOLETO' && !clienteCepOk && (
+                <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3 space-y-2">
+                  <p className="text-[9px] font-black text-amber-700 uppercase leading-snug"><i className="fa-solid fa-triangle-exclamation mr-1"></i>Cliente SEM CEP no cadastro — o boleto do Inter exige o CEP do pagador (8 dígitos), tanto na NF-e quanto na NFC-e.</p>
+                  {onCompletarCadastro && (
+                    <button onClick={() => onCompletarCadastro(client)} className="w-full bg-amber-500 text-white font-black py-2.5 rounded-xl text-[10px] uppercase tracking-widest active:scale-95">
+                      <i className="fa-solid fa-user-pen mr-1"></i>Completar cadastro agora
+                    </button>
+                  )}
+                  <p className="text-[8px] font-bold text-amber-600/80 leading-snug">Sem CEP a venda pode concluir, mas o boleto só gera depois que o cadastro tiver o CEP (ou digitando na hora no card do boleto).</p>
+                </div>
+              )}
+              {formaDoc === 'BOLETO' && clienteCepOk && (
+                <p className="text-[8px] font-black text-indigo-500 uppercase text-center leading-snug bg-indigo-50 border border-indigo-100 rounded-xl px-3 py-2"><i className="fa-solid fa-circle-check mr-1"></i>CEP OK — o boleto é gerado MAIS TARDE (tela final ou cupom da venda) já com o vencimento combinado{vencimentoDoc ? ` ${vencimentoDoc.split('-').reverse().join('/')}` : ''}.</p>
               )}
             </div>
           )}
@@ -2059,18 +2073,131 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               <span className="text-[10px] font-black text-emerald-700 uppercase leading-snug">Entregador recebe na entrega</span>
             </div>
           )}
-          {/* BLOCO 152: à vista na pronta entrega = RECEBIDO na entrega (nasce PAGO,
-              cai no caixa à vista) — sem mais confirmação pendente no cupom */}
+          {/* BLOCO 153 (regra do dono): CAIXA — pronta entrega À VISTA recebe
+              DEPOIS da emissão da nota, aqui na tela final. A tela 6 só
+              selecionou COMO; aqui acontece o recebimento real (dinheiro com
+              troco, QR do Pix ou misto) e o registro cai no detalhe da venda. */}
           {!sucessoData.isPreVenda && !sucessoData.isPrazo && (
-            <div className="bg-emerald-50 p-3 rounded-2xl flex items-center gap-3 border border-emerald-100">
-              <i className="fa-solid fa-hand-holding-dollar text-emerald-500"></i>
-              <span className="text-[10px] font-black text-emerald-700 uppercase leading-snug">À vista: recebido na entrega — R$ {sucessoData.total.toFixed(2)} no caixa</span>
+            <div className="bg-white border-2 border-slate-200 rounded-2xl p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <i className="fa-solid fa-cash-register text-slate-700"></i>
+                <span className="text-[10px] font-black text-slate-700 uppercase flex-1">Caixa — recebimento à vista</span>
+                <span className="text-sm font-black text-gray-800">R$ {sucessoData.total.toFixed(2)}</span>
+              </div>
+              {caixaConfirmado ? (
+                <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 flex items-center gap-2">
+                  <i className="fa-solid fa-circle-check text-emerald-600"></i>
+                  <span className="text-[10px] font-black text-emerald-700 uppercase leading-snug">Recebimento registrado no caixa — venda PAGA</span>
+                </div>
+              ) : (
+                <>
+                  <p className="text-[8px] font-black text-slate-400 uppercase leading-snug">Receba do cliente AQUI (depois da nota) e confirme para registrar no caixa.</p>
+                  {formaDoc === 'DINHEIRO' && (() => {
+                    const rec = parseFloat(valorRecebido) || 0;
+                    const trocoCx = Math.max(0, rec - sucessoData.total);
+                    const recOk = rec > 0 && rec + 0.001 >= sucessoData.total;
+                    return (
+                      <div className="space-y-2">
+                        <label className="text-[9px] font-black text-gray-400 uppercase">Valor recebido R$</label>
+                        <input type="number" inputMode="decimal" value={valorRecebido} onChange={e => setValorRecebido(e.target.value)} placeholder="0.00"
+                          className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-2xl font-black text-center outline-none" />
+                        <div className="grid grid-cols-4 gap-2">
+                          <button onClick={() => setValorRecebido(sucessoData.total.toFixed(2))} className="py-2.5 rounded-xl bg-emerald-600 text-white text-[9px] font-black uppercase active:scale-95">Exato</button>
+                          {[50, 100, 200].map(v => (
+                            <button key={v} onClick={() => setValorRecebido(String(v))} className="py-2.5 rounded-xl bg-gray-50 border border-gray-100 text-[10px] font-black text-gray-600 active:scale-95">R$ {v}</button>
+                          ))}
+                        </div>
+                        {rec > 0 && rec < sucessoData.total && (
+                          <p className="text-[9px] font-black text-rose-500 uppercase text-center">Faltam R$ {(sucessoData.total - rec).toFixed(2)} para fechar</p>
+                        )}
+                        {rec > sucessoData.total && (
+                          <div className="bg-emerald-50 p-3 rounded-2xl border border-emerald-100 text-center">
+                            <p className="text-[9px] font-black text-emerald-600 uppercase mb-1">Troco a devolver</p>
+                            <p className="text-xl font-black text-emerald-700">R$ {trocoCx.toFixed(2)}</p>
+                          </div>
+                        )}
+                        <button onClick={() => confirmarCaixaAvista(`recebido R$ ${rec.toFixed(2)}${trocoCx > 0 ? ` — troco R$ ${trocoCx.toFixed(2)}` : ''}`)}
+                          disabled={!recOk || caixaSalvando}
+                          className={`w-full py-3.5 rounded-2xl font-black uppercase text-[11px] tracking-widest active:scale-95 disabled:opacity-50 ${recOk ? 'bg-emerald-600 text-white shadow-lg' : 'bg-gray-200 text-gray-400'}`}>
+                          <i className={`fa-solid ${caixaSalvando ? 'fa-spinner fa-spin' : 'fa-cash-register'} mr-1`}></i>Confirmar dinheiro no caixa
+                        </button>
+                      </div>
+                    );
+                  })()}
+                  {formaDoc === 'PIX' && (
+                    <div className="space-y-2">
+                      <div className="grid grid-cols-2 gap-2">
+                        <button onClick={() => setPixSlotDoc(1)} className={`p-2.5 rounded-xl border text-[9px] font-black uppercase ${pixSlotDoc === 1 ? 'border-teal-600 bg-teal-50 text-teal-600' : 'border-gray-100 text-gray-400'}`}>{pix1Name}</button>
+                        <button onClick={() => setPixSlotDoc(2)} className={`p-2.5 rounded-xl border text-[9px] font-black uppercase ${pixSlotDoc === 2 ? 'border-teal-600 bg-teal-50 text-teal-600' : 'border-gray-100 text-gray-400'}`}>{pix2Name}</button>
+                      </div>
+                      <div className="bg-teal-50/60 p-4 rounded-2xl flex flex-col items-center border border-teal-100">
+                        <p className="text-[8px] font-black text-teal-500 uppercase mb-1">PIX — QR com o valor da venda</p>
+                        <p className="text-2xl font-black text-teal-700 mb-2">R$ {sucessoData.total.toFixed(2)}</p>
+                        <div className="w-44 h-44 bg-white rounded-xl flex items-center justify-center border border-gray-200 overflow-hidden shadow-inner">
+                          {pixGerado ? (
+                            <img src={pixGerado.qrDataUrl} alt="QR Pix com o valor da venda" className="w-full h-full object-contain" />
+                          ) : pixFalhou ? (
+                            pixSlotDoc === 1
+                              ? (pix1Code ? <img src={pix1Code} className="w-full h-full object-contain" alt="QR Pix conta 1" /> : <i className="fa-solid fa-qrcode text-gray-200 text-3xl"></i>)
+                              : (pix2Code ? <img src={pix2Code} className="w-full h-full object-contain" alt="QR Pix conta 2" /> : <i className="fa-solid fa-qrcode text-gray-200 text-3xl"></i>)
+                          ) : (
+                            <i className="fa-solid fa-spinner fa-spin text-teal-300 text-3xl"></i>
+                          )}
+                        </div>
+                        {pixGerado && (
+                          <button
+                            onClick={() => { navigator.clipboard?.writeText(pixGerado.payload).then(() => setAppModal({ title: 'Pix copiado', message: 'Código Copia e Cola na área de transferência — o cliente cola no app do banco e o valor já vem preenchido.', icon: 'fa-solid fa-copy', iconColor: 'text-teal-500', type: 'success' })).catch(() => {}); }}
+                            className="mt-2 px-4 py-2.5 rounded-xl bg-teal-600 text-white text-[9px] font-black uppercase active:scale-95 shadow"
+                          >
+                            <i className="fa-solid fa-copy mr-1"></i>Copiar código Pix (copia e cola)
+                          </button>
+                        )}
+                      </div>
+                      <button onClick={() => confirmarCaixaAvista(`Pix recebido (${pixSlotDoc === 1 ? pix1Name : pix2Name})`)}
+                        disabled={caixaSalvando}
+                        className="w-full bg-teal-600 text-white py-3.5 rounded-2xl font-black uppercase text-[11px] tracking-widest active:scale-95 shadow-lg disabled:opacity-50">
+                        <i className={`fa-solid ${caixaSalvando ? 'fa-spinner fa-spin' : 'fa-qrcode'} mr-1`}></i>Confirmei o Pix
+                      </button>
+                    </div>
+                  )}
+                  {formaDoc === 'MISTO' && (() => {
+                    const din = parseFloat(mistoDinDoc) || 0;
+                    const px = parseFloat(mistoPixDoc) || 0;
+                    const soma = din + px;
+                    const somaOk = soma > 0 && soma + 0.001 >= sucessoData.total;
+                    return (
+                      <div className="space-y-2">
+                        <div className="grid grid-cols-2 gap-2">
+                          <label className="block">
+                            <span className="text-[9px] font-black text-gray-400 uppercase">Dinheiro R$</span>
+                            <input type="number" inputMode="decimal" value={mistoDinDoc} onChange={e => setMistoDinDoc(e.target.value)} placeholder="0.00" className="w-full p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-lg font-black text-center outline-none" />
+                          </label>
+                          <label className="block">
+                            <span className="text-[9px] font-black text-gray-400 uppercase">Pix R$</span>
+                            <input type="number" inputMode="decimal" value={mistoPixDoc} onChange={e => setMistoPixDoc(e.target.value)} placeholder="0.00" className="w-full p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-lg font-black text-center outline-none" />
+                          </label>
+                        </div>
+                        {soma > 0 && (
+                          <p className={`text-[10px] font-black uppercase text-center ${soma + 0.001 >= sucessoData.total ? 'text-emerald-600' : 'text-amber-500'}`}>
+                            {soma + 0.001 >= sucessoData.total ? 'FECHA O TOTAL ✓' : `Falta: R$ ${(sucessoData.total - soma).toFixed(2)}`}
+                          </p>
+                        )}
+                        <button onClick={() => confirmarCaixaAvista(`Misto: Dinheiro R$ ${din.toFixed(2)} + Pix R$ ${px.toFixed(2)}`)}
+                          disabled={!somaOk || caixaSalvando}
+                          className={`w-full py-3.5 rounded-2xl font-black uppercase text-[11px] tracking-widest active:scale-95 disabled:opacity-50 ${somaOk ? 'bg-slate-900 text-white shadow-lg' : 'bg-gray-200 text-gray-400'}`}>
+                          <i className={`fa-solid ${caixaSalvando ? 'fa-spinner fa-spin' : 'fa-cash-register'} mr-1`}></i>Confirmar recebimento misto
+                        </button>
+                      </div>
+                    );
+                  })()}
+                </>
+              )}
             </div>
           )}
           {sucessoData.isPrazo && (
             <div className="bg-amber-50 p-3 rounded-2xl flex items-center gap-3 border border-amber-100">
               <i className="fa-solid fa-user-clock text-amber-500"></i>
-              <span className="text-[10px] font-black text-amber-700 uppercase leading-snug">Você recebe na data combinada</span>
+              <span className="text-[10px] font-black text-amber-700 uppercase leading-snug">Você recebe na data combinada{vencVendaBR ? ` — ${vencVendaBR}` : ''}</span>
             </div>
           )}
 
@@ -2142,8 +2269,17 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
             </div>
           )}
 
+          {/* BLOCO 153 (regra do dono): boleto = ESCOLHIDO na tela 6 e gerado
+              MAIS TARDE (agora ou no cupom da venda) SEMPRE com o prazo
+              combinado — o vencimento da venda preenche o card sozinho */}
+          {sucessoData.isPrazo && sucessoData.formaAtraso !== 'CHEQUE' && (
+            <div className="bg-amber-50 border border-amber-100 rounded-2xl p-3">
+              <p className="text-[9px] font-black text-amber-700 uppercase leading-snug">
+                <i className="fa-solid fa-barcode mr-1"></i>Boleto do prazo — gere agora ou depois (no cupom da venda). O vencimento vem preenchido com a data combinada{vencVendaBR ? ` (${vencVendaBR})` : ''}.
+              </p>
+            </div>
+          )}
           {/* BOLETO: saldo em aberto e não-cheque (BLOCO 25/41/50) */}
-          {/* BLOCO 139: boleto só para venda A PRAZO — à vista o recebimento é confirmado na janela de impressão */}
           {sucessoData.sale?.id && sucessoData.isPrazo && (Number(sucessoData.sale.valorTotal ?? 0) - Number(sucessoData.sale.valorPago ?? 0) > 0) && sucessoData.formaAtraso !== 'CHEQUE' && (
             <BoletoCard
               saleId={String(sucessoData.sale.id)}
@@ -2155,6 +2291,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               clienteCep={client.enderecoCep}
               clienteTelefone={client.telefone}
               clienteNome={client.nomeFantasia || client.nome}
+              vencimentoVenda={vencVendaISO}
               abertoInicial
               onStatusChange={handleBoletoStatus}
             />

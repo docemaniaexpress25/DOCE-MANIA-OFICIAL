@@ -43,6 +43,9 @@ interface BoletoCardProps {
   /** BLOCO 123: reporta o status do boleto ao pai ('A_RECEBER', 'NAO_GERADO',
    *  'INDISPONIVEL'...) — gate fiscal da pronta entrega a prazo. */
   onStatusChange?: (status: string) => void;
+  /** BLOCO 153: vencimento combinado na venda (YYYY-MM-DD) — o boleto do
+   *  Inter nasce com o PRAZO negociado (fim do +7d fixo desalinhado). */
+  vencimentoVenda?: string;
 }
 
 interface InterStatus {
@@ -56,7 +59,7 @@ const dataBR = (iso?: string) => {
   return `${d}/${m}/${a}`;
 };
 
-const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, notaStatus, notaNumero, clienteDoc, clienteCep, clienteTelefone, clienteNome, showToast, abertoInicial, onStatusChange }) => {
+const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, notaStatus, notaNumero, clienteDoc, clienteCep, clienteTelefone, clienteNome, showToast, abertoInicial, onStatusChange, vencimentoVenda }) => {
   const [boleto, setBoleto] = useState<BoletoInfo | null>(null);
   const [indisponivel, setIndisponivel] = useState(false);
   const [inter, setInter] = useState<InterStatus | null>(null); // BLOCO 85: env do Inter visivel
@@ -82,14 +85,21 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
       setBoleto(r.boleto || null);
       setInter(r.inter || null);
       if (r.boleto?.status === 'NAO_GERADO') {
-        const d = new Date(Date.now() + 7 * 24 * 3600 * 1000);
-        setVenc(new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d));
+        // BLOCO 153: prazo correto = vencimento COMBINADO na venda (tela 6 do
+        // PDV — sales.data_vencimento); sem prazo gravado, mantém o padrão +7d
+        const iso = vencimentoVenda && /^\d{4}-\d{2}-\d{2}/.test(vencimentoVenda) ? vencimentoVenda.slice(0, 10) : null;
+        if (iso) {
+          setVenc(iso);
+        } else {
+          const d = new Date(Date.now() + 7 * 24 * 3600 * 1000);
+          setVenc(new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d));
+        }
         const saldo = Math.max(0, (valorTotal || 0) - (valorPago || 0));
         setValor(saldo > 0 ? saldo.toFixed(2) : (valorTotal || 0).toFixed(2));
       }
     })();
     return () => { vivo = false; };
-  }, [saleId]);
+  }, [saleId, vencimentoVenda]);
 
   // BLOCO 123: reporta o status do boleto ao pai (gate fiscal da pronta
   // entrega a prazo). Card indisponível (Inter sem credenciais) reporta

@@ -903,6 +903,11 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
   const handleSaveClientBasic = async () => {
     if (!cForm.nomeFantasia || !cForm.telefone) { showToast("Preencha ao menos Nome e Telefone.", 'error'); return; }
+    // BLOCO 153 (regra do dono): CEP SEMPRE preenchido — o boleto do Inter
+    // EXIGE o CEP do pagador (8 dígitos) e a nota (NF-e/NFC-e) usa o endereço.
+    // Cliente sem CEP não pode ser salvo.
+    const cepDigitos = (cForm.enderecoCep || '').replace(/\D/g, '');
+    if (cepDigitos.length !== 8) { showToast("CEP é obrigatório (8 dígitos) — o boleto do Inter e a nota precisam dele.", 'error'); return; }
     const cnpjDigitos = (cForm.cnpj || '').replace(/\D/g, '');
     // BLOCO 138 (regra do dono): cadastro pede so CNPJ — e OPCIONAL (aceita
     // salvar sem documento para preencher depois em Editar Cliente).

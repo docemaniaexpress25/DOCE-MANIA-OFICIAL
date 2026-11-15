@@ -1868,3 +1868,34 @@ QA:
 - Grep sem referências vivas ao miniBoleto (só comentários históricos BLOCO 152).
 - Boleto EMITIR payload: mensagem linha1 venda + linha2 padrão do dono + linha3 avulsa + linha4 NF não atrelada + fallback linha5.
 - À vista pronta entrega: payload nasce valorPago=total/PAGO; prazo mantém PENDENTE; cupom de conferência mostra o estado certo.
+
+## bloco153 — FLUXO DO DONO: CAIXA (dinheiro/Pix) DEPOIS da emissão da nota · BOLETO gerado MAIS TARDE com o PRAZO COMBINADO · CEP sempre preenchido no cliente (boleto Inter exige) (2026-11-15)
+
+DONO PEDIU (verbatim): "Na pronta entrega o vendedor deve selecionar a forma de pagamento e se for a vista a caixa para receber o dinheiro ou Pix deve aparecer depois da emissão da nota. No caso do boleto deve ser escolhido boleto e mais tarde ele deve ser gerado com o prazo correto. O cep do cliente deve estar sempre preenchido para poder gerar o boleto tanto no NF-e como NFC, precisamos melhorar essas telas e fluxos"
+
+FEITO (BLOCO 153):
+1. PRONTA ENTREGA À VISTA — TELA 6 só SELECIONA a forma; CAIXA aparece na TELA FINAL (depois da nota):
+   - Tela 6 (FORMA): DINHEIRO/PIX/MISTO viraram SELEÇÃO simples (card informativo) — saíram o campo "valor recebido", troco, QR do Pix e os valores do misto; formaOk à vista = só forma escolhida;
+   - TELA SUCESSO: novo card "CAIXA — recebimento à vista" com o recebimento REAL depois da emissão da nota:
+     · DINHEIRO: valor recebido (botão EXATO + R$50/100/200) + cálculo do troco + "Confirmar dinheiro no caixa";
+     · PIX: escolha da conta (1/2) + QR gerado com o VALOR DA VENDA GRAVADA (useEffect do Pix migrou da tela 6 para a SUCESSO) + copia e cola + "Confirmei o Pix";
+     · MISTO: dinheiro + pix fechando o total + "Confirmar recebimento misto";
+   - Ao confirmar: saleService.updateSale grava no detalhe da venda "| CAIXA: recebido R$ X — troco R$ Y / Pix recebido (conta) / Misto ..." — a venda CONTINUA nascendo PAGO (BLOCO 152): à vista NUNCA fica "em aberto" mesmo se o vendedor fechar a tela antes de confirmar;
+   - montarConferenciaPronta: detalhe à vista simplificado ("DINHEIRO — à vista" / "PIX — à vista (conta)" / "MISTO: Dinheiro + Pix — à vista") — o troco agora vem do CAIXA, não da tela 6.
+2. BOLETO DO PRAZO — escolhido na tela 6, gerado MAIS TARDE com o PRAZO CORRETO:
+   - BoletoCard ganhou prop `vencimentoVenda` (YYYY-MM-DD): o vencimento do boleto do Inter vem preenchido com a DATA COMBINADA NA VENDA (sales.data_vencimento, tela 6) — fim do +7d fixo desalinhado entre venda e boleto;
+   - PDV passa vencimentoVenda da venda gravada; Cupom reaberto também (sale.dataVencimento);
+   - Tela SUCESSO a prazo: card informativo "Boleto do prazo — gere agora ou depois (no cupom da venda). O vencimento vem preenchido com a data combinada (dd/mm/aaaa)" + card "Você recebe na data combinada — dd/mm";
+3. CEP SEMPRE PREENCHIDO (boleto Inter exige CEP do pagador, NF-e e NFC-e):
+   - Tela 6 a prazo + BOLETO: cliente SEM CEP → banner amber "Cliente SEM CEP no cadastro — o boleto do Inter exige o CEP do pagador (8 dígitos), tanto na NF-e quanto na NFC-e" + botão "Completar cadastro agora" (onCompletarCadastro); cliente COM CEP → "CEP OK — o boleto é gerado MAIS TARDE ... já com o vencimento combinado";
+   - Cadastro de cliente: CEP agora é OBRIGATÓRIO (8 dígitos) no app do vendedor (handleSaveClientBasic) e no portal do admin (handleSaveClient) — mensagem: "CEP é obrigatório (8 dígitos) — o boleto do Inter e a nota precisam dele."
+
+SQL PARA O DONO RODAR: NENHUM.
+
+ARQUIVOS: src/components/doce/PDV.tsx, src/components/doce/BoletoCard.tsx, src/components/doce/Cupom.tsx, src/components/doce/VendedorDashboard.tsx, src/components/doce/AdminDashboard.tsx, worklog.md.
+
+QA:
+- LINT: 0 erros / 8 warnings (todos preexistentes de alt-text img).
+- Fluxo à vista pronta entrega: tela 6 só seleção → conferência → tela 8 grava PAGO → SUCESSO mostra nota + CAIXA (dinheiro/troco/QR Pix/misto) → confirmação anota "| CAIXA:" no detalhe.
+- Pré-venda NÃO mudou (DINHEIRO/PIX informativos "entregador cobra na entrega" intactos; MISTO segue bloqueado na UI).
+- Boleto: vencimento do form = data_vencimento da venda; valor = saldo em aberto (igual antes); CEP/CNPJ pagador continuam validados na geração.

@@ -639,6 +639,13 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
               clienteCep={clientLocal.enderecoCep}
               clienteTelefone={clientLocal.telefone}
               clienteNome={clientLocal.nomeFantasia || clientLocal.nome}
+              vencimentoVenda={(() => {
+                // BLOCO 153: prazo correto — vencimento combinado da venda
+                const v = saleLocal.dataVencimento as Date | string | undefined | null;
+                if (!v) return undefined;
+                const s = v instanceof Date ? v.toISOString() : String(v);
+                return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10) : undefined;
+              })()}
               showToast={showToast}
             />
           )}

@@ -1183,6 +1183,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
   const handleSaveClient = () => {
     if (!clientForm.nomeFantasia || !clientForm.telefone) { showToast("Preencha Nome e Telefone.", 'error'); return; }
+    // BLOCO 153 (regra do dono): CEP SEMPRE preenchido — o boleto do Inter
+    // EXIGE o CEP do pagador (8 dígitos) e a nota (NF-e/NFC-e) usa o endereço.
+    const cepDigitos = (clientForm.enderecoCep || '').replace(/\D/g, '');
+    if (cepDigitos.length !== 8) { showToast("CEP é obrigatório (8 dígitos) — o boleto do Inter e a nota precisam dele.", 'error'); return; }
     const cnpjDigitos = (clientForm.cnpj || '').replace(/\D/g, '');
     if (cnpjDigitos.length > 0 && cnpjDigitos.length < 14) { showToast("CNPJ incompleto — complete os 14 dígitos ou apague o campo.", 'error'); return; }
     if (cnpjDigitos.length > 0 && !validaCnpj(cnpjDigitos)) { showToast("CNPJ inválido (dígitos verificadores não conferem).", 'error'); return; }

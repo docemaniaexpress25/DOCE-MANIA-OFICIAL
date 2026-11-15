@@ -10,7 +10,7 @@ import Login from '@/components/doce/Login';
 import { haptics } from '@/utils/haptics';
 import { offlineSync } from '@/utils/offlineSync';
 import { userService, clearSessionToken } from '@/services/userService';
-import { productService } from '@/services/productService';
+import { productService, ProdutoSalvoResultado } from '@/services/productService';
 import { clientService } from '@/services/clientService';
 import { appSettingsService, AppSettings } from '@/services/appSettingsService';
 import { saleService } from '@/services/saleService';
@@ -579,22 +579,22 @@ const App: React.FC = () => {
     return success;
   };
 
-  // BLOCO 147: devolve o produto gravado (ou null) — o modal de produtos usa
-  // isso para AVISAR quando o banco recusou (ex.: coluna codigo ausente —
-  // SQL do Bloco 145 não rodado) em vez de fingir que salvou.
-  const addProduct = async (nome: string, custo: number, venda: number, comissao: number, estoque: number = 0, categoryId?: string, subcategoryId?: string, precoMinimo?: number, fiscal?: Partial<Product>): Promise<Product | null> => {
-    const res = await productService.insertProduct({ nome, precoCusto: custo, precoVenda: venda, precoMinimo: precoMinimo || 0, comissaoPercentual: comissao, estoquePrincipal: estoque, ativo: true, categoryId, subcategoryId, ...fiscal });
-    if (res) {
-      await appSettingsService.updateSettings({ productOrder: [...productOrder, res.id] });
-      fetchCoreData();
+  // BLOCO 147: devolve o RESULTADO HONESTO do banco (ok/erro) — o modal de
+  // produtos usa para avisar quando o banco recusou (ex.: código interno
+  // duplicado — products_codigo_uidx) em vez de fingir que salvou.
+  const addProduct = async (nome: string, custo: number, venda: number, comissao: number, estoque: number = 0, categoryId?: string, subcategoryId?: string, precoMinimo?: number, fiscal?: Partial<Product>): Promise<ProdutoSalvoResultado> => {
+    const r = await productService.insertProduct({ nome, precoCusto: custo, precoVenda: venda, precoMinimo: precoMinimo || 0, comissaoPercentual: comissao, estoquePrincipal: estoque, ativo: true, categoryId, subcategoryId, ...fiscal });
+    if (r.ok && r.produto) {
+      await appSettingsService.updateSettings({ productOrder: [...productOrder, r.produto.id] });
     }
-    return res;
+    fetchCoreData();
+    return r;
   };
 
-  const updateProduct = async (id: string, data: Partial<Product>): Promise<Product | null> => {
-    const res = await productService.updateProduct(id, data);
+  const updateProduct = async (id: string, data: Partial<Product>): Promise<ProdutoSalvoResultado> => {
+    const r = await productService.updateProduct(id, data);
     fetchCoreData();
-    return res;
+    return r;
   };
 
   const activateAllProducts = async () => {

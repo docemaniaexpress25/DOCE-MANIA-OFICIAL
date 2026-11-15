@@ -55,7 +55,7 @@ export interface GestaoCatalogoPortalProps {
   /** Bloco 23: ordem do PORTAL — mexer aqui nao muda o PDV */
   portalOrderIds: string[];
   setPortalOrderIds: (ids: string[]) => void;
-  updateProduct: (id: string, data: Partial<Product>) => void | Promise<void>;
+  updateProduct: (id: string, data: Partial<Product>) => void | Promise<unknown>;
   showToast: (message: string, type?: 'success' | 'error') => void;
 }
 

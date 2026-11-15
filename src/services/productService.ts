@@ -1,6 +1,30 @@
 import { supabase } from '@/lib/supabaseClient';
 import { Product } from '@/lib/types';
 
+/**
+ * BLOCO 147 — resultado HONESTO do salvamento de produto.
+ * `ok: false` vem SEMPRE com `erro` legível para o dono:
+ *  - código interno duplicado (products_codigo_uidx — SQL do Bloco 145);
+ *  - coluna ausente (SQL do bloco X não rodado);
+ *  - falha genérica do banco.
+ * Antes o modal dizia "Produto salvo!" mesmo com o banco recusando — era aí
+ * que o "CODIGO DO PRODUTO NAO ESTA SALVANDO" passava despercebido.
+ */
+export interface ProdutoSalvoResultado {
+  ok: boolean;
+  produto?: Product;
+  erro?: string;
+}
+
+function erroAmigavelProduto(error: { code?: string; message?: string }): string {
+  const msg = String(error?.message || '');
+  const code = String(error?.code || '');
+  if (code === '23505' || /duplicate|unique|codigo_uidx/i.test(msg)) {
+    return 'Este CÓDIGO DO PRODUTO já existe em outro produto! Use um código diferente (ex: 001, DM-125...).';
+  }
+  return 'FALHOU ao salvar no banco! Confira se o SQL mais recente foi rodado no Supabase (Bloco 145 — codigo do produto).';
+}
+
 export const productService = {
   async getAllProducts(): Promise<Product[]> {
     const { data, error } = await supabase.from('products').select('*');
@@ -48,7 +72,7 @@ export const productService = {
     })) as Product[];
   },
 
-  async insertProduct(product: Omit<Product, 'id'>): Promise<Product | null> {
+  async insertProduct(product: Omit<Product, 'id'>): Promise<ProdutoSalvoResultado> {
     // BLOCO 23 — padrão do dono: comissão SEMPRE do produto; vazio = 10% PE / 5% PV
     const peInformada = Number(product.comissaoPercentual);
     const comissaoPe = (product.comissaoPercentual === null || product.comissaoPercentual === undefined || !isFinite(peInformada))
@@ -146,9 +170,9 @@ export const productService = {
     }
     if (error) {
       console.error('Erro ao inserir produto:', error);
-      return null;
+      return { ok: false, erro: erroAmigavelProduto(error) };
     }
-    return {
+    const produto = {
       ...data,
       id: data.id,
       nome: data.nome,
@@ -177,9 +201,10 @@ export const productService = {
       produtoTeste: !!data.produto_teste,
       precoEspecialGb: (data.preco_especial_gb === null || data.preco_especial_gb === undefined) ? undefined : (Number(data.preco_especial_gb) || 0),
     } as Product;
+    return { ok: true, produto };
   },
 
-  async updateProduct(id: string, updates: Partial<Product>): Promise<Product | null> {
+  async updateProduct(id: string, updates: Partial<Product>): Promise<ProdutoSalvoResultado> {
     const payload: any = {};
     if (updates.nome !== undefined) payload.nome = updates.nome;
     if (updates.precoCusto !== undefined) payload.preco_custo = updates.precoCusto;
@@ -260,9 +285,9 @@ export const productService = {
     }
     if (error) {
       console.error('Erro ao atualizar produto:', error);
-      return null;
+      return { ok: false, erro: erroAmigavelProduto(error) };
     }
-    return {
+    const produto = {
       ...data,
       id: data.id,
       nome: data.nome,
@@ -291,6 +316,7 @@ export const productService = {
       produtoTeste: !!data.produto_teste,
       precoEspecialGb: (data.preco_especial_gb === null || data.preco_especial_gb === undefined) ? undefined : (Number(data.preco_especial_gb) || 0),
     } as Product;
+    return { ok: true, produto };
   },
 
   async deleteProduct(id: string): Promise<boolean> {

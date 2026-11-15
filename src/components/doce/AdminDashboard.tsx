@@ -2,6 +2,7 @@
 // @ts-nocheck
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Product, User, Carga, Sale, Commission, Client, ReceiveMethod, CommissionPaymentLog, Expense, Category, Subcategory, MelhoriasFlags } from '@/lib/types';
+import { ProdutoSalvoResultado } from '@/services/productService';
 import ConfirmModal from '@/components/doce/ConfirmModal';
 import { DIAS_SEMANA } from '@/lib/constants';
 import { ehContaAReceber, saldoAberto, preVendaNaFila } from '@/lib/contaAReceber';
@@ -55,8 +56,8 @@ interface AdminDashboardProps {
   expenses: Expense[];
   categories: Category[];
   subcategories: Subcategory[];
-  addProduct: (n: string, c: number, v: number, com: number, estoque?: number, categoryId?: string, subcategoryId?: string, precoMinimo?: number, fiscal?: Partial<Product>) => Promise<Product | null>;
-  updateProduct: (id: string, data: Partial<Product>) => Promise<Product | null>;
+  addProduct: (n: string, c: number, v: number, com: number, estoque?: number, categoryId?: string, subcategoryId?: string, precoMinimo?: number, fiscal?: Partial<Product>) => Promise<ProdutoSalvoResultado>;
+  updateProduct: (id: string, data: Partial<Product>) => Promise<ProdutoSalvoResultado>;
   deleteProduct: (id: string) => void;
   registerStockEntry: (id: string, q: number, c: number) => void;
   adjustStockManual: (id: string, q: number, t: 'ADICAO' | 'SUBTRACAO') => void;
@@ -1013,13 +1014,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     // BLOCO 14 + 23: comissão PV — vazio = padrão do dono (5% gravado no produto)
     data.comissaoPvPercentual = pForm.comissaoPv === '' ? null : parseFloat(pForm.comissaoPv);
     setShowProductModal(null);
-    const salvo = showProductModal === 'NEW'
+    const r = showProductModal === 'NEW'
       ? await props.addProduct(data.nome!, data.precoCusto!, data.precoVenda!, data.comissaoPercentual!, data.estoquePrincipal, data.categoryId, data.subcategoryId, data.precoMinimo, { codigo: data.codigo, ncm: data.ncm, cest: data.cest, cfop: data.cfop, ean: data.ean, unidade: data.unidade, origem: data.origem, comissaoPvPercentual: data.comissaoPvPercentual ?? undefined, imagem: data.imagem, unidadesPorCaixa: data.unidadesPorCaixa, obs: data.obs, estoqueNota: data.estoqueNota, estoqueSemnf: data.estoqueSemnf, precoEspecialGb: data.precoEspecialGb, precoCupom: data.precoCupom })
-      : (typeof showProductModal === 'object' ? await props.updateProduct(showProductModal.id, data) : null);
-    if (salvo) {
+      : (typeof showProductModal === 'object' ? await props.updateProduct(showProductModal.id, data) : { ok: false, erro: 'Modal inválido' });
+    if (r.ok) {
       showToast("Produto salvo!");
     } else {
-      showToast("FALHOU ao salvar no banco! Confira se o SQL mais recente foi rodado no Supabase (Bloco 145 — codigo do produto).", 'error');
+      showToast(r.erro || "FALHOU ao salvar no banco! Confira se o SQL mais recente foi rodado no Supabase.", 'error');
     }
   };
 

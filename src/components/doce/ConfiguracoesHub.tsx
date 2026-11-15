@@ -4,6 +4,8 @@ import { authHeaders } from '@/services/userService';
 // BLOCO 112: reforço de impressão (config POR DISPOSITIVO em localStorage —
 // não vai para o banco: cada aparelho/impressora tem sua calibração)
 import { lerReforcoImpressao, salvarReforcoImpressao } from '@/lib/usbPrint';
+// MINI DANFE + MINI BOLETO (80mm) — janela de visualização dos modelos
+import ModelosImpressao from './ModelosImpressao';
 
 /**
  * ERP FISCAL & AUTOMAÇÕES — hub de configurações organizado em cards que expandem.
@@ -115,6 +117,9 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
   // useEffect evita mismatch de hidratação (localStorage só existe no cliente).
   const [reforco, setReforco] = useState(true);
   useEffect(() => { setReforco(lerReforcoImpressao()); }, []);
+
+  // MINI DANFE + MINI BOLETO (80mm) — janela de visualização dos modelos
+  const [modelosAberto, setModelosAberto] = useState(false);
 
   const [toast, setToast] = useState<{ msg: string; tipo: 'success' | 'error' } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -566,6 +571,16 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
             <Switch on={reforco} onClick={() => { const v = !reforco; setReforco(v); salvarReforcoImpressao(v); mostrarToast(v ? 'Reforço LIGADO neste aparelho' : 'Reforço DESLIGADO neste aparelho', 'success'); }} />
           </div>
 
+          {/* MINI DANFE + MINI BOLETO — visualizar os modelos antes de imprimir */}
+          <button onClick={() => setModelosAberto(true)} className="w-full flex items-center gap-3 p-3.5 rounded-xl bg-slate-900 text-white active:scale-[0.98] transition-transform">
+            <div className="w-9 h-9 rounded-xl bg-white/15 flex items-center justify-center flex-shrink-0"><i className="fa-solid fa-file-receipt"></i></div>
+            <div className="flex-1 text-left min-w-0">
+              <p className="text-[11px] font-black uppercase tracking-wide">Ver modelos de impressão 80mm</p>
+              <p className="text-[9px] font-bold text-white/60 normal-case leading-snug">Mini DANFE (retrato) e mini boleto (deitado) — como sai na térmica Bluetooth ou USB</p>
+            </div>
+            <i className="fa-solid fa-chevron-right text-[10px] opacity-60"></i>
+          </button>
+
           <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4">
             <p className="text-[9px] font-black text-slate-500 uppercase flex items-center gap-1.5 mb-1.5"><i className="fa-solid fa-circle-info text-teal-600"></i>Cupom ainda saindo claro?</p>
             <ul className="text-[9px] font-semibold text-gray-500 leading-snug space-y-1 list-decimal list-inside">
@@ -583,6 +598,9 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
           <i className={`fa-solid ${toast.tipo === 'success' ? 'fa-circle-check' : 'fa-triangle-exclamation'}`}></i>{toast.msg}
         </div>
       )}
+
+      {/* ===== MINI DANFE + MINI BOLETO — MODELOS DE IMPRESSÃO 80mm ===== */}
+      <ModelosImpressao abrir={modelosAberto} onClose={() => setModelosAberto(false)} showToast={mostrarToast} />
     </div>
   );
 };

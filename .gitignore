@@ -51,4 +51,12 @@ prompt
 
 server.log
 # Skills directory
-/skills/
+/skills/tool-results/
+upload/
+tool-results/
+upload/
+skills/
+.gitignore.check
+dev.log
+download/
+agent-ctx/

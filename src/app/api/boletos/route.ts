@@ -3,6 +3,7 @@ import { getServiceClient, devBridge } from '@/lib/serverSupabase';
 import { sessionFromRequest } from '@/lib/session';
 import { hasBoletoColumns } from '@/lib/serverSchema';
 import { isFocusConfigured, consultarNota, FocusDoc } from '@/lib/focusNfe';
+import { lerEmitentePayload } from '@/lib/erpConfig';
 import { validaCpfCnpj, mascaraCpfCnpj } from '@/lib/validaDoc';
 import {
   isInterConfigured,
@@ -188,6 +189,94 @@ export async function POST(req: NextRequest) {
     }
     await atualizar(saleId, { inter_boleto_status: 'CANCELADO', inter_boleto_erro: null });
     return NextResponse.json({ ok: true, boleto: { ...cobrancaPublica(sale as Record<string, unknown>), status: 'CANCELADO' } });
+  }
+
+  // ---------- MINI BOLETO (80mm paisagem — dados completos p/ desenho) ----------
+  // O dono pediu o mini boleto deitado na termica 80mm (modelo do PDF A4 do
+  // Inter). Este acao devolve TUDO que o canvas precisa em 1 chamada:
+  // boleto (linha/barras/pix atualizados na hora) + pagador (cadastro) +
+  // beneficiario (emitente do ERP) + nota (numero/chave) + msgs do boleto.
+  if (acao === 'MINI') {
+    // consulta no Inter para linha digitavel/barras/pix frescos (idempotente)
+    if (sale.inter_boleto_codigo && isInterConfigured()) {
+      try {
+        const c = await recuperarCobranca(String(sale.inter_boleto_codigo));
+        if (c.ok && c.data) {
+          const cob = interpretarCobranca(c.data as Record<string, unknown>);
+          await atualizar(saleId, {
+            inter_boleto_status: cob.status,
+            inter_boleto_linha: cob.linhaDigitavel || sale.inter_boleto_linha || null,
+            inter_boleto_barras: cob.codigoBarras || sale.inter_boleto_barras || null,
+            inter_boleto_pix: cob.pixCopiaECola || sale.inter_boleto_pix || null,
+          });
+          Object.assign(sale, {
+            inter_boleto_status: cob.status,
+            inter_boleto_linha: cob.linhaDigitavel || sale.inter_boleto_linha,
+            inter_boleto_barras: cob.codigoBarras || sale.inter_boleto_barras,
+            inter_boleto_pix: cob.pixCopiaECola || sale.inter_boleto_pix,
+          });
+        }
+      } catch { /* rede — segue com os dados gravados */ }
+    }
+
+    const { data: client } = await db
+      .from('clients')
+      .select('nome_fantasia, nome, cnpj, endereco, bairro, razao_social, endereco_numero, endereco_cep, endereco_municipio, endereco_uf')
+      .eq('id', sale.client_id)
+      .single();
+    const cli = (client || {}) as Record<string, unknown>;
+    const emit = (await lerEmitentePayload()) as Record<string, unknown>;
+
+    const soDig = (v: unknown) => String(v ?? '').replace(/\D/g, '');
+    const txt = (v: unknown) => String(v ?? '').trim();
+
+    // Beneficiario = emitente fiscal (Doce Mania) — mesmos dados que vao na NF
+    const emitCnpj = soDig(emit.cnpj_emitente);
+    const logEmit = [txt(emit.logradouro_emitente), txt(emit.numero_emitente) ? `, ${txt(emit.numero_emitente)}` : ''].join('').trim();
+    const beneficiario = {
+      nome: txt(emit.nome_emitente) || 'DOCE MANIA EXPRESS LTDA',
+      cnpj: emitCnpj,
+      endereco: logEmit || undefined,
+      cidadeUf: [txt(emit.municipio_emitente), txt(emit.uf_emitente)].filter(Boolean).join('/') || undefined,
+    };
+
+    // Pagador = cliente da venda (mesma origem do boleto do Inter)
+    const docPag = soDig(cli.cnpj);
+    const pagador = {
+      nome: txt(cli.razao_social) || txt(cli.nome_fantasia) || txt(cli.nome) || 'PAGADOR',
+      doc: docPag || undefined,
+      endereco: [txt(cli.endereco), txt(cli.endereco_numero) ? `, ${txt(cli.endereco_numero)}` : ''].join('').trim() || undefined,
+      cidadeUf: [txt(cli.endereco_municipio), txt(cli.endereco_uf)].filter(Boolean).join('/') || undefined,
+      cep: soDig(cli.endereco_cep) ? `${soDig(cli.endereco_cep).slice(0, 5)}-${soDig(cli.endereco_cep).slice(5)}` : undefined,
+    };
+
+    const s = sale as Record<string, unknown>;
+    const vendaCurta = String(saleId).slice(0, 8).toUpperCase();
+    const notaNumero = txt(s.nota_numero);
+    const notaAtrelada = txt(s.nota_chave).length === 44;
+
+    return NextResponse.json({
+      ok: true,
+      mini: {
+        beneficiario,
+        pagador,
+        valor: s.inter_boleto_valor === null || s.inter_boleto_valor === undefined ? Number(sale.valor_total) || 0 : Number(s.inter_boleto_valor),
+        vencimento: txt(s.inter_boleto_vencimento),
+        dataDocumento: txt(s.data_venda) ? String(s.data_venda).slice(0, 10) : '',
+        numeroDocumento: txt(s.inter_boleto_seu_numero),
+        nossoNumero: txt(s.inter_boleto_codigo) || '',
+        agenciaCodigo: process.env.INTER_CODIGO_BENEFICIARIO || '',
+        linhaDigitavel: txt(s.inter_boleto_linha),
+        codigoBarras: txt(s.inter_boleto_barras),
+        pixCopiaECola: txt(s.inter_boleto_pix),
+        mensagem1: `Venda ${vendaCurta} - Doce Mania`,
+        mensagem2: notaNumero ? `NF-e/NFC-e ${notaNumero}${notaAtrelada ? '' : ' (nao atrelada)'}` : '',
+        mensagem3: txt(s.inter_boleto_vencimento) ? `Data Limite para pagamento: ${txt(s.inter_boleto_vencimento).slice(0, 10).split('-').reverse().join('/')}` : '',
+      },
+      boleto: cobrancaPublica(sale as Record<string, unknown>),
+      inter: { configurado: isInterConfigured(), ambiente: getInterConfig().ambiente },
+      nota: { status: txt(s.nota_status), numero: notaNumero, chave: txt(s.nota_chave) },
+    });
   }
 
   // ---------- EMITIR ----------

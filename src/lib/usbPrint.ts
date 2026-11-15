@@ -425,3 +425,44 @@ export function imprimirViaUsb(
   }
   abrirJanelaUsb(corpo, width, onError);
 }
+
+// ============================================================
+// MINI BOLETO 80mm PAISAGEM (deitado) — canal USB por IMAGEM.
+// O boleto e um quadro desenhado (canvas do miniBoleto.ts). No canal USB
+// o papel virtual e 80mm: a imagem JA ROTACIONADA (576 x comprimento)
+// entra como <img> de 76mm de largura e o comprimento corre no rolo.
+// A imagem e aguardada (img.onload) ANTES do print() para nunca sair
+// folha em branco no Chrome. No iOS o corpo monta no documento principal
+// (mesma regra do BLOCO 120) com o painel de reforco de gesto.
+// ============================================================
+export function imprimirImagemViaUsb(
+  dataUrl: string,
+  larguraMm = 76,
+  titulo = 'Mini boleto',
+  onError?: (msg: string) => void,
+): void {
+  if (typeof document === 'undefined') {
+    const msg = 'SEM_DOCUMENTO';
+    if (onError) onError(msg); else console.error('[usbPrint]', msg);
+    return;
+  }
+
+  void (async () => {
+    try {
+      // garante que a imagem carregou antes de abrir a folha (iframe/print)
+      await new Promise<void>((res, rej) => {
+        const im = new Image();
+        im.onload = () => res();
+        im.onerror = () => rej(new Error('IMAGEM_INVALIDA'));
+        im.src = dataUrl;
+      });
+      const corpo = `<div style="text-align:center;"><img src="${dataUrl}" alt="${escapeHtml(titulo)}" style="width:${larguraMm}mm;display:block;margin:0 auto;"></div>`;
+      if (dispositivoIOS()) imprimirViaIos(corpo, '80MM');
+      else abrirJanelaUsb(corpo, '80MM', onError);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (onError) onError(msg);
+      else console.error('[usbPrint]', msg);
+    }
+  })();
+}

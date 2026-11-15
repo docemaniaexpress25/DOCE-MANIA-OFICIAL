@@ -17,6 +17,9 @@ import { tipoDocDigitos, validaCpfOuCnpj } from '@/lib/cnpjAutocomplete';
 // BLOCO 134 (regra do dono): preço anônimo SÓ na NFC-e anônima; o cupom
 // (não fiscal) segue o preço digitado pelo vendedor.
 import { intencaoNotaDaVenda, prazoCancelamentoNota, PrazoCancelamento } from '@/lib/regras-fiscais';
+// MINI DANFE 80mm — visualizar o modelo antes de imprimir (o dono aprova o layout)
+import ModelosImpressao from './ModelosImpressao';
+import { DanfeFiscalData } from '@/lib/danfe80';
 
 interface JanelaFiscalProps {
   sale: Sale;
@@ -57,6 +60,9 @@ const JanelaFiscal: React.FC<JanelaFiscalProps> = ({ sale, client, nota, focus, 
   const [aberta, setAberta] = useState<OpcaoFiscal | null>(null);
   const [erro, setErro] = useState<string>('');
   const [info, setInfo] = useState<string>('');
+  // MINI DANFE 80mm (retrato) — modal de visualização com os dados REAIS do cupom
+  const [previewAberto, setPreviewAberto] = useState(false);
+  const [previewCupom, setPreviewCupom] = useState<DanfeFiscalData | null>(null);
 
   // ====================================================================
   // BLOCO 142 — CANCELAR NOTA (ADMIN): dentro do prazo SEFAZ (NFC-e 30min
@@ -248,6 +254,26 @@ const JanelaFiscal: React.FC<JanelaFiscalProps> = ({ sale, client, nota, focus, 
     }
   };
 
+  // ---------- VER MINI DANFE (80mm retrato) — visualizar antes de imprimir ----------
+  const verMiniDanfe = async () => {
+    if (busy || !sale.id) return;
+    setBusy(true);
+    try {
+      const c = await notaService.cupom80(String(sale.id));
+      const cup = c.cupom;
+      if (!c.ok || !cup?.chave) {
+        setErro('Cupom fiscal ainda não disponível — confirme a autorização da SEFAZ.');
+        return;
+      }
+      setPreviewCupom(cup);
+      setPreviewAberto(true);
+    } catch (e: unknown) {
+      setErro(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const opcoes: { id: OpcaoFiscal; ok: boolean; motivo: string; titulo: string; desc: string; preco: string; icon: string; bordaAtiva: string; fundoAtivo: string; textoAtivo: string; pontoAtivo: string; iconeAtivo: string }[] = [
     {
       id: 'NFE', ok: nfeOk, motivo: nfeMotivo,
@@ -365,6 +391,11 @@ const JanelaFiscal: React.FC<JanelaFiscalProps> = ({ sale, client, nota, focus, 
                     className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl text-[10px] uppercase tracking-widest active:scale-95 disabled:opacity-60 flex items-center justify-center gap-2">
                     <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-print'}`}></i> Imprimir Cupom Fiscal (80mm)
                   </button>
+                  {/* MINI DANFE — visualizar o papel 80mm antes de mandar para a térmica */}
+                  <button onClick={verMiniDanfe} disabled={busy}
+                    className="w-full bg-slate-900 text-white font-black py-3 rounded-2xl text-[10px] uppercase tracking-widest active:scale-95 disabled:opacity-60 flex items-center justify-center gap-2">
+                    <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-eye'}`}></i> Ver mini DANFE (80mm retrato)
+                  </button>
                   {nota.pdfUrl && (
                     <a href={nota.pdfUrl} target="_blank" rel="noopener noreferrer"
                       className="block w-full bg-emerald-600 text-white font-black py-3.5 rounded-2xl text-center text-[10px] uppercase tracking-widest active:scale-95">
@@ -427,6 +458,15 @@ const JanelaFiscal: React.FC<JanelaFiscalProps> = ({ sale, client, nota, focus, 
           <button onClick={onClose} className="w-full py-3.5 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Voltar ao cupom</button>
         </div>
       </div>
+
+      {/* MINI DANFE 80mm — visualização + impressão (BT/USB) com os dados reais */}
+      <ModelosImpressao
+        abrir={previewAberto}
+        onClose={() => setPreviewAberto(false)}
+        abaInicial="danfe"
+        cupom={previewCupom}
+        showToast={showToast}
+      />
     </div>
   );
 };

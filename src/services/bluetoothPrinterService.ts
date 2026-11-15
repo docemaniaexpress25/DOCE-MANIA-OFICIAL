@@ -814,6 +814,121 @@ class BluetoothPrinterService {
     return job;
   }
 
+  // ==========================================================
+  // MINI BOLETO 80mm PAISAGEM — IMPRESSAO POR IMAGEM (raster)
+  //
+  // O boleto deitado nao existe como "texto 48 colunas": e um quadro
+  // desenhado (QR do PIX + linha digitavel grande + codigo de barras ITF)
+  // que o dono aprova. A termica imprime imagem por GS v 0 (raster bit
+  // image): recebe o PNG JA ROTACIONADO (576 x comprimento), aplica
+  // limiar de preto/branco (termica nao tem cinza) e manda linha a linha.
+  // Entra na MESMA fila de impressao e usa a MESMA rotina de conexao do
+  // print() de texto (reconexao silenciosa + fila + heartbeats).
+  // ==========================================================
+  async printImage(dataUrl: string, width: PrinterWidth = '80MM', options?: { skipConfirm?: boolean }): Promise<boolean> {
+    const job = this.printQueue.then(() => this._printImage(dataUrl, width, options));
+    this.printQueue = job.then(() => undefined, () => undefined);
+    return job;
+  }
+
+  /** PNG -> buffer monocromatico ESC/POS (GS v 0). */
+  private async bufferImagemEscpos(dataUrl: string, width: PrinterWidth): Promise<Uint8Array> {
+    const maxW = width === '80MM' ? 576 : 384; // dots utéis do papel
+    const img = await new Promise<HTMLImageElement>((res, rej) => {
+      const im = new Image();
+      im.onload = () => res(im);
+      im.onerror = () => rej(new Error('IMAGEM_INVALIDA'));
+      im.src = dataUrl;
+    });
+    // escala 1:1 quando cabe; reduz proporcionalmente quando maior
+    const esc = img.width > maxW ? maxW / img.width : 1;
+    const w = Math.max(1, Math.round(img.width * esc));
+    const h = Math.max(1, Math.round(img.height * esc));
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const ctx = c.getContext('2d');
+    if (!ctx) throw new Error('CANVAS_INDISPONIVEL');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(img, 0, 0, w, h);
+
+    // limiar: termica so tem preto/branco — cinza claro vira branco
+    const data = ctx.getImageData(0, 0, w, h).data;
+    const bytesPorLinha = (w + 7) >> 3;
+    const altura = h;
+    const raster = new Uint8Array(bytesPorLinha * altura);
+    for (let y = 0; y < altura; y++) {
+      const off = y * bytesPorLinha;
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        if (lum < 140) raster[off + (x >> 3)] |= 0x80 >> (x & 7);
+      }
+    }
+
+    const xL = bytesPorLinha & 0xFF, xH = (bytesPorLinha >> 8) & 0xFF;
+    const yL = altura & 0xFF, yH = (altura >> 8) & 0xFF;
+    const cab = new Uint8Array([ESC, 0x40, GS, 0x76, 0x30, 0x00, xL, xH, yL, yH]);
+    const fim = new Uint8Array([ESC, 0x64, 3, GS, 0x56, 0x01]);
+    const out = new Uint8Array(cab.length + raster.length + fim.length);
+    out.set(cab, 0);
+    out.set(raster, cab.length);
+    out.set(fim, cab.length + raster.length);
+    return out;
+  }
+
+  private async _printImage(dataUrl: string, width: PrinterWidth = '80MM', options?: { skipConfirm?: boolean }): Promise<boolean> {
+    if (!this.isAvailable()) throw new Error('BLUETOOTH_NAO_SUPORTADO');
+    if (!this.isConnected()) {
+      await this.reconnect(2500);
+      if (!this.isConnected()) {
+        for (let i = 0; i < 7 && !this.isConnected(); i++) await new Promise(r => setTimeout(r, 200));
+      }
+      if (!this.isConnected()) {
+        if (!options?.skipConfirm) {
+          const wantsToScan = window.confirm('Nenhuma impressora Bluetooth conectada.\n\nDeseja buscar uma impressora agora?');
+          if (!wantsToScan) { this.emitStatus({ status: 'idle' }); return false; }
+        }
+        try {
+          const connected = await this.scanAndConnect();
+          if (!connected) { this.emitStatus({ status: 'idle' }); return false; }
+        } catch {
+          this.emitStatus({ status: 'idle' });
+          return false;
+        }
+      }
+    }
+    if (!options?.skipConfirm) {
+      const printerName = this.printer?.name || 'Impressora';
+      const confirmed = window.confirm(`Confirmar impressao do mini boleto (80mm deitado)?\n\nImpressora: ${printerName}`);
+      if (!confirmed) { this.emitStatus({ status: 'connected', printerName }); return false; }
+    }
+    const printerName = this.printer?.name || 'Impressora';
+    const deviceDaImpressao = this.printer?.device || null;
+    this.emitStatus({ status: 'printing', printerName, progress: 0 });
+    this.printing = true;
+    try {
+      const buffer = await this.bufferImagemEscpos(dataUrl, width);
+      await this.sendBytes(buffer, (pct) => {
+        this.emitStatus({ status: 'printing', printerName, progress: pct });
+      });
+      this.emitStatus({ status: 'done', printerName, progress: 100 });
+      return true;
+    } catch (error: any) {
+      this.emitStatus({
+        status: 'error',
+        printerName,
+        error: `Erro na impressao: ${error.message || 'Falha desconhecida'}`,
+      });
+      throw error;
+    } finally {
+      this.printing = false;
+      if (deviceDaImpressao && !this.isConnected()) {
+        try { await this.autoReconnect(deviceDaImpressao); } catch { /* silencioso */ }
+      }
+    }
+  }
+
   private async _print(rawText: string, width: PrinterWidth = '56MM', options?: { skipConfirm?: boolean }): Promise<boolean> {
     if (!this.isAvailable()) {
       throw new Error('BLUETOOTH_NAO_SUPORTADO');

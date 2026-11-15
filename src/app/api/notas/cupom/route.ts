@@ -164,11 +164,25 @@ export async function GET(req: NextRequest) {
   };
 
   // Destinatario: XML (autorizado) > cadastro do cliente
-  let destinatario: { nome?: string; doc?: string } | undefined;
+  // MINI DANFE fiel ao A4: endereco completo + IE do destinatario quando o
+  // XML traz (NFC-e anonima nao tem bloco <dest> = consumidor nao identificado).
+  let destinatario: DanfeFiscalData['destinatario'] | undefined;
   if (xml) {
-    // XML sem <dest> = NFC-e anonima (CONSUMIDOR NAO IDENTIFICADO no papel)
     if (xml.destinatario && (xml.destinatario.nome || xml.destinatario.cpfCnpj)) {
-      destinatario = { nome: xml.destinatario.nome, doc: soDig(xml.destinatario.cpfCnpj) };
+      const dx = xml.destinatario;
+      const l1 = [dx.logradouro, dx.numero ? `, ${dx.numero}` : '', dx.complemento ? ` - ${dx.complemento}` : ''].join('').trim();
+      const l2 = [dx.bairro, dx.municipio ? `${dx.municipio}/${dx.uf || ''}` : dx.uf].filter(Boolean).join(' - ');
+      const cepD = soDig(dx.cep);
+      const linhas: string[] = [];
+      if (l1) linhas.push(l1);
+      if (l2) linhas.push(l2);
+      if (cepD.length === 8) linhas.push(`CEP: ${cepFmt(cepD)}`);
+      destinatario = {
+        nome: dx.nome,
+        doc: soDig(dx.cpfCnpj),
+        ie: (dx.ie || '').trim() || undefined,
+        endereco: linhas.length ? linhas.join('\n') : undefined,
+      };
     }
   } else {
     const { data: cli } = await db.from('clients').select('nome, nome_fantasia, razao_social, cnpj').eq('id', String(sale.client_id || '')).single();
@@ -189,6 +203,9 @@ export async function GET(req: NextRequest) {
       unidade: it.unidade || 'UN',
       valorUnitario: it.valorUnitario,
       valorTotal: Math.round((it.valorProduto - it.valorDesconto) * 100) / 100,
+      ncm: it.ncm || undefined,
+      cst: it.cst || undefined,
+      cfop: it.cfop || undefined,
     }));
   } else {
     const fiscalCols = await hasProductFiscalColumns();
@@ -252,12 +269,17 @@ export async function GET(req: NextRequest) {
     qrCode: xml?.qrCode || foco?.qrCode || '',
     emitente,
     destinatario,
+    natureza: xml?.natureza || undefined,
     itens,
     quantidadeItens: Math.round(somaQtd * 1000) / 1000,
     valorProdutos: xml?.totais?.valorProdutos ?? somaItens,
     valorDesconto: xml?.totais?.valorDesconto || 0,
     valorTotal: xml?.totais?.valorTotal || foco?.total || Number(sale.valor_total) || somaItens,
     valorTributos: xml?.totais?.valorTributos,
+    baseIcms: xml?.totais?.baseIcms || undefined,
+    valorIcms: xml?.totais?.valorIcms || undefined,
+    baseIcmsSt: xml?.totais?.baseIcmsSt || undefined,
+    valorIcmsSt: xml?.totais?.valorIcmsSt || undefined,
     pagamentos,
     troco,
     informacoes: xml?.informacoes,

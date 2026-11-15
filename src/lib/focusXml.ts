@@ -45,6 +45,10 @@ export interface FocusXmlItem {
   valorUnitario: number;
   valorProduto: number;   // vProd (quantidade x valor unitario)
   valorDesconto: number;  // vDesc do proprio item
+  /** MINI DANFE fiel ao A4 (modelo do dono): grade de itens com NCM/CST/CFOP */
+  ncm?: string;
+  cst?: string;           // CST (regime normal) OU CSOSN (Simples Nacional)
+  cfop?: string;
 }
 
 export interface FocusXmlPagamento {
@@ -60,13 +64,30 @@ export interface FocusXmlNota {
   tpEmis?: string;          // 1 = normal, 9 = contingencia off-line (NFC-e)
   natureza?: string;        // natOp
   emitente?: FocusXmlEmitente;
-  destinatario?: { nome?: string; cpfCnpj?: string };
+  /** MINI DANFE fiel ao A4: destinatario com ENDERECO completo (bloco dest) */
+  destinatario?: {
+    nome?: string;
+    cpfCnpj?: string;
+    ie?: string;
+    logradouro?: string;
+    numero?: string;
+    complemento?: string;
+    bairro?: string;
+    municipio?: string;
+    uf?: string;
+    cep?: string;
+  };
   itens?: FocusXmlItem[];
   totais?: {
     valorProdutos?: number;   // vProd
     valorDesconto?: number;   // vDesc
     valorTotal?: number;      // vNF
     valorTributos?: number;   // vTotTrib (Lei 12.741)
+    /** CALCULO DO IMPOSTO (como o A4 do dono mostra) */
+    baseIcms?: number;        // vBC
+    valorIcms?: number;       // vICMS
+    baseIcmsSt?: number;      // vBCST
+    valorIcmsSt?: number;     // vST
   };
   pagamentos?: FocusXmlPagamento[];
   troco?: number;
@@ -130,6 +151,12 @@ function parseItens(xml: string): FocusXmlItem[] {
       valorUnitario: tagNum(prod, 'vUnCom'),
       valorProduto: tagNum(prod, 'vProd'),
       valorDesconto: tagNum(prod, 'vDesc'),
+      // MINI DANFE fiel ao A4: grade com NCM/CST/CFOP por item (o dono usa o
+      // cupom para conferir carga — mesmas colunas do DANFE A4). CST pega o
+      // regime normal OU o CSOSN do Simples Nacional (o que vier primeiro).
+      ncm: tagInterna(bloco, 'NCM') || undefined,
+      cst: tagInterna(bloco, 'CSOSN') || tagInterna(bloco, 'CST') || undefined,
+      cfop: tagInterna(prod, 'CFOP') || undefined,
     });
   }
   return itens;
@@ -173,11 +200,23 @@ export function parseFocusXml(xmlRaw: string): FocusXmlNota | null {
   out.emitente = parseEmitente(xml);
 
   // Destinatario: NFC-e anonima NAO tem bloco <dest> (CONSUMIDOR NAO
-  // IDENTIFICADO no cupom); quando existe, leva o documento do consumidor.
+  // IDENTIFICADO no cupom); quando existe, leva documento + ENDERECO
+  // completo (o A4 do dono mostra — o mini DANFE tambem mostra).
   const dest = tagInterna(xml, 'dest');
   if (dest) {
     const doc = tagInterna(dest, 'CPF') || tagInterna(dest, 'CNPJ') || undefined;
-    out.destinatario = { nome: tagInterna(dest, 'xNome') || undefined, cpfCnpj: doc };
+    out.destinatario = {
+      nome: tagInterna(dest, 'xNome') || undefined,
+      cpfCnpj: doc,
+      ie: tagInterna(dest, 'IE') || undefined,
+      logradouro: tagInterna(dest, 'xLgr') || undefined,
+      numero: tagInterna(dest, 'nro') || undefined,
+      complemento: tagInterna(dest, 'xCpl') || undefined,
+      bairro: tagInterna(dest, 'xBairro') || undefined,
+      municipio: tagInterna(dest, 'xMun') || undefined,
+      uf: tagInterna(dest, 'UF') || undefined,
+      cep: tagInterna(dest, 'CEP') || undefined,
+    };
   }
 
   const itens = parseItens(xml);
@@ -190,6 +229,10 @@ export function parseFocusXml(xmlRaw: string): FocusXmlNota | null {
       valorDesconto: tagNum(tot, 'vDesc') || undefined,
       valorTotal: tagNum(tot, 'vNF') || undefined,
       valorTributos: tagNum(tot, 'vTotTrib') || undefined,
+      baseIcms: tagNum(tot, 'vBC') || undefined,
+      valorIcms: tagNum(tot, 'vICMS') || undefined,
+      baseIcmsSt: tagNum(tot, 'vBCST') || undefined,
+      valorIcmsSt: tagNum(tot, 'vST') || undefined,
     };
   }
 

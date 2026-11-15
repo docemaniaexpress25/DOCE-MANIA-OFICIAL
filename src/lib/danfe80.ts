@@ -1,32 +1,36 @@
 import { chaveAgrupada, extrairDaChave, mascaraCnpjCpf, mascaraNumeroNota } from './danfeTexto';
 
 /**
- * BLOCO 131 — CUPOM FISCAL 80mm PERFEITO (DANFE NFC-e / NF-e COMPLETO)
+ * MINI DANFE 80mm RETRATO — NFe (modelo 55) e NFC-e (modelo 65).
  *
- * Pedido do dono: o PDF A4 da Focus é "horrível" para a térmica — o cupom
- * fiscal tem que sair da impressora 80mm com TODOS os dados legíveis, no
- * MESMO layout do DANFE NFC-e oficial (layout do Ato DACTE/Ajuste SINIEF 05/08
- * adaptado ao papel de rolo):
+ * O dono mandou analisar o PDF A4 oficial (DANFE da Focus) e montar "o melhor
+ * layout possivel" do mini DANFE para a termica 80mm (Bluetooth ou USB).
+ * O cupom acompanha o A4 SECAO POR SECAO, nas 48 colunas do papel:
  *
- *   [emitente]  razao/fantasia + CNPJ + IE + endereco completo
- *   [titulo]    DANFE - Documento Auxiliar da Nota Fiscal de Consumidor
- *               Eletronica  +  "NAO PERMITE APROVEITAMENTO DE CREDITO DE ICMS"
- *   [nota]      numero / serie / emissao
- *   [consumidor] nome + CPF/CNPJ  ou  CONSUMIDOR NAO IDENTIFICADO
- *   [itens]     ITEM COD DESCRICAO + "QTD UN x VL UNIT = VL TOTAL" (por item!)
- *   [totais]    qtde de itens / valor produtos / desconto / VALOR TOTAL
- *   [pagamento] FORMA ... VALOR (tPag oficial da SEFAZ) + troco
- *   [consulta]  QR CODE OFICIAL (infNFeSupl/qrCode do XML autorizado)
- *   [chave]     chave de acesso em grupos de 4 + protocolo de autorizacao
- *   [legal]     contingencia / Simples Nacional / informacoes adicionais
+ *   [emitente]   razao/fantasia + CNPJ + IE + endereco completo (como o A4)
+ *   [titulo]     DANFE - Documento Auxiliar da Nota Fiscal Eletronica
+ *                + "1-SAIDA" e a NATUREZA DA OPERACAO (VENDA)
+ *   [nota]       NUMERO/SERIE/EMISSAO
+ *   [destinat.]  NOME/RAZAO SOCIAL + CPF/CNPJ + IE + endereco completo
+ *                (logradouro, bairro, CEP, municipio/UF — como o A4)
+ *   [itens]      grade do A4: "n COD DESCRICAO ... VALOR TOT" + linha de
+ *                dados fiscais "qtd UN x VL_UNIT NCM CST CFOP"
+ *   [imposto]    CALCULO DO IMPOSTO (vBC/vICMS/vBCST/vST quando > 0)
+ *   [totais]     QTDE ITENS / VALOR PRODUTOS / DESCONTO / VALOR TOTAL
+ *                / tributos totais (Lei 12.741)
+ *   [pagamento]  FORMA ... VALOR (tPag oficial da SEFAZ) + troco
+ *                — REGRA DO DONO: forma de pagamento SEMPRE aparece
+ *   [consulta]   QR CODE OFICIAL (NFC-e) ou codigo de barras (NF-e)
+ *                + CHAVE DE ACESSO em grupos de 4
+ *   [protocolo]  PROTOCOLO DE AUTORIZACAO + data
+ *   [legal]      Simples Nacional (Lei 123/2006) + informacoes adicionais
  *
- * SAIDA: texto 48 colunas (papel 80mm) com os marcadores de sempre do app
- * ([[QR:...]] / [[BARCODE:...]]) — o bluetoothPrinterService imprime QR/barras
- * ESC/POS nativos e o canal USB do PC (usbPrint) vira imagem no papel virtual.
+ * SAIDA: texto 48 colunas com os marcadores [[QR:...]] / [[BARCODE:...]] —
+ * o bluetoothPrinterService imprime QR/barras ESC/POS nativos e o canal USB
+ * do PC (usbPrint) vira imagem no papel virtual.
  *
- * A DATA vem do objeto DanfeFiscalData (montado no servidor pelo endpoint
- * /api/notas/cupom a partir do XML AUTORIZADO da SEFAZ via Focus NFe) — o
- * cupom nunca diverge do documento fiscal.
+ * Os dados vêm do endpoint /api/notas/cupom a partir do XML AUTORIZADO da
+ * SEFAZ via Focus NFe — o cupom nunca diverge do documento fiscal.
  */
 
 const W = 48; // colunas do papel 80mm (mesma grade de cupomTexto/danfeTexto)
@@ -42,6 +46,10 @@ export interface DanfeFiscalItem {
   unidade?: string;
   valorUnitario: number;
   valorTotal: number; // vProd - vDesc do item (liquido, como o consumidor ve)
+  /** Grade fiscal do A4 (DADOS DO PRODUTO / SERVICO) */
+  ncm?: string;
+  cst?: string; // CST ou CSOSN
+  cfop?: string;
 }
 
 export interface DanfeFiscalPagamento {
@@ -64,13 +72,25 @@ export interface DanfeFiscalData {
   dataEmissao?: string;        // dhEmi (XML) — vai no bloco numero/serie
   qrCode?: string;             // URL oficial de consulta NFC-e (XML)
   emitente: { nome?: string; fantasia?: string; cnpj?: string; ie?: string; endereco?: string };
-  destinatario?: { nome?: string; doc?: string };  // doc so digitos
+  /** Destinatario completo (como o A4): doc so digitos + endereco + IE */
+  destinatario?: {
+    nome?: string;
+    doc?: string;
+    endereco?: string; // logradouro, n, bairro - CEP - mun/UF (multilinha)
+    ie?: string;
+  };
+  natureza?: string;           // natOp (A4: NATUREZA DA OPERACAO — VENDA)
   itens: DanfeFiscalItem[];
   quantidadeItens?: number;    // soma das quantidades
   valorProdutos?: number;
   valorDesconto?: number;
   valorTotal: number;
   valorTributos?: number;      // vTotTrib (Lei da Transparencia) quando > 0
+  /** CALCULO DO IMPOSTO do A4 (mostrado quando maior que zero) */
+  baseIcms?: number;
+  valorIcms?: number;
+  baseIcmsSt?: number;
+  valorIcmsSt?: number;
   pagamentos?: DanfeFiscalPagamento[];
   troco?: number;
   informacoes?: string;        // infCpl (informacoes adicionais contribuinte)
@@ -90,9 +110,7 @@ const money = (v: number): string =>
 const qtdFmt = (v: number): string =>
   new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 3 }).format(Number.isFinite(v) ? v : 0);
 
-/** Valor unitario: 2 decimais; mantem 4 quando o XML traz precisao (kg/L).
- *  BLOCO 137: a linha do item passou a ser UNICA (desc + QTD + valor) — o
- *  unitario por item ficou para o XML/PDF A4; helper mantido para uso futuro. */
+/** Valor unitario: 2 decimais; mantem 4 quando o XML traz precisao (kg/L). */
 const unitFmt = (v: number): string => {
   const n = Number.isFinite(v) ? v : 0;
   const preciso = Math.abs(n - Math.round(n * 100) / 100) > 0.0001;
@@ -140,8 +158,21 @@ export const TPAG_LABEL: Record<string, string> = {
   '91': 'PAGAMENTO POSTERIOR',
 };
 
+/** Endereco do destinatario em blocos (logradouro / bairro-municipio / CEP)
+ *  — mesmo formato que o emitente recebe do servidor. */
+export function enderecoDestinatarioTexto(d: DanfeFiscalData['destinatario']): string {
+  if (!d) return '';
+  const linhas: string[] = [];
+  if (d.endereco && d.endereco.includes('\n')) {
+    linhas.push(...d.endereco.split('\n').map((s) => s.trim()).filter(Boolean));
+    return linhas.join('\n');
+  }
+  if (d.endereco) linhas.push(String(d.endereco));
+  return linhas.join('\n');
+}
+
 // ---------------------------------------------------------------------------
-// Construtor do cupom fiscal 80mm
+// Construtor do mini DANFE 80mm (retrato) — fiel ao modelo A4 do dono
 // ---------------------------------------------------------------------------
 export function danfeFiscal80(d: DanfeFiscalData): string {
   const chave = (d.chave || '').replace(/\D/g, '');
@@ -195,10 +226,15 @@ export function danfeFiscal80(d: DanfeFiscalData): string {
     ctr('NAO PERMITE APROVEITAMENTO DE');
     ctr('CREDITO DE ICMS');
   } else {
-    ctr('DANFE SIMPLIFICADO');
-    ctr('NOTA FISCAL ELETRONICA - MODELO 55');
+    ctr('DANFE - Documento Auxiliar da');
+    ctr('Nota Fiscal Eletronica - MODELO 55');
   }
   push(LINHA);
+
+  // ============================================================
+  // 1-SAIDA + NATUREZA DA OPERACAO (A4: "VENDA")
+  // ============================================================
+  push(`1-SAIDA  NATUREZA DA OPERACAO: ${(d.natureza || 'VENDA').toUpperCase()}`);
 
   // ============================================================
   // NUMERO / SERIE / EMISSAO
@@ -209,42 +245,72 @@ export function danfeFiscal80(d: DanfeFiscalData): string {
   push(`SERIE: ${(serie3 || '---').padStart(3, '0').slice(0, 3)}   EMISSAO: ${dataHoraBR(d.dataEmissao)}`);
 
   // ============================================================
-  // CONSUMIDOR
+  // DESTINATARIO / REMETENTE (A4: nome + doc + IE + endereco completo)
   // ============================================================
+  push(LINHA);
+  push('DESTINATARIO / REMETENTE');
   push(LINHA);
   const cliNome = (d.destinatario?.nome || '').trim();
   const cliDoc = (d.destinatario?.doc || '').replace(/\D/g, '');
   if (cliNome || cliDoc) {
-    for (const l of wrap(`CONSUMIDOR: ${cliNome || '-'}`)) push(l);
+    for (const l of wrap(cliNome || '-')) push(l);
     if (cliDoc) push(`CPF/CNPJ: ${mascaraCnpjCpf(cliDoc)}`);
+    const cliIe = (d.destinatario?.ie || '').trim();
+    if (cliIe && !/^isen/i.test(cliIe)) push(`IE: ${cliIe}`);
+    for (const parte of enderecoDestinatarioTexto(d.destinatario).split('\n')) {
+      if (parte) for (const l of wrap(parte)) push(l);
+    }
   } else {
     ctr('CONSUMIDOR NAO IDENTIFICADO');
   }
 
   // ============================================================
-  // ITENS — BLOCO 137: UMA linha por item (nº codigo DESCRIÇÃO + QTDx + VALOR)
+  // ITENS — grade do A4 (DADOS DO PRODUTO / SERVICO): 2 linhas por item
+  //   linha 1: "n CODIGO DESCRICAO .............. VL TOT"
+  //   linha 2: "  qtd UN x VL_UNIT  NCM ... CST ... CFOP ..."
+  // (CST = CSOSN no Simples Nacional — o A4 mostra 0101/0102)
   // ============================================================
   push(LINHA);
+  push('DADOS DO PRODUTO / SERVICO');
+  push(LINHA);
   let somaQtd = 0;
-  // BLOCO 137 (regra do dono): descrição + quantidade + VALOR em UMA linha
-  // por item, em grade FIXA (nº+codigo | descrição | QTD | valor) — todos
-  // os itens alinhados nas mesmas colunas. Descrição longa quebra com a
-  // continuação ALINHADA sob o início do texto (nada de linha solta).
   (d.itens || []).forEach((it, i) => {
     somaQtd += Number(it.quantidade) || 0;
-    const pCol = 9;   // "1 2e2822 " — item + codigo (coluna fixa)
-    const qtdCol = 5; // "  1x" / " 0,5x"
-    const valCol = 8; // "    3,60"
-    const prefixo = `${i + 1}${it.codigo ? ` ${String(it.codigo).slice(0, 6)}` : ''}`;
+    const pCol = 10;  // "1 DOR120 " — item + codigo interno (coluna fixa)
+    const qtdCol = 4; // "5,000" (fica "5,000UN")
+    const valCol = 9; // "    57,95"
+    const prefixo = `${i + 1}${it.codigo ? ` ${String(it.codigo).slice(0, 7)}` : ''}`;
     const p = prefixo.substring(0, pCol).padEnd(pCol);
     const nome = (it.descricao || 'ITEM').toUpperCase();
-    const descW = Math.max(10, W - pCol - qtdCol - valCol);
+    const descW = Math.max(10, W - pCol - valCol - 1);
     const linhasNome = wrap(nome, descW);
-    const qtdStr = `${qtdFmt(it.quantidade)}x`;
-    const valStr = money(it.valorTotal);
-    push(p + (linhasNome[0] || '').padEnd(descW) + qtdStr.padStart(qtdCol) + valStr.padStart(valCol));
+    push(p + (linhasNome[0] || '').padEnd(descW) + money(it.valorTotal).padStart(valCol));
     for (let k = 1; k < Math.min(linhasNome.length, 4); k++) push(' '.repeat(pCol) + linhasNome[k]);
+
+    // linha 2 — quantidade x valor unitario (grade do cupom fiscal)
+    const linha2 = `${qtdFmt(it.quantidade)}${(it.unidade || 'UN').toUpperCase()} x ${unitFmt(it.valorUnitario)}`;
+    push(' '.repeat(pCol) + linha2);
+
+    // linha 3 — grade fiscal do A4 (NCM/CST/CFOP) em linha própria, nunca
+    // quebrada no meio (o dono confere a carga por essas colunas)
+    const fiscais = [
+      it.ncm ? `NCM ${it.ncm}` : '',
+      it.cst ? `CST ${it.cst}` : '',
+      it.cfop ? `CFOP ${it.cfop}` : '',
+    ].filter(Boolean).join('  ');
+    if (fiscais) push(' '.repeat(pCol) + fiscais);
   });
+
+  // ============================================================
+  // CALCULO DO IMPOSTO (A4) — vBC/vICMS/vBCST/vST quando > 0
+  // ============================================================
+  const temImposto = (d.baseIcms || 0) > 0 || (d.valorIcms || 0) > 0 || (d.baseIcmsSt || 0) > 0 || (d.valorIcmsSt || 0) > 0;
+  if (temImposto) {
+    push(LINHA);
+    push('CALCULO DO IMPOSTO');
+    if ((d.baseIcms || 0) > 0 || (d.valorIcms || 0) > 0) dots('BASE DE CALCULO / VALOR ICMS', `${money(d.baseIcms || 0)} / ${money(d.valorIcms || 0)}`);
+    if ((d.baseIcmsSt || 0) > 0 || (d.valorIcmsSt || 0) > 0) dots('BASE/VALOR ICMS ST', `${money(d.baseIcmsSt || 0)} / ${money(d.valorIcmsSt || 0)}`);
+  }
 
   // ============================================================
   // TOTAIS (valores oficiais do ICMSTot)
@@ -258,11 +324,13 @@ export function danfeFiscal80(d: DanfeFiscalData): string {
 
   // ============================================================
   // FORMA DE PAGAMENTO (tPag oficial) + troco
+  // REGRA DO DONO (tarefa fiscal): NFe/NFC SEMPRE mostram forma de pagamento
   // ============================================================
   push(LINHA);
-  dots('FORMA DE PAGAMENTO', 'VALOR');
+  push('FORMA DE PAGAMENTO / VALOR');
   for (const pg of d.pagamentos || []) dots(pg.forma, money(pg.valor));
   if ((d.troco || 0) > 0) dots('TROCO', money(d.troco));
+  if (!d.pagamentos?.length && (d.troco || 0) <= 0) push('(pagamento nao informado no XML)');
 
   // ============================================================
   // CONSULTA — QR OFICIAL da SEFAZ (NFC-e) / barras da chave (NF-e)
@@ -283,7 +351,7 @@ export function danfeFiscal80(d: DanfeFiscalData): string {
   push(LINHA);
   const prot = (d.protocolo || '').trim();
   if (prot) {
-    push('PROTOCOLO DE AUTORIZACAO:');
+    push('PROTOCOLO DE AUTORIZACAO DE USO:');
     for (const l of wrap(prot)) push(l);
     push(`AUTORIZADO EM: ${dataHoraBR(d.dataAutorizacao)}`);
   }
@@ -299,7 +367,7 @@ export function danfeFiscal80(d: DanfeFiscalData): string {
     push(LINHA);
     for (const l of wrap(d.informacoes)) push(l);
   }
-  if (d.simplesNacional) {
+  if (d.simplesNacional && !d.informacoes?.toUpperCase().includes('SIMPLES NACIONAL')) {
     push(LINHA);
     // BLOCO 137 (regra do dono): SEM a frase "nao gera direito a credito
     // fiscal" — a letra seca da lei assusta o consumidor de balcão. Fica

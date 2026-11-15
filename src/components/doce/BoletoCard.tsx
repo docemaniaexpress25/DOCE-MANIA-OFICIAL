@@ -5,6 +5,9 @@ import { boletoService, BoletoInfo } from '@/services/boletoService';
 import { comprovanteBoletoTexto } from '@/lib/danfeTexto';
 import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
 import { validaCpfCnpj } from '@/lib/validaDoc';
+// MINI BOLETO 80mm PAISAGEM (deitado) — modal de visualizacao + impressao
+import ModelosImpressao from './ModelosImpressao';
+import { MiniBoletoData } from '@/lib/miniBoleto';
 
 /**
  * BLOCO 25 (ajuste "o dono nao achou o botao"): card do BOLETO BANCARIO INTER
@@ -66,6 +69,9 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
   const [doc, setDoc] = useState('');
   const [cep, setCep] = useState('');
   const [erroLocal, setErroLocal] = useState('');
+  // MINI BOLETO 80mm PAISAGEM (deitado): dados carregados da API + modal
+  const [miniModal, setMiniModal] = useState(false);
+  const [miniDados, setMiniDados] = useState<MiniBoletoData | null>(null);
 
   useEffect(() => {
     if (!saleId) return;
@@ -164,6 +170,21 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
     setBusy(false);
     if (r.erro && !r.boleto) { showToast?.(r.erro, 'error'); return; }
     if (r.boleto) setBoleto(r.boleto);
+  };
+
+  // ==================================================================
+  // MINI BOLETO 80mm PAISAGEM (deitado) — busca os dados completos na
+  // API (acao MINI: cobranca fresca do Inter + pagador + emitente + nota)
+  // e abre o modal de VISUALIZACAO + impressao (BT/USB).
+  // ==================================================================
+  const handleMiniBoleto = async () => {
+    if (busy || !saleId) return;
+    setBusy(true);
+    const r = await boletoService.mini(saleId);
+    setBusy(false);
+    if (!r.ok || !r.mini) { showToast?.(r.erro || 'Falha ao carregar o mini boleto.', 'error'); return; }
+    setMiniDados(r.mini);
+    setMiniModal(true);
   };
 
   const handlePdf = async () => {
@@ -320,11 +341,19 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
           )}
           {/* BLOCO 82: comprovante na térmica 80mm (linha digitável + código de barras + QR PIX) */}
           {['A_RECEBER', 'ATRASADO', 'RECEBIDO', 'MARCADO_RECEBIDO'].includes(boleto.status) && (boleto.linhaDigitavel || boleto.pixCopiaECola) && (
-            <button onClick={handleImprimirComprovante} disabled={busy}
-              className="block w-full bg-blue-600 text-white font-black py-2.5 rounded-xl text-[9px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
-              <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-print'} mr-1`}></i>
-              Imprimir comprovante (80mm)
-            </button>
+            <div className="grid grid-cols-2 gap-2">
+              <button onClick={handleImprimirComprovante} disabled={busy}
+                className="bg-blue-600 text-white font-black py-2.5 rounded-xl text-[9px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
+                <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-print'} mr-1`}></i>
+                Comprovante (80mm)
+              </button>
+              {/* MINI BOLETO 80mm PAISAGEM (deitado) — modelo do PDF A4 do Inter */}
+              <button onClick={handleMiniBoleto} disabled={busy}
+                className="bg-slate-900 text-white font-black py-2.5 rounded-xl text-[9px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
+                <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-file-invoice'} mr-1`}></i>
+                Mini boleto deitado
+              </button>
+            </div>
           )}
           {form && (
             <div className="space-y-2 bg-white/70 rounded-xl p-2.5">
@@ -371,6 +400,15 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
           )}
         </div>
       )}
+
+      {/* MINI BOLETO 80mm PAISAGEM — visualização + impressão (BT/USB) */}
+      <ModelosImpressao
+        abrir={miniModal}
+        onClose={() => setMiniModal(false)}
+        abaInicial="boleto"
+        boleto={miniDados}
+        showToast={showToast}
+      />
     </div>
   );
 };

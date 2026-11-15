@@ -15,6 +15,7 @@ import {
   invalidaPresenca,
 } from '@/lib/focusArquivos';
 import { FocusDoc } from '@/lib/focusNfe';
+import { importarLoteXml, XmlLoteArquivo } from '@/lib/xmlNotas';
 
 /**
  * BLOCO 141 — IMPORTADOR DE ARQUIVOS FISCAIS DA FOCUS (regra do dono):
@@ -35,6 +36,11 @@ import { FocusDoc } from '@/lib/focusNfe';
  *   { acao: 'ATUALIZAR_AVULSA', ref } -> re-consulta 1 avulsa e atualiza
  *                                        metadados + arquivos.
  *   { acao: 'EXCLUIR_AVULSA', ref }   -> apaga metadados + arquivos da avulsa.
+ *   { acao: 'XML_LOTE', arquivos: [
+ *        { nome, base64 }, ... ] }   -> BLOCO 143: importa XMLs de notas de
+ *                                        SAIDA emitidas em sistemas de
+ *                                        terceiros (parse + DANFE gerado +
+ *                                        arquivamento no bucket). Idempotente.
  *
  * Cada nota custa ate 4 reqs na Focus (consulta + DANFE + XML + pdf legado
  * NFC-e) — lotes curtos respeitam o rate limit (100 req/min). Tudo idempotente
@@ -254,6 +260,19 @@ export async function POST(req: NextRequest) {
     if (!ref) return BAD(400, 'Parametro ausente (ref).');
     await excluirAvulsa(ref);
     return NextResponse.json({ ok: true, msg: 'Avulsa apagada do sistema (a nota continua na Focus/SEFAZ).' });
+  }
+
+  // ---------------- XML_LOTE (BLOCO 143 — notas de saida de terceiros) ----------------
+  if (acao === 'XML_LOTE') {
+    const lista = Array.isArray(body.arquivos) ? (body.arquivos as XmlLoteArquivo[]) : [];
+    if (lista.length === 0) return BAD(422, 'Nenhum XML recebido.');
+    if (lista.length > 50) return BAD(413, 'Lote grande demais (max. 50 XMLs por chamada) — o portal envia em pedacos.');
+    const resumo = await importarLoteXml(lista);
+    return NextResponse.json({
+      ok: true,
+      ...resumo,
+      msg: `${resumo.importados} nota(s) importada(s), ${resumo.cancelamentos} cancelamento(s), ${resumo.duplicados} duplicada(s), ${resumo.entradas} entrada(s), ${resumo.ilegiveis} ilegivel(is).`,
+    });
   }
 
   // ---------------- IMPORTAR_POR_REF (colar ref/chave do painel da Focus) ----------------

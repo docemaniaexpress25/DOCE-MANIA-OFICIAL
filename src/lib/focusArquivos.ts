@@ -76,6 +76,9 @@ const MIME: Record<string, string> = {
   html: 'text/html; charset=utf-8',
 };
 
+export const MIME_XML = MIME.xml;
+export const MIME_HTML = MIME.html;
+
 /** Extrai a extensao real do caminho da Focus (DANFEs/*.pdf ou *.html). */
 function extDeCaminho(caminho: string): 'pdf' | 'html' | 'xml' | null {
   const m = /\.(pdf|html?|xml)$/i.exec(caminho.trim());
@@ -188,7 +191,9 @@ export async function baixarCaminhoFocus(caminho: string): Promise<ArquivoBaixad
   }
 }
 
-async function gravarNoStorage(caminho: string, bytes: Buffer, contentType: string): Promise<boolean> {
+/** Grava um arquivo no bucket `notas-fiscais` (upsert) — usado também pelo
+ *  importador de XML em lote (BLOCO 143). false = falha de storage. */
+export async function gravarNoStorage(caminho: string, bytes: Buffer, contentType: string): Promise<boolean> {
   if (!(await garanteBucketNotas())) return false;
   try {
     const { error } = await getServiceClient()
@@ -334,6 +339,13 @@ export interface NotaAvulsaMeta {
   pagamento: string;
   qrcodeUrl: string;
   importadoEm: string;
+  /** BLOCO 143: origem da avulsa — 'FOCUS' (importada da API/painel) ou 'XML'
+   *  (XML de sistema terceiro enviado pelo portal). Ausente = FOCUS (legado). */
+  origem?: 'FOCUS' | 'XML';
+  /** Dados do EMITENTE (presentes nas notas importadas por XML — o DANFE
+   *  gerado usa; as da Focus não precisam porque o DANFE oficial vem da API). */
+  emitente?: string;
+  emitenteCnpj?: string;
 }
 
 function pastaAvulsa(): string {
@@ -803,6 +815,12 @@ export async function importarDoBackupFocus(lote = 8): Promise<BackupResultado> 
     mesesComBackup: lista.backups.length,
     danfesGravados,
   };
+}
+
+/** Grava/atualiza o JSON de metadados de uma avulsa (idempotente). */
+export async function gravarMetaAvulsa(meta: NotaAvulsaMeta): Promise<boolean> {
+  const ok = await gravarNoStorage(`${pastaAvulsa()}/${meta.ref}.json`, Buffer.from(JSON.stringify(meta, null, 2)), 'application/json');
+  return ok;
 }
 
 /** Devolve os metadados de uma avulsa (null = nao existe). */

@@ -1,21 +1,38 @@
 "use client";
 
 /**
- * BLOCO 140 — PORTAL DE NOTAS (admin, fora do app — "no mesmo estilo do
- * portal do cliente"): link externo que abre no navegador e pede o MESMO PIN
- * do admin. Lista TODAS as notas de saída (NF-e / NFC-e) na horizontal, uma
- * abaixo da outra: número, tipo, status, cliente, data, valor, pagamento,
- * vendedor — com DANFE (PDF) e XML para abrir/baixar e ações completas de
- * administração: VER (o que foi pedido), CONSULTAR, EMITIR, EDITAR, CLONAR
- * e CANCELAR.
+ * BLOCO 143 — PORTAL DE NOTAS (admin, fora do app) — MEGA OTIMIZAÇÃO PC:
+ * "na imagem em anexo temos o portal da IOB emissor! junto com o nosso portal
+ * vamos otimizar todos os fluxos e botões para que fique 100% funcional
+ * acessando pelo PC. precisamos que tudo caiba em uma linha só, otimize os
+ * espaços a direita e esquerda! ações sempre devem vir com pergunta de
+ * confirmar! crie um botão para importar XML em lote... nesse portal também
+ * devem ter em ações os boletos gerados!"
+ *
+ * O que mudou no 143:
+ *  - TABELA IOB: cada nota = UMA linha compacta (documento, cliente, emissão,
+ *    valor, pagamento, vendedor, situação, ações) — página larga (1600px),
+ *    paddings apertados, sem quebra de linha;
+ *  - TODA ação que muda estado pede CONFIRMAÇÃO (modal unificado de pergunta);
+ *  - IMPORTAR XML EM LOTE: botão no cabeçalho — arrasta/seleciona vários XMLs
+ *    (ou .zip) de sistemas de terceiros; notas de SAÍDA autorizadas/canceladas
+ *    entram arquivadas com DANFE imprimível gerado do XML (origem "XML");
+ *  - BOLETOS: linha com boleto Inter mostra o botão de código de barras —
+ *    abre o modal com linha digitável, PIX, PDF do boleto, consultar e
+ *    cancelar (com motivo e confirmação);
+ *  - SEM "FALTA NF A BATER": a lista tem SOMENTE documentos que vieram da API
+ *    (venda com nota_ref / avulsas Focus / XMLs importados). Venda sem emissão
+ *    não aparece mais (quem resolve pendência usa a aba NOTAS PENDENTES do app);
+ *  - CANCELAR NA SEFAZ: botão só aparece DENTRO do prazo (NFC-e 30min /
+ *    NF-e 24h) e some sozinho quando vence (relógio vivo de 15s).
  *
  * Auth: POST /api/notas-admin {acao:'AUTH', pin} valida o PIN com bcrypt
- * contra os usuários ADMIN (igual tela de login do app) e devolve um token
- * de sessão ADMIN — o mesmo formato usado pelas rotas fiscais (/api/notas),
- * então EMITIR/CONSULTAR/CANCELAR reutilizam TODO o fluxo de produção.
+ * contra os usuários ADMIN e devolve token de sessão ADMIN (mesmo formato das
+ * rotas fiscais /api/notas) — EMITIR/CONSULTAR/CANCELAR reutilizam o fluxo.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { unzipSync } from 'fflate';
 // BLOCO 142: prazo SEFAZ de cancelamento (NFC-e 30min / NF-e 24h) — fonte única com o servidor
 import { prazoCancelamentoNota } from '@/lib/regras-fiscais';
 
@@ -42,11 +59,15 @@ interface NotaRow {
   clienteDoc: string;
   clienteId: string;
   vendedor: string;
-  // BLOCO 141: arquivos arquivados DENTRO do sistema (bucket notas-fiscais)
+  // arquivos arquivados DENTRO do sistema (bucket notas-fiscais)
   pdfLocal: boolean;
   xmlLocal: boolean;
-  // nota avulsa (emitida fora do app — importada da Focus pelo portal)
+  // nota avulsa (emitida fora do app — importada da Focus ou XML de terceiro)
   avulsa?: boolean;
+  origem?: string;
+  // boleto Inter da venda (BLOCO 143)
+  boletoStatus?: string;
+  boletoVencimento?: string;
 }
 
 interface ItemDetalhe { produto: string; quantidade: number; preco: number; }
@@ -56,6 +77,19 @@ interface ClienteDetalhe {
   inscricao_estadual: string; telefone: string; endereco: string; bairro: string;
   endereco_numero: string; endereco_cep: string; endereco_municipio: string;
   endereco_uf: string; email: string;
+}
+
+interface BoletoInfo {
+  status: string;
+  codigo: string;
+  seuNumero: string;
+  vencimento: string;
+  valor: number | null;
+  linhaDigitavel: string;
+  codigoBarras: string;
+  pixCopiaECola: string;
+  valorRecebido: number | null;
+  erro: string;
 }
 
 // ---------------- helpers ----------------
@@ -71,6 +105,15 @@ const fmtData = (iso: string) => {
       timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: '2-digit',
       hour: '2-digit', minute: '2-digit', hour12: false,
     }).format(new Date(iso));
+  } catch { return '—'; }
+};
+
+const fmtDia = (iso: string) => {
+  if (!iso) return '—';
+  try {
+    const d = new Date(iso);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(2, 4);
+    return new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: '2-digit', hour12: false }).format(d);
   } catch { return '—'; }
 };
 
@@ -97,7 +140,7 @@ function rotuloTipo(tipo: string, modoNota: string): string {
   return 'NF';
 }
 
-type FiltroStatus = 'TODAS' | 'AUTORIZADA' | 'EMITINDO' | 'REJEITADA' | 'CANCELADA' | 'NAO_EMITIDA';
+type FiltroStatus = 'TODAS' | 'AUTORIZADA' | 'EMITINDO' | 'REJEITADA' | 'CANCELADA';
 type FiltroPeriodo = 'TUDO' | 'HOJE' | '7D' | '30D' | 'MES';
 
 const PERIODO_META: { key: FiltroPeriodo; label: string }[] = [
@@ -123,6 +166,36 @@ function dentroPeriodo(dataVenda: string, p: FiltroPeriodo): boolean {
 
 const FORMAS = ['DINHEIRO', 'PIX', 'BOLETO', 'CHEQUE', 'A_PRAZO'] as const;
 
+// Boleto Inter (BLOCO 143) — rótulo/cor por status
+const BOLETO_META: Record<string, { label: string; cls: string }> = {
+  A_RECEBER: { label: 'A receber', cls: 'bg-blue-50 text-blue-700 border-blue-200' },
+  EM_PROCESSAMENTO: { label: 'Processando', cls: 'bg-amber-50 text-amber-700 border-amber-200' },
+  ATRASADO: { label: 'Atrasado', cls: 'bg-rose-50 text-rose-700 border-rose-200' },
+  RECEBIDO: { label: 'Recebido', cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+  MARCADO_RECEBIDO: { label: 'Recebido', cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+  CANCELADO: { label: 'Cancelado', cls: 'bg-gray-100 text-gray-500 border-gray-200' },
+  EXPIRADO: { label: 'Expirado', cls: 'bg-gray-100 text-gray-500 border-gray-200' },
+  FALHA_EMISSAO: { label: 'Falha', cls: 'bg-rose-50 text-rose-600 border-rose-200' },
+};
+
+function metaBoleto(st: string) {
+  const key = String(st || '').toUpperCase();
+  return BOLETO_META[key] || { label: key.replace(/_/g, ' ').toLowerCase() || '—', cls: 'bg-gray-100 text-gray-500 border-gray-200' };
+}
+
+const BOLETO_VIVO = ['A_RECEBER', 'EM_PROCESSAMENTO', 'ATRASADO', 'RECEBIDO', 'MARCADO_RECEBIDO', 'FALHA_EMISSAO'];
+
+/** ArrayBuffer -> base64 (chunks para não estourar a pilha com XMLs grandes). */
+function bytesToBase64(u8: Uint8Array): string {
+  let bin = '';
+  const CH = 0x8000;
+  for (let i = 0; i < u8.length; i += CH) {
+    bin += String.fromCharCode(...Array.from(u8.subarray(i, i + CH)));
+  }
+  return btoa(bin);
+}
+
+// ---------------- página ----------------
 export default function PortalNotasPage() {
   const [token, setToken] = useState<string | null>(null);
   const [nomeAdmin, setNomeAdmin] = useState('');
@@ -143,12 +216,11 @@ export default function PortalNotasPage() {
   const [periodo, setPeriodo] = useState<FiltroPeriodo>('TUDO');
   const [busyId, setBusyId] = useState<string | null>(null);
 
-  // Importação da Focus (BLOCO 141 — PDF/XML dentro do sistema)
+  // Importação da Focus (PDF/XML dentro do sistema)
   const [importBusy, setImportBusy] = useState(false);
   const [importProg, setImportProg] = useState<{ fase: string; done: number; total: number } | null>(null);
 
-  // Importação por ref/chave colada do painel da Focus (a API não lista notas
-  // emitidas fora do app — o admin copia do painel e cola aqui)
+  // Importação por ref/chave colada do painel da Focus
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState('');
   const [pasteBusy, setPasteBusy] = useState(false);
@@ -166,11 +238,46 @@ export default function PortalNotasPage() {
   const [emitTipo, setEmitTipo] = useState<'' | 'NFE' | 'NFCE'>("");
 
   // ------------------------------------------------------------------
-  // BLOCO 142 — relógio "agora": o prazo SEFAZ de cancelamento é RELATIVO
-  // (NFC-e 30min / NF-e 24h após a autorização). O botão de cancelar
-  // precisa SUMIR sozinho quando o prazo vence — sem precisar recarregar
-  // a lista. Tick de 15s enquanto o admin está logado (custo zero).
+  // BLOCO 143 — CONFIRMAÇÃO UNIFICADA: TODA ação que muda estado passa
+  // por esta pergunta antes de executar ("ações sempre devem vir com
+  // pergunta de confirmar!").
   // ------------------------------------------------------------------
+  interface Conf {
+    titulo: string;
+    texto: string;
+    detalhe?: string;
+    icone?: string;
+    perigo?: boolean;
+    botao?: string;
+    run: () => Promise<void> | void;
+  }
+  const [conf, setConf] = useState<Conf | null>(null);
+  const [confBusy, setConfBusy] = useState(false);
+  const executarConf = async () => {
+    if (!conf || confBusy) return;
+    setConfBusy(true);
+    try { await conf.run(); } finally { setConfBusy(false); setConf(null); }
+  };
+
+  // BLOCO 143 — IMPORTAR XML EM LOTE
+  const [xmlOpen, setXmlOpen] = useState(false);
+  const [xmlArquivos, setXmlArquivos] = useState<{ nome: string; base64: string; tamanho: number }[]>([]);
+  const [xmlBusy, setXmlBusy] = useState(false);
+  const [xmlProg, setXmlProg] = useState<{ done: number; total: number } | null>(null);
+  const [xmlRes, setXmlRes] = useState<{ importados: number; cancelamentos: number; duplicados: number; entradas: number; ilegiveis: number; erros: { nome: string; mensagem: string }[] } | null>(null);
+  const [xmlDrag, setXmlDrag] = useState(false);
+  const xmlInput = useRef<HTMLInputElement | null>(null);
+
+  // BLOCO 143 — BOLETO (modal + cancelamento com motivo)
+  const [boletoModal, setBoletoModal] = useState<{ n: NotaRow } | null>(null);
+  const [boleto, setBoleto] = useState<BoletoInfo | null>(null);
+  const [boletoBusy, setBoletoBusy] = useState(false);
+  const [boletoMsg, setBoletoMsg] = useState('');
+  const [cancelBoleto, setCancelBoleto] = useState<{ n: NotaRow } | null>(null);
+  const [cancelBoletoMotivo, setCancelBoletoMotivo] = useState('');
+
+  // relógio "agora": o prazo SEFAZ de cancelamento é RELATIVO — o botão
+  // de cancelar precisa SUMIR sozinho quando o prazo vence (tick 15s).
   const [agora, setAgora] = useState(() => new Date());
   useEffect(() => {
     if (!token) return;
@@ -217,14 +324,16 @@ export default function PortalNotasPage() {
       const res = await fetch('/api/notas-admin?acao=lista', { headers: headers(t) });
       const data = await res.json().catch(() => ({}));
       if (res.status === 401 || res.status === 403) {
-        // sessão inválida — volta pro PIN
         try { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(NOME_KEY); } catch {}
         setToken(null); setNomeAdmin('');
         setErroLista('Sessão expirada. Entre com o PIN novamente.');
         return;
       }
       if (!res.ok || !data.ok) { setErroLista(data.erro || `Erro ${res.status}`); return; }
-      setNotas((data.notas || []) as NotaRow[]);
+      // BLOCO 143: defesa extra no front — só documentos reais (a API já
+      // devolve sem vendas sem emissão; aqui filtramos NAO_EMITIDA de novo).
+      const lista = ((data.notas || []) as NotaRow[]).filter(n => String(n.status || '').toUpperCase() !== 'NAO_EMITIDA');
+      setNotas(lista);
     } catch {
       setErroLista('Falha de conexão. Toque em ATUALIZAR.');
     } finally {
@@ -275,8 +384,6 @@ export default function PortalNotasPage() {
     setPinErro('');
     const proximo = (pin + d).slice(0, 8);
     setPin(proximo);
-    // Auto-entrada no 6º dígito (PIN padrão do admin tem 6); PINs de outro
-    // tamanho usam o botão ENTRAR.
     if (proximo.length === 6) void entrarComPin(proximo);
   };
 
@@ -307,14 +414,16 @@ export default function PortalNotasPage() {
   const kpis = useMemo(() => {
     const visiveis = notas.filter(n => dentroPeriodo(n.dataVenda, periodo));
     const autorizadas = visiveis.filter(n => n.status === 'AUTORIZADA');
+    const canceladas = visiveis.filter(n => n.status === 'CANCELADA');
     const rejeitadas = visiveis.filter(n => n.status === 'REJEITADA');
-    const pendentes = visiveis.filter(n => n.status === 'NAO_EMITIDA' || n.status === 'EMITINDO');
     return {
       total: visiveis.length,
       autorizadas: autorizadas.length,
+      canceladas: canceladas.length,
       rejeitadas: rejeitadas.length,
-      pendentes: pendentes.length,
       valor: autorizadas.reduce((a, n) => a + (Number(n.valor) || 0), 0),
+      pdfLocal: visiveis.filter(n => n.pdfLocal).length,
+      xmlLocal: visiveis.filter(n => n.xmlLocal).length,
     };
   }, [notas, periodo]);
 
@@ -330,6 +439,11 @@ export default function PortalNotasPage() {
     setDetalheLoading(true);
     setDetalhe(null);
     try {
+      if (n.avulsa) {
+        // avulsa: detalhe vem dos metadados (sem pedido interno)
+        setDetalhe({ nota: n, cliente: null, itens: [] });
+        return;
+      }
       const res = await fetch(`/api/notas-admin?acao=detalhe&id=${encodeURIComponent(n.id)}`, { headers: headers(token) });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) { showToast(data.erro || 'Falha ao abrir o pedido.', false); return; }
@@ -392,7 +506,7 @@ export default function PortalNotasPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) { showToast(data.erro || 'Falha ao clonar a venda.', false); return; }
-      showToast('Cópia criada (sem nota). Ela aparece na lista como PENDENTE.');
+      showToast('Cópia criada como venda pendente no app — emita a NF pela aba NOTAS PENDENTES.');
       setCloneModal(null);
       void carregar(token);
     } catch {
@@ -426,7 +540,7 @@ export default function PortalNotasPage() {
     } finally { setBusyId(null); }
   };
 
-  // ---------- IMPORTAR DA FOCUS (BLOCO 141) ----------
+  // ---------- IMPORTAR DA FOCUS ----------
   // Loop de lotes: o servidor processa 6 notas por chamada (rate limit da
   // Focus) e devolve done=true quando não sobra nada sem arquivo local.
   const importarTudo = async () => {
@@ -449,9 +563,7 @@ export default function PortalNotasPage() {
         setImportProg({ fase: 'Notas do app', done: (Number(data.total) || 0) - (Number(data.faltando) || 0), total: Number(data.total) || 0 });
         if (data.done) break;
       }
-      // BLOCO 142: varredura da LISTAGEM OFICIAL da Focus (/v2/nfes?cnpj= e
-      // /v2/nfces?cnpj=) — traz notas batidas no PAINEL tbm. Se a conta não
-      // expõe a listagem, o aviso do toast diz e o manual por ref continua.
+      // Varredura dos BACKUPS MENSAIS oficiais da Focus (app + painel).
       setImportProg({ fase: 'Varredura da Focus', done: 0, total: 0 });
       let avulsasMsg = '';
       for (let i = 0; i < 20; i++) {
@@ -526,7 +638,6 @@ export default function PortalNotasPage() {
 
   const excluirAvulsa = async (n: NotaRow) => {
     if (!token) return;
-    if (!window.confirm(`Apagar a cópia interna da nota ${n.numero || n.ref}? A nota continua gravada na Focus/SEFAZ.`)) return;
     setBusyId(n.id);
     try {
       const res = await fetch('/api/notas-importar', {
@@ -543,7 +654,7 @@ export default function PortalNotasPage() {
   };
 
   /** Link do arquivo pela NOSSA rota (storage próprio → cai na Focus ao vivo).
-   *  BLOCO 142: token na query — o <a> de download não carrega header de auth. */
+   *  Token na query — o <a> de download não carrega header de auth. */
   const linkArquivo = (n: NotaRow, tipo: 'pdf' | 'xml'): string => {
     const t = token ? `&token=${encodeURIComponent(token)}` : '';
     if (n.avulsa) {
@@ -551,6 +662,177 @@ export default function PortalNotasPage() {
       return `/api/notas-arquivo?ref=${encodeURIComponent(n.ref)}&doc=${doc}&tipo=${tipo}${t}`;
     }
     return `/api/notas-arquivo?saleId=${encodeURIComponent(n.id)}&tipo=${tipo}${t}`;
+  };
+
+  // ---------- BLOCO 143: XML EM LOTE ----------
+  const pegarArquivos = async (files: FileList | File[]) => {
+    const add: { nome: string; base64: string; tamanho: number }[] = [];
+    const zipTravados: string[] = [];
+    for (const f of Array.from(files).slice(0, 200)) {
+      try {
+        if (/\.zip$/i.test(f.name)) {
+          const zipped = unzipSync(new Uint8Array(await f.arrayBuffer()));
+          for (const [nome, u8] of Object.entries(zipped)) {
+            if (!/\.xml$/i.test(nome) || nome.startsWith('__MACOSX')) continue;
+            add.push({ nome: `${f.name}/${nome}`, base64: bytesToBase64(u8), tamanho: u8.length });
+          }
+        } else if (/\.xml$/i.test(f.name) || f.type === 'text/xml' || f.type === 'application/xml') {
+          const u8 = new Uint8Array(await f.arrayBuffer());
+          add.push({ nome: f.name, base64: bytesToBase64(u8), tamanho: u8.length });
+        } else {
+          zipTravados.push(f.name);
+        }
+      } catch {
+        zipTravados.push(f.name);
+      }
+    }
+    setXmlArquivos(atuais => {
+      const nomes = new Set(atuais.map(a => a.nome));
+      const novos = add.filter(a => !nomes.has(a.nome) && a.tamanho > 0);
+      return [...atuais, ...novos];
+    });
+    if (zipTravados.length) showToast(`${zipTravados.length} arquivo(s) ignorado(s) — só aceito .xml e .zip.`, false);
+    if (xmlRes) setXmlRes(null);
+  };
+
+  const importarXmlLote = async () => {
+    if (!token || xmlBusy || xmlArquivos.length === 0) return;
+    setXmlBusy(true);
+    setXmlRes(null);
+    const total = xmlArquivos.length;
+    setXmlProg({ done: 0, total });
+    const erros: { nome: string; mensagem: string }[] = [];
+    let importados = 0, cancelamentos = 0, duplicados = 0, entradas = 0, ilegiveis = 0;
+    try {
+      const CH = 8;
+      for (let i = 0; i < total; i += CH) {
+        const lote = xmlArquivos.slice(i, i + CH);
+        const res = await fetch('/api/notas-importar', {
+          method: 'POST',
+          headers: headers(token),
+          body: JSON.stringify({ acao: 'XML_LOTE', arquivos: lote.map(a => ({ nome: a.nome, base64: a.base64 })) }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) {
+          showToast(data.erro || 'Falha ao importar o lote de XMLs.', false);
+          break;
+        }
+        importados += Number(data.importados) || 0;
+        cancelamentos += Number(data.cancelamentos) || 0;
+        duplicados += Number(data.duplicados) || 0;
+        entradas += Number(data.entradas) || 0;
+        ilegiveis += Number(data.ilegiveis) || 0;
+        for (const r of (data.resultados || []) as { nome: string; ok: boolean; mensagem: string }[]) {
+          if (!r.ok) erros.push({ nome: r.nome, mensagem: r.mensagem });
+        }
+        setXmlProg({ done: Math.min(i + CH, total), total });
+      }
+      setXmlRes({ importados, cancelamentos, duplicados, entradas, ilegiveis, erros });
+      showToast(`${importados} nota(s) importada(s) do XML — a lista já está atualizada.`);
+      setXmlArquivos([]);
+      void carregar(token);
+    } catch {
+      showToast('Falha de conexão na importação de XMLs.', false);
+    } finally {
+      setXmlBusy(false);
+      setXmlProg(null);
+    }
+  };
+
+  // ---------- BLOCO 143: BOLETO ----------
+  const copiar = async (texto: string, rotulo: string) => {
+    try {
+      await navigator.clipboard.writeText(texto);
+      showToast(`${rotulo} copiado.`);
+    } catch {
+      showToast('Não foi possível copiar — selecione e copie manualmente.', false);
+    }
+  };
+
+  const abrirBoleto = async (n: NotaRow) => {
+    if (!token) return;
+    setBoletoModal({ n });
+    setBoleto(null);
+    setBoletoMsg('');
+    setBoletoBusy(true);
+    try {
+      const res = await fetch(`/api/boletos?saleId=${encodeURIComponent(n.id)}`, { headers: headers(token) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) { setBoletoMsg(data.erro || 'Falha ao carregar o boleto.'); return; }
+      setBoleto(data.boleto as BoletoInfo);
+    } catch {
+      setBoletoMsg('Falha de conexão ao carregar o boleto.');
+    } finally { setBoletoBusy(false); }
+  };
+
+  const pdfBoleto = async () => {
+    if (!token || !boletoModal) return;
+    setBoletoBusy(true);
+    try {
+      const res = await fetch('/api/boletos', {
+        method: 'POST',
+        headers: headers(token),
+        body: JSON.stringify({ acao: 'PDF', saleId: boletoModal.n.id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok || !data.pdfBase64) { showToast(data.erro || 'Falha ao buscar o PDF no Inter.', false); return; }
+      const bin = atob(data.pdfBase64);
+      const u8 = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+      const url = URL.createObjectURL(new Blob([u8], { type: 'application/pdf' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `boleto-${boletoModal.n.numero || boletoModal.n.id.slice(0, 8)}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      showToast('PDF do boleto baixado.');
+    } catch {
+      showToast('Falha ao gerar o PDF do boleto.', false);
+    } finally { setBoletoBusy(false); }
+  };
+
+  const consultarBoleto = async () => {
+    if (!token || !boletoModal) return;
+    setBoletoBusy(true);
+    try {
+      const res = await fetch('/api/boletos', {
+        method: 'POST',
+        headers: headers(token),
+        body: JSON.stringify({ acao: 'CONSULTAR', saleId: boletoModal.n.id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) { showToast(data.erro || 'Falha ao consultar o Inter.', false); return; }
+      setBoleto(data.boleto as BoletoInfo);
+      showToast('Boleto consultado no Inter.');
+      void carregar(token);
+    } catch {
+      showToast('Falha de conexão ao consultar o boleto.', false);
+    } finally { setBoletoBusy(false); }
+  };
+
+  const cancelarBoleto = async () => {
+    if (!token || !cancelBoleto) return;
+    const motivo = cancelBoletoMotivo.trim();
+    if (!motivo) { showToast('Informe o motivo do cancelamento (obrigatório no Inter).', false); return; }
+    setBoletoBusy(true);
+    try {
+      const res = await fetch('/api/boletos', {
+        method: 'POST',
+        headers: headers(token),
+        body: JSON.stringify({ acao: 'CANCELAR', saleId: cancelBoleto.n.id, motivo }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) { showToast(data.erro || 'Falha ao cancelar o boleto no Inter.', false); return; }
+      showToast('Boleto cancelado no Inter.');
+      setCancelBoleto(null);
+      setCancelBoletoMotivo('');
+      setBoletoModal(null);
+      void carregar(token);
+    } catch {
+      showToast('Falha de conexão ao cancelar o boleto.', false);
+    } finally { setBoletoBusy(false); }
   };
 
   // ---------- tela: boot ----------
@@ -599,87 +881,114 @@ export default function PortalNotasPage() {
     );
   }
 
-  // ---------- tela: lista ----------
+  // ---------- tela: lista (PC otimizado — BLOCO 143) ----------
   return (
     <div className="min-h-screen bg-gray-100 flex flex-col">
-      {/* Header */}
-      <div className="bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-800 text-white px-5 pt-10 pb-20 relative overflow-hidden">
-        <div className="absolute top-0 right-0 w-40 h-40 bg-white/5 rounded-full -translate-y-1/2 translate-x-1/2" />
-        <div className="absolute bottom-0 left-0 w-32 h-32 bg-white/5 rounded-full translate-y-1/2 -translate-x-1/2" />
-        <div className="max-w-6xl mx-auto relative z-10 flex items-start justify-between gap-3">
-          <div>
-            <p className="text-[10px] font-bold text-blue-200/70 uppercase tracking-[0.2em] mb-2">Administração · Saída</p>
-            <h1 className="text-2xl font-black uppercase tracking-tight leading-tight">Notas Fiscais <span className="text-blue-200">NF-e · NFC-e</span></h1>
-            {nomeAdmin && <p className="text-[11px] text-blue-200/70 font-semibold mt-2"><i className="fa-solid fa-user-shield mr-1 text-[9px]"></i>{nomeAdmin}</p>}
-          </div>
-          <div className="flex flex-col gap-2 shrink-0">
-            <button onClick={() => void importarTudo()} disabled={importBusy} className="bg-emerald-400 hover:bg-emerald-300 disabled:opacity-60 text-emerald-950 rounded-xl px-3 py-2 text-[10px] font-black uppercase tracking-wider active:scale-95 transition-all shadow-lg shadow-emerald-900/30" title="Varre a API da Focus (NF-e + NFC-e do CNPJ, inclusive notas batidas no PAINEL) e grava PDF (DANFE) e XML de TODAS as notas DENTRO do sistema">
-              <i className={`fa-solid fa-cloud-arrow-down mr-1.5 ${importBusy ? 'fa-bounce' : ''}`}></i>
-              {importBusy ? 'Importando...' : 'Buscar TODAS na Focus'}
-            </button>
-            <button onClick={() => void carregar(token)} className="bg-white/15 hover:bg-white/25 text-white rounded-xl px-3 py-2 text-[10px] font-black uppercase tracking-wider active:scale-95 transition-all" title="Atualizar lista">
-              <i className={`fa-solid fa-rotate mr-1.5 ${carregando ? 'fa-spin' : ''}`}></i>Atualizar
-            </button>
-            <button onClick={sair} className="bg-white/10 hover:bg-white/20 text-blue-100 rounded-xl px-3 py-2 text-[10px] font-black uppercase tracking-wider active:scale-95 transition-all" title="Sair do portal">
-              <i className="fa-solid fa-right-from-bracket mr-1.5"></i>Sair
-            </button>
+      {/* ================= HEADER compacto (1 linha de título + 1 de KPIs) ================= */}
+      <header className="sticky top-0 z-40 shadow-lg shadow-blue-900/10">
+        <div className="bg-gradient-to-r from-blue-700 via-blue-800 to-indigo-900 text-white">
+          <div className="max-w-[1600px] mx-auto px-4 py-2.5 flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-white/10 border border-white/10 flex items-center justify-center shrink-0">
+              <i className="fa-solid fa-file-invoice-dollar text-blue-100"></i>
+            </div>
+            <div className="min-w-0">
+              <h1 className="text-[15px] font-black uppercase tracking-tight leading-none whitespace-nowrap">Portal de Notas Fiscais <span className="text-blue-300">NF-e · NFC-e</span></h1>
+              <p className="text-[10px] text-blue-200/70 font-semibold mt-1 leading-none truncate">
+                {nomeAdmin ? <><i className="fa-solid fa-user-shield mr-1 text-[8px]"></i>{nomeAdmin} · </> : null}
+                <span className="uppercase tracking-wide">administração de saída</span>
+              </p>
+            </div>
+            <div className="flex-1" />
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => { setXmlOpen(true); setXmlRes(null); }}
+                className="bg-teal-400 hover:bg-teal-300 text-teal-950 rounded-xl px-3.5 h-9 text-[10px] font-black uppercase tracking-wider active:scale-95 transition-all shadow-lg shadow-teal-900/30 flex items-center gap-1.5"
+                title="Importar XMLs de notas de SAÍDA emitidas em sistemas de terceiros — aceita vários arquivos e .zip; entra arquivado com DANFE imprimível"
+              >
+                <i className="fa-solid fa-file-import"></i>Importar XML em lote
+              </button>
+              <button
+                onClick={() => setConf({
+                  titulo: 'Buscar TODAS na Focus?',
+                  texto: 'A varredura busca TODAS as notas do CNPJ na API da Focus (do app e do painel), baixa PDF e XML e arquiva tudo dentro do sistema. Pode demorar alguns minutos.',
+                  detalhe: 'Notas que já estão arquivadas são puladas (nunca duplica).',
+                  icone: 'fa-cloud-arrow-down',
+                  botao: 'Buscar agora',
+                  run: importarTudo,
+                })}
+                disabled={importBusy}
+                className="bg-emerald-400 hover:bg-emerald-300 disabled:opacity-60 text-emerald-950 rounded-xl px-3.5 h-9 text-[10px] font-black uppercase tracking-wider active:scale-95 transition-all shadow-lg shadow-emerald-900/30 flex items-center gap-1.5"
+                title="Varre a API da Focus (NF-e + NFC-e do CNPJ) e grava PDF (DANFE) e XML de TODAS as notas DENTRO do sistema"
+              >
+                <i className={`fa-solid fa-cloud-arrow-down ${importBusy ? 'fa-bounce' : ''}`}></i>{importBusy ? 'Importando...' : 'Buscar TODAS na Focus'}
+              </button>
+              <button
+                onClick={() => void carregar(token)}
+                className="bg-white/15 hover:bg-white/25 text-white rounded-xl px-3.5 h-9 text-[10px] font-black uppercase tracking-wider active:scale-95 transition-all flex items-center gap-1.5"
+                title="Atualizar lista"
+              >
+                <i className={`fa-solid fa-rotate ${carregando ? 'fa-spin' : ''}`}></i>Atualizar
+              </button>
+              <button
+                onClick={sair}
+                className="bg-white/10 hover:bg-white/20 text-blue-100 rounded-xl px-3.5 h-9 text-[10px] font-black uppercase tracking-wider active:scale-95 transition-all flex items-center gap-1.5"
+                title="Sair do portal"
+              >
+                <i className="fa-solid fa-right-from-bracket"></i>Sair
+              </button>
+            </div>
           </div>
         </div>
-      </div>
+        {/* faixa de KPIs — uma linha só */}
+        <div className="bg-blue-950 text-blue-100">
+          <div className="max-w-[1600px] mx-auto px-4 py-1.5 flex items-center gap-4 text-[10px] font-bold whitespace-nowrap overflow-x-auto" role="status">
+            <span><b className="text-white">{kpis.total}</b> no período</span>
+            <span className="text-emerald-300"><b>{kpis.autorizadas}</b> autorizadas</span>
+            <span className="text-gray-400"><b>{kpis.canceladas}</b> canceladas</span>
+            <span className="text-rose-300"><b>{kpis.rejeitadas}</b> rejeitadas</span>
+            <span className="text-amber-300"><b>{fmtBRL(kpis.valor)}</b> autorizado</span>
+            <span className="text-blue-300/60">|</span>
+            <span className="text-emerald-200/80">{kpis.pdfLocal} DANFE · {kpis.xmlLocal} XML no sistema</span>
+            {importBusy && importProg && (
+              <span className="ml-auto flex items-center gap-2 text-emerald-300">
+                <i className="fa-solid fa-cloud-arrow-down animate-bounce"></i>
+                {importProg.fase}
+                {importProg.total > 0 && <span className="tabular-nums">{importProg.done}/{importProg.total}</span>}
+              </span>
+            )}
+          </div>
+        </div>
+      </header>
 
-      {/* KPIs flutuante */}
-      <div className="max-w-6xl w-full mx-auto px-4 -mt-14 relative z-20">
-        <div className="bg-white rounded-3xl shadow-xl border border-gray-100 p-5 grid grid-cols-2 sm:grid-cols-4 gap-4">
-          <div className="text-center">
-            <p className="text-[8px] font-black uppercase text-gray-400 tracking-wider">Notas no período</p>
-            <p className="text-lg font-black text-gray-800 mt-0.5">{kpis.total}</p>
-          </div>
-          <div className="text-center sm:border-x border-gray-100">
-            <p className="text-[8px] font-black uppercase text-gray-400 tracking-wider">Autorizadas</p>
-            <p className="text-lg font-black text-emerald-600 mt-0.5">{kpis.autorizadas}</p>
-          </div>
-          <div className="text-center">
-            <p className="text-[8px] font-black uppercase text-gray-400 tracking-wider">Rejeitadas</p>
-            <p className="text-lg font-black text-rose-500 mt-0.5">{kpis.rejeitadas}</p>
-          </div>
-          <div className="text-center">
-            <p className="text-[8px] font-black uppercase text-gray-400 tracking-wider">Valor autorizado</p>
-            <p className="text-lg font-black text-blue-600 mt-0.5">{fmtBRL(kpis.valor)}</p>
-          </div>
+      {/* ================= FILTROS — uma linha (busca + período + chips) ================= */}
+      <div className="max-w-[1600px] w-full mx-auto px-4 mt-3 flex items-center gap-2 flex-wrap lg:flex-nowrap">
+        <div className="relative flex-1 min-w-[220px]">
+          <i className="fa-solid fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-300 text-xs"></i>
+          <input
+            value={busca}
+            onChange={e => setBusca(e.target.value)}
+            placeholder="Buscar por número, cliente, CNPJ, chave ou vendedor..."
+            className="w-full pl-9 pr-3 py-2.5 bg-white border border-gray-200 rounded-xl shadow-sm text-xs font-semibold outline-none focus:ring-2 focus:ring-blue-100"
+            aria-label="Buscar nota"
+          />
         </div>
-      </div>
-
-      {/* Filtros */}
-      <div className="max-w-6xl w-full mx-auto px-4 mt-4 space-y-3">
-        <div className="flex flex-col sm:flex-row gap-2">
-          <div className="relative flex-1">
-            <i className="fa-solid fa-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 text-gray-300 text-sm"></i>
-            <input
-              value={busca}
-              onChange={e => setBusca(e.target.value)}
-              placeholder="Buscar por número, cliente, CNPJ, chave ou vendedor..."
-              className="w-full pl-10 pr-4 py-3.5 bg-white border border-gray-100 rounded-2xl shadow-sm text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-100"
-              aria-label="Buscar nota"
-            />
-          </div>
-          <select
-            value={periodo}
-            onChange={e => setPeriodo(e.target.value as FiltroPeriodo)}
-            className="bg-white border border-gray-100 rounded-2xl shadow-sm px-4 py-3.5 text-xs font-black uppercase text-gray-600 outline-none"
-            aria-label="Período"
-          >
-            {PERIODO_META.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
-          </select>
-        </div>
-        <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
-          {(['TODAS', 'AUTORIZADA', 'EMITINDO', 'REJEITADA', 'CANCELADA', 'NAO_EMITIDA'] as FiltroStatus[]).map(f => {
+        <select
+          value={periodo}
+          onChange={e => setPeriodo(e.target.value as FiltroPeriodo)}
+          className="bg-white border border-gray-200 rounded-xl shadow-sm px-3 py-2.5 text-[10px] font-black uppercase text-gray-600 outline-none"
+          aria-label="Período"
+        >
+          {PERIODO_META.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
+        </select>
+        <div className="flex gap-1.5 overflow-x-auto">
+          {(['TODAS', 'AUTORIZADA', 'EMITINDO', 'REJEITADA', 'CANCELADA'] as FiltroStatus[]).map(f => {
             const meta = metaStatus(f);
             const ativo = filtro === f;
             return (
               <button
                 key={f}
                 onClick={() => setFiltro(f)}
-                className={`shrink-0 rounded-xl px-3 py-2 text-[9px] font-black uppercase tracking-wider border transition-all active:scale-95 ${ativo ? 'bg-blue-600 text-white border-blue-600 shadow-sm' : `bg-white ${meta.cls} border-gray-100`}`}
+                className={`shrink-0 rounded-xl px-3 py-2 text-[9px] font-black uppercase tracking-wider border transition-all active:scale-95 ${ativo ? 'bg-blue-600 text-white border-blue-600 shadow-sm' : `bg-white ${meta.cls} border-gray-200`}`}
               >
                 {f === 'TODAS' ? 'Todas' : meta.label} ({contagem(f)})
               </button>
@@ -688,15 +997,15 @@ export default function PortalNotasPage() {
         </div>
       </div>
 
-      {/* IMPORTAR DO PAINEL DA FOCUS (ref/chave colada) */}
-      <div className="max-w-6xl w-full mx-auto px-4 mt-3">
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+      {/* ================= IMPORTAR NOTA ESPECÍFICA (ref/chave colada) ================= */}
+      <div className="max-w-[1600px] w-full mx-auto px-4 mt-2">
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
           <button
             onClick={() => setPasteOpen(o => !o)}
-            className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left"
+            className="w-full flex items-center justify-between gap-3 px-4 py-2 text-left"
             aria-expanded={pasteOpen}
           >
-            <span className="text-[10px] font-black uppercase tracking-wider text-gray-600">
+            <span className="text-[10px] font-black uppercase tracking-wider text-gray-500">
               <i className="fa-solid fa-clipboard-paste mr-2 text-blue-500"></i>
               Importar nota específica (ref ou chave) — manual
             </span>
@@ -705,14 +1014,14 @@ export default function PortalNotasPage() {
           {pasteOpen && (
             <div className="px-4 pb-4 space-y-2">
               <p className="text-[9px] font-bold text-gray-400 leading-snug">
-                O botão <b>Buscar TODAS na Focus</b> já busca sozinho os <b>backups mensais oficiais</b> da Focus pelo CNPJ do emitente e traz <b>todas</b> as notas — do app e batidas direto no painel (PDF e XML entram arquivados dentro do sistema). Use este campo só para trazer uma nota específica na hora: copie no painel da Focus a <b>referência</b> ou a <b>chave de acesso (44 dígitos)</b>, cole aqui (uma por linha) e ela entra na lista abaixo.
+                Para trazer UMA nota específica da Focus na hora: copie no painel da Focus a <b>referência</b> ou a <b>chave de acesso (44 dígitos)</b>, cole aqui (uma por linha). Para trazer todas de uma vez, use <b>Buscar TODAS na Focus</b>; para notas de sistemas de terceiros, use <b>Importar XML em lote</b>.
               </p>
               <textarea
                 value={pasteText}
                 onChange={e => setPasteText(e.target.value)}
                 rows={3}
                 placeholder={'41190612345678000123550010000000221923094166\nVENDA-0001  NFe411906...'}
-                className="w-full rounded-xl border border-gray-100 bg-gray-50 px-3 py-2.5 text-[11px] font-mono font-semibold outline-none focus:ring-2 focus:ring-blue-100"
+                className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-[11px] font-mono font-semibold outline-none focus:ring-2 focus:ring-blue-100"
                 aria-label="Referências ou chaves de acesso"
               />
               <div className="flex items-center justify-between gap-3">
@@ -730,8 +1039,8 @@ export default function PortalNotasPage() {
         </div>
       </div>
 
-      {/* Lista horizontal — uma linha abaixo da outra */}
-      <main className="max-w-6xl w-full mx-auto px-4 mt-3 flex-1">
+      {/* ================= TABELA (estilo IOB — 1 linha por nota) ================= */}
+      <main className="max-w-[1600px] w-full mx-auto px-4 mt-2 flex-1 pb-6">
         {carregando && notas.length === 0 && (
           <div className="py-16 flex justify-center"><div className="w-10 h-10 border-4 border-blue-100 border-t-blue-600 rounded-full animate-spin" /></div>
         )}
@@ -752,140 +1061,174 @@ export default function PortalNotasPage() {
         )}
 
         {!carregando && !erroLista && listaFiltrada.length > 0 && (
-          <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden mb-6">
-            {/* overflow horizontal no celular: a tabela continua "tudo na horizontal" */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1080px] text-left">
+              <table className="w-full min-w-[1180px] text-left">
                 <thead>
-                  <tr className="bg-gray-50 border-b border-gray-100">
-                    {['Documento', 'Situação', 'Cliente', 'Data de emissão', 'Valor', 'Pagamento', 'Vendedor', 'Ações'].map(h => (
-                      <th key={h} className="px-4 py-3 text-[8px] font-black uppercase text-gray-400 tracking-wider whitespace-nowrap">{h}</th>
+                  <tr className="bg-gray-50 border-b border-gray-200">
+                    {['Documento', 'Cliente', 'Emissão', 'Valor', 'Pagamento', 'Vendedor', 'Situação', 'Ações'].map(h => (
+                      <th key={h} className={`px-3 py-2 text-[8px] font-black uppercase text-gray-400 tracking-wider whitespace-nowrap ${h === 'Ações' ? 'text-center' : ''}`}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {listaFiltrada.map(n => {
                     const meta = metaStatus(n.status);
-                    const podeEmitir = n.status === 'NAO_EMITIDA' || n.status === 'REJEITADA' || n.status === 'CANCELADA';
+                    const podeEmitir = n.status === 'REJEITADA' || n.status === 'CANCELADA';
                     const ocupado = busyId === n.id;
+                    const prazo = prazoCancelDe(n);
+                    const podeCancelar = !n.avulsa && (n.status === 'AUTORIZADA' || n.status === 'EMITINDO') && !!n.ref && prazo.dentroDoPrazo;
+                    const temBoletoVivo = !n.avulsa && !!n.boletoStatus && BOLETO_VIVO.includes(String(n.boletoStatus).toUpperCase());
+                    const bm = temBoletoVivo ? metaBoleto(n.boletoStatus as string) : null;
                     return (
-                      <tr key={n.id} className="border-b border-gray-50 last:border-0 hover:bg-blue-50/30 transition-colors">
+                      <tr key={n.id} className="border-b border-gray-100 last:border-0 hover:bg-blue-50/40 transition-colors group">
                         {/* Documento */}
-                        <td className="px-4 py-3 whitespace-nowrap">
-                          <p className="text-xs font-black text-gray-800">{n.numero ? `Nº ${n.numero}` : '—'}</p>
-                          <span className="inline-flex items-center gap-1 mt-0.5 text-[8px] font-black uppercase px-1.5 py-0.5 rounded bg-violet-50 text-violet-600">{rotuloTipo(n.tipo, n.modoNota)}</span>
-                          {n.avulsa && <span className="ml-1 inline-flex items-center mt-0.5 text-[8px] font-black uppercase px-1.5 py-0.5 rounded bg-amber-50 text-amber-600" title="Nota emitida fora do app — importada da Focus pelo portal">fora do app</span>}
-                          <p className="text-[8px] font-black uppercase tracking-wide mt-1">
-                            {n.pdfLocal && <span className="text-emerald-500" title="DANFE arquivado no nosso sistema">PDF ✓ </span>}
-                            {n.xmlLocal && <span className="text-emerald-500" title="XML arquivado no nosso sistema">XML ✓</span>}
-                            {!n.pdfLocal && !n.xmlLocal && n.ref && <span className="text-gray-300" title="Ainda não importado — clique em IMPORTAR DO FOCUS">não arquivado</span>}
-                          </p>
-                        </td>
-                        {/* Situação */}
-                        <td className="px-4 py-3 whitespace-nowrap">
-                          <span className={`inline-flex items-center gap-1.5 text-[9px] font-black uppercase px-2 py-1 rounded-lg border ${meta.cls}`}>
-                            <span className={`w-1.5 h-1.5 rounded-full ${meta.dot}`}></span>{meta.label}
-                          </span>
-                          {n.erro && <p className="text-[8px] font-bold text-rose-400 mt-1 max-w-[180px] truncate" title={n.erro}>SEFAZ: {n.erro}</p>}
+                        <td className="px-3 py-1.5 whitespace-nowrap">
+                          <span className="text-xs font-black text-gray-800 tabular-nums">{n.numero ? `Nº ${n.numero}` : '—'}</span>
+                          <span className="ml-1.5 inline-block align-middle text-[8px] font-black uppercase px-1.5 py-0.5 rounded bg-violet-50 text-violet-600">{rotuloTipo(n.tipo, n.modoNota)}</span>
+                          {n.avulsa && (
+                            <span className={`ml-1 inline-block align-middle text-[8px] font-black uppercase px-1.5 py-0.5 rounded ${n.origem === 'XML' ? 'bg-teal-50 text-teal-600' : 'bg-amber-50 text-amber-600'}`} title={n.origem === 'XML' ? 'Importada por XML de sistema de terceiros' : 'Nota emitida fora do app — importada da Focus'}>
+                              {n.origem === 'XML' ? 'XML' : 'Focus'}
+                            </span>
+                          )}
                         </td>
                         {/* Cliente */}
-                        <td className="px-4 py-3 max-w-[200px]">
-                          <p className="text-[11px] font-black text-gray-700 truncate">{n.cliente}</p>
-                          <p className="text-[9px] font-bold text-gray-400">{n.clienteDoc || 'sem documento'}</p>
+                        <td className="px-3 py-1.5 max-w-[230px]">
+                          <p className="text-[11px] font-bold text-gray-700 truncate" title={`${n.cliente}${n.clienteDoc ? ` · ${n.clienteDoc}` : ''}`}>{n.cliente}</p>
                         </td>
-                        {/* Data */}
-                        <td className="px-4 py-3 whitespace-nowrap">
-                          <p className="text-[11px] font-bold text-gray-600">{fmtData(n.emitidaEm || n.dataVenda)}</p>
-                          <p className="text-[8px] font-bold text-gray-400 uppercase">venda: {fmtData(n.dataVenda)}</p>
+                        {/* Emissão */}
+                        <td className="px-3 py-1.5 whitespace-nowrap text-[11px] font-semibold text-gray-600 tabular-nums" title={`venda: ${fmtData(n.dataVenda)}`}>
+                          {fmtData(n.emitidaEm || n.dataVenda)}
                         </td>
                         {/* Valor */}
-                        <td className="px-4 py-3 whitespace-nowrap">
-                          <p className="text-[11px] font-black text-gray-800">{fmtBRL(n.valor)}</p>
-                          <p className="text-[8px] font-bold text-gray-400 uppercase">{n.statusPagamento === 'PAGO' ? 'pago' : 'pendente'}</p>
+                        <td className="px-3 py-1.5 whitespace-nowrap">
+                          <span className="text-[11px] font-black text-gray-800 tabular-nums">{fmtBRL(n.valor)}</span>
+                          <span className={`ml-1.5 text-[8px] font-black uppercase ${n.statusPagamento === 'PAGO' ? 'text-emerald-500' : 'text-amber-500'}`}>{n.statusPagamento === 'PAGO' ? 'pago' : n.avulsa ? '' : 'em aberto'}</span>
                         </td>
                         {/* Pagamento */}
-                        <td className="px-4 py-3 max-w-[220px]">
-                          <p className="text-[10px] font-black text-gray-700 uppercase">{(n.metodo || '—').replace('_', ' ')}</p>
-                          <p className="text-[9px] font-bold text-gray-400 truncate max-w-[200px]" title={n.detalhe}>{n.detalhe || ''}</p>
+                        <td className="px-3 py-1.5 whitespace-nowrap max-w-[150px]">
+                          <p className="text-[10px] font-bold text-gray-600 uppercase truncate" title={n.detalhe}>{(n.metodo || '—').replace('_', ' ')}</p>
                         </td>
                         {/* Vendedor */}
-                        <td className="px-4 py-3 whitespace-nowrap">
-                          <p className="text-[10px] font-bold text-gray-600">{n.vendedor || '—'}</p>
+                        <td className="px-3 py-1.5 whitespace-nowrap max-w-[120px]">
+                          <p className="text-[10px] font-semibold text-gray-500 truncate">{n.vendedor || '—'}</p>
                         </td>
-                        {/* Ações */}
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-1.5 flex-wrap">
+                        {/* Situação */}
+                        <td className="px-3 py-1.5 whitespace-nowrap">
+                          <span className={`inline-flex items-center gap-1.5 text-[9px] font-black uppercase px-2 py-0.5 rounded-lg border ${meta.cls}`}>
+                            <span className={`w-1.5 h-1.5 rounded-full ${meta.dot}`}></span>{meta.label}
+                          </span>
+                          {n.erro && <i className="fa-solid fa-triangle-exclamation text-rose-400 text-[9px] ml-1" title={`SEFAZ: ${n.erro}`}></i>}
+                        </td>
+                        {/* Ações — tudo em UMA linha */}
+                        <td className="px-3 py-1.5">
+                          <div className="flex items-center justify-center gap-1">
                             {!n.avulsa && (
-                              <button onClick={() => void abrirDetalhe(n)} disabled={ocupado} className="w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center active:scale-90 transition-transform" title="Ver o que foi pedido (itens, cliente, pagamento)">
-                                {busyId === `det:${n.id}` ? <i className="fa-solid fa-spinner fa-spin text-[11px]"></i> : <i className="fa-solid fa-eye text-[11px]"></i>}
+                              <button onClick={() => void abrirDetalhe(n)} disabled={ocupado} className="w-7 h-7 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center hover:bg-blue-100 active:scale-90 transition-transform" title="Ver o que foi pedido (itens, cliente, pagamento)">
+                                {busyId === `det:${n.id}` ? <i className="fa-solid fa-spinner fa-spin text-[10px]"></i> : <i className="fa-solid fa-eye text-[10px]"></i>}
                               </button>
                             )}
                             {n.ref && (
-                              <a href={linkArquivo(n, 'pdf')} target="_blank" rel="noopener noreferrer" className={`w-8 h-8 rounded-xl flex items-center justify-center active:scale-90 transition-transform ${n.pdfLocal ? 'bg-rose-100 text-rose-600 shadow-sm' : 'bg-rose-50 text-rose-400'}`} title={n.pdfLocal ? 'Abrir/baixar DANFE — arquivo salvo NO NOSSO sistema' : 'Abrir/baixar DANFE (busca na Focus e arquiva no sistema)'}>
-                                <i className="fa-solid fa-file-pdf text-[11px]"></i>
+                              <a href={linkArquivo(n, 'pdf')} target="_blank" rel="noopener noreferrer" className={`w-7 h-7 rounded-lg flex items-center justify-center hover:brightness-95 active:scale-90 transition-transform ${n.pdfLocal ? 'bg-rose-100 text-rose-600 shadow-sm' : 'bg-rose-50 text-rose-400'}`} title={n.pdfLocal ? 'Abrir/baixar DANFE — arquivo salvo NO NOSSO sistema' : 'Abrir/baixar DANFE (busca na Focus ou usa o DANFE gerado do XML)'}>
+                                <i className="fa-solid fa-file-pdf text-[10px]"></i>
                               </a>
                             )}
                             {n.ref && (
-                              <a href={linkArquivo(n, 'xml')} target="_blank" rel="noopener noreferrer" className={`w-8 h-8 rounded-xl flex items-center justify-center active:scale-90 transition-transform ${n.xmlLocal ? 'bg-gray-200 text-gray-700 shadow-sm' : 'bg-gray-50 text-gray-400'}`} title={n.xmlLocal ? 'Abrir/baixar XML — arquivo salvo NO NOSSO sistema' : 'Abrir/baixar XML (busca na Focus e arquiva no sistema)'}>
-                                <i className="fa-solid fa-code text-[11px]"></i>
+                              <a href={linkArquivo(n, 'xml')} target="_blank" rel="noopener noreferrer" className={`w-7 h-7 rounded-lg flex items-center justify-center hover:brightness-95 active:scale-90 transition-transform ${n.xmlLocal ? 'bg-gray-800 text-white shadow-sm' : 'bg-gray-100 text-gray-400'}`} title={n.xmlLocal ? 'Abrir/baixar XML — arquivo salvo NO NOSSO sistema' : 'Abrir/baixar XML (busca na Focus e arquiva no sistema)'}>
+                                <i className="fa-solid fa-code text-[10px]"></i>
                               </a>
+                            )}
+                            {temBoletoVivo && (
+                              <button onClick={() => void abrirBoleto(n)} disabled={ocupado} className={`w-7 h-7 rounded-lg flex items-center justify-center hover:brightness-95 active:scale-90 transition-transform border ${bm?.cls}`} title={`Boleto bancário (${bm?.label}${n.boletoVencimento ? ` · venc. ${fmtDia(n.boletoVencimento)}` : ''}) — PDF, linha digitável, consultar e cancelar`}>
+                                <i className="fa-solid fa-barcode text-[10px]"></i>
+                              </button>
                             )}
                             {!n.avulsa && n.ref && (
                               <button
-                                onClick={async () => {
-                                  if (!token) return;
-                                  setBusyId(n.id);
-                                  try {
-                                    const res = await fetch('/api/notas', { method: 'POST', headers: headers(token), body: JSON.stringify({ acao: 'CONSULTAR', saleId: n.id }) });
-                                    const data = await res.json().catch(() => ({}));
-                                    showToast(data.ok ? 'Consultado na SEFAZ — situação sincronizada.' : data.erro || 'Falha ao consultar.', !!data.ok);
-                                    void carregar(token);
-                                  } catch { showToast('Falha de conexão ao consultar.', false); }
-                                  finally { setBusyId(null); }
-                                }}
+                                onClick={() => setConf({
+                                  titulo: 'Consultar na SEFAZ?',
+                                  texto: `Consulta a situação atual do documento ${n.numero ? `Nº ${n.numero}` : ''} na SEFAZ e sincroniza o status aqui no portal.`,
+                                  icone: 'fa-rotate',
+                                  botao: 'Consultar',
+                                  run: async () => {
+                                    if (!token) return;
+                                    setBusyId(n.id);
+                                    try {
+                                      const res = await fetch('/api/notas', { method: 'POST', headers: headers(token), body: JSON.stringify({ acao: 'CONSULTAR', saleId: n.id }) });
+                                      const data = await res.json().catch(() => ({}));
+                                      showToast(data.ok ? 'Consultado na SEFAZ — situação sincronizada.' : data.erro || 'Falha ao consultar.', !!data.ok);
+                                      void carregar(token);
+                                    } catch { showToast('Falha de conexão ao consultar.', false); }
+                                    finally { setBusyId(null); }
+                                  },
+                                })}
                                 disabled={ocupado}
-                                className="w-8 h-8 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center active:scale-90 transition-transform"
+                                className="w-7 h-7 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center hover:bg-amber-100 active:scale-90 transition-transform"
                                 title="Consultar situação na SEFAZ"
                               >
-                                {ocupado ? <i className="fa-solid fa-spinner fa-spin text-[11px]"></i> : <i className="fa-solid fa-rotate text-[11px]"></i>}
+                                {ocupado ? <i className="fa-solid fa-spinner fa-spin text-[10px]"></i> : <i className="fa-solid fa-rotate text-[10px]"></i>}
                               </button>
                             )}
                             {n.avulsa && (
-                              <button onClick={() => void atualizarAvulsa(n)} disabled={ocupado} className="w-8 h-8 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center active:scale-90 transition-transform" title="Re-consultar na SEFAZ e atualizar arquivos">
-                                {ocupado ? <i className="fa-solid fa-spinner fa-spin text-[11px]"></i> : <i className="fa-solid fa-rotate text-[11px]"></i>}
+                              <button
+                                onClick={() => setConf({
+                                  titulo: 'Re-consultar na SEFAZ?',
+                                  texto: `Re-consulta a nota ${n.numero ? `Nº ${n.numero}` : 'avulsa'} na SEFAZ e atualiza os arquivos arquivados.`,
+                                  icone: 'fa-rotate',
+                                  botao: 'Re-consultar',
+                                  run: () => atualizarAvulsa(n),
+                                })}
+                                disabled={ocupado}
+                                className="w-7 h-7 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center hover:bg-amber-100 active:scale-90 transition-transform"
+                                title="Re-consultar na SEFAZ e atualizar arquivos"
+                              >
+                                {ocupado ? <i className="fa-solid fa-spinner fa-spin text-[10px]"></i> : <i className="fa-solid fa-rotate text-[10px]"></i>}
                               </button>
                             )}
                             {!n.avulsa && podeEmitir && (
                               <button
                                 onClick={() => { setEmitModal(n); setEmitTipo(''); }}
                                 disabled={ocupado}
-                                className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center active:scale-90 transition-transform"
+                                className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center hover:bg-emerald-100 active:scale-90 transition-transform"
                                 title="Emitir documento fiscal (NF-e/NFC-e)"
                               >
-                                <i className="fa-solid fa-bolt text-[11px]"></i>
+                                <i className="fa-solid fa-bolt text-[10px]"></i>
                               </button>
                             )}
                             {!n.avulsa && (
                               <button
                                 onClick={() => { setEditModal(n); setEditMetodo(n.metodo || ''); setEditDetalhe(n.detalhe || ''); }}
                                 disabled={ocupado}
-                                className="w-8 h-8 rounded-xl bg-sky-50 text-sky-600 flex items-center justify-center active:scale-90 transition-transform"
+                                className="w-7 h-7 rounded-lg bg-sky-50 text-sky-600 flex items-center justify-center hover:bg-sky-100 active:scale-90 transition-transform"
                                 title="Editar registro (pagamento/observação)"
                               >
-                                <i className="fa-solid fa-pen text-[11px]"></i>
+                                <i className="fa-solid fa-pen text-[10px]"></i>
                               </button>
                             )}
-                            {!n.avulsa && <button onClick={() => setCloneModal(n)} disabled={ocupado} className="w-8 h-8 rounded-xl bg-violet-50 text-violet-600 flex items-center justify-center active:scale-90 transition-transform" title="Clonar pedido (emite documento de novo)">
-                              <i className="fa-solid fa-clone text-[11px]"></i>
+                            {!n.avulsa && <button onClick={() => setCloneModal(n)} disabled={ocupado} className="w-7 h-7 rounded-lg bg-violet-50 text-violet-600 flex items-center justify-center hover:bg-violet-100 active:scale-90 transition-transform" title="Clonar pedido (emite documento de novo)">
+                              <i className="fa-solid fa-clone text-[10px]"></i>
                             </button>}
-                            {!n.avulsa && (n.status === 'AUTORIZADA' || n.status === 'EMITINDO') && n.ref && prazoCancelDe(n).dentroDoPrazo && (
-                              <button onClick={() => { setCancelModal(n); setJustificativa(''); }} disabled={ocupado} className="w-8 h-8 rounded-xl bg-rose-50 text-rose-500 flex items-center justify-center active:scale-90 transition-transform" title={`Cancelar na SEFAZ — restam ${prazoCancelDe(n).textoRestante} (prazo: ${prazoCancelDe(n).prazoLabel})`}>
-                                <i className="fa-solid fa-ban text-[11px]"></i>
+                            {podeCancelar && (
+                              <button onClick={() => { setCancelModal(n); setJustificativa(''); }} disabled={ocupado} className="w-7 h-7 rounded-lg bg-rose-50 text-rose-500 flex items-center justify-center hover:bg-rose-100 active:scale-90 transition-transform" title={`Cancelar na SEFAZ — restam ${prazo.textoRestante} (prazo: ${prazo.prazoLabel})`}>
+                                <i className="fa-solid fa-ban text-[10px]"></i>
                               </button>
                             )}
                             {n.avulsa && (
-                              <button onClick={() => void excluirAvulsa(n)} disabled={ocupado} className="w-8 h-8 rounded-xl bg-gray-50 text-gray-500 flex items-center justify-center active:scale-90 transition-transform" title="Apagar a cópia interna (a nota continua na Focus/SEFAZ)">
-                                <i className="fa-solid fa-trash text-[11px]"></i>
+                              <button
+                                onClick={() => setConf({
+                                  titulo: 'Apagar a cópia interna?',
+                                  texto: `A cópia interna da nota ${n.numero || n.ref} será apagada DO NOSSO SISTEMA (arquivos e registro). A nota continua existindo na Focus/SEFAZ.`,
+                                  detalhe: 'Se ela veio por XML, pode ser importada de novo com o mesmo arquivo.',
+                                  icone: 'fa-trash',
+                                  perigo: true,
+                                  botao: 'Apagar',
+                                  run: () => excluirAvulsa(n),
+                                })}
+                                disabled={ocupado}
+                                className="w-7 h-7 rounded-lg bg-gray-50 text-gray-500 flex items-center justify-center hover:bg-gray-100 active:scale-90 transition-transform"
+                                title="Apagar a cópia interna (a nota continua na Focus/SEFAZ)"
+                              >
+                                <i className="fa-solid fa-trash text-[10px]"></i>
                               </button>
                             )}
                           </div>
@@ -896,7 +1239,7 @@ export default function PortalNotasPage() {
                 </tbody>
               </table>
             </div>
-            <div className="px-4 py-2.5 bg-gray-50 border-t border-gray-100 flex items-center justify-between flex-wrap gap-2">
+            <div className="px-4 py-2 bg-gray-50 border-t border-gray-200 flex items-center justify-between flex-wrap gap-2">
               <p className="text-[9px] font-bold text-gray-400 uppercase tracking-wider">
                 {listaFiltrada.length} nota(s) — mais recentes primeiro
               </p>
@@ -905,7 +1248,11 @@ export default function PortalNotasPage() {
                 <span className="text-gray-300"> · </span>
                 <span className="text-emerald-500">{listaFiltrada.filter(n => n.xmlLocal).length} XML no sistema</span>
                 <span className="text-gray-300"> · </span>
+                <span className="text-teal-500">{listaFiltrada.filter(n => n.origem === 'XML').length} via XML</span>
+                <span className="text-gray-300"> · </span>
                 <span className="text-gray-400">{listaFiltrada.filter(n => n.avulsa).length} fora do app</span>
+                <span className="text-gray-300"> · </span>
+                <span className="text-blue-500">{listaFiltrada.filter(n => !n.avulsa && n.boletoStatus && BOLETO_VIVO.includes(String(n.boletoStatus).toUpperCase())).length} com boleto</span>
               </p>
             </div>
           </div>
@@ -913,7 +1260,7 @@ export default function PortalNotasPage() {
       </main>
 
       {/* Footer */}
-      <footer className="mt-auto py-5 text-center">
+      <footer className="mt-auto py-4 text-center">
         <p className="text-[9px] font-black uppercase tracking-[0.2em] text-gray-300">DOCE MANIA · Portal de Notas Fiscais</p>
       </footer>
 
@@ -924,7 +1271,7 @@ export default function PortalNotasPage() {
         </div>
       )}
 
-      {/* Progresso da importação (BLOCO 141) */}
+      {/* Progresso da importação Focus */}
       {importBusy && importProg && (
         <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-[280] bg-gray-900/95 text-white rounded-2xl px-5 py-3.5 shadow-2xl flex items-center gap-3 min-w-[240px]" role="status">
           <i className="fa-solid fa-cloud-arrow-down text-emerald-400 text-lg animate-bounce"></i>
@@ -945,6 +1292,226 @@ export default function PortalNotasPage() {
         </div>
       )}
 
+      {/* ===== MODAL: CONFIRMAÇÃO UNIFICADA (BLOCO 143) ===== */}
+      {conf && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[260] flex items-center justify-center p-6" onClick={() => !confBusy && setConf(null)}>
+          <div className="bg-white w-full max-w-sm rounded-[2rem] p-6 shadow-2xl text-center" onClick={e => e.stopPropagation()} role="alertdialog" aria-modal="true" aria-label={conf.titulo}>
+            <div className={`w-14 h-14 mx-auto rounded-2xl flex items-center justify-center ${conf.perigo ? 'bg-rose-50 text-rose-600' : 'bg-blue-50 text-blue-600'}`}>
+              <i className={`fa-solid ${conf.icone || 'fa-circle-question'} text-xl`}></i>
+            </div>
+            <h3 className="font-black text-gray-800 uppercase text-sm mt-3">{conf.titulo}</h3>
+            <p className="text-[11px] text-gray-500 font-semibold mt-1.5 leading-snug">{conf.texto}</p>
+            {conf.detalhe && <p className="text-[10px] text-gray-400 font-semibold mt-1.5 leading-snug">{conf.detalhe}</p>}
+            <div className="flex gap-2 mt-5">
+              <button onClick={() => setConf(null)} disabled={confBusy} className="flex-1 bg-gray-100 text-gray-500 rounded-2xl py-3 text-[11px] font-black uppercase active:scale-95 disabled:opacity-50">Voltar</button>
+              <button onClick={() => void executarConf()} disabled={confBusy} className={`flex-1 ${conf.perigo ? 'bg-rose-600' : 'bg-blue-600'} text-white rounded-2xl py-3 text-[11px] font-black uppercase active:scale-95 disabled:opacity-60`}>
+                {confBusy ? <i className="fa-solid fa-spinner fa-spin"></i> : (conf.botao || 'Confirmar')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== MODAL: IMPORTAR XML EM LOTE (BLOCO 143) ===== */}
+      {xmlOpen && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[240] flex items-center justify-center p-6" onClick={() => !xmlBusy && setXmlOpen(false)}>
+          <div className="bg-white w-full max-w-lg rounded-[2rem] p-6 shadow-2xl overflow-y-auto max-h-[90dvh]" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Importar XML em lote">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="font-black text-gray-800 uppercase text-sm"><i className="fa-solid fa-file-import mr-1.5 text-teal-500"></i>Importar XML em lote</h3>
+                <p className="text-[10px] font-bold text-gray-400 mt-0.5">Notas de SAÍDA emitidas em outros sistemas</p>
+              </div>
+              <button onClick={() => !xmlBusy && setXmlOpen(false)} className="w-9 h-9 rounded-xl bg-gray-100 text-gray-400 flex items-center justify-center active:scale-90" aria-label="Fechar importação de XML">
+                <i className="fa-solid fa-xmark"></i>
+              </button>
+            </div>
+            <div className="bg-teal-50 border border-teal-100 rounded-2xl p-3 mt-3">
+              <p className="text-[9px] font-bold text-teal-700 leading-snug"><i className="fa-solid fa-circle-info mr-1"></i>Cada XML autorizado/cancelado entra ARQUIVADO no sistema (XML + DANFE imprimível gerado do XML) e aparece na lista com o selo <b>XML</b>. Notas de <b>ENTRADA</b> e XMLs sem protocolo da SEFAZ são ignorados. Duplicado nunca entra de novo.</p>
+            </div>
+            {/* zona de drop */}
+            <label
+              onDragOver={e => { e.preventDefault(); setXmlDrag(true); }}
+              onDragLeave={() => setXmlDrag(false)}
+              onDrop={e => { e.preventDefault(); setXmlDrag(false); if (!xmlBusy) void pegarArquivos(e.dataTransfer.files); }}
+              className={`mt-3 flex flex-col items-center justify-center gap-2 border-2 border-dashed rounded-2xl px-4 py-6 text-center cursor-pointer transition-colors ${xmlDrag ? 'border-teal-400 bg-teal-50' : 'border-gray-200 bg-gray-50 hover:border-teal-300'}`}
+            >
+              <input ref={xmlInput} type="file" multiple accept=".xml,.zip,text/xml,application/xml,application/zip" className="hidden" onChange={e => { if (e.target.files) void pegarArquivos(e.target.files); e.target.value = ''; }} />
+              <i className={`fa-solid ${xmlBusy ? 'fa-spinner fa-spin' : 'fa-file-arrow-up'} text-2xl ${xmlBusy ? 'text-gray-400' : 'text-teal-500'}`}></i>
+              <p className="text-[11px] font-black text-gray-600 uppercase tracking-wide">{xmlBusy ? 'Importando...' : 'Clique ou arraste os XMLs aqui'}</p>
+              <p className="text-[9px] font-bold text-gray-400">aceita vários .xml e .zip de uma vez</p>
+            </label>
+            {/* lista de arquivos */}
+            {xmlArquivos.length > 0 && (
+              <div className="mt-3">
+                <div className="flex items-center justify-between mb-1.5">
+                  <p className="text-[9px] font-black uppercase text-gray-400 tracking-wider">{xmlArquivos.length} arquivo(s) pronto(s)</p>
+                  {!xmlBusy && <button onClick={() => setXmlArquivos([])} className="text-[9px] font-black uppercase text-rose-500 active:scale-95">Limpar</button>}
+                </div>
+                <div className="max-h-36 overflow-y-auto space-y-1 pr-1 dm-thin-scroll">
+                  {xmlArquivos.map((a, i) => (
+                    <div key={`${a.nome}-${i}`} className="flex items-center gap-2 bg-gray-50 rounded-lg px-2.5 py-1.5">
+                      <i className="fa-solid fa-file-code text-teal-500 text-[10px]"></i>
+                      <p className="text-[10px] font-bold text-gray-600 flex-1 min-w-0 truncate" title={a.nome}>{a.nome}</p>
+                      <span className="text-[9px] font-bold text-gray-400 tabular-nums">{(a.tamanho / 1024).toFixed(0)} KB</span>
+                      {!xmlBusy && (
+                        <button onClick={() => setXmlArquivos(atuais => atuais.filter((_, j) => j !== i))} className="text-gray-300 hover:text-rose-500" aria-label={`Remover ${a.nome}`}>
+                          <i className="fa-solid fa-xmark text-[10px]"></i>
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {/* progresso */}
+            {xmlBusy && xmlProg && (
+              <div className="mt-3">
+                <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
+                  <div className="h-full bg-teal-500 rounded-full transition-all duration-300" style={{ width: `${Math.round((100 * xmlProg.done) / xmlProg.total)}%` }} />
+                </div>
+                <p className="text-[9px] font-bold text-gray-400 mt-1 uppercase">{xmlProg.done}/{xmlProg.total} XML(s) enviados</p>
+              </div>
+            )}
+            {/* resultado */}
+            {xmlRes && (
+              <div className="mt-3 bg-gray-50 border border-gray-100 rounded-2xl p-3 space-y-1.5">
+                <p className="text-[10px] font-black uppercase text-gray-600 tracking-wide">Resultado</p>
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] font-bold">
+                  <span className="text-emerald-600">{xmlRes.importados} importada(s)</span>
+                  <span className="text-rose-500">{xmlRes.cancelamentos} cancelamento(s)</span>
+                  <span className="text-gray-500">{xmlRes.duplicados} duplicada(s)</span>
+                  <span className="text-amber-600">{xmlRes.entradas} entrada(s)</span>
+                  <span className="text-rose-600">{xmlRes.ilegiveis} ilegível(is)</span>
+                </div>
+                {xmlRes.erros.length > 0 && (
+                  <div className="max-h-24 overflow-y-auto space-y-1 pt-1 border-t border-gray-200 dm-thin-scroll">
+                    {xmlRes.erros.slice(0, 10).map((e, i) => (
+                      <p key={i} className="text-[9px] font-semibold text-gray-500 truncate" title={`${e.nome}: ${e.mensagem}`}>
+                        <i className="fa-solid fa-circle-exclamation text-rose-400 mr-1"></i>{e.nome}: {e.mensagem}
+                      </p>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            <div className="flex gap-2 mt-4">
+              <button onClick={() => setXmlOpen(false)} disabled={xmlBusy} className="flex-1 bg-gray-100 text-gray-500 rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95 disabled:opacity-50">Fechar</button>
+              <button
+                onClick={() => setConf({
+                  titulo: `Importar ${xmlArquivos.length} XML(s)?`,
+                  texto: 'As notas de SAÍDA autorizadas/canceladas entram arquivadas no sistema com DANFE imprimível. Entradas e duplicados são ignorados.',
+                  icone: 'fa-file-import',
+                  botao: 'Importar',
+                  run: importarXmlLote,
+                })}
+                disabled={xmlBusy || xmlArquivos.length === 0}
+                className="flex-1 bg-teal-600 text-white rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95 disabled:opacity-50"
+              >
+                {xmlBusy ? <i className="fa-solid fa-spinner fa-spin"></i> : `Importar ${xmlArquivos.length} XML(s)`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== MODAL: BOLETO (BLOCO 143) ===== */}
+      {boletoModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[240] flex items-center justify-center p-6" onClick={() => !boletoBusy && setBoletoModal(null)}>
+          <div className="bg-white w-full max-w-md rounded-[2rem] p-6 shadow-2xl overflow-y-auto max-h-[90dvh]" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Boleto bancário">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="font-black text-gray-800 uppercase text-sm"><i className="fa-solid fa-barcode mr-1.5 text-blue-600"></i>Boleto bancário</h3>
+                <p className="text-[9px] font-bold text-gray-400 mt-0.5">{boletoModal.n.cliente} · {rotuloTipo(boletoModal.n.tipo, boletoModal.n.modoNota)} {boletoModal.n.numero} · {fmtBRL(boletoModal.n.valor)}</p>
+              </div>
+              <button onClick={() => setBoletoModal(null)} className="w-9 h-9 rounded-xl bg-gray-100 text-gray-400 flex items-center justify-center active:scale-90" aria-label="Fechar boleto">
+                <i className="fa-solid fa-xmark"></i>
+              </button>
+            </div>
+
+            {boletoBusy && !boleto && (
+              <div className="py-10 flex justify-center"><div className="w-10 h-10 border-4 border-blue-100 border-t-blue-600 rounded-full animate-spin" /></div>
+            )}
+
+            {boletoMsg && !boleto && (
+              <div className="bg-amber-50 border border-amber-100 rounded-2xl p-3 mt-3">
+                <p className="text-[10px] font-bold text-amber-700 leading-snug"><i className="fa-solid fa-circle-info mr-1"></i>{boletoMsg}</p>
+              </div>
+            )}
+
+            {boleto && (() => {
+              const bm = metaBoleto(boleto.status);
+              return (
+                <div className="mt-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className={`text-[10px] font-black uppercase px-2.5 py-1 rounded-lg border ${bm.cls}`}>{bm.label}</span>
+                    {boleto.vencimento && <span className="text-[10px] font-bold text-gray-500 uppercase">Venc.: {fmtDia(boleto.vencimento)}</span>}
+                    <span className="text-sm font-black text-gray-800 tabular-nums">{boleto.valor !== null ? fmtBRL(boleto.valor) : '—'}</span>
+                  </div>
+                  {boleto.linhaDigitavel && (
+                    <div className="bg-gray-50 rounded-2xl p-3">
+                      <p className="text-[8px] font-black uppercase text-gray-400 tracking-wider mb-1">Linha digitável</p>
+                      <p className="text-[11px] font-mono font-bold text-gray-700 break-all">{boleto.linhaDigitavel}</p>
+                      <button onClick={() => void copiar(boleto.linhaDigitavel, 'Linha digitável')} className="mt-2 w-full bg-blue-600 text-white rounded-xl py-2 text-[10px] font-black uppercase active:scale-95"><i className="fa-solid fa-copy mr-1"></i>Copiar linha</button>
+                    </div>
+                  )}
+                  {boleto.pixCopiaECola && (
+                    <div className="bg-gray-50 rounded-2xl p-3">
+                      <p className="text-[8px] font-black uppercase text-gray-400 tracking-wider mb-1">PIX cobrança (copia e cola)</p>
+                      <p className="text-[9px] font-mono font-semibold text-gray-500 break-all max-h-14 overflow-y-auto dm-thin-scroll">{boleto.pixCopiaECola}</p>
+                      <button onClick={() => void copiar(boleto.pixCopiaECola, 'PIX copia e cola')} className="mt-2 w-full bg-emerald-600 text-white rounded-xl py-2 text-[10px] font-black uppercase active:scale-95"><i className="fa-solid fa-copy mr-1"></i>Copiar PIX</button>
+                    </div>
+                  )}
+                  {boleto.erro && <p className="text-[10px] font-bold text-rose-500">{boleto.erro}</p>}
+                  <div className="grid grid-cols-2 gap-2">
+                    <button onClick={() => void pdfBoleto()} disabled={boletoBusy} className="bg-blue-600 disabled:opacity-60 text-white rounded-2xl py-3 text-[10px] font-black uppercase active:scale-95 transition-transform"><i className="fa-solid fa-file-pdf mr-1"></i>{boletoBusy ? 'Buscando...' : 'Abrir PDF'}</button>
+                    <button
+                      onClick={() => setConf({
+                        titulo: 'Consultar no Inter?',
+                        texto: 'Sincroniza a situação atual do boleto (recebido, atrasado, cancelado...) com o banco Inter.',
+                        icone: 'fa-rotate',
+                        botao: 'Consultar',
+                        run: consultarBoleto,
+                      })}
+                      disabled={boletoBusy}
+                      className="bg-amber-500 disabled:opacity-60 text-white rounded-2xl py-3 text-[10px] font-black uppercase active:scale-95 transition-transform"><i className="fa-solid fa-rotate mr-1"></i>Consultar</button>
+                  </div>
+                  {['A_RECEBER', 'ATRASADO', 'EM_PROCESSAMENTO'].includes(String(boleto.status).toUpperCase()) && (
+                    <button
+                      onClick={() => { setCancelBoleto(boletoModal ? { n: boletoModal.n } : null); setCancelBoletoMotivo(''); }}
+                      className="w-full bg-rose-50 text-rose-600 border border-rose-100 rounded-2xl py-3 text-[10px] font-black uppercase active:scale-95 transition-transform"
+                    >
+                      <i className="fa-solid fa-ban mr-1"></i>Cancelar boleto no Inter
+                    </button>
+                  )}
+                  <p className="text-[8px] font-bold text-gray-300 uppercase tracking-wider text-center">boleto gerado pela API do Inter · sale {boletoModal.n.id.slice(0, 8).toUpperCase()}</p>
+                </div>
+              );
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* ===== MODAL: CANCELAR BOLETO (motivo + confirmação) ===== */}
+      {cancelBoleto && boletoModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[260] flex items-center justify-center p-6" onClick={() => !boletoBusy && setCancelBoleto(null)}>
+          <div className="bg-white w-full max-w-md rounded-[2rem] p-6 shadow-2xl overflow-y-auto max-h-[90dvh]" onClick={e => e.stopPropagation()} role="alertdialog" aria-modal="true" aria-label="Cancelar boleto">
+            <h3 className="font-black text-rose-600 uppercase text-sm mb-1"><i className="fa-solid fa-ban mr-1"></i>Cancelar boleto</h3>
+            <p className="text-[9px] font-bold text-gray-400 mb-4">{boletoModal.n.cliente} · {fmtBRL(boletoModal.n.valor)}</p>
+            <div className="bg-rose-50 border border-rose-100 rounded-2xl p-3 mb-4">
+              <p className="text-[9px] font-bold text-rose-600 leading-snug"><i className="fa-solid fa-triangle-exclamation mr-1"></i>O boleto é CANCELADO no banco Inter e deixa de ser pago. Quem já recebeu a linha digitável não consegue mais quitar. Ação não pode ser desfeita.</p>
+            </div>
+            <label className="block text-[9px] font-black text-gray-400 uppercase ml-1 mb-1">Motivo (obrigatório, máx. 50 caracteres)</label>
+            <textarea value={cancelBoletoMotivo} onChange={e => setCancelBoletoMotivo(e.target.value.slice(0, 50))} rows={2} maxLength={50} placeholder="Ex.: Venda cancelada pelo cliente." className="w-full p-4 bg-gray-50 rounded-2xl font-semibold text-sm outline-none focus:ring-2 focus:ring-rose-100 resize-none" />
+            <div className="flex gap-2 mt-4">
+              <button onClick={() => setCancelBoleto(null)} disabled={boletoBusy} className="flex-1 bg-gray-100 text-gray-500 rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95 disabled:opacity-50">Voltar</button>
+              <button onClick={() => void cancelarBoleto()} disabled={boletoBusy || !cancelBoletoMotivo.trim()} className="flex-1 bg-rose-600 text-white rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95 disabled:opacity-60">
+                {boletoBusy ? <i className="fa-solid fa-spinner fa-spin"></i> : 'Confirmar cancelamento'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ===== Modal: DETALHE (o que foi pedido) ===== */}
       {detalhe && (() => {
         const n = detalhe.nota;
@@ -956,7 +1523,7 @@ export default function PortalNotasPage() {
               <div className="bg-gradient-to-br from-blue-600 to-indigo-700 text-white p-5 sticky top-0">
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <p className="text-[9px] font-black uppercase tracking-widest text-blue-200">{rotuloTipo(n.tipo, n.modoNota)} {n.numero ? `Nº ${n.numero}` : '(sem número)'}</p>
+                    <p className="text-[9px] font-black uppercase tracking-widest text-blue-200">{rotuloTipo(n.tipo, n.modoNota)} {n.numero ? `Nº ${n.numero}` : '(sem número)'}{n.avulsa ? ` · ${n.origem === 'XML' ? 'XML de terceiro' : 'Focus'}` : ''}</p>
                     <p className="text-lg font-black mt-0.5">{n.cliente}</p>
                     <span className={`inline-flex items-center gap-1.5 text-[9px] font-black uppercase px-2 py-1 rounded-lg mt-2 bg-white/15`}>
                       <span className={`w-1.5 h-1.5 rounded-full ${meta.dot}`}></span>{meta.label}
@@ -975,21 +1542,27 @@ export default function PortalNotasPage() {
                   </div>
                 )}
                 {/* Itens */}
-                <div>
-                  <p className="text-[9px] font-black uppercase text-gray-400 tracking-wider mb-2"><i className="fa-solid fa-basket-shopping mr-1"></i>O que foi pedido ({detalhe.itens.length} item(ns))</p>
-                  <div className="max-h-56 overflow-y-auto space-y-1.5">
-                    {detalhe.itens.map((it, idx) => (
-                      <div key={idx} className="flex items-center justify-between gap-3 bg-gray-50 rounded-xl px-3 py-2">
-                        <p className="text-[11px] font-bold text-gray-700 flex-1 min-w-0 truncate">{it.produto}</p>
-                        <p className="text-[10px] font-black text-gray-500 whitespace-nowrap">{it.quantidade} × {fmtBRL(it.preco)}</p>
-                        <p className="text-[11px] font-black text-gray-800 whitespace-nowrap">{fmtBRL(it.quantidade * it.preco)}</p>
-                      </div>
-                    ))}
+                {detalhe.itens.length > 0 ? (
+                  <div>
+                    <p className="text-[9px] font-black uppercase text-gray-400 tracking-wider mb-2"><i className="fa-solid fa-basket-shopping mr-1"></i>O que foi pedido ({detalhe.itens.length} item(ns))</p>
+                    <div className="max-h-56 overflow-y-auto space-y-1.5 dm-thin-scroll">
+                      {detalhe.itens.map((it, idx) => (
+                        <div key={idx} className="flex items-center justify-between gap-3 bg-gray-50 rounded-xl px-3 py-2">
+                          <p className="text-[11px] font-bold text-gray-700 flex-1 min-w-0 truncate">{it.produto}</p>
+                          <p className="text-[10px] font-black text-gray-500 whitespace-nowrap">{it.quantidade} × {fmtBRL(it.preco)}</p>
+                          <p className="text-[11px] font-black text-gray-800 whitespace-nowrap">{fmtBRL(it.quantidade * it.preco)}</p>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                  <div className="flex justify-between items-center mt-2 px-3">
-                    <p className="text-[10px] font-black uppercase text-gray-500">Total da venda</p>
-                    <p className="text-sm font-black text-blue-600">{fmtBRL(n.valor)}</p>
+                ) : (
+                  <div className="bg-gray-50 rounded-2xl p-3 text-center">
+                    <p className="text-[10px] font-bold text-gray-400">{n.avulsa ? 'Nota importada sem pedido interno no app — itens no XML/DANFE.' : 'Venda sem itens gravados.'}</p>
                   </div>
+                )}
+                <div className="flex justify-between items-center px-3">
+                  <p className="text-[10px] font-black uppercase text-gray-500">Total do documento</p>
+                  <p className="text-sm font-black text-blue-600">{fmtBRL(n.valor)}</p>
                 </div>
                 {/* Cliente */}
                 {c && (
@@ -1012,10 +1585,13 @@ export default function PortalNotasPage() {
                   <p className="text-[9px] font-black uppercase text-gray-400 tracking-wider mb-2"><i className="fa-solid fa-wallet mr-1"></i>Pagamento</p>
                   <div className="flex items-center justify-between">
                     <p className="text-xs font-black text-gray-700 uppercase">{(n.metodo || '—').replace('_', ' ')}</p>
-                    <span className={`text-[9px] font-black uppercase px-2 py-1 rounded-lg ${n.statusPagamento === 'PAGO' ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600'}`}>{n.statusPagamento === 'PAGO' ? 'Pago' : 'Pendente'}</span>
+                    <span className={`text-[9px] font-black uppercase px-2 py-1 rounded-lg ${n.statusPagamento === 'PAGO' ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600'}`}>{n.statusPagamento === 'PAGO' ? 'Pago' : n.avulsa ? '—' : 'Pendente'}</span>
                   </div>
                   {n.detalhe && <p className="text-[9px] font-bold text-gray-400 mt-1 leading-snug">{n.detalhe}</p>}
                   <p className="text-[9px] font-bold text-gray-400 mt-1">Pago registrado: {fmtBRL(n.valorPago)} · Vendedor: {n.vendedor || '—'}</p>
+                  {!n.avulsa && n.boletoStatus && (
+                    <p className="text-[9px] font-bold text-blue-500 mt-1 uppercase">Boleto Inter: {metaBoleto(n.boletoStatus).label}{n.boletoVencimento ? ` · venc. ${fmtDia(n.boletoVencimento)}` : ''}</p>
+                  )}
                 </div>
                 {/* Documento */}
                 <div className="bg-gray-50 rounded-2xl p-4">
@@ -1023,10 +1599,10 @@ export default function PortalNotasPage() {
                   {n.chave && <p className="text-[9px] font-bold text-gray-500 break-all leading-snug">Chave: {n.chave}</p>}
                   <p className="text-[9px] font-bold text-gray-400 mt-1">Emissão: {fmtData(n.emitidaEm || n.dataVenda)} · Venda: {fmtData(n.dataVenda)}</p>
                   {n.ref && <p className="text-[9px] font-bold text-gray-400">Referência: {n.ref}</p>}
-                  {(n.pdfUrl || n.xmlUrl) && (
+                  {n.ref && (
                     <div className="flex gap-2 mt-3">
-                      {n.pdfUrl && <a href={n.pdfUrl} target="_blank" rel="noopener noreferrer" className="flex-1 text-center bg-rose-600 text-white rounded-xl px-3 py-2.5 text-[10px] font-black uppercase tracking-wider active:scale-95 transition-transform"><i className="fa-solid fa-file-pdf mr-1"></i>DANFE (PDF)</a>}
-                      {n.xmlUrl && <a href={n.xmlUrl} target="_blank" rel="noopener noreferrer" className="flex-1 text-center bg-gray-800 text-white rounded-xl px-3 py-2.5 text-[10px] font-black uppercase tracking-wider active:scale-95 transition-transform"><i className="fa-solid fa-code mr-1"></i>XML</a>}
+                      <a href={linkArquivo(n, 'pdf')} target="_blank" rel="noopener noreferrer" className="flex-1 text-center bg-rose-600 text-white rounded-xl px-3 py-2.5 text-[10px] font-black uppercase tracking-wider active:scale-95 transition-transform"><i className="fa-solid fa-file-pdf mr-1"></i>DANFE</a>
+                      <a href={linkArquivo(n, 'xml')} target="_blank" rel="noopener noreferrer" className="flex-1 text-center bg-gray-800 text-white rounded-xl px-3 py-2.5 text-[10px] font-black uppercase tracking-wider active:scale-95 transition-transform"><i className="fa-solid fa-code mr-1"></i>XML</a>
                     </div>
                   )}
                 </div>
@@ -1061,13 +1637,13 @@ export default function PortalNotasPage() {
         </div>
       )}
 
-      {/* ===== Modal: CANCELAR ===== */}
+      {/* ===== Modal: CANCELAR NOTA (prazo SEFAZ ao vivo) ===== */}
       {cancelModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6" onClick={() => setCancelModal(null)}>
           <div className="bg-white w-full max-w-md rounded-[2rem] p-6 shadow-2xl overflow-y-auto max-h-[90dvh]" onClick={e => e.stopPropagation()}>
             <h3 className="font-black text-rose-600 uppercase text-sm mb-1"><i className="fa-solid fa-ban mr-1"></i>Cancelar nota</h3>
             <p className="text-[9px] font-bold text-gray-400 mb-4">{rotuloTipo(cancelModal.tipo, cancelModal.modoNota)} {cancelModal.numero} · {cancelModal.cliente} · {fmtBRL(cancelModal.valor)}</p>
-            {/* BLOCO 142: contagem regressiva AO VIVO do prazo SEFAZ — venceu = botão inativo */}
+            {/* contagem regressiva AO VIVO do prazo SEFAZ — venceu = botão inativo */}
             {prazoCancelModal && (
               <div className={`rounded-2xl border p-3 mb-3 ${prazoCancelModal.expirado ? 'bg-gray-100 border-gray-200' : 'bg-amber-50 border-amber-200'}`}>
                 {prazoCancelModal.expirado ? (
@@ -1084,7 +1660,7 @@ export default function PortalNotasPage() {
             <textarea value={justificativa} onChange={e => setJustificativa(e.target.value)} rows={3} maxLength={255} placeholder="Ex.: Erro na emissão — valores divergentes." className="w-full p-4 bg-gray-50 rounded-2xl font-semibold text-sm outline-none focus:ring-2 focus:ring-rose-100 resize-none" />
             <div className="flex gap-2 mt-4">
               <button onClick={() => setCancelModal(null)} className="flex-1 bg-gray-100 text-gray-500 rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95">Voltar</button>
-              {/* BLOCO 142: prazo vencido DURANTE a digitação = botão inativa na hora */}
+              {/* prazo vencido DURANTE a digitação = botão inativa na hora */}
               <button onClick={() => void cancelarNota()} disabled={busyId === 'cancel' || !prazoCancelModal || prazoCancelModal.expirado} className="flex-1 bg-rose-600 text-white rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95 disabled:opacity-60">
                 {busyId === 'cancel' ? <i className="fa-solid fa-spinner fa-spin"></i> : prazoCancelModal?.expirado ? 'Fora do prazo' : 'Cancelar nota'}
               </button>
@@ -1101,7 +1677,7 @@ export default function PortalNotasPage() {
             <p className="text-[9px] font-bold text-gray-400 mb-4">{cloneModal.cliente} · {fmtBRL(cloneModal.valor)}</p>
             <div className="bg-violet-50 border border-violet-100 rounded-2xl p-3 mb-4 space-y-1">
               <p className="text-[9px] font-bold text-violet-700 leading-snug"><i className="fa-solid fa-circle-info mr-1"></i>Cria uma NOVA venda com o mesmo cliente, itens e valores (não entra na fila de entrega, não baixa estoque de novo).</p>
-              <p className="text-[9px] font-bold text-violet-700 leading-snug">Use para RE-EMITIR o documento fiscal (ex.: nota cancelada) — depois toque EMITIR na linha da cópia.</p>
+              <p className="text-[9px] font-bold text-violet-700 leading-snug">A cópia fica como venda PENDENTE no app — emita a NF dela pela aba NOTAS PENDENTES (este portal mostra somente notas já emitidas).</p>
             </div>
             <div className="flex gap-2 mt-4">
               <button onClick={() => setCloneModal(null)} className="flex-1 bg-gray-100 text-gray-500 rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95">Voltar</button>
@@ -1139,6 +1715,13 @@ export default function PortalNotasPage() {
           </div>
         </div>
       )}
+
+      <style>{`
+        .dm-thin-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+        .dm-thin-scroll::-webkit-scrollbar-track { background: transparent; }
+        .dm-thin-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 999px; }
+        .dm-thin-scroll::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+      `}</style>
     </div>
   );
 }

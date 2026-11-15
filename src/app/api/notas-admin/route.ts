@@ -95,6 +95,11 @@ interface LinhaNota {
   xmlLocal: boolean;
   // nota avulsa (emitida fora do app, importada da Focus pelo BLOCO 141)
   avulsa?: boolean;
+  // BLOCO 143: origem da avulsa ('FOCUS' | 'XML') — o portal mostra o badge
+  origem?: string;
+  // BLOCO 143: boleto bancário (Inter) da venda — aparece nas AÇÕES do portal
+  boletoStatus?: string;
+  boletoVencimento?: string;
 }
 
 function linhaNota(
@@ -128,6 +133,8 @@ function linhaNota(
     pdfLocal: !!presenca?.pdf,
     xmlLocal: !!presenca?.xml,
     avulsa: false,
+    boletoStatus: String(s.inter_boleto_status || ''),
+    boletoVencimento: String(s.inter_boleto_vencimento || ''),
   };
 }
 
@@ -155,10 +162,11 @@ function linhaAvulsa(m: NotaAvulsaMeta, presenca?: { pdf: boolean; xml: boolean;
     cliente: m.cliente || 'CONSUMIDOR NAO IDENTIFICADO',
     clienteDoc: m.clienteDoc,
     clienteId: '',
-    vendedor: '— fora do app —',
+    vendedor: m.origem === 'XML' ? 'XML de terceiro' : '— fora do app —',
     pdfLocal: !!presenca?.pdf,
     xmlLocal: !!presenca?.xml,
     avulsa: true,
+    origem: String(m.origem || 'FOCUS'),
   };
 }
 
@@ -175,7 +183,9 @@ async function nomesDe(ids: string[], tabela: 'clients' | 'app_users'): Promise<
 }
 
 async function carregarVendasComNotas(): Promise<LinhaNota[]> {
-  const [temNota, temModo, temEmitida, temChave] = await Promise.all([
+  // temBoleto (hasBoletoColumns) também porta a coluna nota_chave — mesma
+  // dupla de probes do Bloco 25/141 (a nota_chave chegou junto com o boleto).
+  const [temNota, temModo, temEmitida, temBoleto] = await Promise.all([
     hasNotaColumns(),
     hasModoVendaColumn(),
     hasNotaEmitidaEm(),
@@ -187,16 +197,21 @@ async function carregarVendasComNotas(): Promise<LinhaNota[]> {
     BASE_COLS,
     ', nota_status, nota_tipo, nota_numero, nota_ref, nota_pdf_url, nota_xml_url, nota_erro',
     temEmitida ? ', nota_emitida_em' : '',
-    temChave ? ', nota_chave' : '',
+    temBoleto ? ', nota_chave' : '',
     temModo ? ', modo_nota' : '',
+    temBoleto ? ', inter_boleto_status, inter_boleto_vencimento' : '',
   ].join('');
 
-  // Notas que existem (ref gravada) + vendas com INTENCAO de nota (clone e
-  // pendentes entram para serem resolvidos no portal).
+  // BLOCO 143 (regra do dono): "quando clico em TODAS ele me diz que falta NF
+  // a bater, elas ja foram batidas em outro sistema — EXCLUA ISSO! deixe
+  // somente o que vc buscou pela API". A lista do portal agora tem SOMENTE
+  // documentos fiscais reais: venda com nota_ref gravada (autorizada,
+  // cancelada, emitindo ou rejeitada — tudo passou pela API da Focus).
+  // Venda sem emissão (NAO_EMITIDA, mera intenção) NÃO entra mais — quem
+  // resolve pendência continua com a aba NOTAS PENDENTES do app.
+  void temModo;
   let q = getServiceClient().from('sales').select(sel).order('data_venda', { ascending: false }).limit(400);
-  q = temModo
-    ? q.or('nota_ref.neq.null,modo_nota.in.(NFE,NFCE)')
-    : q.not('nota_ref', 'is', null);
+  q = q.not('nota_ref', 'is', null);
   const { data, error } = await q;
   if (error || !data) return [];
 
@@ -477,7 +492,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       ok: true,
       nova: { id: String(nova!.id), valorTotal: Number(nova!.valor_total) || 0 },
-      aviso: 'Copia criada sem nota — use EMITIR NF para bater o documento dela.',
+      aviso: 'Copia criada como venda pendente no app — emita a NF pela aba NOTAS PENDENTES (o portal lista só notas já emitidas).',
     });
   }
 

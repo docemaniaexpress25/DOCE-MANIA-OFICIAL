@@ -1,0 +1,905 @@
+     1→import { getServiceClient } from '@/lib/serverSupabase';
+     2→import { getFocusConfig, consultarNota, FocusDoc } from '@/lib/focusNfe';
+     3→import { unzipSync } from 'fflate';
+     4→
+     5→/**
+     6→ * BLOCO 141 — ARQUIVOS FISCAIS DENTRO DO NOSSO SISTEMA (regra do dono):
+     7→ * "quero que acesse o portal da focus e me traga o pdf e xml das notas
+     8→ * atraves da api! salve dentro do nosso sistema. ja bati varias notas e
+     9→ * quero ter o controle disso, hj ta tudo no site da focus!"
+    10→ *
+    11→ * O que esta lib faz:
+    12→ * - Bucket PRIVADO `notas-fiscais` no Supabase Storage (criacao idempotente,
+    13→ *   mesmo padrao do bucket fotos-pedidos) — PDF (DANFE/DANFCe) e XML de cada
+    14→ *   nota ficam gravados no NOSSO storage, nao no site da Focus.
+    15→ * - Caminho deterministico por ref: `NFE/{ref}.pdf|.xml|-can.xml` e
+    16→ *   `NFCE/{ref}.pdf|.html|-can.xml` — presenca = listar pastas (sem DB novo).
+    17→ * - Baixa os arquivos na Focus com Basic auth (usuario = token):
+    18→ *   caminho_danfe (NF-e = PDF / NFC-e = HTML), caminho_xml_nota_fiscal e
+    19→ *   caminho_xml_cancelamento — todos relativos ("/arquivos/...") viram URL
+    20→ *   absoluta na baseUrl do ambiente.
+    21→ * - NFC-e: tenta tambem o endpoint legado `/v2/nfes/{ref}/danfe.pdf` (alguns
+    22→ *   estados/contas ainda servem PDF); sem PDF, o DANFCe HTML e a copia visual.
+    23→ * - NF-e com XML de cancelamento: baixa junto (prova do evento 135 na mao).
+    24→ *
+    25→ * RATE LIMIT da Focus (100 req/min): cada nota custa ate 4 reqs (consulta +
+    26→ * danfe + xml + [pdf legado]) — os lotes de importacao usam 6 notas/chamada.
+    27→ */
+    28→
+    29→const BUCKET = 'notas-fiscais';
+    30→const LIMITE_BYTES = 30 * 1024 * 1024; // guarda-chuva contra arquivo patologico
+    31→const TETO_MS_GRANDE = 45_000; // guarda-chuva de duracao da rodada (Vercel — zips + importacoes)
+    32→
+    33→// ---------------------------------------------------------------------------
+    34→// Bucket (criacao idempotente, cache por processo)
+    35→// ---------------------------------------------------------------------------
+    36→let bucketOk = false;
+    37→
+    38→export async function garanteBucketNotas(): Promise<boolean> {
+    39→  if (bucketOk) return true;
+    40→  try {
+    41→    const db = getServiceClient();
+    42→    const { data: buckets } = await db.storage.listBuckets();
+    43→    const existe = (buckets || []).some((b) => b.name === BUCKET);
+    44→    if (!existe) {
+    45→      const { error } = await db.storage.createBucket(BUCKET, {
+    46→        public: false,
+    47→        fileSizeLimit: '30MB',
+    48→      });
+    49→      if (error && !/exists|duplicate/i.test(error.message || '')) throw error;
+    50→    }
+    51→    bucketOk = true;
+    52→    return true;
+    53→  } catch {
+    54→    return false;
+    55→  }
+    56→}
+    57→
+    58→// ---------------------------------------------------------------------------
+    59→// Caminhos / tipos
+    60→// ---------------------------------------------------------------------------
+    61→export type TipoArquivo = 'pdf' | 'xml' | 'xml-cancelamento';
+    62→
+    63→function pastaDe(doc: FocusDoc): string {
+    64→  return doc === 'nfce' ? 'NFCE' : 'NFE';
+    65→}
+    66→
+    67→export function caminhoArquivo(doc: FocusDoc, ref: string, tipo: TipoArquivo, ext?: 'pdf' | 'html'): string {
+    68→  const sufixo = tipo === 'xml-cancelamento' ? '-can' : '';
+    69→  const e = ext || (tipo === 'pdf' ? 'pdf' : 'xml');
+    70→  return `${pastaDe(doc)}/${ref}${sufixo}.${e}`;
+    71→}
+    72→
+    73→const MIME: Record<string, string> = {
+    74→  pdf: 'application/pdf',
+    75→  xml: 'application/xml; charset=utf-8',
+    76→  html: 'text/html; charset=utf-8',
+    77→};
+    78→
+    79→/** Extrai a extensao real do caminho da Focus (DANFEs/*.pdf ou *.html). */
+    80→function extDeCaminho(caminho: string): 'pdf' | 'html' | 'xml' | null {
+    81→  const m = /\.(pdf|html?|xml)$/i.exec(caminho.trim());
+    82→  if (!m) return null;
+    83→  const e = m[1].toLowerCase();
+    84→  return e === 'htm' ? 'html' : (e as 'pdf' | 'html' | 'xml');
+    85→}
+    86→
+    87→// ---------------------------------------------------------------------------
+    88→// Presenca (listagem das pastas — cache 30s por processo)
+    89→// ---------------------------------------------------------------------------
+    90→interface PresencaCache {
+    91→  at: number;
+    92→  refs: Map<string, { pdf: boolean; xml: boolean; can: boolean }>; // chave `{DOC}/{ref}`
+    93→}
+    94→let cachePresenca: PresencaCache | null = null;
+    95→const PRESENCA_TTL = 30_000;
+    96→
+    97→/** Lista recursivo simples por pasta com paginacao (limit 300 por página). */
+    98→async function listarArquivos(pasta: string): Promise<string[]> {
+    99→  const db = getServiceClient();
+   100→  const nomes: string[] = [];
+   101→  const LIM = 300;
+   102→  for (let offset = 0; offset < 10000; offset += LIM) {
+   103→    const { data, error } = await db.storage.from(BUCKET).list(pasta, { limit: LIM, offset, sortBy: { column: 'name', order: 'asc' } });
+   104→    if (error) break;
+   105→    const lote = (data || []).filter(f => f.name).map(f => f.name);
+   106→    nomes.push(...lote);
+   107→    if (lote.length < LIM) break;
+   108→  }
+   109→  return nomes;
+   110→}
+   111→
+   112→/** Invalida o cache de presenca (depois de gravar arquivo novo). */
+   113→export function invalidaPresenca(): void {
+   114→  cachePresenca = null;
+   115→}
+   116→
+   117→/**
+   118→ * Mapa de presenca de arquivos: chave `{DOC}/{ref}` ->
+   119→ * { pdf: tem DANFE (pdf ou html), xml: tem XML, can: tem XML de cancelamento }.
+   120→ * Cache 30s — a lista do portal chama uma vez por render.
+   121→ */
+   122→export async function presencaArquivos(): Promise<Map<string, { pdf: boolean; xml: boolean; can: boolean }>> {
+   123→  const now = Date.now();
+   124→  if (cachePresenca && now - cachePresenca.at < PRESENCA_TTL) return cachePresenca.refs;
+   125→  const mapa = new Map<string, { pdf: boolean; xml: boolean; can: boolean }>();
+   126→  try {
+   127→    const [nfe, nfce] = await Promise.all([listarArquivos('NFE'), listarArquivos('NFCE')]);
+   128→    const registra = (doc: string, nomes: string[]) => {
+   129→      for (const n of nomes) {
+   130→        const m = /^(.+?)(?:-can)?\.(pdf|html?|xml)$/i.exec(n);
+   131→        if (!m) continue;
+   132→        const ref = m[1];
+   133→        const e = m[2].toLowerCase() === 'htm' ? 'html' : m[2].toLowerCase();
+   134→        const chave = `${doc}/${ref}`;
+   135→        const atual = mapa.get(chave) || { pdf: false, xml: false, can: false };
+   136→        if (n.endsWith('-can.xml')) atual.can = true;
+   137→        else if (e === 'xml') atual.xml = true;
+   138→        else atual.pdf = true; // pdf OU html (DANFCe) conta como visual salvo
+   139→        mapa.set(chave, atual);
+   140→      }
+   141→    };
+   142→    registra('NFE', nfe);
+   143→    registra('NFCE', nfce);
+   144→    cachePresenca = { at: now, refs: mapa };
+   145→  } catch {
+   146→    // Storage fora do ar: presenca vazia (downloads caem no modo live da Focus)
+   147→  }
+   148→  return mapa;
+   149→}
+   150→
+   151→// ---------------------------------------------------------------------------
+   152→// Download na Focus (Basic auth) + gravacao no Storage
+   153→// ---------------------------------------------------------------------------
+   154→export interface ArquivoBaixado {
+   155→  bytes: Buffer;
+   156→  contentType: string;
+   157→  ext: 'pdf' | 'html' | 'xml';
+   158→}
+   159→
+   160→/** Baixa um caminho RELATIVO da Focus ("/arquivos/...") com Basic auth. */
+   161→export async function baixarCaminhoFocus(caminho: string): Promise<ArquivoBaixado | null> {
+   162→  const c = (caminho || '').trim();
+   163→  if (!c) return null;
+   164→  const { baseUrl, token } = getFocusConfig();
+   165→  if (!token) return null;
+   166→  const url = /^https?:\/\//i.test(c) ? c : `${baseUrl}${c.startsWith('/') ? '' : '/'}${c}`;
+   167→  try {
+   168→    const res = await fetch(url, {
+   169→      headers: { Authorization: 'Basic ' + Buffer.from(`${token}:`).toString('base64') },
+   170→      signal: AbortSignal.timeout(20_000),
+   171→      cache: 'no-store',
+   172→    });
+   173→    if (!res.ok) return null;
+   174→    const ct = (res.headers.get('content-type') || '').toLowerCase();
+   175→    const ab = await res.arrayBuffer();
+   176→    if (!ab || ab.byteLength === 0 || ab.byteLength > LIMITE_BYTES) return null;
+   177→    // o caminho diz a extensao; content-type da resposta confirma quando util
+   178→    const extCaminho = extDeCaminho(c);
+   179→    let ext: 'pdf' | 'html' | 'xml';
+   180→    if (ct.includes('application/pdf') || extCaminho === 'pdf') ext = 'pdf';
+   181→    else if (ct.includes('text/html') || extCaminho === 'html') ext = 'html';
+   182→    else if (ct.includes('xml') || extCaminho === 'xml') ext = 'xml';
+   183→    else if (ct.includes('json')) return null; // resposta de erro da API disfarcada
+   184→    else ext = extCaminho || 'xml';
+   185→    return { bytes: Buffer.from(ab), contentType: MIME[ext], ext };
+   186→  } catch {
+   187→    return null;
+   188→  }
+   189→}
+   190→
+   191→async function gravarNoStorage(caminho: string, bytes: Buffer, contentType: string): Promise<boolean> {
+   192→  if (!(await garanteBucketNotas())) return false;
+   193→  try {
+   194→    const { error } = await getServiceClient()
+   195→      .storage.from(BUCKET)
+   196→      .upload(caminho, bytes, { contentType, upsert: true });
+   197→    if (error && !/exists|duplicate/i.test(error.message || '')) return false;
+   198→    invalidaPresenca();
+   199→    return true;
+   200→  } catch {
+   201→    return false;
+   202→  }
+   203→}
+   204→
+   205→/** Le um arquivo do nosso Storage (null = nao tem). */
+   206→export async function lerArquivoNota(caminho: string): Promise<ArquivoBaixado | null> {
+   207→  try {
+   208→    const { data, error } = await getServiceClient()
+   209→      .storage.from(BUCKET)
+   210→      .download(caminho);
+   211→    if (error || !data) return null;
+   212→    const ab = await data.arrayBuffer();
+   213→    if (!ab || ab.byteLength === 0) return null;
+   214→    const e = extDeCaminho(caminho) || 'xml';
+   215→    return { bytes: Buffer.from(ab), contentType: MIME[e], ext: e };
+   216→  } catch {
+   217→    return null;
+   218→  }
+   219→}
+   220→
+   221→// ---------------------------------------------------------------------------
+   222→// Coleta: consulta a nota na Focus e arquiva XML + DANFE (+ cancelamento)
+   223→// ---------------------------------------------------------------------------
+   224→export interface ColetaResultado {
+   225→  ok: boolean;
+   226→  motivo?: string;
+   227→  status?: string;
+   228→  numero?: string;
+   229→  chave?: string;
+   230→  pdfSalvo?: boolean;   // DANFE visual (pdf ou html) gravado no storage
+   231→  xmlSalvo?: boolean;   // XML da nota gravado no storage
+   232→  cancelamentoSalvo?: boolean;
+   233→  semArquivo?: boolean; // nota rejeitada/processando — nao ha o que baixar
+   234→  pdfUrl?: string;      // URL absoluta do DANFE na Focus (espelha na venda)
+   235→  xmlUrl?: string;      // URL absoluta do XML na Focus
+   236→}
+   237→
+   238→/** Caminho relativo da Focus -> URL absoluta do ambiente. */
+   239→function urlAbsoluta(caminho: string): string {
+   240→  const c = (caminho || '').trim();
+   241→  if (!c) return '';
+   242→  if (/^https?:\/\//i.test(c)) return c;
+   243→  const { baseUrl } = getFocusConfig();
+   244→  return `${baseUrl}${c.startsWith('/') ? '' : '/'}${c}`;
+   245→}
+   246→
+   247→/**
+   248→ * Arquiva XML + DANFE (+ cancelamento) a partir da RESPOSTA de uma consulta
+   249→ * `GET /v2/{doc}/{ref}` (sem reconsultar — reuso no webhook/EMITIR).
+   250→ */
+   251→export async function arquivarDaConsulta(doc: FocusDoc, ref: string, data: Record<string, unknown>): Promise<ColetaResultado> {
+   252→  const status = String(data.status || '').toLowerCase();
+   253→  const numero = String(data.numero || '');
+   254→  const chave = String(data.chave_nfe || '').replace(/\D/g, '').slice(-44);
+   255→  const caminhoXml = String(data.caminho_xml_nota_fiscal || '');
+   256→  const caminhoDanfe = String(data.caminho_danfe || '');
+   257→  const caminhoCan = String(data.caminho_xml_cancelamento || '');
+   258→
+   259→  if (!caminhoXml && !caminhoDanfe) {
+   260→    // processando_autorizacao / erro_autorizacao: ainda nao ha arquivo na Focus
+   261→    return { ok: true, status, numero, chave, semArquivo: true, motivo: status || 'sem arquivos' };
+   262→  }
+   263→
+   264→  const out: ColetaResultado = { ok: true, status, numero, chave, pdfUrl: urlAbsoluta(caminhoDanfe), xmlUrl: urlAbsoluta(caminhoXml) };
+   265→
+   266→  // XML da nota (o documento legal — sempre que existir)
+   267→  if (caminhoXml) {
+   268→    const xml = await baixarCaminhoFocus(caminhoXml);
+   269→    out.xmlSalvo = !!xml && (await gravarNoStorage(caminhoArquivo(doc, ref, 'xml'), xml.bytes, xml.contentType));
+   270→  } else {
+   271→    out.xmlSalvo = false;
+   272→  }
+   273→
+   274→  // DANFE visual: NF-e = PDF / NFC-e = HTML (doc oficial focusnfe)
+   275→  let salvouPdfReal = false;
+   276→  if (caminhoDanfe) {
+   277→    const danfe = await baixarCaminhoFocus(caminhoDanfe);
+   278→    if (danfe) {
+   279→      const ext = danfe.ext === 'xml' ? (doc === 'nfce' ? 'html' : 'pdf') : danfe.ext;
+   280→      out.pdfSalvo = await gravarNoStorage(caminhoArquivo(doc, ref, 'pdf', ext as 'pdf' | 'html'), danfe.bytes, MIME[ext]);
+   281→      salvouPdfReal = ext === 'pdf' && !!out.pdfSalvo;
+   282→    }
+   283→  }
+   284→
+   285→  // NFC-e: DANFCe nasce em HTML — tenta ainda um PDF verdadeiro pelo endpoint
+   286→  // legado (algumas contas/estados servem /v2/nfes/{ref}/danfe.pdf); se sair,
+   287→  // o dono tem o PDF oficial do cupom, senao o HTML cumpre o papel visual.
+   288→  if (doc === 'nfce' && !salvouPdfReal) {
+   289→    const pdf = await baixarCaminhoFocus(`/v2/nfes/${encodeURIComponent(ref)}/danfe.pdf`);
+   290→    if (pdf && pdf.ext === 'pdf') {
+   291→      await gravarNoStorage(caminhoArquivo(doc, ref, 'pdf', 'pdf'), pdf.bytes, pdf.contentType);
+   292→      out.pdfSalvo = true;
+   293→    }
+   294→  }
+   295→
+   296→  // XML do cancelamento (quando a nota foi cancelada)
+   297→  if (caminhoCan) {
+   298→    const can = await baixarCaminhoFocus(caminhoCan);
+   299→    out.cancelamentoSalvo = !!can && (await gravarNoStorage(caminhoArquivo(doc, ref, 'xml-cancelamento'), can.bytes, can.contentType));
+   300→  }
+   301→
+   302→  return out;
+   303→}
+   304→
+   305→/**
+   306→ * Consulta `GET /v2/{doc}/{ref}` e arquiva XML + DANFE no nosso Storage.
+   307→ * Idempotente: arquivos sao gravados com upsert. Erro de rede/rejeicao da
+   308→ * SEFAZ nunca sobe excecao — devolve motivo.
+   309→ */
+   310→export async function coletarArquivosNota(doc: FocusDoc, ref: string): Promise<ColetaResultado> {
+   311→  const r = await consultarNota(doc, ref);
+   312→  const data = (r.data || {}) as Record<string, unknown>;
+   313→  if (!r.ok || 'erro' in data || !data) {
+   314→    return { ok: false, motivo: (data as { erro?: string }).erro || `HTTP ${r.status}` };
+   315→  }
+   316→  return arquivarDaConsulta(doc, ref, data);
+   317→}
+   318→
+   319→// ---------------------------------------------------------------------------
+   320→// Notas AVULSAS (emitidas fora do app — descoberta pela listagem legada)
+   321→// ---------------------------------------------------------------------------
+   322→export interface NotaAvulsaMeta {
+   323→  ref: string;
+   324→  doc: 'NFE' | 'NFCE';
+   325→  numero: string;
+   326→  serie: string;
+   327→  status: string;
+   328→  chave: string;
+   329→  dataEmissao: string;
+   330→  dataAutorizacao: string;
+   331→  valor: number;
+   332→  cliente: string;
+   333→  clienteDoc: string;
+   334→  pagamento: string;
+   335→  qrcodeUrl: string;
+   336→  importadoEm: string;
+   337→}
+   338→
+   339→function pastaAvulsa(): string {
+   340→  return '_avulsas';
+   341→}
+   342→
+   343→/** Interpreta o modelo (55/65) pela chave de acesso (posicao fixa do XML 4.00). */
+   344→export function docDaChave(chave: string): 'NFE' | 'NFCE' {
+   345→  const dig = String(chave || '').replace(/\D/g, '');
+   346→  return dig.length >= 22 && dig.slice(20, 22) === '65' ? 'NFCE' : 'NFE';
+   347→}
+   348→
+   349→/** tPag -> rótulo legivel (mesma tabela do tpagDeMetodo). */
+   350→function rotuloPagamento(formas: unknown): string {
+   351→  if (!Array.isArray(formas) || formas.length === 0) return '';
+   352→  const f = formas[0] as Record<string, unknown>;
+   353→  const tPag = String(f?.forma_pagamento ?? f?.formaPagamento ?? '');
+   354→  const mapa: Record<string, string> = {
+   355→    '01': 'DINHEIRO', '02': 'CHEQUE', '03': 'CARTAO_CREDITO', '04': 'CARTAO_DEBITO',
+   356→    '15': 'BOLETO', '16': 'DEPOSITO', '17': 'PIX', '90': 'SEM_PAGAMENTO', '91': 'A_PRAZO',
+   357→  };
+   358→  return mapa[tPag] || tPag;
+   359→}
+   360→
+   361→/**
+   362→ * BLOCO 142 — LISTAGEM OFICIAL DA FOCUS (regra do dono):
+   363→ * "nao tem como criar um webhook ou API que busque todas essas notas que
+   364→ * estao dentro da Focus NF-e?" — TEM. A API v2 expoe a listagem por CNPJ:
+   365→ *   GET /v2/nfes?cnpj={cnpj}&offset=N&limit=100   (NF-e)
+   366→ *   GET /v2/nfces?cnpj={cnpj}&offset=N&limit=100  (NFC-e)
+   367→ * — traz TODAS as notas do emitente, INCLUSIVE as batidas direto no PAINEL
+   368→ * da Focus (fora do app). O DIAG do 141 so testou variantes .json/v1 (404);
+   369→ * a listagem oficial pede o cnpj na query. Paginamos por offset com formato
+   370→ * tolerante e paramos quando a pagina acaba OU repete (API sem offset real).
+   371→ * CNPJ do emitente: env FOCUS_NFE_CNPJ -> fallback pela chave de acesso
+   372→ * (44 digitos; CNPJ nas posicoes 6-20) de uma nota gravada no banco.
+   373→ * Se a conta nao expuser a listagem, caimos nas variantes legadas e, no
+   374→ * pior caso, em { suportado: false } — o portal segue com o importador
+   375→ * manual por ref/chave.
+   376→ */
+   377→export interface ListagemFocus {
+   378→  suportado: boolean;
+   379→  motivo?: string;
+   380→  notas: Record<string, unknown>[];
+   381→  docs: { NFE: number; NFCE: number }; // coletadas por modelo
+   382→  cnpj: string;
+   383→}
+   384→
+   385→const TETO_PAGINAS = 20; // 20 x 100 = 2000 notas por modelo
+   386→const LIM_PAGINA = 100;
+   387→
+   388→function extrairLista(data: unknown): Record<string, unknown>[] | null {
+   389→  const d = data as Record<string, unknown> | null;
+   390→  if (Array.isArray(data)) return data as Record<string, unknown>[];
+   391→  if (!d || typeof d !== 'object') return null;
+   392→  for (const k of ['nfes', 'nfces', 'notas', 'data', 'documents']) {
+   393→    if (Array.isArray(d[k])) return d[k] as Record<string, unknown>[];
+   394→  }
+   395→  return null;
+   396→}
+   397→
+   398→async function paginaListagem(url: string, auth: string): Promise<{ ok: boolean; status: number; notas: Record<string, unknown>[] }> {
+   399→  try {
+   400→    const res = await fetch(url, {
+   401→      headers: { Authorization: auth },
+   402→      signal: AbortSignal.timeout(20_000),
+   403→      cache: 'no-store',
+   404→    });
+   405→    const text = await res.text();
+   406→    let data: unknown = null;
+   407→    try { data = text ? JSON.parse(text) : null; } catch { return { ok: false, status: res.status, notas: [] }; }
+   408→    const arr = extrairLista(data);
+   409→    if (!res.ok || !arr) return { ok: false, status: res.status, notas: [] };
+   410→    return { ok: true, status: res.status, notas: arr };
+   411→  } catch {
+   412→    return { ok: false, status: 0, notas: [] };
+   413→  }
+   414→}
+   415→
+   416→/** CNPJ do emitente: env -> primeira chave de acesso de 44 digitos no banco. */
+   417→async function cnpjDoEmitente(): Promise<string> {
+   418→  const env = (getFocusConfig().cnpj || '').replace(/\D/g, '');
+   419→  if (env.length === 14) return env;
+   420→  try {
+   421→    const db = getServiceClient();
+   422→    const { data } = await db.from('sales').select('nota_chave').not('nota_chave', 'is', null).limit(1);
+   423→    const chave = String((data?.[0] as { nota_chave?: string } | undefined)?.nota_chave || '').replace(/\D/g, '');
+   424→    if (chave.length >= 20) return chave.slice(6, 20);
+   425→  } catch { /* banco fora — segue vazio */ }
+   426→  return '';
+   427→}
+   428→
+   429→export async function listarRefsFocus(): Promise<ListagemFocus> {
+   430→  const { baseUrl, token } = getFocusConfig();
+   431→  if (!token) return { suportado: false, motivo: 'FOCUS_NAO_CONFIGURADA', notas: [], docs: { NFE: 0, NFCE: 0 }, cnpj: '' };
+   432→  const auth = 'Basic ' + Buffer.from(`${token}:`).toString('base64');
+   433→  const cnpj = await cnpjDoEmitente();
+   434→
+   435→  const acumulado: Record<string, unknown>[] = [];
+   436→  const docs: { NFE: number; NFCE: number } = { NFE: 0, NFCE: 0 };
+   437→  let ultimoMotivo = '';
+   438→  let algumaListou = false;
+   439→
+   440→  for (const endpoint of ['nfes', 'nfces'] as const) {
+   441→    const rotulo = endpoint === 'nfes' ? 'NFE' : 'NFCE';
+   442→    let listou = false;
+   443→    let refPrimeiraPagina = '';
+   444→    for (let page = 0; page < TETO_PAGINAS; page++) {
+   445→      const qs = cnpj ? `cnpj=${encodeURIComponent(cnpj)}&` : '';
+   446→      const url = `${baseUrl}/v2/${endpoint}?${qs}offset=${page * LIM_PAGINA}&limit=${LIM_PAGINA}`;
+   447→      const r = await paginaListagem(url, auth);
+   448→      if (!r.ok) {
+   449→        ultimoMotivo = `/v2/${endpoint}: HTTP ${r.status}${r.status === 0 ? ' (rede)' : ''}`;
+   450→        break;
+   451→      }
+   452→      listou = true;
+   453→      if (r.notas.length === 0) break;
+   454→      // API sem offset real: pagina 2 devolve o mesmo inicio — parar
+   455→      const primeira = String((r.notas[0] || {}).ref || (r.notas[0] || {}).referencia || '');
+   456→      if (page > 0 && primeira && primeira === refPrimeiraPagina) break;
+   457→      if (page === 0) refPrimeiraPagina = primeira;
+   458→      acumulado.push(...r.notas);
+   459→      if (r.notas.length < LIM_PAGINA) break;
+   460→    }
+   461→    if (listou) {
+   462→      algumaListou = true;
+   463→      docs[rotulo] += 1; // pelo menos 1 pagina OK deste modelo
+   464→    }
+   465→  }
+   466→
+   467→  if (algumaListou) {
+   468→    return { suportado: true, notas: acumulado, docs, cnpj };
+   469→  }
+   470→
+   471→  // Fallback: variantes legadas (contas antigas / endpoints sem cnpj)
+   472→  const variantes = [
+   473→    `${baseUrl}/v2/nfes?offset=0`,
+   474→    `${baseUrl}/v2/nfes.json?offset=0`,
+   475→    `${baseUrl}/v1/nfes.json?token=${encodeURIComponent(token)}`,
+   476→    `${baseUrl}/v1/nfes.json`,
+   477→  ];
+   478→  for (const url of variantes) {
+   479→    const r = await paginaListagem(url, auth);
+   480→    if (r.ok && r.notas.length > 0) {
+   481→      return { suportado: true, notas: r.notas, docs, cnpj };
+   482→    }
+   483→    // motivo SEM token (algumas variantes levam token na query)
+   484→    if (r.ok) ultimoMotivo = `${url.slice(baseUrl.length).replace(token, '***').replace(/token=[^&]+/g, 'token=***')}: lista vazia`;
+   485→  }
+   486→  return {
+   487→    suportado: false,
+   488→    motivo: ultimoMotivo || 'nenhuma variante respondeu',
+   489→    notas: [],
+   490→    docs,
+   491→    cnpj,
+   492→  };
+   493→}
+   494→
+   495→// ---------------------------------------------------------------------------
+   496→// BLOCO 142 — BACKUPS MENSais DA FOCUS (fonte OFICIAL de TODAS as notas).
+   497→// Comprovado real na conta: GET /v2/backups/{cnpj}.json -> 200 com
+   498→// [{ mes: '202611', xmls: 'https://focusnfe.s3.../..._XMLs.zip', danfes: null }]
+   499→// — o ZIP de XMLs traz TODAS as notas do mes (NFe + NFCe), batidas pelo app
+   500→// OU no PAINEL (nome do arquivo = chave de acesso de 44 digitos). A partir
+   501→// da chave importamos a nota completa (importarAvulsa aceita chave).
+   502→// ---------------------------------------------------------------------------
+   503→
+   504→export interface BackupFocus {
+   505→  mes: string; // AAAAMM
+   506→  danfes: string | null; // URL S3 do ZIP de DANFEs (NFe) — pode ser null
+   507→  xmls: string | null;   // URL S3 do ZIP de XMLs (NFe, NFCe...) — pode ser null
+   508→}
+   509→
+   510→/** GET /v2/backups/{cnpj}.json (Basic auth) — lista os backups mensais. */
+   511→export async function listarBackupsFocus(cnpjArg?: string): Promise<{ ok: boolean; motivo?: string; backups: BackupFocus[] }> {
+   512→  const { baseUrl, token } = getFocusConfig();
+   513→  if (!token) return { ok: false, motivo: 'FOCUS_NAO_CONFIGURADA', backups: [] };
+   514→  const cnpj = (cnpjArg || '').replace(/\D/g, '') || (await cnpjDoEmitente());
+   515→  if (cnpj.length !== 14) return { ok: false, motivo: 'CNPJ_EMITENTE_INDISPONIVEL', backups: [] };
+   516→  const auth = 'Basic ' + Buffer.from(`${token}:`).toString('base64');
+   517→  try {
+   518→    const res = await fetch(`${baseUrl}/v2/backups/${cnpj}.json`, {
+   519→      headers: { Authorization: auth },
+   520→      signal: AbortSignal.timeout(20_000),
+   521→      cache: 'no-store',
+   522→    });
+   523→    if (!res.ok) {
+   524→      const corpo = (await res.text().catch(() => '')).slice(0, 120).replace(/\s+/g, ' ');
+   525→      return { ok: false, motivo: `HTTP ${res.status}${corpo ? ` :: ${corpo}` : ''}`, backups: [] };
+   526→    }
+   527→    const data = (await res.json()) as unknown;
+   528→    if (!Array.isArray(data)) return { ok: false, motivo: 'FORMATO_INESPERADO', backups: [] };
+   529→    const backups = (data as Record<string, unknown>[]).map((b) => ({
+   530→      mes: String(b.mes || ''),
+   531→      danfes: typeof b.danfes === 'string' && b.danfes ? b.danfes : null,
+   532→      xmls: typeof b.xmls === 'string' && b.xmls ? b.xmls : null,
+   533→    })).filter((b) => /^\d{6}$/.test(b.mes));
+   534→    return { ok: true, backups };
+   535→  } catch (e) {
+   536→    return { ok: false, motivo: (e as Error).message, backups: [] };
+   537→  }
+   538→}
+   539→
+   540→/** Extrai chaves de acesso (44 digitos) dos nomes dentro do ZIP. */
+   541→function chavesDeNomes(nomes: string[]): { xmls: string[]; danfes: string[] } {
+   542→  const xmls: string[] = [];
+   543→  const danfes: string[] = [];
+   544→  for (const n of nomes) {
+   545→    const mXml = /(?:^|\/)(\d{44})[^/]*\.xml$/i.exec(n);
+   546→    if (mXml) { xmls.push(mXml[1]); continue; }
+   547→    const mPdf = /(?:^|\/)(\d{44})[^/]*\.pdf$/i.exec(n);
+   548→    if (mPdf) danfes.push(mPdf[1]);
+   549→  }
+   550→  return { xmls: [...new Set(xmls)], danfes: [...new Set(danfes)] };
+   551→}
+   552→
+   553→/** Baixa um ZIP (URL S3 pré-assinada da Focus — não pede auth). */
+   554→async function baixarZipFocus(url: string): Promise<Buffer | null> {
+   555→  try {
+   556→    const res = await fetch(url, { signal: AbortSignal.timeout(60_000), cache: 'no-store' });
+   557→    if (!res.ok) return null;
+   558→    const ab = await res.arrayBuffer();
+   559→    if (!ab || ab.byteLength === 0 || ab.byteLength > 60 * 1024 * 1024) return null;
+   560→    return Buffer.from(ab);
+   561→  } catch {
+   562→    return null;
+   563→  }
+   564→}
+   565→
+   566→/** Chaves de acesso contidas num ZIP (via fflate — sem deps nativas). */
+   567→export function chavesDoZip(bytes: Buffer): { xmls: string[]; danfes: string[] } {
+   568→  try {
+   569→    const files = unzipSync(new Uint8Array(bytes));
+   570→    return chavesDeNomes(Object.keys(files));
+   571→  } catch {
+   572→    return { xmls: [], danfes: [] };
+   573→  }
+   574→}
+   575→
+   576→/** Chaves/refs que o sistema ja conhece (vendas com nota_chave + avulsas). */
+   577→async function chavesConhecidas(): Promise<Set<string>> {
+   578→  const set = new Set<string>();
+   579→  try {
+   580→    const db = getServiceClient();
+   581→    for (let range = 0; range < 5000; range += 1000) {
+   582→      const { data, error } = await db
+   583→        .from('sales')
+   584→        .select('nota_chave, nota_ref')
+   585→        .not('nota_chave', 'is', null)
+   586→        .range(range, range + 999);
+   587→      if (error || !data) break;
+   588→      for (const r of (data as unknown) as { nota_chave: string; nota_ref: string }[]) {
+   589→        const chave = String(r.nota_chave || '').replace(/\D/g, '').slice(-44);
+   590→        if (chave.length === 44) set.add(chave);
+   591→        const ref = String(r.nota_ref || '');
+   592→        if (ref) set.add(ref);
+   593→      }
+   594→      if ((data as unknown[]).length < 1000) break;
+   595→    }
+   596→  } catch { /* banco fora — segue */ }
+   597→  const metas = await listarMetasAvulsas();
+   598→  for (const m of metas) {
+   599→    if (m.ref) set.add(m.ref);
+   600→    if (m.chave && m.chave.length === 44) set.add(m.chave);
+   601→  }
+   602→  return set;
+   603→}
+   604→
+   605→export interface BackupResultado {
+   606→  suportado: boolean;   // endpoint de backups respondeu
+   607→  motivo?: string;      // quando suportado=false
+   608→  fim: boolean;         // nenhum mes tem chave nova sem importar
+   609→  mes?: string;         // mes processado nesta rodada
+   610→  chavesNoBackup: number;
+   611→  novas: number;        // notas importadas nesta rodada
+   612→  puladas: number;      // cortadas pelo teto de tempo
+   613→  erros: { chave: string; erro: string }[];
+   614→  restantes: number;    // chaves novas ainda por importar (mes atual)
+   615→  mesesComBackup: number;
+   616→  danfesGravados: number;
+   617→}
+   618→
+   619→// ---------------------------------------------------------------------------
+   620→// PARSE DO XML AUTORIZADO (o ZIP traz o XML completo — metadados SEM
+   621→// reconsultar a Focus; NFC-e do painel nao aceita consulta por chave: 404
+   622→// "Nota fiscal nao encontrada" com chave REAL, provado em producao).
+   623→// ---------------------------------------------------------------------------
+   624→interface XmlNotaMeta {
+   625→  chave: string;
+   626→  numero: string;
+   627→  serie: string;
+   628→  status: 'AUTORIZADO' | 'CANCELADO' | 'OUTRO';
+   629→  cStat: string;
+   630→  dataEmissao: string;
+   631→  dataAutorizacao: string;
+   632→  valor: number;
+   633→  cliente: string;
+   634→  clienteDoc: string;
+   635→  pagamento: string;
+   636→}
+   637→
+   638→function blocoXml(texto: string, tag: string): string {
+   639→  // aceita atributos na tag de abertura (ex.: <protNFe xmlns="..." versao="4.00">)
+   640→  const m = new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)</${tag}>`, 'i').exec(texto);
+   641→  return m ? m[1] : '';
+   642→}
+   643→
+   644→function valorTag(bloco: string, tag: string): string {
+   645→  const m = new RegExp(`<${tag}>([^<]*)</${tag}>`, 'i').exec(bloco);
+   646→  return m ? m[1].trim() : '';
+   647→}
+   648→
+   649→function parseXmlNota(xml: string, chaveFallback: string): XmlNotaMeta | null {
+   650→  try {
+   651→    const chave = (/Id="NFe(\d{44})"/i.exec(xml) || [])[1] || chaveFallback;
+   652→    if (!/^\d{44}$/.test(chave)) return null;
+   653→    const ide = blocoXml(xml, 'ide');
+   654→    const dest = blocoXml(xml, 'dest');
+   655→    const tot = blocoXml(xml, 'ICMSTot');
+   656→    const prot = blocoXml(xml, 'protNFe');
+   657→    const cStat = valorTag(prot, 'cStat') || '';
+   658→    const docDest = valorTag(dest, 'CNPJ') || valorTag(dest, 'CPF');
+   659→    // formas de pagamento (tPag pode repetir — unimos no rotulo)
+   660→    const tPags = [...xml.matchAll(/<tPag>(\d{2})<\/tPag>/gi)].map((m) => m[1]);
+   661→    const mapaPag: Record<string, string> = {
+   662→      '01': 'DINHEIRO', '02': 'CHEQUE', '03': 'CARTAO_CREDITO', '04': 'CARTAO_DEBITO',
+   663→      '05': 'CREDITO_LOJA', '10': 'A_PRAZO', '11': 'CREDITO_LOJA', '13': 'CARTAO_DEBITO',
+   664→      '15': 'BOLETO', '16': 'DEPOSITO', '17': 'PIX', '90': 'SEM_PAGAMENTO', '91': 'A_PRAZO',
+   665→    };
+   666→    const pagamento = [...new Set(tPags.map((t) => mapaPag[t] || t))].join('+');
+   667→    const status: XmlNotaMeta['status'] = cStat === '100' || cStat === '150' ? 'AUTORIZADO'
+   668→      : cStat === '101' || cStat === '135' || cStat === '151' || cStat === '155' ? 'CANCELADO'
+   669→        : cStat ? 'OUTRO' : 'OUTRO';
+   670→    return {
+   671→      chave,
+   672→      numero: valorTag(ide, 'nNF'),
+   673→      serie: valorTag(ide, 'serie'),
+   674→      status,
+   675→      cStat,
+   676→      dataEmissao: valorTag(ide, 'dhEmi') || valorTag(ide, 'dEmi'),
+   677→      dataAutorizacao: valorTag(prot, 'dhRecbto'),
+   678→      valor: Number(valorTag(tot, 'vNF').replace(',', '.')) || 0,
+   679→      cliente: (valorTag(dest, 'xNome') || 'CONSUMIDOR NAO IDENTIFICADO').slice(0, 120),
+   680→      clienteDoc: docDest,
+   681→      pagamento,
+   682→    };
+   683→  } catch {
+   684→    return null;
+   685→  }
+   686→}
+   687→
+   688→/**
+   689→ * UMA rodada do importador por BACKUPS (BLOCO 142): lista os backups mensais,
+   690→ * baixa o ZIP de XMLs (mais recente primeiro), extrai o XML AUTORIZADO de cada
+   691→ * chave NOVA e arquiva DIRETO no nosso storage (XML do ZIP + PDF do DANFE pela
+   692→ * URL oficial /arquivos/{cnpj}/{mes}/DANFEs/{chave}.pdf — provado 302->200
+   693→ * mesmo para NFC-e) + JSON de metadados parseado do XML (nº, série, data,
+   694→ * valor, cliente, pagamento, status). NAO depende de consulta por ref/chave
+   695→ * (NFC-e do painel nao aceita — 404 provado). Idempotente: rodar de novo
+   696→ * nunca duplica (chaves ja conhecidas sao puladas).
+   697→ */
+   698→export async function importarDoBackupFocus(lote = 8): Promise<BackupResultado> {
+   699→  const vazio: BackupResultado = { suportado: false, fim: true, chavesNoBackup: 0, novas: 0, puladas: 0, erros: [], restantes: 0, mesesComBackup: 0, danfesGravados: 0 };
+   700→  const { token } = getFocusConfig();
+   701→  if (!token) return { ...vazio, motivo: 'FOCUS_NAO_CONFIGURADA' };
+   702→
+   703→  const lista = await listarBackupsFocus();
+   704→  if (!lista.ok) {
+   705→    // Endpoint de backups indisponivel — o chamador cai na varredura legada
+   706→    return { ...vazio, motivo: lista.motivo || 'backups indisponivel' };
+   707→  }
+   708→  if (lista.backups.length === 0) {
+   709→    return { ...vazio, suportado: true, motivo: 'SEM_BACKUPS' };
+   710→  }
+   711→  const cnpjEmit = await cnpjDoEmitente();
+   712→
+   713→  const conhecidas = await chavesConhecidas();
+   714→  const inicio = Date.now();
+   715→  const erros: { chave: string; erro: string }[] = [];
+   716→  let novas = 0, puladas = 0, danfesGravados = 0;
+   717→  let mesProcessado: string | undefined;
+   718→  let chavesNoBackup = 0;
+   719→  let faltandoTotal = 0;
+   720→
+   721→  // meses: mais recente primeiro (o JSON costuma vir assim — ordenamos mesmo assim)
+   722→  const meses = [...lista.backups].sort((a, b) => b.mes.localeCompare(a.mes));
+   723→  for (const backup of meses) {
+   724→    if (!backup.xmls) continue;
+   725→    if (Date.now() - inicio > TETO_MS_GRANDE) break;
+   726→    const zip = await baixarZipFocus(backup.xmls);
+   727→    if (!zip) continue;
+   728→    let files: Record<string, Uint8Array>;
+   729→    try { files = unzipSync(new Uint8Array(zip)); } catch { continue; }
+   730→    const nomes = Object.keys(files);
+   731→    const { xmls: chavesXml } = chavesDeNomes(nomes);
+   732→    if (chavesXml.length === 0) continue;
+   733→    chavesNoBackup = Math.max(chavesNoBackup, chavesXml.length);
+   734→    const novasChaves = chavesXml.filter((ch) => !conhecidas.has(ch));
+   735→    if (novasChaves.length === 0) continue;
+   736→
+   737→    mesProcessado = backup.mes;
+   738→    faltandoTotal += novasChaves.length;
+   739→
+   740→    for (const chave of novasChaves) {
+   741→      if (novas >= lote) continue; // fica para a proxima rodada (restantes++)
+   742→      if (Date.now() - inicio > TETO_MS_GRANDE) { puladas++; continue; }
+   743→      try {
+   744→        const doc = docDaChave(chave) === 'NFCE' ? 'nfce' as FocusDoc : 'nfe' as FocusDoc;
+   745→        const caminhoBase = caminhoArquivo(doc, chave, 'xml').replace(/\.xml$/, '');
+   746→
+   747→        // 1) XML autorizado — direto do ZIP (sem bater na Focus)
+   748→        const nomeXml = nomes.find((n) => new RegExp(`(?:^|/)${chave}[^/]*\\.xml$`, 'i').test(n) && !/-can\.xml$/i.test(n));
+   749→        if (!nomeXml) { erros.push({ chave, erro: 'XML_AUSENTE_NO_BACKUP' }); continue; }
+   750→        const xmlTexto = Buffer.from(files[nomeXml]).toString('utf8');
+   751→        if (!xmlTexto) { erros.push({ chave, erro: 'XML_VAZIO' }); continue; }
+   752→        const meta = parseXmlNota(xmlTexto, chave);
+   753→        if (!meta) { erros.push({ chave, erro: 'XML_ILEGIVEL' }); continue; }
+   754→
+   755→        // 2) PDF do DANFE pela URL oficial por chave (302->200; NFC-e tbm serve)
+   756→        let pdfSalvo = false;
+   757→        const pdf = await baixarCaminhoFocus(`/arquivos/${cnpjEmit}/${backup.mes}/DANFEs/${chave}.pdf`);
+   758→        if (pdf && pdf.ext === 'pdf') {
+   759→          pdfSalvo = await gravarNoStorage(`${caminhoBase}.pdf`, pdf.bytes, pdf.contentType);
+   760→          if (pdfSalvo) danfesGravados++;
+   761→        }
+   762→
+   763→        // 3) XML autorizado no storage
+   764→        const xmlSalvo = await gravarNoStorage(`${caminhoBase}.xml`, Buffer.from(xmlTexto), MIME.xml);
+   765→
+   766→        // 4) Metadados para a lista do portal (pasta _avulsas, ref = chave)
+   767→        const metaAvulsa: NotaAvulsaMeta = {
+   768→          ref: chave,
+   769→          doc: doc === 'nfce' ? 'NFCE' : 'NFE',
+   770→          numero: meta.numero,
+   771→          serie: meta.serie,
+   772→          status: meta.status,
+   773→          chave,
+   774→          dataEmissao: meta.dataEmissao,
+   775→          dataAutorizacao: meta.dataAutorizacao,
+   776→          valor: meta.valor,
+   777→          cliente: meta.cliente,
+   778→          clienteDoc: meta.clienteDoc,
+   779→          pagamento: meta.pagamento,
+   780→          qrcodeUrl: '',
+   781→          importadoEm: new Date().toISOString(),
+   782→        };
+   783→        const metaSalva = await gravarNoStorage(`${pastaAvulsa()}/${chave}.json`, Buffer.from(JSON.stringify(metaAvulsa, null, 2)), 'application/json');
+   784→        if (xmlSalvo || pdfSalvo || metaSalva) novas++;
+   785→        else erros.push({ chave, erro: 'FALHA_GRAVACAO' });
+   786→      } catch (e) {
+   787→        erros.push({ chave, erro: (e as Error).message || 'erro' });
+   788→      }
+   789→    }
+   790→  }
+   791→
+   792→  invalidaPresenca();
+   793→  const faltandoRestante = Math.max(0, faltandoTotal - novas - erros.length);
+   794→  return {
+   795→    suportado: true,
+   796→    fim: faltandoRestante === 0,
+   797→    mes: mesProcessado,
+   798→    chavesNoBackup,
+   799→    novas,
+   800→    puladas,
+   801→    erros: erros.slice(0, 8),
+   802→    restantes: faltandoRestante,
+   803→    mesesComBackup: lista.backups.length,
+   804→    danfesGravados,
+   805→  };
+   806→}
+   807→
+   808→/** Devolve os metadados de uma avulsa (null = nao existe). */
+   809→export async function lerMetaAvulsa(ref: string): Promise<NotaAvulsaMeta | null> {
+   810→  try {
+   811→    const { data, error } = await getServiceClient()
+   812→      .storage.from(BUCKET)
+   813→      .download(`${pastaAvulsa()}/${ref}.json`);
+   814→    if (error || !data) return null;
+   815→    const text = await data.text();
+   816→    return JSON.parse(text) as NotaAvulsaMeta;
+   817→  } catch {
+   818→    return null;
+   819→  }
+   820→}
+   821→
+   822→/** Lista as avulsas ja importadas (metadados). */
+   823→export async function listarMetasAvulsas(): Promise<NotaAvulsaMeta[]> {
+   824→  try {
+   825→    const db = getServiceClient();
+   826→    const { data, error } = await db.storage.from(BUCKET).list(pastaAvulsa(), { limit: 1000, sortBy: { column: 'name', order: 'desc' } });
+   827→    if (error || !data) return [];
+   828→    const refs = data.filter(f => f.name.endsWith('.json')).map(f => f.name.replace(/\.json$/, ''));
+   829→    const metas: NotaAvulsaMeta[] = [];
+   830→    for (const ref of refs) {
+   831→      const m = await lerMetaAvulsa(ref);
+   832→      if (m) metas.push(m);
+   833→    }
+   834→    return metas;
+   835→  } catch {
+   836→    return [];
+   837→  }
+   838→}
+   839→
+   840→/**
+   841→ * Importa uma nota AVULSA (fora do app — painel da Focus): consulta COMPLETA
+   842→ * na Focus (`?completa=1` traz destinatario/valor/pagamento), arquiva XML +
+   843→ * DANFE e grava o JSON de metadados que alimenta a lista do portal.
+   844→ * `tokenNota` pode ser a REF do painel OU a chave de acesso de 44 digitos
+   845→ * (BLOCO 141: GET /v2/{doc}/{chave} aceita chave — provado no DIAG).
+   846→ * docHint ausente: tenta nfce e depois nfe (a chave diz o modelo; ref não).
+   847→ */
+   848→export async function importarAvulsa(ref: string, docHint?: 'NFE' | 'NFCE'): Promise<{ ok: boolean; motivo?: string; meta?: NotaAvulsaMeta }> {
+   849→  const { token } = getFocusConfig();
+   850→  if (!token) return { ok: false, motivo: 'FOCUS_NAO_CONFIGURADA' };
+   851→  const tokenNota = ref.trim().replace(/[^A-Za-z0-9_-]/g, '').slice(0, 60);
+   852→  if (!tokenNota) return { ok: false, motivo: 'REF_INVALIDA' };
+   853→  // A listagem legada nao diz o modelo — tenta nfce depois nfe pela chave/ref
+   854→  let doc: FocusDoc = docHint === 'NFCE' ? 'nfce' : docHint === 'NFE' ? 'nfe' : 'nfce';
+   855→  let data: Record<string, unknown> | null = null;
+   856→  for (const d of docHint ? [docHint.toLowerCase() as FocusDoc] : (['nfce', 'nfe'] as FocusDoc[])) {
+   857→    const r = await consultarNota(d, tokenNota, true);
+   858→    const dd = (r.data || {}) as Record<string, unknown>;
+   859→    if (r.ok && dd && !('erro' in dd) && String(dd.status || '') !== '') {
+   860→      doc = d;
+   861→      data = dd;
+   862→      break;
+   863→    }
+   864→  }
+   865→  if (!data) return { ok: false, motivo: 'NOTA_NAO_ENCONTRADA_NA_FOCUS' };
+   866→
+   867→  // Arquiva direto da resposta da consulta (sem reconsultar — economiza reqs)
+   868→  const coleta = await arquivarDaConsulta(doc, tokenNota, data);
+   869→  invalidaPresenca();
+   870→  const req = (data.requisicao_nota_fiscal || {}) as Record<string, unknown>;
+   871→  const totais = (req.totais || {}) as Record<string, unknown>;
+   872→  const dest = req.nome_destinatario || req.razao_social_destinatario || '';
+   873→  const meta: NotaAvulsaMeta = {
+   874→    ref: tokenNota,
+   875→    doc: doc === 'nfce' ? 'NFCE' : 'NFE',
+   876→    numero: String(data.numero || req.numero || ''),
+   877→    serie: String(data.serie || req.serie || ''),
+   878→    status: String(data.status || '').toUpperCase(),
+   879→    chave: String(data.chave_nfe || '').replace(/\D/g, '').slice(-44),
+   880→    dataEmissao: String(req.data_emissao || data.data_emissao || ''),
+   881→    dataAutorizacao: String(data.data_autorizacao || (data.protocolo_nota_fiscal as Record<string, unknown> | undefined)?.data_recebimento || ''),
+   882→    valor: Number(totais.valor_total ?? data.total ?? data.valor_total) || 0,
+   883→    cliente: String(dest || 'CONSUMIDOR NAO IDENTIFICADO').slice(0, 120),
+   884→    clienteDoc: String(req.cnpj_destinatario || req.cpf_destinatario || ''),
+   885→    pagamento: rotuloPagamento(req.formas_pagamento),
+   886→    qrcodeUrl: String(data.qrcode_url || ''),
+   887→    importadoEm: new Date().toISOString(),
+   888→  };
+   889→  const salvo = await gravarNoStorage(`${pastaAvulsa()}/${meta.ref}.json`, Buffer.from(JSON.stringify(meta, null, 2)), 'application/json');
+   890→  if (!salvo && !coleta.ok) return { ok: false, motivo: coleta.motivo || 'FALHA_GRAVACAO' };
+   891→  return { ok: true, meta };
+   892→}
+   893→
+   894→/** Exclui uma avulsa (metadados + DANFE/XML na pasta do documento). */
+   895→export async function excluirAvulsa(ref: string, doc?: 'NFE' | 'NFCE'): Promise<void> {
+   896→  const db = getServiceClient();
+   897→  const refSan = ref.replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 120);
+   898→  const alvos = [`${pastaAvulsa()}/${refSan}.json`];
+   899→  for (const d of doc ? [doc] : (['NFE', 'NFCE'] as const)) {
+   900→    alvos.push(`${d}/${refSan}.pdf`, `${d}/${refSan}.html`, `${d}/${refSan}.xml`, `${d}/${refSan}-can.xml`);
+   901→  }
+   902→  try { await db.storage.from(BUCKET).remove(alvos); } catch { /* best-effort */ }
+   903→  invalidaPresenca();
+   904→}
+   905→

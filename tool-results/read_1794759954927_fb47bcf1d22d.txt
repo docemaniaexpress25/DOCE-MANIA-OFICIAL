@@ -1,0 +1,342 @@
+     1→   801→   801→                        {/* Valor */}
+     2→   802→   802→                        <td className="px-4 py-3 whitespace-nowrap">
+     3→   803→   803→                          <p className="text-[11px] font-black text-gray-800">{fmtBRL(n.valor)}</p>
+     4→   804→   804→                          <p className="text-[8px] font-bold text-gray-400 uppercase">{n.statusPagamento === 'PAGO' ? 'pago' : 'pendente'}</p>
+     5→   805→   805→                        </td>
+     6→   806→   806→                        {/* Pagamento */}
+     7→   807→   807→                        <td className="px-4 py-3 max-w-[220px]">
+     8→   808→   808→                          <p className="text-[10px] font-black text-gray-700 uppercase">{(n.metodo || '—').replace('_', ' ')}</p>
+     9→   809→   809→                          <p className="text-[9px] font-bold text-gray-400 truncate max-w-[200px]" title={n.detalhe}>{n.detalhe || ''}</p>
+    10→   810→   810→                        </td>
+    11→   811→   811→                        {/* Vendedor */}
+    12→   812→   812→                        <td className="px-4 py-3 whitespace-nowrap">
+    13→   813→   813→                          <p className="text-[10px] font-bold text-gray-600">{n.vendedor || '—'}</p>
+    14→   814→   814→                        </td>
+    15→   815→   815→                        {/* Ações */}
+    16→   816→   816→                        <td className="px-4 py-3">
+    17→   817→   817→                          <div className="flex items-center gap-1.5 flex-wrap">
+    18→   818→   818→                            {!n.avulsa && (
+    19→   819→   819→                              <button onClick={() => void abrirDetalhe(n)} disabled={ocupado} className="w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center active:scale-90 transition-transform" title="Ver o que foi pedido (itens, cliente, pagamento)">
+    20→   820→   820→                                {busyId === `det:${n.id}` ? <i className="fa-solid fa-spinner fa-spin text-[11px]"></i> : <i className="fa-solid fa-eye text-[11px]"></i>}
+    21→   821→   821→                              </button>
+    22→   822→   822→                            )}
+    23→   823→   823→                            {n.ref && (
+    24→   824→   824→                              <a href={linkArquivo(n, 'pdf')} target="_blank" rel="noopener noreferrer" className={`w-8 h-8 rounded-xl flex items-center justify-center active:scale-90 transition-transform ${n.pdfLocal ? 'bg-rose-100 text-rose-600 shadow-sm' : 'bg-rose-50 text-rose-400'}`} title={n.pdfLocal ? 'Abrir/baixar DANFE — arquivo salvo NO NOSSO sistema' : 'Abrir/baixar DANFE (busca na Focus e arquiva no sistema)'}>
+    25→   825→   825→                                <i className="fa-solid fa-file-pdf text-[11px]"></i>
+    26→   826→   826→                              </a>
+    27→   827→   827→                            )}
+    28→   828→   828→                            {n.ref && (
+    29→   829→   829→                              <a href={linkArquivo(n, 'xml')} target="_blank" rel="noopener noreferrer" className={`w-8 h-8 rounded-xl flex items-center justify-center active:scale-90 transition-transform ${n.xmlLocal ? 'bg-gray-200 text-gray-700 shadow-sm' : 'bg-gray-50 text-gray-400'}`} title={n.xmlLocal ? 'Abrir/baixar XML — arquivo salvo NO NOSSO sistema' : 'Abrir/baixar XML (busca na Focus e arquiva no sistema)'}>
+    30→   830→   830→                                <i className="fa-solid fa-code text-[11px]"></i>
+    31→   831→   831→                              </a>
+    32→   832→   832→                            )}
+    33→   833→   833→                            {!n.avulsa && n.ref && (
+    34→   834→   834→                              <button
+    35→   835→   835→                                onClick={async () => {
+    36→   836→   836→                                  if (!token) return;
+    37→   837→   837→                                  setBusyId(n.id);
+    38→   838→   838→                                  try {
+    39→   839→   839→                                    const res = await fetch('/api/notas', { method: 'POST', headers: headers(token), body: JSON.stringify({ acao: 'CONSULTAR', saleId: n.id }) });
+    40→   840→   840→                                    const data = await res.json().catch(() => ({}));
+    41→   841→   841→                                    showToast(data.ok ? 'Consultado na SEFAZ — situação sincronizada.' : data.erro || 'Falha ao consultar.', !!data.ok);
+    42→   842→   842→                                    void carregar(token);
+    43→   843→   843→                                  } catch { showToast('Falha de conexão ao consultar.', false); }
+    44→   844→   844→                                  finally { setBusyId(null); }
+    45→   845→   845→                                }}
+    46→   846→   846→                                disabled={ocupado}
+    47→   847→   847→                                className="w-8 h-8 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center active:scale-90 transition-transform"
+    48→   848→   848→                                title="Consultar situação na SEFAZ"
+    49→   849→   849→                              >
+    50→   850→   850→                                {ocupado ? <i className="fa-solid fa-spinner fa-spin text-[11px]"></i> : <i className="fa-solid fa-rotate text-[11px]"></i>}
+    51→   851→   851→                              </button>
+    52→   852→   852→                            )}
+    53→   853→   853→                            {n.avulsa && (
+    54→   854→   854→                              <button onClick={() => void atualizarAvulsa(n)} disabled={ocupado} className="w-8 h-8 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center active:scale-90 transition-transform" title="Re-consultar na SEFAZ e atualizar arquivos">
+    55→   855→   855→                                {ocupado ? <i className="fa-solid fa-spinner fa-spin text-[11px]"></i> : <i className="fa-solid fa-rotate text-[11px]"></i>}
+    56→   856→   856→                              </button>
+    57→   857→   857→                            )}
+    58→   858→   858→                            {!n.avulsa && podeEmitir && (
+    59→   859→   859→                              <button
+    60→   860→   860→                                onClick={() => { setEmitModal(n); setEmitTipo(''); }}
+    61→   861→   861→                                disabled={ocupado}
+    62→   862→   862→                                className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center active:scale-90 transition-transform"
+    63→   863→   863→                                title="Emitir documento fiscal (NF-e/NFC-e)"
+    64→   864→   864→                              >
+    65→   865→   865→                                <i className="fa-solid fa-bolt text-[11px]"></i>
+    66→   866→   866→                              </button>
+    67→   867→   867→                            )}
+    68→   868→   868→                            {!n.avulsa && (
+    69→   869→   869→                              <button
+    70→   870→   870→                                onClick={() => { setEditModal(n); setEditMetodo(n.metodo || ''); setEditDetalhe(n.detalhe || ''); }}
+    71→   871→   871→                                disabled={ocupado}
+    72→   872→   872→                                className="w-8 h-8 rounded-xl bg-sky-50 text-sky-600 flex items-center justify-center active:scale-90 transition-transform"
+    73→   873→   873→                                title="Editar registro (pagamento/observação)"
+    74→   874→   874→                              >
+    75→   875→   875→                                <i className="fa-solid fa-pen text-[11px]"></i>
+    76→   876→   876→                              </button>
+    77→   877→   877→                            )}
+    78→   878→   878→                            {!n.avulsa && <button onClick={() => setCloneModal(n)} disabled={ocupado} className="w-8 h-8 rounded-xl bg-violet-50 text-violet-600 flex items-center justify-center active:scale-90 transition-transform" title="Clonar pedido (emite documento de novo)">
+    79→   879→   879→                              <i className="fa-solid fa-clone text-[11px]"></i>
+    80→   880→   880→                            </button>}
+    81→   881→   881→                            {!n.avulsa && (n.status === 'AUTORIZADA' || n.status === 'EMITINDO') && n.ref && prazoCancelDe(n).dentroDoPrazo && (
+    82→   882→   882→                              <button onClick={() => { setCancelModal(n); setJustificativa(''); }} disabled={ocupado} className="w-8 h-8 rounded-xl bg-rose-50 text-rose-500 flex items-center justify-center active:scale-90 transition-transform" title={`Cancelar na SEFAZ — restam ${prazoCancelDe(n).textoRestante} (prazo: ${prazoCancelDe(n).prazoLabel})`}>
+    83→   883→   883→                                <i className="fa-solid fa-ban text-[11px]"></i>
+    84→   884→   884→                              </button>
+    85→   885→   885→                            )}
+    86→   886→   886→                            {n.avulsa && (
+    87→   887→   887→                              <button onClick={() => void excluirAvulsa(n)} disabled={ocupado} className="w-8 h-8 rounded-xl bg-gray-50 text-gray-500 flex items-center justify-center active:scale-90 transition-transform" title="Apagar a cópia interna (a nota continua na Focus/SEFAZ)">
+    88→   888→   888→                                <i className="fa-solid fa-trash text-[11px]"></i>
+    89→   889→   889→                              </button>
+    90→   890→   890→                            )}
+    91→   891→   891→                          </div>
+    92→   892→   892→                        </td>
+    93→   893→   893→                      </tr>
+    94→   894→   894→                    );
+    95→   895→   895→                  })}
+    96→   896→   896→                </tbody>
+    97→   897→   897→              </table>
+    98→   898→   898→            </div>
+    99→   899→   899→            <div className="px-4 py-2.5 bg-gray-50 border-t border-gray-100 flex items-center justify-between flex-wrap gap-2">
+   100→   900→   900→              <p className="text-[9px] font-bold text-gray-400 uppercase tracking-wider">
+   101→   901→   901→                {listaFiltrada.length} nota(s) — mais recentes primeiro
+   102→   902→   902→              </p>
+   103→   903→   903→              <p className="text-[9px] font-bold uppercase tracking-wider">
+   104→   904→   904→                <span className="text-emerald-500">{listaFiltrada.filter(n => n.pdfLocal).length} DANFE no sistema</span>
+   105→   905→   905→                <span className="text-gray-300"> · </span>
+   106→   906→   906→                <span className="text-emerald-500">{listaFiltrada.filter(n => n.xmlLocal).length} XML no sistema</span>
+   107→   907→   907→                <span className="text-gray-300"> · </span>
+   108→   908→   908→                <span className="text-gray-400">{listaFiltrada.filter(n => n.avulsa).length} fora do app</span>
+   109→   909→   909→              </p>
+   110→   910→   910→            </div>
+   111→   911→   911→          </div>
+   112→   912→   912→        )}
+   113→   913→   913→      </main>
+   114→   914→   914→
+   115→   915→   915→      {/* Footer */}
+   116→   916→   916→      <footer className="mt-auto py-5 text-center">
+   117→   917→   917→        <p className="text-[9px] font-black uppercase tracking-[0.2em] text-gray-300">DOCE MANIA · Portal de Notas Fiscais</p>
+   118→   918→   918→      </footer>
+   119→   919→   919→
+   120→   920→   920→      {/* Toast */}
+   121→   921→   921→      {toast && (
+   122→   922→   922→        <div className={`fixed bottom-5 left-1/2 -translate-x-1/2 z-[300] max-w-[92vw] rounded-2xl px-5 py-3 shadow-2xl text-center text-[11px] font-bold ${toast.ok ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white'}`} role="status">
+   123→   923→   923→          {toast.msg}
+   124→   924→   924→        </div>
+   125→   925→   925→      )}
+   126→   926→   926→
+   127→   927→   927→      {/* Progresso da importação (BLOCO 141) */}
+   128→   928→   928→      {importBusy && importProg && (
+   129→   929→   929→        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-[280] bg-gray-900/95 text-white rounded-2xl px-5 py-3.5 shadow-2xl flex items-center gap-3 min-w-[240px]" role="status">
+   130→   930→   930→          <i className="fa-solid fa-cloud-arrow-down text-emerald-400 text-lg animate-bounce"></i>
+   131→   931→   931→          <div className="flex-1 min-w-0">
+   132→   932→   932→            <p className="text-[10px] font-black uppercase tracking-wider">{importProg.fase}</p>
+   133→   933→   933→            <div className="w-full h-1.5 bg-white/15 rounded-full mt-1.5 overflow-hidden">
+   134→   934→   934→              <div className="h-full bg-emerald-400 rounded-full transition-all duration-500" style={{ width: `${importProg.total > 0 ? Math.min(100, Math.round((100 * importProg.done) / importProg.total)) : 30}%` }} />
+   135→   935→   935→            </div>
+   136→   936→   936→            {importProg.total > 0 && <p className="text-[8px] font-bold text-gray-400 mt-1">{importProg.done}/{importProg.total} arquivadas</p>}
+   137→   937→   937→          </div>
+   138→   938→   938→        </div>
+   139→   939→   939→      )}
+   140→   940→   940→
+   141→   941→   941→      {/* Loading do detalhe */}
+   142→   942→   942→      {detalheLoading && (
+   143→   943→   943→        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[200] flex items-center justify-center">
+   144→   944→   944→          <div className="w-12 h-12 border-4 border-white/30 border-t-white rounded-full animate-spin" />
+   145→   945→   945→        </div>
+   146→   946→   946→      )}
+   147→   947→   947→
+   148→   948→   948→      {/* ===== Modal: DETALHE (o que foi pedido) ===== */}
+   149→   949→   949→      {detalhe && (() => {
+   150→   950→   950→        const n = detalhe.nota;
+   151→   951→   951→        const meta = metaStatus(n.status);
+   152→   952→   952→        const c = detalhe.cliente;
+   153→   953→   953→        return (
+   154→   954→   954→          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-4" onClick={() => setDetalhe(null)}>
+   155→   955→   955→            <div className="bg-white w-full max-w-lg rounded-[2rem] shadow-2xl overflow-y-auto max-h-[90dvh]" onClick={e => e.stopPropagation()}>
+   156→   956→   956→              <div className="bg-gradient-to-br from-blue-600 to-indigo-700 text-white p-5 sticky top-0">
+   157→   957→   957→                <div className="flex items-start justify-between gap-3">
+   158→   958→   958→                  <div>
+   159→   959→   959→                    <p className="text-[9px] font-black uppercase tracking-widest text-blue-200">{rotuloTipo(n.tipo, n.modoNota)} {n.numero ? `Nº ${n.numero}` : '(sem número)'}</p>
+   160→   960→   960→                    <p className="text-lg font-black mt-0.5">{n.cliente}</p>
+   161→   961→   961→                    <span className={`inline-flex items-center gap-1.5 text-[9px] font-black uppercase px-2 py-1 rounded-lg mt-2 bg-white/15`}>
+   162→   962→   962→                      <span className={`w-1.5 h-1.5 rounded-full ${meta.dot}`}></span>{meta.label}
+   163→   963→   963→                    </span>
+   164→   964→   964→                  </div>
+   165→   965→   965→                  <button onClick={() => setDetalhe(null)} className="w-9 h-9 rounded-xl bg-white/15 text-white flex items-center justify-center active:scale-90" aria-label="Fechar detalhes">
+   166→   966→   966→                    <i className="fa-solid fa-xmark"></i>
+   167→   967→   967→                  </button>
+   168→   968→   968→                </div>
+   169→   969→   969→              </div>
+   170→   970→   970→              <div className="p-5 space-y-4">
+   171→   971→   971→                {n.erro && (
+   172→   972→   972→                  <div className="bg-rose-50 border border-rose-100 rounded-2xl p-3">
+   173→   973→   973→                    <p className="text-[9px] font-black uppercase text-rose-500 tracking-wider">Motivo da SEFAZ</p>
+   174→   974→   974→                    <p className="text-[10px] font-bold text-rose-600 mt-1 leading-snug">{n.erro}</p>
+   175→   975→   975→                  </div>
+   176→   976→   976→                )}
+   177→   977→   977→                {/* Itens */}
+   178→   978→   978→                <div>
+   179→   979→   979→                  <p className="text-[9px] font-black uppercase text-gray-400 tracking-wider mb-2"><i className="fa-solid fa-basket-shopping mr-1"></i>O que foi pedido ({detalhe.itens.length} item(ns))</p>
+   180→   980→   980→                  <div className="max-h-56 overflow-y-auto space-y-1.5">
+   181→   981→   981→                    {detalhe.itens.map((it, idx) => (
+   182→   982→   982→                      <div key={idx} className="flex items-center justify-between gap-3 bg-gray-50 rounded-xl px-3 py-2">
+   183→   983→   983→                        <p className="text-[11px] font-bold text-gray-700 flex-1 min-w-0 truncate">{it.produto}</p>
+   184→   984→   984→                        <p className="text-[10px] font-black text-gray-500 whitespace-nowrap">{it.quantidade} × {fmtBRL(it.preco)}</p>
+   185→   985→   985→                        <p className="text-[11px] font-black text-gray-800 whitespace-nowrap">{fmtBRL(it.quantidade * it.preco)}</p>
+   186→   986→   986→                      </div>
+   187→   987→   987→                    ))}
+   188→   988→   988→                  </div>
+   189→   989→   989→                  <div className="flex justify-between items-center mt-2 px-3">
+   190→   990→   990→                    <p className="text-[10px] font-black uppercase text-gray-500">Total da venda</p>
+   191→   991→   991→                    <p className="text-sm font-black text-blue-600">{fmtBRL(n.valor)}</p>
+   192→   992→   992→                  </div>
+   193→   993→   993→                </div>
+   194→   994→   994→                {/* Cliente */}
+   195→   995→   995→                {c && (
+   196→   996→   996→                  <div className="bg-blue-50/60 border border-blue-100 rounded-2xl p-4">
+   197→   997→   997→                    <p className="text-[9px] font-black uppercase text-blue-500 tracking-wider mb-2"><i className="fa-solid fa-user mr-1"></i>Cliente</p>
+   198→   998→   998→                    <div className="grid grid-cols-1 gap-1 text-[10px] font-bold text-gray-600">
+   199→   999→   999→                      <p>{c.razao_social || c.nome_fantasia || c.nome || '—'}</p>
+   200→  1000→  1000→                      {c.cnpj && <p className="text-gray-400">DOC: {c.cnpj}</p>}
+   201→  1001→  1001→                      {c.inscricao_estadual && <p className="text-gray-400">IE: {c.inscricao_estadual}</p>}
+   202→  1002→  1002→                      {(c.endereco || c.bairro || c.endereco_municipio) && (
+   203→  1003→  1003→                        <p className="text-gray-400">{[c.endereco, c.endereco_numero].filter(Boolean).join(', ')}{c.bairro ? ` - ${c.bairro}` : ''}{c.endereco_municipio ? ` - ${c.endereco_municipio}/${c.endereco_uf || ''}` : ''}</p>
+   204→  1004→  1004→                      )}
+   205→  1005→  1005→                      {c.email && <p className="text-gray-400"><i className="fa-solid fa-envelope text-[8px] mr-1"></i>{c.email}</p>}
+   206→  1006→  1006→                      {c.telefone && <p className="text-gray-400"><i className="fa-solid fa-phone text-[8px] mr-1"></i>{c.telefone}</p>}
+   207→  1007→  1007→                    </div>
+   208→  1008→  1008→                  </div>
+   209→  1009→  1009→                )}
+   210→  1010→  1010→                {/* Pagamento */}
+   211→  1011→  1011→                <div className="bg-gray-50 rounded-2xl p-4">
+   212→  1012→  1012→                  <p className="text-[9px] font-black uppercase text-gray-400 tracking-wider mb-2"><i className="fa-solid fa-wallet mr-1"></i>Pagamento</p>
+   213→  1013→  1013→                  <div className="flex items-center justify-between">
+   214→  1014→  1014→                    <p className="text-xs font-black text-gray-700 uppercase">{(n.metodo || '—').replace('_', ' ')}</p>
+   215→  1015→  1015→                    <span className={`text-[9px] font-black uppercase px-2 py-1 rounded-lg ${n.statusPagamento === 'PAGO' ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600'}`}>{n.statusPagamento === 'PAGO' ? 'Pago' : 'Pendente'}</span>
+   216→  1016→  1016→                  </div>
+   217→  1017→  1017→                  {n.detalhe && <p className="text-[9px] font-bold text-gray-400 mt-1 leading-snug">{n.detalhe}</p>}
+   218→  1018→  1018→                  <p className="text-[9px] font-bold text-gray-400 mt-1">Pago registrado: {fmtBRL(n.valorPago)} · Vendedor: {n.vendedor || '—'}</p>
+   219→  1019→  1019→                </div>
+   220→  1020→  1020→                {/* Documento */}
+   221→  1021→  1021→                <div className="bg-gray-50 rounded-2xl p-4">
+   222→  1022→  1022→                  <p className="text-[9px] font-black uppercase text-gray-400 tracking-wider mb-2"><i className="fa-solid fa-receipt mr-1"></i>Documento fiscal</p>
+   223→  1023→  1023→                  {n.chave && <p className="text-[9px] font-bold text-gray-500 break-all leading-snug">Chave: {n.chave}</p>}
+   224→  1024→  1024→                  <p className="text-[9px] font-bold text-gray-400 mt-1">Emissão: {fmtData(n.emitidaEm || n.dataVenda)} · Venda: {fmtData(n.dataVenda)}</p>
+   225→  1025→  1025→                  {n.ref && <p className="text-[9px] font-bold text-gray-400">Referência: {n.ref}</p>}
+   226→  1026→  1026→                  {(n.pdfUrl || n.xmlUrl) && (
+   227→  1027→  1027→                    <div className="flex gap-2 mt-3">
+   228→  1028→  1028→                      {n.pdfUrl && <a href={n.pdfUrl} target="_blank" rel="noopener noreferrer" className="flex-1 text-center bg-rose-600 text-white rounded-xl px-3 py-2.5 text-[10px] font-black uppercase tracking-wider active:scale-95 transition-transform"><i className="fa-solid fa-file-pdf mr-1"></i>DANFE (PDF)</a>}
+   229→  1029→  1029→                      {n.xmlUrl && <a href={n.xmlUrl} target="_blank" rel="noopener noreferrer" className="flex-1 text-center bg-gray-800 text-white rounded-xl px-3 py-2.5 text-[10px] font-black uppercase tracking-wider active:scale-95 transition-transform"><i className="fa-solid fa-code mr-1"></i>XML</a>}
+   230→  1030→  1030→                    </div>
+   231→  1031→  1031→                  )}
+   232→  1032→  1032→                </div>
+   233→  1033→  1033→              </div>
+   234→  1034→  1034→            </div>
+   235→  1035→  1035→          </div>
+   236→  1036→  1036→        );
+   237→  1037→  1037→      })()}
+   238→  1038→  1038→
+   239→  1039→  1039→      {/* ===== Modal: EDITAR ===== */}
+   240→  1040→  1040→      {editModal && (
+   241→  1041→  1041→        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6" onClick={() => setEditModal(null)}>
+   242→  1042→  1042→          <div className="bg-white w-full max-w-md rounded-[2rem] p-6 shadow-2xl overflow-y-auto max-h-[90dvh]" onClick={e => e.stopPropagation()}>
+   243→  1043→  1043→            <h3 className="font-black text-gray-800 uppercase text-sm mb-1">Editar registro</h3>
+   244→  1044→  1044→            <p className="text-[9px] font-bold text-gray-400 mb-4">{editModal.cliente} · {rotuloTipo(editModal.tipo, editModal.modoNota)} {editModal.numero}</p>
+   245→  1045→  1045→            <div className="bg-amber-50 border border-amber-100 rounded-2xl p-3 mb-4">
+   246→  1046→  1046→              <p className="text-[9px] font-bold text-amber-600 leading-snug"><i className="fa-solid fa-circle-info mr-1"></i>Isso atualiza o registro INTERNO da venda (controle do sistema). O XML/PDF já autorizado pela SEFAZ não muda.</p>
+   247→  1047→  1047→            </div>
+   248→  1048→  1048→            <label className="block text-[9px] font-black text-gray-400 uppercase ml-1 mb-1">Forma de pagamento</label>
+   249→  1049→  1049→            <select value={editMetodo} onChange={e => setEditMetodo(e.target.value)} className="w-full p-4 bg-gray-50 rounded-2xl font-bold text-sm mb-3 outline-none focus:ring-2 focus:ring-blue-100">
+   250→  1050→  1050→              {FORMAS.map(f => <option key={f} value={f}>{f.replace('_', ' ')}</option>)}
+   251→  1051→  1051→            </select>
+   252→  1052→  1052→            <label className="block text-[9px] font-black text-gray-400 uppercase ml-1 mb-1">Detalhe do pagamento</label>
+   253→  1053→  1053→            <textarea value={editDetalhe} onChange={e => setEditDetalhe(e.target.value)} rows={3} maxLength={500} placeholder="Observação do pagamento (ex.: PAGO NA VISITA...)" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold text-sm outline-none focus:ring-2 focus:ring-blue-100 resize-none" />
+   254→  1054→  1054→            <div className="flex gap-2 mt-4">
+   255→  1055→  1055→              <button onClick={() => setEditModal(null)} className="flex-1 bg-gray-100 text-gray-500 rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95">Voltar</button>
+   256→  1056→  1056→              <button onClick={() => void salvarEdicao()} disabled={busyId === 'edit'} className="flex-1 bg-blue-600 text-white rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95 disabled:opacity-60">
+   257→  1057→  1057→                {busyId === 'edit' ? <i className="fa-solid fa-spinner fa-spin"></i> : 'Salvar'}
+   258→  1058→  1058→              </button>
+   259→  1059→  1059→            </div>
+   260→  1060→  1060→          </div>
+   261→  1061→  1061→        </div>
+   262→  1062→  1062→      )}
+   263→  1063→  1063→
+   264→  1064→  1064→      {/* ===== Modal: CANCELAR ===== */}
+   265→  1065→  1065→      {cancelModal && (
+   266→  1066→  1066→        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6" onClick={() => setCancelModal(null)}>
+   267→  1067→  1067→          <div className="bg-white w-full max-w-md rounded-[2rem] p-6 shadow-2xl overflow-y-auto max-h-[90dvh]" onClick={e => e.stopPropagation()}>
+   268→  1068→  1068→            <h3 className="font-black text-rose-600 uppercase text-sm mb-1"><i className="fa-solid fa-ban mr-1"></i>Cancelar nota</h3>
+   269→  1069→  1069→            <p className="text-[9px] font-bold text-gray-400 mb-4">{rotuloTipo(cancelModal.tipo, cancelModal.modoNota)} {cancelModal.numero} · {cancelModal.cliente} · {fmtBRL(cancelModal.valor)}</p>
+   270→  1070→  1070→            {/* BLOCO 142: contagem regressiva AO VIVO do prazo SEFAZ — venceu = botão inativo */}
+   271→  1071→  1071→            {prazoCancelModal && (
+   272→  1072→  1072→              <div className={`rounded-2xl border p-3 mb-3 ${prazoCancelModal.expirado ? 'bg-gray-100 border-gray-200' : 'bg-amber-50 border-amber-200'}`}>
+   273→  1073→  1073→                {prazoCancelModal.expirado ? (
+   274→  1074→  1074→                  <p className="text-[9px] font-bold text-gray-500 leading-snug"><i className="fa-solid fa-clock mr-1"></i>Prazo SEFAZ VENCIDO — o evento de cancelamento seria recusado. A janela de {prazoCancelModal.prazoLabel} após a autorização acabou.</p>
+   275→  1075→  1075→                ) : (
+   276→  1076→  1076→                  <p className="text-[9px] font-black text-amber-700 uppercase tracking-wide leading-snug"><i className="fa-solid fa-stopwatch mr-1"></i>Restam {prazoCancelModal.textoRestante} para cancelar (regra SEFAZ: {prazoCancelModal.prazoLabel})</p>
+   277→  1077→  1077→                )}
+   278→  1078→  1078→              </div>
+   279→  1079→  1079→            )}
+   280→  1080→  1080→            <div className="bg-rose-50 border border-rose-100 rounded-2xl p-3 mb-4">
+   281→  1081→  1081→              <p className="text-[9px] font-bold text-rose-600 leading-snug"><i className="fa-solid fa-triangle-exclamation mr-1"></i>Regra da SEFAZ: NFC-e pode ser cancelada até 30 MINUTOS após a emissão; NF-e até 24h. O cancelamento é enviado à SEFAZ e o XML original continua existindo (evento de cancelamento).</p>
+   282→  1082→  1082→            </div>
+   283→  1083→  1083→            <label className="block text-[9px] font-black text-gray-400 uppercase ml-1 mb-1">Justificativa (mínimo 15 caracteres)</label>
+   284→  1084→  1084→            <textarea value={justificativa} onChange={e => setJustificativa(e.target.value)} rows={3} maxLength={255} placeholder="Ex.: Erro na emissão — valores divergentes." className="w-full p-4 bg-gray-50 rounded-2xl font-semibold text-sm outline-none focus:ring-2 focus:ring-rose-100 resize-none" />
+   285→  1085→  1085→            <div className="flex gap-2 mt-4">
+   286→  1086→  1086→              <button onClick={() => setCancelModal(null)} className="flex-1 bg-gray-100 text-gray-500 rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95">Voltar</button>
+   287→  1087→  1087→              {/* BLOCO 142: prazo vencido DURANTE a digitação = botão inativa na hora */}
+   288→  1088→  1088→              <button onClick={() => void cancelarNota()} disabled={busyId === 'cancel' || !prazoCancelModal || prazoCancelModal.expirado} className="flex-1 bg-rose-600 text-white rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95 disabled:opacity-60">
+   289→  1089→  1089→                {busyId === 'cancel' ? <i className="fa-solid fa-spinner fa-spin"></i> : prazoCancelModal?.expirado ? 'Fora do prazo' : 'Cancelar nota'}
+   290→  1090→  1090→              </button>
+   291→  1091→  1091→            </div>
+   292→  1092→  1092→          </div>
+   293→  1093→  1093→        </div>
+   294→  1094→  1094→      )}
+   295→  1095→  1095→
+   296→  1096→  1096→      {/* ===== Modal: CLONAR ===== */}
+   297→  1097→  1097→      {cloneModal && (
+   298→  1098→  1098→        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6" onClick={() => setCloneModal(null)}>
+   299→  1099→  1099→          <div className="bg-white w-full max-w-md rounded-[2rem] p-6 shadow-2xl overflow-y-auto max-h-[90dvh]" onClick={e => e.stopPropagation()}>
+   300→  1100→  1100→            <h3 className="font-black text-gray-800 uppercase text-sm mb-1"><i className="fa-solid fa-clone mr-1 text-violet-500"></i>Clonar pedido</h3>
+   301→  1101→  1101→            <p className="text-[9px] font-bold text-gray-400 mb-4">{cloneModal.cliente} · {fmtBRL(cloneModal.valor)}</p>
+   302→  1102→  1102→            <div className="bg-violet-50 border border-violet-100 rounded-2xl p-3 mb-4 space-y-1">
+   303→  1103→  1103→              <p className="text-[9px] font-bold text-violet-700 leading-snug"><i className="fa-solid fa-circle-info mr-1"></i>Cria uma NOVA venda com o mesmo cliente, itens e valores (não entra na fila de entrega, não baixa estoque de novo).</p>
+   304→  1104→  1104→              <p className="text-[9px] font-bold text-violet-700 leading-snug">Use para RE-EMITIR o documento fiscal (ex.: nota cancelada) — depois toque EMITIR na linha da cópia.</p>
+   305→  1105→  1105→            </div>
+   306→  1106→  1106→            <div className="flex gap-2 mt-4">
+   307→  1107→  1107→              <button onClick={() => setCloneModal(null)} className="flex-1 bg-gray-100 text-gray-500 rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95">Voltar</button>
+   308→  1108→  1108→              <button onClick={() => void clonarVenda()} disabled={busyId === 'clone'} className="flex-1 bg-violet-600 text-white rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95 disabled:opacity-60">
+   309→  1109→  1109→                {busyId === 'clone' ? <i className="fa-solid fa-spinner fa-spin"></i> : 'Clonar agora'}
+   310→  1110→  1110→              </button>
+   311→  1111→  1111→            </div>
+   312→  1112→  1112→          </div>
+   313→  1113→  1113→        </div>
+   314→  1114→  1114→      )}
+   315→  1115→  1115→
+   316→  1116→  1116→      {/* ===== Modal: EMITIR ===== */}
+   317→  1117→  1117→      {emitModal && (
+   318→  1118→  1118→        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6" onClick={() => setEmitModal(null)}>
+   319→  1119→  1119→          <div className="bg-white w-full max-w-md rounded-[2rem] p-6 shadow-2xl overflow-y-auto max-h-[90dvh]" onClick={e => e.stopPropagation()}>
+   320→  1120→  1120→            <h3 className="font-black text-gray-800 uppercase text-sm mb-1"><i className="fa-solid fa-bolt mr-1 text-emerald-500"></i>Emitir documento fiscal</h3>
+   321→  1121→  1121→            <p className="text-[9px] font-bold text-gray-400 mb-4">{emitModal.cliente} · {fmtBRL(emitModal.valor)}</p>
+   322→  1122→  1122→            <label className="block text-[9px] font-black text-gray-400 uppercase ml-1 mb-1">Documento</label>
+   323→  1123→  1123→            <div className="grid grid-cols-3 gap-2 mb-4">
+   324→  1124→  1124→              {[['', 'Automático'], ['NFE', 'NF-e'], ['NFCE', 'NFC-e']].map(([v, label]) => (
+   325→  1125→  1125→                <button key={v} type="button" onClick={() => setEmitTipo(v as '' | 'NFE' | 'NFCE')} className={`rounded-2xl py-3 text-[10px] font-black uppercase border-2 transition-all active:scale-95 ${emitTipo === v ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-gray-500 border-gray-100'}`}>
+   326→  1126→  1126→                  {label}
+   327→  1127→  1127→                </button>
+   328→  1128→  1128→              ))}
+   329→  1129→  1129→            </div>
+   330→  1130→  1130→            <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-3 mb-4">
+   331→  1131→  1131→              <p className="text-[9px] font-bold text-emerald-700 leading-snug"><i className="fa-solid fa-circle-info mr-1"></i>Automático: cliente com CNPJ válido → NF-e; consumidor → NFC-e. A emissão usa os mesmos dados da venda (itens, pagamento, cadastro).</p>
+   332→  1132→  1132→            </div>
+   333→  1133→  1133→            <div className="flex gap-2">
+   334→  1134→  1134→              <button onClick={() => setEmitModal(null)} className="flex-1 bg-gray-100 text-gray-500 rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95">Voltar</button>
+   335→  1135→  1135→              <button onClick={() => void emitirNota()} disabled={busyId === 'emit'} className="flex-1 bg-emerald-600 text-white rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95 disabled:opacity-60">
+   336→  1136→  1136→                {busyId === 'emit' ? <i className="fa-solid fa-spinner fa-spin"></i> : 'Emitir'}
+   337→  1137→  1137→              </button>
+   338→  1138→  1138→            </div>
+   339→  1139→  1139→          </div>
+   340→  1140→  1140→        </div>
+
+[showing lines 1-340 of 345; use offset=341 with limit to continue reading]

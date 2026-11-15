@@ -1,0 +1,346 @@
+   800→                        </td>
+   801→                        {/* Valor */}
+   802→                        <td className="px-4 py-3 whitespace-nowrap">
+   803→                          <p className="text-[11px] font-black text-gray-800">{fmtBRL(n.valor)}</p>
+   804→                          <p className="text-[8px] font-bold text-gray-400 uppercase">{n.statusPagamento === 'PAGO' ? 'pago' : 'pendente'}</p>
+   805→                        </td>
+   806→                        {/* Pagamento */}
+   807→                        <td className="px-4 py-3 max-w-[220px]">
+   808→                          <p className="text-[10px] font-black text-gray-700 uppercase">{(n.metodo || '—').replace('_', ' ')}</p>
+   809→                          <p className="text-[9px] font-bold text-gray-400 truncate max-w-[200px]" title={n.detalhe}>{n.detalhe || ''}</p>
+   810→                        </td>
+   811→                        {/* Vendedor */}
+   812→                        <td className="px-4 py-3 whitespace-nowrap">
+   813→                          <p className="text-[10px] font-bold text-gray-600">{n.vendedor || '—'}</p>
+   814→                        </td>
+   815→                        {/* Ações */}
+   816→                        <td className="px-4 py-3">
+   817→                          <div className="flex items-center gap-1.5 flex-wrap">
+   818→                            {!n.avulsa && (
+   819→                              <button onClick={() => void abrirDetalhe(n)} disabled={ocupado} className="w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center active:scale-90 transition-transform" title="Ver o que foi pedido (itens, cliente, pagamento)">
+   820→                                {busyId === `det:${n.id}` ? <i className="fa-solid fa-spinner fa-spin text-[11px]"></i> : <i className="fa-solid fa-eye text-[11px]"></i>}
+   821→                              </button>
+   822→                            )}
+   823→                            {n.ref && (
+   824→                              <a href={linkArquivo(n, 'pdf')} target="_blank" rel="noopener noreferrer" className={`w-8 h-8 rounded-xl flex items-center justify-center active:scale-90 transition-transform ${n.pdfLocal ? 'bg-rose-100 text-rose-600 shadow-sm' : 'bg-rose-50 text-rose-400'}`} title={n.pdfLocal ? 'Abrir/baixar DANFE — arquivo salvo NO NOSSO sistema' : 'Abrir/baixar DANFE (busca na Focus e arquiva no sistema)'}>
+   825→                                <i className="fa-solid fa-file-pdf text-[11px]"></i>
+   826→                              </a>
+   827→                            )}
+   828→                            {n.ref && (
+   829→                              <a href={linkArquivo(n, 'xml')} target="_blank" rel="noopener noreferrer" className={`w-8 h-8 rounded-xl flex items-center justify-center active:scale-90 transition-transform ${n.xmlLocal ? 'bg-gray-200 text-gray-700 shadow-sm' : 'bg-gray-50 text-gray-400'}`} title={n.xmlLocal ? 'Abrir/baixar XML — arquivo salvo NO NOSSO sistema' : 'Abrir/baixar XML (busca na Focus e arquiva no sistema)'}>
+   830→                                <i className="fa-solid fa-code text-[11px]"></i>
+   831→                              </a>
+   832→                            )}
+   833→                            {!n.avulsa && n.ref && (
+   834→                              <button
+   835→                                onClick={async () => {
+   836→                                  if (!token) return;
+   837→                                  setBusyId(n.id);
+   838→                                  try {
+   839→                                    const res = await fetch('/api/notas', { method: 'POST', headers: headers(token), body: JSON.stringify({ acao: 'CONSULTAR', saleId: n.id }) });
+   840→                                    const data = await res.json().catch(() => ({}));
+   841→                                    showToast(data.ok ? 'Consultado na SEFAZ — situação sincronizada.' : data.erro || 'Falha ao consultar.', !!data.ok);
+   842→                                    void carregar(token);
+   843→                                  } catch { showToast('Falha de conexão ao consultar.', false); }
+   844→                                  finally { setBusyId(null); }
+   845→                                }}
+   846→                                disabled={ocupado}
+   847→                                className="w-8 h-8 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center active:scale-90 transition-transform"
+   848→                                title="Consultar situação na SEFAZ"
+   849→                              >
+   850→                                {ocupado ? <i className="fa-solid fa-spinner fa-spin text-[11px]"></i> : <i className="fa-solid fa-rotate text-[11px]"></i>}
+   851→                              </button>
+   852→                            )}
+   853→                            {n.avulsa && (
+   854→                              <button onClick={() => void atualizarAvulsa(n)} disabled={ocupado} className="w-8 h-8 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center active:scale-90 transition-transform" title="Re-consultar na SEFAZ e atualizar arquivos">
+   855→                                {ocupado ? <i className="fa-solid fa-spinner fa-spin text-[11px]"></i> : <i className="fa-solid fa-rotate text-[11px]"></i>}
+   856→                              </button>
+   857→                            )}
+   858→                            {!n.avulsa && podeEmitir && (
+   859→                              <button
+   860→                                onClick={() => { setEmitModal(n); setEmitTipo(''); }}
+   861→                                disabled={ocupado}
+   862→                                className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center active:scale-90 transition-transform"
+   863→                                title="Emitir documento fiscal (NF-e/NFC-e)"
+   864→                              >
+   865→                                <i className="fa-solid fa-bolt text-[11px]"></i>
+   866→                              </button>
+   867→                            )}
+   868→                            {!n.avulsa && (
+   869→                              <button
+   870→                                onClick={() => { setEditModal(n); setEditMetodo(n.metodo || ''); setEditDetalhe(n.detalhe || ''); }}
+   871→                                disabled={ocupado}
+   872→                                className="w-8 h-8 rounded-xl bg-sky-50 text-sky-600 flex items-center justify-center active:scale-90 transition-transform"
+   873→                                title="Editar registro (pagamento/observação)"
+   874→                              >
+   875→                                <i className="fa-solid fa-pen text-[11px]"></i>
+   876→                              </button>
+   877→                            )}
+   878→                            {!n.avulsa && <button onClick={() => setCloneModal(n)} disabled={ocupado} className="w-8 h-8 rounded-xl bg-violet-50 text-violet-600 flex items-center justify-center active:scale-90 transition-transform" title="Clonar pedido (emite documento de novo)">
+   879→                              <i className="fa-solid fa-clone text-[11px]"></i>
+   880→                            </button>}
+   881→                            {!n.avulsa && (n.status === 'AUTORIZADA' || n.status === 'EMITINDO') && n.ref && prazoCancelDe(n).dentroDoPrazo && (
+   882→                              <button onClick={() => { setCancelModal(n); setJustificativa(''); }} disabled={ocupado} className="w-8 h-8 rounded-xl bg-rose-50 text-rose-500 flex items-center justify-center active:scale-90 transition-transform" title={`Cancelar na SEFAZ — restam ${prazoCancelDe(n).textoRestante} (prazo: ${prazoCancelDe(n).prazoLabel})`}>
+   883→                                <i className="fa-solid fa-ban text-[11px]"></i>
+   884→                              </button>
+   885→                            )}
+   886→                            {n.avulsa && (
+   887→                              <button onClick={() => void excluirAvulsa(n)} disabled={ocupado} className="w-8 h-8 rounded-xl bg-gray-50 text-gray-500 flex items-center justify-center active:scale-90 transition-transform" title="Apagar a cópia interna (a nota continua na Focus/SEFAZ)">
+   888→                                <i className="fa-solid fa-trash text-[11px]"></i>
+   889→                              </button>
+   890→                            )}
+   891→                          </div>
+   892→                        </td>
+   893→                      </tr>
+   894→                    );
+   895→                  })}
+   896→                </tbody>
+   897→              </table>
+   898→            </div>
+   899→            <div className="px-4 py-2.5 bg-gray-50 border-t border-gray-100 flex items-center justify-between flex-wrap gap-2">
+   900→              <p className="text-[9px] font-bold text-gray-400 uppercase tracking-wider">
+   901→                {listaFiltrada.length} nota(s) — mais recentes primeiro
+   902→              </p>
+   903→              <p className="text-[9px] font-bold uppercase tracking-wider">
+   904→                <span className="text-emerald-500">{listaFiltrada.filter(n => n.pdfLocal).length} DANFE no sistema</span>
+   905→                <span className="text-gray-300"> · </span>
+   906→                <span className="text-emerald-500">{listaFiltrada.filter(n => n.xmlLocal).length} XML no sistema</span>
+   907→                <span className="text-gray-300"> · </span>
+   908→                <span className="text-gray-400">{listaFiltrada.filter(n => n.avulsa).length} fora do app</span>
+   909→              </p>
+   910→            </div>
+   911→          </div>
+   912→        )}
+   913→      </main>
+   914→
+   915→      {/* Footer */}
+   916→      <footer className="mt-auto py-5 text-center">
+   917→        <p className="text-[9px] font-black uppercase tracking-[0.2em] text-gray-300">DOCE MANIA · Portal de Notas Fiscais</p>
+   918→      </footer>
+   919→
+   920→      {/* Toast */}
+   921→      {toast && (
+   922→        <div className={`fixed bottom-5 left-1/2 -translate-x-1/2 z-[300] max-w-[92vw] rounded-2xl px-5 py-3 shadow-2xl text-center text-[11px] font-bold ${toast.ok ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white'}`} role="status">
+   923→          {toast.msg}
+   924→        </div>
+   925→      )}
+   926→
+   927→      {/* Progresso da importação (BLOCO 141) */}
+   928→      {importBusy && importProg && (
+   929→        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-[280] bg-gray-900/95 text-white rounded-2xl px-5 py-3.5 shadow-2xl flex items-center gap-3 min-w-[240px]" role="status">
+   930→          <i className="fa-solid fa-cloud-arrow-down text-emerald-400 text-lg animate-bounce"></i>
+   931→          <div className="flex-1 min-w-0">
+   932→            <p className="text-[10px] font-black uppercase tracking-wider">{importProg.fase}</p>
+   933→            <div className="w-full h-1.5 bg-white/15 rounded-full mt-1.5 overflow-hidden">
+   934→              <div className="h-full bg-emerald-400 rounded-full transition-all duration-500" style={{ width: `${importProg.total > 0 ? Math.min(100, Math.round((100 * importProg.done) / importProg.total)) : 30}%` }} />
+   935→            </div>
+   936→            {importProg.total > 0 && <p className="text-[8px] font-bold text-gray-400 mt-1">{importProg.done}/{importProg.total} arquivadas</p>}
+   937→          </div>
+   938→        </div>
+   939→      )}
+   940→
+   941→      {/* Loading do detalhe */}
+   942→      {detalheLoading && (
+   943→        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[200] flex items-center justify-center">
+   944→          <div className="w-12 h-12 border-4 border-white/30 border-t-white rounded-full animate-spin" />
+   945→        </div>
+   946→      )}
+   947→
+   948→      {/* ===== Modal: DETALHE (o que foi pedido) ===== */}
+   949→      {detalhe && (() => {
+   950→        const n = detalhe.nota;
+   951→        const meta = metaStatus(n.status);
+   952→        const c = detalhe.cliente;
+   953→        return (
+   954→          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-4" onClick={() => setDetalhe(null)}>
+   955→            <div className="bg-white w-full max-w-lg rounded-[2rem] shadow-2xl overflow-y-auto max-h-[90dvh]" onClick={e => e.stopPropagation()}>
+   956→              <div className="bg-gradient-to-br from-blue-600 to-indigo-700 text-white p-5 sticky top-0">
+   957→                <div className="flex items-start justify-between gap-3">
+   958→                  <div>
+   959→                    <p className="text-[9px] font-black uppercase tracking-widest text-blue-200">{rotuloTipo(n.tipo, n.modoNota)} {n.numero ? `Nº ${n.numero}` : '(sem número)'}</p>
+   960→                    <p className="text-lg font-black mt-0.5">{n.cliente}</p>
+   961→                    <span className={`inline-flex items-center gap-1.5 text-[9px] font-black uppercase px-2 py-1 rounded-lg mt-2 bg-white/15`}>
+   962→                      <span className={`w-1.5 h-1.5 rounded-full ${meta.dot}`}></span>{meta.label}
+   963→                    </span>
+   964→                  </div>
+   965→                  <button onClick={() => setDetalhe(null)} className="w-9 h-9 rounded-xl bg-white/15 text-white flex items-center justify-center active:scale-90" aria-label="Fechar detalhes">
+   966→                    <i className="fa-solid fa-xmark"></i>
+   967→                  </button>
+   968→                </div>
+   969→              </div>
+   970→              <div className="p-5 space-y-4">
+   971→                {n.erro && (
+   972→                  <div className="bg-rose-50 border border-rose-100 rounded-2xl p-3">
+   973→                    <p className="text-[9px] font-black uppercase text-rose-500 tracking-wider">Motivo da SEFAZ</p>
+   974→                    <p className="text-[10px] font-bold text-rose-600 mt-1 leading-snug">{n.erro}</p>
+   975→                  </div>
+   976→                )}
+   977→                {/* Itens */}
+   978→                <div>
+   979→                  <p className="text-[9px] font-black uppercase text-gray-400 tracking-wider mb-2"><i className="fa-solid fa-basket-shopping mr-1"></i>O que foi pedido ({detalhe.itens.length} item(ns))</p>
+   980→                  <div className="max-h-56 overflow-y-auto space-y-1.5">
+   981→                    {detalhe.itens.map((it, idx) => (
+   982→                      <div key={idx} className="flex items-center justify-between gap-3 bg-gray-50 rounded-xl px-3 py-2">
+   983→                        <p className="text-[11px] font-bold text-gray-700 flex-1 min-w-0 truncate">{it.produto}</p>
+   984→                        <p className="text-[10px] font-black text-gray-500 whitespace-nowrap">{it.quantidade} × {fmtBRL(it.preco)}</p>
+   985→                        <p className="text-[11px] font-black text-gray-800 whitespace-nowrap">{fmtBRL(it.quantidade * it.preco)}</p>
+   986→                      </div>
+   987→                    ))}
+   988→                  </div>
+   989→                  <div className="flex justify-between items-center mt-2 px-3">
+   990→                    <p className="text-[10px] font-black uppercase text-gray-500">Total da venda</p>
+   991→                    <p className="text-sm font-black text-blue-600">{fmtBRL(n.valor)}</p>
+   992→                  </div>
+   993→                </div>
+   994→                {/* Cliente */}
+   995→                {c && (
+   996→                  <div className="bg-blue-50/60 border border-blue-100 rounded-2xl p-4">
+   997→                    <p className="text-[9px] font-black uppercase text-blue-500 tracking-wider mb-2"><i className="fa-solid fa-user mr-1"></i>Cliente</p>
+   998→                    <div className="grid grid-cols-1 gap-1 text-[10px] font-bold text-gray-600">
+   999→                      <p>{c.razao_social || c.nome_fantasia || c.nome || '—'}</p>
+  1000→                      {c.cnpj && <p className="text-gray-400">DOC: {c.cnpj}</p>}
+  1001→                      {c.inscricao_estadual && <p className="text-gray-400">IE: {c.inscricao_estadual}</p>}
+  1002→                      {(c.endereco || c.bairro || c.endereco_municipio) && (
+  1003→                        <p className="text-gray-400">{[c.endereco, c.endereco_numero].filter(Boolean).join(', ')}{c.bairro ? ` - ${c.bairro}` : ''}{c.endereco_municipio ? ` - ${c.endereco_municipio}/${c.endereco_uf || ''}` : ''}</p>
+  1004→                      )}
+  1005→                      {c.email && <p className="text-gray-400"><i className="fa-solid fa-envelope text-[8px] mr-1"></i>{c.email}</p>}
+  1006→                      {c.telefone && <p className="text-gray-400"><i className="fa-solid fa-phone text-[8px] mr-1"></i>{c.telefone}</p>}
+  1007→                    </div>
+  1008→                  </div>
+  1009→                )}
+  1010→                {/* Pagamento */}
+  1011→                <div className="bg-gray-50 rounded-2xl p-4">
+  1012→                  <p className="text-[9px] font-black uppercase text-gray-400 tracking-wider mb-2"><i className="fa-solid fa-wallet mr-1"></i>Pagamento</p>
+  1013→                  <div className="flex items-center justify-between">
+  1014→                    <p className="text-xs font-black text-gray-700 uppercase">{(n.metodo || '—').replace('_', ' ')}</p>
+  1015→                    <span className={`text-[9px] font-black uppercase px-2 py-1 rounded-lg ${n.statusPagamento === 'PAGO' ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600'}`}>{n.statusPagamento === 'PAGO' ? 'Pago' : 'Pendente'}</span>
+  1016→                  </div>
+  1017→                  {n.detalhe && <p className="text-[9px] font-bold text-gray-400 mt-1 leading-snug">{n.detalhe}</p>}
+  1018→                  <p className="text-[9px] font-bold text-gray-400 mt-1">Pago registrado: {fmtBRL(n.valorPago)} · Vendedor: {n.vendedor || '—'}</p>
+  1019→                </div>
+  1020→                {/* Documento */}
+  1021→                <div className="bg-gray-50 rounded-2xl p-4">
+  1022→                  <p className="text-[9px] font-black uppercase text-gray-400 tracking-wider mb-2"><i className="fa-solid fa-receipt mr-1"></i>Documento fiscal</p>
+  1023→                  {n.chave && <p className="text-[9px] font-bold text-gray-500 break-all leading-snug">Chave: {n.chave}</p>}
+  1024→                  <p className="text-[9px] font-bold text-gray-400 mt-1">Emissão: {fmtData(n.emitidaEm || n.dataVenda)} · Venda: {fmtData(n.dataVenda)}</p>
+  1025→                  {n.ref && <p className="text-[9px] font-bold text-gray-400">Referência: {n.ref}</p>}
+  1026→                  {(n.pdfUrl || n.xmlUrl) && (
+  1027→                    <div className="flex gap-2 mt-3">
+  1028→                      {n.pdfUrl && <a href={n.pdfUrl} target="_blank" rel="noopener noreferrer" className="flex-1 text-center bg-rose-600 text-white rounded-xl px-3 py-2.5 text-[10px] font-black uppercase tracking-wider active:scale-95 transition-transform"><i className="fa-solid fa-file-pdf mr-1"></i>DANFE (PDF)</a>}
+  1029→                      {n.xmlUrl && <a href={n.xmlUrl} target="_blank" rel="noopener noreferrer" className="flex-1 text-center bg-gray-800 text-white rounded-xl px-3 py-2.5 text-[10px] font-black uppercase tracking-wider active:scale-95 transition-transform"><i className="fa-solid fa-code mr-1"></i>XML</a>}
+  1030→                    </div>
+  1031→                  )}
+  1032→                </div>
+  1033→              </div>
+  1034→            </div>
+  1035→          </div>
+  1036→        );
+  1037→      })()}
+  1038→
+  1039→      {/* ===== Modal: EDITAR ===== */}
+  1040→      {editModal && (
+  1041→        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6" onClick={() => setEditModal(null)}>
+  1042→          <div className="bg-white w-full max-w-md rounded-[2rem] p-6 shadow-2xl overflow-y-auto max-h-[90dvh]" onClick={e => e.stopPropagation()}>
+  1043→            <h3 className="font-black text-gray-800 uppercase text-sm mb-1">Editar registro</h3>
+  1044→            <p className="text-[9px] font-bold text-gray-400 mb-4">{editModal.cliente} · {rotuloTipo(editModal.tipo, editModal.modoNota)} {editModal.numero}</p>
+  1045→            <div className="bg-amber-50 border border-amber-100 rounded-2xl p-3 mb-4">
+  1046→              <p className="text-[9px] font-bold text-amber-600 leading-snug"><i className="fa-solid fa-circle-info mr-1"></i>Isso atualiza o registro INTERNO da venda (controle do sistema). O XML/PDF já autorizado pela SEFAZ não muda.</p>
+  1047→            </div>
+  1048→            <label className="block text-[9px] font-black text-gray-400 uppercase ml-1 mb-1">Forma de pagamento</label>
+  1049→            <select value={editMetodo} onChange={e => setEditMetodo(e.target.value)} className="w-full p-4 bg-gray-50 rounded-2xl font-bold text-sm mb-3 outline-none focus:ring-2 focus:ring-blue-100">
+  1050→              {FORMAS.map(f => <option key={f} value={f}>{f.replace('_', ' ')}</option>)}
+  1051→            </select>
+  1052→            <label className="block text-[9px] font-black text-gray-400 uppercase ml-1 mb-1">Detalhe do pagamento</label>
+  1053→            <textarea value={editDetalhe} onChange={e => setEditDetalhe(e.target.value)} rows={3} maxLength={500} placeholder="Observação do pagamento (ex.: PAGO NA VISITA...)" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold text-sm outline-none focus:ring-2 focus:ring-blue-100 resize-none" />
+  1054→            <div className="flex gap-2 mt-4">
+  1055→              <button onClick={() => setEditModal(null)} className="flex-1 bg-gray-100 text-gray-500 rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95">Voltar</button>
+  1056→              <button onClick={() => void salvarEdicao()} disabled={busyId === 'edit'} className="flex-1 bg-blue-600 text-white rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95 disabled:opacity-60">
+  1057→                {busyId === 'edit' ? <i className="fa-solid fa-spinner fa-spin"></i> : 'Salvar'}
+  1058→              </button>
+  1059→            </div>
+  1060→          </div>
+  1061→        </div>
+  1062→      )}
+  1063→
+  1064→      {/* ===== Modal: CANCELAR ===== */}
+  1065→      {cancelModal && (
+  1066→        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6" onClick={() => setCancelModal(null)}>
+  1067→          <div className="bg-white w-full max-w-md rounded-[2rem] p-6 shadow-2xl overflow-y-auto max-h-[90dvh]" onClick={e => e.stopPropagation()}>
+  1068→            <h3 className="font-black text-rose-600 uppercase text-sm mb-1"><i className="fa-solid fa-ban mr-1"></i>Cancelar nota</h3>
+  1069→            <p className="text-[9px] font-bold text-gray-400 mb-4">{rotuloTipo(cancelModal.tipo, cancelModal.modoNota)} {cancelModal.numero} · {cancelModal.cliente} · {fmtBRL(cancelModal.valor)}</p>
+  1070→            {/* BLOCO 142: contagem regressiva AO VIVO do prazo SEFAZ — venceu = botão inativo */}
+  1071→            {prazoCancelModal && (
+  1072→              <div className={`rounded-2xl border p-3 mb-3 ${prazoCancelModal.expirado ? 'bg-gray-100 border-gray-200' : 'bg-amber-50 border-amber-200'}`}>
+  1073→                {prazoCancelModal.expirado ? (
+  1074→                  <p className="text-[9px] font-bold text-gray-500 leading-snug"><i className="fa-solid fa-clock mr-1"></i>Prazo SEFAZ VENCIDO — o evento de cancelamento seria recusado. A janela de {prazoCancelModal.prazoLabel} após a autorização acabou.</p>
+  1075→                ) : (
+  1076→                  <p className="text-[9px] font-black text-amber-700 uppercase tracking-wide leading-snug"><i className="fa-solid fa-stopwatch mr-1"></i>Restam {prazoCancelModal.textoRestante} para cancelar (regra SEFAZ: {prazoCancelModal.prazoLabel})</p>
+  1077→                )}
+  1078→              </div>
+  1079→            )}
+  1080→            <div className="bg-rose-50 border border-rose-100 rounded-2xl p-3 mb-4">
+  1081→              <p className="text-[9px] font-bold text-rose-600 leading-snug"><i className="fa-solid fa-triangle-exclamation mr-1"></i>Regra da SEFAZ: NFC-e pode ser cancelada até 30 MINUTOS após a emissão; NF-e até 24h. O cancelamento é enviado à SEFAZ e o XML original continua existindo (evento de cancelamento).</p>
+  1082→            </div>
+  1083→            <label className="block text-[9px] font-black text-gray-400 uppercase ml-1 mb-1">Justificativa (mínimo 15 caracteres)</label>
+  1084→            <textarea value={justificativa} onChange={e => setJustificativa(e.target.value)} rows={3} maxLength={255} placeholder="Ex.: Erro na emissão — valores divergentes." className="w-full p-4 bg-gray-50 rounded-2xl font-semibold text-sm outline-none focus:ring-2 focus:ring-rose-100 resize-none" />
+  1085→            <div className="flex gap-2 mt-4">
+  1086→              <button onClick={() => setCancelModal(null)} className="flex-1 bg-gray-100 text-gray-500 rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95">Voltar</button>
+  1087→              {/* BLOCO 142: prazo vencido DURANTE a digitação = botão inativa na hora */}
+  1088→              <button onClick={() => void cancelarNota()} disabled={busyId === 'cancel' || !prazoCancelModal || prazoCancelModal.expirado} className="flex-1 bg-rose-600 text-white rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95 disabled:opacity-60">
+  1089→                {busyId === 'cancel' ? <i className="fa-solid fa-spinner fa-spin"></i> : prazoCancelModal?.expirado ? 'Fora do prazo' : 'Cancelar nota'}
+  1090→              </button>
+  1091→            </div>
+  1092→          </div>
+  1093→        </div>
+  1094→      )}
+  1095→
+  1096→      {/* ===== Modal: CLONAR ===== */}
+  1097→      {cloneModal && (
+  1098→        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6" onClick={() => setCloneModal(null)}>
+  1099→          <div className="bg-white w-full max-w-md rounded-[2rem] p-6 shadow-2xl overflow-y-auto max-h-[90dvh]" onClick={e => e.stopPropagation()}>
+  1100→            <h3 className="font-black text-gray-800 uppercase text-sm mb-1"><i className="fa-solid fa-clone mr-1 text-violet-500"></i>Clonar pedido</h3>
+  1101→            <p className="text-[9px] font-bold text-gray-400 mb-4">{cloneModal.cliente} · {fmtBRL(cloneModal.valor)}</p>
+  1102→            <div className="bg-violet-50 border border-violet-100 rounded-2xl p-3 mb-4 space-y-1">
+  1103→              <p className="text-[9px] font-bold text-violet-700 leading-snug"><i className="fa-solid fa-circle-info mr-1"></i>Cria uma NOVA venda com o mesmo cliente, itens e valores (não entra na fila de entrega, não baixa estoque de novo).</p>
+  1104→              <p className="text-[9px] font-bold text-violet-700 leading-snug">Use para RE-EMITIR o documento fiscal (ex.: nota cancelada) — depois toque EMITIR na linha da cópia.</p>
+  1105→            </div>
+  1106→            <div className="flex gap-2 mt-4">
+  1107→              <button onClick={() => setCloneModal(null)} className="flex-1 bg-gray-100 text-gray-500 rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95">Voltar</button>
+  1108→              <button onClick={() => void clonarVenda()} disabled={busyId === 'clone'} className="flex-1 bg-violet-600 text-white rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95 disabled:opacity-60">
+  1109→                {busyId === 'clone' ? <i className="fa-solid fa-spinner fa-spin"></i> : 'Clonar agora'}
+  1110→              </button>
+  1111→            </div>
+  1112→          </div>
+  1113→        </div>
+  1114→      )}
+  1115→
+  1116→      {/* ===== Modal: EMITIR ===== */}
+  1117→      {emitModal && (
+  1118→        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6" onClick={() => setEmitModal(null)}>
+  1119→          <div className="bg-white w-full max-w-md rounded-[2rem] p-6 shadow-2xl overflow-y-auto max-h-[90dvh]" onClick={e => e.stopPropagation()}>
+  1120→            <h3 className="font-black text-gray-800 uppercase text-sm mb-1"><i className="fa-solid fa-bolt mr-1 text-emerald-500"></i>Emitir documento fiscal</h3>
+  1121→            <p className="text-[9px] font-bold text-gray-400 mb-4">{emitModal.cliente} · {fmtBRL(emitModal.valor)}</p>
+  1122→            <label className="block text-[9px] font-black text-gray-400 uppercase ml-1 mb-1">Documento</label>
+  1123→            <div className="grid grid-cols-3 gap-2 mb-4">
+  1124→              {[['', 'Automático'], ['NFE', 'NF-e'], ['NFCE', 'NFC-e']].map(([v, label]) => (
+  1125→                <button key={v} type="button" onClick={() => setEmitTipo(v as '' | 'NFE' | 'NFCE')} className={`rounded-2xl py-3 text-[10px] font-black uppercase border-2 transition-all active:scale-95 ${emitTipo === v ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-gray-500 border-gray-100'}`}>
+  1126→                  {label}
+  1127→                </button>
+  1128→              ))}
+  1129→            </div>
+  1130→            <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-3 mb-4">
+  1131→              <p className="text-[9px] font-bold text-emerald-700 leading-snug"><i className="fa-solid fa-circle-info mr-1"></i>Automático: cliente com CNPJ válido → NF-e; consumidor → NFC-e. A emissão usa os mesmos dados da venda (itens, pagamento, cadastro).</p>
+  1132→            </div>
+  1133→            <div className="flex gap-2">
+  1134→              <button onClick={() => setEmitModal(null)} className="flex-1 bg-gray-100 text-gray-500 rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95">Voltar</button>
+  1135→              <button onClick={() => void emitirNota()} disabled={busyId === 'emit'} className="flex-1 bg-emerald-600 text-white rounded-2xl py-3.5 text-[11px] font-black uppercase active:scale-95 disabled:opacity-60">
+  1136→                {busyId === 'emit' ? <i className="fa-solid fa-spinner fa-spin"></i> : 'Emitir'}
+  1137→              </button>
+  1138→            </div>
+  1139→          </div>
+  1140→        </div>
+  1141→      )}
+  1142→    </div>
+  1143→  );
+  1144→}
+  1145→

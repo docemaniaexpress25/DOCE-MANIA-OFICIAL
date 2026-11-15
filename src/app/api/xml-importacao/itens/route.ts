@@ -183,6 +183,9 @@ interface BodyAcao {
   itemId?: string;
   produtoId?: string;
   produto?: { nome?: string; precoVenda?: number; precoCusto?: number; unidade?: string };
+  /** BLOCO 148: escopo POR NOTA — os lotes aplicam so aos itens da importacao
+   *  (portal de entradas: acao da linha da nota). Ausente = global (legado). */
+  importacaoId?: string;
 }
 
 /** VINCULAR + completar fiscal do produto (so campos VAZIOS — nunca pisa). */
@@ -380,10 +383,15 @@ export async function POST(request: NextRequest) {
     }
 
     if (acao === 'VINCULAR_SUGESTOES') {
-      // Lote: vincula todos os pendentes com sugestao alta (>= 0.9)
+      // Lote: vincula todos os pendentes com sugestao alta (>= 0.9).
+      // BLOCO 148: com importacaoId, o lote fica na NOTA (portal de entradas).
+      const escopo = String(body.importacaoId || '').trim();
       const pend = await carregarFila('PENDENTE', 500);
       if (!(pend instanceof Array)) return BAD(500, (pend as { erro: string }).erro);
-      const alvos = pend.filter((i) => (i.sugestao?.score ?? 0) >= 0.9 && i.sugestao);
+      const alvos = pend.filter((i) => (escopo ? i.importacaoId === escopo : true) && (i.sugestao?.score ?? 0) >= 0.9 && i.sugestao);
+      if (escopo && alvos.length === 0) {
+        return NextResponse.json({ ok: true, vinculados: 0, falhas: [], aviso: 'Nenhum item desta nota com sugestao segura (>= 90%) — vincule manualmente.' });
+      }
       let ok = 0;
       const falhas: string[] = [];
       for (const i of alvos) {
@@ -415,18 +423,25 @@ export async function POST(request: NextRequest) {
     }
 
     if (acao === 'ENTRADA_LOTE') {
-      // Nota inteira: TODOS os vinculados/criados que ainda nao entraram
+      // Nota inteira: TODOS os vinculados/criados que ainda nao entraram.
+      // BLOCO 148: com importacaoId, a entrada fica NA NOTA (portal de entradas:
+      // acao "Dar entrada" da linha) — o global continua valendo no legado.
       if (!(await hasXmlEntradaColumn())) {
         return BAD(400, 'Banco desatualizado: rode sql/bloco95_1_cest_entrada.sql no Supabase (trava contra entrada duplicada).');
       }
-      const { data: itens } = await supabase
+      const escopo = String(body.importacaoId || '').trim();
+      let q = supabase
         .from('xml_itens')
         .select('*')
         .in('status', ['VINCULADO', 'CRIADO'])
         .is('entrada_estoque_em', null)
         .limit(500);
+      if (escopo) q = q.eq('importacao_id', escopo);
+      const { data: itens } = await q;
       const alvos = (itens || []) as Record<string, unknown>[];
-      if (alvos.length === 0) return NextResponse.json({ ok: true, entradas: 0, falhas: [] });
+      if (alvos.length === 0) {
+        return NextResponse.json({ ok: true, entradas: 0, falhas: [], aviso: escopo ? 'Nada a entrar nesta nota (vincule os itens primeiro ou entrada ja feita).' : null });
+      }
       let ok = 0;
       const falhas: string[] = [];
       for (const rec of alvos) {

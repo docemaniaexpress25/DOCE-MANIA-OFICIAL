@@ -99,6 +99,17 @@ export async function GET(request: NextRequest) {
       };
     }
 
+    // BLOCO 148 — PORTAL DE ENTRADAS: lista minima do catalogo para a
+    // VINCULACAO MANUAL na tela (o portal roda fora do app, sem o estado do
+    // AdminDashboard). So o que a tela precisa: id, nome, ean.
+    const produtos = (prods || [])
+      .map((p: Record<string, unknown>) => ({
+        id: String(p.id),
+        nome: String(p.nome || ''),
+        ean: String(p.ean || ''),
+      }))
+      .filter((p: { id: string; nome: string }) => p.nome);
+
     return NextResponse.json({
       ok: true,
       importacoes: (importacoes || []).map((r: Record<string, unknown>) => ({
@@ -117,6 +128,7 @@ export async function GET(request: NextRequest) {
       })),
       stats,
       catalogo,
+      produtos,
     });
   } catch (e) {
     return BAD(500, `Erro inesperado: ${e instanceof Error ? e.message : String(e)}`);

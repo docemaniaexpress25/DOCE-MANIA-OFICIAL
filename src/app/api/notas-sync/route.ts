@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServiceClient } from '@/lib/serverSupabase';
 import { sessionFromRequest } from '@/lib/session';
 import { hasNotaColumns, hasBoletoColumns } from '@/lib/serverSchema';
-import { isFocusConfigured, consultarNota, interpretarResultado, FocusDoc } from '@/lib/focusNfe';
+import { isFocusConfigured, consultarNota, interpretarResultado, FocusDoc, garantirHooksFocus } from '@/lib/focusNfe';
 
 /**
  * BLOCO 108 — SINCRONIZACAO AUTOMATICA DE NOTAS (cron da Vercel).
@@ -40,6 +40,19 @@ export async function GET(req: NextRequest) {
   }
   if (!isFocusConfigured()) {
     return NextResponse.json({ ok: true, processadas: 0, motivo: 'FOCUS_NAO_CONFIGURADA' });
+  }
+
+  // BLOCO 147: auto-reparo dos gatilhos da Focus a cada rodada do cron — se
+  // o `nfce` (ou qualquer outro) sumir da conta, o cron recria em minutos.
+  // Sem isso, notas batidas no painel da Focus ficavam invisiveis ate o
+  // proximo backup mensal (bug "7 no painel, 5 no nosso").
+  let hooksReparados: string[] = [];
+  if (process.env.FOCUS_WEBHOOK_SECRET || process.env.CRON_SECRET) {
+    const origin2 = process.env.DM_PROD_URL || 'https://sistema-doce-mania1.vercel.app';
+    try {
+      const g = await garantirHooksFocus(`${origin2.replace(/\/$/, '')}/api/focus/webhook`);
+      hooksReparados = g.criados;
+    } catch { /* best-effort — o importador tambem repara */ }
   }
 
   const db = getServiceClient();
@@ -107,6 +120,7 @@ export async function GET(req: NextRequest) {
     varridas: fila.length,
     processadas: resultados.length,
     autorizadas: resultados.filter((r) => r.status === 'AUTORIZADA').length,
+    hooksReparados,
     resultados,
   });
 }

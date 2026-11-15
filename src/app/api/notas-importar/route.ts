@@ -14,7 +14,7 @@ import {
   docDaChave,
   invalidaPresenca,
 } from '@/lib/focusArquivos';
-import { FocusDoc } from '@/lib/focusNfe';
+import { FocusDoc, isFocusConfigured, garantirHooksFocus } from '@/lib/focusNfe';
 import { importarLoteXml, XmlLoteArquivo } from '@/lib/xmlNotas';
 
 /**
@@ -159,6 +159,19 @@ export async function POST(req: NextRequest) {
   if (acao === 'AVULSAS') {
     const inicio = Date.now();
     const db = getServiceClient();
+
+    // ---------------- BLOCO 147: AUTO-REPARO DOS GATILHOS ----------------
+    // O buraco provado ("7 no painel, 5 no nosso"): gatilho `nfce` ausente na
+    // Focus + backup mensal parcial (sabado/dia 1o). Notas novas ficavam
+    // invisiveis ate o proximo ZIP. Aqui consertamos o pipeline ANTES de
+    // varrer: garante nfe + nfce + nfce_contingencia apontando pro webhook.
+    let reparo: { criados: string[]; falhas: string[] } = { criados: [], falhas: [] };
+    if (isFocusConfigured()) {
+      const origin2 = `${req.nextUrl.protocol}//${req.nextUrl.host}`;
+      const g = await garantirHooksFocus(`${origin2}/api/focus/webhook`);
+      reparo = { criados: g.criados, falhas: g.falhas };
+    }
+
     // refs que o app ja conhece (qualquer status)
     const conhecidas = new Set<string>();
     for (let range = 0; range < 5000; range += 1000) {
@@ -188,12 +201,21 @@ export async function POST(req: NextRequest) {
           : backup.restantes > 0
             ? `Backup ${backup.mes || ''}: ainda faltam ${backup.restantes} nota(s) — toque de novo.`
             : `Conferido: todas as notas do backup mensal da Focus (${backup.mesesComBackup} mes(es), ${backup.chavesNoBackup} XMLs) ja estao no sistema.`;
+      // BLOCO 147: avisa quando o reparo criou gatilhos (o dono entende por que
+      // notas novas nao chegavam) e como trazer as que ficaram de fora.
+      const dicaReparo = reparo.criados.length > 0
+        ? ` Gatilho(s) ${reparo.criados.join(', ')} instalado(s) na Focus agora — notas novas chegam em tempo real.`
+        : '';
+      const dicaParcial = backup.novas === 0 && backup.restantes === 0
+        ? ' O backup oficial e parcial (sabados): notas emitidas apos o ultimo ZIP chegam em tempo real pelo webhook ou cole a ref/chave do painel.'
+        : '';
       return NextResponse.json({
         ok: true, suportado: true, fonte: 'backups', fim: backup.fim,
         conhecidas: conhecidas.size, novas: backup.novas, puladas: backup.puladas,
         erros: backup.erros, totalNaFocus: backup.chavesNoBackup, restantes: backup.restantes,
         mes: backup.mes || null, mesesComBackup: backup.mesesComBackup, danfesGravados: backup.danfesGravados,
-        msg,
+        hooksReparados: reparo.criados, hooksFalhas: reparo.falhas,
+        msg: `${msg}${dicaReparo}${dicaParcial}`,
       });
     }
 

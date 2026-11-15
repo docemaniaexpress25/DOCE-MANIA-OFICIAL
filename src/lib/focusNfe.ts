@@ -647,6 +647,86 @@ export async function excluirWebhookFocus(id: string) {
   return focusRequest<FocusNotaResultado>('DELETE', `/v2/hooks/${encodeURIComponent(id)}`);
 }
 
+/**
+ * BLOCO 147 — AUTO-REPARO DOS GATILHOS DA FOCUS (bug do dono: "temos 7 notas
+ * no painel da focus e o nosso painel so buscou 5").
+ *
+ * CAUSA RAIZ provada em producao (15/11/2026):
+ *  - A conta tinha SO os gatilhos `nfe` + `nfce_contingencia` — o `nfce`
+ *    NAO EXISTIA. Toda NFC-e autorizada (painel da Focus OU app) nunca avisou
+ *    o sistema em tempo real.
+ *  - A listagem /v2/nfes nao existe nesta conta (404 provado) e o backup
+ *    mensal e PARCIAL (gerado dia 1o + todo sabado) — notas emitidas depois
+ *    do ultimo parcial so entram no proximo ZIP. Com o `nfce` ausente, nada
+ *    cobre o buraco: nota nova = invisivel ate o proximo backup.
+ *
+ * FIX: lista os gatilhos e cria os que faltam (idempotente — ja instalados
+ * ficam de pe). Chamado pelo importador do portal (AVULSAS) e pelo cron
+ * notas-sync — qualquer varredura conserta o pipeline sozinha.
+ */
+export interface GarantiaHooks {
+  ok: boolean;
+  eventos: string[];
+  criados: string[];
+  falhas: string[];
+  motivo?: string;
+}
+
+export function segredoWebhookFocus(): string {
+  return process.env.FOCUS_WEBHOOK_SECRET || process.env.CRON_SECRET || '';
+}
+
+export async function garantirHooksFocus(urlWebhook: string): Promise<GarantiaHooks> {
+  const vazio: GarantiaHooks = { ok: false, eventos: [], criados: [], falhas: [] };
+  if (!isFocusConfigured()) return { ...vazio, motivo: 'FOCUS_NAO_CONFIGURADA' };
+  const segredo = segredoWebhookFocus();
+  if (!segredo) return { ...vazio, motivo: 'SEM_SEGREDO_WEBHOOK' };
+
+  const lista = await listarWebhooksFocus();
+  if (!lista.ok || !Array.isArray(lista.data)) {
+    const erro = 'erro' in lista.data ? String((lista.data as { erro?: string }).erro) : `HTTP ${lista.status}`;
+    return { ...vazio, motivo: `LISTAGEM_FALHOU: ${erro}` };
+  }
+  const instalados = new Set(
+    (lista.data as FocusNotaResultado[])
+      .filter((h) => isEventoDoApp(h.event) && String(h.url || '').includes(urlWebhook))
+      .map((h) => String(h.event || ''))
+  );
+  const faltam = (HOOKS_DO_APP as readonly string[]).filter((ev) => !instalados.has(ev));
+  if (faltam.length === 0) {
+    return { ok: true, eventos: [...instalados], criados: [], falhas: [] };
+  }
+
+  // CNPJ do emitente: app_settings sobrescreve env (mesma fonte do INSTALAR_WEBHOOK)
+  let cnpj = (getFocusConfig().cnpj || '').replace(/\D/g, '');
+  try {
+    const { lerErpConfig } = await import('@/lib/erpConfig');
+    const erp = await lerErpConfig();
+    cnpj = (erp.emitente.cnpj || cnpj).replace(/\D/g, '');
+  } catch { /* env sozinho */ }
+
+  const criados: string[] = [];
+  const falhas: string[] = [];
+  for (const ev of faltam) {
+    const r = await criarWebhookFocus({
+      url: urlWebhook,
+      segredo,
+      authorizationHeader: 'x-dm-token',
+      cnpj,
+      event: ev as FocusHookEvent,
+    });
+    if (r.ok && r.data && !('erro' in r.data)) criados.push(ev);
+    else falhas.push(`${ev}: ${'erro' in r.data ? String((r.data as { erro?: string }).erro) : `HTTP ${r.status}`}`);
+  }
+  return {
+    ok: criados.length > 0 || falhas.length === 0,
+    eventos: [...new Set([...instalados, ...criados])],
+    criados,
+    falhas,
+    motivo: falhas.length > 0 ? falhas.join('; ') : undefined,
+  };
+}
+
 /** Cancela a nota (requer justificativa >= 15 chars, regra da SEFAZ). */
 export async function cancelarNota(doc: FocusDoc, ref: string, justificativa: string) {
   return focusRequest<FocusNotaResultado>('DELETE', `/v2/${doc}/${encodeURIComponent(ref)}`, {

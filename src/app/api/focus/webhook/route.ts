@@ -87,13 +87,22 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, processado: false, motivo: 'SEGREDO_INVALIDO' }, { status: 401 });
   }
 
-  // ref do documento alterado (mesmo formato da operacao de consulta)
-  const nested = (body.nfe || body.notafiscal || body.documento) as Record<string, unknown> | undefined;
-  const ref = String(body.ref || body.referencia || nested?.ref || '').trim();
+  // ref do documento alterado (mesmo formato da operacao de consulta).
+  // BLOCO 147: a Focus muda a forma do payload entre versoes/eventos — extraimos
+  // a ref de TODAS as formas conhecidas (raiz, aninhado, data) e a CHAVE de
+  // acesso tambem (quando a ref nao vem, a chave de 44 dig import do mesmo jeito).
+  const nested = (body.nfe || body.notafiscal || body.documento || body.data) as Record<string, unknown> | undefined;
+  const ref = String(
+    body.ref || body.referencia || nested?.ref || nested?.referencia || ''
+  ).trim();
+  const chaveEvento = String(
+    body.chave_nfe || body.chave || nested?.chave_nfe || nested?.chave || ''
+  ).replace(/\D/g, '').slice(-44);
   const evento = String(body.event || '').trim();
-  if (!ref) {
+  if (!ref && chaveEvento.length !== 44) {
     return NextResponse.json({ ok: true, processado: false, motivo: 'SEM_REF' });
   }
+  const refOuChave = ref || chaveEvento;
 
   if (!(await hasNotaColumns())) {
     return NextResponse.json({ ok: true, processado: false, motivo: 'SCHEMA_ANTIGO' });
@@ -104,12 +113,21 @@ export async function POST(req: NextRequest) {
 
   // 1. Acha a venda pela ref exata (a ultima emissao desta venda)
   let sale: Record<string, unknown> | null = null;
-  const { data: pelaRef } = await db.from('sales').select(COLS).eq('nota_ref', ref).limit(1).maybeSingle();
-  sale = (pelaRef as Record<string, unknown> | null) || null;
+  if (ref) {
+    const { data: pelaRef } = await db.from('sales').select(COLS).eq('nota_ref', ref).limit(1).maybeSingle();
+    sale = (pelaRef as Record<string, unknown> | null) || null;
+  }
+  // 1b. BLOCO 147: sem ref no payload (alguns eventos vêm só com a chave) —
+  //     a venda pode ser achada pela chave de acesso gravada.
+  let saleId = sale ? String(sale.id) : '';
+  if (!sale && chaveEvento.length === 44) {
+    const { data: pelaChave } = await db.from('sales').select(COLS).eq('nota_chave', chaveEvento).limit(1).maybeSingle();
+    sale = (pelaChave as Record<string, unknown> | null) || null;
+    saleId = sale ? String(sale.id) : '';
+  }
 
   // 2. Fallback: ref antiga apos reemissao (nota_ref agora e -r2...) — acha
   //    pelo saleId e a reconsulta abaixo usa a ref ATUAL do banco.
-  let saleId = sale ? String(sale.id) : '';
   if (!sale) {
     const saleIdDaRef = ref.match(/^VENDA-(.+?)(?:-r\d+)?$/i);
     const id = saleIdDaRef ? saleIdDaRef[1] : '';
@@ -130,11 +148,13 @@ export async function POST(req: NextRequest) {
     // -------------------------------------------------------------
     after(async () => {
       try {
-        const chaveHook = String(body.chave_nfe || body.chave || '').replace(/\D/g, '').slice(-44);
+        const chaveHook = String(body.chave_nfe || body.chave || nested?.chave_nfe || nested?.chave || '').replace(/\D/g, '').slice(-44);
         const hint = chaveHook.length === 44 ? docDaChave(chaveHook) : undefined;
-        const r = await importarAvulsa(ref, hint);
+        // BLOCO 147: ref OU chave — eventos sem ref (ex. algumas notificações
+        // de NFC-e) importam pela chave de acesso; o que sempre existir ganha.
+        const r = await importarAvulsa(refOuChave, hint);
         if (r.ok) invalidaPresenca();
-        console.log(`[focus-webhook] avulsa ${ref}: ${r.ok ? 'importada' : r.motivo}`);
+        console.log(`[focus-webhook] avulsa ${refOuChave}: ${r.ok ? 'importada' : r.motivo}`);
       } catch (e) {
         console.warn('[focus-webhook] importacao da avulsa falhou (importador cobre):', (e as Error).message);
       }

@@ -1,0 +1,671 @@
+     1→import crypto from 'node:crypto';
+     2→
+     3→/**
+     4→ * Cliente SPEDY (docs.spedy.com.br) — emissao de NF-e/NFC-e, recebimento DFe
+     5→ * (notas contra o CNPJ da empresa), certificado A1 e catalogo de produtos,
+     6→ * via API REST (X-Api-Key).
+     7→ *
+     8→ * BLOCO 95: decisao do dono — a integracao fiscal sera pela SPEDY. Este
+     9→ * modulo PREPARA o app para a troca: NENHUM fluxo de venda chama nada daqui
+    10→ * ainda (/api/notas segue na Focus ate o dono ligar a Spedy em producao).
+    11→ * Tudo aqui e "dormant" — usado so pela aba Fiscal (admin) para status,
+    12→ * teste de conexao, certificado e importacao das notas recebidas.
+    13→ *
+    14→ * SOMENTE SERVER-SIDE: a API key e segredo e vive em env var (Vercel).
+    15→ *   SPEDY_API_KEY      -> X-Api-Key (obrigatorio p/ qualquer chamada)
+    16→ *   SPEDY_AMBIENTE     -> 'sandbox' (default — plano Desenvolvedor gratis)
+    17→ *                         | 'producao'
+    18→ *   SPEDY_EMPRESA_ID   -> id da empresa emissora na Spedy (v1/companies/{id})
+    19→ *   SPEDY_NATUREZA     -> natureza da operacao (default 'Venda de mercadoria')
+    20→ *   SPEDY_UF_EMITENTE  -> UF do emitente (default 'RS' — decide CFOP 5102/6102)
+    21→ *
+    22→ * ENDPOINTS (referencia docs.spedy.com.br/api-reference):
+    23→ *   GET  /v1/companies                          — empresas da conta (teste conexao)
+    24→ *   GET  /v1/companies/{id}/certificates        — certificados A1 (isActive/expirationAt)
+    25→ *   POST /v1/companies/{id}/certificates        — upload .pfx + senha (multipart)
+    26→ *   PUT  /v1/companies/{id}/settings            — liga inbound (notas recebidas)
+    27→ *   POST /v1/product-invoices                   — NF-e (modelo 55) — ASSINCRONA
+    28→ *   POST /v1/consumer-invoices                  — NFC-e (modelo 65) — ASSINCRONA
+    29→ *   GET  /v1/{product|consumer}-invoices/{id}   — status (processingDetail)
+    30→ *   GET  /v1/{product|consumer}-invoices/{id}/pdf|xml — DANFE / XML autorizado
+    31→ *   POST /v1/{product|consumer}-invoices/{id}/corrections — CC-e (NF-e)
+    32→ *   POST /v1/{product|consumer}-invoices/{id}/cancelations — cancelamento
+    33→ *   POST /v1/inbound-product-invoices/sync      — busca antecipada SEFAZ (429 + Retry-After)
+    34→ *   GET  /v1/inbound-product-invoices           — notas recebidas (cursor)
+    35→ *   GET  /v1/inbound-product-invoices/{id}/xml  — XML da recebida (pos-manifestacao)
+    36→ *
+    37→ * PAGAMENTO + BOLETO (pergunta do dono — "como atrelar o boleto a nota?"):
+    38→ *   - metodo tPag da Spedy: money | check | creditCard | debitCard |
+    39→ *     storeCredit | foodVoucher | mealVoucher | giftVoucher | fuelVoucher |
+    40→ *     commercialDuplicate | BILLETBANKING (boleto bancario) | bankDeposit |
+    41→ *     dynamicPix | bankTransfer | fidelityProgram | pix | noPayment | other
+    42→ *   - Venda A PRAZO c/ boleto: payments [{ method:'billetBanking', amount }]
+    43→ *     + billing { number, originalAmount, netAmount } + duplicates[] com
+    44→ *     { number [nDup], dueDate [dVenc], amount [vDup] } — cada duplicata e
+    45→ *     uma parcela; o boleto em si nasce no BANCO INTER (interBoleto.ts,
+    46→ *     seuNumero DM+saleId) e o app amarra: venda -> nota (nDup = parcela) ->
+    47→ *     boleto (nosso numero) -> baixa no webhook do Inter.
+    48→ *   - NFC-e NAO leva boleto/duplicata (venda a prazo na rota = NF-e).
+    49→ */
+    50→
+    51→export type SpedyAmbiente = 'sandbox' | 'producao';
+    52→export type SpedyDoc = 'product-invoices' | 'consumer-invoices'; // NF-e | NFC-e
+    53→
+    54→// ---------------------------------------------------------------------------
+    55→// Config (env)
+    56→// ---------------------------------------------------------------------------
+    57→export function getSpedyConfig() {
+    58→  const apiKey = process.env.SPEDY_API_KEY || '';
+    59→  const ambiente = (process.env.SPEDY_AMBIENTE as SpedyAmbiente) || 'sandbox';
+    60→  return {
+    61→    apiKey,
+    62→    ambiente,
+    63→    baseUrl: ambiente === 'producao' ? 'https://api.spedy.com.br' : 'https://sandbox-api.spedy.com.br',
+    64→    backofficeUrl: ambiente === 'producao' ? 'https://app.spedy.com.br' : 'https://sandbox-app.spedy.com.br',
+    65→    empresaId: process.env.SPEDY_EMPRESA_ID || '',
+    66→    natureza: process.env.SPEDY_NATUREZA || 'Venda de mercadoria',
+    67→    ufEmitente: (process.env.SPEDY_UF_EMITENTE || 'RS').toUpperCase(),
+    68→    // BLOCO 95 (webhook): segredo das assinaturas Standard Webhooks (valor de
+    69→    // GET /v1/webhooks/secret — aceita com ou sem prefixo whsec_) e a chave
+    70→    // geral do app. Sem segredo o /api/spedy/webhook recusa TUDO (503) — o
+    71→    // endpoint fica exposto na internet e nao aceita nada nao assinado.
+    72→    webhookSecret: process.env.SPEDY_WEBHOOK_SECRET || '',
+    73→    enabled: process.env.SPEDY_ENABLED === '1',
+    74→  };
+    75→}
+    76→
+    77→export function isSpedyConfigured(): boolean {
+    78→  return !!getSpedyConfig().apiKey;
+    79→}
+    80→
+    81→function soDigitos(v?: string | null): string {
+    82→  return (v || '').replace(/\D/g, '');
+    83→}
+    84→
+    85→// ---------------------------------------------------------------------------
+    86→// Request basico (JSON)
+    87→// ---------------------------------------------------------------------------
+    88→async function spedyRequest<T = unknown>(
+    89→  method: 'GET' | 'POST' | 'PUT' | 'PATCH',
+    90→  path: string,
+    91→  body?: unknown,
+    92→  timeoutMs = 45_000
+    93→): Promise<{ ok: boolean; status: number; data: T & Record<string, unknown>; retryAfterSeconds?: number }> {
+    94→  const { apiKey, baseUrl } = getSpedyConfig();
+    95→  if (!apiKey) return { ok: false, status: 0, data: { erro: 'SPEDY_API_KEY nao configurada.' } as T & Record<string, unknown> };
+    96→  try {
+    97→    const res = await fetch(`${baseUrl}${path}`, {
+    98→      method,
+    99→      headers: { 'X-Api-Key': apiKey, 'Content-Type': 'application/json' },
+   100→      body: body !== undefined ? JSON.stringify(body) : undefined,
+   101→      signal: AbortSignal.timeout(timeoutMs),
+   102→      cache: 'no-store',
+   103→    });
+   104→    const text = await res.text();
+   105→    let data: unknown;
+   106→    try {
+   107→      data = text ? JSON.parse(text) : {};
+   108→    } catch {
+   109→      data = { erro: `Resposta nao-JSON da Spedy: ${text.slice(0, 200)}` };
+   110→    }
+   111→    const out: { ok: boolean; status: number; data: T & Record<string, unknown>; retryAfterSeconds?: number } = {
+   112→      ok: res.ok,
+   113→      status: res.status,
+   114→      data: data as T & Record<string, unknown>,
+   115→    };
+   116→    if (res.status === 429) {
+   117→      // Docs: corpo traz retryAfterSeconds; header Retry-After (segundos)
+   118→      const ra = Number((data as Record<string, unknown>)?.retryAfterSeconds);
+   119→      const hdr = Number(res.headers.get('retry-after'));
+   120→      out.retryAfterSeconds = Number.isFinite(ra) && ra > 0 ? ra : Number.isFinite(hdr) && hdr > 0 ? hdr : 60;
+   121→    }
+   122→    return out;
+   123→  } catch (e: unknown) {
+   124→    const msg = e instanceof Error ? e.message : String(e);
+   125→    return { ok: false, status: 0, data: { erro: `Falha de rede com a Spedy: ${msg}` } as T & Record<string, unknown> };
+   126→  }
+   127→}
+   128→
+   129→/** Download de BINARIO (PDF do DANFE / XML) — devolve Buffer + content-type. */
+   130→async function spedyDownload(
+   131→  path: string,
+   132→  timeoutMs = 60_000
+   133→): Promise<{ ok: boolean; status: number; buffer?: Buffer; contentType?: string; erro?: string }> {
+   134→  const { apiKey, baseUrl } = getSpedyConfig();
+   135→  if (!apiKey) return { ok: false, status: 0, erro: 'SPEDY_API_KEY nao configurada.' };
+   136→  try {
+   137→    const res = await fetch(`${baseUrl}${path}`, {
+   138→      headers: { 'X-Api-Key': apiKey },
+   139→      signal: AbortSignal.timeout(timeoutMs),
+   140→      cache: 'no-store',
+   141→    });
+   142→    if (!res.ok) {
+   143→      const text = await res.text().catch(() => '');
+   144→      return { ok: false, status: res.status, erro: `Spedy ${res.status}: ${text.slice(0, 300)}` };
+   145→    }
+   146→    const ab = await res.arrayBuffer();
+   147→    return { ok: true, status: res.status, buffer: Buffer.from(ab), contentType: res.headers.get('content-type') || undefined };
+   148→  } catch (e: unknown) {
+   149→    const msg = e instanceof Error ? e.message : String(e);
+   150→    return { ok: false, status: 0, erro: `Falha de download na Spedy: ${msg}` };
+   151→  }
+   152→}
+   153→
+   154→// ---------------------------------------------------------------------------
+   155→// Empresas + Certificado A1
+   156→// ---------------------------------------------------------------------------
+   157→export interface SpedyEmpresa {
+   158→  id: string;
+   159→  federalTaxNumber?: string;
+   160→  name?: string;
+   161→  tradeName?: string;
+   162→  [k: string]: unknown;
+   163→}
+   164→
+   165→/** GET /v1/companies — teste de conexao + achar a empresa emissora. */
+   166→export async function listarEmpresasSpedy() {
+   167→  return spedyRequest<{ data?: SpedyEmpresa[] } | Spedy[]>('GET', '/v1/companies');
+   168→}
+   169→
+   170→export interface SpedyCertificado {
+   171→  id: string;
+   172→  subject?: string;
+   173→  issuer?: string;
+   174→  expirationAt?: string;
+   175→  isActive?: boolean;
+   176→  [k: string]: unknown;
+   177→}
+   178→
+   179→/** GET /v1/companies/{id}/certificates — validade do A1 (expirou = nao emite!). */
+   180→export async function listarCertificadosSpedy(empresaId?: string) {
+   181→  const emp = empresaId || getSpedyConfig().empresaId;
+   182→  if (!emp) return { ok: false, status: 0, data: { erro: 'SPEDY_EMPRESA_ID nao configurada.' } };
+   183→  return spedyRequest<{ data?: SpedyCertificado[] } | SpedyCertificado[]>('GET', `/v1/companies/${emp}/certificates`);
+   184→}
+   185→
+   186→/** POST multipart — upload do certificado A1 (.pfx + senha). A Spedy guarda e
+   187→ *  assina por nos: o app NUNCA manipula o arquivo alem deste repasse. */
+   188→export async function enviarCertificadoSpedy(opts: {
+   189→  empresaId?: string;
+   190→  arquivoBase64: string; // conteudo do .pfx em base64
+   191→  nomeArquivo?: string;
+   192→  senha: string;
+   193→}) {
+   194→  const emp = opts.empresaId || getSpedyConfig().empresaId;
+   195→  if (!emp) return { ok: false, status: 0, data: { erro: 'SPEDY_EMPRESA_ID nao configurada.' } };
+   196→  const { apiKey, baseUrl } = getSpedyConfig();
+   197→  if (!apiKey) return { ok: false, status: 0, data: { erro: 'SPEDY_API_KEY nao configurada.' } };
+   198→  try {
+   199→    const form = new FormData();
+   200→    const bytes = Buffer.from(opts.arquivoBase64, 'base64');
+   201→    form.append('certificateFile', new Blob([new Uint8Array(bytes)], { type: 'application/x-pkcs12' }), opts.nomeArquivo || 'certificado.pfx');
+   202→    form.append('password', opts.senha);
+   203→    const res = await fetch(`${baseUrl}/v1/companies/${emp}/certificates`, {
+   204→      method: 'POST',
+   205→      headers: { 'X-Api-Key': apiKey },
+   206→      body: form,
+   207→      signal: AbortSignal.timeout(60_000),
+   208→    });
+   209→    const text = await res.text();
+   210→    let data: unknown;
+   211→    try { data = text ? JSON.parse(text) : {}; } catch { data = { erro: text.slice(0, 300) }; }
+   212→    return { ok: res.ok, status: res.status, data: data as Record<string, unknown> };
+   213→  } catch (e: unknown) {
+   214→    const msg = e instanceof Error ? e.message : String(e);
+   215→    return { ok: false, status: 0, data: { erro: `Falha enviando certificado: ${msg}` } };
+   216→  }
+   217→}
+   218→
+   219→/** PUT /v1/companies/{id}/settings — liga o recebimento DFe (notas contra o
+   220→ *  CNPJ). startDate NAO pode ser mais de 90 dias atras (limite da SEFAZ). */
+   221→export async function habilitarInboundSpedy(empresaId?: string, startDate?: string) {
+   222→  const emp = empresaId || getSpedyConfig().empresaId;
+   223→  if (!emp) return { ok: false, status: 0, data: { erro: 'SPEDY_EMPRESA_ID nao configurada.' } };
+   224→  const inicio = startDate || new Date().toISOString().slice(0, 10);
+   225→  return spedyRequest('PUT', `/v1/companies/${emp}/settings`, {
+   226→    productInvoice: { inbound: { enabled: true, startDate: inicio } },
+   227→  });
+   228→}
+   229→
+   230→// ---------------------------------------------------------------------------
+   231→// Pagamentos / cobranca (boleto atrelado a nota)
+   232→// ---------------------------------------------------------------------------
+   233→export type SpedyMetodoPagamento =
+   234→  | 'money' | 'check' | 'creditCard' | 'debitCard' | 'storeCredit'
+   235→  | 'foodVoucher' | 'mealVoucher' | 'giftVoucher' | 'fuelVoucher'
+   236→  | 'commercialDuplicate' | 'billetBanking' | 'bankDeposit'
+   237→  | 'dynamicPix' | 'bankTransfer' | 'fidelityProgram' | 'pix'
+   238→  | 'noPayment' | 'other';
+   239→
+   240→/** Metodo do APP -> tPag da Spedy. A_PRAZO na NF-e = billetBanking (boleto
+   241→ *  bancario, tPag 15) — as parcelas/vencimentos vao no bloco duplicates. */
+   242→export function metodoSpedy(metodo?: string | null): SpedyMetodoPagamento {
+   243→  const m = String(metodo || '').toUpperCase();
+   244→  if (m === 'PIX') return 'pix';
+   245→  if (m === 'CHEQUE') return 'check';
+   246→  if (m === 'A_PRAZO') return 'billetBanking';
+   247→  if (m === 'CARTAO_CREDITO' || m === 'CREDITO') return 'creditCard';
+   248→  if (m === 'CARTAO_DEBITO' || m === 'DEBITO') return 'debitCard';
+   249→  return 'money';
+   250→}
+   251→
+   252→export interface SpedyDuplicata {
+   253→  number: string;    // nDup — "NF 123/1" (parcela)
+   254→  dueDate: string;   // dVenc
+   255→  amount: number;    // vDup
+   256→}
+   257→
+   258→export interface SpedyBilling {
+   259→  number: string;        // nFat
+   260→  originalAmount: number; // vOrig
+   261→  discountAmount?: number; // vDesc
+   262→  netAmount: number;    // vLiq
+   263→}
+   264→
+   265→/** Duplicatas de uma venda a prazo: n parcelas iguais (a ultima absorve os
+   266→ *  centavos de arredondamento) com vencimentos mensais a partir da data. */
+   267→export function montarDuplicatas(opts: {
+   268→  numeroNota: string;        // numero da nota (ou ref da venda antes de autorizar)
+   269→  valorTotal: number;
+   270→  parcelas: number;
+   271→  primeiroVencimento?: Date;
+   272→}): SpedyDuplicata[] {
+   273→  const n = Math.max(1, Math.min(12, Math.round(opts.parcelas)));
+   274→  if (n <= 1) {
+   275→    return [{
+   276→      number: `${opts.numeroNota}/1`,
+   277→      dueDate: (opts.primeiroVencimento ?? new Date()).toISOString(),
+   278→      amount: Math.round(opts.valorTotal * 100) / 100,
+   279→    }];
+   280→  }
+   281→  const centavos = Math.round(opts.valorTotal * 100);
+   282→  const base = Math.floor(centavos / n);
+   283→  const resto = centavos - base * n;
+   284→  const primeiro = opts.primeiroVencimento ?? new Date();
+   285→  const dups: SpedyDuplicata[] = [];
+   286→  for (let i = 0; i < n; i++) {
+   287→    const venc = new Date(primeiro.getTime());
+   288→    venc.setMonth(venc.getMonth() + i);
+   289→    const valor = (base + (i === n - 1 ? resto : 0)) / 100;
+   290→    dups.push({ number: `${opts.numeroNota}/${i + 1}`, dueDate: venc.toISOString(), amount: valor });
+   291→  }
+   292→  return dups;
+   293→}
+   294→
+   295→// ---------------------------------------------------------------------------
+   296→// Payload de emissao (Simples Nacional — CSOSN 102 / PIS-COFINS 49)
+   297→// ---------------------------------------------------------------------------
+   298→export interface SpedyItemPayload {
+   299→  code: string;
+   300→  description: string;
+   301→  ncm: string;
+   302→  cfop: number;
+   303→  unit: string;
+   304→  quantity: number;
+   305→  unitAmount: number;
+   306→  unitTax: string;
+   307→  quantityTax: number;
+   308→  unitTaxAmount: number;
+   309→  totalAmount: number;
+   310→  taxes: {
+   311→    icms: { origin: number; csosn: number };
+   312→    pis: { cst: number };
+   313→    cofins: { cst: number };
+   314→  };
+   315→}
+   316→
+   317→export interface SpedyDestinatarioPayload {
+   318→  name: string;
+   319→  federalTaxNumber?: string;
+   320→  email?: string;
+   321→  address?: {
+   322→    street: string; number: string; district: string;
+   323→    postalCode: string; city: { name: string; state: string };
+   324→  };
+   325→}
+   326→
+   327→export interface SpedyNfePayload {
+   328→  integrationId?: string;      // idempotencia: "VENDA-<saleId>" (reemissao -r2...)
+   329→  transactionId?: string;
+   330→  effectiveDate: string;       // ISO (NFC-e: SEMPRE agora — SEFAZ recusa > 5 min)
+   331→  operationNature: string;
+   332→  isFinalCustomer: boolean;
+   333→  receiver: SpedyDestinatarioPayload;
+   334→  payments: { method: SpedyMetodoPagamento; amount: number }[];
+   335→  billing?: SpedyBilling;      // venda a prazo (boleto)
+   336→  duplicates?: SpedyDuplicata[]; // parcelas da venda a prazo
+   337→  items: SpedyItemPayload[];
+   338→  [k: string]: unknown;
+   339→}
+   340→
+   341→const round2 = (v: number) => Math.round(v * 100) / 100;
+   342→
+   343→interface ItemVendaInput {
+   344→  codigo?: string;
+   345→  descricao: string;
+   346→  ncm?: string;
+   347→  cfop?: string;
+   348→  ean?: string;
+   349→  unidade?: string;
+   350→  origem?: string;
+   351→  quantidade: number;
+   352→  valorUnitario: number;
+   353→}
+   354→
+   355→function montarItensSpedy(opts: {
+   356→  itens: ItemVendaInput[];
+   357→  valorTotalVenda: number;
+   358→  ufDestino: string;
+   359→  ufEmitente: string;
+   360→}): { items: SpedyItemPayload[] } {
+   361→  const descontoTotal = round2(Math.max(0, round2(opts.itens.reduce((a, it) => a + it.quantidade * it.valorUnitario, 0)) - opts.valorTotalVenda));
+   362→  const items: SpedyItemPayload[] = opts.itens.map((it, i) => {
+   363→    const bruto = round2(it.quantidade * it.valorUnitario);
+   364→    const desconto = i === 0 ? descontoTotal : 0;
+   365→    return {
+   366→      code: (it.codigo || `P${i + 1}`).slice(0, 60),
+   367→      description: normaliza(it.descricao, 120),
+   368→      ncm: soDigitos(it.ncm) || '21069090', // guarda do modulo Focus (doce/salgado generico)
+   369→      cfop: Number(soDigitos(it.cfop) || (opts.ufDestino === opts.ufEmitente ? '5102' : '6102')) || 5102,
+   370→      unit: (it.unidade || 'UN').toUpperCase().slice(0, 6),
+   371→      quantity: it.quantidade,
+   372→      unitAmount: round2(it.valorUnitario),
+   373→      // trio tributavel espelhado (docs: item inline precisa dos 3)
+   374→      unitTax: (it.unidade || 'UN').toUpperCase().slice(0, 6),
+   375→      quantityTax: it.quantidade,
+   376→      unitTaxAmount: round2(it.valorUnitario),
+   377→      totalAmount: round2(bruto - desconto),
+   378→      taxes: {
+   379→        icms: { origin: Number(soDigitos(it.origem) || '0') || 0, csosn: 102 }, // Simples Nacional s/ credito
+   380→        pis: { cst: 49 },    // outras saidas — DAS
+   381→        cofins: { cst: 49 },
+   382→      },
+   383→    };
+   384→  });
+   385→  return { items };
+   386→}
+   387→
+   388→function normaliza(v: string, max: number): string {
+   389→  return (v || '').replace(/\s+/g, ' ').trim().slice(0, max);
+   390→}
+   391→
+   392→function montarReceiver(d: SpedyDestinatarioPayload): SpedyDestinatarioPayload {
+   393→  const doc = soDigitos(d.federalTaxNumber);
+   394→  const out: SpedyDestinatarioPayload = { name: normaliza(d.name, 60) || 'CONSUMIDOR FINAL' };
+   395→  if (doc.length === 11 || doc.length === 14) out.federalTaxNumber = doc;
+   396→  if (d.email) out.email = d.email.trim().slice(0, 80);
+   397→  if (d.address) {
+   398→    out.address = {
+   399→      street: normaliza(d.address.street, 60),
+   400→      number: (d.address.number || 'S/N').slice(0, 10),
+   401→      district: normaliza(d.address.district, 60) || 'CENTRO',
+   402→      postalCode: soDigitos(d.address.postalCode).slice(0, 8),
+   403→      city: { name: normaliza(d.address.city?.name, 60) || 'CIDADE', state: (d.address.city?.state || 'RS').toUpperCase().slice(0, 2) },
+   404→    };
+   405→  }
+   406→  return out;
+   407→}
+   408→
+   409→/** ISO com fuso de SP (igual ao modulo Focus — offset fixo -03:00). */
+   410→function isoComFuso(d: Date): string {
+   411→  const p = new Intl.DateTimeFormat('sv-SE', {
+   412→    timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit',
+   413→    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+   414→  }).format(d);
+   415→  return `${p.replace(' ', 'T')}-03:00`;
+   416→}
+   417→
+   418→/** Payload NF-e (modelo 55) — venda com boleto A PRAZO ganha billing+duplicates. */
+   419→export function montarPayloadNfeSpedy(opts: {
+   420→  integrationId: string;
+   421→  dataEmissao: Date;
+   422→  natureza?: string;
+   423→  ufEmitente?: string;
+   424→  destinatario: SpedyDestinatarioPayload;
+   425→  itens: ItemVendaInput[];
+   426→  valorTotalVenda: number;
+   427→  metodo: string;
+   428→  /** Venda a prazo: parcelas + 1o vencimento (boleto Inter amarrado pelo nDup) */
+   429→  parcelas?: number;
+   430→  primeiroVencimento?: Date;
+   431→  informacoesAdicionais?: string;
+   432→}): SpedyNfePayload {
+   433→  const cfg = getSpedyConfig();
+   434→  const ufEmit = opts.ufEmitente || cfg.ufEmitente;
+   435→  const ufDestino = '';
+   436→  const { items } = montarItensSpedy({ itens: opts.itens, valorTotalVenda: opts.valorTotalVenda, ufDestino, ufEmitente: ufEmit });
+   437→  const aPrazo = String(opts.metodo || '').toUpperCase() === 'A_PRAZO';
+   438→  const payload: SpedyNfePayload = {
+   439→    integrationId: opts.integrationId,
+   440→    effectiveDate: isoComFuso(opts.dataEmissao),
+   441→    operationNature: opts.natureza || cfg.natureza,
+   442→    isFinalCustomer: true,
+   443→    receiver: montarReceiver(opts.destinatario),
+   444→    payments: [{ method: metodoSpedy(opts.metodo), amount: round2(opts.valorTotalVenda) }],
+   445→    items,
+   446→  };
+   447→  if (aPrazo) {
+   448→    const parcelas = Math.max(1, Math.min(12, opts.parcelas || 1));
+   449→    payload.duplicates = montarDuplicatas({
+   450→      numeroNota: opts.integrationId.replace(/^VENDA-/i, 'NF'),
+   451→      valorTotal: opts.valorTotalVenda,
+   452→      parcelas,
+   453→      primeiroVencimento: opts.primeiroVencimento,
+   454→    });
+   455→    payload.billing = {
+   456→      number: opts.integrationId,
+   457→      originalAmount: round2(opts.valorTotalVenda),
+   458→      netAmount: round2(opts.valorTotalVenda),
+   459→    };
+   460→  }
+   461→  if (opts.informacoesAdicionais) {
+   462→    payload.additionalInformation = normaliza(opts.informacoesAdicionais, 500);
+   463→  }
+   464→  return payload;
+   465→}
+   466→
+   467→/** Payload NFC-e (modelo 65) — consumidor final, SEMPRE agora, SEM boleto. */
+   468→export function montarPayloadNfceSpedy(opts: {
+   469→  integrationId: string;
+   470→  natureza?: string;
+   471→  ufEmitente?: string;
+   472→  destinatario?: SpedyDestinatarioPayload; // opcional (consumidor anonimo)
+   473→  itens: ItemVendaInput[];
+   474→  valorTotalVenda: number;
+   475→  metodo: string;
+   476→  informacoesAdicionais?: string;
+   477→}): SpedyNfePayload {
+   478→  const cfg = getSpedyConfig();
+   479→  const ufEmit = opts.ufEmitente || cfg.ufEmitente;
+   480→  const { items } = montarItensSpedy({ itens: opts.itens, valorTotalVenda: opts.valorTotalVenda, ufDestino: ufEmit, ufEmitente: ufEmit });
+   481→  const receiver: SpedyDestinatarioPayload = opts.destinatario
+   482→    ? montarReceiver(opts.destinatario)
+   483→    : { name: 'CONSUMIDOR FINAL' };
+   484→  const payload: SpedyNfePayload = {
+   485→    integrationId: opts.integrationId,
+   486→    effectiveDate: isoComFuso(new Date()),
+   487→    operationNature: opts.natureza || 'VENDA DE MERCADORIA ACQR',
+   488→    isFinalCustomer: true,
+   489→    receiver,
+   490→    payments: [{ method: metodoSpedy(opts.metodo), amount: round2(opts.valorTotalVenda) }],
+   491→    items,
+   492→  };
+   493→  if (opts.informacoesAdicionais) {
+   494→    payload.additionalInformation = normaliza(opts.informacoesAdicionais, 500);
+   495→  }
+   496→  return payload;
+   497→}
+   498→
+   499→// ---------------------------------------------------------------------------
+   500→// Emissao (ASSINCRONA! 2xx = aceita, nao autorizada — webhook/consulta)
+   501→// ---------------------------------------------------------------------------
+   502→export async function emitirNfeSpedy(payload: SpedyNfePayload) {
+   503→  return spedyRequest('POST', '/v1/product-invoices', payload);
+   504→}
+   505→
+   506→export async function emitirNfceSpedy(payload: SpedyNfePayload) {
+   507→  return spedyRequest('POST', '/v1/consumer-invoices', payload);
+   508→}
+   509→
+   510→export async function obterNotaSpedy(doc: SpedyDoc, id: string) {
+   511→  return spedyRequest('GET', `/v1/${doc}/${id}`);
+   512→}
+   513→
+   514→export async function baixarPdfNotaSpedy(doc: SpedyDoc, id: string) {
+   515→  return spedyDownload(`/v1/${doc}/${id}/pdf`);
+   516→}
+   517→
+   518→export async function baixarXmlNotaSpedy(doc: SpedyDoc, id: string) {
+   519→  return spedyDownload(`/v1/${doc}/${id}/xml`);
+   520→}
+   521→
+   522→export async function cancelarNotaSpedy(doc: SpedyDoc, id: string, reason: string) {
+   523→  return spedyRequest('POST', `/v1/${doc}/${id}/cancelations`, { reason: normaliza(reason, 255) });
+   524→}
+   525→
+   526→export async function cartaCorrecaoSpedy(doc: SpedyDoc, id: string, letter: string) {
+   527→  return spedyRequest('POST', `/v1/${doc}/${id}/corrections`, { letter: normaliza(letter, 1000) });
+   528→}
+   529→
+   530→/** Status da nota na Spedy -> status do app (sales.nota_status). */
+   531→export function interpretarResultadoSpedy(nota: Record<string, unknown>) {
+   532→  const status = String(nota.status || '').toLowerCase();
+   533→  const detail = (nota.processingDetail || {}) as Record<string, unknown>;
+   534→  const erro = String(detail.erro || detail.message || nota.erro || '');
+   535→  return {
+   536→    id: String(nota.id || ''),
+   537→    // enqueued | authorized | rejected | canceled | denied | disabled...
+   538→    autorizada: status === 'authorized' || status === 'autorizado',
+   539→    cancelada: status === 'canceled' || status === 'cancelado',
+   540→    processando: ['enqueued', 'processing', 'processando_autorizacao'].includes(status),
+   541→    rejeitada: status === 'rejected' || status === 'denied',
+   542→    statusBruto: status,
+   543→    numero: String(nota.number || ''),
+   544→    serie: String(nota.series || ''),
+   545→    chave: soDigitos(String(nota.accessKey || '')).slice(-44),
+   546→    motivo: erro,
+   547→    environment: String(nota.environment || ''),
+   548→  };
+   549→}
+   550→
+   551→// ---------------------------------------------------------------------------
+   552→// Notas RECEBIDAS (DFe — a fonte dos "produtos vindos da XML")
+   553→// ---------------------------------------------------------------------------
+   554→export async function sincronizarInboundSpedy() {
+   555→  return spedyRequest('POST', '/v1/inbound-product-invoices/sync', undefined, 30_000);
+   556→}
+   557→
+   558→export interface SpedInboundNota {
+   559→  id: string;
+   560→  accessKey?: string;
+   561→  status?: string;
+   562→  manifestationStatus?: string;
+   563→  isComplete?: boolean;
+   564→  emitter?: { federalTaxNumber?: string; name?: string };
+   565→  amount?: number;
+   566→  issueDate?: string;
+   567→  [k: string]: unknown;
+   568→}
+   569→
+   570→/** GET /v1/inbound-product-invoices — notas contra o CNPJ (paginacao cursor). */
+   571→export async function listarInboundSpedy(params?: { cursor?: string; limit?: number }) {
+   572→  const qs = new URLSearchParams();
+   573→  if (params?.cursor) qs.set('cursor', params.cursor);
+   574→  if (params?.limit) qs.set('limit', String(params.limit));
+   575→  const q = qs.toString();
+   576→  return spedyRequest<{ data?: SpedInboundNota[]; nextCursor?: string } | SpedInboundNota[]>(
+   577→    'GET', `/v1/inbound-product-invoices${q ? `?${q}` : ''}`
+   578→  );
+   579→}
+   580→
+   581→export async function baixarXmlInboundSpedy(id: string) {
+   582→  return spedyDownload(`/v1/inbound-product-invoices/${id}/xml`);
+   583→}
+   584→
+   585→// ---------------------------------------------------------------------------
+   586→// Webhooks (rota /api/spedy/webhook — eventos que importam pro app)
+   587→// ---------------------------------------------------------------------------
+   588→
+   589→/**
+   590→ * BLOCO 95: o integrationId que o app manda na emissao e "VENDA-<saleId>"
+   591→ * (reemissao anexa -r2, -r3... no fim). O webhook decompoe de volta para
+   592→ * achar a venda no espelho sales.nota_*.
+   593→ */
+   594→export function decompoeIntegrationId(ref?: string | null): { saleId: string | null } {
+   595→  const raw = String(ref || '').trim();
+   596→  const m = raw.match(/^VENDA-(.+?)(?:-r\d+)?$/i);
+   597→  return { saleId: m ? m[1] : null };
+   598→}
+   599→
+   600→/**
+   601→ * BLOCO 95: verificacao de assinatura do webhook da Spedy — padrao STANDARD
+   602→ * WEBHOOKS (docs.spedy.com.br): cabecalhos webhook-id, webhook-timestamp e
+   603→ * webhook-signature ("v1,<base64>" — uma ou mais durante rotacao de segredo).
+   604→ *   assinatura = HMAC-SHA256(segredo, "<id>.<timestamp>.<corpo>") em base64
+   605→ * O segredo vem de GET /v1/webhooks/secret (env SPEDY_WEBHOOK_SECRET — aceita
+   606→ * com ou sem prefixo whsec_). Comparacao em tempo constante + janela de 5
+   607→ * minutos contra replay. SEM segredo configurado recusa tudo (o endpoint
+   608→ * fica exposto na internet — nao aceita nada nao assinado).
+   609→ */
+   610→export async function verificarAssinaturaWebhook(
+   611→  headers: Headers,
+   612→  corpoCru: string
+   613→): Promise<{ valido: boolean; motivo?: string }> {
+   614→  const secret = process.env.SPEDY_WEBHOOK_SECRET || '';
+   615→  if (!secret) {
+   616→    return { valido: false, motivo: 'SPEDY_WEBHOOK_SECRET nao configurado no servidor (Vercel).' };
+   617→  }
+   618→
+   619→  const id = headers.get('webhook-id') || '';
+   620→  const ts = headers.get('webhook-timestamp') || '';
+   621→  const sigHeader = headers.get('webhook-signature') || '';
+   622→  if (!id || !ts || !sigHeader) {
+   623→    return { valido: false, motivo: 'Cabecalhos Standard Webhooks ausentes (webhook-id/timestamp/signature).' };
+   624→  }
+   625→
+   626→  // Janela de tolerancia: 5 minutos — fora disso e replay, recusa.
+   627→  const tsNum = Number(ts);
+   628→  if (!Number.isFinite(tsNum)) return { valido: false, motivo: 'webhook-timestamp invalido.' };
+   629→  const agora = Math.floor(Date.now() / 1000);
+   630→  if (Math.abs(agora - tsNum) > 300) {
+   631→    return { valido: false, motivo: 'webhook-timestamp fora da tolerancia de 5 min (possivel replay).' };
+   632→  }
+   633→
+   634→  // Segredo: "whsec_<base64>" (Standard Webhooks) ou base64 cru.
+   635→  const secretoLimpo = secret.replace(/^whsec_/, '');
+   636→  const secretBytes = Buffer.from(secretoLimpo, 'base64');
+   637→  const key = secretBytes.length > 0 ? secretBytes : Buffer.from(secretoLimpo, 'utf8');
+   638→
+   639→  const esperado = crypto.createHmac('sha256', key).update(`${id}.${ts}.${corpoCru}`, 'utf8').digest('base64');
+   640→
+   641→  // "v1,abc v1,def" (rotacao de segredo) — vale qualquer uma.
+   642→  for (const parte of sigHeader.split(/[ ,]+/)) {
+   643→    const sig = parte.trim();
+   644→    if (!sig) continue;
+   645→    const v1 = sig.startsWith('v1,') ? sig.slice(3) : sig;
+   646→    const a = Buffer.from(v1);
+   647→    const b = Buffer.from(esperado);
+   648→    if (a.length === b.length && crypto.timingSafeEqual(a, b)) return { valido: true };
+   649→  }
+   650→  return { valido: false, motivo: 'Assinatura HMAC invalida.' };
+   651→}
+   652→
+   653→export const SPEDY_WEBHOOK_EVENTS = [
+   654→  'invoice.status_changed',   // qualquer mudanca de status
+   655→  'invoice.authorized',       // AUTORIZADA -> baixa estoque COM NF + salva XML/DANFE
+   656→  'invoice.rejected',         // REJEITADA -> fila de correcao do admin
+   657→  'invoice.canceled',         // CANCELADA -> estorna se deu baixa
+   658→  'invoice.denied',           // DENEGADA
+   659→  'inbound_invoice.detected', // nota de compra DETECTADA (resumo) -> manifestar
+   660→  'inbound_invoice.completed',// XML COMPLETO liberado -> importa produtos
+   661→] as const;
+   662→
+   663→/** Eventos relevantes + o que o app faz com cada um (documentacao viva). */
+   664→export const SPEDY_EVENTOS_ACAO: Record<string, string> = {
+   665→  'invoice.authorized': 'Baixa estoque (COM NF), salva XML+DANFE, imprime 80mm',
+   666→  'invoice.rejected': 'Fila de rejeicoes no admin (corrigir + reemitir)',
+   667→  'invoice.canceled': 'Estorna a baixa se ja foi feita',
+   668→  'inbound_invoice.detected': 'Manifesta (ciencia/confirmacao) e aguarda XML',
+   669→  'inbound_invoice.completed': 'Importa produtos da XML para a fila fiscal',
+   670→};
+   671→

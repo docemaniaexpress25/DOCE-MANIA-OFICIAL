@@ -1,0 +1,828 @@
+     1→"use client";
+     2→
+     3→import { useEffect, useState, useRef } from 'react';
+     4→import { useParams } from 'next/navigation';
+     5→
+     6→interface SaleItem { produto_id: string; quantidade: number; preco_venda: number; }
+     7→interface Pagamento { data: string; valor: number; metodo: string; }
+     8→
+     9→/** Selo de situacao da entrega da pre-venda (visivel no cartao da venda) */
+    10→const ENTREGA_META: Record<string, { label: string; cls: string }> = {
+    11→  PENDENTE: { label: 'Aguardando entrega', cls: 'text-amber-600 bg-amber-50' },
+    12→  EM_ROTA: { label: 'Saiu p/ entrega', cls: 'text-blue-600 bg-blue-50' },
+    13→  ENTREGUE: { label: 'Entregue', cls: 'text-emerald-600 bg-emerald-50' },
+    14→  FALHOU: { label: 'Entrega nao realizada', cls: 'text-rose-600 bg-rose-50' },
+    15→};
+    16→
+    17→/** Badge da situacao da nota fiscal (Bloco 10) — no portal so a AUTORIZADA aparece, mas o mapa fica pronto */
+    18→const NOTA_META: Record<string, { label: string; cls: string; icon: string }> = {
+    19→  AUTORIZADA: { label: 'Autorizada', cls: 'text-emerald-600 bg-emerald-50', icon: 'fa-solid fa-circle-check' },
+    20→  EMITINDO: { label: 'Emitindo', cls: 'text-amber-600 bg-amber-50', icon: 'fa-solid fa-hourglass-half' },
+    21→  REJEITADA: { label: 'Rejeitada', cls: 'text-rose-600 bg-rose-50', icon: 'fa-solid fa-circle-xmark' },
+    22→  CANCELADA: { label: 'Cancelada', cls: 'text-gray-500 bg-gray-100', icon: 'fa-solid fa-ban' },
+    23→};
+    24→interface Sale {
+    25→  id: string; valor_total: number; valor_pago: number; metodo_pagamento: string;
+    26→  status_pagamento: string; data_venda: string; data_vencimento: string | null;
+    27→  /** Situacao da entrega da pre-venda (PENDENTE | EM_ROTA | ENTREGUE | FALHOU) */
+    28→  entrega_status?: string | null;
+    29→  /** Nota fiscal (Bloco 10) — so chega quando o SQL do Bloco 10 foi aplicado;
+    30→   *  AUTORIZADA libera o DANFE (PDF) e o XML no portal */
+    31→  nota_status?: string | null;
+    32→  nota_tipo?: string | null;
+    33→  nota_numero?: string | null;
+    34→  nota_pdf_url?: string | null;
+    35→  nota_xml_url?: string | null;
+    36→  sale_items: SaleItem[];
+    37→  /** Historico organizado dos recebimentos (pagamentos parciais) */
+    38→  pagamentos?: Pagamento[];
+    39→}
+    40→interface Sugestao { produto_id: string; nome: string; popularidade: number; clientesQueCompram: number; preco: number; }
+    41→interface Destaque { produto_id: string; nome: string; }
+    42→interface Stats {
+    43→  totalComprado: number; totalPago: number; clienteDesde: string;
+    44→  frequenciaDias: number; totalCompras: number;
+    45→  produtoFavorito: string; produtoFavoritoQtd: number;
+    46→}
+    47→interface Comprovante {
+    48→  id: string; sale_id: string; valor: number; txid: string | null;
+    49→  status: 'PENDENTE' | 'CONFIRMADO' | 'REJEITADO';
+    50→  observacao: string | null; review_note: string | null;
+    51→  created_at: string; reviewed_at: string | null;
+    52→}
+    53→interface ApiResponse {
+    54→  client: { id: string; nome_fantasia: string; endereco: string; bairro: string; portal_code?: string };
+    55→  sales: Sale[]; products: Record<string, string>; stats: Stats; sugestoes: Sugestao[]; destaques?: Destaque[];
+    56→  comprovantes?: Comprovante[];
+    57→  error?: string;
+    58→}
+    59→interface PixData {
+    60→  payload: string; valor: number; txid: string;
+    61→  chave: string; chaveFormatada: string; nome: string; cidade: string;
+    62→  qrDataUrl: string; cliente: string; saleId: string;
+    63→}
+    64→
+    65→function formatDate(d: string) { return new Date(d).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' }); }
+    66→function formatCurrency(v: number) { return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }); }
+    67→function getPaymentLabel(m: string) { return { DINHEIRO: 'Dinheiro', PIX: 'PIX', A_PRAZO: 'A Prazo' }[m] || m; }
+    68→
+    69→/** Rotulo da nota (NF-e / NFC-e) conforme nota_tipo gravado na emissao (Bloco 10) */
+    70→function notaRotulo(tipo: string | null | undefined, numero: string | null | undefined) {
+    71→  const t = String(tipo || '').toUpperCase();
+    72→  const prefix = t === 'NFE' ? 'NF-e' : t === 'NFCE' ? 'NFC-e' : 'NF';
+    73→  const num = String(numero || '').trim();
+    74→  return num ? `${prefix} nº ${num}` : prefix;
+    75→}
+    76→
+    77→/** Comprime a foto do comprovante no proprio aparelho antes de enviar */
+    78→function compressImage(file: File): Promise<string> {
+    79→  return new Promise((resolve, reject) => {
+    80→    const reader = new FileReader();
+    81→    reader.onload = () => {
+    82→      const img = new Image();
+    83→      img.onload = () => {
+    84→        const max = 1280;
+    85→        let { width, height } = img;
+    86→        if (width > max || height > max) {
+    87→          const ratio = Math.min(max / width, max / height);
+    88→          width = Math.round(width * ratio);
+    89→          height = Math.round(height * ratio);
+    90→        }
+    91→        const canvas = document.createElement('canvas');
+    92→        canvas.width = width;
+    93→        canvas.height = height;
+    94→        const ctx = canvas.getContext('2d');
+    95→        if (!ctx) { reject(new Error('Canvas indisponivel')); return; }
+    96→        ctx.drawImage(img, 0, 0, width, height);
+    97→        resolve(canvas.toDataURL('image/jpeg', 0.75));
+    98→      };
+    99→      img.onerror = () => reject(new Error('Imagem invalida'));
+   100→      img.src = reader.result as string;
+   101→    };
+   102→    reader.onerror = () => reject(new Error('Erro ao ler arquivo'));
+   103→    reader.readAsDataURL(file);
+   104→  });
+   105→}
+   106→
+   107→/** Copia com fallback para WebView/APK antigos (sem Clipboard API) */
+   108→async function copyText(text: string): Promise<boolean> {
+   109→  try {
+   110→    await navigator.clipboard.writeText(text);
+   111→    return true;
+   112→  } catch {
+   113→    try {
+   114→      const ta = document.createElement('textarea');
+   115→      ta.value = text;
+   116→      ta.style.position = 'fixed';
+   117→      ta.style.opacity = '0';
+   118→      document.body.appendChild(ta);
+   119→      ta.focus();
+   120→      ta.select();
+   121→      const ok = document.execCommand('copy');
+   122→      document.body.removeChild(ta);
+   123→      return ok;
+   124→    } catch {
+   125→      return false;
+   126→    }
+   127→  }
+   128→}
+   129→
+   130→export default function ClienteDashboard() {
+   131→  const params = useParams();
+   132→  const codigo = params.codigo as string;
+   133→  const [loading, setLoading] = useState(true);
+   134→  const [error, setError] = useState('');
+   135→  const [data, setData] = useState<ApiResponse | null>(null);
+   136→  const [tab, setTab] = useState<'todas' | 'pendentes'>('todas');
+   137→  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+   138→
+   139→  // Pagamento Pix
+   140→  const [pixSale, setPixSale] = useState<Sale | null>(null);
+   141→  const [pixData, setPixData] = useState<PixData | null>(null);
+   142→  const [pixLoading, setPixLoading] = useState(false);
+   143→  const [pixError, setPixError] = useState('');
+   144→  const [copiado, setCopiado] = useState(false);
+   145→  const [enviando, setEnviando] = useState(false);
+   146→  const [enviado, setEnviado] = useState(false);
+   147→  const [compError, setCompError] = useState('');
+   148→  const fileInputRef = useRef<HTMLInputElement>(null);
+   149→  const [refreshKey, setRefreshKey] = useState(0);
+   150→
+   151→  useEffect(() => {
+   152→    if (!codigo) return;
+   153→    fetch(`/api/cliente/${codigo}`)
+   154→      .then(r => r.json())
+   155→      .then((d: ApiResponse) => { if (d.error) { setError(d.error); return; } setData(d); })
+   156→      .catch(() => setError('Erro ao carregar.'))
+   157→      .finally(() => setLoading(false));
+   158→  }, [codigo, refreshKey]);
+   159→
+   160→  function toggle(id: string) {
+   161→    setExpanded(prev => { const n = new Set(prev); if (n.has(id)) { n.delete(id); } else { n.add(id); } return n; });
+   162→  }
+   163→
+   164→  // ---- Fluxo Pix ----
+   165→  async function abrirPix(sale: Sale) {
+   166→    setPixSale(sale);
+   167→    setPixData(null);
+   168→    setPixError('');
+   169→    setCopiado(false);
+   170→    setEnviado(false);
+   171→    setCompError('');
+   172→    setPixLoading(true);
+   173→    try {
+   174→      const res = await fetch(`/api/cliente/${codigo}/pix`, {
+   175→        method: 'POST',
+   176→        headers: { 'Content-Type': 'application/json' },
+   177→        body: JSON.stringify({ saleId: sale.id }),
+   178→      });
+   179→      const d = await res.json();
+   180→      if (!res.ok) { setPixError(d.error || 'Erro ao gerar o Pix.'); return; }
+   181→      setPixData(d);
+   182→    } catch {
+   183→      setPixError('Erro ao gerar o Pix. Verifique a conexão.');
+   184→    } finally {
+   185→      setPixLoading(false);
+   186→    }
+   187→  }
+   188→
+   189→  function fecharPix() {
+   190→    setPixSale(null);
+   191→    setPixData(null);
+   192→    setPixError('');
+   193→    setEnviado(false);
+   194→    setCompError('');
+   195→  }
+   196→
+   197→  async function copiarCodigo() {
+   198→    if (!pixData) return;
+   199→    const ok = await copyText(pixData.payload);
+   200→    setCopiado(ok);
+   201→    if (ok) setTimeout(() => setCopiado(false), 2500);
+   202→  }
+   203→
+   204→  function escolherArquivo() {
+   205→    fileInputRef.current?.click();
+   206→  }
+   207→
+   208→  async function onArquivoSelecionado(e: React.ChangeEvent<HTMLInputElement>) {
+   209→    const file = e.target.files?.[0];
+   210→    e.target.value = '';
+   211→    if (!file || !pixData) return;
+   212→    setEnviando(true);
+   213→    setCompError('');
+   214→    try {
+   215→      const foto = await compressImage(file);
+   216→      const res = await fetch(`/api/cliente/${codigo}/comprovante`, {
+   217→        method: 'POST',
+   218→        headers: { 'Content-Type': 'application/json' },
+   219→        body: JSON.stringify({ saleId: pixData.saleId, valor: pixData.valor, foto }),
+   220→      });
+   221→      const d = await res.json();
+   222→      if (!res.ok) { setCompError(d.error || 'Erro ao enviar comprovante.'); return; }
+   223→      setEnviado(true);
+   224→      setRefreshKey(k => k + 1); // recarrega status dos comprovantes
+   225→    } catch {
+   226→      setCompError('Erro ao processar a imagem. Tente novamente.');
+   227→    } finally {
+   228→      setEnviando(false);
+   229→    }
+   230→  }
+   231→
+   232→  if (loading) return (<div className="min-h-screen bg-gray-100 flex items-center justify-center"><div className="w-10 h-10 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin"></div></div>);
+   233→
+   234→  if (error || !data) return (
+   235→    <div className="min-h-screen bg-gray-100 flex items-center justify-center px-6">
+   236→      <div className="text-center bg-white rounded-2xl p-8 shadow-sm border border-gray-100 max-w-sm">
+   237→        <div className="w-14 h-14 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4"><i className="fa-solid fa-link-slash text-rose-400 text-xl"></i></div>
+   238→        <p className="text-sm font-bold text-gray-700">Link invalido</p>
+   239→        <p className="text-xs text-gray-400 mt-1">Este link nao esta associado a nenhum cliente.</p>
+   240→      </div>
+   241→    </div>
+   242→  );
+   243→
+   244→  const { client, sales, products, stats, sugestoes, destaques = [], comprovantes = [] } = data;
+   245→  // Link do PEDIDO ONLINE (dentro do proprio sistema — cai na fila como pre-venda).
+   246→  // O nome do cliente vai SEMPRE completo, direto do banco (nao depende de URL externa).
+   247→  const pedidoUrl = `/pedido/${encodeURIComponent(client.portal_code || codigo)}`;
+   248→  const saldoDevedor = stats.totalComprado - stats.totalPago;
+   249→  // Pedidos online so para quem esta em dia (tolerancia de centavos)
+   250→  const temDebito = saldoDevedor > 0.005;
+   251→  // Destaques comerciais (os "mais comprados / nao pode ficar sem");
+   252→  // fallback para as sugestoes personalizadas se o cadastro mudar de nome.
+   253→  const ofertas = destaques.length > 0
+   254→    ? destaques.map(d => ({ id: d.produto_id, nome: d.nome }))
+   255→    : sugestoes.map(s => ({ id: s.produto_id, nome: s.nome }));
+   256→  const vendasPendentes = sales.filter(s => s.status_pagamento === 'PENDENTE');
+   257→  const saldoPendente = vendasPendentes.reduce((a, s) => a + (Number(s.valor_total) - Number(s.valor_pago)), 0);
+   258→  const listSales = tab === 'pendentes' ? vendasPendentes : sales;
+   259→  const compPendentes = comprovantes.filter(c => c.status === 'PENDENTE').length;
+   260→  // Notas fiscais (Bloco 10): a secao so existe se o backend devolveu colunas de
+   261→  // nota (SQL aplicado) — com SQL antigo ela simplesmente nao renderiza.
+   262→  const temNotas = sales.some(s => s.nota_status);
+   263→  const notasFiscais = sales.filter(s => s.nota_status === 'AUTORIZADA');
+   264→
+   265→  return (
+   266→    <div className="min-h-screen bg-gray-100">
+   267→      {/* Header personalizado */}
+   268→      <div className="bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-800 text-white px-5 pt-14 pb-24 relative overflow-hidden">
+   269→        <div className="absolute top-0 right-0 w-40 h-40 bg-white/5 rounded-full -translate-y-1/2 translate-x-1/2"></div>
+   270→        <div className="absolute bottom-0 left-0 w-32 h-32 bg-white/5 rounded-full translate-y-1/2 -translate-x-1/2"></div>
+   271→        <div className="max-w-md mx-auto relative z-10">
+   272→          <p className="text-[10px] font-bold text-blue-200/70 uppercase tracking-[0.2em] mb-3">Extrato do Cliente</p>
+   273→          <h1 className="text-2xl font-black uppercase tracking-tight leading-tight">{client.nome_fantasia}</h1>
+   274→          {client.endereco && (
+   275→            <p className="text-[11px] text-blue-200/60 mt-2 font-medium">
+   276→              <i className="fa-solid fa-location-dot mr-1 text-[9px]"></i>{client.endereco}{client.bairro ? ` - ${client.bairro}` : ''}
+   277→            </p>
+   278→          )}
+   279→        </div>
+   280→      </div>
+   281→
+   282→      {/* KPIs flutuante */}
+   283→      <div className="max-w-md mx-auto px-4 -mt-16 relative z-20">
+   284→        <div className="bg-white rounded-3xl shadow-xl border border-gray-100 p-5 grid grid-cols-3 gap-4">
+   285→          <div className="text-center">
+   286→            <p className="text-[8px] font-black uppercase text-gray-400 tracking-wider">Comprado</p>
+   287→            <p className="text-[15px] font-black text-blue-600 mt-0.5">{formatCurrency(stats.totalComprado)}</p>
+   288→          </div>
+   289→          <div className="text-center border-x border-gray-100">
+   290→            <p className="text-[8px] font-black uppercase text-gray-400 tracking-wider">Pago</p>
+   291→            <p className="text-[15px] font-black text-emerald-600 mt-0.5">{formatCurrency(stats.totalPago)}</p>
+   292→          </div>
+   293→          <div className="text-center">
+   294→            <p className="text-[8px] font-black uppercase text-gray-400 tracking-wider">Devedor</p>
+   295→            <p className={`text-[15px] font-black mt-0.5 ${saldoDevedor > 0 ? 'text-rose-500' : 'text-emerald-600'}`}>{formatCurrency(saldoDevedor)}</p>
+   296→          </div>
+   297→        </div>
+   298→      </div>
+   299→
+   300→      {/* Perfil personalizado */}
+   301→      <div className="max-w-md mx-auto px-4 mt-4">
+   302→        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
+   303→          <p className="text-[9px] font-black uppercase text-gray-400 tracking-wider mb-3">
+   304→            <i className="fa-solid fa-fingerprint mr-1 text-blue-400"></i>Seu Perfil
+   305→          </p>
+   306→          <div className="grid grid-cols-2 gap-3">
+   307→            <div className="flex items-center gap-2.5">
+   308→              <div className="w-8 h-8 bg-blue-50 rounded-xl flex items-center justify-center shrink-0">
+   309→                <i className="fa-solid fa-calendar-check text-blue-500 text-[10px]"></i>
+   310→              </div>
+   311→              <div>
+   312→                <p className="text-[9px] font-bold text-gray-400">Cliente desde</p>
+   313→                <p className="text-[11px] font-black text-gray-700 capitalize">{stats.clienteDesde}</p>
+   314→              </div>
+   315→            </div>
+   316→            <div className="flex items-center gap-2.5">
+   317→              <div className="w-8 h-8 bg-indigo-50 rounded-xl flex items-center justify-center shrink-0">
+   318→                <i className="fa-solid fa-repeat text-indigo-500 text-[10px]"></i>
+   319→              </div>
+   320→              <div>
+   321→                <p className="text-[9px] font-bold text-gray-400">Frequencia</p>
+   322→                <p className="text-[11px] font-black text-gray-700">{stats.frequenciaDias > 0 ? `A cada ${stats.frequenciaDias} dias` : `${stats.totalCompras} compra(s)`}</p>
+   323→              </div>
+   324→            </div>
+   325→            <div className="flex items-center gap-2.5">
+   326→              <div className="w-8 h-8 bg-emerald-50 rounded-xl flex items-center justify-center shrink-0">
+   327→                <i className="fa-solid fa-star text-emerald-500 text-[10px]"></i>
+   328→              </div>
+   329→              <div>
+   330→                <p className="text-[9px] font-bold text-gray-400">Favorito</p>
+   331→                <p className="text-[11px] font-black text-gray-700 break-words">{stats.produtoFavorito}</p>
+   332→              </div>
+   333→            </div>
+   334→            <div className="flex items-center gap-2.5">
+   335→              <div className="w-8 h-8 bg-purple-50 rounded-xl flex items-center justify-center shrink-0">
+   336→                <i className="fa-solid fa-bag-shopping text-purple-500 text-[10px]"></i>
+   337→              </div>
+   338→              <div>
+   339→                <p className="text-[9px] font-bold text-gray-400">Total pedidos</p>
+   340→                <p className="text-[11px] font-black text-gray-700">{stats.totalCompras} compra(s)</p>
+   341→              </div>
+   342→            </div>
+   343→          </div>
+   344→        </div>
+   345→      </div>
+   346→
+   347→      {/* Fazer pedido no catalogo online (identificado) — so para quem nao deve */}
+   348→      <div className="max-w-md mx-auto px-4 mt-4">
+   349→        {!temDebito ? (
+   350→          <a href={pedidoUrl} target="_blank" rel="noopener noreferrer" className="block bg-gradient-to-r from-blue-600 to-indigo-600 rounded-2xl px-4 py-3.5 shadow-lg active:scale-[0.98] transition-transform">
+   351→            <div className="flex items-center gap-3">
+   352→              <div className="w-9 h-9 bg-white/15 rounded-xl flex items-center justify-center shrink-0">
+   353→                <i className="fa-solid fa-cart-shopping text-white text-sm"></i>
+   354→              </div>
+   355→              <div className="flex-1 min-w-0 text-left">
+   356→                <p className="text-[11px] font-black text-white uppercase">Faca seu pedido online</p>
+   357→                <p className="text-[9px] text-blue-100/80 font-semibold">Monte seu carrinho — o pedido cai direto no nosso sistema</p>
+   358→              </div>
+   359→              <i className="fa-solid fa-arrow-right text-white/70 text-xs shrink-0"></i>
+   360→            </div>
+   361→          </a>
+   362→        ) : (
+   363→          <div className="bg-white border border-dashed border-gray-200 rounded-2xl px-4 py-3.5">
+   364→            <div className="flex items-center gap-3">
+   365→              <div className="w-9 h-9 bg-gray-100 rounded-xl flex items-center justify-center shrink-0">
+   366→                <i className="fa-solid fa-lock text-gray-400 text-sm"></i>
+   367→              </div>
+   368→              <div className="flex-1 min-w-0">
+   369→                <p className="text-[11px] font-black text-gray-500 uppercase">Pedido online bloqueado</p>
+   370→                <p className="text-[9px] text-gray-400 font-semibold">Quite seu debito de {formatCurrency(saldoDevedor)} para liberar o pedido pelo catalogo</p>
+   371→              </div>
+   372→            </div>
+   373→          </div>
+   374→        )}
+   375→      </div>
+   376→
+   377→      {/* Pendente — com botao de pagar via Pix */}
+   378→      {vendasPendentes.length > 0 && (
+   379→        <div className="max-w-md mx-auto px-4 mt-4">
+   380→          <div className="bg-gradient-to-r from-rose-50 to-orange-50 rounded-2xl px-4 py-3 border border-rose-100 flex items-center gap-3">
+   381→            <div className="w-9 h-9 bg-rose-100 rounded-xl flex items-center justify-center shrink-0">
+   382→              <i className="fa-solid fa-triangle-exclamation text-rose-500 text-sm"></i>
+   383→            </div>
+   384→            <div className="flex-1 min-w-0">
+   385→              <p className="text-[10px] font-bold text-rose-600 uppercase">Voce tem pendencias</p>
+   386→              <p className="text-sm font-black text-rose-800">{formatCurrency(saldoPendente)}</p>
+   387→            </div>
+   388→            <span className="text-[9px] font-bold text-rose-500 bg-rose-100 px-2.5 py-1 rounded-lg">{vendasPendentes.length}</span>
+   389→          </div>
+   390→          <button
+   391→            onClick={() => vendasPendentes.length === 1 ? abrirPix(vendasPendentes[0]) : setTab('pendentes')}
+   392→            className="w-full mt-2 py-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-2xl text-xs font-black uppercase tracking-wider shadow-lg active:scale-[0.98] transition-transform flex items-center justify-center gap-2"
+   393→          >
+   394→            <i className="fa-brands fa-pix text-base"></i>
+   395→            Pagar com Pix
+   396→          </button>
+   397→        </div>
+   398→      )}
+   399→
+   400→      {/* Meus comprovantes enviados */}
+   401→      {comprovantes.length > 0 && (
+   402→        <div className="max-w-md mx-auto px-4 mt-4">
+   403→          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
+   404→            <div className="flex items-center justify-between mb-3">
+   405→              <div className="flex items-center gap-2">
+   406→                <div className="w-8 h-8 bg-teal-50 rounded-xl flex items-center justify-center">
+   407→                  <i className="fa-solid fa-paper-plane text-teal-500 text-[11px]"></i>
+   408→                </div>
+   409→                <p className="text-[10px] font-black text-gray-700">Meus comprovantes</p>
+   410→              </div>
+   411→              {compPendentes > 0 && (
+   412→                <span className="text-[9px] font-black text-amber-600 bg-amber-50 px-2 py-1 rounded-lg border border-amber-100">{compPendentes} em analise</span>
+   413→              )}
+   414→            </div>
+   415→            <div className="space-y-2 max-h-64 overflow-y-auto">
+   416→              {comprovantes.slice(0, 8).map(c => (
+   417→                <div key={c.id} className="flex items-center gap-3 bg-gray-50 rounded-xl px-3 py-2.5 border border-gray-100">
+   418→                  <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${c.status === 'CONFIRMADO' ? 'bg-emerald-400' : c.status === 'REJEITADO' ? 'bg-rose-400' : 'bg-amber-400 animate-pulse'}`}></div>
+   419→                  <div className="flex-1 min-w-0">
+   420→                    <p className="text-[11px] font-black text-gray-700">{formatCurrency(Number(c.valor))}</p>
+   421→                    <p className="text-[9px] text-gray-400 font-semibold">{formatDate(c.created_at)}{c.review_note ? ` — ${c.review_note}` : ''}</p>
+   422→                  </div>
+   423→                  <span className={`text-[8px] font-black uppercase px-2 py-1 rounded-lg shrink-0 ${c.status === 'CONFIRMADO' ? 'bg-emerald-100 text-emerald-700' : c.status === 'REJEITADO' ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'}`}>
+   424→                    {c.status === 'CONFIRMADO' ? 'Confirmado' : c.status === 'REJEITADO' ? 'Recusado' : 'Em analise'}
+   425→                  </span>
+   426→                </div>
+   427→              ))}
+   428→            </div>
+   429→          </div>
+   430→        </div>
+   431→      )}
+   432→
+   433→      {/* Destaques — os mais comprados, nao pode ficar sem */}
+   434→      {ofertas.length > 0 && (
+   435→        <div className="max-w-md mx-auto px-4 mt-4">
+   436→          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
+   437→            <div className="flex items-center gap-2 mb-3">
+   438→              <div className="w-8 h-8 bg-orange-50 rounded-xl flex items-center justify-center">
+   439→                <i className="fa-solid fa-fire text-orange-500 text-xs"></i>
+   440→              </div>
+   441→              <div>
+   442→                <p className="text-[10px] font-black text-gray-700">Os mais comprados</p>
+   443→                <p className="text-[9px] text-gray-400 font-semibold">O que não pode faltar no seu estoque</p>
+   444→              </div>
+   445→            </div>
+   446→            <div className="grid grid-cols-2 gap-2">
+   447→              {ofertas.slice(0, 8).map((p, i) => (
+   448→                <div key={p.id || i} className="bg-orange-50/60 border border-orange-100 rounded-xl px-3 py-2.5 flex items-start gap-2">
+   449→                  <span className="w-4 h-4 bg-orange-500 text-white rounded-md text-[8px] font-black flex items-center justify-center shrink-0 mt-0.5">{i + 1}</span>
+   450→                  <p className="text-[11px] font-bold text-gray-700 capitalize leading-tight">{p.nome}</p>
+   451→                </div>
+   452→              ))}
+   453→            </div>
+   454→          </div>
+   455→        </div>
+   456→      )}
+   457→
+   458→      {/* Tabs + Lista */}
+   459→      <div className="max-w-md mx-auto px-4 mt-5">
+   460→        <div className="flex bg-white p-1 rounded-xl shadow-sm border border-gray-100 mb-4">
+   461→          <button onClick={() => setTab('todas')} className={`flex-1 py-2.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${tab === 'todas' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-400'}`}>
+   462→            Todas ({sales.length})
+   463→          </button>
+   464→          <button onClick={() => setTab('pendentes')} className={`flex-1 py-2.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${tab === 'pendentes' ? 'bg-rose-500 text-white shadow-sm' : 'text-gray-400'}`}>
+   465→            Pendentes ({vendasPendentes.length})
+   466→          </button>
+   467→        </div>
+   468→
+   469→        <div className="space-y-2 pb-10">
+   470→          {listSales.length === 0 ? (
+   471→            <div className="bg-white rounded-2xl p-10 text-center border border-gray-100">
+   472→              <i className="fa-solid fa-receipt text-gray-200 text-4xl mb-3 block"></i>
+   473→              <p className="text-xs text-gray-400 font-semibold">Nenhuma compra encontrada</p>
+   474→            </div>
+   475→          ) : listSales.map(sale => {
+   476→            const isPending = sale.status_pagamento === 'PENDENTE';
+   477→            const valorTotal = Number(sale.valor_total) || 0;
+   478→            const valorPago = Number(sale.valor_pago) || 0;
+   479→            const restante = valorTotal - valorPago;
+   480→            // Pagamento parcial: ja pagou uma parte mas ainda falta
+   481→            const isPartial = isPending && valorPago > 0.005 && restante > 0.005;
+   482→            const pctPago = valorTotal > 0 ? Math.min(100, Math.round((valorPago / valorTotal) * 100)) : 0;
+   483→            const compsDaVenda = comprovantes.filter(c => c.sale_id === sale.id);
+   484→            const compsEmAnalise = compsDaVenda.filter(c => c.status === 'PENDENTE');
+   485→            const isOpen = expanded.has(sale.id);
+   486→
+   487→            return (
+   488→              <div key={sale.id} className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden transition-all">
+   489→                {/* Linha resumida - SEMPRE VISIVEL */}
+   490→                <button onClick={() => toggle(sale.id)} className="w-full px-4 py-3.5 flex items-center justify-between text-left">
+   491→                  <div className="flex items-center gap-3 min-w-0">
+   492→                    <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${isPartial ? 'bg-amber-400' : isPending ? 'bg-rose-400' : 'bg-emerald-400'}`}></div>
+   493→                    <div className="min-w-0">
+   494→                      <div className="flex items-center gap-2">
+   495→                        <span className={`text-[10px] font-black uppercase ${isPartial ? 'text-amber-600' : isPending ? 'text-rose-600' : 'text-emerald-600'}`}>{isPartial ? 'Pago parcial' : isPending ? 'Devendo' : 'Pago'}</span>
+   496→                        <span className="text-[10px] text-gray-400 font-semibold">{formatDate(sale.data_venda)}</span>
+   497→                        {sale.entrega_status && ENTREGA_META[sale.entrega_status] && (
+   498→                          <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded ${ENTREGA_META[sale.entrega_status].cls}`}>
+   499→                            <i className="fa-solid fa-truck-fast mr-1"></i>{ENTREGA_META[sale.entrega_status].label}
+   500→                          </span>
+   501→                        )}
+   502→                      </div>
+   503→                      <p className="text-[9px] text-gray-400 font-medium mt-0.5">
+   504→                        {isPartial ? (
+   505→                          <>Ja pagou <span className="text-emerald-600 font-bold">{formatCurrency(valorPago)}</span> de {formatCurrency(valorTotal)}</>
+   506→                        ) : (
+   507→                          getPaymentLabel(sale.metodo_pagamento)
+   508→                        )}
+   509→                      </p>
+   510→                    </div>
+   511→                  </div>
+   512→                  <div className="flex items-center gap-2.5 shrink-0">
+   513→                    <div className="flex flex-col items-end">
+   514→                      <span className="text-sm font-black text-gray-800">{formatCurrency(valorTotal)}</span>
+   515→                      {isPartial && <span className="text-[8px] font-black text-rose-500 uppercase">falta {formatCurrency(restante)}</span>}
+   516→                    </div>
+   517→                    <i className={`fa-solid fa-chevron-down text-[9px] text-gray-300 transition-transform ${isOpen ? 'rotate-180' : ''}`}></i>
+   518→                  </div>
+   519→                </button>
+   520→
+   521→                {/* Detalhes - CUPOM EXPANDIDO */}
+   522→                {isOpen && (
+   523→                  <div>
+   524→                    <div className="border-t border-gray-100 mx-4"></div>
+   525→                    <div className="px-4 py-3">
+   526→                      <div className="border-l-2 border-dashed border-gray-200 pl-3 space-y-1.5">
+   527→                        {(sale.sale_items || []).map((item, idx) => (
+   528→                          <div key={idx} className="flex items-baseline justify-between text-[11px]">
+   529→                            <span className="text-gray-700 font-medium capitalize">{products[item.produto_id] || 'Produto'}</span>
+   530→                            <span className="text-gray-400 font-bold tabular-nums ml-3 shrink-0">{item.quantidade} un</span>
+   531→                          </div>
+   532→                        ))}
+   533→                      </div>
+   534→                    </div>
+   535→                    <div className="border-t border-dashed border-gray-200 mx-4"></div>
+   536→                    <div className="px-4 py-3 flex items-center justify-between">
+   537→                      <span className="text-[9px] font-bold uppercase text-gray-400 tracking-wider">Total</span>
+   538→                      <span className="text-base font-black text-gray-800">{formatCurrency(valorTotal)}</span>
+   539→                    </div>
+   540→
+   541→                    {/* PAGAMENTO PARCIAL: progresso + historico organizado */}
+   542→                    {isPartial && (
+   543→                      <div className="px-4 pb-3">
+   544→                        <div className="flex items-center justify-between mb-1.5">
+   545→                          <span className="text-[9px] font-black uppercase text-gray-400">{pctPago}% pago</span>
+   546→                          <span className="text-[9px] font-bold text-gray-500"><span className="text-emerald-600 font-black">{formatCurrency(valorPago)}</span> de {formatCurrency(valorTotal)}</span>
+   547→                        </div>
+   548→                        <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+   549→                          <div className="h-full bg-gradient-to-r from-emerald-500 to-teal-500 rounded-full transition-all" style={{ width: `${pctPago}%` }}></div>
+   550→                        </div>
+   551→                      </div>
+   552→                    )}
+   553→
+   554→                    {(sale.pagamentos?.length || 0) > 0 && (
+   555→                      <div className="px-4 pb-3">
+   556→                        <p className="text-[9px] font-black uppercase text-gray-400 tracking-wider mb-2">
+   557→                          <i className="fa-solid fa-clock-rotate-left mr-1 text-gray-300"></i>Pagamentos registrados
+   558→                        </p>
+   559→                        <div className="space-y-1.5">
+   560→                          {sale.pagamentos!.map((pg, i) => (
+   561→                            <div key={i} className="flex items-center gap-2.5 bg-emerald-50/70 rounded-xl px-3 py-2 border border-emerald-100/70">
+   562→                              <div className="w-5 h-5 bg-emerald-100 rounded-full flex items-center justify-center shrink-0">
+   563→                                <i className="fa-solid fa-check text-emerald-600 text-[8px]"></i>
+   564→                              </div>
+   565→                              <div className="flex-1 min-w-0">
+   566→                                <p className="text-[10px] font-black text-gray-700 capitalize break-words">{pg.metodo}</p>
+   567→                                <p className="text-[8px] text-gray-400 font-semibold">{pg.data}</p>
+   568→                              </div>
+   569→                              <span className="text-[11px] font-black text-emerald-600 shrink-0">+ {formatCurrency(pg.valor)}</span>
+   570→                            </div>
+   571→                          ))}
+   572→                        </div>
+   573→                      </div>
+   574→                    )}
+   575→
+   576→                    {/* Comprovante enviado pelo portal aguardando confirmacao */}
+   577→                    {compsEmAnalise.map(c => (
+   578→                      <div key={c.id} className="mx-4 mb-3 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2 flex items-center gap-2.5">
+   579→                        <div className="w-5 h-5 bg-amber-100 rounded-full flex items-center justify-center shrink-0">
+   580→                          <i className="fa-solid fa-hourglass-half text-amber-600 text-[8px]"></i>
+   581→                        </div>
+   582→                        <div className="flex-1 min-w-0">
+   583→                          <p className="text-[10px] font-black text-amber-700">Comprovante em análise</p>
+   584→                          <p className="text-[8px] text-amber-600/80 font-semibold">Enviado em {formatDate(c.created_at)} — aguarde a confirmacao</p>
+   585→                        </div>
+   586→                        <span className="text-[10px] font-black text-amber-700 shrink-0">{formatCurrency(Number(c.valor))}</span>
+   587→                      </div>
+   588→                    ))}
+   589→
+   590→                    {isPending && restante > 0 && (
+   591→                      <>
+   592→                        <div className="bg-rose-50 px-4 py-2 border-t border-rose-100 flex items-center justify-between">
+   593→                          <span className="text-[9px] font-bold text-rose-500">Falta pagar</span>
+   594→                          <span className="text-[11px] font-black text-rose-600">{formatCurrency(restante)}</span>
+   595→                        </div>
+   596→                        <div className="px-4 py-3 border-t border-rose-100 bg-white">
+   597→                          <button
+   598→                            onClick={(e) => { e.stopPropagation(); abrirPix(sale); }}
+   599→                            className="w-full py-3 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-xl text-[11px] font-black uppercase tracking-wider shadow-md active:scale-[0.98] transition-transform flex items-center justify-center gap-2"
+   600→                          >
+   601→                            <i className="fa-brands fa-pix text-sm"></i>Pagar com Pix
+   602→                          </button>
+   603→                        </div>
+   604→                      </>
+   605→                    )}
+   606→                    {isPending && sale.data_vencimento && (
+   607→                      <div className="bg-amber-50 px-4 py-2 border-t border-amber-100">
+   608→                        <p className="text-[9px] font-bold text-amber-600 text-center uppercase">
+   609→                          <i className="fa-solid fa-calendar-day mr-1"></i>Vence em {formatDate(sale.data_vencimento)}
+   610→                        </p>
+   611→                      </div>
+   612→                    )}
+   613→                  </div>
+   614→                )}
+   615→              </div>
+   616→            );
+   617→          })}
+   618→        </div>
+   619→      </div>
+   620→
+   621→      {/* Minhas Notas Fiscais — DANFE (PDF) e XML (Bloco 10; so renderiza se o backend devolveu notas) */}
+   622→      {temNotas && (
+   623→        <div className="max-w-md mx-auto px-4 mt-4">
+   624→          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
+   625→            <div className="flex items-center justify-between mb-3">
+   626→              <div className="flex items-center gap-2">
+   627→                <div className="w-8 h-8 bg-blue-50 rounded-xl flex items-center justify-center">
+   628→                  <i className="fa-solid fa-file-invoice text-blue-500 text-[11px]"></i>
+   629→                </div>
+   630→                <p className="text-[10px] font-black text-gray-700">Minhas Notas Fiscais</p>
+   631→              </div>
+   632→              {notasFiscais.length > 0 && (
+   633→                <span className="text-[9px] font-black text-emerald-600 bg-emerald-50 px-2 py-1 rounded-lg border border-emerald-100 shrink-0">
+   634→                  {notasFiscais.length} nota{notasFiscais.length > 1 ? 's' : ''}
+   635→                </span>
+   636→              )}
+   637→            </div>
+   638→            {notasFiscais.length === 0 ? (
+   639→              <div className="bg-gray-50 rounded-xl px-3 py-2.5 border border-gray-100 flex items-start gap-2">
+   640→                <i className="fa-solid fa-circle-info text-gray-300 text-[10px] mt-0.5 shrink-0"></i>
+   641→                <p className="text-[9px] text-gray-400 font-semibold leading-relaxed">
+   642→                  Nenhuma nota fiscal autorizada ainda — as notas aparecem aqui automaticamente após a emissão.
+   643→                </p>
+   644→              </div>
+   645→            ) : (
+   646→              <div className="space-y-2">
+   647→                {notasFiscais.map(s => {
+   648→                  const label = notaRotulo(s.nota_tipo, s.nota_numero);
+   649→                  const pdfUrl = s.nota_pdf_url || '';
+   650→                  const xmlUrl = s.nota_xml_url || '';
+   651→                  // WhatsApp: numero da nota + links disponiveis (PDF/XML), tudo URL-encodado
+   652→                  const waTexto = encodeURIComponent(
+   653→                    `Nota fiscal ${label} da compra de ${formatDate(s.data_venda)}` +
+   654→                    (pdfUrl ? `\nDANFE (PDF): ${pdfUrl}` : '') +
+   655→                    (xmlUrl ? `\nXML: ${xmlUrl}` : '')
+   656→                  );
+   657→                  const badge = s.nota_status ? NOTA_META[s.nota_status] : undefined;
+   658→                  return (
+   659→                    <div key={s.id} className="bg-gray-50 rounded-xl px-3 py-2.5 border border-gray-100">
+   660→                      <div className="flex items-center gap-2">
+   661→                        <i className="fa-solid fa-file-invoice text-gray-400 text-[10px] shrink-0"></i>
+   662→                        <p className="text-[11px] font-black text-gray-700 flex-1 min-w-0 break-words">{label}</p>
+   663→                        {badge && (
+   664→                          <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded shrink-0 ${badge.cls}`}>
+   665→                            <i className={`${badge.icon} mr-1`}></i>{badge.label}
+   666→                          </span>
+   667→                        )}
+   668→                      </div>
+   669→                      <p className="text-[9px] text-gray-400 font-semibold mt-0.5">
+   670→                        Compra de {formatDate(s.data_venda)} — {formatCurrency(Number(s.valor_total) || 0)}
+   671→                      </p>
+   672→                      <div className="flex flex-wrap gap-1.5 mt-2">
+   673→                        {pdfUrl && (
+   674→                          <a href={pdfUrl} target="_blank" rel="noopener noreferrer" className="text-[9px] font-black uppercase tracking-wide inline-flex items-center gap-1 bg-blue-50 text-blue-600 border border-blue-100 rounded-lg px-2.5 py-1.5 active:scale-[0.97] transition-transform">
+   675→                            <i className="fa-solid fa-file-pdf"></i>DANFE (PDF)
+   676→                          </a>
+   677→                        )}
+   678→                        {xmlUrl && (
+   679→                          <a href={xmlUrl} target="_blank" rel="noopener noreferrer" className="text-[9px] font-black uppercase tracking-wide inline-flex items-center gap-1 bg-gray-100 text-gray-600 border border-gray-200 rounded-lg px-2.5 py-1.5 active:scale-[0.97] transition-transform">
+   680→                            <i className="fa-solid fa-code"></i>XML
+   681→                          </a>
+   682→                        )}
+   683→                        <a href={`https://wa.me/?text=${waTexto}`} target="_blank" rel="noopener noreferrer" className="text-[9px] font-black uppercase tracking-wide inline-flex items-center gap-1 bg-emerald-50 text-emerald-600 border border-emerald-100 rounded-lg px-2.5 py-1.5 active:scale-[0.97] transition-transform">
+   684→                          <i className="fa-brands fa-whatsapp"></i>WhatsApp
+   685→                        </a>
+   686→                      </div>
+   687→                    </div>
+   688→                  );
+   689→                })}
+   690→              </div>
+   691→            )}
+   692→          </div>
+   693→        </div>
+   694→      )}
+   695→
+   696→      <div className="text-center pb-6">
+   697→        <p className="text-[9px] text-gray-300 font-semibold tracking-widest uppercase">Doce Mania Distribuidora</p>
+   698→      </div>
+   699→
+   700→      {/* ===== MODAL PIX ===== */}
+   701→      {pixSale && (
+   702→        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm" onClick={fecharPix}>
+   703→          <div
+   704→            className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl max-h-[92vh] overflow-y-auto animate-in slide-in-from-bottom duration-300"
+   705→            onClick={e => e.stopPropagation()}
+   706→          >
+   707→            {/* Header */}
+   708→            <div className="sticky top-0 bg-gradient-to-r from-emerald-600 to-teal-600 text-white px-5 py-4 flex items-center justify-between rounded-t-3xl">
+   709→              <div>
+   710→                <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-emerald-100/80">Pagamento</p>
+   711→                <h3 className="text-base font-black uppercase flex items-center gap-2"><i className="fa-brands fa-pix"></i>Pix — Doce Mania</h3>
+   712→              </div>
+   713→              <button onClick={fecharPix} className="w-9 h-9 bg-white/15 rounded-xl flex items-center justify-center active:scale-90">
+   714→                <i className="fa-solid fa-xmark"></i>
+   715→              </button>
+   716→            </div>
+   717→
+   718→            {enviado ? (
+   719→              /* Sucesso */
+   720→              <div className="p-8 text-center">
+   721→                <div className="w-20 h-20 bg-emerald-50 rounded-full flex items-center justify-center mx-auto mb-5">
+   722→                  <i className="fa-solid fa-check text-emerald-500 text-3xl"></i>
+   723→                </div>
+   724→                <h4 className="text-base font-black text-gray-800 uppercase">Comprovante enviado!</h4>
+   725→                <p className="text-xs text-gray-400 font-semibold mt-2 leading-relaxed">
+   726→                  Recebemos seu comprovante de {formatCurrency(pixData?.valor || 0)}.<br />
+   727→                  A confirmacao e feita pela nossa equipe — em<br />poucos minutos sua divida sera atualizada aqui.
+   728→                </p>
+   729→                <button onClick={fecharPix} className="w-full mt-6 py-3.5 bg-gray-800 text-white rounded-2xl text-xs font-black uppercase tracking-wider active:scale-[0.98] transition-transform">
+   730→                  Voltar ao extrato
+   731→                </button>
+   732→              </div>
+   733→            ) : pixLoading ? (
+   734→              /* Carregando QR */
+   735→              <div className="p-10 text-center">
+   736→                <div className="w-10 h-10 border-4 border-emerald-100 border-t-emerald-600 rounded-full animate-spin mx-auto"></div>
+   737→                <p className="text-[10px] font-bold text-gray-400 uppercase mt-4">Gerando seu Pix...</p>
+   738→              </div>
+   739→            ) : pixError ? (
+   740→              /* Erro */
+   741→              <div className="p-8 text-center">
+   742→                <div className="w-14 h-14 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4">
+   743→                  <i className="fa-solid fa-triangle-exclamation text-rose-400 text-xl"></i>
+   744→                </div>
+   745→                <p className="text-xs font-bold text-gray-700">{pixError}</p>
+   746→                <button onClick={fecharPix} className="w-full mt-5 py-3 bg-gray-100 text-gray-600 rounded-2xl text-[11px] font-black uppercase">Fechar</button>
+   747→              </div>
+   748→            ) : pixData ? (
+   749→              <div className="p-5">
+   750→                {/* Valor */}
+   751→                <div className="text-center mb-4">
+   752→                  <p className="text-[9px] font-black text-gray-400 uppercase tracking-wider">Saldo em aberto</p>
+   753→                  <p className="text-3xl font-black text-gray-800 mt-1">{formatCurrency(pixData.valor)}</p>
+   754→                  {Number(pixSale.valor_pago || 0) > 0.005 && (
+   755→                    <p className="text-[9px] text-emerald-600 font-bold mt-1">
+   756→                      <i className="fa-solid fa-check mr-1"></i>Você já pagou {formatCurrency(Number(pixSale.valor_pago))} desta compra
+   757→                    </p>
+   758→                  )}
+   759→                  <p className="text-[9px] text-gray-400 font-semibold mt-1">Venda de {formatDate(pixSale.data_venda)} • ID {pixData.txid}</p>
+   760→                </div>
+   761→
+   762→                {/* QR Code */}
+   763→                <div className="bg-gray-50 border border-gray-100 rounded-2xl p-4 flex flex-col items-center">
+   764→                  <img src={pixData.qrDataUrl} alt="QR Code Pix" className="w-52 h-52 object-contain bg-white rounded-xl border border-gray-100 shadow-inner" />
+   765→                  <p className="text-[8px] font-bold text-gray-400 uppercase mt-3 text-center leading-relaxed">
+   766→                    Abra o app do seu banco &gt; Pix &gt; Escanear QR Code
+   767→                  </p>
+   768→                </div>
+   769→
+   770→                {/* Copia e cola */}
+   771→                <div className="mt-3">
+   772→                  <p className="text-[9px] font-black text-gray-400 uppercase tracking-wider mb-2">Ou use o Pix Copia e Cola</p>
+   773→                  <div className="bg-gray-50 border border-gray-100 rounded-xl p-3">
+   774→                    <p className="text-[9px] font-mono text-gray-500 break-all leading-relaxed max-h-16 overflow-hidden">{pixData.payload}</p>
+   775→                  </div>
+   776→                  <button
+   777→                    onClick={copiarCodigo}
+   778→                    className={`w-full mt-2 py-3 rounded-xl text-[11px] font-black uppercase tracking-wider transition-all active:scale-[0.98] flex items-center justify-center gap-2 ${copiado ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-800 text-white'}`}
+   779→                  >
+   780→                    <i className={`fa-solid ${copiado ? 'fa-check' : 'fa-copy'}`}></i>
+   781→                    {copiado ? 'Codigo copiado!' : 'Copiar codigo Pix'}
+   782→                  </button>
+   783→                </div>
+   784→
+   785→                {/* Recebedor */}
+   786→                <div className="mt-3 bg-blue-50/50 border border-blue-100 rounded-xl p-3 grid grid-cols-2 gap-2 text-center">
+   787→                  <div>
+   788→                    <p className="text-[8px] font-black text-gray-400 uppercase">Recebedor</p>
+   789→                    <p className="text-[10px] font-black text-gray-700 mt-0.5">{pixData.nome}</p>
+   790→                  </div>
+   791→                  <div>
+   792→                    <p className="text-[8px] font-black text-gray-400 uppercase">Chave (CPF)</p>
+   793→                    <p className="text-[10px] font-black text-gray-700 mt-0.5">{pixData.chaveFormatada}</p>
+   794→                  </div>
+   795→                </div>
+   796→
+   797→                {/* Anexar comprovante */}
+   798→                <div className="mt-4 pt-4 border-t border-dashed border-gray-200">
+   799→                  <p className="text-[9px] font-black text-gray-500 uppercase tracking-wider text-center mb-3">
+   800→                    <i className="fa-solid fa-circle-info mr-1 text-blue-400"></i>Ja pagou? Envie o print do comprovante
+   801→                  </p>
+   802→                  {compError && (
+   803→                    <div className="mb-3 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2.5 text-center">
+   804→                      <p className="text-[10px] font-bold text-rose-600">{compError}</p>
+   805→                    </div>
+   806→                  )}
+   807→                  <button
+   808→                    onClick={escolherArquivo}
+   809→                    disabled={enviando}
+   810→                    className="w-full py-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-2xl text-xs font-black uppercase tracking-wider shadow-lg active:scale-[0.98] transition-transform flex items-center justify-center gap-2 disabled:opacity-60"
+   811→                  >
+   812→                    {enviando ? (
+   813→                      <><div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin"></div>Enviando...</>
+   814→                    ) : (
+   815→                      <><i className="fa-solid fa-paperclip"></i>Anexar comprovante</>
+   816→                    )}
+   817→                  </button>
+   818→                  <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={onArquivoSelecionado} />
+   819→                </div>
+   820→              </div>
+   821→            ) : null}
+   822→          </div>
+   823→        </div>
+   824→      )}
+   825→    </div>
+   826→  );
+   827→}
+   828→

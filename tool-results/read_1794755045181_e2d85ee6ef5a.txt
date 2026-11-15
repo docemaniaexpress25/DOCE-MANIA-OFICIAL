@@ -1,0 +1,1082 @@
+     1→"use client";
+     2→import React, { useState, useEffect, useCallback, useRef } from 'react';
+     3→import { User, Product, Carga, Sale, Commission, Client, ReceiveMethod, CargaPendente, CommissionPaymentLog, SystemMessage, Expense, Category, Subcategory, MelhoriasFlags, MELHORIAS_DEFAULT } from '@/lib/types';
+     4→import AdminDashboard from '@/components/doce/AdminDashboard';
+     5→import VendedorDashboard from '@/components/doce/VendedorDashboard';
+     6→import FilaEntregas from '@/components/doce/FilaEntregas';
+     7→import SecretarioView from '@/components/doce/SecretarioView';
+     8→import SecretarioEstoque from '@/components/doce/SecretarioEstoque';
+     9→import Login from '@/components/doce/Login';
+    10→import { haptics } from '@/utils/haptics';
+    11→import { offlineSync } from '@/utils/offlineSync';
+    12→import { userService, clearSessionToken } from '@/services/userService';
+    13→import { productService } from '@/services/productService';
+    14→import { clientService } from '@/services/clientService';
+    15→import { appSettingsService, AppSettings } from '@/services/appSettingsService';
+    16→import { saleService } from '@/services/saleService';
+    17→import { commissionService } from '@/services/commissionService';
+    18→import { messageService } from '@/services/messageService';
+    19→import { cargaService } from '@/services/cargaService';
+    20→import { dailyRouteService } from '@/services/dailyRouteService';
+    21→import { expenseService } from '@/services/expenseService';
+    22→import { categoryService } from '@/services/categoryService';
+    23→import { supabase } from '@/lib/supabaseClient';
+    24→import { loadLocalState, saveLocalState, DailyRouteState } from '@/utils/persistence';
+    25→import { pushService } from '@/services/pushNotificationService';
+    26→// BLOCO 118.3 (regra do dono): o CAIXA é EXCLUSIVO do David (Rota 5) — os
+    27→// demais vendedores ganham comissão e não têm caixa.
+    28→import { isDavidVendedor } from '@/lib/equipe';
+    29→
+    30→const getTodayDateString = () => {
+    31→  const now = new Date();
+    32→  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    33→};
+    34→
+    35→/**
+    36→ * BLOCO 13: Tela do ENTREGADOR — fila continua de entregas (P1/P2/antiguidade).
+    37→ * Login oculto (5 toques no logo) OU usuario real ENTREGADOR criado pelo admin.
+    38→ * Entregador recebe SALARIO fixo: aqui nao existe comissao.
+    39→ */
+    40→const EntregadorShell: React.FC<{ user: User; melhorias: MelhoriasFlags }> = ({ user, melhorias }) => {
+    41→  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+    42→  const showToast = useCallback((message: string, type: 'success' | 'error' = 'success') => {
+    43→    setToast({ message, type });
+    44→    setTimeout(() => setToast(null), 3200);
+    45→  }, []);
+    46→  return (
+    47→    <div className="space-y-4 pb-10">
+    48→      {toast && (
+    49→        <div className="fixed top-[calc(5rem+env(safe-area-inset-top))] left-4 right-4 z-[300] flex justify-center pointer-events-none">
+    50→          <div className={`${toast.type === 'success' ? 'bg-emerald-600' : 'bg-rose-600'} text-white px-6 py-3 rounded-2xl shadow-2xl font-black text-xs uppercase flex items-center gap-3 animate-in slide-in-from-top`}>
+    51→            <i className={`fa-solid ${toast.type === 'success' ? 'fa-circle-check' : 'fa-circle-exclamation'}`}></i>{toast.message}
+    52→          </div>
+    53→        </div>
+    54→      )}
+    55→      <FilaEntregas user={user} showToast={showToast} modo="ENTREGADOR" melhorias={melhorias} />
+    56→    </div>
+    57→  );
+    58→};
+    59→
+    60→/**
+    61→ * BLOCO 13: Tela do SECRETARIO da base fisica — separacao de pedidos.
+    62→ * Ve cada pedido novo (com alarme sonoro), imprime o cupom identico e
+    63→ * marca SEPARADO. Nao vende, nao entrega, nao mexe em valores.
+    64→ *
+    65→ * BLOCO 19: ganhou a aba ESTOQUE — ajuste APENAS da quantidade dos
+    66→ * produtos (sem preco, custo, nome ou qualquer outro dado). A gravacao
+    67→ * vai pela rota /api/secretario/estoque (whitelist de coluna no servidor).
+    68→ */
+    69→const SecretarioShell: React.FC<{ user: User; melhorias: MelhoriasFlags; products: Product[]; reloadCore: () => void }> = ({ user, melhorias, products, reloadCore }) => {
+    70→  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+    71→  const showToast = useCallback((message: string, type: 'success' | 'error' = 'success') => {
+    72→    setToast({ message, type });
+    73→    setTimeout(() => setToast(null), 3200);
+    74→  }, []);
+    75→  // BLOCO 19: abas do secretario — SEPARACAO (fila, padrao de sempre) + ESTOQUE
+    76→  const [abaSecretario, setAbaSecretario] = useState<'SEPARACAO' | 'ESTOQUE'>('SEPARACAO');
+    77→  return (
+    78→    <div className="space-y-4 pb-10">
+    79→      {toast && (
+    80→        <div className="fixed top-[calc(5rem+env(safe-area-inset-top))] left-4 right-4 z-[300] flex justify-center pointer-events-none">
+    81→          <div className={`${toast.type === 'success' ? 'bg-emerald-600' : 'bg-rose-600'} text-white px-6 py-3 rounded-2xl shadow-2xl font-black text-xs uppercase flex items-center gap-3 animate-in slide-in-from-top`}>
+    82→            <i className={`fa-solid ${toast.type === 'success' ? 'fa-circle-check' : 'fa-circle-exclamation'}`}></i>{toast.message}
+    83→          </div>
+    84→        </div>
+    85→      )}
+    86→      {/* ===== ABAS DO SECRETARIO ===== */}
+    87→      <div className="grid grid-cols-2 gap-1.5 bg-white p-1.5 rounded-2xl border border-gray-100 shadow-sm">
+    88→        <button
+    89→          onClick={() => setAbaSecretario('SEPARACAO')}
+    90→          className={`py-3 rounded-xl text-[10px] font-black uppercase tracking-wide active:scale-95 transition-all ${abaSecretario === 'SEPARACAO' ? 'bg-slate-800 text-white shadow-md' : 'bg-gray-50 text-gray-400'}`}
+    91→        >
+    92→          <i className="fa-solid fa-boxes-packing mr-1.5"></i>Separação
+    93→        </button>
+    94→        <button
+    95→          onClick={() => setAbaSecretario('ESTOQUE')}
+    96→          className={`py-3 rounded-xl text-[10px] font-black uppercase tracking-wide active:scale-95 transition-all ${abaSecretario === 'ESTOQUE' ? 'bg-emerald-600 text-white shadow-md' : 'bg-gray-50 text-gray-400'}`}
+    97→        >
+    98→          <i className="fa-solid fa-boxes-stacked mr-1.5"></i>Estoque
+    99→        </button>
+   100→      </div>
+   101→      {abaSecretario === 'SEPARACAO' ? (
+   102→        <SecretarioView user={user} showToast={showToast} melhorias={melhorias} />
+   103→      ) : (
+   104→        <SecretarioEstoque products={products} showToast={showToast} reloadProducts={reloadCore} />
+   105→      )}
+   106→    </div>
+   107→  );
+   108→};
+   109→
+   110→const App: React.FC = () => {
+   111→  const [currentUser, setCurrentUser] = useState<User | null>(() => loadLocalState('currentUser', null));
+   112→  
+   113→  const [logo, setLogo] = useState<string | null>(null);
+   114→  const [margemGlobalAtiva, setMargemGlobalAtiva] = useState(true);
+   115→  const [margemGlobalValor, setMargemGlobalValor] = useState(30); 
+   116→  const [margemMinima, setMargemMinima] = useState(20); 
+   117→  const [margemMinimaAtiva, setMargemMinimaAtiva] = useState(true); 
+   118→  const [pix1Name, setPix1Name] = useState("Pix Banco A");
+   119→  const [pix1Code, setPix1Code] = useState<string | null>(null);
+   120→  const [pix2Name, setPix2Name] = useState("Pix Banco B");
+   121→  const [pix2Code, setPix2Code] = useState<string | null>(null);
+   122→  // BLOCO 62: chave Pix do RECEBIMENTO (QR gerado na entrega) — editavel em Configurações
+   123→  const [pixChave, setPixChave] = useState<string>("");
+   124→  const [productOrder, setProductOrder] = useState<string[]>([]);
+   125→  const [clientOrder, setClientOrder] = useState<string[]>([]);
+   126→  // BLOCO 23: ordem do PORTAL (catálogo do cliente) — NÃO mexe na ordem do PDV
+   127→  const [catalogoOrder, setCatalogoOrder] = useState<string[]>([]);
+   128→  const [companyName, setCompanyName] = useState("DOCE MANIA DISTRIBUIDORA");
+   129→  const [companyCnpj, setCompanyCnpj] = useState("00.000.000/0001-00");
+   130→  // BLOCO 14: interruptores das melhorias (liga/desliga pelo admin)
+   131→  const [melhorias, setMelhorias] = useState<MelhoriasFlags>({ ...MELHORIAS_DEFAULT });
+   132→
+   133→  const [adminNotification, setAdminNotification] = useState<string | null>(null);
+   134→  const [isOnline, setIsOnline] = useState(true);
+   135→  
+   136→  const [users, setUsers] = useState<User[]>([]);
+   137→  // Bloco 12: estado da busca de usuarios para a tela de login
+   138→  // (LOADING mostra spinner; ERRO mostra "Tentar novamente").
+   139→  const [usersStatus, setUsersStatus] = useState<'LOADING' | 'OK' | 'ERRO'>('LOADING');
+   140→  const reloadUsers = useCallback(() => {
+   141→    setUsersStatus('LOADING');
+   142→    userService.getAllUsers()
+   143→      .then(list => { setUsers(list); setUsersStatus('OK'); })
+   144→      .catch((e) => { console.error('[users] recarga falhou:', e?.message); setUsersStatus('ERRO'); });
+   145→  }, []);
+   146→  const [products, setProducts] = useState<Product[]>([]);
+   147→  const [clients, setClients] = useState<Client[]>([]);
+   148→  const [categories, setCategories] = useState<Category[]>([]);
+   149→  const [subcategories, setSubcategories] = useState<Subcategory[]>([]);
+   150→
+   151→  const [cargas, setCargas] = useState<Carga[]>([]);
+   152→  const [cargasPendentes, setCargasPendentes] = useState<CargaPendente[]>([]);
+   153→  // true quando os dados de carga chegaram de verdade do Supabase ao menos uma vez.
+   154→  // Evita o race do rascunho de carga no admin (inicializava com cargas ainda vazio).
+   155→  const [cargasLoaded, setCargasLoaded] = useState(false);
+   156→  const [sales, setSales] = useState<Sale[]>([]);
+   157→  const [commissions, setCommissions] = useState<Commission[]>([]);
+   158→  const [payoutLogs, setPayoutLogs] = useState<CommissionPaymentLog[]>([]);
+   159→  const [expenses, setExpenses] = useState<Expense[]>([]);
+   160→  const [messages, setMessages] = useState<SystemMessage[]>([]);
+   161→
+   162→  const [dailyRouteState, setDailyRouteState] = useState<DailyRouteState>(() => {
+   163→    const saved = loadLocalState<DailyRouteState | null>('dailyRouteState', null);
+   164→    const today = getTodayDateString();
+   165→    if (!saved || saved.date !== today) {
+   166→      return { date: today, clientIds: [], skippedClientIds: [] };
+   167→    }
+   168→    return saved;
+   169→  });
+   170→
+   171→  // Refs para evitar race condition no pular/reabrir
+   172→  const routeInitializedRef = useRef(false);
+   173→  const routeUpdateLockUntilRef = useRef(0); // timestamp — bloqueia reloads ate esta hora
+   174→
+   175→  // Haptics: vibracao em todos os botoes
+   176→  useEffect(() => {
+   177→    const handler = (e: MouseEvent) => {
+   178→      const target = e.target as HTMLElement;
+   179→      if (target.closest('button, a, [role="button"], select, input[type="checkbox"], input[type="radio"], .haptic')) {
+   180→        haptics.tap();
+   181→      }
+   182→    };
+   183→    document.addEventListener('click', handler);
+   184→    return () => document.removeEventListener('click', handler);
+   185→  }, []);
+   186→
+   187→  // Offline sync: detecta conexao
+   188→  useEffect(() => {
+   189→    setIsOnline(offlineSync.isOnline());
+   190→    const cleanup = offlineSync.onConnectionChange((online) => {
+   191→      setIsOnline(online);
+   192→      if (online) {
+   193→        haptics.notification();
+   194→      } else {
+   195→        haptics.error();
+   196→      }
+   197→    });
+   198→    return cleanup;
+   199→  }, []);
+   200→
+   201→  // Push notifications: registrar Service Worker + solicitar permissao
+   202→  useEffect(() => {
+   203→    if (!currentUser) return;
+   204→    // Aguardar um momento para nao conflitar com outros init
+   205→    const timer = setTimeout(() => {
+   206→      pushService.init(currentUser.id).then(ok => {
+   207→        if (ok) console.log('[APP] Push notifications ativo');
+   208→      });
+   209→    }, 3000);
+   210→    return () => clearTimeout(timer);
+   211→  }, [currentUser]);
+   212→
+   213→  useEffect(() => { saveLocalState('currentUser', currentUser); }, [currentUser]);
+   214→
+   215→  // Papel do usuario em ref (usado para o ENTREGADOR pular as buscas pesadas
+   216→  // de estoque/vendas/comissoes — ele so usa a tela de rota)
+   217→  const roleRef = useRef<string>('');
+   218→  useEffect(() => { roleRef.current = currentUser?.role || ''; }, [currentUser]);
+   219→
+   220→  // Pre-venda + ROTA 2 (Bloco 27): sincroniza as flags do usuario cacheado com
+   221→  // o servidor. Se o admin ligar o teste ROTA 2 no painel e o app ainda tem o
+   222→  // user antigo no localStorage, o wizard aparece sem precisar re-logar.
+   223→  useEffect(() => {
+   224→    if (!currentUser) return;
+   225→    userService.getAllUsers()
+   226→      .then(list => {
+   227→        const u = list.find(x => x.id === currentUser.id);
+   228→        if (u && (!!u.preVenda !== !!currentUser.preVenda || !!u.rota2 !== !!currentUser.rota2)) {
+   229→          setCurrentUser(prev => prev ? { ...prev, preVenda: !!u.preVenda, rota2: !!u.rota2 } : prev);
+   230→        }
+   231→      })
+   232→      .catch(() => {});
+   233→  }, []);
+   234→  useEffect(() => { saveLocalState('dailyRouteState', dailyRouteState); }, [dailyRouteState]);
+   235→
+   236→  /** Carrega SOMENTE cargas + pendentes (barato) — usado no polling/focus e pos-mutacoes. */
+   237→  const fetchCargas = useCallback(async () => {
+   238→    if (roleRef.current === 'ENTREGADOR') return;
+   239→    const [cgR, cgpR] = await Promise.allSettled([
+   240→      cargaService.getAllCargas(),
+   241→      cargaService.getAllCargasPendentes(),
+   242→    ]);
+   243→    if (cgR.status === 'fulfilled') setCargas(cgR.value);
+   244→    else console.error('[cargas] falha ao carregar cargas:', cgR.reason);
+   245→    if (cgpR.status === 'fulfilled') setCargasPendentes(cgpR.value);
+   246→    else console.error('[cargas] falha ao carregar pendentes:', cgpR.reason);
+   247→    if (cgR.status === 'fulfilled' && cgpR.status === 'fulfilled') setCargasLoaded(true);
+   248→  }, []);
+   249→
+   250→  // SINCRONISMO DA CARGA: polling leve (5 min) + refresh ao voltar o foco do app.
+   251→  // Antes o vendedor so via a carga ao reabrir o app — carga enviada pelo admin
+   252→  // ficava invisivel (e o card "ACEITAR CARGA" nunca aparecia).
+   253→  // EGRESS: 45s → 5min; tick pula quando o app esta em background; foco so
+   254→  // recarrega se a ultima busca foi ha mais de 30s (evita rajada ao alternar apps).
+   255→  useEffect(() => {
+   256→    if (!currentUser || currentUser.role === 'ENTREGADOR') return;
+   257→    const lastRef = { t: 0 };
+   258→    const wrapped = async () => {
+   259→      if (typeof document !== 'undefined' && document.hidden) return;
+   260→      const now = Date.now();
+   261→      if (now - lastRef.t < 30_000) return;
+   262→      lastRef.t = now;
+   263→      await fetchCargas();
+   264→    };
+   265→    const iv = setInterval(wrapped, 300_000);
+   266→    window.addEventListener('focus', wrapped);
+   267→    return () => { clearInterval(iv); window.removeEventListener('focus', wrapped); };
+   268→  }, [currentUser, fetchCargas]);
+   269→
+   270→  const fetchTransactionalData = useCallback(async () => {
+   271→    if (roleRef.current === 'ENTREGADOR') return;
+   272→    // allSettled: uma query que falhar NAO mais zera as outras (antes, se qualquer
+   273→    // uma das 7 falhasse, cargas/vendas/comissoes ficavam vazias em silencio).
+   274→    const [sR, cR, pR, mR, cgR, cgpR, exR] = await Promise.allSettled([
+   275→      saleService.getAllSales(),
+   276→      commissionService.getAllCommissions(),
+   277→      commissionService.getAllPayouts(),
+   278→      messageService.getAllMessages(),
+   279→      cargaService.getAllCargas(),
+   280→      cargaService.getAllCargasPendentes(),
+   281→      expenseService.getAllExpenses()
+   282→    ]);
+   283→    if (sR.status === 'fulfilled') {
+   284→      // BLOCO 13: pre-venda so vira "venda" quando a entrega e confirmada.
+   285→      // PENDENTE/EM_ROTA/FALHOU ficam fora dos relatorios de vendas e dividas.
+   286→      setSales(sR.value.filter(s => !(s.tipoVenda === 'PRE_VENDA' && s.entregaStatus !== 'ENTREGUE')));
+   287→    }
+   288→    else console.error('[dados] sales:', sR.reason);
+   289→    if (cR.status === 'fulfilled') setCommissions(cR.value); else console.error('[dados] comissoes:', cR.reason);
+   290→    if (pR.status === 'fulfilled') setPayoutLogs(pR.value); else console.error('[dados] payouts:', pR.reason);
+   291→    if (mR.status === 'fulfilled') setMessages(mR.value); else console.error('[dados] mensagens:', mR.reason);
+   292→    if (cgR.status === 'fulfilled') setCargas(cgR.value); else console.error('[dados] cargas:', cgR.reason);
+   293→    if (cgpR.status === 'fulfilled') setCargasPendentes(cgpR.value); else console.error('[dados] cargas pendentes:', cgpR.reason);
+   294→    if (exR.status === 'fulfilled') setExpenses(exR.value); else console.error('[dados] despesas:', exR.reason);
+   295→    if (cgR.status === 'fulfilled' && cgpR.status === 'fulfilled') setCargasLoaded(true);
+   296→  }, []);
+   297→
+   298→  const fetchCoreData = useCallback(async () => {
+   299→    if (roleRef.current === 'ENTREGADOR') return;
+   300→    try {
+   301→      const settings = await appSettingsService.getSettings();
+   302→      setLogo(settings.logo);
+   303→      setMargemGlobalAtiva(settings.margemGlobalAtiva);
+   304→      setMargemGlobalValor(settings.margemGlobalValor);
+   305→      setMargemMinimaAtiva(settings.margemMinimaAtiva);
+   306→      setMargemMinima(settings.margemMinima);
+   307→      setPix1Name(settings.pix1Name ?? "Pix Banco A");
+   308→      setPix1Code(settings.pix1Code);
+   309→      setPix2Name(settings.pix2Name ?? "Pix Banco B");
+   310→      setPix2Code(settings.pix2Code);
+   311→      // BLOCO 62: chave do recebimento (QR na entrega)
+   312→      setPixChave(settings.pixChave ?? "");
+   313→      setProductOrder(settings.productOrder || []);
+   314→      setClientOrder(settings.clientOrder || []);
+   315→      setCatalogoOrder((settings as any).catalogoOrder || []);
+   316→      setCompanyName(settings.companyName ?? "DOCE MANIA DISTRIBUIDORA");
+   317→      setCompanyCnpj(settings.companyCnpj ?? "00.000.000/0001-00");
+   318→      setMelhorias(settings.melhorias ?? { ...MELHORIAS_DEFAULT });
+   319→
+   320→      const [u, cl, p, cats, subs] = await Promise.all([
+   321→        // Bloco 12: getAllUsers lanca em caso de falha — sinaliza ERRO para a
+   322→        // tela de login mostrar "Tentar novamente" em vez do card vazio.
+   323→        userService.getAllUsers().then((list) => { setUsersStatus('OK'); return list; }).catch((e) => { console.error('[users] falha ao carregar:', e?.message); setUsersStatus('ERRO'); return []; }),
+   324→        clientService.getAllClients(),
+   325→        productService.getAllProducts(),
+   326→        categoryService.getAllCategories(),
+   327→        categoryService.getAllSubcategories()
+   328→      ]);
+   329→      
+   330→      setUsers(u);
+   331→      setClients(cl);
+   332→      setCategories(cats);
+   333→      setSubcategories(subs);
+   334→      
+   335→      const order = settings.productOrder || [];
+   336→      const sortedProducts = [...p].sort((a, b) => {
+   337→        const idxA = order.indexOf(a.id);
+   338→        const idxB = order.indexOf(b.id);
+   339→        if (idxA === -1 && idxB === -1) return 0;
+   340→        if (idxA === -1) return 1;
+   341→        if (idxB === -1) return -1;
+   342→        return idxA - idxB;
+   343→      });
+   344→      setProducts(sortedProducts);
+   345→
+   346→      await fetchTransactionalData();
+   347→    } catch (e) {
+   348→      console.error("Erro ao carregar dados principais:", e);
+   349→    }
+   350→  }, [fetchTransactionalData]);
+   351→
+   352→  // BLOCO 87 (sync entre aparelhos): mescla a rota do SERVIDOR com a local.
+   353→  // Servidor e a FONTE DA VERDADE para skippedClientIds (pulo/reabertura feita
+   354→  // em qualquer aparelho da mesma conta propagam); clientIds e UNIAO (rota
+   355→  // montada no servidor + o que só existe local — nunca remove).
+   356→  const mergeDailyRouteStates = useCallback((server: DailyRouteState, prev: DailyRouteState): DailyRouteState => {
+   357→    if (server.date !== prev.date) return prev;
+   358→    const clientIds = [...new Set([...(server.clientIds || []), ...(prev.clientIds || [])])];
+   359→    const skippedClientIds = [...new Set(server.skippedClientIds || [])];
+   360→    return { date: prev.date, clientIds, skippedClientIds };
+   361→  }, []);
+   362→
+   363→  // Busca a rota do dia no servidor e mescla no estado local (se mudou).
+   364→  // Respeita o lock de 5s pos skip/reopen (nao desfaz mudanca em andamento).
+   365→  const syncDailyRouteFromServer = useCallback(async (motivo: string) => {
+   366→    if (!currentUser || currentUser.role !== 'VENDEDOR') return;
+   367→    if (Date.now() < routeUpdateLockUntilRef.current) return;
+   368→    const today = getTodayDateString();
+   369→    try {
+   370→      const server = await dailyRouteService.getRoute(currentUser.id, today);
+   371→      if (!server) return; // servidor sem rota de hoje — mantem a local
+   372→      setDailyRouteState(prev => {
+   373→        if (prev.date !== today) return prev;
+   374→        const merged = mergeDailyRouteStates(server, prev);
+   375→        if (JSON.stringify(merged) === JSON.stringify(prev)) return prev; // nada mudou
+   376→        console.log(`[ROTA] Sync de outro aparelho aplicado (${motivo}).`);
+   377→        return merged;
+   378→      });
+   379→    } catch { /* offline: mantem a local */ }
+   380→  }, [currentUser, mergeDailyRouteStates]);
+   381→
+   382→  useEffect(() => {
+   383→    const loadRoute = async () => {
+   384→      if (currentUser && currentUser.role === 'VENDEDOR') {
+   385→        const today = getTodayDateString();
+   386→
+   387→        // Se estamos dentro do periodo de lock (pos skip/reopen), nao recarregar
+   388→        if (Date.now() < routeUpdateLockUntilRef.current) {
+   389→          console.log('[ROTA] Bloqueado — skip/reopen recente, ignorando reload.');
+   390→          return;
+   391→        }
+   392→
+   393→        // BLOCO 87: o servidor manda agora. Antes: se o localStorage tinha rota
+   394→        // de hoje com clientes, ele ERA a fonte e o Supabase nunca era lido —
+   395→        // pulo feito em outro aparelho nunca chegava (rota nao sincronizava).
+   396→        // Agora: SEMPRE busca a rota do dia no servidor e mescla (servidor manda
+   397→        // nos pulados; union nos clientes). O localStorage vira so cache/offline.
+   398→        const server = await dailyRouteService.getRoute(currentUser.id, today);
+   399→        if (server && ((server.clientIds || []).length > 0 || (server.skippedClientIds || []).length > 0)) {
+   400→          setDailyRouteState(prev => {
+   401→            if (prev.date !== today) return prev;
+   402→            const merged = mergeDailyRouteStates(server, prev);
+   403→            if (JSON.stringify(merged) === JSON.stringify(prev)) return prev;
+   404→            console.log('[ROTA] Rota carregada do servidor (sync multi-aparelho).');
+   405→            return merged;
+   406→          });
+   407→          routeInitializedRef.current = true;
+   408→          return;
+   409→        }
+   410→
+   411→        // Servidor sem rota de hoje (1o acesso do dia nesta conta): monta pela
+   412→        // diaRoteiro, mescla com o que ja existe no aparelho e SALVA no servidor
+   413→        // — de hoje em diante qualquer aparelho logado nessa conta enxerga igual.
+   414→        const todayDay = new Date().getDay();
+   415→        const routeClients = clients
+   416→          .filter(c => c.diaRoteiro === todayDay && c.ativo && c.rota === (currentUser.rota || 'ROTA_01'))
+   417→          .sort((a, b) => (a.ordem || 0) - (b.ordem || 0))
+   418→          .map(c => c.id);
+   419→
+   420→        // Preserva qualquer skippedClientIds que ja existia no estado local
+   421→        // (caso o save no Supabase nao tenha completado antes do refresh)
+   422→        const existingSkipped = dailyRouteState.skippedClientIds || [];
+   423→        const newRoute = { date: today, clientIds: routeClients, skippedClientIds: existingSkipped };
+   424→        setDailyRouteState(newRoute);
+   425→        await dailyRouteService.updateRoute(currentUser.id, newRoute);
+   426→        routeInitializedRef.current = true;
+   427→      }
+   428→    };
+   429→    if (clients.length > 0) {
+   430→      loadRoute();
+   431→    }
+   432→  }, [currentUser, clients.length > 0, mergeDailyRouteStates]); // muda so quando clients aparece/volta a zero, nao a cada edicao
+   433→
+   434→  useEffect(() => {
+   435→    const checkDate = () => {
+   436→      const today = getTodayDateString();
+   437→      if (dailyRouteState.date !== today) {
+   438→        // Reset da inicializacao para permitir reload da rota do novo dia
+   439→        routeInitializedRef.current = false;
+   440→        setDailyRouteState({ date: today, clientIds: [], skippedClientIds: [] });
+   441→        fetchCoreData();
+   442→      } else {
+   443→        // BLOCO 87 (sync entre aparelhos): a cada tick (30s em prod) e a cada
+   444→        // focus da aba, puxa a rota do servidor — pulo/reabertura feita em
+   445→        // outro aparelho da mesma conta aparece aqui em segundos.
+   446→        void syncDailyRouteFromServer('tick');
+   447→      }
+   448→    };
+   449→
+   450→    const interval = setInterval(checkDate, process.env.NEXT_PUBLIC_E2E_MOCK === '1' ? 30 * 60 * 1000 : 30000);
+   451→    window.addEventListener('focus', checkDate);
+   452→
+   453→    return () => {
+   454→      clearInterval(interval);
+   455→      window.removeEventListener('focus', checkDate);
+   456→    };
+   457→  }, [dailyRouteState.date, fetchCoreData, syncDailyRouteFromServer]);
+   458→
+   459→  useEffect(() => {
+   460→    let timeoutId: any;
+   461→    let stale = false;
+   462→
+   463→    // EGRESS: antes este canal ouvia QUALQUER write em QUALQUER tabela (inclusive
+   464→    // o GPS de cada vendedor a cada 60s) e disparava fetchCoreData COMPLETO
+   465→    // (~13 consultas full-table com fotos em base64) em TODOS os aparelhos —
+   466→    // o maior consumo de egress do sistema. Agora escuta APENAS INSERT em sales
+   467→    // (venda nova — evento raro) e refaz so os dados transacionais, com debounce
+   468→    // de 2s. Em background adia; ao voltar, recarrega uma unica vez.
+   469→    const run = () => {
+   470→      if (typeof document !== 'undefined' && document.hidden) { stale = true; return; }
+   471→      fetchTransactionalData();
+   472→    };
+   473→    const debouncedFetch = () => {
+   474→      clearTimeout(timeoutId);
+   475→      timeoutId = setTimeout(run, 2000);
+   476→    };
+   477→    const onVisible = () => {
+   478→      if (typeof document !== 'undefined' && !document.hidden && stale) {
+   479→        stale = false;
+   480→        fetchTransactionalData();
+   481→      }
+   482→    };
+   483→
+   484→    // E2E local (mock sem websocket): nao assina o canal — evita loop de
+   485→    // retry do realtime que re-dispara fetchTransactionalData sem parar.
+   486→    if (process.env.NEXT_PUBLIC_E2E_MOCK === '1') {
+   487→      if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible);
+   488→      return () => {
+   489→        clearTimeout(timeoutId);
+   490→        if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible);
+   491→      };
+   492→    }
+   493→
+   494→    const channel = supabase
+   495→      .channel('sales-insert-changes')
+   496→      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'sales' }, debouncedFetch)
+   497→      .subscribe();
+   498→    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible);
+   499→
+   500→    return () => {
+   501→      clearTimeout(timeoutId);
+   502→      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible);
+   503→      supabase.removeChannel(channel);
+   504→    };
+   505→  }, [fetchTransactionalData]);
+   506→
+   507→  useEffect(() => { if (process.env.NEXT_PUBLIC_E2E_MOCK === '1') console.log('[TRACE] fetchCoreData:', new Error().stack?.split('\n').slice(1, 5).join(' << ')); fetchCoreData(); }, [fetchCoreData]);
+   508→
+   509→  const updateSetting = async (key: keyof AppSettings, value: any) => {
+   510→    if (key === 'logo') setLogo(value);
+   511→    else if (key === 'margemGlobalAtiva') setMargemGlobalAtiva(value);
+   512→    else if (key === 'margemGlobalValor') setMargemGlobalValor(value);
+   513→    else if (key === 'margemMinimaAtiva') setMargemMinimaAtiva(value);
+   514→    else if (key === 'margemMinima') setMargemMinima(value);
+   515→    else if (key === 'pix1Name') setPix1Name(value);
+   516→    else if (key === 'pix1Code') setPix1Code(value);
+   517→    else if (key === 'pix2Name') setPix2Name(value);
+   518→    else if (key === 'pix2Code') setPix2Code(value);
+   519→    else if (key === 'pixChave') setPixChave(value);
+   520→    else if (key === 'companyName') setCompanyName(value);
+   521→    else if (key === 'companyCnpj') setCompanyCnpj(value);
+   522→    else if (key === 'catalogoOrder') {
+   523→      // BLOCO 23: só a ordem do PORTAL muda — o PDV (product_order) fica intacto
+   524→      setCatalogoOrder(value);
+   525→    }
+   526→    else if (key === 'melhorias') setMelhorias(value as MelhoriasFlags);
+   527→    else if (key === 'productOrder') {
+   528→      setProductOrder(value);
+   529→      setProducts(prev => {
+   530→        return [...prev].sort((a, b) => {
+   531→          const idxA = value.indexOf(a.id);
+   532→          const idxB = value.indexOf(b.id);
+   533→          if (idxA === -1 && idxB === -1) return 0;
+   534→          if (idxA === -1) return 1;
+   535→          if (idxB === -1) return -1;
+   536→          return idxA - idxB;
+   537→        });
+   538→      });
+   539→    }
+   540→    else if (key === 'clientOrder') {
+   541→      setClientOrder(value);
+   542→    }
+   543→
+   544→    await appSettingsService.updateSettings({ [key]: value });
+   545→  };
+   546→
+   547→  const addUser = async (nome: string, foto?: string, telefone?: string, role: 'ADMIN' | 'VENDEDOR' | 'ENTREGADOR' | 'SECRETARIO' = 'VENDEDOR') => {
+   548→    const sellerRoutes = users
+   549→      .filter(u => u.role === 'VENDEDOR' && u.rota?.startsWith('ROTA_'))
+   550→      .map(u => parseInt(u.rota!.replace('ROTA_', '')))
+   551→      .filter(n => !isNaN(n));
+   552→
+   553→    const maxRouteNum = sellerRoutes.length > 0 ? Math.max(...sellerRoutes) : 0;
+   554→    const nextRoute = `ROTA_${String(maxRouteNum + 1).padStart(2, '0')}`;
+   555→
+   556→    // BLOCO 13: admin cria usuarios de QUALQUER perfil (vendedor, entregador,
+   557→    // secretário, admin) com o PIN que quiser — autoridade total sobre acessos.
+   558→    await userService.insertUser({
+   559→      nome,
+   560→      email: `${nome.toLowerCase().replace(/\s/g, '')}@sistema.com`,
+   561→      role,
+   562→      ativo: true,
+   563→      foto,
+   564→      telefone,
+   565→      pin: '123456',
+   566→      rota: role === 'VENDEDOR' ? nextRoute : '',
+   567→    });
+   568→    fetchCoreData();
+   569→  };
+   570→
+   571→  const updateUser = async (id: string, data: Partial<User>) => {
+   572→    await userService.updateUser(id, data);
+   573→    fetchCoreData();
+   574→  };
+   575→
+   576→  const deleteUser = async (id: string) => {
+   577→    const success = await userService.deleteUser(id);
+   578→    if (success) fetchCoreData();
+   579→    return success;
+   580→  };
+   581→
+   582→  const addProduct = async (nome: string, custo: number, venda: number, comissao: number, estoque: number = 0, categoryId?: string, subcategoryId?: string, precoMinimo?: number, fiscal?: Partial<Product>) => {
+   583→    const res = await productService.insertProduct({ nome, precoCusto: custo, precoVenda: venda, precoMinimo: precoMinimo || 0, comissaoPercentual: comissao, estoquePrincipal: estoque, ativo: true, categoryId, subcategoryId, ...fiscal });
+   584→    if (res) {
+   585→      await appSettingsService.updateSettings({ productOrder: [...productOrder, res.id] });
+   586→      fetchCoreData();
+   587→    }
+   588→  };
+   589→
+   590→  const updateProduct = async (id: string, data: Partial<Product>) => {
+   591→    await productService.updateProduct(id, data);
+   592→    fetchCoreData();
+   593→  };
+   594→
+   595→  const activateAllProducts = async () => {
+   596→    const inactiveOnes = products.filter(p => !p.ativo);
+   597→    if (inactiveOnes.length === 0) return;
+   598→    
+   599→    setAdminNotification(`Ativando ${inactiveOnes.length} produtos...`);
+   600→    for (const p of inactiveOnes) {
+   601→      await productService.updateProduct(p.id, { ativo: true });
+   602→    }
+   603→    setAdminNotification("Todos os produtos foram ativados!");
+   604→    fetchCoreData();
+   605→  };
+   606→
+   607→  const deleteProduct = async (id: string) => {
+   608→    await productService.deleteProduct(id);
+   609→    fetchCoreData();
+   610→  };
+   611→
+   612→  // BLOCO 76: devolve a linha gravada (ou null) — o form de cliente do
+   613→  // vendedor usa isso para provar a persistencia e avisar quando falhou
+   614→  // (antes o modal fechava como se tivesse salvo mesmo com erro no banco).
+   615→  const addClient = async (data: Omit<Client, 'id'>): Promise<Client | null> => {
+   616→    const r = await clientService.insertClient(data);
+   617→    fetchCoreData();
+   618→    return r;
+   619→  };
+   620→
+   621→  // BLOCO 72: devolve SE GRAVOU no banco (clientService retorna a linha ou null)
+   622→  // — o modal de WhatsApp/Localizacao usa isso para provar a persistencia.
+   623→  const updateClient = async (id: string, data: Partial<Client>): Promise<boolean> => {
+   624→    const r = await clientService.updateClient(id, data);
+   625→    fetchCoreData();
+   626→    return !!r;
+   627→  };
+   628→
+   629→  const deleteClient = async (id: string) => {
+   630→    const r = await clientService.deleteClient(id);
+   631→    if (r.ok) setAdminNotification('Cliente excluído!');
+   632→    else setAdminNotification(r.erro || 'Erro ao excluir o cliente.');
+   633→    fetchCoreData();
+   634→  };
+   635→
+   636→  const addCategory = async (name: string) => {
+   637→    const maxOrder = categories.length > 0 ? Math.max(...categories.map(c => c.display_order || 0)) : 0;
+   638→    await categoryService.insertCategory(name, maxOrder + 1);
+   639→    fetchCoreData();
+   640→  };
+   641→
+   642→  const updateCategory = async (id: string, updates: Partial<Category>) => {
+   643→    await categoryService.updateCategory(id, updates);
+   644→    fetchCoreData();
+   645→  };
+   646→
+   647→  const deleteCategory = async (id: string) => {
+   648→    await categoryService.deleteCategory(id);
+   649→    fetchCoreData();
+   650→  };
+   651→  
+   652→  const addSubcategory = async (catId: string, name: string) => {
+   653→    const relevantSubs = subcategories.filter(s => s.categoryId === catId);
+   654→    const maxOrder = relevantSubs.length > 0 ? Math.max(...relevantSubs.map(s => s.display_order || 0)) : 0;
+   655→    await categoryService.insertSubcategory(catId, name, maxOrder + 1);
+   656→    fetchCoreData();
+   657→  };
+   658→
+   659→  const updateSubcategory = async (id: string, updates: Partial<Subcategory>) => {
+   660→    await categoryService.updateSubcategory(id, updates);
+   661→    fetchCoreData();
+   662→  };
+   663→
+   664→  const deleteSubcategory = async (id: string) => {
+   665→    await categoryService.deleteSubcategory(id);
+   666→    fetchCoreData();
+   667→  };
+   668→
+   669→  const applyCargaDirectly = async (vId: string, itens: { produtoId: string, quantidade: number }[]): Promise<{ ok: boolean; erro?: string }> => {
+   670→    try {
+   671→      await cargaService.applyCargaAdminRPC(vId, itens);
+   672→      setAdminNotification("Carga aplicada com sucesso!");
+   673→      fetchCargas();
+   674→      return { ok: true };
+   675→    } catch (e: any) {
+   676→      console.error(e);
+   677→      setAdminNotification("Erro ao aplicar carga.");
+   678→      return { ok: false, erro: e?.message || 'Erro ao aplicar carga.' };
+   679→    }
+   680→  };
+   681→
+   682→  const syncVendedorCarga = async (vId: string, itens: { produtoId: string, quantidade: number }[]): Promise<{ ok: boolean; erro?: string }> => {
+   683→    try {
+   684→      await cargaService.insertCargaPendente({ vendedorId: vId, itens, data: new Date() });
+   685→      fetchCargas();
+   686→      return { ok: true };
+   687→    } catch (e: any) {
+   688→      console.error('[carga] falha ao enviar pendente:', e);
+   689→      return { ok: false, erro: e?.message || 'Erro ao enviar a carga. Tente novamente.' };
+   690→    }
+   691→  };
+   692→
+   693→  // ===== BLOCO 29 (ROTA 2): carga da van com MODO (COM_NF | SEM_NF) =====
+   694→  // Toda a logica (bloqueio de mistura + movimento de casa) roda no SERVIDOR.
+   695→  const applyCargaDirectlyRota2 = async (vId: string, itens: { produtoId: string, quantidade: number }[], modo: 'COM_NF' | 'SEM_NF'): Promise<{ ok: boolean; erro?: string }> => {
+   696→    const r = await cargaService.aplicarCargaRota2(vId, itens, modo, 'APLICAR');
+   697→    if (r.ok) {
+   698→      setAdminNotification(`Carga ${modo === 'COM_NF' ? 'COM NF' : 'SEM NF'} aplicada com sucesso!`);
+   699→      fetchCargas();
+   700→      fetchCoreData(); // estoque de casa mudou
+   701→      return { ok: true };
+   702→    }
+   703→    setAdminNotification(r.erro || 'Erro ao aplicar carga.');
+   704→    return { ok: false, erro: r.erro };
+   705→  };
+   706→
+   707→  const syncVendedorCargaRota2 = async (vId: string, itens: { produtoId: string, quantidade: number }[], modo: 'COM_NF' | 'SEM_NF'): Promise<{ ok: boolean; erro?: string }> => {
+   708→    const r = await cargaService.aplicarCargaRota2(vId, itens, modo, 'PENDENTE');
+   709→    if (r.ok) {
+   710→      fetchCargas();
+   711→      return { ok: true };
+   712→    }
+   713→    return { ok: false, erro: r.erro };
+   714→  };
+   715→
+   716→  const aceitarCarga = async (pendenciaId: string): Promise<{ ok: boolean; erro?: string }> => {
+   717→    try {
+   718→      // Via API server-side: valida sessao + dono da carga + bloqueia carga vazia.
+   719→      // (Antes ia direto no RPC via chave anon, sem validar dono e engolindo erros.)
+   720→      const { authHeaders } = await import('@/services/userService');
+   721→      const res = await fetch('/api/cargas/aceitar', {
+   722→        method: 'POST',
+   723→        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+   724→        body: JSON.stringify({ pendenciaId }),
+   725→      });
+   726→      const d = await res.json().catch(() => null);
+   727→      if (!res.ok || !d?.ok) {
+   728→        const erro = String(d?.erro || (res.status === 401 ? 'Sessao expirada. Entre novamente.' : `Erro ${res.status} ao aceitar a carga.`));
+   729→        console.error('[carga] aceitar falhou:', res.status, erro);
+   730→        return { ok: false, erro };
+   731→      }
+   732→      setAdminNotification("Carga aceita!");
+   733→      fetchCargas();
+   734→      return { ok: true };
+   735→    } catch (e: any) {
+   736→      console.error('[carga] aceitar erro:', e);
+   737→      return { ok: false, erro: e?.message || 'Falha de conexao ao aceitar a carga.' };
+   738→    }
+   739→  };
+   740→
+   741→  const markMessageAsRead = async (id: string) => {
+   742→    await messageService.updateMessage(id, { lida: true });
+   743→    fetchTransactionalData();
+   744→  };
+   745→
+   746→  const processSale = async (saleData: any) => {
+   747→    try {
+   748→      const res = await saleService.insertSale(saleData);
+   749→      if (res) {
+   750→        fetchTransactionalData();
+   751→        // BLOCO 118.3 — CAIXA (regra do dono): o caixa é EXCLUSIVO do David
+   752→        // (Rota 5) e só recebe À VISTA. Venda à vista (dinheiro/pix) do David
+   753→        // entra no ledger do Fechamento de Caixa na hora; dos DEMAIS vendedores
+   754→        // NÃO entra (a compensação deles é comissão). Best-effort: nunca trava.
+   755→        try {
+   756→          const metodoCaixa = String(saleData.metodoPagamento || '').toUpperCase();
+   757→          const pagoCaixa = String(saleData.statusPagamento || 'PAGO').toUpperCase();
+   758→          if (isDavidVendedor(currentUser as any) && (metodoCaixa === 'DINHEIRO' || metodoCaixa === 'PIX') && pagoCaixa === 'PAGO') {
+   759→            const { authHeaders } = await import('@/services/userService');
+   760→            fetch('/api/caixa', {
+   761→              method: 'POST',
+   762→              headers: { 'Content-Type': 'application/json', ...authHeaders() },
+   763→              body: JSON.stringify({
+   764→                acao: 'REGISTRAR',
+   765→                origem: 'VENDA',
+   766→                saleId: res.id || null,
+   767→                metodo: metodoCaixa,
+   768→                valor: Number(saleData.valorTotal || 0),
+   769→                cliente: (clients || []).find((c: any) => c.id === saleData.clientId)?.nomeFantasia || null,
+   770→                vendedor: currentUser?.nome || null,
+   771→                detalhe: saleData.detalhePagamento ? String(saleData.detalhePagamento).slice(-200) : null,
+   772→              }),
+   773→            }).catch(() => {});
+   774→          }
+   775→        } catch { /* caixa nunca trava a venda */ }
+   776→        // Som de caixa registradora + haptics ao vender
+   777→        const { sounds } = await import('@/utils/sound');
+   778→        sounds.kaChing();
+   779→        haptics.success();
+   780→        // Enviar push notification para o admin
+   781→        try {
+   782→          const valor = Number(saleData.valorTotal || 0).toFixed(2);
+   783→          const metodo = saleData.metodoPagamento === 'A_PRAZO' ? 'A Prazo' : (saleData.metodoPagamento || '');
+   784→          fetch('/api/send-push', {
+   785→            method: 'POST',
+   786→            headers: { 'Content-Type': 'application/json' },
+   787→            body: JSON.stringify({
+   788→              title: 'Nova Venda!',
+   789→              body: `R$ ${valor} - ${metodo}`,
+   790→              url: '/'
+   791→            }),
+   792→          }).catch(() => {});
+   793→        } catch {} // nao bloqueia a venda se push falhar
+   794→      }
+   795→      return res;
+   796→    } catch (e) {
+   797→      console.error(e);
+   798→      haptics.error();
+   799→      return null;
+   800→    }
+   801→  };
+   802→
+   803→  // BLOCO 13: pedidos de pre-venda pendentes criados nesta sessao — o deleteSale
+   804→  // deles vai pela API da fila (nao pelo RPC de estorno de estoque).
+   805→  const pvPendentesRef = useRef<Set<string>>(new Set());
+   806→
+   807→  const processPreVenda = async (data: any): Promise<{ pedido: Sale | null; erro?: string; comissaoPrevista?: number }> => {
+   808→    try {
+   809→      const { authHeaders } = await import('@/services/userService');
+   810→      const res = await fetch('/api/pre-venda/venda', {
+   811→        method: 'POST',
+   812→        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+   813→        body: JSON.stringify(data),
+   814→      });
+   815→      const d = await res.json().catch(() => null);
+   816→      if (!res.ok || !d?.ok) {
+   817→        const motivo = String(
+   818→          d?.error ||
+   819→          (res.status === 401 ? 'Sessao expirada. Faca logout e entre novamente.' : `Erro ${res.status} no servidor.`)
+   820→        );
+   821→        const detalhe = d?.detalhe ? `\n(${String(d.detalhe).slice(0, 140)})` : '';
+   822→        console.error('[pre-venda] falha:', motivo, d?.detalhe || res.status);
+   823→        haptics.error();
+   824→        return { pedido: null, erro: `${motivo}${detalhe}` };
+   825→      }
+   826→      fetchTransactionalData();
+   827→      const { sounds } = await import('@/utils/sound');
+   828→      sounds.kaChing();
+   829→      haptics.success();
+   830→      try {
+   831→        fetch('/api/send-push', {
+   832→          method: 'POST',
+   833→          headers: { 'Content-Type': 'application/json' },
+   834→          body: JSON.stringify({ title: 'Novo Pedido (Pre-Venda)!', body: `R$ ${Number(d.sale.valor_total || 0).toFixed(2)} — entrou na fila de entregas`, url: '/' }),
+   835→        }).catch(() => {});
+   836→      } catch {}
+   837→      // Mapeia para o tipo Sale usado pelo app
+   838→      const s: any = d.sale;
+   839→      const mapped: Sale = {
+   840→        id: s.id,
+   841→        vendedorId: currentUser?.id || '',
+   842→        clientId: data.clientId,
+   843→        data: new Date(s.data_venda || Date.now()),
+   844→        valorTotal: Number(s.valor_total || 0),
+   845→        valorPago: Number(s.valor_pago || 0),
+   846→        // BLOCO 40: metodo real quando vier na resposta (fallback A_PRAZO =
+   847→        // padrao do pedido pendente gravado pela API)
+   848→        metodoPagamento: s.metodo_pagamento || 'A_PRAZO',
+   849→        detalhePagamento: s.detalhe_pagamento || 'PRE-VENDA',
+   850→        statusPagamento: 'PENDENTE',
+   851→        itens: (data.itens || []).map((i: any) => ({ produtoId: i.produtoId, quantidade: i.quantidade, precoVenda: i.precoVenda })),
+   852→        dataVencimento: s.data_vencimento ? new Date(s.data_vencimento) : undefined,
+   853→        trocas: s.trocas || undefined,
+   854→        tipoVenda: 'PRE_VENDA',
+   855→        entregaStatus: 'PENDENTE',
+   856→        // BLOCO 40: modo do atendimento (NFE|NFCE|CUPOM) — o cupom mostra o
+   857→        // documento certo (">>> NF-e <<<") direto no "Pedido Registrado!"
+   858→        modoNota: s.modo_nota || undefined,
+   859→      };
+   860→      // BLOCO 13: pedido pendente — exclusao dele usa a API da fila
+   861→      pvPendentesRef.current.add(mapped.id);
+   862→      // BLOCO 88 (RESERVA): o servidor ja subtraiu o estoque — espelha NA TELA
+   863→      // na hora (sem esperar o refetch). O catalogo da pre-venda filtra saldo
+   864→      // > 0: vendeu tudo, o produto some do PDV no ato — nao da pra vender
+   865→      // 15 un com 5 em estoque.
+   866→      try {
+   867→        const qtdMap = new Map<string, number>();
+   868→        for (const it of (data.itens || [])) {
+   869→          const pid = String(it.produtoId);
+   870→          qtdMap.set(pid, (qtdMap.get(pid) || 0) + (Number(it.quantidade) || 0));
+   871→        }
+   872→        if (qtdMap.size > 0) {
+   873→          setProducts(prev => prev.map(p => {
+   874→            const q = qtdMap.get(p.id);
+   875→            return q ? { ...p, estoquePrincipal: (Number(p.estoquePrincipal) || 0) - q } : p;
+   876→          }));
+   877→        }
+   878→      } catch { /* espelho best-effort: o refetch corrige */ }
+   879→      // Aviso de estoque insuficiente NO ATO da reserva (nao bloqueia o pedido)
+   880→      if (Array.isArray(d.avisos) && d.avisos.length > 0) {
+   881→        const linhas = d.avisos.map((a: any) => `${a.produto}: pediu ${a.solicitado}, tinha ${a.disponivel}`).join('\n');
+   882→        setAdminNotification(`Atencao — reservou SEM estoque completo (saldo pode ficar negativo):\n${linhas}`);
+   883→      }
+   884→      // NAO entra no estado "sales" (venda so existe apos a entrega confirmada).
+   885→      // O cupom usa o pedido retornado direto.
+   886→      // BLOCO 21: previsão da comissão de PRÉ-VENDA calculada pelo SERVIDOR
+   887→      // (mesma regra que gera a comissão na entrega — % própria do produto).
+   888→      const comissaoPrevista = Number(d.comissaoPrevista);
+   889→      return { pedido: mapped, comissaoPrevista: isFinite(comissaoPrevista) && comissaoPrevista > 0 ? comissaoPrevista : undefined };
+   890→    } catch (e: any) {
+   891→      console.error(e);
+   892→      haptics.error();
+   893→      return { pedido: null, erro: 'Sem conexao com o servidor.\nVerifique sua internet e tente novamente.' };
+   894→    }
+   895→  };
+   896→
+   897→  const deleteSale = async (id: string) => {
+   898→    // BLOCO 13: pedido de pre-venda pendente — exclui pela API da fila
+   899→    // (nao pode estornar estoque: a baixa so acontece na entrega).
+   900→    if (pvPendentesRef.current.has(id)) {
+   901→      try {
+   902→        const { authHeaders } = await import('@/services/userService');
+   903→        const res = await fetch('/api/pre-venda', {
+   904→          method: 'POST',
+   905→          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+   906→          body: JSON.stringify({ acao: 'EXCLUIR_VENDA', saleId: id }),
+   907→        });
+   908→        const d = await res.json().catch(() => null);
+   909→        if (res.ok && d?.ok) {
+   910→          pvPendentesRef.current.delete(id);
+   911→          setAdminNotification('Pedido cancelado!');
+   912→          fetchTransactionalData();
+   913→          return;
+   914→        }
+   915→        setAdminNotification(String(d?.error || 'Nao foi possivel cancelar o pedido.'));
+   916→        return;
+   917→      } catch {
+   918→        setAdminNotification('Sem conexao para cancelar o pedido.');
+   919→        return;
+   920→      }
+   921→    }
+   922→    const success = await saleService.deleteSale(id);
+   923→    if (success) fetchTransactionalData();
+   924→  };
+   925→
+   926→  const receiveAccount = async (saleId: string, method: ReceiveMethod, amount?: number) => {
+   927→    const sale = sales.find(s => s.id === saleId);
+   928→    if (!sale) return;
+   929→
+   930→    const valorRecebido = amount || (sale.valorTotal - sale.valorPago);
+   931→    const novoValorPago = Number((sale.valorPago + valorRecebido).toFixed(2));
+   932→    const statusPagamento = novoValorPago >= sale.valorTotal ? 'PAGO' : 'PENDENTE';
+   933→    
+   934→    const timestamp = new Date().toLocaleString('pt-BR');
+   935→    const novoLog = `${timestamp}: R$ ${valorRecebido.toFixed(2)} (${method})`;
+   936→    const novoDetalhe = sale.detalhePagamento ? `${sale.detalhePagamento} | ${novoLog}` : novoLog;
+   937→
+   938→    // BLOCO 22: quando o dinheiro entra, a venda DEIXA de ser "a prazo" —
+   939→    // grava o metodo real (DINHEIRO/PIX passam no CHECK legado do banco).
+   940→    // Antes ficava A_PRAZO para sempre e a venda paga aparecia como "a prazo"
+   941→    // em Vendas Realizadas/Relatorios.
+   942→    // BLOCO 124 (regra do dono): a venda a prazo é TODA BOLETO — o recebimento
+   943→    // como BOLETO (ou DEPOSITO) fecha o saldo e entra no log da venda
+   944→    // ("(BOLETO)"), mas NÃO vira metodoPagamento (CHECK legado não aceita) e
+   945→    // NÃO entra no caixa — o caixa do David é só DINHEIRO/PIX à vista (118.3).
+   946→    const updates: Partial<Sale> = { valorPago: novoValorPago, statusPagamento, detalhePagamento: novoDetalhe };
+   947→    if (method === 'DINHEIRO' || method === 'PIX') updates.metodoPagamento = method;
+   948→
+   949→    const success = await saleService.updateSale(saleId, updates);
+   950→
+   951→    if (success) {
+   952→      // BLOCO 118.3 (regra do dono): RECEBIMENTO de contas a receber NÃO entra
+   953→      // mais no caixa — a tela mostra SÓ o dinheiro/pix À VISTA que o David
+   954→      // (Rota 5) recebe. Vendas a prazo/boleto ficam no Contas a Receber e no
+   955→      // webhook do banco. (Antes: origem RECEBIMENTO no ledger — removido.)
+   956→      if (statusPagamento === 'PAGO') {
+   957→        const comm = commissions.find(c => c.saleId === saleId);
+   958→        if (comm && comm.status === 'A_RECEBER') {
+   959→          await commissionService.updateCommissionStatus(comm.id, 'DISPONIVEL');
+   960→        }
+   961→      }
+   962→      fetchTransactionalData();
+   963→    }
+   964→  };
+   965→
+   966→  // BLOCO 14: acerto de comissao via API (FIFO no servidor — saldo sempre certo)
+   967→  const payCommission = async (vId: string, amount: number, type: 'TOTAL' | 'PARCIAL', adminId: string) => {
+   968→    try {
+   969→      const { authHeaders } = await import('@/services/userService');
+   970→      const res = await fetch('/api/comissoes', {
+   971→        method: 'POST',
+   972→        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+   973→        body: JSON.stringify({ acao: 'PAGAR', vendedorId: vId, total: type === 'TOTAL', valor: type === 'PARCIAL' ? amount : undefined, adminId }),
+   974→      });
+   975→      const d = await res.json().catch(() => null);
+   976→      if (!res.ok || !d?.ok) {
+   977→        setAdminNotification(String(d?.error || 'Nao foi possivel registrar o pagamento.'));
+   978→        return;
+   979→      }
+   980→      setAdminNotification(`Comissão de R$ ${amount.toFixed(2)} liberada! O vendedor recebe o aviso e confirma com o RECIBO no app dele.`);
+   981→      fetchTransactionalData();
+   982→    } catch {
+   983→      setAdminNotification('Sem conexao para registrar o pagamento.');
+   984→    }
+   985→  };
+   986→
+   987→  const addExpense = async (vId: string, desc: string, val: number) => {
+   988→    const success = await expenseService.insertExpense({ sellerId: vId, descricao: desc, valor: val });
+   989→    if (success) fetchTransactionalData();
+   990→    return success;
+   991→  };
+   992→
+   993→  const updateDailyRoute = async (clientIds: string[], skippedClientIds: string[]) => {
+   994→    if (!currentUser) {
+   995→      console.error('[ROTA] currentUser nulo, impossivel salvar rota.');
+   996→      return;
+   997→    }
+   998→    const date = dailyRouteState?.date || (() => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}-${String(n.getDate()).padStart(2,'0')}`; })();
+   999→    const newRoute = { date, clientIds, skippedClientIds };
+  1000→    // Bloqueia reloads do Supabase por 5 segundos para evitar race condition
+  1001→    routeUpdateLockUntilRef.current = Date.now() + 5000;
+  1002→    setDailyRouteState(newRoute);
+  1003→    try {
+  1004→      await dailyRouteService.updateRoute(currentUser.id, newRoute);
+  1005→      console.log('[ROTA] Salvo no Supabase com sucesso.');
+  1006→    } catch (err) {
+  1007→      console.error('[ROTA] Erro ao salvar rota diaria:', err);
+  1008→    }
+  1009→  };
+  1010→
+  1011→  // Wrapper para setClientOrder que persiste no Supabase
+  1012→  const setClientOrderWithPersistence = useCallback((ids: string[]) => {
+  1013→    updateSetting('clientOrder', ids);
+  1014→  }, [updateSetting]);
+  1015→
+  1016→  if (!currentUser) return <Login users={users} status={usersStatus} onRetry={reloadUsers} onLogin={(u) => { setCurrentUser(u); reloadUsers(); }} logo={logo} />;
+  1017→
+  1018→  const sellerClients = currentUser.role === 'VENDEDOR' 
+  1019→    ? clients.filter(c => c.rota === (currentUser.rota || 'ROTA_01'))
+  1020→    : clients;
+  1021→
+  1022→  return (
+  1023→    <div className="min-h-screen bg-gray-50 flex flex-col">
+  1024→      {/* Offline Banner */}
+  1025→      {!isOnline && (
+  1026→        <div className="bg-amber-500 text-white text-[10px] font-black text-center py-1.5 px-4 uppercase tracking-widest z-[60] flex items-center justify-center gap-2">
+  1027→          <i className="fa-solid fa-wifi"></i>
+  1028→          Modo Offline - Dados serao sincronizados
+  1029→          {offlineSync.getPendingCount() > 0 && <span className="bg-white/20 px-1.5 py-0.5 rounded-full ml-1">{offlineSync.getPendingCount()}</span>}
+  1030→        </div>
+  1031→      )}
+  1032→      {/* BLOCO 99: header a prova de logo largo — o logo NUNCA empurra a pagina
+  1033→          para o lado (era o causador do card do Cliente quebrando). Cada lado
+  1034→          tem limite proprio e o conteudo encolhe, nao estoura. */}
+  1035→      <header className="bg-white min-h-20 px-3 sm:px-6 shadow-sm flex justify-between items-center gap-2 min-w-0 sticky top-0 z-50 border-b" style={{ paddingTop: 'max(env(safe-area-inset-top), 0px)', paddingBottom: 'max(env(safe-area-inset-bottom), 0px)' }}>
+  1036→        {logo ? <img src={logo} alt="" className="h-12 w-auto max-w-[45vw] sm:max-w-[260px] object-contain min-w-0" /> : <span className="font-black text-[11px] text-gray-300 uppercase tracking-widest break-words leading-tight min-w-0">{companyName}</span>}
+  1037→        <div className="flex items-center gap-2 sm:gap-3 shrink-0 min-w-0">
+  1038→          <div className="text-right min-w-0 max-w-[38vw] sm:max-w-none"><p className="text-[10px] font-black uppercase text-gray-400 break-words">{currentUser.role}</p><p className="text-sm font-bold text-gray-800 break-words leading-tight">{currentUser.nome}</p></div>
+  1039→          <button onClick={() => { clearSessionToken(); setCurrentUser(null); }} className="text-gray-400 p-2 shrink-0" aria-label="Sair"><i className="fa-solid fa-right-from-bracket"></i></button>
+  1040→        </div>
+  1041→      </header>
+  1042→
+  1043→      {/* BLOCO 99: `container` + `max-w-lg` brigavam entre si (o container
+  1044→          sobrescrevia o max-width em telas maiores) — agora é um max-width
+  1045→          simples e sem ambiguidade. */}
+  1046→      <main className="w-full max-w-lg mx-auto p-4">
+  1047→        {currentUser.role === 'ENTREGADOR' ? (
+  1048→          <EntregadorShell user={currentUser} melhorias={melhorias} />
+  1049→        ) : currentUser.role === 'SECRETARIO' ? (
+  1050→          <SecretarioShell user={currentUser} melhorias={melhorias} products={products} reloadCore={fetchCoreData} />
+  1051→        ) : currentUser.role === 'ADMIN' ? (
+  1052→          <AdminDashboard 
+  1053→            {...{ products, users, cargas, cargasLoaded, clients, sales, commissions, payoutLogs, expenses, logo, margemGlobalAtiva, margemGlobalValor, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, pixChave, adminNotification, companyName, companyCnpj, orderedProductIds: productOrder, portalOrderIds: catalogoOrder, categories, subcategories, clientOrder, melhorias }}
+  1054→            addProduct={addProduct} updateProduct={updateProduct} deleteProduct={deleteProduct} registerStockEntry={()=>{}} adjustStockManual={()=>{}}
+  1055→            syncVendedorCarga={syncVendedorCarga} applyCargaDirectly={applyCargaDirectly}
+  1056→            syncVendedorCargaRota2={syncVendedorCargaRota2} applyCargaDirectlyRota2={applyCargaDirectlyRota2}
+  1057→            addClient={addClient} updateClient={updateClient} deleteClient={deleteClient}
+  1058→            addUser={addUser} updateUser={updateUser} deleteUser={deleteUser} payCommission={payCommission} setCommissions={()=>{}} updateEstoqueCentral={()=>{}} reinforceCarga={()=>{}} deleteSale={deleteSale} receiveAccount={receiveAccount}
+  1059→            setLogo={(v)=>updateSetting('logo', v)} adminUser={currentUser} setMargemGlobalAtiva={(v)=>updateSetting('margemGlobalAtiva', v)} setMargemGlobalValor={(v)=>updateSetting('margemGlobalValor', v)}
+  1060→            setMargemMinima={(v)=>updateSetting('margemMinima', v)} setMargemMinimaAtiva={(v)=>updateSetting('margemMinimaAtiva', v)} setPix1Name={(v)=>updateSetting('pix1Name', v)} setPix1Code={(v)=>updateSetting('pix1Code', v)}
+  1061→            setPix2Name={(v)=>updateSetting('pix2Name', v)} setPix2Code={(v)=>updateSetting('pix2Code', v)} clearAdminNotification={() => setAdminNotification(null)} setOrderedProductIds={(v)=>updateSetting('productOrder', v)} setPortalOrderIds={(v)=>updateSetting('catalogoOrder', v as string[])}
+  1062→            setPixChave={(v)=>updateSetting('pixChave', v)}
+  1063→            setCompanyName={(v)=>updateSetting('companyName', v)} setCompanyCnpj={(v)=>updateSetting('companyCnpj', v)}
+  1064→            setMelhorias={(v: MelhoriasFlags)=>updateSetting('melhorias', v)}
+  1065→            activateAllProducts={activateAllProducts} addCategory={addCategory} updateCategory={updateCategory} deleteCategory={deleteCategory}
+  1066→            addSubcategory={addSubcategory} updateSubcategory={updateSubcategory} deleteSubcategory={deleteSubcategory}
+  1067→            setClientOrder={setClientOrderWithPersistence}
+  1068→          />
+  1069→        ) : (
+  1070→          <VendedorDashboard 
+  1071→            {...{ products, users, cargas, cargasPendentes, sales, commissions, payoutLogs, expenses, messages, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, companyName, companyCnpj, user: currentUser, clients: sellerClients, allClients: clients, categories, subcategories, clientOrder, melhorias }}
+  1072→            markMessageAsRead={markMessageAsRead} processSale={processSale} processPreVenda={processPreVenda} addClient={addClient} updateClient={updateClient} deleteClient={deleteClient}
+  1073→            receivePayment={receiveAccount} deleteSale={deleteSale} aceitarCarga={aceitarCarga} addExpense={addExpense} updateDailyRoute={updateDailyRoute}
+  1074→            setClientOrder={setClientOrderWithPersistence}
+  1075→          />
+  1076→        )}
+  1077→      </main>
+  1078→    </div>
+  1079→  );
+  1080→};
+  1081→
+  1082→export default App;

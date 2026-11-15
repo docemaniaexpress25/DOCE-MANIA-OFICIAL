@@ -1,0 +1,137 @@
+import { supabase } from '@/lib/supabaseClient';
+import { fetchAllPages } from '@/lib/supabaseAll';
+import { Commission, CommissionPaymentLog } from '@/lib/types';
+
+// Helper function to safely convert database numeric values (which might be null or string) to number
+const safeNumber = (value: any): number => Number(value || 0);
+
+// BLOCO 33b — sonda da coluna aceitado (mesmo padrao do modoColCache do
+// saleService, Bloco 30). O SQL do Bloco 15 (aceitado/aceite_em) NUNCA rodou
+// no banco: commission_payment_logs so tem id, commission_id, seller_id,
+// valor_pago, metodo_pagamento, observacao, created_at. Sem a sonda, TODA
+// carga do app tentava 'aceitado, aceite_em' -> erro 42703 ruidoso no console
+// ("column commission_payment_logs.aceitado does not exist") + 1 request falho
+// + fallback '*' (egress desperdicado). Probe leve (limit 1, 1 coluna, erro
+// tratado em silencio) com cache no modulo; quando o SQL do Bloco 15 for
+// rodado no SQL Editor, a leitura com aceite volta sozinha.
+let payoutAceiteColCache: boolean | null = null;
+
+export const commissionService = {
+  async getAllCommissions(): Promise<Commission[]> {
+    // BLOCO 20: paginado — tabela chegou a 999/1000; sem isso comissoes sumiriam do acerto
+    // EGRESS: colunas explicitas (fallback '*' se SQL pendente)
+    let data: any[];
+    try {
+      data = await fetchAllPages<any>('commissions', 'id, sale_id, seller_id, valor_comissao, valor_base, percentual, valor_pago, status, created_at');
+    } catch {
+      data = await fetchAllPages<any>('commissions', '*');
+    }
+    return (data || []).map(c => ({
+      id: c.id,
+      saleId: c.sale_id,
+      vendedorId: c.seller_id,
+      valor: safeNumber(c.valor_comissao),
+      valorBase: safeNumber(c.valor_base),
+      percentual: safeNumber(c.percentual),
+      valorPago: safeNumber(c.valor_pago), // Bloco 14: acerto parcial (FIFO)
+      status: (c.status || 'DISPONIVEL').toUpperCase(), // Normaliza o status para maiúsculo
+      dataGeracao: new Date(c.created_at)
+    })) as Commission[];
+  },
+
+  async insertCommission(comm: Omit<Commission, 'id'>): Promise<boolean> {
+    if (comm.valorBase === undefined || comm.percentual === undefined) {
+        console.error('Erro: valorBase e percentual são obrigatórios para inserir comissão.');
+        return false;
+    }
+    
+    const { error } = await supabase.from('commissions').insert({
+      sale_id: comm.saleId,
+      seller_id: comm.vendedorId,
+      valor_comissao: comm.valor,
+      valor_base: comm.valorBase,
+      percentual: comm.percentual,
+      status: comm.status,
+      created_at: comm.dataGeracao.toISOString()
+    });
+    return !error;
+  },
+
+  async updateCommission(id: string, updates: Partial<Commission>): Promise<boolean> {
+    const payload: any = {};
+    if (updates.status !== undefined) payload.status = updates.status;
+    if (updates.valor !== undefined) payload.valor_comissao = updates.valor;
+    if (updates.valorBase !== undefined) payload.valor_base = updates.valorBase;
+    
+    const { error } = await supabase.from('commissions').update(payload).eq('id', id);
+    if (error) console.error('Erro ao atualizar comissão:', error);
+    return !error;
+  },
+
+  async updateCommissionStatus(id: string, status: string): Promise<boolean> {
+    return this.updateCommission(id, { status: status as any });
+  },
+
+  async bulkUpdateStatusByVendedor(vId: string, oldStatus: string, newStatus: string): Promise<boolean> {
+    const { error } = await supabase.from('commissions')
+      .update({ status: newStatus })
+      .eq('seller_id', vId)
+      .eq('status', oldStatus);
+    if (error) console.error('Erro ao atualizar status em massa das comissões:', error);
+    return !error;
+  },
+
+  async getAllPayouts(): Promise<CommissionPaymentLog[]> {
+    // BLOCO 20: paginado (mesmo padrao de vendas/comissoes)
+    // BLOCO 33b: colunas conforme a sonda — sem tentativa que falha sempre e
+    // sem fallback '*' (protege egress). Colunas que existem no banco:
+    // id, seller_id, valor_pago, created_at.
+    let comAceite = payoutAceiteColCache === true;
+    if (payoutAceiteColCache === null) {
+      const { error: probeErr } = await supabase
+        .from('commission_payment_logs')
+        .select('aceitado')
+        .limit(1);
+      payoutAceiteColCache = !probeErr;
+      comAceite = payoutAceiteColCache;
+    }
+    const data = await fetchAllPages<any>(
+      'commission_payment_logs',
+      comAceite
+        ? 'id, seller_id, valor_pago, created_at, aceitado, aceite_em'
+        : 'id, seller_id, valor_pago, created_at'
+    );
+    return data.map(l => ({
+      id: l.id,
+      vendedorId: l.seller_id,
+      vendedorNome: 'N/D',
+      valorPago: safeNumber(l.valor_pago),
+      valorRestante: 0,
+      tipo: 'TOTAL',
+      dataPagamento: new Date(l.created_at),
+      adminId: 'N/D',
+      // Bloco 15: recibo do vendedor (se a coluna ainda nao existe, trata como aceito)
+      aceitado: l.aceitado !== false,
+      aceiteEm: l.aceite_em ? new Date(l.aceite_em) : undefined,
+    })) as CommissionPaymentLog[];
+  },
+
+  async insertPayout(log: Omit<CommissionPaymentLog, 'id'>): Promise<boolean> {
+    const payload = {
+      seller_id: log.vendedorId,
+      valor_pago: log.valorPago,
+      metodo_pagamento: 'DINHEIRO',
+      observacao: `Pagamento ${log.tipo} por Admin ${log.adminId}.`,
+      created_at: log.dataPagamento.toISOString(),
+    };
+    
+    const { error } = await supabase.from('commission_payment_logs').insert(payload);
+    if (error) console.error('Erro ao inserir log de pagamento:', error);
+    return !error;
+  },
+
+  async deleteCommissionBySale(saleId: string): Promise<boolean> {
+    const { error } = await supabase.from('commissions').delete().eq('sale_id', saleId);
+    return !error;
+  }
+};

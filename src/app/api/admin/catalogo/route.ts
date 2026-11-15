@@ -1,0 +1,88 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { isAdminSession } from '@/lib/session';
+import { devBridge, getServiceClient, isServerSupabaseConfigured } from '@/lib/serverSupabase';
+
+/**
+ * GESTAO DO CATALOGO DO PORTAL (Bloco 17) — status para a aba do admin.
+ *
+ * GET /api/admin/catalogo   (Bearer session ADMIN obrigatoria)
+ *
+ * Responde o estado das colunas do Bloco 15 no Supabase (products.imagem e
+ * products.unidades_por_caixa) e do Bloco 18 (products.obs) para a aba saber
+ * se FOTO/CAIXA/OBS ja podem salvar de verdade — e se existe product_order
+ * (ordem do PDV) aplicada. Renomear/reordenar NAO dependem deste SQL
+ * (colunas de sempre).
+ */
+
+export async function GET(request: NextRequest) {
+  if (!isServerSupabaseConfigured()) {
+    // Preview local sem service key: repassa para o deploy de producao (Bloco 12)
+    const bridged = await devBridge(request);
+    if (bridged) return bridged;
+    return NextResponse.json({ ok: false, erro: 'Indisponivel no preview local.' }, { status: 503 });
+  }
+  if (!isAdminSession(request)) {
+    return NextResponse.json({ ok: false, erro: 'Sessao invalida.' }, { status: 401 });
+  }
+
+  try {
+    const supabase = getServiceClient();
+
+    // Probe do Bloco 15: coluna inexistente = PostgREST devolve erro (PGRST204)
+    let bloco15ok = false;
+    try {
+      const { error } = await supabase
+        .from('products')
+        .select('id, imagem, unidades_por_caixa')
+        .limit(1);
+      bloco15ok = !error;
+      if (error) console.error('[api/admin/catalogo] probe bloco15:', error.message);
+    } catch {
+      bloco15ok = false;
+    }
+
+    // Probe do Bloco 18: coluna obs (observacao para o cliente no portal)
+    let obsOk = false;
+    try {
+      const { error } = await supabase
+        .from('products')
+        .select('id, obs')
+        .limit(1);
+      obsOk = !error;
+      if (error) console.error('[api/admin/catalogo] probe obs:', error.message);
+    } catch {
+      obsOk = false;
+    }
+
+    // Probe do Bloco 23: vinculo de familia (products.familia_catalogo)
+    // + ordem do portal (app_settings.catalogo_order)
+    let vinculosOk = false;
+    try {
+      const [{ error: errProd }, { error: errCfg }] = await Promise.all([
+        supabase.from('products').select('id, familia_catalogo').limit(1),
+        supabase.from('app_settings').select('catalogo_order').limit(1),
+      ]);
+      vinculosOk = !errProd && !errCfg;
+      if (errProd) console.error('[api/admin/catalogo] probe familia_catalogo:', errProd.message);
+      if (errCfg) console.error('[api/admin/catalogo] probe catalogo_order:', errCfg.message);
+    } catch {
+      vinculosOk = false;
+    }
+
+    let totalEmOrdem = 0;
+    try {
+      const { data: cfg } = await supabase
+        .from('app_settings')
+        .select('product_order')
+        .eq('id', 'global_settings')
+        .maybeSingle();
+      const ordem = (cfg as any)?.product_order;
+      totalEmOrdem = Array.isArray(ordem) ? ordem.length : 0;
+    } catch { /* settings opcional */ }
+
+    return NextResponse.json({ ok: true, bloco15ok, obsOk, vinculosOk, totalEmOrdem });
+  } catch (e: any) {
+    console.error('[api/admin/catalogo] erro:', e?.message);
+    return NextResponse.json({ ok: false, erro: 'Erro interno' }, { status: 500 });
+  }
+}

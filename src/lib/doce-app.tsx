@@ -1,0 +1,1082 @@
+"use client";
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { User, Product, Carga, Sale, Commission, Client, ReceiveMethod, CargaPendente, CommissionPaymentLog, SystemMessage, Expense, Category, Subcategory, MelhoriasFlags, MELHORIAS_DEFAULT } from '@/lib/types';
+import AdminDashboard from '@/components/doce/AdminDashboard';
+import VendedorDashboard from '@/components/doce/VendedorDashboard';
+import FilaEntregas from '@/components/doce/FilaEntregas';
+import SecretarioView from '@/components/doce/SecretarioView';
+import SecretarioEstoque from '@/components/doce/SecretarioEstoque';
+import Login from '@/components/doce/Login';
+import { haptics } from '@/utils/haptics';
+import { offlineSync } from '@/utils/offlineSync';
+import { userService, clearSessionToken } from '@/services/userService';
+import { productService } from '@/services/productService';
+import { clientService } from '@/services/clientService';
+import { appSettingsService, AppSettings } from '@/services/appSettingsService';
+import { saleService } from '@/services/saleService';
+import { commissionService } from '@/services/commissionService';
+import { messageService } from '@/services/messageService';
+import { cargaService } from '@/services/cargaService';
+import { dailyRouteService } from '@/services/dailyRouteService';
+import { expenseService } from '@/services/expenseService';
+import { categoryService } from '@/services/categoryService';
+import { supabase } from '@/lib/supabaseClient';
+import { loadLocalState, saveLocalState, DailyRouteState } from '@/utils/persistence';
+import { pushService } from '@/services/pushNotificationService';
+// BLOCO 118.3 (regra do dono): o CAIXA é EXCLUSIVO do David (Rota 5) — os
+// demais vendedores ganham comissão e não têm caixa.
+import { isDavidVendedor } from '@/lib/equipe';
+
+const getTodayDateString = () => {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+};
+
+/**
+ * BLOCO 13: Tela do ENTREGADOR — fila continua de entregas (P1/P2/antiguidade).
+ * Login oculto (5 toques no logo) OU usuario real ENTREGADOR criado pelo admin.
+ * Entregador recebe SALARIO fixo: aqui nao existe comissao.
+ */
+const EntregadorShell: React.FC<{ user: User; melhorias: MelhoriasFlags }> = ({ user, melhorias }) => {
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const showToast = useCallback((message: string, type: 'success' | 'error' = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3200);
+  }, []);
+  return (
+    <div className="space-y-4 pb-10">
+      {toast && (
+        <div className="fixed top-[calc(5rem+env(safe-area-inset-top))] left-4 right-4 z-[300] flex justify-center pointer-events-none">
+          <div className={`${toast.type === 'success' ? 'bg-emerald-600' : 'bg-rose-600'} text-white px-6 py-3 rounded-2xl shadow-2xl font-black text-xs uppercase flex items-center gap-3 animate-in slide-in-from-top`}>
+            <i className={`fa-solid ${toast.type === 'success' ? 'fa-circle-check' : 'fa-circle-exclamation'}`}></i>{toast.message}
+          </div>
+        </div>
+      )}
+      <FilaEntregas user={user} showToast={showToast} modo="ENTREGADOR" melhorias={melhorias} />
+    </div>
+  );
+};
+
+/**
+ * BLOCO 13: Tela do SECRETARIO da base fisica — separacao de pedidos.
+ * Ve cada pedido novo (com alarme sonoro), imprime o cupom identico e
+ * marca SEPARADO. Nao vende, nao entrega, nao mexe em valores.
+ *
+ * BLOCO 19: ganhou a aba ESTOQUE — ajuste APENAS da quantidade dos
+ * produtos (sem preco, custo, nome ou qualquer outro dado). A gravacao
+ * vai pela rota /api/secretario/estoque (whitelist de coluna no servidor).
+ */
+const SecretarioShell: React.FC<{ user: User; melhorias: MelhoriasFlags; products: Product[]; reloadCore: () => void }> = ({ user, melhorias, products, reloadCore }) => {
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const showToast = useCallback((message: string, type: 'success' | 'error' = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3200);
+  }, []);
+  // BLOCO 19: abas do secretario — SEPARACAO (fila, padrao de sempre) + ESTOQUE
+  const [abaSecretario, setAbaSecretario] = useState<'SEPARACAO' | 'ESTOQUE'>('SEPARACAO');
+  return (
+    <div className="space-y-4 pb-10">
+      {toast && (
+        <div className="fixed top-[calc(5rem+env(safe-area-inset-top))] left-4 right-4 z-[300] flex justify-center pointer-events-none">
+          <div className={`${toast.type === 'success' ? 'bg-emerald-600' : 'bg-rose-600'} text-white px-6 py-3 rounded-2xl shadow-2xl font-black text-xs uppercase flex items-center gap-3 animate-in slide-in-from-top`}>
+            <i className={`fa-solid ${toast.type === 'success' ? 'fa-circle-check' : 'fa-circle-exclamation'}`}></i>{toast.message}
+          </div>
+        </div>
+      )}
+      {/* ===== ABAS DO SECRETARIO ===== */}
+      <div className="grid grid-cols-2 gap-1.5 bg-white p-1.5 rounded-2xl border border-gray-100 shadow-sm">
+        <button
+          onClick={() => setAbaSecretario('SEPARACAO')}
+          className={`py-3 rounded-xl text-[10px] font-black uppercase tracking-wide active:scale-95 transition-all ${abaSecretario === 'SEPARACAO' ? 'bg-slate-800 text-white shadow-md' : 'bg-gray-50 text-gray-400'}`}
+        >
+          <i className="fa-solid fa-boxes-packing mr-1.5"></i>Separação
+        </button>
+        <button
+          onClick={() => setAbaSecretario('ESTOQUE')}
+          className={`py-3 rounded-xl text-[10px] font-black uppercase tracking-wide active:scale-95 transition-all ${abaSecretario === 'ESTOQUE' ? 'bg-emerald-600 text-white shadow-md' : 'bg-gray-50 text-gray-400'}`}
+        >
+          <i className="fa-solid fa-boxes-stacked mr-1.5"></i>Estoque
+        </button>
+      </div>
+      {abaSecretario === 'SEPARACAO' ? (
+        <SecretarioView user={user} showToast={showToast} melhorias={melhorias} />
+      ) : (
+        <SecretarioEstoque products={products} showToast={showToast} reloadProducts={reloadCore} />
+      )}
+    </div>
+  );
+};
+
+const App: React.FC = () => {
+  const [currentUser, setCurrentUser] = useState<User | null>(() => loadLocalState('currentUser', null));
+  
+  const [logo, setLogo] = useState<string | null>(null);
+  const [margemGlobalAtiva, setMargemGlobalAtiva] = useState(true);
+  const [margemGlobalValor, setMargemGlobalValor] = useState(30); 
+  const [margemMinima, setMargemMinima] = useState(20); 
+  const [margemMinimaAtiva, setMargemMinimaAtiva] = useState(true); 
+  const [pix1Name, setPix1Name] = useState("Pix Banco A");
+  const [pix1Code, setPix1Code] = useState<string | null>(null);
+  const [pix2Name, setPix2Name] = useState("Pix Banco B");
+  const [pix2Code, setPix2Code] = useState<string | null>(null);
+  // BLOCO 62: chave Pix do RECEBIMENTO (QR gerado na entrega) — editavel em Configurações
+  const [pixChave, setPixChave] = useState<string>("");
+  const [productOrder, setProductOrder] = useState<string[]>([]);
+  const [clientOrder, setClientOrder] = useState<string[]>([]);
+  // BLOCO 23: ordem do PORTAL (catálogo do cliente) — NÃO mexe na ordem do PDV
+  const [catalogoOrder, setCatalogoOrder] = useState<string[]>([]);
+  const [companyName, setCompanyName] = useState("DOCE MANIA DISTRIBUIDORA");
+  const [companyCnpj, setCompanyCnpj] = useState("00.000.000/0001-00");
+  // BLOCO 14: interruptores das melhorias (liga/desliga pelo admin)
+  const [melhorias, setMelhorias] = useState<MelhoriasFlags>({ ...MELHORIAS_DEFAULT });
+
+  const [adminNotification, setAdminNotification] = useState<string | null>(null);
+  const [isOnline, setIsOnline] = useState(true);
+  
+  const [users, setUsers] = useState<User[]>([]);
+  // Bloco 12: estado da busca de usuarios para a tela de login
+  // (LOADING mostra spinner; ERRO mostra "Tentar novamente").
+  const [usersStatus, setUsersStatus] = useState<'LOADING' | 'OK' | 'ERRO'>('LOADING');
+  const reloadUsers = useCallback(() => {
+    setUsersStatus('LOADING');
+    userService.getAllUsers()
+      .then(list => { setUsers(list); setUsersStatus('OK'); })
+      .catch((e) => { console.error('[users] recarga falhou:', e?.message); setUsersStatus('ERRO'); });
+  }, []);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [clients, setClients] = useState<Client[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [subcategories, setSubcategories] = useState<Subcategory[]>([]);
+
+  const [cargas, setCargas] = useState<Carga[]>([]);
+  const [cargasPendentes, setCargasPendentes] = useState<CargaPendente[]>([]);
+  // true quando os dados de carga chegaram de verdade do Supabase ao menos uma vez.
+  // Evita o race do rascunho de carga no admin (inicializava com cargas ainda vazio).
+  const [cargasLoaded, setCargasLoaded] = useState(false);
+  const [sales, setSales] = useState<Sale[]>([]);
+  const [commissions, setCommissions] = useState<Commission[]>([]);
+  const [payoutLogs, setPayoutLogs] = useState<CommissionPaymentLog[]>([]);
+  const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [messages, setMessages] = useState<SystemMessage[]>([]);
+
+  const [dailyRouteState, setDailyRouteState] = useState<DailyRouteState>(() => {
+    const saved = loadLocalState<DailyRouteState | null>('dailyRouteState', null);
+    const today = getTodayDateString();
+    if (!saved || saved.date !== today) {
+      return { date: today, clientIds: [], skippedClientIds: [] };
+    }
+    return saved;
+  });
+
+  // Refs para evitar race condition no pular/reabrir
+  const routeInitializedRef = useRef(false);
+  const routeUpdateLockUntilRef = useRef(0); // timestamp — bloqueia reloads ate esta hora
+
+  // Haptics: vibracao em todos os botoes
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.closest('button, a, [role="button"], select, input[type="checkbox"], input[type="radio"], .haptic')) {
+        haptics.tap();
+      }
+    };
+    document.addEventListener('click', handler);
+    return () => document.removeEventListener('click', handler);
+  }, []);
+
+  // Offline sync: detecta conexao
+  useEffect(() => {
+    setIsOnline(offlineSync.isOnline());
+    const cleanup = offlineSync.onConnectionChange((online) => {
+      setIsOnline(online);
+      if (online) {
+        haptics.notification();
+      } else {
+        haptics.error();
+      }
+    });
+    return cleanup;
+  }, []);
+
+  // Push notifications: registrar Service Worker + solicitar permissao
+  useEffect(() => {
+    if (!currentUser) return;
+    // Aguardar um momento para nao conflitar com outros init
+    const timer = setTimeout(() => {
+      pushService.init(currentUser.id).then(ok => {
+        if (ok) console.log('[APP] Push notifications ativo');
+      });
+    }, 3000);
+    return () => clearTimeout(timer);
+  }, [currentUser]);
+
+  useEffect(() => { saveLocalState('currentUser', currentUser); }, [currentUser]);
+
+  // Papel do usuario em ref (usado para o ENTREGADOR pular as buscas pesadas
+  // de estoque/vendas/comissoes — ele so usa a tela de rota)
+  const roleRef = useRef<string>('');
+  useEffect(() => { roleRef.current = currentUser?.role || ''; }, [currentUser]);
+
+  // Pre-venda + ROTA 2 (Bloco 27): sincroniza as flags do usuario cacheado com
+  // o servidor. Se o admin ligar o teste ROTA 2 no painel e o app ainda tem o
+  // user antigo no localStorage, o wizard aparece sem precisar re-logar.
+  useEffect(() => {
+    if (!currentUser) return;
+    userService.getAllUsers()
+      .then(list => {
+        const u = list.find(x => x.id === currentUser.id);
+        if (u && (!!u.preVenda !== !!currentUser.preVenda || !!u.rota2 !== !!currentUser.rota2)) {
+          setCurrentUser(prev => prev ? { ...prev, preVenda: !!u.preVenda, rota2: !!u.rota2 } : prev);
+        }
+      })
+      .catch(() => {});
+  }, []);
+  useEffect(() => { saveLocalState('dailyRouteState', dailyRouteState); }, [dailyRouteState]);
+
+  /** Carrega SOMENTE cargas + pendentes (barato) — usado no polling/focus e pos-mutacoes. */
+  const fetchCargas = useCallback(async () => {
+    if (roleRef.current === 'ENTREGADOR') return;
+    const [cgR, cgpR] = await Promise.allSettled([
+      cargaService.getAllCargas(),
+      cargaService.getAllCargasPendentes(),
+    ]);
+    if (cgR.status === 'fulfilled') setCargas(cgR.value);
+    else console.error('[cargas] falha ao carregar cargas:', cgR.reason);
+    if (cgpR.status === 'fulfilled') setCargasPendentes(cgpR.value);
+    else console.error('[cargas] falha ao carregar pendentes:', cgpR.reason);
+    if (cgR.status === 'fulfilled' && cgpR.status === 'fulfilled') setCargasLoaded(true);
+  }, []);
+
+  // SINCRONISMO DA CARGA: polling leve (5 min) + refresh ao voltar o foco do app.
+  // Antes o vendedor so via a carga ao reabrir o app — carga enviada pelo admin
+  // ficava invisivel (e o card "ACEITAR CARGA" nunca aparecia).
+  // EGRESS: 45s → 5min; tick pula quando o app esta em background; foco so
+  // recarrega se a ultima busca foi ha mais de 30s (evita rajada ao alternar apps).
+  useEffect(() => {
+    if (!currentUser || currentUser.role === 'ENTREGADOR') return;
+    const lastRef = { t: 0 };
+    const wrapped = async () => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      const now = Date.now();
+      if (now - lastRef.t < 30_000) return;
+      lastRef.t = now;
+      await fetchCargas();
+    };
+    const iv = setInterval(wrapped, 300_000);
+    window.addEventListener('focus', wrapped);
+    return () => { clearInterval(iv); window.removeEventListener('focus', wrapped); };
+  }, [currentUser, fetchCargas]);
+
+  const fetchTransactionalData = useCallback(async () => {
+    if (roleRef.current === 'ENTREGADOR') return;
+    // allSettled: uma query que falhar NAO mais zera as outras (antes, se qualquer
+    // uma das 7 falhasse, cargas/vendas/comissoes ficavam vazias em silencio).
+    const [sR, cR, pR, mR, cgR, cgpR, exR] = await Promise.allSettled([
+      saleService.getAllSales(),
+      commissionService.getAllCommissions(),
+      commissionService.getAllPayouts(),
+      messageService.getAllMessages(),
+      cargaService.getAllCargas(),
+      cargaService.getAllCargasPendentes(),
+      expenseService.getAllExpenses()
+    ]);
+    if (sR.status === 'fulfilled') {
+      // BLOCO 13: pre-venda so vira "venda" quando a entrega e confirmada.
+      // PENDENTE/EM_ROTA/FALHOU ficam fora dos relatorios de vendas e dividas.
+      setSales(sR.value.filter(s => !(s.tipoVenda === 'PRE_VENDA' && s.entregaStatus !== 'ENTREGUE')));
+    }
+    else console.error('[dados] sales:', sR.reason);
+    if (cR.status === 'fulfilled') setCommissions(cR.value); else console.error('[dados] comissoes:', cR.reason);
+    if (pR.status === 'fulfilled') setPayoutLogs(pR.value); else console.error('[dados] payouts:', pR.reason);
+    if (mR.status === 'fulfilled') setMessages(mR.value); else console.error('[dados] mensagens:', mR.reason);
+    if (cgR.status === 'fulfilled') setCargas(cgR.value); else console.error('[dados] cargas:', cgR.reason);
+    if (cgpR.status === 'fulfilled') setCargasPendentes(cgpR.value); else console.error('[dados] cargas pendentes:', cgpR.reason);
+    if (exR.status === 'fulfilled') setExpenses(exR.value); else console.error('[dados] despesas:', exR.reason);
+    if (cgR.status === 'fulfilled' && cgpR.status === 'fulfilled') setCargasLoaded(true);
+  }, []);
+
+  const fetchCoreData = useCallback(async () => {
+    if (roleRef.current === 'ENTREGADOR') return;
+    try {
+      const settings = await appSettingsService.getSettings();
+      setLogo(settings.logo);
+      setMargemGlobalAtiva(settings.margemGlobalAtiva);
+      setMargemGlobalValor(settings.margemGlobalValor);
+      setMargemMinimaAtiva(settings.margemMinimaAtiva);
+      setMargemMinima(settings.margemMinima);
+      setPix1Name(settings.pix1Name ?? "Pix Banco A");
+      setPix1Code(settings.pix1Code);
+      setPix2Name(settings.pix2Name ?? "Pix Banco B");
+      setPix2Code(settings.pix2Code);
+      // BLOCO 62: chave do recebimento (QR na entrega)
+      setPixChave(settings.pixChave ?? "");
+      setProductOrder(settings.productOrder || []);
+      setClientOrder(settings.clientOrder || []);
+      setCatalogoOrder((settings as any).catalogoOrder || []);
+      setCompanyName(settings.companyName ?? "DOCE MANIA DISTRIBUIDORA");
+      setCompanyCnpj(settings.companyCnpj ?? "00.000.000/0001-00");
+      setMelhorias(settings.melhorias ?? { ...MELHORIAS_DEFAULT });
+
+      const [u, cl, p, cats, subs] = await Promise.all([
+        // Bloco 12: getAllUsers lanca em caso de falha — sinaliza ERRO para a
+        // tela de login mostrar "Tentar novamente" em vez do card vazio.
+        userService.getAllUsers().then((list) => { setUsersStatus('OK'); return list; }).catch((e) => { console.error('[users] falha ao carregar:', e?.message); setUsersStatus('ERRO'); return []; }),
+        clientService.getAllClients(),
+        productService.getAllProducts(),
+        categoryService.getAllCategories(),
+        categoryService.getAllSubcategories()
+      ]);
+      
+      setUsers(u);
+      setClients(cl);
+      setCategories(cats);
+      setSubcategories(subs);
+      
+      const order = settings.productOrder || [];
+      const sortedProducts = [...p].sort((a, b) => {
+        const idxA = order.indexOf(a.id);
+        const idxB = order.indexOf(b.id);
+        if (idxA === -1 && idxB === -1) return 0;
+        if (idxA === -1) return 1;
+        if (idxB === -1) return -1;
+        return idxA - idxB;
+      });
+      setProducts(sortedProducts);
+
+      await fetchTransactionalData();
+    } catch (e) {
+      console.error("Erro ao carregar dados principais:", e);
+    }
+  }, [fetchTransactionalData]);
+
+  // BLOCO 87 (sync entre aparelhos): mescla a rota do SERVIDOR com a local.
+  // Servidor e a FONTE DA VERDADE para skippedClientIds (pulo/reabertura feita
+  // em qualquer aparelho da mesma conta propagam); clientIds e UNIAO (rota
+  // montada no servidor + o que só existe local — nunca remove).
+  const mergeDailyRouteStates = useCallback((server: DailyRouteState, prev: DailyRouteState): DailyRouteState => {
+    if (server.date !== prev.date) return prev;
+    const clientIds = [...new Set([...(server.clientIds || []), ...(prev.clientIds || [])])];
+    const skippedClientIds = [...new Set(server.skippedClientIds || [])];
+    return { date: prev.date, clientIds, skippedClientIds };
+  }, []);
+
+  // Busca a rota do dia no servidor e mescla no estado local (se mudou).
+  // Respeita o lock de 5s pos skip/reopen (nao desfaz mudanca em andamento).
+  const syncDailyRouteFromServer = useCallback(async (motivo: string) => {
+    if (!currentUser || currentUser.role !== 'VENDEDOR') return;
+    if (Date.now() < routeUpdateLockUntilRef.current) return;
+    const today = getTodayDateString();
+    try {
+      const server = await dailyRouteService.getRoute(currentUser.id, today);
+      if (!server) return; // servidor sem rota de hoje — mantem a local
+      setDailyRouteState(prev => {
+        if (prev.date !== today) return prev;
+        const merged = mergeDailyRouteStates(server, prev);
+        if (JSON.stringify(merged) === JSON.stringify(prev)) return prev; // nada mudou
+        console.log(`[ROTA] Sync de outro aparelho aplicado (${motivo}).`);
+        return merged;
+      });
+    } catch { /* offline: mantem a local */ }
+  }, [currentUser, mergeDailyRouteStates]);
+
+  useEffect(() => {
+    const loadRoute = async () => {
+      if (currentUser && currentUser.role === 'VENDEDOR') {
+        const today = getTodayDateString();
+
+        // Se estamos dentro do periodo de lock (pos skip/reopen), nao recarregar
+        if (Date.now() < routeUpdateLockUntilRef.current) {
+          console.log('[ROTA] Bloqueado — skip/reopen recente, ignorando reload.');
+          return;
+        }
+
+        // BLOCO 87: o servidor manda agora. Antes: se o localStorage tinha rota
+        // de hoje com clientes, ele ERA a fonte e o Supabase nunca era lido —
+        // pulo feito em outro aparelho nunca chegava (rota nao sincronizava).
+        // Agora: SEMPRE busca a rota do dia no servidor e mescla (servidor manda
+        // nos pulados; union nos clientes). O localStorage vira so cache/offline.
+        const server = await dailyRouteService.getRoute(currentUser.id, today);
+        if (server && ((server.clientIds || []).length > 0 || (server.skippedClientIds || []).length > 0)) {
+          setDailyRouteState(prev => {
+            if (prev.date !== today) return prev;
+            const merged = mergeDailyRouteStates(server, prev);
+            if (JSON.stringify(merged) === JSON.stringify(prev)) return prev;
+            console.log('[ROTA] Rota carregada do servidor (sync multi-aparelho).');
+            return merged;
+          });
+          routeInitializedRef.current = true;
+          return;
+        }
+
+        // Servidor sem rota de hoje (1o acesso do dia nesta conta): monta pela
+        // diaRoteiro, mescla com o que ja existe no aparelho e SALVA no servidor
+        // — de hoje em diante qualquer aparelho logado nessa conta enxerga igual.
+        const todayDay = new Date().getDay();
+        const routeClients = clients
+          .filter(c => c.diaRoteiro === todayDay && c.ativo && c.rota === (currentUser.rota || 'ROTA_01'))
+          .sort((a, b) => (a.ordem || 0) - (b.ordem || 0))
+          .map(c => c.id);
+
+        // Preserva qualquer skippedClientIds que ja existia no estado local
+        // (caso o save no Supabase nao tenha completado antes do refresh)
+        const existingSkipped = dailyRouteState.skippedClientIds || [];
+        const newRoute = { date: today, clientIds: routeClients, skippedClientIds: existingSkipped };
+        setDailyRouteState(newRoute);
+        await dailyRouteService.updateRoute(currentUser.id, newRoute);
+        routeInitializedRef.current = true;
+      }
+    };
+    if (clients.length > 0) {
+      loadRoute();
+    }
+  }, [currentUser, clients.length > 0, mergeDailyRouteStates]); // muda so quando clients aparece/volta a zero, nao a cada edicao
+
+  useEffect(() => {
+    const checkDate = () => {
+      const today = getTodayDateString();
+      if (dailyRouteState.date !== today) {
+        // Reset da inicializacao para permitir reload da rota do novo dia
+        routeInitializedRef.current = false;
+        setDailyRouteState({ date: today, clientIds: [], skippedClientIds: [] });
+        fetchCoreData();
+      } else {
+        // BLOCO 87 (sync entre aparelhos): a cada tick (30s em prod) e a cada
+        // focus da aba, puxa a rota do servidor — pulo/reabertura feita em
+        // outro aparelho da mesma conta aparece aqui em segundos.
+        void syncDailyRouteFromServer('tick');
+      }
+    };
+
+    const interval = setInterval(checkDate, process.env.NEXT_PUBLIC_E2E_MOCK === '1' ? 30 * 60 * 1000 : 30000);
+    window.addEventListener('focus', checkDate);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', checkDate);
+    };
+  }, [dailyRouteState.date, fetchCoreData, syncDailyRouteFromServer]);
+
+  useEffect(() => {
+    let timeoutId: any;
+    let stale = false;
+
+    // EGRESS: antes este canal ouvia QUALQUER write em QUALQUER tabela (inclusive
+    // o GPS de cada vendedor a cada 60s) e disparava fetchCoreData COMPLETO
+    // (~13 consultas full-table com fotos em base64) em TODOS os aparelhos —
+    // o maior consumo de egress do sistema. Agora escuta APENAS INSERT em sales
+    // (venda nova — evento raro) e refaz so os dados transacionais, com debounce
+    // de 2s. Em background adia; ao voltar, recarrega uma unica vez.
+    const run = () => {
+      if (typeof document !== 'undefined' && document.hidden) { stale = true; return; }
+      fetchTransactionalData();
+    };
+    const debouncedFetch = () => {
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(run, 2000);
+    };
+    const onVisible = () => {
+      if (typeof document !== 'undefined' && !document.hidden && stale) {
+        stale = false;
+        fetchTransactionalData();
+      }
+    };
+
+    // E2E local (mock sem websocket): nao assina o canal — evita loop de
+    // retry do realtime que re-dispara fetchTransactionalData sem parar.
+    if (process.env.NEXT_PUBLIC_E2E_MOCK === '1') {
+      if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible);
+      return () => {
+        clearTimeout(timeoutId);
+        if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible);
+      };
+    }
+
+    const channel = supabase
+      .channel('sales-insert-changes')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'sales' }, debouncedFetch)
+      .subscribe();
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible);
+
+    return () => {
+      clearTimeout(timeoutId);
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible);
+      supabase.removeChannel(channel);
+    };
+  }, [fetchTransactionalData]);
+
+  useEffect(() => { if (process.env.NEXT_PUBLIC_E2E_MOCK === '1') console.log('[TRACE] fetchCoreData:', new Error().stack?.split('\n').slice(1, 5).join(' << ')); fetchCoreData(); }, [fetchCoreData]);
+
+  const updateSetting = async (key: keyof AppSettings, value: any) => {
+    if (key === 'logo') setLogo(value);
+    else if (key === 'margemGlobalAtiva') setMargemGlobalAtiva(value);
+    else if (key === 'margemGlobalValor') setMargemGlobalValor(value);
+    else if (key === 'margemMinimaAtiva') setMargemMinimaAtiva(value);
+    else if (key === 'margemMinima') setMargemMinima(value);
+    else if (key === 'pix1Name') setPix1Name(value);
+    else if (key === 'pix1Code') setPix1Code(value);
+    else if (key === 'pix2Name') setPix2Name(value);
+    else if (key === 'pix2Code') setPix2Code(value);
+    else if (key === 'pixChave') setPixChave(value);
+    else if (key === 'companyName') setCompanyName(value);
+    else if (key === 'companyCnpj') setCompanyCnpj(value);
+    else if (key === 'catalogoOrder') {
+      // BLOCO 23: só a ordem do PORTAL muda — o PDV (product_order) fica intacto
+      setCatalogoOrder(value);
+    }
+    else if (key === 'melhorias') setMelhorias(value as MelhoriasFlags);
+    else if (key === 'productOrder') {
+      setProductOrder(value);
+      setProducts(prev => {
+        return [...prev].sort((a, b) => {
+          const idxA = value.indexOf(a.id);
+          const idxB = value.indexOf(b.id);
+          if (idxA === -1 && idxB === -1) return 0;
+          if (idxA === -1) return 1;
+          if (idxB === -1) return -1;
+          return idxA - idxB;
+        });
+      });
+    }
+    else if (key === 'clientOrder') {
+      setClientOrder(value);
+    }
+
+    await appSettingsService.updateSettings({ [key]: value });
+  };
+
+  const addUser = async (nome: string, foto?: string, telefone?: string, role: 'ADMIN' | 'VENDEDOR' | 'ENTREGADOR' | 'SECRETARIO' = 'VENDEDOR') => {
+    const sellerRoutes = users
+      .filter(u => u.role === 'VENDEDOR' && u.rota?.startsWith('ROTA_'))
+      .map(u => parseInt(u.rota!.replace('ROTA_', '')))
+      .filter(n => !isNaN(n));
+
+    const maxRouteNum = sellerRoutes.length > 0 ? Math.max(...sellerRoutes) : 0;
+    const nextRoute = `ROTA_${String(maxRouteNum + 1).padStart(2, '0')}`;
+
+    // BLOCO 13: admin cria usuarios de QUALQUER perfil (vendedor, entregador,
+    // secretário, admin) com o PIN que quiser — autoridade total sobre acessos.
+    await userService.insertUser({
+      nome,
+      email: `${nome.toLowerCase().replace(/\s/g, '')}@sistema.com`,
+      role,
+      ativo: true,
+      foto,
+      telefone,
+      pin: '123456',
+      rota: role === 'VENDEDOR' ? nextRoute : '',
+    });
+    fetchCoreData();
+  };
+
+  const updateUser = async (id: string, data: Partial<User>) => {
+    await userService.updateUser(id, data);
+    fetchCoreData();
+  };
+
+  const deleteUser = async (id: string) => {
+    const success = await userService.deleteUser(id);
+    if (success) fetchCoreData();
+    return success;
+  };
+
+  const addProduct = async (nome: string, custo: number, venda: number, comissao: number, estoque: number = 0, categoryId?: string, subcategoryId?: string, precoMinimo?: number, fiscal?: Partial<Product>) => {
+    const res = await productService.insertProduct({ nome, precoCusto: custo, precoVenda: venda, precoMinimo: precoMinimo || 0, comissaoPercentual: comissao, estoquePrincipal: estoque, ativo: true, categoryId, subcategoryId, ...fiscal });
+    if (res) {
+      await appSettingsService.updateSettings({ productOrder: [...productOrder, res.id] });
+      fetchCoreData();
+    }
+  };
+
+  const updateProduct = async (id: string, data: Partial<Product>) => {
+    await productService.updateProduct(id, data);
+    fetchCoreData();
+  };
+
+  const activateAllProducts = async () => {
+    const inactiveOnes = products.filter(p => !p.ativo);
+    if (inactiveOnes.length === 0) return;
+    
+    setAdminNotification(`Ativando ${inactiveOnes.length} produtos...`);
+    for (const p of inactiveOnes) {
+      await productService.updateProduct(p.id, { ativo: true });
+    }
+    setAdminNotification("Todos os produtos foram ativados!");
+    fetchCoreData();
+  };
+
+  const deleteProduct = async (id: string) => {
+    await productService.deleteProduct(id);
+    fetchCoreData();
+  };
+
+  // BLOCO 76: devolve a linha gravada (ou null) — o form de cliente do
+  // vendedor usa isso para provar a persistencia e avisar quando falhou
+  // (antes o modal fechava como se tivesse salvo mesmo com erro no banco).
+  const addClient = async (data: Omit<Client, 'id'>): Promise<Client | null> => {
+    const r = await clientService.insertClient(data);
+    fetchCoreData();
+    return r;
+  };
+
+  // BLOCO 72: devolve SE GRAVOU no banco (clientService retorna a linha ou null)
+  // — o modal de WhatsApp/Localizacao usa isso para provar a persistencia.
+  const updateClient = async (id: string, data: Partial<Client>): Promise<boolean> => {
+    const r = await clientService.updateClient(id, data);
+    fetchCoreData();
+    return !!r;
+  };
+
+  const deleteClient = async (id: string) => {
+    const r = await clientService.deleteClient(id);
+    if (r.ok) setAdminNotification('Cliente excluído!');
+    else setAdminNotification(r.erro || 'Erro ao excluir o cliente.');
+    fetchCoreData();
+  };
+
+  const addCategory = async (name: string) => {
+    const maxOrder = categories.length > 0 ? Math.max(...categories.map(c => c.display_order || 0)) : 0;
+    await categoryService.insertCategory(name, maxOrder + 1);
+    fetchCoreData();
+  };
+
+  const updateCategory = async (id: string, updates: Partial<Category>) => {
+    await categoryService.updateCategory(id, updates);
+    fetchCoreData();
+  };
+
+  const deleteCategory = async (id: string) => {
+    await categoryService.deleteCategory(id);
+    fetchCoreData();
+  };
+  
+  const addSubcategory = async (catId: string, name: string) => {
+    const relevantSubs = subcategories.filter(s => s.categoryId === catId);
+    const maxOrder = relevantSubs.length > 0 ? Math.max(...relevantSubs.map(s => s.display_order || 0)) : 0;
+    await categoryService.insertSubcategory(catId, name, maxOrder + 1);
+    fetchCoreData();
+  };
+
+  const updateSubcategory = async (id: string, updates: Partial<Subcategory>) => {
+    await categoryService.updateSubcategory(id, updates);
+    fetchCoreData();
+  };
+
+  const deleteSubcategory = async (id: string) => {
+    await categoryService.deleteSubcategory(id);
+    fetchCoreData();
+  };
+
+  const applyCargaDirectly = async (vId: string, itens: { produtoId: string, quantidade: number }[]): Promise<{ ok: boolean; erro?: string }> => {
+    try {
+      await cargaService.applyCargaAdminRPC(vId, itens);
+      setAdminNotification("Carga aplicada com sucesso!");
+      fetchCargas();
+      return { ok: true };
+    } catch (e: any) {
+      console.error(e);
+      setAdminNotification("Erro ao aplicar carga.");
+      return { ok: false, erro: e?.message || 'Erro ao aplicar carga.' };
+    }
+  };
+
+  const syncVendedorCarga = async (vId: string, itens: { produtoId: string, quantidade: number }[]): Promise<{ ok: boolean; erro?: string }> => {
+    try {
+      await cargaService.insertCargaPendente({ vendedorId: vId, itens, data: new Date() });
+      fetchCargas();
+      return { ok: true };
+    } catch (e: any) {
+      console.error('[carga] falha ao enviar pendente:', e);
+      return { ok: false, erro: e?.message || 'Erro ao enviar a carga. Tente novamente.' };
+    }
+  };
+
+  // ===== BLOCO 29 (ROTA 2): carga da van com MODO (COM_NF | SEM_NF) =====
+  // Toda a logica (bloqueio de mistura + movimento de casa) roda no SERVIDOR.
+  const applyCargaDirectlyRota2 = async (vId: string, itens: { produtoId: string, quantidade: number }[], modo: 'COM_NF' | 'SEM_NF'): Promise<{ ok: boolean; erro?: string }> => {
+    const r = await cargaService.aplicarCargaRota2(vId, itens, modo, 'APLICAR');
+    if (r.ok) {
+      setAdminNotification(`Carga ${modo === 'COM_NF' ? 'COM NF' : 'SEM NF'} aplicada com sucesso!`);
+      fetchCargas();
+      fetchCoreData(); // estoque de casa mudou
+      return { ok: true };
+    }
+    setAdminNotification(r.erro || 'Erro ao aplicar carga.');
+    return { ok: false, erro: r.erro };
+  };
+
+  const syncVendedorCargaRota2 = async (vId: string, itens: { produtoId: string, quantidade: number }[], modo: 'COM_NF' | 'SEM_NF'): Promise<{ ok: boolean; erro?: string }> => {
+    const r = await cargaService.aplicarCargaRota2(vId, itens, modo, 'PENDENTE');
+    if (r.ok) {
+      fetchCargas();
+      return { ok: true };
+    }
+    return { ok: false, erro: r.erro };
+  };
+
+  const aceitarCarga = async (pendenciaId: string): Promise<{ ok: boolean; erro?: string }> => {
+    try {
+      // Via API server-side: valida sessao + dono da carga + bloqueia carga vazia.
+      // (Antes ia direto no RPC via chave anon, sem validar dono e engolindo erros.)
+      const { authHeaders } = await import('@/services/userService');
+      const res = await fetch('/api/cargas/aceitar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ pendenciaId }),
+      });
+      const d = await res.json().catch(() => null);
+      if (!res.ok || !d?.ok) {
+        const erro = String(d?.erro || (res.status === 401 ? 'Sessao expirada. Entre novamente.' : `Erro ${res.status} ao aceitar a carga.`));
+        console.error('[carga] aceitar falhou:', res.status, erro);
+        return { ok: false, erro };
+      }
+      setAdminNotification("Carga aceita!");
+      fetchCargas();
+      return { ok: true };
+    } catch (e: any) {
+      console.error('[carga] aceitar erro:', e);
+      return { ok: false, erro: e?.message || 'Falha de conexao ao aceitar a carga.' };
+    }
+  };
+
+  const markMessageAsRead = async (id: string) => {
+    await messageService.updateMessage(id, { lida: true });
+    fetchTransactionalData();
+  };
+
+  const processSale = async (saleData: any) => {
+    try {
+      const res = await saleService.insertSale(saleData);
+      if (res) {
+        fetchTransactionalData();
+        // BLOCO 118.3 — CAIXA (regra do dono): o caixa é EXCLUSIVO do David
+        // (Rota 5) e só recebe À VISTA. Venda à vista (dinheiro/pix) do David
+        // entra no ledger do Fechamento de Caixa na hora; dos DEMAIS vendedores
+        // NÃO entra (a compensação deles é comissão). Best-effort: nunca trava.
+        try {
+          const metodoCaixa = String(saleData.metodoPagamento || '').toUpperCase();
+          const pagoCaixa = String(saleData.statusPagamento || 'PAGO').toUpperCase();
+          if (isDavidVendedor(currentUser as any) && (metodoCaixa === 'DINHEIRO' || metodoCaixa === 'PIX') && pagoCaixa === 'PAGO') {
+            const { authHeaders } = await import('@/services/userService');
+            fetch('/api/caixa', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', ...authHeaders() },
+              body: JSON.stringify({
+                acao: 'REGISTRAR',
+                origem: 'VENDA',
+                saleId: res.id || null,
+                metodo: metodoCaixa,
+                valor: Number(saleData.valorTotal || 0),
+                cliente: (clients || []).find((c: any) => c.id === saleData.clientId)?.nomeFantasia || null,
+                vendedor: currentUser?.nome || null,
+                detalhe: saleData.detalhePagamento ? String(saleData.detalhePagamento).slice(-200) : null,
+              }),
+            }).catch(() => {});
+          }
+        } catch { /* caixa nunca trava a venda */ }
+        // Som de caixa registradora + haptics ao vender
+        const { sounds } = await import('@/utils/sound');
+        sounds.kaChing();
+        haptics.success();
+        // Enviar push notification para o admin
+        try {
+          const valor = Number(saleData.valorTotal || 0).toFixed(2);
+          const metodo = saleData.metodoPagamento === 'A_PRAZO' ? 'A Prazo' : (saleData.metodoPagamento || '');
+          fetch('/api/send-push', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              title: 'Nova Venda!',
+              body: `R$ ${valor} - ${metodo}`,
+              url: '/'
+            }),
+          }).catch(() => {});
+        } catch {} // nao bloqueia a venda se push falhar
+      }
+      return res;
+    } catch (e) {
+      console.error(e);
+      haptics.error();
+      return null;
+    }
+  };
+
+  // BLOCO 13: pedidos de pre-venda pendentes criados nesta sessao — o deleteSale
+  // deles vai pela API da fila (nao pelo RPC de estorno de estoque).
+  const pvPendentesRef = useRef<Set<string>>(new Set());
+
+  const processPreVenda = async (data: any): Promise<{ pedido: Sale | null; erro?: string; comissaoPrevista?: number }> => {
+    try {
+      const { authHeaders } = await import('@/services/userService');
+      const res = await fetch('/api/pre-venda/venda', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify(data),
+      });
+      const d = await res.json().catch(() => null);
+      if (!res.ok || !d?.ok) {
+        const motivo = String(
+          d?.error ||
+          (res.status === 401 ? 'Sessao expirada. Faca logout e entre novamente.' : `Erro ${res.status} no servidor.`)
+        );
+        const detalhe = d?.detalhe ? `\n(${String(d.detalhe).slice(0, 140)})` : '';
+        console.error('[pre-venda] falha:', motivo, d?.detalhe || res.status);
+        haptics.error();
+        return { pedido: null, erro: `${motivo}${detalhe}` };
+      }
+      fetchTransactionalData();
+      const { sounds } = await import('@/utils/sound');
+      sounds.kaChing();
+      haptics.success();
+      try {
+        fetch('/api/send-push', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: 'Novo Pedido (Pre-Venda)!', body: `R$ ${Number(d.sale.valor_total || 0).toFixed(2)} — entrou na fila de entregas`, url: '/' }),
+        }).catch(() => {});
+      } catch {}
+      // Mapeia para o tipo Sale usado pelo app
+      const s: any = d.sale;
+      const mapped: Sale = {
+        id: s.id,
+        vendedorId: currentUser?.id || '',
+        clientId: data.clientId,
+        data: new Date(s.data_venda || Date.now()),
+        valorTotal: Number(s.valor_total || 0),
+        valorPago: Number(s.valor_pago || 0),
+        // BLOCO 40: metodo real quando vier na resposta (fallback A_PRAZO =
+        // padrao do pedido pendente gravado pela API)
+        metodoPagamento: s.metodo_pagamento || 'A_PRAZO',
+        detalhePagamento: s.detalhe_pagamento || 'PRE-VENDA',
+        statusPagamento: 'PENDENTE',
+        itens: (data.itens || []).map((i: any) => ({ produtoId: i.produtoId, quantidade: i.quantidade, precoVenda: i.precoVenda })),
+        dataVencimento: s.data_vencimento ? new Date(s.data_vencimento) : undefined,
+        trocas: s.trocas || undefined,
+        tipoVenda: 'PRE_VENDA',
+        entregaStatus: 'PENDENTE',
+        // BLOCO 40: modo do atendimento (NFE|NFCE|CUPOM) — o cupom mostra o
+        // documento certo (">>> NF-e <<<") direto no "Pedido Registrado!"
+        modoNota: s.modo_nota || undefined,
+      };
+      // BLOCO 13: pedido pendente — exclusao dele usa a API da fila
+      pvPendentesRef.current.add(mapped.id);
+      // BLOCO 88 (RESERVA): o servidor ja subtraiu o estoque — espelha NA TELA
+      // na hora (sem esperar o refetch). O catalogo da pre-venda filtra saldo
+      // > 0: vendeu tudo, o produto some do PDV no ato — nao da pra vender
+      // 15 un com 5 em estoque.
+      try {
+        const qtdMap = new Map<string, number>();
+        for (const it of (data.itens || [])) {
+          const pid = String(it.produtoId);
+          qtdMap.set(pid, (qtdMap.get(pid) || 0) + (Number(it.quantidade) || 0));
+        }
+        if (qtdMap.size > 0) {
+          setProducts(prev => prev.map(p => {
+            const q = qtdMap.get(p.id);
+            return q ? { ...p, estoquePrincipal: (Number(p.estoquePrincipal) || 0) - q } : p;
+          }));
+        }
+      } catch { /* espelho best-effort: o refetch corrige */ }
+      // Aviso de estoque insuficiente NO ATO da reserva (nao bloqueia o pedido)
+      if (Array.isArray(d.avisos) && d.avisos.length > 0) {
+        const linhas = d.avisos.map((a: any) => `${a.produto}: pediu ${a.solicitado}, tinha ${a.disponivel}`).join('\n');
+        setAdminNotification(`Atencao — reservou SEM estoque completo (saldo pode ficar negativo):\n${linhas}`);
+      }
+      // NAO entra no estado "sales" (venda so existe apos a entrega confirmada).
+      // O cupom usa o pedido retornado direto.
+      // BLOCO 21: previsão da comissão de PRÉ-VENDA calculada pelo SERVIDOR
+      // (mesma regra que gera a comissão na entrega — % própria do produto).
+      const comissaoPrevista = Number(d.comissaoPrevista);
+      return { pedido: mapped, comissaoPrevista: isFinite(comissaoPrevista) && comissaoPrevista > 0 ? comissaoPrevista : undefined };
+    } catch (e: any) {
+      console.error(e);
+      haptics.error();
+      return { pedido: null, erro: 'Sem conexao com o servidor.\nVerifique sua internet e tente novamente.' };
+    }
+  };
+
+  const deleteSale = async (id: string) => {
+    // BLOCO 13: pedido de pre-venda pendente — exclui pela API da fila
+    // (nao pode estornar estoque: a baixa so acontece na entrega).
+    if (pvPendentesRef.current.has(id)) {
+      try {
+        const { authHeaders } = await import('@/services/userService');
+        const res = await fetch('/api/pre-venda', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({ acao: 'EXCLUIR_VENDA', saleId: id }),
+        });
+        const d = await res.json().catch(() => null);
+        if (res.ok && d?.ok) {
+          pvPendentesRef.current.delete(id);
+          setAdminNotification('Pedido cancelado!');
+          fetchTransactionalData();
+          return;
+        }
+        setAdminNotification(String(d?.error || 'Nao foi possivel cancelar o pedido.'));
+        return;
+      } catch {
+        setAdminNotification('Sem conexao para cancelar o pedido.');
+        return;
+      }
+    }
+    const success = await saleService.deleteSale(id);
+    if (success) fetchTransactionalData();
+  };
+
+  const receiveAccount = async (saleId: string, method: ReceiveMethod, amount?: number) => {
+    const sale = sales.find(s => s.id === saleId);
+    if (!sale) return;
+
+    const valorRecebido = amount || (sale.valorTotal - sale.valorPago);
+    const novoValorPago = Number((sale.valorPago + valorRecebido).toFixed(2));
+    const statusPagamento = novoValorPago >= sale.valorTotal ? 'PAGO' : 'PENDENTE';
+    
+    const timestamp = new Date().toLocaleString('pt-BR');
+    const novoLog = `${timestamp}: R$ ${valorRecebido.toFixed(2)} (${method})`;
+    const novoDetalhe = sale.detalhePagamento ? `${sale.detalhePagamento} | ${novoLog}` : novoLog;
+
+    // BLOCO 22: quando o dinheiro entra, a venda DEIXA de ser "a prazo" —
+    // grava o metodo real (DINHEIRO/PIX passam no CHECK legado do banco).
+    // Antes ficava A_PRAZO para sempre e a venda paga aparecia como "a prazo"
+    // em Vendas Realizadas/Relatorios.
+    // BLOCO 124 (regra do dono): a venda a prazo é TODA BOLETO — o recebimento
+    // como BOLETO (ou DEPOSITO) fecha o saldo e entra no log da venda
+    // ("(BOLETO)"), mas NÃO vira metodoPagamento (CHECK legado não aceita) e
+    // NÃO entra no caixa — o caixa do David é só DINHEIRO/PIX à vista (118.3).
+    const updates: Partial<Sale> = { valorPago: novoValorPago, statusPagamento, detalhePagamento: novoDetalhe };
+    if (method === 'DINHEIRO' || method === 'PIX') updates.metodoPagamento = method;
+
+    const success = await saleService.updateSale(saleId, updates);
+
+    if (success) {
+      // BLOCO 118.3 (regra do dono): RECEBIMENTO de contas a receber NÃO entra
+      // mais no caixa — a tela mostra SÓ o dinheiro/pix À VISTA que o David
+      // (Rota 5) recebe. Vendas a prazo/boleto ficam no Contas a Receber e no
+      // webhook do banco. (Antes: origem RECEBIMENTO no ledger — removido.)
+      if (statusPagamento === 'PAGO') {
+        const comm = commissions.find(c => c.saleId === saleId);
+        if (comm && comm.status === 'A_RECEBER') {
+          await commissionService.updateCommissionStatus(comm.id, 'DISPONIVEL');
+        }
+      }
+      fetchTransactionalData();
+    }
+  };
+
+  // BLOCO 14: acerto de comissao via API (FIFO no servidor — saldo sempre certo)
+  const payCommission = async (vId: string, amount: number, type: 'TOTAL' | 'PARCIAL', adminId: string) => {
+    try {
+      const { authHeaders } = await import('@/services/userService');
+      const res = await fetch('/api/comissoes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ acao: 'PAGAR', vendedorId: vId, total: type === 'TOTAL', valor: type === 'PARCIAL' ? amount : undefined, adminId }),
+      });
+      const d = await res.json().catch(() => null);
+      if (!res.ok || !d?.ok) {
+        setAdminNotification(String(d?.error || 'Nao foi possivel registrar o pagamento.'));
+        return;
+      }
+      setAdminNotification(`Comissão de R$ ${amount.toFixed(2)} liberada! O vendedor recebe o aviso e confirma com o RECIBO no app dele.`);
+      fetchTransactionalData();
+    } catch {
+      setAdminNotification('Sem conexao para registrar o pagamento.');
+    }
+  };
+
+  const addExpense = async (vId: string, desc: string, val: number) => {
+    const success = await expenseService.insertExpense({ sellerId: vId, descricao: desc, valor: val });
+    if (success) fetchTransactionalData();
+    return success;
+  };
+
+  const updateDailyRoute = async (clientIds: string[], skippedClientIds: string[]) => {
+    if (!currentUser) {
+      console.error('[ROTA] currentUser nulo, impossivel salvar rota.');
+      return;
+    }
+    const date = dailyRouteState?.date || (() => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}-${String(n.getDate()).padStart(2,'0')}`; })();
+    const newRoute = { date, clientIds, skippedClientIds };
+    // Bloqueia reloads do Supabase por 5 segundos para evitar race condition
+    routeUpdateLockUntilRef.current = Date.now() + 5000;
+    setDailyRouteState(newRoute);
+    try {
+      await dailyRouteService.updateRoute(currentUser.id, newRoute);
+      console.log('[ROTA] Salvo no Supabase com sucesso.');
+    } catch (err) {
+      console.error('[ROTA] Erro ao salvar rota diaria:', err);
+    }
+  };
+
+  // Wrapper para setClientOrder que persiste no Supabase
+  const setClientOrderWithPersistence = useCallback((ids: string[]) => {
+    updateSetting('clientOrder', ids);
+  }, [updateSetting]);
+
+  if (!currentUser) return <Login users={users} status={usersStatus} onRetry={reloadUsers} onLogin={(u) => { setCurrentUser(u); reloadUsers(); }} logo={logo} />;
+
+  const sellerClients = currentUser.role === 'VENDEDOR' 
+    ? clients.filter(c => c.rota === (currentUser.rota || 'ROTA_01'))
+    : clients;
+
+  return (
+    <div className="min-h-screen bg-gray-50 flex flex-col">
+      {/* Offline Banner */}
+      {!isOnline && (
+        <div className="bg-amber-500 text-white text-[10px] font-black text-center py-1.5 px-4 uppercase tracking-widest z-[60] flex items-center justify-center gap-2">
+          <i className="fa-solid fa-wifi"></i>
+          Modo Offline - Dados serao sincronizados
+          {offlineSync.getPendingCount() > 0 && <span className="bg-white/20 px-1.5 py-0.5 rounded-full ml-1">{offlineSync.getPendingCount()}</span>}
+        </div>
+      )}
+      {/* BLOCO 99: header a prova de logo largo — o logo NUNCA empurra a pagina
+          para o lado (era o causador do card do Cliente quebrando). Cada lado
+          tem limite proprio e o conteudo encolhe, nao estoura. */}
+      <header className="bg-white min-h-20 px-3 sm:px-6 shadow-sm flex justify-between items-center gap-2 min-w-0 sticky top-0 z-50 border-b" style={{ paddingTop: 'max(env(safe-area-inset-top), 0px)', paddingBottom: 'max(env(safe-area-inset-bottom), 0px)' }}>
+        {logo ? <img src={logo} alt="" className="h-12 w-auto max-w-[45vw] sm:max-w-[260px] object-contain min-w-0" /> : <span className="font-black text-[11px] text-gray-300 uppercase tracking-widest break-words leading-tight min-w-0">{companyName}</span>}
+        <div className="flex items-center gap-2 sm:gap-3 shrink-0 min-w-0">
+          <div className="text-right min-w-0 max-w-[38vw] sm:max-w-none"><p className="text-[10px] font-black uppercase text-gray-400 break-words">{currentUser.role}</p><p className="text-sm font-bold text-gray-800 break-words leading-tight">{currentUser.nome}</p></div>
+          <button onClick={() => { clearSessionToken(); setCurrentUser(null); }} className="text-gray-400 p-2 shrink-0" aria-label="Sair"><i className="fa-solid fa-right-from-bracket"></i></button>
+        </div>
+      </header>
+
+      {/* BLOCO 99: `container` + `max-w-lg` brigavam entre si (o container
+          sobrescrevia o max-width em telas maiores) — agora é um max-width
+          simples e sem ambiguidade. */}
+      <main className="w-full max-w-lg mx-auto p-4">
+        {currentUser.role === 'ENTREGADOR' ? (
+          <EntregadorShell user={currentUser} melhorias={melhorias} />
+        ) : currentUser.role === 'SECRETARIO' ? (
+          <SecretarioShell user={currentUser} melhorias={melhorias} products={products} reloadCore={fetchCoreData} />
+        ) : currentUser.role === 'ADMIN' ? (
+          <AdminDashboard 
+            {...{ products, users, cargas, cargasLoaded, clients, sales, commissions, payoutLogs, expenses, logo, margemGlobalAtiva, margemGlobalValor, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, pixChave, adminNotification, companyName, companyCnpj, orderedProductIds: productOrder, portalOrderIds: catalogoOrder, categories, subcategories, clientOrder, melhorias }}
+            addProduct={addProduct} updateProduct={updateProduct} deleteProduct={deleteProduct} registerStockEntry={()=>{}} adjustStockManual={()=>{}}
+            syncVendedorCarga={syncVendedorCarga} applyCargaDirectly={applyCargaDirectly}
+            syncVendedorCargaRota2={syncVendedorCargaRota2} applyCargaDirectlyRota2={applyCargaDirectlyRota2}
+            addClient={addClient} updateClient={updateClient} deleteClient={deleteClient}
+            addUser={addUser} updateUser={updateUser} deleteUser={deleteUser} payCommission={payCommission} setCommissions={()=>{}} updateEstoqueCentral={()=>{}} reinforceCarga={()=>{}} deleteSale={deleteSale} receiveAccount={receiveAccount}
+            setLogo={(v)=>updateSetting('logo', v)} adminUser={currentUser} setMargemGlobalAtiva={(v)=>updateSetting('margemGlobalAtiva', v)} setMargemGlobalValor={(v)=>updateSetting('margemGlobalValor', v)}
+            setMargemMinima={(v)=>updateSetting('margemMinima', v)} setMargemMinimaAtiva={(v)=>updateSetting('margemMinimaAtiva', v)} setPix1Name={(v)=>updateSetting('pix1Name', v)} setPix1Code={(v)=>updateSetting('pix1Code', v)}
+            setPix2Name={(v)=>updateSetting('pix2Name', v)} setPix2Code={(v)=>updateSetting('pix2Code', v)} clearAdminNotification={() => setAdminNotification(null)} setOrderedProductIds={(v)=>updateSetting('productOrder', v)} setPortalOrderIds={(v)=>updateSetting('catalogoOrder', v as string[])}
+            setPixChave={(v)=>updateSetting('pixChave', v)}
+            setCompanyName={(v)=>updateSetting('companyName', v)} setCompanyCnpj={(v)=>updateSetting('companyCnpj', v)}
+            setMelhorias={(v: MelhoriasFlags)=>updateSetting('melhorias', v)}
+            activateAllProducts={activateAllProducts} addCategory={addCategory} updateCategory={updateCategory} deleteCategory={deleteCategory}
+            addSubcategory={addSubcategory} updateSubcategory={updateSubcategory} deleteSubcategory={deleteSubcategory}
+            setClientOrder={setClientOrderWithPersistence}
+          />
+        ) : (
+          <VendedorDashboard 
+            {...{ products, users, cargas, cargasPendentes, sales, commissions, payoutLogs, expenses, messages, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, companyName, companyCnpj, user: currentUser, clients: sellerClients, allClients: clients, categories, subcategories, clientOrder, melhorias }}
+            markMessageAsRead={markMessageAsRead} processSale={processSale} processPreVenda={processPreVenda} addClient={addClient} updateClient={updateClient} deleteClient={deleteClient}
+            receivePayment={receiveAccount} deleteSale={deleteSale} aceitarCarga={aceitarCarga} addExpense={addExpense} updateDailyRoute={updateDailyRoute}
+            setClientOrder={setClientOrderWithPersistence}
+          />
+        )}
+      </main>
+    </div>
+  );
+};
+
+export default App;

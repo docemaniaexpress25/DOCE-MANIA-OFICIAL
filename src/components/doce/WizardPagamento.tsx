@@ -1,0 +1,575 @@
+"use client";
+import React, { useEffect, useMemo, useState } from 'react';
+
+/**
+ * BLOCO 27 — ROTA 2: wizard guiado de fechamento da venda (teste).
+ * Regra do dono (PRONTA ENTREGA): DINHEIRO na entrega e SOMENTE A VISTA
+ * (a vista = cliente ja pagou na visita); A PRAZO NAO tem dinheiro na
+ * entrega — quem cobra e o VENDEDOR na hora da venda (capital p/ nova venda).
+ *
+ * BLOCO 39 (regra do dono, PRÉ-VENDA): pré-venda SO ANOTA O PEDIDO — nada
+ * de recebimento na visita (sem valor recebido, sem troco, sem QR de Pix).
+ *  - A VISTA (Dinheiro/Pix): quem recebe e o ENTREGADOR na entrega
+ *    (pedido nasce PENDENTE "cobrar X na entrega (A VISTA)").
+ *  - A PRAZO (Boleto/Cheque/Pix na data): quem cobra e o VENDEDOR na
+ *    proxima visita ou na data combinada.
+ * So aparece para vendedores com a flag rota2 ligada; demais perfis usam a
+ * tela de pagamento antiga intocada.
+ */
+
+export interface WizardPayload {
+  condicao: 'AVISTA' | 'APRAZO';
+  forma: 'DINHEIRO' | 'PIX' | 'MISTO' | 'BOLETO' | 'CHEQUE' | 'PIX_DATA';
+  /** A vista dinheiro: quanto o cliente entregou agora (gera troco) */
+  valorRecebido?: number;
+  pixSlot?: 1 | 2;
+  mistoDinheiro?: number;
+  mistoPix?: number;
+  /** A prazo: vencimento combinado (boleto, pix na data) */
+  vencimento?: string;
+  chequeNumero?: string;
+  chequeBomPara?: string;
+  notaIntencao: 'NENHUMA' | 'NFE' | 'NFCE';
+  nfcCpf?: string;
+}
+
+interface WizardPagamentoProps {
+  total: number;
+  isPreVenda: boolean;
+  clienteAptoNfe: boolean;
+  pix1Name: string;
+  pix1Code: string | null;
+  pix2Name: string;
+  pix2Code: string | null;
+  /** Mascarador de CPF importado do PDV para nao duplicar util */
+  mascararCpf?: (v: string) => string;
+  onConfirm: (payload: WizardPayload) => void;
+  onVoltar: () => void;
+  /** Mensagem de erro vinda do PDV (falha ao salvar etc.) — mostra no resumo */
+  erro?: string | null;
+  /** BLOCO 44: submit em andamento — trava TODOS os botões e mostra spinner
+   *  (o vendedor vê que está registrando e não clica de novo nem volta). */
+  enviando?: boolean;
+  /** BLOCO 29 (ROTA 2): modo fixado na PERGUNTA DO ATENDIMENTO — pula o passo NOTA */
+  modoInicial?: 'NFE' | 'NFCE' | 'CUPOM' | null;
+  /** BLOCO 29: CPF do NFC-e capturado no atendimento (opcional) */
+  nfcCpfInicial?: string;
+}
+
+const fmt = (v: number) => `R$ ${v.toFixed(2)}`;
+const dataBr = (iso?: string) => {
+  if (!iso) return '';
+  const [y, m, d] = iso.split('-');
+  return `${d}/${m}/${y}`;
+};
+const somaDias = (n: number) => {
+  const d = new Date(); d.setDate(d.getDate() + n);
+  return d.toISOString().slice(0, 10);
+};
+
+const PASSOS_PADRAO = ['CONDIÇÃO', 'FORMA', 'NOTA', 'RESUMO'];
+const PASSOS_MODO_FIXO = ['CONDIÇÃO', 'FORMA', 'RESUMO'];
+
+const WizardPagamento: React.FC<WizardPagamentoProps> = ({
+  total, isPreVenda, clienteAptoNfe,
+  pix1Name, pix1Code, pix2Name, pix2Code,
+  mascararCpf,
+  onConfirm, onVoltar, erro, enviando,
+  modoInicial, nfcCpfInicial,
+}) => {
+  const [passo, setPasso] = useState(0);
+  const [condicao, setCondicao] = useState<'AVISTA' | 'APRAZO'>('AVISTA');
+  const [forma, setForma] = useState<'DINHEIRO' | 'PIX' | 'MISTO' | 'BOLETO' | 'CHEQUE' | 'PIX_DATA'>('DINHEIRO');
+  const [valorRecebido, setValorRecebido] = useState('');
+  const [pixSlot, setPixSlot] = useState<1 | 2>(1);
+  const [mistoDinheiro, setMistoDinheiro] = useState('');
+  const [mistoPix, setMistoPix] = useState('');
+  const [vencimento, setVencimento] = useState(somaDias(7));
+  const [vencAtalho, setVencAtalho] = useState<number | null>(7);
+  // BLOCO 60: o numero do cheque NAO e mais pedido na tela do vendedor —
+  // anota na entrega. Fica so o chequeBomPara (que e o vencimento).
+  const [chequeBomPara, setChequeBomPara] = useState(somaDias(7));
+  // BLOCO 49: atalho clicado no cheque (7/14/21/30 dias) para o destaque
+  const [chequeAtalho, setChequeAtalho] = useState<number | null>(7);
+  // BLOCO 29: com modo fixado no atendimento, o passo NOTA NEM EXISTE (3 passos)
+  const temPassoNota = !modoInicial;
+  const PASSOS = temPassoNota ? PASSOS_PADRAO : PASSOS_MODO_FIXO;
+  const passoResumo = PASSOS.length - 1;
+  const notaIntencaoInicial = modoInicial === 'NFE' ? 'NFE' : modoInicial === 'NFCE' ? 'NFCE' : 'NENHUMA';
+  const [notaIntencao, setNotaIntencao] = useState<'NENHUMA' | 'NFE' | 'NFCE'>(notaIntencaoInicial);
+  const [nfcCpf, setNfcCpf] = useState(nfcCpfInicial || '');
+  const [erroLocal, setErroLocal] = useState<string | null>(null);
+
+  const troco = useMemo(() => Math.max(0, (parseFloat(valorRecebido) || 0) - total), [valorRecebido, total]);
+  const md = parseFloat(mistoDinheiro) || 0;
+  const mp = parseFloat(mistoPix) || 0;
+  const mistoFalta = Math.round((total - md - mp) * 100) / 100;
+
+  // ============================================================
+  // BLOCO 100 (regra do dono): QR DO PIX GERADO com o VALOR DA VENDA —
+  // BR Code (Pix Copia e Cola) atrelado a chave Pix configurada em
+  // Configurações (app_settings.pix_chave_entrega, lida no servidor via
+  // /api/pix/venda). O cliente escaneia e o valor ja vem preenchido.
+  // ============================================================
+  const [pixGerado, setPixGerado] = useState<{ qrDataUrl: string; payload: string; chaveFormatada: string } | null>(null);
+  const [pixFalhou, setPixFalhou] = useState(false);
+  const pixNaVisita = forma === 'PIX' && !isPreVenda && condicao === 'AVISTA';
+  useEffect(() => {
+    if (!pixNaVisita || !(total > 0)) { setPixGerado(null); setPixFalhou(false); return; }
+    let vivo = true;
+    setPixFalhou(false);
+    (async () => {
+      try {
+        const { authHeaders } = await import('@/services/userService');
+        const r = await fetch(`/api/pix/venda?valor=${total.toFixed(2)}`, { headers: authHeaders() });
+        const d = await r.json().catch(() => ({}));
+        if (!vivo) return;
+        if (r.ok && d.ok && d.qrDataUrl) setPixGerado({ qrDataUrl: d.qrDataUrl, payload: d.payload, chaveFormatada: d.chaveFormatada || '' });
+        else setPixFalhou(true);
+      } catch {
+        if (vivo) setPixFalhou(true);
+      }
+    })();
+    return () => { vivo = false; };
+  }, [pixNaVisita, total]);
+
+  const formaLabel = condicao === 'AVISTA'
+    ? (forma === 'DINHEIRO' ? 'Dinheiro' : forma === 'PIX' ? 'Pix' : 'Misto (dinheiro + Pix)')
+    : (forma === 'BOLETO' ? 'Boleto' : forma === 'CHEQUE' ? 'Cheque' : forma === 'DINHEIRO' ? 'Dinheiro na data' : 'Pix na data');
+
+  // BLOCO 39: na pré-venda NINGUÉM recebe na visita — a vista é o ENTREGADOR
+  // que recebe na entrega; a prazo é o VENDEDOR que cobra na data/visita.
+  const avisoChave = condicao === 'AVISTA'
+    ? (isPreVenda
+      ? { icon: 'fa-truck-fast', cor: 'emerald', titulo: 'ENTREGADOR QUE RECEBE NA ENTREGA', texto: `Você só anota o pedido. Na entrega, o entregador cobra ${formaLabel} — nada a receber agora.` }
+      : { icon: 'fa-money-bill-wave', cor: 'emerald', titulo: 'RECEBIMENTO NA VISITA', texto: `Dinheiro na entrega é somente À VISTA — o cliente paga agora, com você.` })
+    : { icon: 'fa-user-clock', cor: 'amber', titulo: 'QUEM COBRA É VOCÊ, VENDEDOR', texto: forma === 'DINHEIRO' ? `Você recebe o dinheiro do cliente na data combinada (${dataBr(vencimento)}).` : `Você cobra ${formaLabel} no vencimento ${dataBr(vencimento)}.` };
+
+  // BLOCO 39: na pré-venda o MISTO não existe (ninguém recebe na visita)
+  const formasAvista: ReadonlyArray<'DINHEIRO' | 'PIX' | 'MISTO'> = isPreVenda
+    ? (['DINHEIRO', 'PIX'] as const)
+    : (['DINHEIRO', 'PIX', 'MISTO'] as const);
+
+  // BLOCO 48 (regra do dono): NF-e A PRAZO NÃO tem Pix na data nem Dinheiro
+  // na data — só Boleto ou Cheque. BLOCO 60 (regra do dono): cupom/NFC-e a
+  // prazo tem as QUATRO opções — Boleto, Cheque, Pix na data e Dinheiro na
+  // data (vendedor cobra o dinheiro na data combinada).
+  const formasAprazo: ReadonlyArray<'BOLETO' | 'CHEQUE' | 'PIX' | 'DINHEIRO'> = notaIntencao === 'NFE'
+    ? (['BOLETO', 'CHEQUE'] as const)
+    : (['BOLETO', 'CHEQUE', 'PIX', 'DINHEIRO'] as const);
+  // BLOCO 49/60 (regra do dono): a tela do vendedor NUNCA pede o numero do
+  // cheque (em nenhum modo de nota) — fica so o BOM PARA; o numero e anotado
+  // na entrega pelo entregador (pre-venda) ou fica com o escritorio.
+  const chequeNumeroNaEntrega = isPreVenda;
+
+  const proximo = () => {
+    setErroLocal(null);
+    if (passo === 0) {
+      setPasso(1);
+      return;
+    }
+    if (passo === 1) {
+      // BLOCO 39: pré-venda não recebe nada agora — sem validação de valor
+      if (condicao === 'AVISTA' && !isPreVenda) {
+        if (forma === 'DINHEIRO') {
+          const rec = parseFloat(valorRecebido) || 0;
+          if (rec <= 0) return setErroLocal('Digite o valor recebido do cliente.');
+          if (rec + 0.001 < total) return setErroLocal(`Valor recebido (${fmt(rec)}) é menor que o total (${fmt(total)}).`);
+        }
+        if (forma === 'MISTO' && Math.abs(mistoFalta) > 0.009) {
+          return setErroLocal(`Dinheiro + Pix precisa fechar o total: falta ${fmt(Math.abs(mistoFalta))} (ou passou).`);
+        }
+      }
+      // BLOCO 29: com modo fixado no atendimento, forma -> RESUMO direto (sem nota)
+      setPasso(2);
+      return;
+    }
+    if (passo === 2 && temPassoNota) {
+      if (notaIntencao === 'NFE' && !clienteAptoNfe) {
+        // BLOCO 77 (regra do dono): por enquanto a NF-e so exige CNPJ + email
+        return setErroLocal('NF-e exige CNPJ + email no cadastro do cliente. Complete o cadastro ou escolha SÓ CUPOM / NFC-e.');
+      }
+      setPasso(3);
+      return;
+    }
+  };
+
+  const confirmar = () => {
+    setErroLocal(null);
+    // BLOCO 48/60 (regra do dono): trava de segurança — NF-e a prazo só
+    // Boleto ou Cheque (sem Pix na data e sem Dinheiro na data).
+    if (condicao === 'APRAZO' && notaIntencao === 'NFE' && (forma === 'PIX' || forma === 'DINHEIRO')) {
+      setErroLocal('NF-e a prazo: escolha Boleto ou Cheque.');
+      return;
+    }
+    const payload: WizardPayload = {
+      condicao,
+      forma: condicao === 'AVISTA' ? forma : (forma === 'PIX' ? 'PIX_DATA' : forma),
+      notaIntencao,
+    };
+    if (condicao === 'AVISTA') {
+      // BLOCO 39: pré-venda não tem recebimento — nada de valor recebido
+      if (forma === 'DINHEIRO' && !isPreVenda) payload.valorRecebido = parseFloat(valorRecebido) || 0;
+      if (forma === 'PIX') payload.pixSlot = pixSlot;
+      if (forma === 'MISTO' && !isPreVenda) { payload.mistoDinheiro = md; payload.mistoPix = mp; payload.valorRecebido = md; }
+    } else {
+      if (forma === 'CHEQUE') {
+        // BLOCO 49: o cheque tem UMA data só — o BOM PARA (que é o vencimento)
+        payload.vencimento = chequeBomPara;
+        payload.chequeBomPara = chequeBomPara;
+        // BLOCO 60: sem numero do cheque na tela do vendedor — anota na entrega
+      } else {
+        payload.vencimento = vencimento;
+      }
+    }
+    if (notaIntencao === 'NFCE' && nfcCpf.trim()) {
+      payload.nfcCpf = nfcCpf.replace(/\D/g, '');
+    }
+    onConfirm(payload);
+  };
+
+  const erroMostrar = erro || erroLocal;
+
+  // Rótulo do modo (BLOCO 29 — fixado no atendimento quando modoInicial veio)
+  const modoLabel = notaIntencao === 'NENHUMA' ? 'Só cupom' : notaIntencao === 'NFE' ? 'NF-e' : 'NFC-e';
+
+  return (
+    <div className="animate-in fade-in duration-300">
+      {/* ===== STEPPER ===== */}
+      <div className="flex items-center justify-center gap-1 mb-5">
+        {PASSOS.map((label, i) => (
+          <React.Fragment key={label}>
+            <div className={`flex items-center gap-1 px-2.5 py-1.5 rounded-full text-[8px] font-black uppercase tracking-wide transition-all ${i === passo ? 'bg-violet-600 text-white shadow-md' : i < passo ? 'bg-violet-50 text-violet-500' : 'bg-gray-50 text-gray-300'}`}>
+              {i < passo ? <i className="fa-solid fa-check text-[7px]"></i> : <span className="font-black">{i + 1}</span>}
+              <span>{label}</span>
+            </div>
+            {i < PASSOS.length - 1 && <div className={`w-2 h-0.5 rounded ${i < passo ? 'bg-violet-300' : 'bg-gray-100'}`}></div>}
+          </React.Fragment>
+        ))}
+      </div>
+
+      {/* ===== PASSO 1: CONDICAO ===== */}
+      {passo === 0 && (
+        <div className="space-y-3 mb-5">
+          <p className="text-[9px] font-black text-gray-400 uppercase text-center">1. Como o cliente vai pagar?</p>
+          <div className="grid grid-cols-2 gap-2">
+            <button onClick={() => { setCondicao('AVISTA'); setForma('DINHEIRO'); }}
+              className={`p-4 rounded-2xl border-2 text-left transition-all ${condicao === 'AVISTA' ? 'border-emerald-500 bg-emerald-50 shadow-md' : 'border-gray-100 bg-gray-50'}`}>
+              <i className={`fa-solid fa-money-bill-wave text-lg ${condicao === 'AVISTA' ? 'text-emerald-600' : 'text-gray-300'}`}></i>
+              <p className={`text-[11px] font-black uppercase mt-1 ${condicao === 'AVISTA' ? 'text-emerald-700' : 'text-gray-400'}`}>À vista</p>
+              <p className="text-[8px] font-bold text-gray-400 leading-snug mt-0.5">{isPreVenda ? 'Entregador recebe na entrega' : 'Cliente paga AGORA com você'}</p>
+            </button>
+            <button onClick={() => { setCondicao('APRAZO'); setForma('BOLETO'); }}
+              className={`p-4 rounded-2xl border-2 text-left transition-all ${condicao === 'APRAZO' ? 'border-amber-500 bg-amber-50 shadow-md' : 'border-gray-100 bg-gray-50'}`}>
+              <i className={`fa-regular fa-calendar text-lg ${condicao === 'APRAZO' ? 'text-amber-600' : 'text-gray-300'}`}></i>
+              <p className={`text-[11px] font-black uppercase mt-1 ${condicao === 'APRAZO' ? 'text-amber-700' : 'text-gray-400'}`}>A prazo</p>
+              <p className="text-[8px] font-bold text-gray-400 leading-snug mt-0.5">{isPreVenda ? 'Você cobra na data ou próxima visita' : 'Você cobra na data combinada'}</p>
+            </button>
+          </div>
+          {/* BLOCO 57 (regra do dono): os avisos "sem dinheiro na entrega/visita"
+              e "dinheiro só na visita" SAÍRAM — o vendedor ja sabe a regra de
+              cor e o card só ocupava espaço no passo da condição. */}
+        </div>
+      )}
+
+      {/* ===== PASSO 2: FORMA ===== */}
+      {passo === 1 && condicao === 'AVISTA' && (
+        <div className="space-y-3 mb-5">
+          <p className="text-[9px] font-black text-gray-400 uppercase text-center">{isPreVenda ? '2. Como o entregador vai cobrar na entrega?' : '2. Forma do pagamento agora'}</p>
+          <div className={`grid gap-2 ${formasAvista.length === 2 ? 'grid-cols-2' : 'grid-cols-3'}`}>
+            {formasAvista.map(f => (
+              <button key={f} onClick={() => setForma(f)}
+                className={`py-3 rounded-xl text-[9px] font-black uppercase transition-all border-2 ${forma === f ? 'bg-emerald-600 text-white border-emerald-600 shadow-md' : 'bg-gray-50 text-gray-400 border-gray-100'}`}>
+                {f === 'DINHEIRO' ? 'Dinheiro' : f === 'PIX' ? 'Pix' : 'Misto'}
+              </button>
+            ))}
+          </div>
+
+          {forma === 'DINHEIRO' && isPreVenda && (
+            <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-3 text-center animate-in fade-in duration-200">
+              <p className="text-[9px] font-black text-emerald-700 uppercase"><i className="fa-solid fa-truck-fast mr-1"></i>Entregador recebe o dinheiro na entrega</p>
+              <p className="text-[8px] font-semibold text-emerald-600/80 mt-0.5">Você não recebe nada na visita — só anota o pedido.</p>
+            </div>
+          )}
+          {forma === 'DINHEIRO' && !isPreVenda && (
+            <div className="space-y-2 animate-in fade-in duration-200">
+              <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Valor recebido</label>
+              <input type="number" inputMode="decimal" value={valorRecebido} onChange={e => setValorRecebido(e.target.value)} placeholder="0.00" className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-2xl font-black text-center outline-none" autoFocus />
+              {troco > 0 && (
+                <div className="bg-emerald-50 p-3 rounded-2xl border border-emerald-100 text-center">
+                  <p className="text-[9px] font-black text-emerald-600 uppercase">Troco a devolver</p>
+                  <p className="text-xl font-black text-emerald-700">{fmt(troco)}</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {forma === 'PIX' && isPreVenda && (
+            <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-3 text-center animate-in fade-in duration-200">
+              <p className="text-[9px] font-black text-emerald-700 uppercase"><i className="fa-solid fa-truck-fast mr-1"></i>Entregador recebe o Pix na entrega</p>
+              <p className="text-[8px] font-semibold text-emerald-600/80 mt-0.5">O Pix da empresa vai com o entregador — nada a receber agora.</p>
+            </div>
+          )}
+          {forma === 'PIX' && !isPreVenda && (
+            <div className="space-y-2 animate-in fade-in duration-200">
+              <p className="text-[9px] font-black text-gray-400 uppercase text-center">Chave Pix que recebe</p>
+              <div className="grid grid-cols-2 gap-2">
+                <button onClick={() => setPixSlot(1)} className={`p-3 rounded-xl border text-[10px] font-black uppercase transition-all ${pixSlot === 1 ? 'border-emerald-600 bg-emerald-50 text-emerald-700' : 'border-gray-100 text-gray-400'}`}>{pix1Name}</button>
+                <button onClick={() => setPixSlot(2)} className={`p-3 rounded-xl border text-[10px] font-black uppercase transition-all ${pixSlot === 2 ? 'border-emerald-600 bg-emerald-50 text-emerald-700' : 'border-gray-100 text-gray-400'}`}>{pix2Name}</button>
+              </div>
+              {/* BLOCO 100 (regra do dono): QR GERADO com o VALOR DA VENDA —
+                  BR Code da chave Pix das Configurações. Sem chave/erro de
+                  rede: cai no QR fixo do banco (sem valor). */}
+              <div className="bg-teal-50/60 p-3 rounded-2xl flex flex-col items-center border border-teal-100">
+                <p className="text-[8px] font-black text-teal-500 uppercase mb-0.5">PIX — QR com o valor da venda</p>
+                <p className="text-xl font-black text-teal-700 mb-1.5">{fmt(total)}</p>
+                <div className="w-36 h-36 bg-white rounded-xl flex items-center justify-center border border-gray-200 overflow-hidden">
+                  {pixGerado ? (
+                    <img src={pixGerado.qrDataUrl} alt="QR Pix com o valor da venda" className="w-full h-full object-contain" />
+                  ) : pixFalhou ? (
+                    pixSlot === 1 ? (pix1Code ? <img src={pix1Code} alt="QR Pix" className="w-full h-full object-contain" /> : <i className="fa-solid fa-qrcode text-gray-200 text-3xl"></i>) : (pix2Code ? <img src={pix2Code} alt="QR Pix" className="w-full h-full object-contain" /> : <i className="fa-solid fa-qrcode text-gray-200 text-3xl"></i>)
+                  ) : (
+                    <i className="fa-solid fa-spinner fa-spin text-teal-300 text-3xl"></i>
+                  )}
+                </div>
+                {pixGerado ? (
+                  <>
+                    <p className="text-[9px] font-bold text-gray-400 mt-1.5 text-center leading-snug break-all">Chave Pix das Configurações: <span className="font-black text-gray-600">{pixGerado.chaveFormatada}</span></p>
+                    <button
+                      onClick={() => { navigator.clipboard?.writeText(pixGerado.payload).catch(() => {}); setErroLocal(null); }}
+                      className="mt-1.5 px-3 py-2 rounded-xl bg-teal-600 text-white text-[8px] font-black uppercase active:scale-95 shadow"
+                    >
+                      <i className="fa-solid fa-copy mr-1"></i>Copiar código Pix (copia e cola)
+                    </button>
+                  </>
+                ) : pixFalhou ? (
+                  <p className="text-[8px] font-bold text-rose-400 mt-1.5 text-center leading-snug">QR com valor indisponível — use o QR fixo do banco e confira o valor.</p>
+                ) : (
+                  <p className="text-[8px] font-bold text-teal-400 mt-1.5">Gerando QR com o valor da venda...</p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {forma === 'MISTO' && !isPreVenda && (
+            <div className="space-y-2 animate-in fade-in duration-200">
+              <p className="text-[9px] font-black text-gray-400 uppercase text-center">Parte em dinheiro + parte em Pix (soma = total)</p>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <label className="text-[8px] font-black text-gray-400 uppercase ml-1">Dinheiro</label>
+                  <input type="number" inputMode="decimal" value={mistoDinheiro} onChange={e => setMistoDinheiro(e.target.value)} placeholder="0.00" className="w-full p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-base font-black text-center outline-none" />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[8px] font-black text-gray-400 uppercase ml-1">Pix</label>
+                  <input type="number" inputMode="decimal" value={mistoPix} onChange={e => setMistoPix(e.target.value)} placeholder="0.00" className="w-full p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-base font-black text-center outline-none" />
+                </div>
+              </div>
+              <div className={`p-3 rounded-2xl text-center border text-[10px] font-black ${Math.abs(mistoFalta) < 0.01 ? 'bg-emerald-50 border-emerald-100 text-emerald-700' : 'bg-amber-50 border-amber-100 text-amber-600'}`}>
+                {Math.abs(mistoFalta) < 0.01 ? 'FECHA O TOTAL ✓' : `Falta: ${fmt(Math.abs(mistoFalta))}`}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {passo === 1 && condicao === 'APRAZO' && (
+        <div className="space-y-3 mb-5">
+          <p className="text-[9px] font-black text-gray-400 uppercase text-center">2. Como você vai cobrar depois?</p>
+          {/* BLOCO 48: NFe a prazo = so Boleto/Cheque. BLOCO 60 (regra do
+              dono): cupom a prazo tem as QUATRO formas — 2x2 para caber o
+              texto no celular. */}
+          <div className="grid grid-cols-2 gap-2">
+            {formasAprazo.map(f => (
+              <button key={f} onClick={() => setForma(f)}
+                className={`py-3 rounded-xl text-[9px] font-black uppercase transition-all border-2 ${forma === f ? 'bg-amber-500 text-white border-amber-500 shadow-md' : 'bg-gray-50 text-gray-400 border-gray-100'}`}>
+                {f === 'BOLETO' ? 'Boleto' : f === 'CHEQUE' ? 'Cheque' : f === 'PIX' ? 'Pix na data' : 'Dinheiro na data'}
+              </button>
+            ))}
+          </div>
+          {/* BLOCO 57 (regra do dono): card "Sem dinheiro no a prazo" saiu —
+              o vendedor ja sabe que a prazo o dinheiro vem na data. */}
+
+          {forma === 'CHEQUE' && (
+            <div className="space-y-2 animate-in fade-in duration-200">
+              {/* BLOCO 60 (regra do dono): a tela do vendedor NUNCA pede o
+                  numero do cheque — fica so o BOM PARA (que e o vencimento).
+                  O numero e anotado na entrega pelo entregador. Atalhos de
+                  clicagem iguais aos do boleto (7/14/21/30 dias). */}
+              <p className="text-[9px] font-black text-gray-400 uppercase text-center">Bom para</p>
+              <div className="grid grid-cols-4 gap-2">
+                {[7, 14, 21, 30].map(d => (
+                  <button key={d} onClick={() => { setChequeAtalho(d); const iso = somaDias(d); setChequeBomPara(iso); setVencimento(iso); }} className={`py-2.5 rounded-xl text-[10px] font-black transition-all ${chequeAtalho === d ? 'bg-amber-500 text-white shadow-md scale-105' : 'bg-gray-50 border-2 border-gray-100 text-gray-500'}`}>{d}D</button>
+                ))}
+              </div>
+              <input type="date" value={chequeBomPara} onChange={e => { setChequeBomPara(e.target.value); setVencimento(e.target.value); setChequeAtalho(null); }} className="w-full p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-bold text-center outline-none" />
+            </div>
+          )}
+
+          {forma === 'BOLETO' && (
+            <div className="space-y-2 animate-in fade-in duration-200">
+              <p className="text-[9px] font-black text-gray-400 uppercase text-center">Vencimento do boleto</p>
+              <div className="grid grid-cols-4 gap-2">
+                {[7, 14, 21, 30].map(d => (
+                  <button key={d} onClick={() => { setVencAtalho(d); setVencimento(somaDias(d)); }} className={`py-2.5 rounded-xl text-[10px] font-black transition-all ${vencAtalho === d ? 'bg-amber-500 text-white shadow-md scale-105' : 'bg-gray-50 border-2 border-gray-100 text-gray-500'}`}>{d}D</button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* BLOCO 49: no CHEQUE a data única é o BOM PARA (acima) — sem
+              campo duplicado de vencimento aqui */}
+          {forma !== 'CHEQUE' && (
+            <div className="space-y-1">
+              <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Data de vencimento</label>
+              <input type="date" value={vencimento} onChange={e => { setVencimento(e.target.value); setVencAtalho(null); }} className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-black text-center outline-none" />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ===== PASSO 3: NOTA (pulado quando o modo veio do atendimento) ===== */}
+      {passo === 2 && temPassoNota && (
+        <div className="space-y-3 mb-5">
+          <p className="text-[9px] font-black text-gray-400 uppercase text-center">3. Quer nota fiscal nesta venda?</p>
+          <div className="space-y-2">
+            <button onClick={() => setNotaIntencao('NENHUMA')}
+              className={`w-full p-4 rounded-2xl border-2 text-left transition-all ${notaIntencao === 'NENHUMA' ? 'border-violet-500 bg-violet-50 shadow-md' : 'border-gray-100 bg-gray-50'}`}>
+              <p className={`text-[11px] font-black uppercase ${notaIntencao === 'NENHUMA' ? 'text-violet-700' : 'text-gray-400'}`}><i className="fa-solid fa-receipt mr-1"></i>Só cupom (sem nota)</p>
+              <p className="text-[8px] font-bold text-gray-400 mt-0.5">Fluxo comum — cupom não fiscal</p>
+            </button>
+            <button onClick={() => { setNotaIntencao('NFE'); if (condicao === 'APRAZO' && forma === 'PIX') { setForma('BOLETO'); } }}
+              className={`w-full p-4 rounded-2xl border-2 text-left transition-all ${notaIntencao === 'NFE' ? 'border-slate-700 bg-slate-50 shadow-md' : 'border-gray-100 bg-gray-50'} ${!clienteAptoNfe ? 'opacity-50' : ''}`}
+              disabled={!clienteAptoNfe}>
+              <p className={`text-[11px] font-black uppercase ${notaIntencao === 'NFE' ? 'text-slate-800' : 'text-gray-400'}`}><i className="fa-solid fa-file-invoice-dollar mr-1"></i>Com NF-e {clienteAptoNfe ? '' : '(cliente sem CNPJ + email no cadastro)'}</p>
+              <p className="text-[8px] font-bold text-gray-400 mt-0.5">Nota eletrônica para o CNPJ do cadastro</p>
+            </button>
+            <button onClick={() => setNotaIntencao('NFCE')}
+              className={`w-full p-4 rounded-2xl border-2 text-left transition-all ${notaIntencao === 'NFCE' ? 'border-blue-600 bg-blue-50 shadow-md' : 'border-gray-100 bg-gray-50'}`}>
+              <p className={`text-[11px] font-black uppercase ${notaIntencao === 'NFCE' ? 'text-blue-700' : 'text-gray-400'}`}><i className="fa-solid fa-file-lines mr-1"></i>Com NFC-e</p>
+              <p className="text-[8px] font-bold text-gray-400 mt-0.5">Cupom fiscal — CPF do consumidor (opcional)</p>
+            </button>
+            {notaIntencao === 'NFCE' && (
+              <div className="bg-blue-50 border border-blue-100 rounded-2xl p-3 space-y-2 animate-in fade-in duration-200">
+                <p className="text-[9px] font-black text-blue-600 uppercase">Cliente quer CPF na nota? (opcional)</p>
+                <input value={nfcCpf} onChange={e => setNfcCpf(mascararCpf ? mascararCpf(e.target.value) : e.target.value)} placeholder="000.000.000-00" inputMode="numeric" className="w-full p-3 bg-white border rounded-xl font-bold text-sm" />
+              </div>
+            )}
+          </div>
+          <p className="text-[8px] font-bold text-gray-300 text-center leading-snug">A nota é emitida ao final da venda (mesmo fluxo de sempre). Sem escolha = cupom não fiscal.</p>
+        </div>
+      )}
+
+      {/* ===== PASSO FINAL: RESUMO ===== */}
+      {passo === passoResumo && (
+        <div className="space-y-3 mb-5">
+          <p className="text-[9px] font-black text-gray-400 uppercase text-center">4. Confira e confirme</p>
+          <div className="bg-gray-50 border border-gray-100 rounded-2xl divide-y divide-gray-100">
+            <div className="p-3.5 flex items-center justify-between">
+              <span className="text-[9px] font-black text-gray-400 uppercase">Condição</span>
+              <span className="text-[11px] font-black text-gray-700 uppercase">{condicao === 'AVISTA' ? 'À vista' : 'A prazo'}</span>
+            </div>
+            <div className="p-3.5 flex items-center justify-between">
+              <span className="text-[9px] font-black text-gray-400 uppercase">Forma</span>
+              <span className="text-[11px] font-black text-gray-700 uppercase">{formaLabel}</span>
+            </div>
+            {!isPreVenda && condicao === 'AVISTA' && forma === 'DINHEIRO' && (
+              <div className="p-3.5 flex items-center justify-between">
+                <span className="text-[9px] font-black text-gray-400 uppercase">Recebido / troco</span>
+                <span className="text-[11px] font-black text-gray-700">{fmt(parseFloat(valorRecebido) || 0)} {troco > 0 ? <span className="text-emerald-600">(troco {fmt(troco)})</span> : null}</span>
+              </div>
+            )}
+            {!isPreVenda && condicao === 'AVISTA' && forma === 'MISTO' && (
+              <div className="p-3.5 flex items-center justify-between">
+                <span className="text-[9px] font-black text-gray-400 uppercase">Misto</span>
+                <span className="text-[11px] font-black text-gray-700">{fmt(md)} + Pix {fmt(mp)}</span>
+              </div>
+            )}
+            {condicao === 'APRAZO' && (
+              <div className="p-3.5 flex items-center justify-between">
+                <span className="text-[9px] font-black text-gray-400 uppercase">Vencimento</span>
+                <span className="text-[11px] font-black text-gray-700">{dataBr(vencimento)}</span>
+              </div>
+            )}
+            {condicao === 'APRAZO' && forma === 'CHEQUE' && (
+              <div className="p-3.5 flex items-center justify-between">
+                <span className="text-[9px] font-black text-gray-400 uppercase">Cheque nº</span>
+                {/* BLOCO 60: sem numero na tela do vendedor — anota na entrega */}
+                <span className="text-[11px] font-black text-gray-700">{chequeNumeroNaEntrega ? 'anota na entrega' : '—'}</span>
+              </div>
+            )}
+            <div className="p-3.5 flex items-center justify-between">
+              <span className="text-[9px] font-black text-gray-400 uppercase">Nota</span>
+              <span className="text-[11px] font-black text-gray-700 uppercase">
+                {modoLabel}{!temPassoNota && <i className="fa-solid fa-lock text-[8px] text-violet-400 ml-1" title="Fixado no atendimento"></i>}
+              </span>
+            </div>
+            <div className="p-3.5 flex items-center justify-between bg-white">
+              <span className="text-[10px] font-black text-gray-400 uppercase">Total</span>
+              <span className="text-lg font-black text-gray-800">{fmt(total)}</span>
+            </div>
+          </div>
+
+          <div className={`rounded-2xl p-3.5 text-center border ${avisoChave.cor === 'emerald' ? 'bg-emerald-50 border-emerald-100' : 'bg-amber-50 border-amber-100'}`}>
+            <p className={`text-[10px] font-black uppercase ${avisoChave.cor === 'emerald' ? 'text-emerald-700' : 'text-amber-700'}`}>
+              <i className={`fa-solid ${avisoChave.icon} mr-1`}></i>{avisoChave.titulo}
+            </p>
+            <p className={`text-[9px] font-semibold mt-1 leading-snug ${avisoChave.cor === 'emerald' ? 'text-emerald-600/80' : 'text-amber-600/80'}`}>{avisoChave.texto}</p>
+          </div>
+        </div>
+      )}
+
+      {/* ===== ERRO ===== */}
+      {erroMostrar && (
+        <div className="bg-rose-50 border border-rose-200 rounded-2xl p-3 mb-4 animate-in fade-in duration-200">
+          <p className="text-[10px] font-black text-rose-700 uppercase leading-snug"><i className="fa-solid fa-circle-exclamation mr-1"></i>{erroMostrar}</p>
+        </div>
+      )}
+
+      {/* ===== NAVEGACAO ===== */}
+      <div className="flex gap-2">
+        {passo > 0 && (
+          <button onClick={() => { setErroLocal(null); setPasso(p => p - 1); }} disabled={enviando} className="px-5 py-4 rounded-2xl bg-gray-100 text-gray-500 font-black uppercase text-[10px] tracking-widest active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed">
+            <i className="fa-solid fa-arrow-left mr-1"></i>Voltar
+          </button>
+        )}
+        {passo < passoResumo ? (
+          <button onClick={proximo} disabled={enviando} className="flex-1 py-4 rounded-2xl bg-violet-600 text-white font-black uppercase text-xs tracking-widest shadow-lg active:scale-95 transition-all disabled:opacity-60 disabled:cursor-not-allowed">
+            {passo === 0 ? 'Começar' : 'Continuar'}<i className="fa-solid fa-arrow-right ml-2"></i>
+          </button>
+        ) : (
+          <button onClick={confirmar} disabled={enviando} className="flex-1 py-4 rounded-2xl bg-emerald-600 text-white font-black uppercase text-xs tracking-widest shadow-lg active:scale-95 transition-all disabled:opacity-70 disabled:cursor-not-allowed">
+            {enviando
+              ? <><i className="fa-solid fa-spinner fa-spin mr-2"></i>{isPreVenda ? 'Registrando pedido...' : 'Finalizando...'}</>
+              : <>{isPreVenda ? 'Registrar Pedido' : 'Concluir Venda'}<i className="fa-solid fa-check ml-2"></i></>}
+          </button>
+        )}
+      </div>
+      {/* BLOCO 88: volta pro CARRINHO — o cupom so existe depois de registrar */}
+      <button onClick={onVoltar} disabled={enviando} className="w-full py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest disabled:opacity-50">Voltar ao Carrinho</button>
+
+      {/* ===== BLOCO 51 (regra do dono): enquanto o pedido/venda esta sendo
+          gravado, a tela inteira mostra o GIF de processamento + "NAO FECHE A
+          TELA" — o vendedor espera em vez de sair/clicar de novo (que era o
+          que duplicava pedido). Todos os botoes ja estao travados (enviando). ===== */}
+      {enviando && (
+        <div className="fixed inset-0 z-[300] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" role="alert" aria-live="assertive">
+          <div className="bg-white w-full max-w-xs rounded-3xl shadow-2xl p-8 text-center animate-in zoom-in-95 duration-200">
+            <div className="relative w-24 h-24 mx-auto mb-5">
+              <i className="fa-solid fa-spinner fa-spin text-[64px] text-violet-500 leading-none"></i>
+              <i className={`fa-solid ${isPreVenda ? 'fa-clipboard-list' : 'fa-money-bill-wave'} text-lg text-violet-400 absolute inset-0 flex items-center justify-center animate-pulse`}></i>
+            </div>
+            <h3 className="text-base font-black text-gray-800 uppercase tracking-widest animate-pulse">
+              <i className="fa-solid fa-hand mr-1.5 text-violet-600"></i>Não feche a tela
+            </h3>
+            <p className="text-[10px] font-bold text-gray-500 mt-2 leading-snug">
+              {isPreVenda ? 'Registrando seu pedido no sistema...' : 'Concluindo sua venda no sistema...'}
+            </p>
+            <p className="text-[9px] font-bold text-gray-400 mt-3 leading-snug">Pode demorar alguns segundos. Aguarde a confirmação — sair agora pode perder o registro.</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default WizardPagamento;

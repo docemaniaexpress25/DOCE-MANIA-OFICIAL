@@ -1,0 +1,231 @@
+/home/z/doce-mania-repo/src/lib/fotoStorage.ts:94:    const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(valor, SIGNED_TTL);
+/home/z/doce-mania-repo/src/lib/comissaoPv.ts:65:    const r = await supabase.from('products').select('id, comissao_pv_percentual').in('id', prodIds);
+/home/z/doce-mania-repo/src/lib/comissaoPv.ts:98:    const r = await supabase.from('products').select('id, comissao_percentual').in('id', prodIds);
+/home/z/doce-mania-repo/src/lib/focusArquivos.ts:103:    const { data, error } = await db.storage.from(BUCKET).list(pasta, { limit: LIM, offset, sortBy: { column: 'name', order: 'asc' } });
+/home/z/doce-mania-repo/src/lib/focusArquivos.ts:195:      .storage.from(BUCKET)
+/home/z/doce-mania-repo/src/lib/focusArquivos.ts:209:      .storage.from(BUCKET)
+/home/z/doce-mania-repo/src/lib/focusArquivos.ts:422:    const { data } = await db.from('sales').select('nota_chave').not('nota_chave', 'is', null).limit(1);
+/home/z/doce-mania-repo/src/lib/focusArquivos.ts:583:        .from('sales')
+/home/z/doce-mania-repo/src/lib/focusArquivos.ts:812:      .storage.from(BUCKET)
+/home/z/doce-mania-repo/src/lib/focusArquivos.ts:826:    const { data, error } = await db.storage.from(BUCKET).list(pastaAvulsa(), { limit: 1000, sortBy: { column: 'name', order: 'desc' } });
+/home/z/doce-mania-repo/src/lib/focusArquivos.ts:902:  try { await db.storage.from(BUCKET).remove(alvos); } catch { /* best-effort */ }
+/home/z/doce-mania-repo/src/app/api/xml-importacao/route.ts:91:      .from('products')
+/home/z/doce-mania-repo/src/app/api/xml-importacao/itens/route.ts:113:    .from('products')
+/home/z/doce-mania-repo/src/app/api/xml-importacao/itens/route.ts:196:  const { data: prod } = await supabase.from('products').select('id, nome, ncm, ean, unidade, origem, cest').eq('id', produtoId).maybeSingle();
+/home/z/doce-mania-repo/src/app/api/xml-importacao/itens/route.ts:211:    const { error: eProd } = await supabase.from('products').update(patch).eq('id', produtoId);
+/home/z/doce-mania-repo/src/app/api/xml-importacao/itens/route.ts:218:          await supabase.from('products').update(semCest).eq('id', produtoId);
+/home/z/doce-mania-repo/src/app/api/xml-importacao/itens/route.ts:277:  const { data: prod } = await supabase.from('products').select('estoque_principal').eq('id', produtoId).maybeSingle();
+/home/z/doce-mania-repo/src/app/api/xml-importacao/itens/route.ts:281:  const { error: eUpd } = await supabase.from('products').update({ estoque_principal: novo }).eq('id', produtoId);
+/home/z/doce-mania-repo/src/app/api/xml-importacao/itens/route.ts:357:        .from('products')
+/home/z/doce-mania-repo/src/app/api/boletos/route.ts:67:  await getServiceClient().from('sales').update(patch).eq('id', saleId);
+/home/z/doce-mania-repo/src/app/api/boletos/route.ts:101:  const { data: sale, error } = await db.from('sales').select(COLS).eq('id', saleId).single();
+/home/z/doce-mania-repo/src/app/api/boletos/route.ts:131:  const { data: sale, error: saleErr } = await db.from('sales').select(COLS).eq('id', saleId).single();
+/home/z/doce-mania-repo/src/app/api/boletos/route.ts:191:    .from('clients')
+/home/z/doce-mania-repo/src/app/api/estoque/movimentos/route.ts:73:      .from('products')
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:91:    const r = await supabase.from('clients').select(cols).in('id', ids);
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:146:    const { error } = await getServiceClient().from('sales').select('ordem_entrega').limit(1);
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:158:    const { error } = await getServiceClient().from('sales').select('trocas_valor').limit(1);
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:251:      .from('commissions').select('id').eq('sale_id', sale.id).limit(1);
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:253:      await supabase.from('commissions')
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:257:      await supabase.from('commissions').insert({
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:276:      const { data: cli } = await supabase.from('clients').select('nome_fantasia').eq('id', clientId).maybeSingle();
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:316:    .from('sales')
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:346:    const { data: prods } = await supabase.from('products').select('id, nome').in('id', prodIds);
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:445:    .from('sales')
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:484:    .from('sales')
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:520:  const { error } = await supabase.from('sales').update(payload).eq('id', saleId);
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:531:    const { error: err2 } = await supabase.from('sales').update(flex).eq('id', saleId);
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:541:    const { error: err3 } = await supabase.from('sales').update(flex2).eq('id', saleId);
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:585:    const { data: prods } = await supabase.from('products').select('id, nome').in('id', prodIds);
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:724:    .from('sales')
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:737:      .from('sales')
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:751:    .from('sales')
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:761:    .from('sales')
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:863:    const { data: salesEnt } = await supabase.from('sales').select('id, entregador_id, valor_total, valor_pago').in('id', saleIdsCaixa);
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:1057:    .from('sales')
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:1080:      .from('sales')
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:1089:    await supabase.from('sales').update({ route_id: null, entrega_seq: null }).eq('route_id', existente.id);
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:1096:  const { data: clientsRows } = await supabase.from('clients').select('id, ordem').in('id', clientIds);
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:1126:      .from('sales')
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:1168:        .from('products')
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:1286:          .from('sales')
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:1328:      await supabase.from('sales').update({ entrega_status: 'EM_ROTA' }).eq('route_id', rota.id).in('entrega_status', ['PENDENTE']);
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:1357:      const { data: entregues } = await supabase.from('sales').select('id').in('id', ids).eq('entrega_status', 'ENTREGUE');
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:1370:          return supabase.from('sales').update({ ordem_entrega: ordem }).eq('id', String(o.saleId));
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:1405:        const { data: sNotaCarga } = await supabase.from('sales').select(colsNotaCarga.join(', ')).eq('id', saleIdCarga).maybeSingle();
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:1433:      const { error: cargaErr } = await supabase.from('sales').update(payload).eq('id', saleIdCarga);
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:1465:      const { error: desErr } = await supabase.from('sales').update(payloadDes).eq('id', saleIdDes);
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:1539:    const { data: sale } = await supabase.from('sales').select(`${FILA_COLS_13}`).eq('id', saleId).maybeSingle();
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:1544:      const alt = await supabase.from('sales').select(`${SALE_COLS}, tipo_venda`).eq('id', saleId).maybeSingle();
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:1635:      const { data: prods, error: perr } = await supabase.from('products').select('id, nome, preco_venda').in('id', pids);
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:1647:        const { data: ebRow } = await supabase.from('sales').select('estoque_baixado').eq('id', saleId).maybeSingle();
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:1698:        await supabase.from('sales').update({ estoque_baixado: false }).eq('id', saleId);
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:1703:        if (wasReserved) await supabase.from('sales').update({ estoque_baixado: true }).eq('id', saleId);
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:1716:        if (wasReserved) await supabase.from('sales').update({ estoque_baixado: true }).eq('id', saleId);
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:1734:            const { data: prodsDelta } = await supabase.from('products').select('id, estoque_principal').in('id', idsDelta);
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:1736:              supabase.from('products').update({
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:1744:        await supabase.from('sales').update({ estoque_baixado: true }).eq('id', saleId);
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:1777:        const { data: sNotaDoc } = await supabase.from('sales').select('nota_status').eq('id', saleId).maybeSingle();
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:1835:        const { data: ebRow } = await supabase.from('sales').select('estoque_baixado').eq('id', saleId).maybeSingle();
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:1837:          await supabase.from('sales').update({ estoque_baixado: false }).eq('id', saleId);
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:1846:            const { data: prodsDev } = await supabase.from('products').select('id, estoque_principal').in('id', idsDev);
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:1848:              supabase.from('products').update({
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:1860:      const { error: delErr } = await supabase.from('sales').delete().eq('id', saleId);
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:1870:          .from('sales')
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:1901:      const rCarga = await supabase.from('sales').select('carga_confirmada_em').eq('id', saleId).maybeSingle();
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:2116:          ? ((await supabase.from('clients').select('nome_fantasia').eq('id', saleRow.client_id).limit(1).maybeSingle()).data as any)?.nome_fantasia || null
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:2160:        const { data: modoRow75 } = await supabase.from('sales').select('modo_nota').eq('id', saleId).maybeSingle();
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:2172:            const { data: prods75 } = await supabase.from('products').select(`id, ${col75}`).in('id', ids75);
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:2177:              await supabase.from('products').update({ [col75]: novo }).eq('id', pr.id);
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:2208:      const { error: upErr } = await supabase.from('sales').update({ entrega_status: 'FALHOU' }).eq('id', saleId);
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:2226:      const { error: upErr } = await supabase.from('sales').update({ entrega_status: 'PENDENTE' }).eq('id', saleId);
+/home/z/doce-mania-repo/src/app/api/pre-venda/route.ts:2240:        .from('sales')
+/home/z/doce-mania-repo/src/app/api/pre-venda/foto/route.ts:57:        .from('sales')
+/home/z/doce-mania-repo/src/app/api/pre-venda/foto/route.ts:87:    const { data: sale } = await supabase.from('sales').select('id, route_id, vendedor_id').eq('id', saleId).maybeSingle();
+/home/z/doce-mania-repo/src/app/api/pre-venda/venda/route.ts:117:      supabase.from('clients').select('id').eq('id', clientId).limit(1).maybeSingle(),
+/home/z/doce-mania-repo/src/app/api/pre-venda/venda/route.ts:123:      supabase.from('sales')
+/home/z/doce-mania-repo/src/app/api/pre-venda/venda/route.ts:212:      .from('sales')
+/home/z/doce-mania-repo/src/app/api/pre-venda/venda/route.ts:223:        .from('sales')
+/home/z/doce-mania-repo/src/app/api/pre-venda/venda/route.ts:257:      await supabase.from('sales').delete().eq('id', sale.id);
+/home/z/doce-mania-repo/src/app/api/pre-venda/venda/route.ts:280:        supabase.from('products').select('id, nome, estoque_principal').in('id', prodIds),
+/home/z/doce-mania-repo/src/app/api/pre-venda/venda/route.ts:296:      const { error: markErr } = await supabase.from('sales').update({ estoque_baixado: true }).eq('id', sale.id);
+/home/z/doce-mania-repo/src/app/api/pre-venda/venda/route.ts:303:          await supabase.from('products').update({
+/home/z/doce-mania-repo/src/app/api/sales/trocas/route.ts:33:    const { data: sale } = await supabase.from('sales').select('id, vendedor_id, entrega_status').eq('id', saleId).maybeSingle();
+/home/z/doce-mania-repo/src/app/api/sales/trocas/route.ts:42:    let { error } = await supabase.from('sales').update({ trocas, trocas_valor: trocasValor }).eq('id', saleId);
+/home/z/doce-mania-repo/src/app/api/sales/trocas/route.ts:45:      ({ error } = await supabase.from('sales').update({ trocas }).eq('id', saleId));
+/home/z/doce-mania-repo/src/app/api/cliente/[codigo]/pedido/route.ts:61:      .from('clients')
+/home/z/doce-mania-repo/src/app/api/cliente/[codigo]/pedido/route.ts:74:      .from('sales')
+/home/z/doce-mania-repo/src/app/api/cliente/[codigo]/pedido/route.ts:90:      .from('products')
+/home/z/doce-mania-repo/src/app/api/cliente/[codigo]/pedido/route.ts:191:      .from('sales')
+/home/z/doce-mania-repo/src/app/api/cliente/[codigo]/pedido/route.ts:199:        .from('sales')
+/home/z/doce-mania-repo/src/app/api/cliente/[codigo]/pedido/route.ts:220:      await supabase.from('sales').delete().eq('id', sale.id);
+/home/z/doce-mania-repo/src/app/api/cliente/[codigo]/catalogo/route.ts:36:      .from('clients')
+/home/z/doce-mania-repo/src/app/api/cliente/[codigo]/catalogo/route.ts:46:      .from('sales')
+/home/z/doce-mania-repo/src/app/api/cliente/[codigo]/catalogo/route.ts:60:        .from('products')
+/home/z/doce-mania-repo/src/app/api/cliente/[codigo]/catalogo/route.ts:69:        .from('products')
+/home/z/doce-mania-repo/src/app/api/cliente/[codigo]/route.ts:71:      .from('clients')
+/home/z/doce-mania-repo/src/app/api/cliente/[codigo]/route.ts:90:      .from('sales')
+/home/z/doce-mania-repo/src/app/api/cliente/[codigo]/route.ts:102:    const { data: prodData } = await supabase.from('products').select('id, nome, preco_venda');
+/home/z/doce-mania-repo/src/app/api/cliente/[codigo]/pix/route.ts:41:      .from('clients')
+/home/z/doce-mania-repo/src/app/api/cliente/[codigo]/pix/route.ts:51:      .from('sales')
+/home/z/doce-mania-repo/src/app/api/cliente/[codigo]/comprovante/route.ts:55:      .from('clients')
+/home/z/doce-mania-repo/src/app/api/cliente/[codigo]/comprovante/route.ts:65:      .from('sales')
+/home/z/doce-mania-repo/src/services/cargaService.ts:11:      const r = await supabase.from('cargas').select('vendedor_id, produto_id, quantidade, modo_nota');
+/home/z/doce-mania-repo/src/services/cargaService.ts:14:        const r2 = await supabase.from('cargas').select('vendedor_id, produto_id, quantidade');
+/home/z/doce-mania-repo/src/services/clientService.ts:91:    let { data, error } = await supabase.from('clients').insert({ ...payload, ...fiscal }).select().single();
+/home/z/doce-mania-repo/src/services/clientService.ts:94:      ({ data, error } = await supabase.from('clients').insert(payload).select().single());
+/home/z/doce-mania-repo/src/services/clientService.ts:99:      ({ data, error } = await supabase.from('clients').insert(semGps).select().single());
+/home/z/doce-mania-repo/src/services/clientService.ts:105:      ({ data, error } = await supabase.from('clients').insert(semGb).select().single());
+/home/z/doce-mania-repo/src/services/clientService.ts:111:      ({ data, error } = await supabase.from('clients').insert(semCupom).select().single());
+/home/z/doce-mania-repo/src/services/clientService.ts:163:    let { data, error } = await supabase.from('clients').update(payload).eq('id', id).select().single();
+/home/z/doce-mania-repo/src/services/clientService.ts:178:      ({ data, error } = await supabase.from('clients').update(semFiscais).eq('id', id).select().single());
+/home/z/doce-mania-repo/src/services/clientService.ts:182:      ({ data, error } = await supabase.from('clients').update(fallback).eq('id', id).select().single());
+/home/z/doce-mania-repo/src/services/clientService.ts:186:      ({ data, error } = await supabase.from('clients').update(fallback2).eq('id', id).select().single());
+/home/z/doce-mania-repo/src/services/clientService.ts:192:      ({ data, error } = await supabase.from('clients').update(fallback3).eq('id', id).select().single());
+/home/z/doce-mania-repo/src/services/clientService.ts:198:      ({ data, error } = await supabase.from('clients').update(fallback4).eq('id', id).select().single());
+/home/z/doce-mania-repo/src/services/saleService.ts:92:      .from('sales')
+/home/z/doce-mania-repo/src/services/saleService.ts:134:        const { error: modoErr } = await supabase.from('sales').update({ modo_nota: modo }).eq('id', saleId);
+/home/z/doce-mania-repo/src/services/saleService.ts:167:        .from('products').select(`id, ${colContador}`).in('id', ids);
+/home/z/doce-mania-repo/src/services/saleService.ts:173:        const { error: upErr } = await supabase.from('products').update({ [colContador]: novo }).eq('id', p.id);
+/home/z/doce-mania-repo/src/services/saleService.ts:184:      const { data: sale } = await supabase.from('sales').select('modo_nota').eq('id', saleId).maybeSingle();
+/home/z/doce-mania-repo/src/services/saleService.ts:196:      const { data: prods } = await supabase.from('products').select(`id, ${colContador}`).in('id', ids);
+/home/z/doce-mania-repo/src/services/saleService.ts:202:        await supabase.from('products').update({ [colContador]: novo }).eq('id', p.id);
+/home/z/doce-mania-repo/src/services/saleService.ts:216:    const { error } = await supabase.from('sales').update(payload).eq('id', id);
+/home/z/doce-mania-repo/src/services/commissionService.ts:48:    const { error } = await supabase.from('commissions').insert({
+/home/z/doce-mania-repo/src/services/commissionService.ts:66:    const { error } = await supabase.from('commissions').update(payload).eq('id', id);
+/home/z/doce-mania-repo/src/services/commissionService.ts:76:    const { error } = await supabase.from('commissions')
+/home/z/doce-mania-repo/src/services/commissionService.ts:134:    const { error } = await supabase.from('commissions').delete().eq('sale_id', saleId);
+/home/z/doce-mania-repo/src/services/productService.ts:6:    const { data, error } = await supabase.from('products').select('*');
+/home/z/doce-mania-repo/src/services/productService.ts:104:    let { data, error } = await supabase.from('products').insert({ ...payload, ...fiscal, ...extra14, ...b15, ...b18, ...b23, ...b29, ...b69, ...b108 }).select().single();
+/home/z/doce-mania-repo/src/services/productService.ts:108:      ({ data, error } = await supabase.from('products').insert(sem108).select().single());
+/home/z/doce-mania-repo/src/services/productService.ts:112:      ({ data, error } = await supabase.from('products').insert(sem69).select().single());
+/home/z/doce-mania-repo/src/services/productService.ts:116:      ({ data, error } = await supabase.from('products').insert(sem29).select().single());
+/home/z/doce-mania-repo/src/services/productService.ts:120:      ({ data, error } = await supabase.from('products').insert(sem23).select().single());
+/home/z/doce-mania-repo/src/services/productService.ts:123:      ({ data, error } = await supabase.from('products').insert({ ...payload, ...fiscal, ...b15, ...b18 }).select().single());
+/home/z/doce-mania-repo/src/services/productService.ts:128:      ({ data, error } = await supabase.from('products').insert(sem15).select().single());
+/home/z/doce-mania-repo/src/services/productService.ts:131:      ({ data, error } = await supabase.from('products').insert({ ...payload, ...fiscal, ...extra14, ...b15 }).select().single());
+/home/z/doce-mania-repo/src/services/productService.ts:134:      ({ data, error } = await supabase.from('products').insert({ ...payload, ...extra14 }).select().single());
+/home/z/doce-mania-repo/src/services/productService.ts:206:    let { data, error } = await supabase.from('products').update(payload).eq('id', id).select().single();
+/home/z/doce-mania-repo/src/services/productService.ts:210:      ({ data, error } = await supabase.from('products').update(fb108).eq('id', id).select().single());
+/home/z/doce-mania-repo/src/services/productService.ts:214:      ({ data, error } = await supabase.from('products').update(fb69).eq('id', id).select().single());
+/home/z/doce-mania-repo/src/services/productService.ts:218:      ({ data, error } = await supabase.from('products').update(fb29).eq('id', id).select().single());
+/home/z/doce-mania-repo/src/services/productService.ts:222:      ({ data, error } = await supabase.from('products').update(fb23).eq('id', id).select().single());
+/home/z/doce-mania-repo/src/services/productService.ts:226:      ({ data, error } = await supabase.from('products').update(fb14).eq('id', id).select().single());
+/home/z/doce-mania-repo/src/services/productService.ts:230:      ({ data, error } = await supabase.from('products').update(fb15).eq('id', id).select().single());
+/home/z/doce-mania-repo/src/services/productService.ts:234:      ({ data, error } = await supabase.from('products').update(fb18).eq('id', id).select().single());
+/home/z/doce-mania-repo/src/services/productService.ts:239:      ({ data, error } = await supabase.from('products').update(fallback).eq('id', id).select().single());
+/home/z/doce-mania-repo/src/services/productService.ts:276:    const { error } = await supabase.from('products').delete().eq('id', id);
+/home/z/doce-mania-repo/src/services/productService.ts:279:        const { error: updateError } = await supabase.from('products').update({ ativo: false }).eq('id', id);
+/home/z/doce-mania-repo/src/app/api/cargas/route.ts:77:      .from('cargas').select('modo_nota').eq('vendedor_id', vendedorId).not('modo_nota', 'is', null);
+/home/z/doce-mania-repo/src/app/api/cargas/route.ts:112:      .from('cargas').select('produto_id, quantidade').eq('vendedor_id', vendedorId);
+/home/z/doce-mania-repo/src/app/api/cargas/route.ts:119:      .from('products').select(`id, nome, estoque_principal`).in('id', ids);
+/home/z/doce-mania-repo/src/app/api/cargas/route.ts:150:      const { error: e2 } = await supabase.from('products').update({ [colCasa]: novo }).eq('id', d.produtoId);
+/home/z/doce-mania-repo/src/app/api/cargas/route.ts:155:    const { error: delErr } = await supabase.from('cargas').delete().eq('vendedor_id', vendedorId);
+/home/z/doce-mania-repo/src/app/api/cargas/route.ts:164:      const { error: insErr } = await supabase.from('cargas').insert(rows);
+/home/z/doce-mania-repo/src/app/api/cargas/aceitar/route.ts:88:        .from('cargas').select('modo_nota').eq('vendedor_id', pendente.vendedor_id).not('modo_nota', 'is', null);
+/home/z/doce-mania-repo/src/app/api/cargas/aceitar/route.ts:96:        .from('cargas').select('produto_id, quantidade').eq('vendedor_id', pendente.vendedor_id);
+/home/z/doce-mania-repo/src/app/api/cargas/aceitar/route.ts:110:        .from('products').select('id, nome, estoque_principal').in('id', ids);
+/home/z/doce-mania-repo/src/app/api/cargas/aceitar/route.ts:137:        const { error: e2 } = await supabase.from('products').update({ [colCasa]: novo }).eq('id', d.produtoId);
+/home/z/doce-mania-repo/src/app/api/cargas/aceitar/route.ts:141:      const { error: delErr } = await supabase.from('cargas').delete().eq('vendedor_id', pendente.vendedor_id);
+/home/z/doce-mania-repo/src/app/api/cargas/aceitar/route.ts:150:        const { error: insErr } = await supabase.from('cargas').insert(rows);
+/home/z/doce-mania-repo/src/app/api/comprovantes/revisar/route.ts:63:      .from('sales')
+/home/z/doce-mania-repo/src/app/api/comprovantes/revisar/route.ts:80:      .from('sales')
+/home/z/doce-mania-repo/src/app/api/comprovantes/revisar/route.ts:95:          .from('commissions')
+/home/z/doce-mania-repo/src/app/api/comprovantes/route.ts:47:      const { data: cs } = await supabase.from('clients').select('id, nome_fantasia').in('id', clientIds);
+/home/z/doce-mania-repo/src/app/api/comprovantes/route.ts:54:        .from('sales')
+/home/z/doce-mania-repo/src/app/api/spedy/webhook/route.ts:121:          await getServiceClient().from('sales').update(patch).eq('id', saleId);
+/home/z/doce-mania-repo/src/app/api/notas/route.ts:75:  await getServiceClient().from('sales').update(patch).eq('id', saleId);
+/home/z/doce-mania-repo/src/app/api/notas/route.ts:116:  const { data: sale, error } = await db.from('sales').select(COLS_NOTA).eq('id', saleId).single();
+/home/z/doce-mania-repo/src/app/api/notas/route.ts:143:    .from('sales')
+/home/z/doce-mania-repo/src/app/api/notas/route.ts:235:    .from('clients')
+/home/z/doce-mania-repo/src/app/api/notas/route.ts:315:    .from('products')
+/home/z/doce-mania-repo/src/app/api/notas/route.ts:482:  const { error: errPatch } = await db.from('sales').update(patch).eq('id', saleId);
+/home/z/doce-mania-repo/src/app/api/notas/cupom/route.ts:96:  const { data: sale, error } = await db.from('sales').select(cols).eq('id', saleId).single();
+/home/z/doce-mania-repo/src/app/api/notas/cupom/route.ts:128:      await db.from('sales').update(patch).eq('id', saleId);
+/home/z/doce-mania-repo/src/app/api/notas/cupom/route.ts:174:    const { data: cli } = await db.from('clients').select('nome, nome_fantasia, razao_social, cnpj').eq('id', String(sale.client_id || '')).single();
+/home/z/doce-mania-repo/src/app/api/notas/cupom/route.ts:198:      ? await db.from('products').select(`id, nome${fiscalCols ? ', unidade' : ''}`).in('id', ids)
+/home/z/doce-mania-repo/src/app/api/comissoes/route.ts:87:      .from('commissions')
+/home/z/doce-mania-repo/src/app/api/comissoes/route.ts:139:      const { error: uErr } = await supabase.from('commissions').update(upd).eq('id', r.id);
+/home/z/doce-mania-repo/src/app/api/comissoes/route.ts:207:      .from('commissions')
+/home/z/doce-mania-repo/src/app/api/webhooks/inter/route.ts:68:      .from('sales')
+/home/z/doce-mania-repo/src/app/api/webhooks/inter/route.ts:77:      .from('sales')
+/home/z/doce-mania-repo/src/app/api/webhooks/inter/route.ts:92:      await db.from('sales').update({ inter_boleto_status: 'RECEBIDO' }).eq('id', sale.id as string);
+/home/z/doce-mania-repo/src/app/api/webhooks/inter/route.ts:113:      await db.from('sales').update({ inter_boleto_status: cob.status }).eq('id', sale.id as string);
+/home/z/doce-mania-repo/src/app/api/webhooks/inter/route.ts:127:    .from('sales')
+/home/z/doce-mania-repo/src/app/api/vendedor/lucro-rota/route.ts:111:      r.from('sales')
+/home/z/doce-mania-repo/src/app/api/vendedor/lucro-rota/route.ts:136:        r.from('products').select('id, preco_custo').in('id', lote)
+/home/z/doce-mania-repo/src/app/api/notas-importar/route.ts:79:        .from('sales')
+/home/z/doce-mania-repo/src/app/api/notas-importar/route.ts:121:          await db.from('sales').update({ nota_tipo: doc === 'nfce' ? 'NFCE' : 'NFE' }).eq('id', v.id);
+/home/z/doce-mania-repo/src/app/api/notas-importar/route.ts:132:        try { await db.from('sales').update(patch).eq('id', v.id); } catch { /* best-effort */ }
+/home/z/doce-mania-repo/src/app/api/notas-importar/route.ts:160:        .from('sales')
+/home/z/doce-mania-repo/src/app/api/notas-sync/route.ts:50:    .from('sales')
+/home/z/doce-mania-repo/src/app/api/notas-sync/route.ts:61:      .from('sales')
+/home/z/doce-mania-repo/src/app/api/notas-sync/route.ts:94:      const { error: updErr } = await db.from('sales').update(patch).eq('id', saleId);
+/home/z/doce-mania-repo/src/app/api/notas-sync/route.ts:97:        await db.from('sales').update(patch).eq('id', saleId);
+/home/z/doce-mania-repo/src/app/api/admin/catalogo/route.ts:35:        .from('products')
+/home/z/doce-mania-repo/src/app/api/admin/catalogo/route.ts:48:        .from('products')
+/home/z/doce-mania-repo/src/app/api/admin/catalogo/route.ts:62:        supabase.from('products').select('id, familia_catalogo').limit(1),
+/home/z/doce-mania-repo/src/app/api/admin/catalogo/foto/route.ts:67:    const { data: pub } = supabase.storage.from(BUCKET).getPublicUrl(path);
+/home/z/doce-mania-repo/src/app/api/admin/lucro-rotas/route.ts:122:      r.from('sales')
+/home/z/doce-mania-repo/src/app/api/admin/lucro-rotas/route.ts:147:        r.from('products').select('id, preco_custo').in('id', lote)
+/home/z/doce-mania-repo/src/app/api/clientes/excluir/route.ts:40:      .from('clients')
+/home/z/doce-mania-repo/src/app/api/clientes/excluir/route.ts:52:    const { error: delErr } = await db.from('clients').delete().eq('id', clientId);
+/home/z/doce-mania-repo/src/app/api/clientes/excluir/route.ts:60:      const { error: updErr } = await db.from('clients').update({ ativo: false }).eq('id', clientId);
+/home/z/doce-mania-repo/src/app/api/clientes/contato/route.ts:70:    const { error: updErr } = await db.from('clients').update(payload).eq('id', clientId);
+/home/z/doce-mania-repo/src/app/api/clientes/contato/route.ts:77:      .from('clients')
+/home/z/doce-mania-repo/src/app/api/notas-arquivo/route.ts:77:      .from('sales')
+/home/z/doce-mania-repo/src/app/api/notas-arquivo/route.ts:134:    const { data } = await getServiceClient().from('clients').select('nome_fantasia, nome, razao_social').eq('id', client_id).single();
+/home/z/doce-mania-repo/src/app/api/focus/webhook/route.ts:107:  const { data: pelaRef } = await db.from('sales').select(COLS).eq('nota_ref', ref).limit(1).maybeSingle();
+/home/z/doce-mania-repo/src/app/api/focus/webhook/route.ts:117:      const { data: peloId } = await db.from('sales').select(COLS).eq('id', id).limit(1).maybeSingle();
+/home/z/doce-mania-repo/src/app/api/focus/webhook/route.ts:177:      const { error } = await getServiceClient().from('sales').update(patch).eq('id', saleId);
+/home/z/doce-mania-repo/src/app/api/focus/webhook/route.ts:192:            await getServiceClient().from('sales').update({ nota_pdf_url: coleta.pdfUrl }).eq('id', saleId);
+/home/z/doce-mania-repo/src/app/api/secretario/estoque/route.ts:62:        supabase.from('products').update({ estoque_principal: qtd }).eq('id', id).select('id').single()
+/home/z/doce-mania-repo/src/app/api/notas-admin/route.ts:196:  let q = getServiceClient().from('sales').select(sel).order('data_venda', { ascending: false }).limit(400);
+/home/z/doce-mania-repo/src/app/api/notas-admin/route.ts:264:    const { data: sale, error } = await db.from('sales').select(sel as unknown as string).eq('id', id).single();
+/home/z/doce-mania-repo/src/app/api/notas-admin/route.ts:269:      db.from('clients').select('id, nome_fantasia, nome, cnpj, razao_social, inscricao_estadual, telefone, endereco, bairro, endereco_numero, endereco_cep, endereco_municipio, endereco_uf, email').eq('id', String(s.client_id || '')).single(),
+/home/z/doce-mania-repo/src/app/api/notas-admin/route.ts:276:      ? await db.from('products').select('id, nome').in('id', prodIds)
+/home/z/doce-mania-repo/src/app/api/notas-admin/route.ts:368:      .from('sales')
+/home/z/doce-mania-repo/src/app/api/notas-admin/route.ts:396:    const { data: orig, error: origErr } = await db.from('sales').select(sel as unknown as string).eq('id', saleId).single();
+/home/z/doce-mania-repo/src/app/api/notas-admin/route.ts:442:      const r = await db.from('sales').insert(payload).select('id, valor_total, detalhe_pagamento').single();
+/home/z/doce-mania-repo/src/app/api/notas-admin/route.ts:453:        const r = await db.from('sales').insert(payload).select('id, valor_total, detalhe_pagamento').single();
+/home/z/doce-mania-repo/src/app/api/notas-admin/route.ts:473:      await db.from('sales').delete().eq('id', String(nova!.id));

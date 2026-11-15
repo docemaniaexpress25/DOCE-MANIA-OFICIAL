@@ -1,0 +1,2381 @@
+"use client";
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { Product, Client, Carga, Sale, SaleItem, PaymentMethod, Category, Subcategory } from '@/lib/types';
+import Cupom from '@/components/doce/Cupom';
+import BoletoCard from '@/components/doce/BoletoCard';
+import ConfirmModal from '@/components/doce/ConfirmModal';
+import PrinterSelector from '@/components/doce/PrinterSelector';
+import { loadLocalState, saveLocalState } from '@/utils/persistence';
+import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
+import { wakeLockManager } from '@/utils/wakeLock';
+// BLOCO 82: impressão no iPhone — instruções do Bluefy quando a Apple bloqueia o Bluetooth
+import { isIOSDevice, TEXTO_IMPRESSAO_IOS, TITULO_IMPRESSAO_IOS } from '@/lib/iosPrint';
+// BLOCO 111: impressão térmica USB do PC — canal BT x USB persistente por dispositivo
+import { imprimirViaUsb, lerCanalImpressao, salvarCanalImpressao, CanalImpressao } from '@/lib/usbPrint';
+import { saleService } from '@/services/saleService';
+import { notaService } from '@/services/notaService';
+import { danfeMiniTexto } from '@/lib/danfeTexto';
+// BLOCO 131: cupom fiscal PERFEITO 80mm — dados do XML autorizado pela SEFAZ
+import { danfeFiscal80 } from '@/lib/danfe80';
+import { clienteAptoNfe, mascararCpf, validaCpf } from '@/lib/cnpjAutocomplete';
+// BLOCO 123: regras fiscais ARMADAS porém DESLIGADAS (FISCAL_OBRIGATORIO=false
+// até o dono implantar a API fiscal) — pronta entrega só conclui com NF-e/NFC-e
+// BATIDA (+ boleto do prazo). Pré-venda: vendedor SÓ escolhe (nada muda aqui).
+import { FISCAL_OBRIGATORIO, docExigeNota, notaBatida, pendenciasFinaProntaEntrega } from '@/lib/regras-fiscais';
+
+interface PDVProps {
+  client: Client;
+  products: Product[];
+  minhaCarga: Carga[];
+  vendedorId: string;
+  onCancel: () => void;
+  onFinish: (sale: Sale) => void;
+  processSale: (data: any) => Promise<Sale | null>;
+  margemMinima: number;
+  margemMinimaAtiva: boolean;
+  pix1Name: string;
+  pix1Code: string | null;
+  pix2Name: string;
+  pix2Code: string | null;
+  sales: Sale[];
+  onNavigateToCredit: () => void;
+  categories: Category[];
+  subcategories: Subcategory[];
+  /** Pre-venda: quando definido, o PDV registra PEDIDO (estoque principal, entrega na rota) */
+  modoVenda?: 'PRONTA' | 'PRE_VENDA';
+  processPreVenda?: (data: any) => Promise<{ pedido: Sale | null; erro?: string; comissaoPrevista?: number }>;
+  /** BLOCO 27 (ROTA 2): GERAL desde o Bloco 64 — hoje controla catálogo dual e
+   *  modo de nota no payload. (O wizard legado de pagamento SAIU — Bloco 122.) */
+  rota2?: boolean;
+  /** BLOCO 64: produtos de TESTE continuam visíveis só para quem tem a flag rota2 (piloto) */
+  verProdutosTeste?: boolean;
+  /** BLOCO 29 (ROTA 2): documento vem FIXADO só quando a van do dia é SEM NF
+   *  (CUPOM direto, sem pergunta). Nas demais rotas o PDV pergunta na TELA 4. */
+  modoAtendimento?: 'NFE' | 'NFCE' | 'CUPOM' | null;
+  /** BLOCO 29: CPF capturado para o NFC-e (opcional) */
+  nfcCpfInicial?: string;
+  /** BLOCO 122 (fluxo de 8 telas, tela 4): "Completar cadastro agora" quando
+   *  o cliente pede NF-e sem CNPJ/email — fecha o PDV e abre o cadastro. */
+  onCompletarCadastro?: (c: Client) => void;
+}
+
+// BLOCO 122 (fluxo de 8 telas do dono): CART=3 produtos · DOC=4 documento ·
+// CONDICAO=5 à vista/a prazo · FORMA=6 forma de pagamento · FINALIZAR=8 gerar
+// documento e concluir · SUCESSO=conclusão mínima · PRE_PEDIDO_PREVIEW=rascunho
+// (fora do fluxo) · PAYMENT=fluxo legado (SAIU — unificado no fluxo de 8 telas).
+type PDVView = 'CART' | 'DOC' | 'CONDICAO' | 'FORMA' | 'FINALIZAR' | 'SUCESSO' | 'PRE_PEDIDO_PREVIEW';
+
+// Tipo do item do carrinho
+type CartItem = { quantidade: number; precoVenda: string };
+
+// BLOCO 41: chip-switch compacto do rodapé do PDV (tabela/troca/obs/pré-pedido)
+// — uma linha só, para não comer o espaço da grade de produtos.
+const CHIP_ON: Record<string, string> = { violet: 'bg-violet-600', orange: 'bg-orange-500', teal: 'bg-teal-600', indigo: 'bg-indigo-600' };
+const CHIP_TXT: Record<string, string> = { violet: 'text-violet-600', orange: 'text-orange-500', teal: 'text-teal-600', indigo: 'text-indigo-600' };
+const SwitchChip: React.FC<{ ligado: boolean; onClick: () => void; cor: 'violet' | 'orange' | 'teal' | 'indigo'; label: string; title: string }> = ({ ligado, onClick, cor, label, title }) => (
+  <button onClick={onClick} aria-pressed={ligado} title={title} className="flex items-center gap-1.5 active:scale-95 transition-transform">
+    <span className={`w-8 h-5 rounded-full relative transition-colors ${ligado ? CHIP_ON[cor] : 'bg-gray-300'}`}>
+      <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all ${ligado ? 'left-4' : 'left-0.5'}`}></span>
+    </span>
+    <span className={`text-[8px] font-black uppercase tracking-wide ${ligado ? CHIP_TXT[cor] : 'text-gray-400'}`}>{label}</span>
+  </button>
+);
+
+const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onCancel, onFinish, processSale, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, sales, onNavigateToCredit, categories, subcategories, modoVenda, processPreVenda, rota2, verProdutosTeste, modoAtendimento, nfcCpfInicial, onCompletarCadastro }) => {
+  const [view, setView] = useState<PDVView>('CART');
+  // ============================================================
+  // BLOCO 122 (fluxo de 8 telas do dono) — ESTADOS DAS TELAS 3/4/5/6/8
+  // (declarados no TOPO: modoAtivo/formaOk dependem deles)
+  // ============================================================
+  // TELA 4 — documento (NF-e/NFC-e/cupom). Se o dashboard fixou (van SEM NF),
+  // já nasce escolhido e a tela 4 é pulada:
+  const [docEscolhido, setDocEscolhido] = useState<'NFE' | 'NFCE' | 'CUPOM' | null>(modoAtendimento || null);
+  const [nfcCpfDoc, setNfcCpfDoc] = useState<string>(nfcCpfInicial || '');
+  // TELA 5 — condição; TELA 6 — forma:
+  const [condicaoDoc, setCondicaoDoc] = useState<'AVISTA' | 'APRAZO' | null>(null);
+  const [formaDoc, setFormaDoc] = useState<'DINHEIRO' | 'PIX' | 'MISTO' | 'BOLETO' | 'CHEQUE' | 'DINHEIRO_DATA' | 'PIX_DATA' | null>(null);
+  const [mistoDinDoc, setMistoDinDoc] = useState('');
+  const [mistoPixDoc, setMistoPixDoc] = useState('');
+  const [pixSlotDoc, setPixSlotDoc] = useState<1 | 2>(1);
+  // A prazo: UMA data só (boleto / cheque "bom para" / pix na data / dinheiro na data)
+  const [vencimentoDoc, setVencimentoDoc] = useState<string>(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 7);
+    return d.toISOString().split('T')[0];
+  });
+  // TELA 3 — busca de produto no carrinho (antes: girava abas caçando item)
+  const [buscaProduto, setBuscaProduto] = useState('');
+  const [isPrePedido, setIsPrePedido] = useState(false);
+  const isPreVenda = modoVenda === 'PRE_VENDA' && !!processPreVenda;
+  // BLOCO 122: condição/forma agora vivem nos states das telas 5/6
+  // (condicaoDoc/formaDoc) — os antigos condicaoPv/metodoEntrega saíram.
+  // BLOCO 13: trocas anotadas pelo vendedor (sai no cupom) com autocomplete de produto
+  const [trocasTexto, setTrocasTexto] = useState('');
+  const [trocasSugestao, setTrocasSugestao] = useState(false);
+  // BLOCO 98 (regra do dono): VALOR das trocas em R$ PRECO DE CUSTO — as trocas
+  // nem sempre voltam pelo mesmo produto; a entrega leva itens que fechem
+  // esse valor. Informativo (nao e desconto — o desconto segue no campo proprio).
+  const [trocasValorCusto, setTrocasValorCusto] = useState('');
+  // BLOCO 41: OBSERVAÇÃO do pedido — switch novo (mesmo sistema do de trocas);
+  // o texto sai impresso no cupom no bloco OBSERVACAO (grava como linha "OBS: ...").
+  const [isObsActive, setIsObsActive] = useState(false);
+  const [obsTexto, setObsTexto] = useState('');
+  // BLOCO 44: UI de envio — trava os botões e mostra o spinner enquanto a API
+  // registra (o vendedor vê que está indo e não clica de novo achando que travou).
+  const [finalizando, setFinalizando] = useState(false);
+  // BLOCO 24: PREÇO TABELA — switch que joga TODOS os itens do carrinho no
+  // PREÇO MÍNIMO cadastrado no estoque central de uma vez (em vez de um por um).
+  // Desligar volta tudo para o PREÇO PADRÃO do estoque central.
+  const [precoTabelaAtivo, setPrecoTabelaAtivo] = useState(false);
+
+  const aplicarPrecoTabela = (ligar: boolean) => {
+    setPrecoTabelaAtivo(ligar);
+    setCart(prev => {
+      const next: typeof prev = {};
+      Object.entries(prev).forEach(([pId, item]) => {
+        if (!item || (item.quantidade ?? 0) <= 0) return;
+        const p = products.find(prod => prod.id === pId);
+        if (!p) return;
+        const min = p.precoMinimo ?? 0;
+        // BLOCO 70: cliente ESPECIAL GB com preço GB cadastrado = preço GB vence tudo
+        const gb = precoEspecialGbDe(p);
+        // LIGAR: produto com mínimo cadastrado vai para o mínimo (sem mínimo = segue padrão)
+        // DESLIGAR: volta para o preço padrão do estoque central
+        const preco = gb > 0 ? gb : (ligar ? (min > 0 ? min : (p.precoVenda ?? 0)) : (p.precoVenda ?? 0));
+        next[pId] = { ...item, precoVenda: preco.toFixed(2) };
+      });
+      return next;
+    });
+  };
+
+  const trocasSugestoes = React.useMemo(() => {
+    const partes = trocasTexto.split(/[\n,]+/);
+    const ultimo = (partes[partes.length - 1] || '').trim().toLowerCase();
+    if (ultimo.length < 2) return [];
+    const jaTem = new Set(partes.slice(0, -1).map(s => s.trim().toLowerCase()));
+    return products
+      .filter(p => p.ativo && p.nome.toLowerCase().includes(ultimo) && !jaTem.has(p.nome.toLowerCase()))
+      .slice(0, 4);
+  }, [trocasTexto, products]);
+
+  const addSugestaoTroca = (nome: string) => {
+    const partes = trocasTexto.split(/[\n,]+/);
+    partes[partes.length - 1] = `1 ${nome}`;
+    // BLOCO 98: um item POR LINHA (era ", " — virava texto corrido sem espaçamento)
+    setTrocasTexto(partes.filter(s => s.trim()).join('\n'));
+    setTrocasSugestao(false);
+  };
+
+  // BLOCO 41: trocas + OBSERVAÇÃO vão no mesmo campo do banco (coluna trocas,
+  // mesmo padrão do portal) — a observação entra como linha "OBS: ..." e o
+  // gerador de cupom imprime no bloco OBSERVACAO, separado das TROCAS.
+  const obsLimpa = obsTexto.trim().replace(/\s*\n\s*/g, ' / ');
+  const trocasComObs = [trocasTexto.trim(), obsLimpa ? `OBS: ${obsLimpa}` : ''].filter(Boolean).join('\n');
+  // BLOCO 98: valor de custo das trocas (R$) — vai junto com o texto para a venda
+  const trocasValorNum = (() => { const v = parseFloat(trocasValorCusto.replace(',', '.')); return isFinite(v) && v > 0 ? Math.round(v * 100) / 100 : 0; })();
+  const limparAnotacoes = () => { setTrocasTexto(''); setObsTexto(''); setIsObsActive(false); setTrocasValorCusto(''); };
+
+  // ============================================================
+  // BLOCO 100 (regra do dono): TROCAS com CUSTO CALCULADO — cada linha
+  // que reconhece um produto do catálogo soma QTD x PREÇO DE CUSTO; o
+  // total calculado preenche sozinho o campo "Valor (custo)". Linhas
+  // que não batem com produto nenhum ficam de fora (o vendedor pode
+  // digitar o valor manualmente nesse caso).
+  // ============================================================
+  const trocasCalculo = useMemo(() => {
+    const linhas = trocasTexto.split(/[\n;]+/).map(s => s.trim()).filter(Boolean);
+    let total = 0;
+    let reconhecidos = 0;
+    const nomeIdx = new Map<string, Product>();
+    products.forEach(p => { if (p.ativo) nomeIdx.set(p.nome.trim().toLowerCase(), p); });
+    for (const linha of linhas) {
+      // formato do autocomplete: "2 Toddynho 200ml" (qtd no inicio, opcional)
+      const m = linha.match(/^(\d+(?:[.,]\d+)?)\s+(.+)$/);
+      const qtd = m ? (parseFloat(m[1].replace(',', '.')) || 1) : 1;
+      const nome = (m ? m[2] : linha).trim().toLowerCase();
+      if (!nome) continue;
+      const prod =
+        nomeIdx.get(nome) ||
+        products.find(p => p.ativo && nome.length >= 4 && p.nome.toLowerCase().startsWith(nome)) ||
+        products.find(p => p.ativo && nome.length >= 4 && p.nome.toLowerCase().includes(nome));
+      const custoUnit = Number(prod?.precoCusto) || 0;
+      if (prod && custoUnit > 0) {
+        total += Math.round(qtd * custoUnit * 100) / 100;
+        reconhecidos++;
+      }
+    }
+    return { total: Math.round(total * 100) / 100, reconhecidos, qtdLinhas: linhas.length };
+  }, [trocasTexto, products]);
+
+  // BLOCO 100: o valor calculado ESCREVE o campo (regra do dono: "faça os
+  // cálculos e dê esse valor no final"). Texto vazio limpa o campo; linhas
+  // sem produto reconhecido deixam o valor manual do vendedor intacto.
+  useEffect(() => {
+    if (trocasCalculo.total > 0) {
+      setTrocasValorCusto(trocasCalculo.total.toFixed(2).replace('.', ','));
+    } else if (!trocasTexto.trim()) {
+      setTrocasValorCusto('');
+    }
+  }, [trocasCalculo.total, trocasTexto]);
+
+  // ============================================================
+  // BLOCO 100 (regra do dono): CUPOM DE CONFERÊNCIA — na PRONTA ENTREGA o
+  // vendedor imprime o cupom (já com cliente, forma de pagamento, itens e
+  // total) ANTES de finalizar a venda. O registro so acontece quando ele
+  // toca em FINALIZAR VENDA dentro do cupom.
+  // ============================================================
+  const [cupomConferencia, setCupomConferencia] = useState<Sale | null>(null);
+  // Dados congelados para o registro depois da conferência (nem o fluxo
+  // direto nem o wizard registram mais sozinhos na pronta entrega).
+  const [pendRegistro, setPendRegistro] = useState<{
+    payload: any; trocasTxt: string; trocasVal: number; trocaDesconto: number; isPrazo: boolean; formaAtraso?: string;
+  } | null>(null);
+
+  // BLOCO 100: PIX gerado com o VALOR DA VENDA — BR Code (Pix Copia e Cola)
+  // atrelado a chave Pix configurada em Configurações (app_settings).
+  const [pixGerado, setPixGerado] = useState<{ qrDataUrl: string; payload: string; chaveFormatada: string } | null>(null);
+  const [pixFalhou, setPixFalhou] = useState(false);
+
+  // Pre-venda e pre-pedido vendem do ESTOQUE CENTRAL (nao da carga da van)
+  const sellFromCentral = isPrePedido || isPreVenda;
+
+  // ============================================================
+  // BLOCO 70 — CLIENTE ESPECIAL GB
+  // Cliente marcado como ESPECIAL GB no cadastro: todo produto do estoque
+  // principal com PREÇO ESPECIAL GB > 0 entra nesse preço (vence o preço
+  // normal E o switch Tabela). Produto sem preço GB segue o preço de hoje.
+  // Cliente normal: NADA muda — mesmos preços de sempre.
+  // ============================================================
+  const clienteGB = client?.clienteEspecialGb === true;
+  const precoEspecialGbDe = (p: Product): number => (clienteGB ? (Number(p.precoEspecialGb) || 0) : 0);
+
+  // ============================================================
+  // BLOCO 75 (ESTOQUE TOTAL) — DOIS ESTOQUES VIRARAM CONTADORES
+  // Pre-venda consulta SEMPRE o ESTOQUE TOTAL (estoque_principal).
+  // O documento do atendimento (CUPOM / NFE / NFCE) nao escolhe mais cofre:
+  // so alimenta o CONTADOR de saida (estoque 2 sem NF / estoque 1 com NF)
+  // na baixa. undefined nas colunas = fallback legado (tudo no principal).
+  // ============================================================
+  const rota2Ativo = !!rota2; // BLOCO 64: fluxo novo da ROTA 2 — geral (todos os vendedores)
+  const temDualEstoque = React.useMemo(() => products.some(p => p.estoqueNota !== undefined), [products]);
+  // BLOCO 122: modo fiscal EFETIVO = fixado pelo dashboard (van SEM NF) OU o
+  // documento escolhido na TELA 4. Enquanto ninguém escolheu, null.
+  const modoAtivo = rota2Ativo && temDualEstoque ? (modoAtendimento || docEscolhido || null) : null;
+
+  /** Saldo que o PDV usa para o produto — BLOCO 75: pre-venda consulta o
+   *  ESTOQUE TOTAL unico; o modo do atendimento so alimenta o contador. */
+  const saldoFonte = React.useCallback((p: Product): number => {
+    if (!sellFromCentral) {
+      return minhaCarga.find(c => c.produtoId === p.id)?.quantidade || 0;
+    }
+    return p.estoquePrincipal || 0;
+  }, [sellFromCentral, minhaCarga]);
+
+  // Wake Lock: mantem tela acordada durante o PDV
+  useEffect(() => {
+    wakeLockManager.acquire();
+    return () => { wakeLockManager.release(); };
+  }, []);
+
+  // ============================================================
+  // MODAL: Venda finalizada com comissao
+  // ============================================================
+  // BLOCO 50: formaAtraso = forma escolhida no A PRAZO ('CHEQUE' etc.) —
+  // pagamento confirmado em CHEQUE NAO gera botão de boleto no resultado.
+  // BLOCO 122: TELA DE SUCESSO substitui o modal gigante — dados mínimos da
+  // venda concluída (total, comissão, prazo, venda gravada). A nota emitida
+  // na hora vive em notaResult; boleto/foto de comprovante ficam aqui.
+  const [sucessoData, setSucessoData] = useState<{ total: number; comissao: number; troca: number; isPrazo: boolean; isPreVenda: boolean; sale: Sale; formaAtraso?: string } | null>(null);
+
+  // ============================================================
+  // Bloco 10/12: emissao de NF-e/NFC-e direto no fechamento da venda.
+  // O vendedor ESCOLHE a forma: NF-e (cliente CNPJ apto), NFC-e
+  // (com ou sem CPF) ou cupom nao fiscal (botao OK, fluxo comum).
+  // ============================================================
+  const [notaResult, setNotaResult] = useState<{ status: string; numero?: string; pdfUrl?: string; erro?: string; chave?: string; serie?: string; protocolo?: string; dataAutorizacao?: string; qrCode?: string; emitente?: { nome?: string; cnpj?: string; ie?: string } } | null>(null);
+  const [notaEmitindo, setNotaEmitindo] = useState(false);
+  // BLOCO 123: status do BOLETO reportado pelo BoletoCard (gate fiscal da
+  // pronta entrega a prazo). 'INDISPONIVEL' = Inter sem credenciais (não bloqueia).
+  const [boletoStatusSucesso, setBoletoStatusSucesso] = useState<string | null>(null);
+  const handleBoletoStatus = React.useCallback((s: string) => { setBoletoStatusSucesso(s); }, []);
+  // BLOCO 122: estado da nota emitida NA TELA 8 (após gravar a venda) —
+  // mostrado na tela de SUCESSO. Limpa quando a tela de sucesso fecha.
+  useEffect(() => {
+    if (!sucessoData) { setNotaResult(null); setBoletoStatusSucesso(null); }
+  }, [sucessoData]);
+
+  // BLOCO 123 (ARMADA/DESLIGADA): pendências fiscais da PRONTA ENTREGA para
+  // CONCLUIR a venda — nota BATIDA (doc NFE/NFCE) + boleto do prazo gerado.
+  // Com FISCAL_OBRIGATORIO=false devolve SEMPRE [] — nada muda hoje.
+  const pendFiscalSucesso = useMemo(() => {
+    if (!sucessoData || sucessoData.isPreVenda) return [];
+    const saldoAberto = Number(sucessoData.sale.valorTotal ?? 0) - Number(sucessoData.sale.valorPago ?? 0);
+    return pendenciasFinaProntaEntrega({
+      docEscolhido,
+      notaStatus: notaResult?.status,
+      exigeBoleto: sucessoData.isPrazo && sucessoData.formaAtraso !== 'CHEQUE' && saldoAberto > 0,
+      boletoStatus: boletoStatusSucesso,
+    });
+  }, [sucessoData, docEscolhido, notaResult, boletoStatusSucesso]);
+
+  // BLOCO 122: emissão da nota na TELA 8 — roda logo após gravar a venda
+  // pronta entrega com documento NFE/NFCE. A venda já está SALVA: se a SEFAZ
+  // rejeitar, o erro aparece na tela de SUCESSO com "emitir novamente".
+  const handleEmitirNotaModal = async (tipo: 'NFE' | 'NFCE', sale: Sale, cpfNaNota?: string) => {
+    if (!sale || !sale.id || sale.id === 'preview' || notaEmitindo) return;
+    if (tipo === 'NFCE' && cpfNaNota && !validaCpf(cpfNaNota)) {
+      setAppModal({ title: 'NFC-e', message: 'CPF invalido (digitos verificadores nao conferem). Corrija o CPF ou deixe vazio para emitir sem identificacao.', icon: 'fa-solid fa-triangle-exclamation', iconColor: 'text-rose-500', type: 'error' });
+      return;
+    }
+    setNotaEmitindo(true);
+    const r = await notaService.emitir(sale.id, tipo, cpfNaNota || undefined);
+    setNotaEmitindo(false);
+    if (!r.ok) {
+      setNotaResult({ status: r.nota?.status || 'REJEITADA', erro: r.nota?.erro || r.erro });
+      return;
+    }
+    // BLOCO 82: guarda chave/serie/protocolo/emitente p/ imprimir o mini DANFE na hora
+    setNotaResult({
+      status: r.nota?.status || 'EMITINDO',
+      numero: r.nota?.numero,
+      pdfUrl: r.nota?.pdfUrl,
+      erro: r.nota?.erro,
+      chave: r.nota?.chave || '',
+      serie: r.nota?.serie || '',
+      protocolo: r.nota?.protocolo || '',
+      dataAutorizacao: r.nota?.dataAutorizacao || '',
+      qrCode: r.nota?.qrCode || '',
+      emitente: r.nota?.emitente,
+    });
+  };
+
+  // ==================================================================
+  // BLOCO 131: CUPOM FISCAL 80mm PERFEITO no modal de venda finalizada —
+  // busca o documento AUTORIZADO (XML da SEFAZ via /api/notas/cupom) e
+  // imprime o DANFE completo no layout oficial. Fallback: mini DANFE
+  // local (BLOCO 82) quando a SEFAZ/Focus nao responde.
+  // ==================================================================
+  const handleImprimirDanfeModal = async () => {
+    const s = sucessoData?.sale;
+    if (!s || notaEmitindo) return;
+    setNotaEmitindo(true);
+    try {
+      let texto = '';
+      const c = await notaService.cupom80(String(s.id));
+      const cup = c.cupom;
+      if (c.ok && cup?.cancelada) {
+        setAppModal({ title: 'Cupom Fiscal', message: 'Nota CANCELADA na SEFAZ — não pode ser impressa.', icon: 'fa-solid fa-ban', iconColor: 'text-rose-500', type: 'error' });
+        return;
+      }
+      if (c.ok && cup?.autorizada && cup.chave) {
+        // Caminho NOVO: cupom fiscal fiel ao documento autorizado
+        texto = danfeFiscal80(cup);
+        setNotaResult(prev => prev ? {
+          ...prev,
+          numero: cup.numero || prev.numero,
+          pdfUrl: cup.pdfUrl || prev.pdfUrl,
+          chave: cup.chave || prev.chave,
+          serie: cup.serie || prev.serie,
+          protocolo: cup.protocolo || prev.protocolo,
+          dataAutorizacao: cup.dataAutorizacao || prev.dataAutorizacao,
+          qrCode: cup.qrCode || prev.qrCode,
+        } : prev);
+      } else {
+        // ----- FALLBACK: mini DANFE local (BLOCO 82) -----
+        let d = {
+          chave: notaResult?.chave || '',
+          numero: notaResult?.numero || '',
+          serie: notaResult?.serie || '',
+          protocolo: notaResult?.protocolo || '',
+          dataAutorizacao: notaResult?.dataAutorizacao || '',
+          qrCode: notaResult?.qrCode || '',
+          emitente: notaResult?.emitente,
+        };
+        if (!d.chave || !d.emitente?.cnpj) {
+          const r = await notaService.consultar(s.id);
+          if (r.ok && r.nota) {
+            setNotaResult(prev => prev ? {
+              ...prev,
+              numero: r.nota?.numero || prev.numero,
+              pdfUrl: r.nota?.pdfUrl || prev.pdfUrl,
+              chave: r.nota?.chave || prev.chave,
+              serie: r.nota?.serie || prev.serie,
+              protocolo: r.nota?.protocolo || prev.protocolo,
+              dataAutorizacao: r.nota?.dataAutorizacao || prev.dataAutorizacao,
+              qrCode: r.nota?.qrCode || prev.qrCode,
+              emitente: r.nota?.emitente || prev.emitente,
+            } : prev);
+            d = {
+              chave: r.nota?.chave || d.chave,
+              numero: r.nota?.numero || d.numero,
+              serie: r.nota?.serie || d.serie,
+              protocolo: r.nota?.protocolo || d.protocolo,
+              dataAutorizacao: r.nota?.dataAutorizacao || d.dataAutorizacao,
+              qrCode: r.nota?.qrCode || d.qrCode,
+              emitente: r.nota?.emitente || d.emitente,
+            };
+          }
+        }
+        if (!d.chave) {
+          setAppModal({ title: 'Cupom Fiscal', message: 'Nota sem chave de acesso ainda — aguarde a autorizacao da SEFAZ e tente de novo.', icon: 'fa-solid fa-triangle-exclamation', iconColor: 'text-rose-500', type: 'error' });
+          return;
+        }
+        const prods = new Map(products.map(p => [p.id, p.nome] as const));
+        const itens = (s.itens || []).map(i => ({
+          descricao: prods.get(i.produtoId) || 'ITEM',
+          quantidade: Number(i.quantidade) || 0,
+          valorUnitario: Number(i.precoVenda) || 0,
+        }));
+        texto = danfeMiniTexto({
+          tipo: (s.modoNota === 'NFCE' ? 'NFCE' : 'NFE') as 'NFE' | 'NFCE',
+          chave: d.chave,
+          numero: d.numero,
+          serie: d.serie,
+          protocolo: d.protocolo,
+          dataAutorizacao: d.dataAutorizacao,
+          emitente: d.emitente,
+          qrCode: d.qrCode,
+          dataVenda: s.data,
+          cliente: { nome: client.nomeFantasia || client.nome || '', doc: client.cnpj || '' },
+          itens,
+          valorTotal: Number(s.valorTotal) || 0,
+          metodoPagamento: s.metodoPagamento,
+          detalhePagamento: s.detalhePagamento,
+          statusPagamento: s.statusPagamento,
+          dataVencimento: s.dataVencimento,
+          entregaStatus: s.entregaStatus,
+          tipoVenda: s.tipoVenda,
+        });
+      }
+      // BLOCO 111: canal USB do PC — DANFE 80mm sai pela janela de impressão
+      if (lerCanalImpressao() === 'USB') {
+        imprimirViaUsb(texto, '80MM', (m) => {
+          setAppModal({ title: 'Cupom Fiscal', message: `Falha na impressão USB: ${m}`, icon: 'fa-solid fa-triangle-exclamation', iconColor: 'text-rose-500', type: 'error' });
+        });
+        setAppModal({ title: 'Cupom Fiscal', message: 'Janela de impressão aberta — escolha a térmica USB do computador e confirme.', icon: 'fa-solid fa-desktop', iconColor: 'text-violet-500', type: 'success' });
+        return;
+      }
+      const ok = await bluetoothPrinter.print(texto, '80MM', { skipConfirm: true });
+      if (ok) setAppModal({ title: 'Cupom Fiscal', message: 'Cupom fiscal enviado a impressora!', icon: 'fa-solid fa-circle-check', iconColor: 'text-emerald-500', type: 'success' });
+      else setAppModal({ title: 'Cupom Fiscal', message: 'Impressao nao realizada — conecte a impressora Bluetooth.', icon: 'fa-solid fa-bluetooth-b', iconColor: 'text-blue-500', type: 'info' });
+    } catch (e: any) {
+      const msg = e?.message || '';
+      setAppModal({ title: 'Cupom Fiscal', message: msg === 'BLUETOOTH_NAO_SUPORTADO' ? 'Bluetooth nao disponivel neste aparelho (use o Chrome do Android).' : `Erro na impressao: ${msg}`, icon: 'fa-solid fa-triangle-exclamation', iconColor: 'text-rose-500', type: 'error' });
+    } finally {
+      setNotaEmitindo(false);
+    }
+  };
+
+  // ============================================================
+  // MODAL: Comprovante foto (venda a prazo)
+  // ============================================================
+  // Guarda contra clique duplo na finalização
+  const isFinalizingRef = useRef(false);
+  const lastFinishedSaleRef = useRef<Sale | null>(null);
+
+  // BLOCO 40 (regra do dono): o cupom é a BASE DA SEPARACAO — depois de
+  // registrar o pedido, o OK abre o cupom REAL (com o tipo de documento
+  // NF-e/NFC-e, a forma de pagamento e o prazo escolhidos no wizard). Antes o
+  // cupom so existia ANTES do wizard (com defaults DINHEIRO A VISTA) e depois
+  // do registro o vendedor teria que reabrir pela fila para imprimir certo.
+  const [cupomPosRegistro, setCupomPosRegistro] = useState<Sale | null>(null);
+
+  const [showComprovanteModal, setShowComprovanteModal] = useState(false);
+  const [comprovanteSaleId, setComprovanteSaleId] = useState<string | null>(null);
+  const [comprovanteFoto, setComprovanteFoto] = useState<string | null>(null);
+  const [comprovanteUploading, setComprovanteUploading] = useState(false);
+  const comprovanteInputRef = useRef<HTMLInputElement | null>(null);
+
+  const handleCaptureComprovante = (file: File) => {
+    setComprovanteUploading(true);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const MAX = 1200;
+        let w = img.width, h = img.height;
+        if (w > MAX || h > MAX) {
+          if (w > h) { h = (h / w) * MAX; w = MAX; }
+          else { w = (w / h) * MAX; h = MAX; }
+        }
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d')!.drawImage(img, 0, 0, w, h);
+        const base64 = canvas.toDataURL('image/jpeg', 0.6);
+        setComprovanteFoto(base64);
+        setComprovanteUploading(false);
+      };
+      img.src = e.target?.result as string;
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSaveComprovante = async () => {
+    if (!comprovanteSaleId || !comprovanteFoto) return;
+    setComprovanteUploading(true);
+    const ok = await saleService.updateSale(comprovanteSaleId, { comprovanteFoto } as any);
+    setComprovanteUploading(false);
+    if (ok) {
+      setShowComprovanteModal(false);
+      // Após salvar comprovante, fecha o PDV com a venda já finalizada
+      if (lastFinishedSaleRef.current) {
+        onFinish(lastFinishedSaleRef.current);
+      }
+    } else {
+      setAppModal({ title: 'Erro', message: 'Falha ao salvar comprovante.', icon: 'fa-solid fa-triangle-exclamation', iconColor: 'text-rose-500', type: 'error' });
+    }
+  };
+
+  const openComprovanteFlow = (sale: Sale) => {
+    lastFinishedSaleRef.current = sale;
+    setComprovanteSaleId(sale.id);
+    setComprovanteFoto(sale.comprovanteFoto || null);
+    setShowComprovanteModal(true);
+  };
+
+  // ============================================================
+  // MODAL: App-like genérico (substitui window.alert)
+  // ============================================================
+  const [appModal, setAppModal] = useState<{ title: string; message: string; icon?: string; iconColor?: string; type?: 'info' | 'error' | 'success' } | null>(null);
+
+  // ============================================================
+  // MODAL: Confirmação genérica (substitui window.confirm)
+  // ============================================================
+  const [confirmModal, setConfirmModal] = useState<{ title: string; message: string; onConfirm: () => void; icon?: string; iconColor?: string } | null>(null);
+
+  // OBS: O modal de GPS/WhatsApp para clientes incompletos fica no VendedorDashboard (handleAtenderClient),
+  // não aqui no PDV, para evitar duplicação de modais.
+
+  const cartKey = isPreVenda
+    ? `pdv_pre_venda_cart_${vendedorId}_${client.id}`
+    : isPrePedido 
+      ? `pdv_pre_pedido_cart_${vendedorId}_${client.id}`
+      : `pdv_cart_${vendedorId}_${client.id}`;
+  
+  const [activeCategoryId, setActiveCategoryId] = useState<string>(() => {
+    return categories.length > 0 ? categories[0].id : '';
+  });
+
+  const [visitedCategoryIds, setVisitedCategoryIds] = useState<string[]>(() => {
+    return categories.length > 0 ? [categories[0].id] : [];
+  });
+  
+  const [cart, setCart] = useState<Record<string, CartItem>>(() => 
+    loadLocalState(cartKey, {})
+  );
+
+  // BLOCO 122: os estados do fluxo legado (metodo/detalheMetodo/tipoPrazo/
+  // prazoData/prazoDays/selectedPixSlot) SAÍRAM — as telas 5/6 usam condicaoDoc
+  // + formaDoc + vencimentoDoc. O valor recebido do DINHEIRO continua aqui:
+  const [valorRecebido, setValorRecebido] = useState<string>('');
+  const [isTrocaActive, setIsTrocaActive] = useState(false);
+  const [valorTroca, setValorTroca] = useState('');
+  const [printWidth, setPrintWidth] = useState<'56MM' | '80MM'>('56MM');
+  // BLOCO 111: canal de impressão (Bluetooth térmica x USB do PC) — gravado no aparelho
+  const [canalImpr, setCanalImprState] = useState<CanalImpressao>(() => lerCanalImpressao());
+  const trocarCanal = (c: CanalImpressao) => { setCanalImprState(c); salvarCanalImpressao(c); };
+
+  useEffect(() => {
+    if (activeCategoryId && !visitedCategoryIds.includes(activeCategoryId)) {
+      setVisitedCategoryIds(prev => [...prev, activeCategoryId]);
+    }
+  }, [activeCategoryId, visitedCategoryIds]);
+
+  useEffect(() => {
+    if (activeCategoryId === '' && categories.length > 0) {
+      setActiveCategoryId(categories[0].id);
+    }
+  }, [categories, activeCategoryId]);
+
+  useEffect(() => {
+    saveLocalState(cartKey, cart);
+  }, [cart, cartKey]);
+
+  const allCategoriesVisited = visitedCategoryIds.length >= categories.length;
+
+  const soldProductIds = useMemo(() => {
+    const clientSales = sales.filter(s => s.clientId === client.id);
+    const ids = new Set<string>();
+    clientSales.forEach(s => {
+      s.itens?.forEach(item => {
+        if (item.produtoId) {
+          ids.add(item.produtoId);
+        }
+      });
+    });
+    return ids;
+  }, [sales, client.id]);
+
+  const formatCategoryName = (name: string) => {
+    const n = name.toUpperCase();
+    if (n.includes('ELMA')) return 'ELMA';
+    if (n.includes('SALTY')) return 'SALTY';
+    if (n.includes('DOCE')) return 'DOCES';
+    if (n.includes('BEBIDA')) return 'BEBIDAS';
+    return n.substring(0, 5);
+  };
+
+  const getOrderedItems = (): SaleItem[] => {
+    return products
+      .filter(p => cart[p.id] && cart[p.id].quantidade > 0)
+      .map(p => ({
+        produtoId: p.id,
+        quantidade: cart[p.id].quantidade,
+        precoVenda: parseFloat(cart[p.id].precoVenda) || 0
+      }));
+  };
+
+  const clientDebt = useMemo(() => {
+    const pendingSales = sales.filter(s => s.clientId === client.id && s.statusPagamento === 'PENDENTE');
+    return pendingSales.reduce((acc, s) => acc + (s.valorTotal - s.valorPago), 0);
+  }, [sales, client.id]);
+  const clientDebtQtd = useMemo(
+    () => sales.filter(s => s.clientId === client.id && s.statusPagamento === 'PENDENTE' && s.valorTotal - s.valorPago > 0.005).length,
+    [sales, client.id]
+  );
+
+  // BLOCO 67: o banner de divida em 1 linha + minimizavel (X) — o banner antigo
+  // (2 linhas, p-3) empurrava a grade pra baixo e atrapalhava a digitacao de
+  // preco/quantidade. Minimizado vira uma pildora pequenina no topo direito;
+  // volta ao abrir outro cliente.
+  const [debtBannerMin, setDebtBannerMin] = useState(false);
+  useEffect(() => { setDebtBannerMin(false); }, [client.id]);
+
+  // ============================================================
+  // FUNÇÃO DE VALIDAÇÃO DIRETA - CHAMA EM QUALQUER LUGAR
+  // ============================================================
+  const checkPrecoMinimoViolation = (): { hasViolation: boolean; violatingProducts: Array<{ nome: string; preco: number; minimo: number }> } => {
+    // BLOCO 73 (regra do dono): cliente ESPECIAL GB — o PREÇO MÍNIMO não faz
+    // parte da regra GB. Nada de banner 'Venda Bloqueada', nada de travar o
+    // cupom por mínimo: a regra do especial é o PREÇO GB (piso de edição do
+    // Bloco 70 continua — blur devolve pro GB se digitarem abaixo).
+    if (!margemMinimaAtiva || isPrePedido || clienteGB) return { hasViolation: false, violatingProducts: [] };
+    
+    const violating: Array<{ nome: string; preco: number; minimo: number }> = [];
+    
+    (Object.entries(cart) as [string, CartItem][]).forEach(([pId, item]) => {
+      if (item.quantidade <= 0) return;
+      const p = products.find(prod => prod.id === pId);
+      if (!p) return;
+      
+      const price = parseFloat(item.precoVenda) || 0;
+      const minPrice = p.precoMinimo || 0;
+      // BLOCO 70: cliente ESPECIAL GB — o piso do item é o PREÇO GB (quando cadastrado > 0)
+      const gb = precoEspecialGbDe(p);
+      const piso = gb > 0 ? gb : minPrice;
+      
+      // Só valida se tem piso CADASTRADO (> 0)
+      if (piso > 0 && price < piso) {
+        violating.push({ 
+          nome: p.nome, 
+          preco: price, 
+          minimo: piso 
+        });
+      }
+    });
+    
+    return { hasViolation: violating.length > 0, violatingProducts: violating };
+  };
+
+  // Para compatibilidade com código existente
+  const hasMarginViolation = checkPrecoMinimoViolation().hasViolation;
+
+  const updateCart = (pId: string, delta: number, basePrice: number) => {
+    setCart(prev => {
+      const current = prev[pId] || { quantidade: 0, precoVenda: basePrice.toString() };
+      // Pre-venda trabalha com o estoque central (nao com a carga da van).
+      // BLOCO 29: rota 2 com modo = saldo do ESTOQUE DO MODO (nao do principal).
+      const maxLimit = sellFromCentral 
+        ? (saldoFonte(products.find(p => p.id === pId) ?? ({} as Product)) || 0)
+        : (minhaCarga.find(c => c.produtoId === pId)?.quantidade || 0);
+      const novaQtd = Math.max(0, Math.min(maxLimit, (current.quantidade ?? 0) + delta)); 
+      if (novaQtd === 0 && delta < 0) {
+        const { [pId]: _, ...rest } = prev;
+        return rest;
+      }
+      return { ...prev, [pId]: { ...current, quantidade: novaQtd } };
+    });
+  };
+
+  // Validação no blur - corrige automaticamente se abaixo do mínimo
+  const handlePriceBlur = (pId: string, value: string) => {
+    if (!margemMinimaAtiva || isPrePedido) return;
+    
+    const sanitized = value.replace(',', '.');
+    const p = products.find(prod => prod.id === pId);
+    const minPrice = p?.precoMinimo || 0;
+    // BLOCO 70: cliente ESPECIAL GB — autocorreção vai para o PREÇO GB (quando > 0)
+    const gb = p ? precoEspecialGbDe(p) : 0;
+    const piso = gb > 0 ? gb : minPrice;
+    
+    if (sanitized && piso > 0) {
+      const numValue = parseFloat(sanitized);
+      if (!isNaN(numValue) && numValue < piso) {
+        setCart(prev => {
+          if (!prev[pId]) return prev;
+          return { ...prev, [pId]: { ...prev[pId], precoVenda: piso.toFixed(2) } };
+        });
+      }
+    }
+  };
+
+  // Mudança no input - apenas atualiza, não bloqueia digitação
+  const handlePriceChange = (pId: string, value: string) => {
+    const sanitized = value.replace(',', '.');
+    setCart(prev => {
+      if (!prev[pId]) return prev;
+      return { ...prev, [pId]: { ...prev[pId], precoVenda: sanitized } };
+    });
+  };
+
+  const subtotal = useMemo(() => {
+    return Object.entries(cart).reduce((acc, [_, item]) => {
+      const cartItem = item as CartItem;
+      const price = parseFloat(cartItem.precoVenda) || 0;
+      return acc + ((cartItem.quantidade ?? 0) * price); 
+    }, 0);
+  }, [cart]);
+
+  const total = useMemo(() => {
+    const vt = parseFloat(valorTroca) || 0;
+    return Math.max(0, subtotal - (isTrocaActive ? vt : 0));
+  }, [subtotal, isTrocaActive, valorTroca]);
+
+  const troco = useMemo(() => {
+    const rec = parseFloat(valorRecebido) || 0;
+    return Math.max(0, rec - total);
+  }, [valorRecebido, total]);
+
+  // BLOCO 122 (tela 4): aptidão de NF-e do cliente (CNPJ + email) e o que falta
+  const temCnpjApto = (client.cnpj || '').replace(/\D/g, '').length === 14;
+  const faltantesNfe: string[] = [];
+  if (!temCnpjApto) faltantesNfe.push('CNPJ');
+  if (!client.email?.trim()) faltantesNfe.push('email');
+  // BLOCO 122 (tela 6): forma de pagamento válida — habilita o botão Continuar
+  // (depois de total/valorRecebido existirem — ordem das declarações importa)
+  const formaOk = (() => {
+    if (!condicaoDoc || !formaDoc) return false;
+    if (condicaoDoc === 'AVISTA') {
+      if (isPreVenda) return formaDoc === 'DINHEIRO' || formaDoc === 'PIX';
+      if (formaDoc === 'DINHEIRO') { const rec = parseFloat(valorRecebido) || 0; return rec > 0 && rec + 0.001 >= total; }
+      if (formaDoc === 'MISTO') { const soma = (parseFloat(mistoDinDoc) || 0) + (parseFloat(mistoPixDoc) || 0); return soma > 0 && soma + 0.001 >= total; }
+      return formaDoc === 'PIX';
+    }
+    return !!vencimentoDoc;
+  })();
+
+  // ============================================================
+  // BLOCO 100 (regra do dono): QR DO PIX gerado com o VALOR DA VENDA —
+  // BR Code (Pix Copia e Cola) atrelado a chave Pix configurada nas
+  // Configurações (app_settings.pix_chave_entrega, lida no servidor).
+  // BLOCO 122: roda na TELA 6 (FORMA) — à vista + Pix na pronta entrega.
+  // ============================================================
+  useEffect(() => {
+    if (view !== 'FORMA' || isPreVenda || condicaoDoc !== 'AVISTA' || formaDoc !== 'PIX' || !(total > 0)) {
+      setPixGerado(null);
+      setPixFalhou(false);
+      return;
+    }
+    let vivo = true;
+    setPixFalhou(false);
+    (async () => {
+      try {
+        const { authHeaders } = await import('@/services/userService');
+        const r = await fetch(`/api/pix/venda?valor=${total.toFixed(2)}`, { headers: authHeaders() });
+        const d = await r.json().catch(() => ({}));
+        if (!vivo) return;
+        if (r.ok && d.ok && d.qrDataUrl) {
+          setPixGerado({ qrDataUrl: d.qrDataUrl, payload: d.payload, chaveFormatada: d.chaveFormatada || '' });
+        } else {
+          setPixFalhou(true);
+        }
+      } catch {
+        if (vivo) setPixFalhou(true);
+      }
+    })();
+    return () => { vivo = false; };
+  }, [view, isPreVenda, condicaoDoc, formaDoc, total]);
+
+  // BLOCO 122: os atalhos 7D/14D/21D/30D da tela 6 escrevem direto o
+  // vencimentoDoc — sem estado extra de "dias".
+
+  // ============================================================
+  // BLOQUEIO INQUEBRÁVEL - CHAMADO ANTES DE QUALQUER FINALIZAÇÃO
+  // ============================================================
+  const validateAndBlockIfNeeded = (): boolean => {
+    const { hasViolation, violatingProducts } = checkPrecoMinimoViolation();
+    
+    if (hasViolation) {
+      const detalhes = violatingProducts
+        .map(v => `• ${v.nome}: digitou R$ ${v.preco.toFixed(2)}, mínimo é R$ ${v.minimo.toFixed(2)}`)
+        .join('\n');
+      
+      setAppModal({
+        title: 'Venda Bloqueada',
+        message: `Preço abaixo do mínimo!\n\n${detalhes}\n\nCorrija os preços antes de continuar.`,
+        icon: 'fa-solid fa-circle-exclamation',
+        iconColor: 'text-rose-500',
+        type: 'error',
+      });
+      return false; // BLOQUEIA
+    }
+    return true; // LIBERA
+  };
+
+  // ============================================================
+  // BLOCO 122 (fluxo de 8 telas do dono) — HANDLERS DAS TELAS 6/7/8
+  // ============================================================
+  // TELA 6 → TELA 7: valida a forma e monta o RESUMO/CONFERÊNCIA (Cupom).
+  //  - PRONTA ENTREGA: payload completo + cupom de conferência (imprime e
+  //    confere ANTES de gravar — o registro continua rodando só na tela 8).
+  //  - PRÉ-VENDA: preview do pedido (venda ainda NÃO existe na fila).
+  const continuarDaForma = () => {
+    if (!formaOk || isFinalizingRef.current) return;
+    if (total <= 0 && getOrderedItems().length === 0) return;
+    if (!validateAndBlockIfNeeded()) return;
+    if (isPreVenda) montarResumoPreVenda();
+    else montarConferenciaPronta();
+  };
+
+  // ===== PRONTA ENTREGA: monta o payload e abre a CONFERÊNCIA (tela 7) =====
+  const montarConferenciaPronta = () => {
+    const itens = getOrderedItems();
+    const vt = parseFloat(valorTroca) || 0;
+    const descontoInfo = isTrocaActive && vt > 0 ? ` (Troca: R$ ${vt.toFixed(2)})` : '';
+    // Documento escolhido na tela 4 (ou fixado pela van SEM NF)
+    const notaTxt = docEscolhido === 'NFE'
+      ? ' | COM NOTA: NF-e'
+      : docEscolhido === 'NFCE'
+        ? ` | COM NOTA: NFC-e${nfcCpfDoc ? ` (CPF ${nfcCpfDoc})` : ''}`
+        : '';
+
+    let metodoP: PaymentMethod;
+    let finalDetalhe = '';
+    if (condicaoDoc === 'AVISTA') {
+      if (formaDoc === 'DINHEIRO') {
+        metodoP = 'DINHEIRO';
+        const rec = parseFloat(valorRecebido) || 0;
+        const trocoVal = Math.max(0, rec - total);
+        finalDetalhe = `DINHEIRO${trocoVal > 0 ? ` — troco R$ ${trocoVal.toFixed(2)}` : ''}`;
+      } else if (formaDoc === 'PIX') {
+        metodoP = 'PIX';
+        finalDetalhe = pixSlotDoc === 1 ? pix1Name : pix2Name;
+      } else {
+        // MISTO: o banco legado só grava DINHEIRO/PIX/A_PRAZO — grava como
+        // DINHEIRO com o detalhe explícito (mesmo padrão de sempre)
+        metodoP = 'DINHEIRO';
+        finalDetalhe = `MISTO: Dinheiro R$ ${(parseFloat(mistoDinDoc) || 0).toFixed(2)} + Pix R$ ${(parseFloat(mistoPixDoc) || 0).toFixed(2)}`;
+      }
+    } else {
+      metodoP = 'A_PRAZO';
+      // BLOCO 60: a prazo = Boleto, Cheque (bom para), Pix na data, Dinheiro na data
+      finalDetalhe = formaDoc === 'BOLETO'
+        ? 'Boleto'
+        : formaDoc === 'CHEQUE'
+          ? `Cheque (bom para ${vencimentoDoc.split('-').reverse().join('/')})`
+          : formaDoc === 'DINHEIRO_DATA'
+            ? 'Dinheiro na data'
+            : 'Pix na data';
+    }
+    finalDetalhe += descontoInfo + notaTxt;
+
+    // BLOCO 139 (regra do dono): O RECEBIMENTO REAL é confirmado DEPOIS, na
+    // tela de imprimir o cupom/nota ("você recebeu R$ X? CONFIRMO / Não recebi").
+    // A venda à vista também nasce PENDENTE (valorPago 0) — CONFIRMO fecha o
+    // saldo (PAGO, entra no caixa à vista); NÃO RECEBI fica em Contas a Receber.
+    const salePayload: any = {
+      vendedorId,
+      clientId: client.id,
+      valorTotal: total,
+      valorPago: 0,
+      metodoPagamento: metodoP,
+      detalhePagamento: finalDetalhe,
+      itens,
+      data: new Date(),
+      // BLOCO 29 (ROTA 2): modo do atendimento — grava sales.modo_nota (baixa/margem real)
+      modoNota: rota2Ativo && modoAtivo ? modoAtivo : undefined,
+    };
+    salePayload.statusPagamento = 'PENDENTE';
+    if (metodoP === 'A_PRAZO') {
+      // meio-dia local: evita a data cair no dia anterior (meia-noite UTC em TZ -3)
+      salePayload.dataVencimento = new Date(`${vencimentoDoc}T12:00:00`);
+    }
+
+    setPendRegistro({
+      payload: salePayload,
+      trocasTxt: trocasComObs,
+      trocasVal: trocasValorNum,
+      trocaDesconto: isTrocaActive ? vt : 0,
+      isPrazo: metodoP === 'A_PRAZO',
+      // BLOCO 50: a prazo em CHEQUE não tem botão de boleto no resultado
+      formaAtraso: metodoP === 'A_PRAZO' && formaDoc === 'CHEQUE' ? 'CHEQUE' : undefined,
+    });
+    setCupomConferencia(vendaConferenciaDe(salePayload));
+  };
+
+  // ===== PRÉ-VENDA: monta o RESUMO do pedido (tela 7) — nada é gravado aqui =====
+  const montarResumoPreVenda = () => {
+    const itens = getOrderedItems();
+    const vt = parseFloat(valorTroca) || 0;
+    const descontoInfo = isTrocaActive && vt > 0 ? ` (Troca: R$ ${vt.toFixed(2)})` : '';
+    const formaApi = condicaoDoc === 'AVISTA'
+      ? (formaDoc === 'PIX' ? 'PIX' : 'DINHEIRO')
+      : (formaDoc === 'PIX_DATA' ? 'PIX' : formaDoc === 'DINHEIRO_DATA' ? 'DINHEIRO' : (formaDoc || 'BOLETO') as string);
+    const finalDetalhe = (condicaoDoc === 'AVISTA'
+      ? `Entregador recebe ${formaApi === 'PIX' ? 'Pix' : 'dinheiro'} na entrega (A VISTA)`
+      : formaDoc === 'BOLETO'
+        ? 'Boleto'
+        : formaDoc === 'CHEQUE'
+          ? `Cheque (bom para ${vencimentoDoc.split('-').reverse().join('/')})`
+          : formaDoc === 'DINHEIRO_DATA'
+            ? 'Dinheiro na data'
+            : 'Pix na data') + descontoInfo;
+    const previewPayload: any = {
+      vendedorId,
+      clientId: client.id,
+      valorTotal: total,
+      valorPago: 0, // pré-venda NUNCA recebe na visita (regra do Bloco 39)
+      metodoPagamento: formaApi as PaymentMethod,
+      detalhePagamento: finalDetalhe,
+      statusPagamento: 'PENDENTE',
+      dataVencimento: condicaoDoc === 'APRAZO' ? new Date(`${vencimentoDoc}T12:00:00`) : undefined,
+      itens,
+      data: new Date(),
+    };
+    setCupomConferencia(vendaConferenciaDe(previewPayload));
+  };
+
+  // BLOCO 100: venda provisória (id 'preview') que alimenta o cupom de
+  // conferência — MESMO texto do cupom real (cliente + pagamento + total).
+  const vendaConferenciaDe = (payload: any): Sale => ({
+    id: 'preview',
+    vendedorId: payload.vendedorId,
+    clientId: payload.clientId,
+    valorTotal: payload.valorTotal,
+    valorPago: payload.valorPago,
+    metodoPagamento: payload.metodoPagamento,
+    detalhePagamento: payload.detalhePagamento,
+    statusPagamento: payload.statusPagamento,
+    dataVencimento: payload.dataVencimento,
+    itens: payload.itens,
+    data: new Date(),
+    trocas: trocasComObs || undefined,
+    trocasValor: trocasValorNum || undefined,
+  } as unknown as Sale);
+
+  // ============================================================
+  // BLOCO 122: registro da PRONTA ENTREGA — roda na TELA 8 (o vendedor já
+  // passou pela conferência da tela 7). Sucesso → TELA DE SUCESSO + emissão
+  // automática do documento escolhido (NF-e/NFC-e).
+  // ============================================================
+  const finalizarAposConferencia = async () => {
+    const pend = pendRegistro;
+    if (!pend || isFinalizingRef.current) return; // BLOQUEIO: evita venda duplicada
+
+    isFinalizingRef.current = true;
+    setFinalizando(true);
+    setCupomConferencia(null);
+
+    // BLOCO 44 (anti-duplicação): o carrinho sai da tela ANTES do envio — se o
+    // vendedor recarregar/desistir durante a demora, o pedido não se repete.
+    // Em falha, o carrinho volta para a tela.
+    const carrinhoPrev = cart;
+    try { localStorage.removeItem(cartKey); } catch { /* storage bloqueado */ }
+    setCart({});
+
+    const newSale = await processSale(pend.payload);
+    if (newSale) {
+      lastFinishedSaleRef.current = newSale;
+      setFinalizando(false);
+
+      // Calcula comissao
+      let comissaoTotal = 0;
+      (pend.payload.itens || []).forEach((item: any) => {
+        const prod = products.find(p => p.id === item.produtoId);
+        if (prod) {
+          comissaoTotal += (item.quantidade * item.precoVenda) * ((prod.comissaoPercentual || 0) / 100);
+        }
+      });
+      comissaoTotal = Math.round(comissaoTotal * 100) / 100;
+
+      const saleFinal = { ...newSale, trocas: pend.trocasTxt || undefined, trocasValor: pend.trocasVal || undefined };
+      setSucessoData({
+        total: pend.payload.valorTotal,
+        comissao: comissaoTotal,
+        troca: pend.trocaDesconto,
+        isPrazo: pend.isPrazo,
+        isPreVenda: false,
+        sale: saleFinal,
+        formaAtraso: pend.formaAtraso,
+      });
+      setView('SUCESSO');
+
+      // BLOCO 13/41/98: persiste as TROCAS (+ valor de custo) + OBSERVAÇÃO da pronta entrega (best-effort)
+      if (pend.trocasTxt || pend.trocasVal > 0) {
+        try {
+          const { authHeaders } = await import('@/services/userService');
+          fetch('/api/sales/trocas', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            body: JSON.stringify({ saleId: newSale.id, trocas: pend.trocasTxt, trocasValor: pend.trocasVal || undefined }),
+          }).catch(() => {});
+        } catch {}
+        limparAnotacoes();
+      }
+
+      // BLOCO 122 (tela 8 do dono): GERAR o documento escolhido aqui = finalizar.
+      // A venda já está salva — se a SEFAZ rejeitar, o erro aparece na tela de
+      // sucesso com "emitir novamente" (nada se perde).
+      if (docEscolhido === 'NFE' || docEscolhido === 'NFCE') {
+        emitirNotaFluxo(docEscolhido, saleFinal, docEscolhido === 'NFCE' ? (nfcCpfDoc || undefined) : undefined);
+      }
+    } else {
+      isFinalizingRef.current = false; // Libera se falhou
+      setCart(carrinhoPrev);
+      setFinalizando(false);
+      setAppModal({ title: 'Falha ao Finalizar', message: 'Nao foi possivel concluir a venda. Verifique sua conexao e tente novamente — o carrinho voltou para a tela.', icon: 'fa-solid fa-circle-exclamation', iconColor: 'text-rose-500', type: 'error' });
+    }
+  };
+
+  // ============================================================
+  // BLOCO 122: emissão do documento da TELA 8 (wrapper do handleEmitirNotaModal)
+  // ============================================================
+  const emitirNotaFluxo = (tipo: 'NFE' | 'NFCE', sale: Sale, cpf?: string) => {
+    void handleEmitirNotaModal(tipo, sale, cpf);
+  };
+
+  // ============================================================
+  // BLOCO 122: registro da PRÉ-VENDA — roda na TELA 8. Mesmo payload do
+  // wizard (BLOCO 39: pré-venda NUNCA recebe na visita; a vista = entregador
+  // cobra na entrega; a prazo = vendedor cobra na data). A nota é INTENÇÃO:
+  // sai depois (na entrega/pelo admin) — nada é emitido aqui.
+  // ============================================================
+  const registrarPreVendaFluxo = async () => {
+    if (isFinalizingRef.current) return; // BLOQUEIO: evita pedido duplicado
+    if (total <= 0 && getOrderedItems().length === 0) return;
+    if (!validateAndBlockIfNeeded()) return;
+
+    const itens = getOrderedItems();
+    const vt = parseFloat(valorTroca) || 0;
+
+    isFinalizingRef.current = true;
+    setFinalizando(true);
+
+    // BLOCO 44 (anti-duplicação): o carrinho sai da tela ANTES do envio —
+    // recarregou/desistiu durante a demora = pedido não se repete. Falha volta.
+    const carrinhoPrev = cart;
+    try { localStorage.removeItem(cartKey); } catch { /* storage bloqueado */ }
+    setCart({});
+
+    const formaApi = condicaoDoc === 'AVISTA'
+      ? (formaDoc === 'PIX' ? 'PIX' : 'DINHEIRO')
+      : (formaDoc === 'PIX_DATA' ? 'PIX' : formaDoc === 'DINHEIRO_DATA' ? 'DINHEIRO' : (formaDoc || 'BOLETO') as string);
+    const notaIntencao = docEscolhido === 'CUPOM' ? 'NENHUMA' : (docEscolhido || 'NENHUMA');
+    const r = await processPreVenda!({
+      clientId: client.id, valorTotal: total, itens,
+      formaPagamento: formaApi, condicao: condicaoDoc || 'AVISTA',
+      vencimento: condicaoDoc === 'APRAZO' ? vencimentoDoc : undefined,
+      trocas: trocasComObs,
+      trocasValor: trocasValorNum || undefined,
+      notaIntencao,
+      nfcCpf: docEscolhido === 'NFCE' && nfcCpfDoc ? nfcCpfDoc : undefined,
+      // BLOCO 29 (ROTA 2): modo do atendimento — baixa na coluna certa
+      modo: rota2Ativo && modoAtivo ? modoAtivo : undefined,
+    });
+    if (r.pedido) {
+      const pedido = r.pedido;
+      limparAnotacoes();
+      setFinalizando(false);
+      lastFinishedSaleRef.current = pedido;
+      // BLOCO 21: comissão de PRÉ-VENDA — o valor OFICIAL vem do SERVIDOR
+      let comissaoTotal = Number(r.comissaoPrevista);
+      if (!isFinite(comissaoTotal) || comissaoTotal <= 0) {
+        const PV_PADRAO = 5; // Bloco 23: pré-venda sem % no produto = 5% fixo (lib/comissaoPv)
+        comissaoTotal = 0;
+        itens.forEach(item => {
+          const prod = products.find(p => p.id === item.produtoId);
+          if (prod) {
+            const pv = prod.comissaoPvPercentual;
+            const pct = (pv !== undefined && pv !== null) ? pv : PV_PADRAO;
+            comissaoTotal += (item.quantidade * item.precoVenda) * (pct / 100);
+          }
+        });
+        comissaoTotal = Math.round(comissaoTotal * 100) / 100;
+      }
+      setSucessoData({
+        total,
+        comissao: comissaoTotal,
+        troca: isTrocaActive ? vt : 0,
+        isPrazo: condicaoDoc === 'APRAZO',
+        isPreVenda: true,
+        sale: pedido,
+        formaAtraso: condicaoDoc === 'APRAZO' && formaDoc === 'CHEQUE' ? 'CHEQUE' : undefined,
+      });
+      setView('SUCESSO');
+    } else {
+      isFinalizingRef.current = false;
+      setCart(carrinhoPrev);
+      setFinalizando(false);
+      // Falha SEM silencio: mostra o motivo REAL vindo da API
+      setAppModal({ title: 'Falha ao Registrar', message: r.erro || 'Nao foi possivel registrar o pedido.\nVerifique sua conexao e tente novamente.', icon: 'fa-solid fa-circle-exclamation', iconColor: 'text-rose-500', type: 'error' });
+    }
+  };
+
+  // ============================================================
+  // BLOCO 122: TELA 8 — o toque no documento VERDE gera e finaliza.
+  // ============================================================
+  const executarFinalizacao = () => {
+    if (isFinalizingRef.current || finalizando) return;
+    if (isPreVenda) registrarPreVendaFluxo();
+    else finalizarAposConferencia();
+  };
+
+  const productIdsInCarga = useMemo(() => new Set(minhaCarga.map(c => c.produtoId)), [minhaCarga]);
+  
+  const filteredProducts = useMemo(() => {
+    let base: Product[];
+    if (sellFromCentral) {
+      // BLOCO 75 (ESTOQUE TOTAL): catalogo da pre-venda = o que tem saldo no
+      // TOTAL unico (estoque 0 NAO aparece — regra do dono). O modo do
+      // atendimento nao filtra mais cofre; so alimenta o contador na baixa.
+      base = products.filter(p => p.ativo && (p.estoquePrincipal || 0) > 0);
+      // BLOCO 29/64: produtos TESTE só aparecem para quem tem a flag rota2 (piloto)
+      if (!verProdutosTeste) base = base.filter(p => !p.produtoTeste);
+    } else {
+      // PRONTA ENTREGA: só o que está NA CARGA da van.
+      // BLOCO 29 (rota 2): carga com quantidade 0 NÃO aparece (regra do dono).
+      let productsInCarga = products.filter(p => productIdsInCarga.has(p.id));
+      if (rota2Ativo) {
+        productsInCarga = productsInCarga.filter(p => (minhaCarga.find(c => c.produtoId === p.id)?.quantidade ?? 0) > 0);
+      } else {
+        productsInCarga = productsInCarga.filter(p => !p.produtoTeste);
+      }
+      base = productsInCarga;
+    }
+    // BLOCO 73 (regra do dono): cliente ESPECIAL GB -> o PDV mostra SOMENTE os
+    // produtos com PREÇO ESPECIAL GB cadastrado (> 0). Produto com GB 0.00 (sem
+    // valor) NÃO aparece — no especial só entra item com preço GB ativo (vale
+    // para pronta entrega da carga e pré-venda do estoque), fica mais fácil
+    // vender e não roda risco de sair preço normal no cliente GB.
+    if (clienteGB) base = base.filter(p => (Number(p.precoEspecialGb) || 0) > 0);
+    if (!activeCategoryId) return base;
+    return base.filter(p => p.categoryId === activeCategoryId);
+  }, [products, productIdsInCarga, activeCategoryId, sellFromCentral, modoAtivo, rota2Ativo, verProdutosTeste, minhaCarga, clienteGB]);
+
+  // BLOCO 122 (TELA 3): busca de produto — digita e acha na hora, ignora a
+  // categoria ativa (o vendedor não gira mais as abas caçando item).
+  const produtosNaTela = useMemo(() => {
+    const q = buscaProduto.trim().toLowerCase();
+    if (!q) return filteredProducts;
+    return filteredProducts.filter(p => p.nome.toLowerCase().includes(q));
+  }, [filteredProducts, buscaProduto]);
+
+  const generatePrePedidoText = (width: '56MM' | '80MM') => {
+    const totalWidth = width === '80MM' ? 48 : 32; 
+    
+    const padR = (str: string, len: number) => str.substring(0, len).padEnd(len);
+    const padL = (str: string, len: number) => str.substring(0, len).padStart(len);
+    const center = (str: string, len: number) => {
+      const s = str.substring(0, len);
+      const spaces = Math.max(0, Math.floor((len - s.length) / 2));
+      return ' '.repeat(spaces) + s;
+    };
+
+    let t = '';
+    
+    t += '*'.repeat(totalWidth) + '\n';
+    t += center('PRÉ-PEDIDO (RASCUNHO)', totalWidth) + '\n';
+    t += '*'.repeat(totalWidth) + '\n';
+    
+    const clientName = client.nomeFantasia || 'Consumidor';
+    t += `Cliente: ${clientName}\n`;
+    t += `Data: ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}\n`;
+    t += '-'.repeat(totalWidth) + '\n';
+
+    const qtyW = 4;
+    const valW = width === '80MM' ? 13 : 8;
+    const descW = totalWidth - qtyW - valW;
+
+    t += padR('DESCRICAO', descW) + padL('QTD', qtyW) + padL('VALOR', valW) + '\n';
+    t += '-'.repeat(totalWidth) + '\n';
+
+    const items = getOrderedItems();
+    items.forEach(item => {
+      const p = products.find(prod => prod.id === item.produtoId);
+      const productName = (p?.nome ?? 'Produto');
+      
+      const qtyStr = `${item.quantidade}x`;
+      const valStr = `${(item.quantidade * item.precoVenda).toFixed(2)}`;
+
+      t += padR(productName.substring(0, descW), descW) + padL(qtyStr, qtyW) + padL(valStr, valW) + '\n';
+
+      let remaining = productName.substring(descW);
+      while (remaining.length > 0) {
+        t += padR(remaining.substring(0, totalWidth), totalWidth) + '\n';
+        remaining = remaining.substring(totalWidth);
+      }
+    });
+
+    t += '-'.repeat(totalWidth) + '\n';
+    
+    const totalLabel = 'TOTAL ESTIMADO:';
+    const totalVal = `R$ ${total.toFixed(2)}`;
+    t += padR(totalLabel, totalWidth - totalVal.length) + totalVal + '\n';
+
+    t += '-'.repeat(totalWidth) + '\n';
+    t += center('ATENÇÃO: ESTE DOCUMENTO', totalWidth) + '\n';
+    t += center('NÃO É UMA VENDA REAL.', totalWidth) + '\n';
+    t += center('APENAS RESERVA/PLANEJAMENTO', totalWidth) + '\n';
+    t += '*'.repeat(totalWidth) + '\n';
+    t += '\n\n\n\n\n';
+
+    return t;
+  };
+
+  const handlePrintPrePedido = async () => {
+    const rawText = generatePrePedidoText(printWidth);
+    setConfirmModal({
+      title: 'Imprimir Pré-Pedido',
+      message: `Deseja imprimir este pré-pedido?\nModelo: ${printWidth === '80MM' ? '80mm (Largo)' : '56mm (Estreito)'}`,
+      icon: 'fa-solid fa-print',
+      iconColor: 'text-blue-600',
+      onConfirm: async () => {
+        setConfirmModal(null);
+        // BLOCO 111: canal USB do PC — pré-pedido sai pela janela de impressão
+        if (lerCanalImpressao() === 'USB') {
+          imprimirViaUsb(rawText, printWidth, (m) => {
+            setAppModal({ title: 'Erro na Impressão', message: `Não consegui abrir a janela de impressão: ${m}`, icon: 'fa-solid fa-triangle-exclamation', iconColor: 'text-rose-500', type: 'error' });
+          });
+          setAppModal({ title: 'Janela de impressão aberta', message: 'Escolha a impressora térmica USB do computador e confirme.\n\nDica: o navegador memoriza a última impressora usada.', icon: 'fa-solid fa-desktop', iconColor: 'text-violet-500', type: 'success' });
+          return;
+        }
+        try {
+          const ok = await bluetoothPrinter.print(rawText, printWidth, { skipConfirm: true });
+          if (ok) {
+            setAppModal({ title: 'Sucesso', message: 'Pré-pedido impresso com sucesso!', icon: 'fa-solid fa-check', iconColor: 'text-emerald-500', type: 'success' });
+          } else {
+            setAppModal({ title: 'Impressão não realizada', message: 'Nenhuma impressora foi conectada.\n\n1. Ligue a impressora Bluetooth\n2. Tente imprimir novamente\n3. Selecione o aparelho na janela do Chrome', icon: 'fa-solid fa-bluetooth-b', iconColor: 'text-gray-400', type: 'error' });
+          }
+        } catch (error: any) {
+          const msg = error?.message || 'Erro desconhecido';
+          if (msg === 'BLUETOOTH_NAO_SUPORTADO') {
+            // BLOCO 82: no iPhone, ensina o caminho que funciona (app Bluefy) em vez de mandar pro Android
+            if (isIOSDevice()) {
+              setAppModal({ title: TITULO_IMPRESSAO_IOS, message: TEXTO_IMPRESSAO_IOS, icon: 'fa-brands fa-apple', iconColor: 'text-gray-400', type: 'error' });
+            } else {
+              setAppModal({ title: 'Bluetooth Indisponível', message: 'Para impressão via Bluetooth:\n1. Use o Chrome no Android\n2. Ative o Bluetooth do dispositivo', icon: 'fa-brands fa-bluetooth-b', iconColor: 'text-gray-400', type: 'error' });
+            }
+          } else {
+            setAppModal({ title: 'Erro na Impressão', message: `Falha ao imprimir pré-pedido: ${msg}`, icon: 'fa-solid fa-triangle-exclamation', iconColor: 'text-rose-500', type: 'error' });
+          }
+        }
+      },
+    });
+  };
+
+  const handleCopyPrePedido = () => {
+    const rawText = generatePrePedidoText(printWidth);
+    navigator.clipboard.writeText(rawText);
+    setAppModal({ title: 'Copiado!', message: 'Texto do pré-pedido copiado para a área de transferência.', icon: 'fa-solid fa-clipboard-check', iconColor: 'text-emerald-500', type: 'success' });
+  };
+
+  // BLOCO 40: cupom REAL apos registrar (pre-venda OU pronta entrega) —
+  // imprime o documento escolhido (NF-e/NFC-e/CUPOM), a forma de pagamento e
+  // o prazo. allowNota so na pronta entrega (pre-venda emite nota na entrega).
+  if (cupomPosRegistro) {
+    return (
+      <div className="fixed inset-0 bg-gray-900 z-[100] flex flex-col">
+        <div className="flex-1 overflow-y-auto">
+          <Cupom
+            sale={cupomPosRegistro}
+            client={client}
+            products={products}
+            onClose={() => { const s = cupomPosRegistro; setCupomPosRegistro(null); onFinish(s); }}
+            allowDelete={false}
+            allowNota={cupomPosRegistro.tipoVenda !== 'PRE_VENDA'}
+            closeLabel="FECHAR"
+          />
+        </div>
+      </div>
+    );
+  }
+
+  // BLOCO 88: a tela RECEIPT_PREVIEW (cupom com defaults ANTES das perguntas)
+  // foi removida — o cupom REAL so existe depois de registrar (cupomPosRegistro).
+  // Toda venda vai primeiro ao PAYMENT (perguntas), depois ao cupom real.
+
+  if (view === 'PRE_PEDIDO_PREVIEW') {
+    return (
+      <div className="fixed inset-0 bg-black/90 z-[150] flex flex-col items-center p-4 overflow-y-auto backdrop-blur-sm">
+        <div className="bg-white w-full max-w-[340px] shadow-2xl flex flex-col animate-in zoom-in-95 duration-300 relative rounded-t-3xl overflow-hidden my-auto">
+          
+          {/* BLOCO 139: seta de voltar em TODAS as telas do PDV — volta ao atendimento SEM perder o rascunho (correção) */}
+          <button onClick={() => setView('CART')} className="absolute top-4 left-4 w-10 h-10 bg-gray-100 text-gray-500 rounded-full flex items-center justify-center active:scale-90 transition-transform z-20 shadow-md" aria-label="Voltar ao atendimento"><i className="fa-solid fa-arrow-left"></i></button>
+          <div className="p-6 bg-white overflow-hidden mt-4">
+            <h3 className="text-center font-black text-xs text-indigo-600 uppercase mb-4 tracking-widest"><i className="fa-solid fa-file-invoice mr-2"></i> Pré-Pedido Rascunho</h3>
+            <div className="font-mono text-[11px] leading-tight text-black bg-white whitespace-pre-wrap break-all select-none border-l-2 border-indigo-100 pl-4">
+              {generatePrePedidoText(printWidth)}
+            </div>
+          </div>
+
+          <div className="bg-gray-100 p-5 flex flex-col gap-3 border-t border-gray-200">
+            {/* BLOCO 111: canal de impressão — Bluetooth (celular) x USB do PC */}
+            <div className="flex bg-gray-200 p-1 rounded-2xl">
+              <button onClick={() => trocarCanal('BT')} className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${canalImpr === 'BT' ? 'bg-white shadow-sm text-indigo-600' : 'text-gray-500'}`}>
+                <i className="fa-brands fa-bluetooth-b mr-1"></i>Bluetooth
+              </button>
+              <button onClick={() => trocarCanal('USB')} className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${canalImpr === 'USB' ? 'bg-white shadow-sm text-violet-600' : 'text-gray-500'}`}>
+                <i className="fa-solid fa-desktop mr-1"></i>USB do PC
+              </button>
+            </div>
+
+            {canalImpr === 'BT' ? (
+              <PrinterSelector accent="indigo" />
+            ) : (
+              <p className="text-[9px] font-bold text-violet-600 bg-violet-50 border border-violet-100 rounded-xl px-3 py-2 leading-snug">
+                <i className="fa-solid fa-circle-info mr-1"></i>A janela de impressão do computador vai abrir — escolha a térmica USB. O navegador memoriza a escolhida.
+              </p>
+            )}
+
+            <div className="flex bg-gray-200 p-1 rounded-2xl mb-1">
+              <button onClick={() => setPrintWidth('56MM')} className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${printWidth === '56MM' ? 'bg-white shadow-sm text-indigo-600' : 'text-gray-500'}`}>56mm</button>
+              <button onClick={() => setPrintWidth('80MM')} className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${printWidth === '80MM' ? 'bg-white shadow-sm text-indigo-600' : 'text-gray-400'}`}>80mm</button>
+            </div>
+            
+            <div className="grid grid-cols-2 gap-2">
+              <button onClick={handlePrintPrePedido} className="bg-indigo-600 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 active:scale-95 text-[10px] uppercase shadow-lg">
+                <i className="fa-solid fa-print"></i> Imprimir
+              </button>
+              <button onClick={handleCopyPrePedido} className="bg-emerald-600 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 active:scale-95 text-[10px] uppercase shadow-lg">
+                <i className="fa-solid fa-copy"></i> Copiar
+              </button>
+            </div>
+
+            <button 
+              onClick={() => {
+                setCart({});
+                setView('CART');
+                setIsPrePedido(false);
+              }} 
+              className="w-full bg-slate-900 text-white font-black py-4 rounded-2xl active:scale-95 text-[10px] uppercase tracking-widest shadow-xl"
+            >
+              VOLTAR AO ATENDIMENTO
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+    <div className="fixed inset-0 bg-gray-50 z-[60] flex flex-col overflow-hidden">
+      <header className="bg-white border-b border-gray-100 p-3 flex flex-col shadow-sm">
+        <div className="flex justify-between items-center mb-3">
+          <button onClick={onCancel} className="w-9 h-9 bg-gray-50 text-gray-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-arrow-left"></i></button>
+          <div className="text-center px-2 flex-1 min-w-0">
+            <p className="text-[9px] text-gray-400 uppercase font-black tracking-tighter">
+              {isPreVenda ? 'Pre-Venda — Pedido p/ Entrega' : isPrePedido ? 'Pré-Pedido Rascunho' : 'Atendimento'}
+            </p>
+            <h2 className="font-black text-xs text-gray-800 uppercase break-words leading-tight">{client.nomeFantasia}</h2>
+            {client.nome && <p className="text-[9px] text-blue-500 font-semibold">{client.nome}</p>} 
+          </div>
+          <button onClick={() => setConfirmModal({ title: 'Zerar Quantidades', message: 'Deseja realmente zerar todas as quantidades do carrinho?', icon: 'fa-solid fa-trash-can', iconColor: 'text-rose-500', onConfirm: () => { setConfirmModal(null); setCart({}); } })} className="w-9 h-9 bg-rose-50 text-rose-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-trash-can text-sm"></i></button>
+        </div>
+
+        <div className="overflow-x-auto flex gap-1 px-0.5 -mx-1" style={{ scrollbarWidth: 'none' }}>
+          {categories.map(cat => {
+            const isVisited = visitedCategoryIds.includes(cat.id);
+            return (
+              <button 
+                key={cat.id}
+                onClick={() => setActiveCategoryId(cat.id)}
+                className={`py-2.5 px-3 rounded-xl text-[10px] font-black uppercase transition-all whitespace-nowrap border relative flex-shrink-0 ${activeCategoryId === cat.id ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-gray-50 text-gray-500 border-gray-200'}`}
+              >
+                {formatCategoryName(cat.name)}
+                {isVisited && activeCategoryId !== cat.id && (
+                  <div className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-emerald-500 rounded-full border-2 border-white shadow-sm"></div>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* BLOCO 122 (TELA 3): busca de produto — o achado da sonda de UX:
+            antes o vendedor girava as abas caçando item. Busca ignora categoria. */}
+        <div className="relative mt-2">
+          <i className="fa-solid fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-300 text-sm"></i>
+          <input
+            type="text"
+            value={buscaProduto}
+            onChange={e => setBuscaProduto(e.target.value)}
+            placeholder="Buscar produto..."
+            className="w-full pl-10 pr-9 py-2.5 bg-gray-50 border border-gray-100 rounded-xl text-[12px] font-bold outline-none focus:ring-2 focus:ring-blue-100"
+          />
+          {buscaProduto && (
+            <button onClick={() => setBuscaProduto('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-300 active:text-gray-500" aria-label="Limpar busca">
+              <i className="fa-solid fa-xmark"></i>
+            </button>
+          )}
+        </div>
+      </header>
+
+      {/* ===== BLOCO 29 (ROTA 2): SELO DO DOCUMENTO (tela 4 escolhe ou van fixa) ===== */}
+      {modoAtivo && (
+        <div className={`w-full px-3 py-2 flex items-center gap-2.5 border-b ${modoAtivo === 'CUPOM' ? 'bg-gray-100 border-gray-200' : 'bg-violet-50 border-violet-200'}`}>
+          <i className={`fa-solid ${modoAtivo === 'CUPOM' ? 'fa-receipt text-gray-500' : modoAtivo === 'NFE' ? 'fa-file-invoice-dollar text-violet-600' : 'fa-file-lines text-violet-600'} text-sm`}></i>
+          <div className="flex-1 min-w-0">
+            <p className={`text-[10px] font-black uppercase tracking-wide ${modoAtivo === 'CUPOM' ? 'text-gray-600' : 'text-violet-700'}`}>
+              {modoAtivo === 'CUPOM' ? 'CUPOM — sai do TOTAL, conta no ESTOQUE 2 (SEM NF)' : modoAtivo === 'NFE' ? 'NF-e — sai do TOTAL, conta no ESTOQUE 1 (COM NF)' : 'NFC-e — sai do TOTAL, conta no ESTOQUE 1 (COM NF)'}
+            </p>
+            <p className={`text-[8px] font-bold ${modoAtivo === 'CUPOM' ? 'text-gray-400' : 'text-violet-400'}`}>{modoAtendimento ? 'Fixado pelo carregamento da van' : 'Documento escolhido na tela 4'} — baixa o Estoque Total e alimenta o contador</p>
+          </div>
+        </div>
+      )}
+      {/* BLOCO 138: o selo "escolher no final do pedido" foi REMOVIDO (regra do dono) */}
+
+      {/* ===== BLOCO 70: SELO DO CLIENTE ESPECIAL GB ===== */}
+      {clienteGB && (
+        <div className="w-full px-3 py-2 flex items-center gap-2.5 border-b bg-amber-50 border-amber-200">
+          <i className="fa-solid fa-star text-amber-500 text-sm"></i>
+          <div className="flex-1 min-w-0">
+            <p className="text-[10px] font-black uppercase tracking-wide text-amber-700">CLIENTE ESPECIAL GB — preço especial ativo</p>
+            <p className="text-[8px] font-bold text-amber-500">Produtos com preço GB entram no valor especial · sem GB segue o preço normal</p>
+          </div>
+        </div>
+      )}
+
+      {clientDebt > 0 && !isPrePedido && !debtBannerMin && (
+        <div className="w-full bg-rose-600 text-white py-1.5 px-2 flex items-center gap-1.5 shadow-md">
+          <button onClick={() => { onCancel(); onNavigateToCredit(); }} className="flex-1 min-w-0 flex items-center gap-2 text-left active:opacity-80">
+            <i className="fa-solid fa-triangle-exclamation text-[11px] shrink-0"></i>
+            <span className="text-[9px] font-black uppercase tracking-wide break-words">
+              {client.nomeFantasia || 'Cliente'}: R$ {clientDebt.toFixed(2)} em aberto ({clientDebtQtd}) — toque para receber
+            </span>
+          </button>
+          <button onClick={() => setDebtBannerMin(true)} title="Minimizar aviso" aria-label="Minimizar aviso de dívida" className="w-9 h-9 shrink-0 rounded-lg bg-white/15 flex items-center justify-center active:scale-90">
+            <i className="fa-solid fa-chevron-up text-[10px]"></i>
+          </button>
+        </div>
+      )}
+      {clientDebt > 0 && !isPrePedido && debtBannerMin && (
+        <div className="w-full flex justify-end px-2 pt-1.5">
+          <button onClick={() => setDebtBannerMin(false)} title="Abrir aviso de dívida" className="bg-rose-600 text-white text-[9px] font-black uppercase px-2 py-1.5 rounded-full shadow flex items-center gap-1 active:scale-95">
+            <i className="fa-solid fa-triangle-exclamation text-[8px]"></i>
+            R$ {clientDebt.toFixed(2)} em aberto
+          </button>
+        </div>
+      )}
+
+      {/* BLOCO 41: o padding acompanha o rodapé compacto (cresce só quando os
+          campos de troca/observação estão abertos) — a grade mostra mais produtos */}
+      <div className="flex-1 overflow-y-auto p-2 space-y-1.5" style={{ paddingBottom: `${(isTrocaActive ? 100 : 0) + (isObsActive ? 70 : 0) + (hasMarginViolation ? 56 : 0) + ((!allCategoriesVisited && !sellFromCentral) ? 44 : 0) + 210}px` }}>
+        {produtosNaTela.map(p => { 
+          const item = cart[p.id];
+          const cargaOriginal = saldoFonte(p);
+          const minPrice = p.precoMinimo || 0;
+          // BLOCO 70: preço especial GB do produto (0 = sem GB) e piso de edição
+          const precoGB = precoEspecialGbDe(p);
+          const pisoCard = precoGB > 0 ? precoGB : minPrice;
+          // BLOCO 24: com PREÇO TABELA ligado, produto com mínimo cadastrado entra/continua no mínimo
+          // BLOCO 70: cliente ESPECIAL GB com preço GB > 0 = preço base do item é o GB
+          const precoBase = precoGB > 0 ? precoGB : (precoTabelaAtivo && minPrice > 0 ? minPrice : (p.precoVenda ?? 0));
+          const itemPrice = item ? parseFloat(item.precoVenda) || 0 : p.precoVenda;
+          // Só considera violação se tem piso cadastrado (> 0)
+          // BLOCO 73: cliente ESPECIAL GB NÃO tem preço mínimo — nem destaque
+          // vermelho, nem hint 'Mínimo: R$' (o mínimo não faz parte da regra;
+          // o piso que vale é o PREÇO GB, garantido no blur pelo Bloco 70)
+          const isBelowMin = margemMinimaAtiva && !clienteGB && item && item.quantidade > 0 && pisoCard > 0 && itemPrice < pisoCard && !isPrePedido;
+          // BLOCO 24: preço no mínimo pela tabela = destaque violeta (fora da regra GB — mínimo não se aplica ao especial)
+          const isPrecoTabela = !clienteGB && precoTabelaAtivo && item && item.quantidade > 0 && minPrice > 0 && itemPrice === minPrice;
+          // BLOCO 70: item no PREÇO ESPECIAL GB = destaque âmbar
+          const isPrecoGB = clienteGB && precoGB > 0 && item && item.quantidade > 0 && itemPrice === precoGB;
+          const hasBeenSold = soldProductIds.has(p.id);
+
+          return (
+            <div key={p.id} className={`bg-white p-2.5 rounded-2xl border flex flex-col gap-1 ${item?.quantidade ? 'border-blue-200 bg-blue-50/30' : 'border-gray-100'}`}>
+              <div className="flex items-center gap-3 w-full">
+                <div className="flex-1 min-w-0">
+                  <h3 className="font-bold text-gray-800 text-[11px] leading-tight uppercase break-words flex items-center gap-1.5">
+                    {hasBeenSold && (
+                      <i 
+                        className="fa-solid fa-check text-[11px] text-emerald-500 flex-shrink-0" 
+                        title="Este produto já foi vendido para este cliente"
+                      />
+                    )}
+                    {p.nome}
+                  </h3> 
+                  <div className="flex flex-wrap items-center gap-2 mt-1">
+                     <div className={`flex items-center gap-1.5 bg-white border px-2 py-0.5 rounded-lg ${isBelowMin ? 'border-rose-500 bg-rose-50' : 'border-gray-100'}`}>
+                        <span className={`text-[9px] font-black ${isBelowMin ? 'text-rose-500' : 'text-gray-300'}`}>R$</span>
+                        <input 
+                          type="text" 
+                          value={item?.precoVenda ?? precoBase.toFixed(2)} 
+                          onChange={(e) => handlePriceChange(p.id, e.target.value)} 
+                          onBlur={(e) => handlePriceBlur(p.id, e.target.value)}
+                          className={`w-16 bg-transparent border-none p-0 text-[11px] font-black outline-none ${isBelowMin ? 'text-rose-600' : (isPrecoGB ? 'text-amber-600' : (isPrecoTabela ? 'text-violet-600' : 'text-emerald-600'))}`} 
+                        />
+                        {/* SÓ mostra preço mínimo se cadastrado (> 0) - NUNCA mostra 0 */}
+                        {/* BLOCO 73: cliente ESPECIAL GB não mostra mínimo — não faz parte da regra */}
+                        {!clienteGB && p.precoMinimo && p.precoMinimo > 0 && (
+                          <span className="text-[10px] font-bold text-rose-600 ml-1">
+                            {p.precoMinimo.toFixed(2)}
+                          </span>
+                        )}
+                        {/* BLOCO 70: selo do PREÇO ESPECIAL GB — só para cliente ESPECIAL GB com preço GB cadastrado */}
+                        {clienteGB && precoGB > 0 && (
+                          <span className="text-[9px] font-black text-amber-600 bg-amber-100 border border-amber-200 rounded px-1 py-0.5 ml-1" title="Preço especial GB deste cliente">
+                            GB {precoGB.toFixed(2)}
+                          </span>
+                        )}
+                     </div>
+                     {/* ICONE DE ESTOQUE CENTRAL (PRE-VENDA / PRE-PEDIDO) - MAIS CLEAN */}
+                     {sellFromCentral && (
+                       <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded-lg border shadow-inner whitespace-nowrap ${isPreVenda ? 'bg-emerald-50 border-emerald-100' : 'bg-indigo-50 border-indigo-100'}`} title="Estoque Central">
+                         <i className={`fa-solid fa-warehouse text-[10px] ${isPreVenda ? 'text-emerald-400' : 'text-indigo-400'}`}></i>
+                         <span className={`text-[10px] font-black ${isPreVenda ? 'text-emerald-600' : 'text-indigo-600'}`}>{cargaOriginal - (item?.quantidade ?? 0)}</span>
+                       </div>
+                     )}
+                     {!sellFromCentral && (
+                       <span className="text-[9px] font-bold uppercase text-blue-500">
+                         {cargaOriginal - (item?.quantidade ?? 0)} UN
+                       </span>
+                     )}
+                  </div>
+                </div>
+                <div className="flex items-center bg-white rounded-xl p-0.5 border border-gray-100 shadow-sm">
+                  <button onClick={() => updateCart(p.id, -1, precoBase)} className="w-9 h-9 text-gray-400 active:scale-90 flex items-center justify-center"><i className="fa-solid fa-minus text-[10px]"></i></button> 
+                  <span className="font-black text-xs min-w-[22px] text-center">{item?.quantidade ?? 0}</span> 
+                  <button onClick={() => updateCart(p.id, 1, precoBase)} className="w-9 h-9 text-blue-600 active:scale-90 flex items-center justify-center"><i className="fa-solid fa-plus text-[10px]"></i></button> 
+                </div>
+              </div>
+              {isBelowMin && (
+                <p className="text-[9px] text-rose-600 font-black uppercase mt-1 animate-pulse">
+                  <i className="fa-solid fa-circle-exclamation mr-1"></i> Mínimo: R$ {pisoCard.toFixed(2)}{clienteGB && precoGB > 0 ? ' (GB)' : ''}
+                </p>
+              )}
+            </div>
+          );
+        })}
+        {produtosNaTela.length === 0 && (
+          <div className="py-20 text-center opacity-40 flex flex-col items-center gap-4">
+            <i className="fa-solid fa-box-open text-5xl"></i>
+            {buscaProduto ? (
+              <p className="font-black uppercase tracking-widest text-[10px]">Nada encontrado para "{buscaProduto}".</p>
+            ) : clienteGB ? (
+              <>
+                <p className="font-black uppercase tracking-widest text-[10px]">Nenhum produto com Preço Especial GB aqui.</p>
+                <p className="text-[9px] font-bold text-gray-400 uppercase leading-snug px-6">No cliente especial só aparece o que tem preço GB cadastrado — peça ao admin para atualizar.</p>
+              </>
+            ) : (
+              <p className="font-black uppercase tracking-widest text-[10px]">Nenhum produto desta categoria.</p>
+            )}
+          </div>
+        )}
+      </div>
+
+      <footer className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 p-4 pb-[calc(2rem+env(safe-area-inset-bottom))] space-y-3 shadow-[0_-10px_20px_rgba(0,0,0,0.05)] max-w-lg mx-auto z-[70]">
+        {!allCategoriesVisited && !sellFromCentral && (
+          <div className="bg-amber-100 text-amber-700 p-2 rounded-xl text-center font-black text-[8px] uppercase tracking-widest animate-in fade-in duration-300">
+            <i className="fa-solid fa-eye mr-1"></i> Visualize todas as abas para liberar o cupom ({visitedCategoryIds.length}/{categories.length})
+          </div>
+        )}
+        
+        {/* Banner visual de violação */}
+        {hasMarginViolation && (
+          <div className="bg-rose-600 text-white p-3 rounded-xl text-center font-black text-[9px] uppercase tracking-widest animate-pulse flex items-center justify-center gap-2">
+            <i className="fa-solid fa-circle-exclamation text-sm"></i>
+            Venda Bloqueada: Preço abaixo do mínimo!
+          </div>
+        )}
+
+        {/* BLOCO 41 (regra do dono): switches em UMA linha compacta — não comem
+            o espaço da grade de produtos. Os campos (desconto/trocas/observação)
+            só aparecem quando o switch deles está ligado. */}
+        <div className="flex items-center gap-x-4 gap-y-1 flex-wrap px-1 py-1.5 bg-gray-50/60 rounded-xl">
+          <SwitchChip ligado={precoTabelaAtivo} onClick={() => aplicarPrecoTabela(!precoTabelaAtivo)} cor="violet" label="Tabela" title="Preço tabela: aplica o preço mínimo cadastrado em todos os produtos do carrinho" />
+          {precoTabelaAtivo && (
+            <span className="text-[8px] font-black text-violet-600 uppercase tracking-widest animate-pulse"><i className="fa-solid fa-tag mr-1"></i>todos no mínimo</span>
+          )}
+          <SwitchChip ligado={isTrocaActive} onClick={() => setIsTrocaActive(!isTrocaActive)} cor="orange" label="Troca/Desc." title="Desconto por troca + anotação de trocas que sai no cupom" />
+          <SwitchChip ligado={isObsActive} onClick={() => setIsObsActive(!isObsActive)} cor="teal" label="Obs." title="Observação do pedido — sai impressa no cupom (bloco OBSERVACAO)" />
+          {!isPreVenda && (
+            <SwitchChip ligado={isPrePedido} onClick={() => { setIsPrePedido(!isPrePedido); setCart({}); }} cor="indigo" label="Pré-Pedido" title="Rascunho de pré-pedido (vende do estoque central)" />
+          )}
+        </div>
+
+        {/* BLOCO 41/98: campos abrem SÓ quando o switch correspondente está ligado */}
+        {isTrocaActive && (
+          <div className="px-1 relative space-y-1.5">
+            <div className="flex items-center gap-2">
+              <span className="text-[8px] font-black text-gray-400 uppercase shrink-0">Desconto</span>
+              <input type="number" value={valorTroca} onChange={e => setValorTroca(e.target.value)} placeholder="R$ 0.00" className="flex-1 bg-white border border-orange-100 rounded-lg text-[11px] font-black text-orange-600 p-2 text-right outline-none" />
+            </div>
+            <div className="bg-orange-50/70 border border-orange-100 rounded-xl p-2.5 space-y-2">
+              <div className="relative">
+                <p className="text-[8px] font-black text-orange-400 uppercase mb-1"><i className="fa-solid fa-right-left mr-1"></i>Trocas (1 por linha — sai itemizado no cupom)</p>
+                <textarea
+                  value={trocasTexto}
+                  onChange={e => { setTrocasTexto(e.target.value); setTrocasSugestao(true); }}
+                  onFocus={() => setTrocasSugestao(true)}
+                  rows={3} maxLength={400}
+                  placeholder={'1 Lays sour cream 62g\n2 Toddynho 200ml'}
+                  className="w-full bg-white border border-orange-100 rounded-xl text-[11px] font-bold text-orange-800 px-3 py-2 outline-none focus:ring-2 focus:ring-orange-100 resize-none leading-relaxed"
+                />
+                {trocasSugestao && trocasSugestoes.length > 0 && (
+                  <div className="absolute bottom-full left-1 right-4 mb-1 bg-white border border-gray-100 rounded-xl shadow-lg overflow-hidden z-20">
+                    {trocasSugestoes.map(p => (
+                      <button key={p.id} onClick={() => addSugestaoTroca(p.nome)} className="w-full text-left px-3 py-2.5 text-[11px] font-bold text-gray-700 hover:bg-orange-50 active:bg-orange-100 flex items-center gap-2">
+                        <i className="fa-solid fa-plus text-orange-400 text-[9px] shrink-0"></i>
+                        <span className="flex-1 break-words">{p.nome}</span>
+                        {/* BLOCO 100: a sugestão já mostra o CUSTO do produto */}
+                        <span className="text-[9px] font-black text-orange-500 shrink-0">custo R$ {(Number(p.precoCusto) || 0).toFixed(2).replace('.', ',')}</span>
+                      </button>
+                    ))}
+                    <p className="px-3 py-1.5 text-[8px] font-bold text-gray-300 uppercase bg-gray-50">Toque para adicionar — um item por linha</p>
+                  </div>
+                )}
+              </div>
+              {/* BLOCO 100: resumo do CÁLCULO — o app soma o custo dos produtos
+                  reconhecidos e dá o valor final sozinho */}
+              {trocasTexto.trim() && (
+                <p className={`text-[9px] font-black uppercase leading-snug ${trocasCalculo.reconhecidos > 0 ? 'text-orange-600' : 'text-orange-400'}`}>
+                  <i className={`fa-solid ${trocasCalculo.reconhecidos > 0 ? 'fa-calculator' : 'fa-circle-question'} mr-1`}></i>
+                  {trocasCalculo.reconhecidos > 0
+                    ? `${trocasCalculo.reconhecidos} de ${trocasCalculo.qtdLinhas} linha(s) reconhecida(s) — custo total: R$ ${trocasCalculo.total.toFixed(2).replace('.', ',')}`
+                    : 'Nenhum produto reconhecido — escreva o valor de custo manualmente.'}
+                </p>
+              )}
+              <div className="flex items-center gap-2">
+                <span className="text-[8px] font-black text-orange-400 uppercase shrink-0 leading-tight">Valor<br />(custo)</span>
+                <input
+                  type="text" inputMode="decimal"
+                  value={trocasValorCusto}
+                  onChange={e => setTrocasValorCusto(e.target.value)}
+                  placeholder="R$ 0,00"
+                  className="flex-1 bg-white border border-orange-100 rounded-lg text-[11px] font-black text-orange-700 p-2 text-right outline-none focus:ring-2 focus:ring-orange-100"
+                />
+                {trocasCalculo.total > 0 && (
+                  <span className="text-[9px] font-black uppercase px-1.5 py-1 rounded-md bg-orange-500 text-white shrink-0" title="Valor calculado pelo custo dos produtos reconhecidos">auto</span>
+                )}
+              </div>
+              <p className="text-[8px] font-semibold text-orange-400 leading-snug">O valor é em PREÇO DE CUSTO e é calculado sozinho pelos produtos reconhecidos — na entrega levamos produtos que fechem esse valor (ex.: trocas de R$ 30 de custo = R$ 30 em produtos).</p>
+            </div>
+          </div>
+        )}
+
+        {isObsActive && (
+          <div className="px-1">
+            <textarea
+              value={obsTexto}
+              onChange={e => setObsTexto(e.target.value)}
+              rows={2}
+              placeholder="Observação do pedido (sai impressa no cupom): ex. entregar na porta dos fundos"
+              className="w-full bg-white border border-teal-100 rounded-xl text-[11px] font-bold text-teal-700 px-3 py-2 outline-none focus:ring-2 focus:ring-teal-100 resize-none"
+            />
+          </div>
+        )}
+
+        <div className="flex justify-between items-end px-1">
+          <div>
+            <p className="text-[9px] font-black text-gray-400 uppercase mb-0.5">
+              {isPreVenda ? 'Total do Pedido' : isPrePedido ? 'Total Rascunho' : 'Total Líquido'}
+            </p>
+            <p className="text-xl font-black text-gray-800">R$ {total.toFixed(2)}</p>
+          </div>
+          <button
+            onClick={() => {
+              if (isPrePedido) {
+                setView('PRE_PEDIDO_PREVIEW');
+              } else {
+                // BLOCO 122 (fluxo de 8 telas do dono): TELA 4 = documento —
+                // quando já vem fixado (van SEM NF), cai direto na condição.
+                setView(docEscolhido ? 'CONDICAO' : 'DOC');
+              }
+            }}
+            disabled={(total <= 0 && getOrderedItems().length === 0) || hasMarginViolation || (!allCategoriesVisited && !sellFromCentral)}
+            className={`px-6 py-4 rounded-2xl font-black uppercase text-xs ${(total > 0 || getOrderedItems().length > 0) && !hasMarginViolation && (allCategoriesVisited || sellFromCentral) ? (isPreVenda ? 'bg-emerald-600 text-white shadow-lg' : isPrePedido ? 'bg-indigo-600 text-white shadow-lg' : 'bg-blue-600 text-white shadow-lg') : 'bg-gray-200 text-gray-400'}`}
+          >
+            {isPrePedido ? 'Gerar Rascunho' : 'Continuar'}
+          </button>
+        </div>
+      </footer>
+
+
+    </div>
+
+    {/* ============================================================
+        BLOCO 122 — FLUXO DE 8 TELAS DO DONO
+        TELA 4 = DOC · TELA 5 = CONDICAO · TELA 6 = FORMA ·
+        TELA 7 = cupom/resumo (Cupom conferência abaixo) ·
+        TELA 8 = FINALIZAR (documento verde) · SUCESSO = conclusão.
+        Telas cheias sobre o carrinho — voltar em TODAS, carrinho intocado.
+        ============================================================ */}
+    {view === 'DOC' && (
+      <div className="fixed inset-0 bg-gray-50 z-[120] flex flex-col overflow-hidden">
+        <header className="bg-white border-b border-gray-100 p-3 flex items-center gap-3 shadow-sm">
+          <button onClick={() => setView('CART')} className="w-9 h-9 bg-gray-50 text-gray-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-arrow-left"></i></button>
+          <div className="flex-1 min-w-0 text-center">
+            <p className="text-[9px] text-violet-400 uppercase font-black tracking-tighter">Tela 4 de 8 — Documento</p>
+            <h2 className="font-black text-xs text-gray-800 uppercase truncate">Que documento sai?</h2>
+          </div>
+          <div className="w-9 h-9"></div>
+        </header>
+        <div className="flex-1 overflow-y-auto p-4 space-y-3 max-w-lg w-full mx-auto">
+          <div className="bg-white p-4 rounded-2xl border border-gray-100 text-center">
+            <p className="text-2xl font-black text-gray-800">R$ {total.toFixed(2)}</p>
+            <p className="text-[9px] font-black text-gray-400 uppercase mt-1 break-words">{getOrderedItems().length} item(ns) · {client.nomeFantasia}</p>
+          </div>
+
+          {/* SÓ CUPOM — o principal (regra do Bloco 35) */}
+          <button onClick={() => { setDocEscolhido('CUPOM'); setView('CONDICAO'); }}
+            className="w-full py-7 rounded-3xl bg-gradient-to-br from-gray-900 to-gray-600 text-white shadow-lg active:scale-[0.98] transition-transform text-center">
+            <i className="fa-solid fa-receipt text-2xl block mb-2"></i>
+            <span className="text-sm font-black uppercase tracking-widest block">Só cupom</span>
+            <span className="block text-[9px] font-bold text-gray-300 mt-1">Cupom não fiscal — nada na SEFAZ</span>
+          </button>
+
+          {/* NF-e — só com CNPJ + email no cadastro (BLOCO 77) */}
+          <div className="rounded-3xl bg-white border border-gray-100 p-3.5 space-y-2">
+            <div className="flex items-center gap-2">
+              <i className="fa-solid fa-file-invoice-dollar text-violet-600"></i>
+              <p className="text-[11px] font-black text-gray-700 uppercase flex-1">NF-e — nota para empresa</p>
+            </div>
+            {/* BLOCO 139 (regra do dono): o card "Falta completar o cadastro" com a
+                frase da nota batida no SISTEMA EXTERNO SAIU — a nota é batida pelo
+                próprio app (Focus). O botão fica SEMPRE disponível; sem CNPJ/email
+                no cadastro vira só um aviso discreto (nada bloqueia). */}
+            <button onClick={() => { setDocEscolhido('NFE'); setView('CONDICAO'); }}
+              className="w-full py-4 rounded-2xl bg-violet-600 text-white text-xs font-black uppercase shadow-md active:scale-95 flex items-center justify-center">
+              <i className="fa-solid fa-file-invoice-dollar mr-2"></i>Escolher NF-e
+            </button>
+            {!clienteAptoNfe(client) && (
+              <div className="rounded-xl bg-gray-50 border border-gray-100 p-2.5">
+                <p className="text-[8px] font-bold text-gray-500 leading-snug">Sem {faltantesNfe.join(' + ')} no cadastro — a NF-e da empresa pode rejeitar na SEFAZ. Cadastre depois e emita pela janela fiscal.</p>
+                {onCompletarCadastro && (
+                  <button onClick={() => onCompletarCadastro(client)}
+                    className="w-full mt-1.5 bg-gray-100 text-gray-600 text-[9px] font-black uppercase py-2.5 rounded-lg active:scale-95">
+                    <i className="fa-solid fa-circle-plus mr-1.5"></i>Completar cadastro agora
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* NFC-e — CPF opcional */}
+          <div className="rounded-3xl bg-white border border-gray-100 p-3.5 space-y-2">
+            <div className="flex items-center gap-2">
+              <i className="fa-solid fa-file-lines text-blue-500"></i>
+              <p className="text-[11px] font-black text-gray-700 uppercase flex-1">NFC-e — consumidor final</p>
+            </div>
+            <input value={nfcCpfDoc} onChange={e => setNfcCpfDoc(mascararCpf(e.target.value))} placeholder="CPF na nota (opcional) — 000.000.000-00" inputMode="numeric"
+              className="w-full p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-black text-center outline-none" />
+            <button onClick={() => { setDocEscolhido('NFCE'); setView('CONDICAO'); }}
+              className="w-full py-4 rounded-2xl bg-slate-700 text-white text-xs font-black uppercase shadow-md active:scale-95 flex items-center justify-center">
+              <i className="fa-solid fa-file-lines mr-2"></i>Escolher NFC-e
+            </button>
+            <p className="text-[8px] font-bold text-gray-400 leading-snug">Com CPF → nota identificada. Sem CPF → anônima. Pode mudar até a tela final.</p>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {view === 'CONDICAO' && (
+      <div className="fixed inset-0 bg-gray-50 z-[120] flex flex-col overflow-hidden">
+        <header className="bg-white border-b border-gray-100 p-3 flex items-center gap-3 shadow-sm">
+          <button onClick={() => setView(modoAtendimento ? 'CART' : 'DOC')} className="w-9 h-9 bg-gray-50 text-gray-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-arrow-left"></i></button>
+          <div className="flex-1 min-w-0 text-center">
+            <p className="text-[9px] text-emerald-400 uppercase font-black tracking-tighter">Tela 5 de 8 — Pagamento</p>
+            <h2 className="font-black text-xs text-gray-800 uppercase truncate">À vista ou a prazo?</h2>
+          </div>
+          <div className="w-9 h-9"></div>
+        </header>
+        <div className="flex-1 overflow-y-auto p-4 space-y-3 max-w-lg w-full mx-auto">
+          <div className="bg-white p-4 rounded-2xl border border-gray-100 text-center">
+            <p className="text-2xl font-black text-gray-800">R$ {total.toFixed(2)}</p>
+            <p className="text-[9px] font-black text-gray-400 uppercase mt-1">
+              {docEscolhido === 'NFE' ? 'Documento: NF-e' : docEscolhido === 'NFCE' ? 'Documento: NFC-e' : 'Documento: cupom não fiscal'}
+              {clientDebt > 0 && !isPrePedido ? ` · dívida: R$ ${clientDebt.toFixed(2)}` : ''}
+            </p>
+          </div>
+
+          {docEscolhido === 'NFE' && (
+            <div className="bg-violet-50 border border-violet-200 rounded-2xl p-3">
+              <p className="text-[9px] font-black text-violet-700 uppercase leading-snug"><i className="fa-solid fa-circle-info mr-1"></i>NF-e a prazo: só Boleto ou Cheque — regra da SEFAZ.</p>
+            </div>
+          )}
+
+          <button onClick={() => { setCondicaoDoc('AVISTA'); if (formaDoc && formaDoc !== 'DINHEIRO' && formaDoc !== 'PIX' && formaDoc !== 'MISTO') setFormaDoc('DINHEIRO'); setView('FORMA'); }}
+            className="w-full py-7 rounded-3xl bg-gradient-to-br from-emerald-600 to-teal-600 text-white shadow-lg active:scale-[0.98] transition-transform text-center">
+            <i className="fa-solid fa-money-bill-wave text-2xl block mb-2"></i>
+            <span className="text-sm font-black uppercase tracking-widest block">À vista</span>
+            <span className="block text-[9px] font-bold text-emerald-100 mt-1">{isPreVenda ? 'Entregador recebe na entrega' : 'Cliente paga agora com você'}</span>
+          </button>
+
+          <button onClick={() => { setCondicaoDoc('APRAZO'); if (docEscolhido === 'NFE' && formaDoc && formaDoc !== 'BOLETO' && formaDoc !== 'CHEQUE') setFormaDoc('BOLETO'); setView('FORMA'); }}
+            className="w-full py-7 rounded-3xl bg-gradient-to-br from-indigo-600 to-blue-600 text-white shadow-lg active:scale-[0.98] transition-transform text-center">
+            <i className="fa-regular fa-calendar text-2xl block mb-2"></i>
+            <span className="text-sm font-black uppercase tracking-widest block">A prazo</span>
+            <span className="block text-[9px] font-bold text-indigo-100 mt-1">Você cobra na data combinada</span>
+          </button>
+        </div>
+      </div>
+    )}
+
+    {view === 'FORMA' && (
+      <div className="fixed inset-0 bg-gray-50 z-[120] flex flex-col overflow-hidden">
+        <header className="bg-white border-b border-gray-100 p-3 flex items-center gap-3 shadow-sm">
+          <button onClick={() => setView('CONDICAO')} className="w-9 h-9 bg-gray-50 text-gray-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-arrow-left"></i></button>
+          <div className="flex-1 min-w-0 text-center">
+            <p className="text-[9px] text-blue-400 uppercase font-black tracking-tighter">Tela 6 de 8 — Forma</p>
+            <h2 className="font-black text-xs text-gray-800 uppercase truncate">{condicaoDoc === 'AVISTA' ? 'Como o cliente vai pagar?' : 'Prazo combinado'}</h2>
+          </div>
+          <div className="w-9 h-9"></div>
+        </header>
+        <div className="flex-1 overflow-y-auto p-4 space-y-3 max-w-lg w-full mx-auto">
+          <div className="bg-white p-4 rounded-2xl border border-gray-100 text-center">
+            <p className="text-2xl font-black text-gray-800">R$ {total.toFixed(2)}</p>
+            <p className={`text-[9px] font-black uppercase mt-1 ${clientDebt > 0 && !isPrePedido ? 'text-rose-500' : 'text-gray-400'}`}>
+              {clientDebt > 0 && !isPrePedido ? `Atenção: R$ ${clientDebt.toFixed(2)} em aberto (${clientDebtQtd})` : (condicaoDoc === 'AVISTA' ? 'À vista' : 'A prazo')}
+            </p>
+          </div>
+
+          {/* PRÉ-VENDA À VISTA: ninguém recebe na visita (BLOCO 39) */}
+          {condicaoDoc === 'AVISTA' && isPreVenda && (
+            <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 text-center">
+              <i className="fa-solid fa-truck-fast text-emerald-500 text-lg"></i>
+              <p className="text-[10px] font-black text-emerald-700 uppercase mt-1">Entregador recebe na entrega — nada a receber agora</p>
+              <p className="text-[9px] text-emerald-600/70 font-semibold mt-0.5">Escolha com o cliente COMO ele vai pagar na entrega:</p>
+            </div>
+          )}
+
+          {condicaoDoc === 'AVISTA' && (
+            <>
+              <div className="grid grid-cols-3 gap-2">
+                {(['DINHEIRO', 'PIX', 'MISTO'] as const).map(f => (
+                  <button key={f} disabled={isPreVenda && f === 'MISTO'}
+                    onClick={() => setFormaDoc(f)}
+                    className={`py-4 rounded-2xl text-[10px] font-black uppercase border-2 transition-all ${formaDoc === f ? 'bg-emerald-600 text-white border-emerald-600 shadow-md' : 'bg-white border-gray-100 text-gray-500'} disabled:opacity-40`}>
+                    {f === 'DINHEIRO' ? 'Dinheiro' : f === 'PIX' ? 'Pix' : 'Misto'}
+                  </button>
+                ))}
+              </div>
+              {isPreVenda && <p className="text-[8px] font-bold text-gray-400 text-center leading-snug">Misto na entrega: o entregador informa na hora (dinheiro + Pix).</p>}
+              {/* BLOCO 139 (regra do dono): aqui só diz COMO o cliente vai pagar —
+                  o recebimento REAL é confirmado depois, na tela de imprimir o cupom/nota */}
+              {!isPreVenda && (
+                <p className="text-[8px] font-black text-blue-500 text-center leading-snug bg-blue-50 border border-blue-100 rounded-xl px-3 py-2"><i className="fa-solid fa-circle-info mr-1"></i>Aqui você só diz COMO o cliente vai pagar — o recebimento real é confirmado na tela de imprimir o cupom/nota.</p>
+              )}
+
+              {/* DINHEIRO */}
+              {formaDoc === 'DINHEIRO' && !isPreVenda && (
+                <div className="bg-white rounded-3xl border border-gray-100 p-4 space-y-3">
+                  <label className="text-[9px] font-black text-gray-400 uppercase">Valor recebido R$</label>
+                  <input type="number" inputMode="decimal" value={valorRecebido} onChange={e => setValorRecebido(e.target.value)} placeholder="0.00"
+                    className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-2xl font-black text-center outline-none" />
+                  <div className="grid grid-cols-3 gap-2">
+                    {[50, 100, 200].map(v => (
+                      <button key={v} onClick={() => setValorRecebido(String(v))} className="py-2.5 rounded-xl bg-gray-50 border border-gray-100 text-[10px] font-black text-gray-600 active:scale-95">R$ {v}</button>
+                    ))}
+                  </div>
+                  {(parseFloat(valorRecebido) || 0) > 0 && (parseFloat(valorRecebido) || 0) < total && (
+                    <p className="text-[9px] font-black text-rose-500 uppercase text-center">Faltam R$ {(total - (parseFloat(valorRecebido) || 0)).toFixed(2)} para fechar</p>
+                  )}
+                  {(parseFloat(valorRecebido) || 0) > total && (
+                    <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100 text-center">
+                      <p className="text-[10px] font-black text-emerald-600 uppercase mb-1">Troco a devolver</p>
+                      <p className="text-2xl font-black text-emerald-700">R$ {troco.toFixed(2)}</p>
+                    </div>
+                  )}
+                </div>
+              )}
+              {formaDoc === 'DINHEIRO' && isPreVenda && (
+                <div className="bg-white rounded-3xl border border-gray-100 p-4 text-center">
+                  <i className="fa-solid fa-hand-holding-dollar text-emerald-500 text-lg"></i>
+                  <p className="text-[10px] font-black text-emerald-700 uppercase mt-1">Entregador cobra R$ {total.toFixed(2)} em DINHEIRO na entrega</p>
+                </div>
+              )}
+
+              {/* PIX */}
+              {formaDoc === 'PIX' && !isPreVenda && (
+                <div className="bg-white rounded-3xl border border-gray-100 p-4 space-y-3">
+                  <p className="text-[9px] font-black text-gray-400 uppercase text-center">Conta para registrar (anotação da venda)</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button onClick={() => setPixSlotDoc(1)} className={`p-3 rounded-xl border text-[10px] font-black uppercase ${pixSlotDoc === 1 ? 'border-teal-600 bg-teal-50 text-teal-600' : 'border-gray-100 text-gray-400'}`}>{pix1Name}</button>
+                    <button onClick={() => setPixSlotDoc(2)} className={`p-3 rounded-xl border text-[10px] font-black uppercase ${pixSlotDoc === 2 ? 'border-teal-600 bg-teal-50 text-teal-600' : 'border-gray-100 text-gray-400'}`}>{pix2Name}</button>
+                  </div>
+                  <div className="bg-teal-50/60 p-4 rounded-2xl flex flex-col items-center border border-teal-100">
+                    <p className="text-[8px] font-black text-teal-500 uppercase mb-1">PIX — QR com o valor da venda</p>
+                    <p className="text-2xl font-black text-teal-700 mb-2">R$ {total.toFixed(2)}</p>
+                    <div className="w-44 h-44 bg-white rounded-xl flex items-center justify-center border border-gray-200 overflow-hidden shadow-inner">
+                      {pixGerado ? (
+                        <img src={pixGerado.qrDataUrl} alt="QR Pix com o valor da venda" className="w-full h-full object-contain" />
+                      ) : pixFalhou ? (
+                        pixSlotDoc === 1
+                          ? (pix1Code ? <img src={pix1Code} className="w-full h-full object-contain" /> : <i className="fa-solid fa-qrcode text-gray-200 text-3xl"></i>)
+                          : (pix2Code ? <img src={pix2Code} className="w-full h-full object-contain" /> : <i className="fa-solid fa-qrcode text-gray-200 text-3xl"></i>)
+                      ) : (
+                        <i className="fa-solid fa-spinner fa-spin text-teal-300 text-3xl"></i>
+                      )}
+                    </div>
+                    {pixGerado ? (
+                      <>
+                        <p className="text-[9px] font-bold text-gray-400 mt-2 text-center leading-snug">Chave Pix das Configurações: <span className="font-black text-gray-600 break-all">{pixGerado.chaveFormatada}</span></p>
+                        <button
+                          onClick={() => { navigator.clipboard?.writeText(pixGerado.payload).then(() => setAppModal({ title: 'Pix copiado', message: 'Código Copia e Cola na área de transferência — o cliente cola no app do banco e o valor já vem preenchido.', icon: 'fa-solid fa-copy', iconColor: 'text-teal-500', type: 'success' })).catch(() => {}); }}
+                          className="mt-2 px-4 py-2.5 rounded-xl bg-teal-600 text-white text-[9px] font-black uppercase active:scale-95 shadow"
+                        >
+                          <i className="fa-solid fa-copy mr-1"></i>Copiar código Pix (copia e cola)
+                        </button>
+                      </>
+                    ) : pixFalhou ? (
+                      <p className="text-[8px] font-bold text-rose-400 mt-2 text-center leading-snug">Não deu para gerar o QR com valor — mostre o QR fixo do banco (acima) e confira o valor com o cliente.</p>
+                    ) : (
+                      <p className="text-[8px] font-bold text-teal-400 mt-2">Gerando QR com o valor da venda...</p>
+                    )}
+                  </div>
+                </div>
+              )}
+              {formaDoc === 'PIX' && isPreVenda && (
+                <div className="bg-white rounded-3xl border border-gray-100 p-4 text-center">
+                  <i className="fa-solid fa-qrcode text-teal-500 text-lg"></i>
+                  <p className="text-[10px] font-black text-teal-700 uppercase mt-1">Entregador cobra R$ {total.toFixed(2)} via PIX na entrega (com foto do comprovante)</p>
+                </div>
+              )}
+
+              {/* MISTO */}
+              {formaDoc === 'MISTO' && !isPreVenda && (
+                <div className="bg-white rounded-3xl border border-gray-100 p-4 space-y-3">
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-black text-gray-400 uppercase">Dinheiro R$</label>
+                    <input type="number" inputMode="decimal" value={mistoDinDoc} onChange={e => setMistoDinDoc(e.target.value)} placeholder="0.00" className="w-full p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-lg font-black text-center outline-none" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-black text-gray-400 uppercase">Pix R$</label>
+                    <input type="number" inputMode="decimal" value={mistoPixDoc} onChange={e => setMistoPixDoc(e.target.value)} placeholder="0.00" className="w-full p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-lg font-black text-center outline-none" />
+                  </div>
+                  {((parseFloat(mistoDinDoc) || 0) + (parseFloat(mistoPixDoc) || 0)) > 0 && (() => {
+                    const soma = (parseFloat(mistoDinDoc) || 0) + (parseFloat(mistoPixDoc) || 0);
+                    return (
+                      <p className={`text-[10px] font-black uppercase text-center ${soma + 0.001 >= total ? 'text-emerald-600' : 'text-amber-500'}`}>
+                        {soma + 0.001 >= total ? 'FECHA O TOTAL ✓' : `Falta: R$ ${(total - soma).toFixed(2)}`}
+                      </p>
+                    );
+                  })()}
+                </div>
+              )}
+            </>
+          )}
+
+          {condicaoDoc === 'APRAZO' && (
+            <div className="bg-white rounded-3xl border border-gray-100 p-4 space-y-3">
+              <p className="text-[9px] font-black text-gray-400 uppercase text-center">Forma do prazo</p>
+              <div className="grid grid-cols-2 gap-2">
+                {(['BOLETO', 'CHEQUE', ...(docEscolhido === 'NFE' ? [] : ['DINHEIRO_DATA', 'PIX_DATA'])] as Array<'BOLETO' | 'CHEQUE' | 'DINHEIRO_DATA' | 'PIX_DATA'>).map(f => (
+                  <button key={f} onClick={() => setFormaDoc(f)}
+                    className={`py-3.5 rounded-xl text-[10px] font-black uppercase border-2 transition-all ${formaDoc === f ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' : 'bg-white border-gray-100 text-gray-500'}`}>
+                    {f === 'BOLETO' ? 'Boleto' : f === 'CHEQUE' ? 'Cheque' : f === 'DINHEIRO_DATA' ? 'Dinheiro na data' : 'Pix na data'}
+                  </button>
+                ))}
+              </div>
+              {docEscolhido === 'NFE' && (
+                <p className="text-[8px] font-black text-violet-500 uppercase text-center">NF-e a prazo: só Boleto e Cheque (regra da SEFAZ)</p>
+              )}
+              {formaDoc && (
+                <div className="space-y-2">
+                  <label className="text-[9px] font-black text-gray-400 uppercase">{formaDoc === 'CHEQUE' ? 'Bom para (data do cheque)' : 'Data de vencimento / cobrança'}</label>
+                  <input type="date" value={vencimentoDoc} onChange={e => setVencimentoDoc(e.target.value)}
+                    className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-black text-center outline-none focus:ring-2 focus:ring-indigo-100" />
+                  <div className="grid grid-cols-4 gap-2">
+                    {[7, 14, 21, 30].map(days => {
+                      const d = new Date(); d.setDate(d.getDate() + days);
+                      const target = d.toISOString().split('T')[0];
+                      return (
+                        <button key={days} onClick={() => setVencimentoDoc(target)}
+                          className={`py-3 rounded-xl text-[10px] font-black transition-all ${vencimentoDoc === target ? 'bg-indigo-600 text-white border-2 border-indigo-600 shadow-lg' : 'bg-gray-50 border-2 border-gray-100 text-gray-500'}`}>{days}D</button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        <div className="p-4 border-t border-gray-100 bg-white pb-[calc(2rem+env(safe-area-inset-bottom))] max-w-lg w-full mx-auto">
+          <button onClick={continuarDaForma}
+            disabled={!formaOk}
+            className={`w-full py-4 rounded-2xl font-black uppercase text-xs shadow-lg active:scale-95 tracking-widest ${formaOk ? 'bg-emerald-600 text-white' : 'bg-gray-200 text-gray-400'}`}>
+            {isPreVenda ? 'Ver resumo do pedido' : 'Conferir cupom'}
+          </button>
+        </div>
+      </div>
+    )}
+
+    {view === 'FINALIZAR' && (
+      <div className="fixed inset-0 bg-gray-50 z-[120] flex flex-col overflow-hidden">
+        <header className="bg-white border-b border-gray-100 p-3 flex items-center gap-3 shadow-sm">
+          <button onClick={() => setView('FORMA')} className="w-9 h-9 bg-gray-50 text-gray-400 rounded-xl flex items-center justify-center active:scale-90 transition-transform"><i className="fa-solid fa-arrow-left"></i></button>
+          <div className="flex-1 min-w-0 text-center">
+            <p className="text-[9px] text-gray-400 uppercase font-black tracking-tighter">Tela 8 de 8 — Concluir</p>
+            <h2 className="font-black text-xs text-gray-800 uppercase truncate">Toque no VERDE para gerar e finalizar</h2>
+          </div>
+          <div className="w-9 h-9"></div>
+        </header>
+        <div className="flex-1 overflow-y-auto p-4 space-y-3 max-w-lg w-full mx-auto">
+          <div className="bg-white p-4 rounded-2xl border border-gray-100 text-center">
+            <p className="text-3xl font-black text-gray-800">R$ {total.toFixed(2)}</p>
+            <p className="text-[9px] font-black text-gray-400 uppercase mt-1">
+              {condicaoDoc === 'APRAZO'
+                ? `A prazo — vence ${vencimentoDoc.split('-').reverse().join('/')}`
+                : isPreVenda ? 'À vista — entregador recebe na entrega' : 'À vista'}
+              {' · '}{isPreVenda ? 'resumo conferido' : 'cupom conferido'}
+            </p>
+          </div>
+
+          {/* BLOCO 123 (ARMADA/DESLIGADA): quando a regra fiscal estiver LIGADA,
+              a pronta entrega SÓ finaliza com o documento BATIDO (+ boleto do
+              prazo). Com a flag desligada isso nunca aparece. */}
+          {FISCAL_OBRIGATORIO && !isPreVenda && (docExigeNota(docEscolhido) || (condicaoDoc === 'APRAZO' && formaDoc !== 'CHEQUE')) && (
+            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3">
+              <p className="text-[9px] font-black text-amber-700 uppercase leading-snug">
+                <i className="fa-solid fa-lock mr-1"></i>Regra fiscal ativa:
+                {docExigeNota(docEscolhido) ? ` a ${docEscolhido === 'NFE' ? 'NF-e' : 'NFC-e'} precisa SAIR (autorizada) para concluir` : ''}
+                {docExigeNota(docEscolhido) && condicaoDoc === 'APRAZO' && formaDoc !== 'CHEQUE' ? ' + ' : ''}
+                {condicaoDoc === 'APRAZO' && formaDoc !== 'CHEQUE' ? 'boleto do prazo gerado antes de concluir' : ''}
+              </p>
+            </div>
+          )}
+
+          <p className="text-[9px] font-black text-gray-400 uppercase text-center">Documento escolhido</p>
+          {([
+            { tipo: 'NFE' as const, rotulo: isPreVenda ? 'Registrar pedido + NF-e' : 'Gerar NF-e e finalizar', sub: 'Nota para empresa (CNPJ)' },
+            { tipo: 'NFCE' as const, rotulo: isPreVenda ? 'Registrar pedido + NFC-e' : 'Gerar NFC-e e finalizar', sub: nfcCpfDoc ? `Nota com CPF ${nfcCpfDoc}` : 'Nota de consumidor (sem CPF)' },
+            { tipo: 'CUPOM' as const, rotulo: isPreVenda ? 'Registrar pedido (só cupom)' : 'Finalizar venda (só cupom)', sub: 'Cupom não fiscal — nada na SEFAZ' },
+          ]).map(o => {
+            const escolhido = docEscolhido === o.tipo;
+            return (
+              <button key={o.tipo}
+                onClick={() => escolhido && setConfirmModal({
+                  title: 'Ponto sem volta',
+                  message: `${o.rotulo.toUpperCase()}?\n\nTotal R$ ${total.toFixed(2)} para ${client.nomeFantasia}. Depois disso o documento é gerado com esses dados.`,
+                  icon: 'fa-solid fa-triangle-exclamation',
+                  iconColor: 'text-amber-500',
+                  onConfirm: () => { setConfirmModal(null); executarFinalizacao(); },
+                })}
+                disabled={!escolhido || finalizando}
+                className={`w-full py-7 rounded-3xl text-center shadow-lg transition-transform active:scale-[0.98] ${escolhido ? (o.tipo === 'CUPOM' ? 'bg-gradient-to-br from-gray-900 to-gray-600 text-white' : 'bg-gradient-to-br from-emerald-600 to-emerald-500 text-white') : 'bg-gray-200 text-gray-400 cursor-not-allowed opacity-60'}`}>
+                <i className={`fa-solid ${o.tipo === 'NFE' ? 'fa-file-invoice-dollar' : o.tipo === 'NFCE' ? 'fa-file-lines' : 'fa-receipt'} text-2xl block mb-2 ${escolhido ? '' : 'text-gray-300'}`}></i>
+                <span className="text-sm font-black uppercase tracking-widest block">{o.rotulo}</span>
+                <span className={`block text-[9px] font-bold mt-1 ${escolhido ? (o.tipo === 'CUPOM' ? 'text-gray-300' : 'text-emerald-100') : 'text-gray-400'}`}>{o.sub}</span>
+              </button>
+            );
+          })}
+          {finalizando && (
+            <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 text-center">
+              <i className="fa-solid fa-spinner fa-spin text-blue-500 text-xl"></i>
+              <p className="text-[10px] font-black text-blue-700 uppercase mt-1">Gravando — NÃO feche a tela</p>
+            </div>
+          )}
+        </div>
+      </div>
+    )}
+
+    {view === 'SUCESSO' && sucessoData && (
+      <div className="fixed inset-0 bg-gray-50 z-[120] flex flex-col overflow-hidden">
+        {/* BLOCO 139: seta de voltar em TODAS as telas do PDV — abre o cupom da venda (imprimir / confirmar recebimento real) */}
+        <div className="bg-gradient-to-br from-emerald-600 to-teal-600 p-8 text-center relative">
+          <button onClick={() => setCupomPosRegistro(sucessoData.sale)} className="absolute top-4 left-4 w-9 h-9 bg-white/15 text-white rounded-full flex items-center justify-center active:scale-90 transition-transform z-20" aria-label="Abrir cupom da venda"><i className="fa-solid fa-arrow-left"></i></button>
+          <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-3">
+            <i className="fa-solid fa-circle-check text-white text-3xl"></i>
+          </div>
+          <h2 className="font-black text-white text-lg uppercase tracking-tight">{sucessoData.isPreVenda ? 'Pedido registrado!' : 'Venda finalizada!'}</h2>
+          <p className="text-white/80 text-[10px] font-bold uppercase mt-1">{client.nomeFantasia}</p>
+        </div>
+        <div className="flex-1 overflow-y-auto p-4 space-y-3 max-w-lg w-full mx-auto">
+          <div className="bg-white p-4 rounded-2xl border border-gray-100 flex items-center justify-between">
+            <span className="text-[10px] font-black text-gray-400 uppercase">Total</span>
+            <span className="text-lg font-black text-gray-800">R$ {sucessoData.total.toFixed(2)}</span>
+          </div>
+
+          {sucessoData.troca > 0 && (
+            <div className="bg-orange-50 p-3 rounded-2xl flex items-center justify-between border border-orange-100">
+              <span className="text-[10px] font-black text-orange-400 uppercase">Desconto Troca</span>
+              <span className="text-sm font-black text-orange-600">- R$ {sucessoData.troca.toFixed(2)}</span>
+            </div>
+          )}
+
+          {sucessoData.isPreVenda && (
+            <div className="bg-emerald-50 p-3 rounded-2xl flex items-center gap-3 border border-emerald-100">
+              <i className="fa-solid fa-truck text-emerald-500"></i>
+              <span className="text-[10px] font-black text-emerald-700 uppercase leading-snug">Entra na rota de entrega de hoje — acompanhe no menu Entregas</span>
+            </div>
+          )}
+          {sucessoData.isPreVenda && !sucessoData.isPrazo && (
+            <div className="bg-emerald-50 p-3 rounded-2xl flex items-center gap-3 border border-emerald-100">
+              <i className="fa-solid fa-truck-fast text-emerald-500"></i>
+              <span className="text-[10px] font-black text-emerald-700 uppercase leading-snug">Entregador recebe na entrega</span>
+            </div>
+          )}
+          {/* BLOCO 139: à vista — o saldo só fecha na confirmação do recebimento real (janela de impressão do cupom) */}
+          {!sucessoData.isPreVenda && !sucessoData.isPrazo && (
+            <div className="bg-emerald-50 p-3 rounded-2xl flex items-center gap-3 border border-emerald-100">
+              <i className="fa-solid fa-hand-holding-dollar text-emerald-500"></i>
+              <span className="text-[10px] font-black text-emerald-700 uppercase leading-snug">À vista: confirme o recebimento real no cupom da venda (Ver cupom da venda → Imprimir cupom)</span>
+            </div>
+          )}
+          {sucessoData.isPrazo && (
+            <div className="bg-amber-50 p-3 rounded-2xl flex items-center gap-3 border border-amber-100">
+              <i className="fa-solid fa-user-clock text-amber-500"></i>
+              <span className="text-[10px] font-black text-amber-700 uppercase leading-snug">Você recebe na data combinada</span>
+            </div>
+          )}
+
+          {/* BLOCO 122: resultado do documento GERADO na tela 8 (pronta entrega) */}
+          {!sucessoData.isPreVenda && notaEmitindo && (
+            <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 text-center">
+              <i className="fa-solid fa-spinner fa-spin text-blue-500 text-xl"></i>
+              <p className="text-[10px] font-black text-blue-700 uppercase mt-1">Emitindo nota na SEFAZ — não feche a tela</p>
+            </div>
+          )}
+          {!sucessoData.isPreVenda && notaResult?.status === 'AUTORIZADA' && (
+            <div className="space-y-2">
+              <div className="bg-emerald-50 border border-emerald-200 p-3 rounded-2xl flex items-center gap-2">
+                <i className="fa-solid fa-circle-check text-emerald-600"></i>
+                <span className="text-[10px] font-black text-emerald-700 uppercase flex-1">{notaResult.numero ? `Nota ${notaResult.numero} ` : ''}Autorizada</span>
+              </div>
+              {notaResult.pdfUrl && (
+                <a href={notaResult.pdfUrl} target="_blank" rel="noopener noreferrer" className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest flex items-center justify-center">
+                  <i className="fa-solid fa-file-pdf mr-2"></i>Abrir DANFE e Enviar ao Cliente
+                </a>
+              )}
+              <button onClick={handleImprimirDanfeModal} disabled={notaEmitindo} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest disabled:opacity-60 flex items-center justify-center">
+                <i className={`fa-solid ${notaEmitindo ? 'fa-spinner fa-spin' : 'fa-print'} mr-2`}></i>{notaEmitindo ? 'Imprimindo...' : 'Cupom Fiscal (80mm)'}
+              </button>
+            </div>
+          )}
+          {!sucessoData.isPreVenda && notaResult?.status === 'REJEITADA' && (
+            <div className="bg-rose-50 border border-rose-200 p-3 rounded-2xl">
+              <p className="text-[10px] font-black text-rose-700 uppercase leading-snug break-words"><i className="fa-solid fa-circle-xmark mr-1"></i>{notaResult.erro || 'Nota rejeitada'}</p>
+              <p className="text-[9px] text-rose-500 font-bold mt-1 uppercase">A venda JÁ ESTÁ gravada e segura — emita novamente pelo histórico da venda.</p>
+            </div>
+          )}
+          {/* BLOCO 123 (ARMADA/DESLIGADA): regra do dono — pronta entrega SÓ
+              conclui com NF-e/NFC-e BATIDA (+ boleto do prazo gerado). A venda
+              já está gravada: resolve aqui e o "Concluir" libera. Com a flag
+              desligada (FISCAL_OBRIGATORIO=false) este card NUNCA aparece. */}
+          {!sucessoData.isPreVenda && pendFiscalSucesso.length > 0 && (
+            <div className="bg-rose-50 border border-rose-200 p-3 rounded-2xl space-y-2">
+              <p className="text-[10px] font-black text-rose-700 uppercase leading-snug"><i className="fa-solid fa-lock mr-1"></i>Venda gravada — pendência para CONCLUIR:</p>
+              {pendFiscalSucesso.map((pp, i) => (
+                <p key={i} className="text-[9px] font-black text-rose-600 uppercase leading-snug">• {pp}</p>
+              ))}
+              {docExigeNota(docEscolhido) && !notaBatida(notaResult?.status) && (docEscolhido === 'NFE' || docEscolhido === 'NFCE') && (
+                <button
+                  onClick={() => emitirNotaFluxo(docEscolhido, sucessoData.sale, docEscolhido === 'NFCE' ? (nfcCpfDoc || undefined) : undefined)}
+                  disabled={notaEmitindo}
+                  className="w-full bg-slate-900 text-white font-black py-3.5 rounded-2xl shadow-lg active:scale-95 uppercase text-[11px] tracking-widest disabled:opacity-60"
+                >
+                  <i className={`fa-solid ${notaEmitindo ? 'fa-spinner fa-spin' : 'fa-arrows-rotate'} mr-2`}></i>Emitir {docEscolhido === 'NFE' ? 'NF-e' : 'NFC-e'} novamente
+                </button>
+              )}
+            </div>
+          )}
+          {sucessoData.isPreVenda && (docEscolhido === 'NFE' || docEscolhido === 'NFCE') && (
+            <div className="bg-violet-50 border border-violet-200 p-3 rounded-2xl flex items-center gap-3">
+              <i className="fa-solid fa-file-invoice text-violet-500"></i>
+              <span className="text-[10px] font-black text-violet-700 uppercase leading-snug">Nota marcada ({docEscolhido === 'NFE' ? 'NF-e' : 'NFC-e'}) — sai com a entrega</span>
+            </div>
+          )}
+
+          {sucessoData.comissao > 0 && (
+            <div className="bg-emerald-50 p-4 rounded-2xl border-2 border-emerald-200 text-center">
+              <p className="text-[10px] font-black text-emerald-600 uppercase mb-1">{sucessoData.isPreVenda ? 'Comissão da Pré-Venda (gera na entrega)' : 'Comissão Gerada'}</p>
+              <p className="text-2xl font-black text-emerald-700">R$ {sucessoData.comissao.toFixed(2)}</p>
+            </div>
+          )}
+
+          {/* BOLETO: saldo em aberto e não-cheque (BLOCO 25/41/50) */}
+          {/* BLOCO 139: boleto só para venda A PRAZO — à vista o recebimento é confirmado na janela de impressão */}
+          {sucessoData.sale?.id && sucessoData.isPrazo && (Number(sucessoData.sale.valorTotal ?? 0) - Number(sucessoData.sale.valorPago ?? 0) > 0) && sucessoData.formaAtraso !== 'CHEQUE' && (
+            <BoletoCard
+              saleId={String(sucessoData.sale.id)}
+              valorTotal={Number(sucessoData.total) || 0}
+              valorPago={Number(sucessoData.sale.valorPago) || 0}
+              notaStatus={notaResult?.status}
+              notaNumero={notaResult?.numero}
+              clienteDoc={client.cnpj}
+              clienteCep={client.enderecoCep}
+              clienteTelefone={client.telefone}
+              clienteNome={client.nomeFantasia || client.nome}
+              abertoInicial
+              onStatusChange={handleBoletoStatus}
+            />
+          )}
+
+          {/* BLOCO 40: foto do comprovante — pronta entrega a prazo */}
+          {sucessoData.isPrazo && !sucessoData.isPreVenda && !sucessoData.sale.comprovanteFoto && (
+            <button
+              onClick={() => openComprovanteFlow(sucessoData.sale)}
+              className="w-full bg-amber-500 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest"
+            >
+              <i className="fa-solid fa-camera mr-2"></i>Tirar Foto do Comprovante (obrigatória)
+            </button>
+          )}
+        </div>
+        <div className="p-4 pb-8 border-t border-gray-100 bg-white space-y-2 max-w-lg w-full mx-auto">
+          <button onClick={() => setCupomPosRegistro(sucessoData.sale)} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest"><i className="fa-solid fa-receipt mr-2"></i>Ver cupom da venda</button>
+          {/* BLOCO 123 (ARMADA/DESLIGADA): Concluir bloqueia enquanto existir
+              pendência fiscal (nota batida / boleto do prazo). Flag off = sempre livre. */}
+          <button onClick={() => onFinish(sucessoData.sale)} disabled={pendFiscalSucesso.length > 0} className={`w-full font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest ${pendFiscalSucesso.length > 0 ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-gray-900 text-white'}`}>
+            {pendFiscalSucesso.length > 0 ? <><i className="fa-solid fa-lock mr-2"></i>Resolva a pendência fiscal</> : <><i className="fa-solid fa-check mr-2"></i>Concluir</>}
+          </button>
+        </div>
+      </div>
+    )}
+
+        {/* BLOCO 100/122 — TELA 7: cupom de conferência (pronta entrega) ou resumo
+        do pedido (pré-venda). "Continuar" leva à tela 8 (documento verde). */}
+    {cupomConferencia && (
+      <Cupom
+        sale={cupomConferencia}
+        client={client}
+        products={products}
+        onClose={() => setCupomConferencia(null)}
+        conferencia
+        finalizando={finalizando}
+        onFinalizar={() => { setCupomConferencia(null); setView('FINALIZAR'); }}
+        labelFinalizar="Continuar"
+        conferenciaTitulo={isPreVenda ? 'Resumo do pedido' : 'Conferência da venda'}
+      />
+    )}
+
+    {/* MODAL: App-like genérico (substitui window.alert) */}
+    {/* ============================================================ */}
+    {appModal && (
+      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[400] flex items-center justify-center p-4">
+        <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 max-h-[85dvh] overflow-y-auto">
+          <div className={`p-6 text-center ${appModal.type === 'error' ? 'bg-gradient-to-br from-rose-500 to-red-600' : appModal.type === 'success' ? 'bg-gradient-to-br from-emerald-500 to-teal-600' : 'bg-gradient-to-br from-blue-500 to-indigo-600'}`}>
+            <div className="w-14 h-14 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-3">
+              <i className={`${appModal.icon || 'fa-solid fa-info'} text-white text-2xl`}></i>
+            </div>
+            <h3 className="font-black text-white text-sm uppercase tracking-tight">{appModal.title}</h3>
+          </div>
+          <div className="p-6">
+            <p className="text-center text-[12px] text-gray-600 font-semibold leading-relaxed whitespace-pre-line">{appModal.message}</p>
+          </div>
+          <div className="p-5 pt-0">
+            <button
+              onClick={() => setAppModal(null)}
+              className={`w-full font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest text-white ${appModal.type === 'error' ? 'bg-rose-600' : appModal.type === 'success' ? 'bg-emerald-600' : 'bg-blue-600'}`}
+            >
+              OK
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* ============================================================ */}
+    {/* MODAL: Confirmação genérica (substitui window.confirm) */}
+    {/* ============================================================ */}
+    {confirmModal && (
+      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[400] flex items-center justify-center p-4">
+        <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 max-h-[85dvh] overflow-y-auto">
+          <div className="bg-gradient-to-br from-gray-600 to-gray-800 p-6 text-center">
+            <div className="w-14 h-14 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-3">
+              <i className={`${confirmModal.icon || 'fa-solid fa-question'} ${confirmModal.iconColor || 'text-white'} text-2xl`}></i>
+            </div>
+            <h3 className="font-black text-white text-sm uppercase tracking-tight">{confirmModal.title}</h3>
+          </div>
+          <div className="p-6">
+            <p className="text-center text-[12px] text-gray-600 font-semibold leading-relaxed whitespace-pre-line">{confirmModal.message}</p>
+          </div>
+          <div className="p-5 pt-0 grid grid-cols-2 gap-2">
+            <button
+              onClick={() => setConfirmModal(null)}
+              className="w-full bg-gray-100 text-gray-600 font-black py-4 rounded-2xl active:scale-95 uppercase text-[10px] tracking-widest"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={confirmModal.onConfirm}
+              className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-[10px] tracking-widest"
+            >
+              Confirmar
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    {/* ============================================================ */}
+    {/* MODAL: Comprovante de venda a prazo (foto) */}
+    {/* ============================================================ */}
+    {showComprovanteModal && (
+      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[350] flex items-center justify-center p-4">
+        <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 max-h-[90dvh] overflow-y-auto">
+          <div className="bg-gradient-to-br from-amber-400 to-orange-500 p-5 text-center">
+            <div className="w-14 h-14 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-2">
+              <i className="fa-solid fa-file-circle-check text-white text-2xl"></i>
+            </div>
+            <h3 className="font-black text-white text-sm uppercase tracking-tight">Comprovante de Venda</h3>
+            <p className="text-white/70 text-[9px] font-bold mt-1">Tire foto do cupom assinado</p>
+          </div>
+
+          <div className="p-5">
+            {comprovanteFoto ? (
+              <div className="space-y-3">
+                <img src={comprovanteFoto} className="w-full max-h-[55dvh] object-contain rounded-2xl border border-gray-100 shadow-inner" alt="Comprovante" />
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => comprovanteInputRef.current?.click()}
+                    className="bg-gray-100 text-gray-600 font-black py-3 rounded-xl active:scale-95 text-[10px] uppercase"
+                  >
+                    <i className="fa-solid fa-camera-rotate mr-1"></i>Refazer
+                  </button>
+                  <button
+                    onClick={handleSaveComprovante}
+                    disabled={comprovanteUploading}
+                    className="bg-emerald-600 text-white font-black py-3 rounded-xl active:scale-95 text-[10px] uppercase shadow-sm"
+                  >
+                    {comprovanteUploading ? 'Salvando...' : 'Salvar'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={() => comprovanteInputRef.current?.click()}
+                disabled={comprovanteUploading}
+                className="w-full bg-amber-100 border-2 border-dashed border-amber-300 rounded-2xl p-8 flex flex-col items-center gap-3 active:scale-95 transition-all"
+              >
+                {comprovanteUploading ? (
+                  <i className="fa-solid fa-spinner fa-spin text-amber-500 text-2xl"></i>
+                ) : (
+                  <i className="fa-solid fa-camera text-amber-500 text-2xl"></i>
+                )}
+                <span className="text-[10px] font-black text-amber-700 uppercase">
+                  {comprovanteUploading ? 'Processando...' : 'Tirar Foto Obrigatoria'}
+                </span>
+              </button>
+            )}
+          </div>
+
+          <p className="p-5 pt-0 text-center text-[8px] text-rose-500 font-black uppercase tracking-widest animate-pulse">
+            <i className="fa-solid fa-triangle-exclamation mr-1"></i>Foto obrigatoria para venda a prazo
+          </p>
+
+          <input
+            ref={comprovanteInputRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={e => { const f = e.target.files?.[0]; if (f) handleCaptureComprovante(f); e.target.value = ''; }}
+          />
+        </div>
+      </div>
+    )}
+    </>
+  );
+};
+
+export default PDV;

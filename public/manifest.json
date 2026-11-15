@@ -1,0 +1,16 @@
+{
+  "name": "Doce Mania | Salgadinhos em Atacado em Caxias do Sul",
+  "short_name": "Doce Mania",
+  "description": "Distribuidora e fornecedor de salgadinhos Elma Chips e doces no atacado em Caxias do Sul.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#13ec5b",
+  "icons": [
+    {
+      "src": "/logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

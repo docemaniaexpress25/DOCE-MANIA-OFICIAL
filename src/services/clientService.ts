@@ -1,0 +1,239 @@
+import { supabase } from '@/lib/supabaseClient';
+import { fetchAllPages } from '@/lib/supabaseAll';
+import { Client } from '@/lib/types';
+// BLOCO 71: cliente ESPECIAL GB só vale nas rotas liberadas (Rota 03 Edipo Pena / Rota 04 Gil Pantoja)
+import { podeClienteEspecialGB } from '@/lib/regraClienteGB';
+
+/** Codigo aleatorio do portal (12 chars) para clientes novos */
+function generatePortalCode(): string {
+  let hex = '';
+  while (hex.length < 12) hex += Math.floor(Math.random() * 16).toString(16);
+  return hex.toUpperCase();
+}
+
+function mapClient(c: any): Client {
+  return {
+    ...c,
+    nomeFantasia: c.nome_fantasia,
+    ativarCnpj: c.ativar_cnpj,
+    diaRoteiro: c.dia_roteiro,
+    ordem: c.ordem || 0,
+    pinLocalizacao: c.pin_localizacao,
+    rota: c.rota || 'ROTA_01',
+    portalCodigo: c.portal_code,
+    // Fiscais (Bloco 10) — podem nao existir antes do SQL
+    razaoSocial: c.razao_social || undefined,
+    inscricaoEstadual: c.inscricao_estadual || undefined,
+    enderecoNumero: c.endereco_numero || undefined,
+    enderecoCep: c.endereco_cep || undefined,
+    enderecoMunicipio: c.endereco_municipio || undefined,
+    enderecoUf: c.endereco_uf || undefined,
+    email: c.email || undefined,
+    // BLOCO 70: cliente ESPECIAL GB — undefined = SQL ainda nao rodado (trata como normal)
+    clienteEspecialGb: c.cliente_especial_gb === true,
+    // BLOCO 108: modo cupom — undefined = SQL ainda nao rodado (trata como normal)
+    modoCupom: c.modo_cupom === true,
+  } as Client;
+}
+
+export const clientService = {
+  async getAllClients(): Promise<Client[]> {
+    // BLOCO 20: paginado — mantem ordem por 'ordem' com desempate estavel por id
+    // EGRESS: colunas explicitas (206 clientes x colunas fiscais em toda recarga).
+    // Fallback progressivo ao '*' caso alguma coluna ainda nao exista (SQL pendente).
+    const COLS = 'id, nome_fantasia, nome, ativar_cnpj, cnpj, telefone, endereco, bairro, ativo, localizacao, dia_roteiro, ordem, observacoes, pin_localizacao, rota, portal_code, razao_social, inscricao_estadual, endereco_numero, endereco_cep, endereco_municipio, endereco_uf, email, cliente_especial_gb, modo_cupom';
+    let data: any[];
+    try {
+      data = await fetchAllPages<any>('clients', COLS, { orderCol: 'ordem', ascending: true, tiebreak: true });
+    } catch {
+      data = await fetchAllPages<any>('clients', '*', { orderCol: 'ordem', ascending: true, tiebreak: true });
+    }
+    return data.map(mapClient);
+  },
+
+  async insertClient(client: Omit<Client, 'id'>): Promise<Client | null> {
+    const { nomeFantasia, nome, ativarCnpj, cnpj, telefone, endereco, bairro, ativo, localizacao, diaRoteiro, ordem, observacoes, pinLocalizacao, rota, razaoSocial, inscricaoEstadual, enderecoNumero, enderecoCep, enderecoMunicipio, enderecoUf, email } = client;
+    const payload: Record<string, unknown> = {
+      nome_fantasia: nomeFantasia,
+      nome,
+      ativar_cnpj: ativarCnpj,
+      cnpj,
+      telefone,
+      endereco,
+      bairro,
+      ativo,
+      localizacao,
+      dia_roteiro: diaRoteiro,
+      ordem: ordem || 0,
+      observacoes,
+      pin_localizacao: pinLocalizacao,
+      rota: rota || 'ROTA_01',
+      portal_code: generatePortalCode(),
+      // BLOCO 70/71: tipo do cliente — normal (default) ou ESPECIAL GB.
+      // BLOCO 71 (regra do dono): o flag só vale nas rotas liberadas — fora
+      // delas o cliente nasce/grava sempre NORMAL, independente do form.
+      cliente_especial_gb: podeClienteEspecialGB(rota || 'ROTA_01') ? !!client.clienteEspecialGb : false,
+      // BLOCO 108: cliente "somente cupom"
+      modo_cupom: !!client.modoCupom,
+    };
+    // Fiscais (Bloco 10): envia com checagem suave — se a coluna ainda nao
+    // existir o Supabase rejeita o insert, entao refaz sem elas (fallback).
+    const fiscal = {
+      razao_social: razaoSocial || null,
+      inscricao_estadual: inscricaoEstadual || null,
+      endereco_numero: enderecoNumero || null,
+      endereco_cep: enderecoCep || null,
+      endereco_municipio: enderecoMunicipio || null,
+      endereco_uf: enderecoUf || null,
+      email: email || null,
+    };
+
+    let { data, error } = await supabase.from('clients').insert({ ...payload, ...fiscal }).select().single();
+    if (error && /razao_social|inscricao_estadual|endereco_numero|endereco_cep|endereco_municipio|endereco_uf|\bemail\b/i.test(error.message || '')) {
+      console.warn('Colunas fiscais ausentes (Bloco 10 nao rodado). Salvando sem elas.');
+      ({ data, error } = await supabase.from('clients').insert(payload).select().single());
+    }
+    // clients.localizacao (GPS por mapa) pode nao existir (Bloco 12): refaz sem
+    if (error && /localizacao/i.test(error.message || '')) {
+      const semGps = { ...payload }; delete semGps.localizacao;
+      ({ data, error } = await supabase.from('clients').insert(semGps).select().single());
+    }
+    // BLOCO 70: cliente_especial_gb pode nao existir (SQL pendente): refaz sem
+    if (error && /cliente_especial_gb/i.test(error.message || '')) {
+      console.warn('Coluna cliente_especial_gb ausente (Bloco 69 nao rodado). Salvando sem ela.');
+      const semGb = { ...payload }; delete semGb.cliente_especial_gb;
+      ({ data, error } = await supabase.from('clients').insert(semGb).select().single());
+    }
+    // BLOCO 108: modo_cupom pode nao existir (SQL pendente): refaz sem
+    if (error && /modo_cupom/i.test(error.message || '')) {
+      console.warn('Coluna modo_cupom ausente (Bloco 108 nao rodado). Salvando sem ela.');
+      const semCupom = { ...payload }; delete semCupom.modo_cupom;
+      ({ data, error } = await supabase.from('clients').insert(semCupom).select().single());
+    }
+    if (error) {
+      console.error('Erro ao inserir cliente:', error);
+      return null;
+    }
+    return {
+      ...data,
+      nomeFantasia: data.nome_fantasia,
+      ativarCnpj: data.ativar_cnpj,
+      diaRoteiro: data.dia_roteiro,
+      ordem: data.ordem,
+      pinLocalizacao: data.pin_localizacao,
+      rota: data.rota,
+      portalCodigo: data.portal_code,
+    } as Client;
+  },
+
+  async updateClient(id: string, updates: Partial<Client>): Promise<Client | null> {
+    const payload: Partial<any> = {}; 
+    if (updates.nomeFantasia !== undefined) payload.nome_fantasia = updates.nomeFantasia;
+    if (updates.nome !== undefined) payload.nome = updates.nome;
+    if (updates.ativarCnpj !== undefined) payload.ativar_cnpj = updates.ativarCnpj;
+    if (updates.cnpj !== undefined) payload.cnpj = updates.cnpj;
+    if (updates.telefone !== undefined) payload.telefone = updates.telefone;
+    if (updates.endereco !== undefined) payload.endereco = updates.endereco;
+    if (updates.bairro !== undefined) payload.bairro = updates.bairro;
+    if (updates.ativo !== undefined) payload.ativo = updates.ativo;
+    if (updates.localizacao !== undefined) payload.localizacao = updates.localizacao;
+    if (updates.diaRoteiro !== undefined) payload.dia_roteiro = updates.diaRoteiro;
+    if (updates.ordem !== undefined) payload.ordem = updates.ordem;
+    if (updates.observacoes !== undefined) payload.observacoes = updates.observacoes;
+    if (updates.pinLocalizacao !== undefined) payload.pin_localizacao = updates.pinLocalizacao;
+    if (updates.rota !== undefined) payload.rota = updates.rota;
+    // Fiscais (Bloco 10)
+    if ((updates as Record<string, unknown>).razaoSocial !== undefined) payload.razao_social = (updates as Record<string, unknown>).razaoSocial;
+    if ((updates as Record<string, unknown>).inscricaoEstadual !== undefined) payload.inscricao_estadual = (updates as Record<string, unknown>).inscricaoEstadual;
+    if ((updates as Record<string, unknown>).enderecoNumero !== undefined) payload.endereco_numero = (updates as Record<string, unknown>).enderecoNumero;
+    if ((updates as Record<string, unknown>).enderecoCep !== undefined) payload.endereco_cep = (updates as Record<string, unknown>).enderecoCep;
+    if ((updates as Record<string, unknown>).enderecoMunicipio !== undefined) payload.endereco_municipio = (updates as Record<string, unknown>).enderecoMunicipio;
+    if ((updates as Record<string, unknown>).enderecoUf !== undefined) payload.endereco_uf = (updates as Record<string, unknown>).enderecoUf;
+    if ((updates as Record<string, unknown>).email !== undefined) payload.email = (updates as Record<string, unknown>).email || null;
+    // BLOCO 70: tipo do cliente (normal | especial GB) — só grava quando o form envia.
+    // BLOCO 71 (regra do dono): guarda pela rota — o Admin e o Vendedor mandam
+    // sempre a rota junto com o flag. Se a rota não veio no update, o flag
+    // NÃO é alterado aqui (comportamento neutro: não quebra updates fiscais/GPS).
+    if (updates.clienteEspecialGb !== undefined && updates.rota !== undefined) {
+      payload.cliente_especial_gb = podeClienteEspecialGB(updates.rota) ? !!updates.clienteEspecialGb : false;
+    }
+    // BLOCO 108: cliente "somente cupom"
+    if (updates.modoCupom !== undefined) payload.modo_cupom = !!updates.modoCupom;
+
+    let { data, error } = await supabase.from('clients').update(payload).eq('id', id).select().single();
+    // BLOCO 76 (bug do dono): CNPJ/edicao do cliente nao salvava no app do
+    // vendedor. Causa: UPDATE cai no erro de coluna fiscal ausente (SQL do
+    // Bloco 12 nao rodado) e so havia retry para email — razao_social,
+    // inscricao_estadual, endereco_numero/cep/municipio/uf abortavam o update
+    // INTEIRO (e o form fechava como se tivesse salvo). Agora: qualquer
+    // falha dessas refaz o update SEM todas as fiscais (cnpj/telefone/
+    // endereco etc. continuam indo — sao colunas base, nunca descartadas).
+    if (error && /razao_social|inscricao_estadual|endereco_numero|endereco_cep|endereco_municipio|endereco_uf|\bemail\b/i.test(error.message || '')) {
+      console.warn('BLOCO 76: colunas fiscais ausentes — refazendo update sem elas.');
+      const semFiscais = { ...payload };
+      delete semFiscais.razao_social; delete semFiscais.inscricao_estadual;
+      delete semFiscais.endereco_numero; delete semFiscais.endereco_cep;
+      delete semFiscais.endereco_municipio; delete semFiscais.endereco_uf;
+      delete semFiscais.email;
+      ({ data, error } = await supabase.from('clients').update(semFiscais).eq('id', id).select().single());
+    }
+    if (error && /\bemail\b/i.test(error.message || '')) {
+      const fallback = { ...payload }; delete fallback.email;
+      ({ data, error } = await supabase.from('clients').update(fallback).eq('id', id).select().single());
+    }
+    if (error && /localizacao/i.test(error.message || '')) {
+      const fallback2 = { ...payload }; delete fallback2.localizacao;
+      ({ data, error } = await supabase.from('clients').update(fallback2).eq('id', id).select().single());
+    }
+    // BLOCO 70: cliente_especial_gb pode nao existir (SQL pendente): refaz sem
+    if (error && /cliente_especial_gb/i.test(error.message || '')) {
+      console.warn('Coluna cliente_especial_gb ausente (Bloco 69 nao rodado). Salvando sem ela.');
+      const fallback3 = { ...payload }; delete fallback3.cliente_especial_gb;
+      ({ data, error } = await supabase.from('clients').update(fallback3).eq('id', id).select().single());
+    }
+    // BLOCO 108: modo_cupom pode nao existir (SQL pendente): refaz sem
+    if (error && /modo_cupom/i.test(error.message || '')) {
+      console.warn('Coluna modo_cupom ausente (Bloco 108 nao rodado). Salvando sem ela.');
+      const fallback4 = { ...payload }; delete fallback4.modo_cupom;
+      ({ data, error } = await supabase.from('clients').update(fallback4).eq('id', id).select().single());
+    }
+    if (error) {
+      console.error('Erro ao atualizar cliente:', error);
+      return null;
+    }
+    return {
+      ...data,
+      nomeFantasia: data.nome_fantasia,
+      ativarCnpj: data.ativar_cnpj,
+      diaRoteiro: data.dia_roteiro,
+      ordem: data.ordem,
+      pinLocalizacao: data.pin_localizacao,
+      rota: data.rota,
+      portalCodigo: data.portal_code,
+    } as Client;
+  },
+
+  /**
+   * Bloco 12: exclusao de cliente via API server-side (service role).
+   * Antes: delete direto pelo browser com chave anon — o RLS do Supabase
+   * bloqueava e o admin nunca conseguia excluir.
+   * Cliente com vendas no historico NAO e excluido (FK) — e desativado.
+   */
+  async deleteClient(id: string): Promise<{ ok: boolean; desativado?: boolean; erro?: string }> {
+    const { authHeaders } = await import('@/services/userService');
+    try {
+      const res = await fetch('/api/clientes/excluir', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ clientId: id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        return { ok: false, desativado: !!data.desativado, erro: data.erro || `Erro ${res.status} ao excluir.` };
+      }
+      return { ok: true };
+    } catch {
+      return { ok: false, erro: 'Falha de conexao ao excluir o cliente.' };
+    }
+  },
+};

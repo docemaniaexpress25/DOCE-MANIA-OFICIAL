@@ -1,0 +1,621 @@
+     1→"use client";
+     2→
+     3→/**
+     4→ * PEDIDO ONLINE DOCE MANIA — /pedido/[codigo]
+     5→ * CATÁLOGO DE ATACADO — igual ao site de pedidos doce-mania
+     6→ * (github.com/albeneiredipo/site-doce-mania-pedidos), agora DENTRO do sistema:
+     7→ *
+     8→ * - 1 card por produto (família) com FOTO grande e variantes dentro;
+     9→ * - Foto: products.imagem (Bloco 15) > foto do catálogo antigo (pedidoFotos.ts) > placeholder;
+    10→ * - Venda por CAIXA: produto com unidades_por_caixa = N soma de N em N
+    11→ *   ("3 cx (36 un)") e o pedido cai no sistema já em UNIDADES prontas p/ separar;
+    12→ * - Pedido mínimo de atacado (MIN_PEDIDO) — igual ao site antigo (R$ 200);
+    13→ * - Checkout com RECIBO estilo cupom + forma de pagamento (Pix/Dinheiro);
+    14→ * - AO ENVIAR: o pedido nasce como PRÉ-VENDA na FILA do sistema (separação),
+    15→ *   com preço/estoque SEMPRE do banco — NÃO vai para WhatsApp como o site antigo.
+    16→ *
+    17→ * O código na URL é o portal_code aleatório do cliente (mesmo link do portal).
+    18→ */
+    19→
+    20→import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+    21→import { useParams } from "next/navigation";
+    22→import {
+    23→  agruparCatalogo,
+    24→  rotuloItem,
+    25→  type FamiliaCatalogo,
+    26→  type ProdutoCatalogo,
+    27→} from "@/lib/pedidoGrupos";
+    28→import { fotoFamilia } from "@/lib/pedidoFotos";
+    29→
+    30→interface Categoria { id: string; name: string; }
+    31→interface ClienteInfo { nomeCompleto: string; bairro: string; endereco: string; }
+    32→
+    33→/** Pedido mínimo de atacado (igual ao site antigo). Fácil de mexer. */
+    34→const MIN_PEDIDO = 200;
+    35→/** Cor do site antigo (verde Doce Mania) */
+    36→const PRIMARY = "#13ec5b";
+    37→const PRIMARY_DARK = "#0fb847";
+    38→
+    39→const fmt = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+    40→const semAcento = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    41→
+    42→/** Foto da família: cadastrada (Bloco 15) > catálogo antigo > null (placeholder) */
+    43→const fotoDe = (f: FamiliaCatalogo, produtoImagem: Map<string, string | null>): string | null => {
+    44→  for (const v of f.variantes) {
+    45→    const img = produtoImagem.get(v.produtoId);
+    46→    if (img) return img;
+    47→  }
+    48→  return fotoFamilia(f.nome);
+    49→};
+    50→
+    51→export default function PedidoOnlinePage() {
+    52→  const params = useParams<{ codigo: string }>();
+    53→  const codigo = String(params?.codigo || "");
+    54→
+    55→  const [loading, setLoading] = useState(true);
+    56→  const [erro, setErro] = useState("");
+    57→  const [client, setClient] = useState<ClienteInfo | null>(null);
+    58→  const [produtos, setProdutos] = useState<ProdutoCatalogo[]>([]);
+    59→  const [categorias, setCategorias] = useState<Categoria[]>([]);
+    60→  const [bloqueado, setBloqueado] = useState(false);
+    61→  const [saldoDevedor, setSaldoDevedor] = useState(0);
+    62→
+    63→  const [carrinho, setCarrinho] = useState<Record<string, number>>({});
+    64→  const [busca, setBusca] = useState("");
+    65→  const [catSel, setCatSel] = useState<string>("TODAS");
+    66→  const [forma, setForma] = useState<"PIX" | "DINHEIRO">("DINHEIRO");
+    67→  const [obs, setObs] = useState("");
+    68→  const [enviando, setEnviando] = useState(false);
+    69→  const [erroEnvio, setErroEnvio] = useState("");
+    70→  const [resultado, setResultado] = useState<{ pedidoId: string; total: number } | null>(null);
+    71→  const [checkoutVisivel, setCheckoutVisivel] = useState(false);
+    72→  const checkoutRef = useRef<HTMLDivElement | null>(null);
+    73→
+    74→  const carregar = useCallback(async () => {
+    75→    setLoading(true);
+    76→    setErro("");
+    77→    try {
+    78→      const res = await fetch(`/api/cliente/${encodeURIComponent(codigo)}/catalogo`);
+    79→      const d = await res.json().catch(() => null);
+    80→      if (!res.ok || !d?.ok) {
+    81→        setErro(String(d?.error || "Nao foi possivel abrir o catalogo."));
+    82→        return;
+    83→      }
+    84→      setClient(d.client);
+    85→      setProdutos(d.produtos || []);
+    86→      setCategorias(d.categorias || []);
+    87→      setBloqueado(!!d.bloqueado);
+    88→      setSaldoDevedor(Number(d.saldoDevedor || 0));
+    89→    } catch {
+    90→      setErro("Sem conexao. Verifique a internet e tente de novo.");
+    91→    } finally {
+    92→      setLoading(false);
+    93→    }
+    94→  }, [codigo]);
+    95→
+    96→  useEffect(() => { if (codigo) carregar(); }, [codigo, carregar]);
+    97→
+    98→  // Carrinho persiste no aparelho (igual ao site antigo), por cliente
+    99→  const CART_KEY = `dm_portal_cart_${codigo}`;
+   100→  useEffect(() => {
+   101→    try {
+   102→      const saved = localStorage.getItem(CART_KEY);
+   103→      if (saved) {
+   104→        const parsed = JSON.parse(saved) as Record<string, number>;
+   105→        if (parsed && typeof parsed === "object") setCarrinho(parsed);
+   106→      }
+   107→    } catch { /* ignora */ }
+   108→  }, []);
+   109→  useEffect(() => {
+   110→    try { localStorage.setItem(CART_KEY, JSON.stringify(carrinho)); } catch { /* ignora */ }
+   111→  }, [carrinho, CART_KEY]);
+   112→
+   113→  const familias = useMemo(() => agruparCatalogo(produtos), [produtos]);
+   114→  const prodMap = useMemo(() => Object.fromEntries(produtos.map(p => [p.id, p])), [produtos]);
+   115→  const produtoImagem = useMemo(
+   116→    () => new Map(produtos.map(p => [p.id, (p as any).imagem as string | null])),
+   117→    [produtos]
+   118→  );
+   119→
+   120→  const itensCarrinho = useMemo(
+   121→    () => Object.entries(carrinho)
+   122→      .map(([id, q]) => ({ produto: prodMap[id], q }))
+   123→      .filter((x): x is { produto: ProdutoCatalogo; q: number } => !!x.produto && x.q > 0),
+   124→    [carrinho, prodMap]
+   125→  );
+   126→  const totalCarrinho = itensCarrinho.reduce((a, i) => a + i.produto.preco * i.q, 0);
+   127→  const qtdItens = itensCarrinho.reduce((a, i) => a + i.q, 0);
+   128→  const isMinOk = totalCarrinho >= MIN_PEDIDO;
+   129→
+   130→  const familiasFiltradas = useMemo(() => {
+   131→    const q = semAcento(busca.trim().toLowerCase());
+   132→    if (!q && catSel === "TODAS") return familias;
+   133→    return familias.filter(f => {
+   134→      if (catSel !== "TODAS" && f.categoryId !== catSel) return false;
+   135→      if (!q) return true;
+   136→      if (semAcento(f.nome.toLowerCase()).includes(q)) return true;
+   137→      return f.variantes.some(v => v.rotulo && semAcento(v.rotulo.toLowerCase()).includes(q));
+   138→    });
+   139→  }, [familias, busca, catSel]);
+   140→
+   141→  /** Quantidade (em UN) de toda a familia no carrinho */
+   142→  const qtdFamilia = useCallback((f: FamiliaCatalogo) =>
+   143→    f.variantes.reduce((a, v) => a + (carrinho[v.produtoId] || 0), 0), [carrinho]);
+   144→
+   145→  /** Soma/diminui em passos de CAIXA quando o produto e vendido por caixa (igual site antigo) */
+   146→  const addQty = (p: ProdutoCatalogo, upb: number) => {
+   147→    const passo = Math.max(1, upb);
+   148→    setCarrinho(prev => {
+   149→      const atual = prev[p.id] || 0;
+   150→      const nova = Math.min(p.estoque, Math.min(atual + passo, Math.floor(atual + passo)));
+   151→      const q = Math.min(nova, Math.max(0, Math.min(p.estoque, atual + passo)));
+   152→      const copy = { ...prev };
+   153→      if (q <= 0) delete copy[p.id]; else copy[p.id] = q;
+   154→      return copy;
+   155→    });
+   156→  };
+   157→  const subQty = (p: ProdutoCatalogo, upb: number) => {
+   158→    const passo = Math.max(1, upb);
+   159→    setCarrinho(prev => {
+   160→      const atual = prev[p.id] || 0;
+   161→      const q = Math.max(0, atual - passo);
+   162→      const copy = { ...prev };
+   163→      if (q <= 0) delete copy[p.id]; else copy[p.id] = q;
+   164→      return copy;
+   165→    });
+   166→  };
+   167→
+   168→  // Botao flutuante some quando o checkout esta na tela
+   169→  useEffect(() => {
+   170→    if (!checkoutRef.current) { setCheckoutVisivel(false); return; }
+   171→    const obsv = new IntersectionObserver(
+   172→      (entries) => setCheckoutVisivel(!!entries[0]?.isIntersecting),
+   173→      { threshold: 0.05 }
+   174→    );
+   175→    obsv.observe(checkoutRef.current);
+   176→    return () => obsv.disconnect();
+   177→  }, [itensCarrinho.length, resultado]);
+   178→
+   179→  const irParaCheckout = () => {
+   180→    if (!checkoutVisivel) checkoutRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+   181→  };
+   182→
+   183→  const enviarPedido = async () => {
+   184→    if (enviando || itensCarrinho.length === 0) return;
+   185→    if (!isMinOk) return;
+   186→    setEnviando(true);
+   187→    setErroEnvio("");
+   188→    try {
+   189→      const res = await fetch(`/api/cliente/${encodeURIComponent(codigo)}/pedido`, {
+   190→        method: "POST",
+   191→        headers: { "Content-Type": "application/json" },
+   192→        body: JSON.stringify({
+   193→          itens: itensCarrinho.map(i => ({ produtoId: i.produto.id, quantidade: i.q })),
+   194→          observacoes: obs,
+   195→          formaPagamento: forma,
+   196→        }),
+   197→      });
+   198→      const d = await res.json().catch(() => null);
+   199→      if (res.ok && d?.ok) {
+   200→        setResultado({ pedidoId: String(d.pedidoId || "").slice(0, 8).toUpperCase(), total: Number(d.total || totalCarrinho) });
+   201→        setCarrinho({});
+   202→        setObs("");
+   203→      } else {
+   204→        setErroEnvio(String(d?.error || "Nao foi possivel enviar o pedido."));
+   205→      }
+   206→    } catch {
+   207→      setErroEnvio("Sem conexao. Tente novamente.");
+   208→    } finally {
+   209→      setEnviando(false);
+   210→    }
+   211→  };
+   212→
+   213→  const novoPedido = () => {
+   214→    setResultado(null);
+   215→    setErroEnvio("");
+   216→    window.scrollTo({ top: 0, behavior: "smooth" });
+   217→  };
+   218→
+   219→  /** Rótulo do item no recibo: "2 cx (24 un)" ou "24 un" — igual ao site antigo */
+   220→  const rotuloQtd = (q: number, upb: number) =>
+   221→    upb > 1 ? `${q / upb}cx (${q}un)` : `${q}un`;
+   222→
+   223→  // ---------- Estados de tela ----------
+   224→  if (loading) {
+   225→    return (
+   226→      <div className="min-h-screen bg-white flex flex-col items-center justify-center p-6 text-center">
+   227→        <div className="w-12 h-12 rounded-full border-4 border-[#13ec5b] border-t-transparent animate-spin mb-4"></div>
+   228→        <p className="font-black text-xs uppercase tracking-widest text-[#0fb847] animate-pulse">Iniciando App...</p>
+   229→      </div>
+   230→    );
+   231→  }
+   232→
+   233→  if (erro || !client) {
+   234→    return (
+   235→      <div className="min-h-screen bg-white flex flex-col items-center justify-center px-6 text-center">
+   236→        <h1 className="font-black text-gray-900 text-lg mb-1">Ops!</h1>
+   237→        <p className="text-xs text-neutral-500 font-semibold mb-6">{erro || "Link invalido."}</p>
+   238→        <button onClick={carregar} className="bg-[#13ec5b] text-black font-black text-[10px] uppercase tracking-widest px-6 py-3.5 rounded-full shadow-lg shadow-[#13ec5b]/30 active:scale-95 transition-transform">
+   239→          Tentar de novo
+   240→        </button>
+   241→      </div>
+   242→    );
+   243→  }
+   244→
+   245→  if (bloqueado) {
+   246→    return (
+   247→      <div className="min-h-screen bg-white flex flex-col items-center justify-center px-6 text-center">
+   248→        <h1 className="font-black text-gray-900 text-lg mb-1">Pedido online bloqueado</h1>
+   249→        <p className="text-xs text-neutral-500 font-semibold mb-2">
+   250→          Ola, {client.nomeCompleto}! Existe um saldo de <b className="text-gray-900">{fmt(saldoDevedor)}</b> em aberto.
+   251→        </p>
+   252→        <p className="text-[11px] text-neutral-400 font-semibold mb-6 max-w-xs">Quite pelo portal do cliente ou fale com o nosso vendedor para liberar seu pedido online.</p>
+   253→        <a href={`/cliente/${encodeURIComponent(codigo)}`} className="bg-[#13ec5b] text-black font-black text-[10px] uppercase tracking-widest px-6 py-3.5 rounded-full shadow-lg shadow-[#13ec5b]/30 active:scale-95 transition-transform">
+   254→          Ir para o portal
+   255→        </a>
+   256→      </div>
+   257→    );
+   258→  }
+   259→
+   260→  const primeiraSigla = client.nomeCompleto.trim().split(/\s+/).slice(0, 2).map(p => p[0]).join("").toUpperCase();
+   261→
+   262→  return (
+   263→    <div className="min-h-screen bg-white text-neutral-900 flex flex-col">
+   264→      {/* ===== HEADER (igual site antigo) ===== */}
+   265→      <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-neutral-100 px-4 py-3 flex items-center justify-between">
+   266→        <div className="flex items-center gap-3 min-w-0">
+   267→          <div className="w-11 h-11 shrink-0 bg-[#13ec5b] rounded-2xl flex items-center justify-center shadow-sm">
+   268→            {/* A logo.png do site antigo nao esta mais acessivel — marca em texto */}
+   269→            <span className="font-black text-black text-[11px] leading-none tracking-tighter text-center">DOCE<br/>MANIA</span>
+   270→          </div>
+   271→          <div className="flex flex-col min-w-0">
+   272→            <h1 className="font-black text-sm uppercase tracking-tight">Doce Mania Atacado</h1>
+   273→            <span className="text-[7px] font-bold text-neutral-400 uppercase tracking-widest -mt-0.5 truncate">Distribuidora em Caxias do Sul - RS</span>
+   274→          </div>
+   275→        </div>
+   276→        <a href={`/cliente/${encodeURIComponent(codigo)}`} aria-label="Voltar para o portal do cliente"
+   277→          className="w-10 h-10 flex items-center justify-center rounded-full text-neutral-400 hover:bg-neutral-100 transition-colors shrink-0">
+   278→          <i className="fa-solid fa-user text-lg"></i>
+   279→        </a>
+   280→      </header>
+   281→
+   282→      <main className="flex-1 w-full max-md:max-w-md mx-auto flex flex-col pb-24">
+   283→        {/* ===== HERO SEO (igual site antigo) ===== */}
+   284→        <section className="mb-4 px-4 pt-4 text-center">
+   285→          <h2 className="text-[10px] font-black uppercase tracking-widest text-[#0fb847]">
+   286→            🔥 Fornecedor de Salgadinhos Elma Chips em Caxias do Sul 🔥
+   287→          </h2>
+   288→          <p className="text-[9px] font-bold text-neutral-400 uppercase tracking-[0.2em] mt-1.5 leading-relaxed">
+   289→            Preços exclusivos de Atacado para mercados e revendedores.<br/>
+   290→            Pedido mínimo para entrega: R$ 200,00.
+   291→          </p>
+   292→        </section>
+   293→
+   294→        {/* ===== BUSCA + CATEGORIAS ===== */}
+   295→        <div className="px-4">
+   296→          <div className="relative mb-3">
+   297→            <i className="fa-solid fa-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 text-neutral-300 text-sm"></i>
+   298→            <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar produto..." aria-label="Buscar produto"
+   299→              className="w-full pl-11 pr-4 py-3 bg-neutral-50 border border-neutral-100 rounded-2xl text-sm font-bold text-neutral-900 placeholder:text-neutral-300 outline-none focus:border-[#13ec5b] transition-colors" />
+   300→          </div>
+   301→          {categorias.length > 0 && (
+   302→            <div className="flex gap-2 overflow-x-auto pb-4 no-scrollbar">
+   303→              {[{ id: "TODAS", name: "Todas" }, ...categorias].map(c => (
+   304→                <button key={c.id} onClick={() => setCatSel(c.id)}
+   305→                  className={`shrink-0 px-5 py-2.5 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all ${catSel === c.id ? "bg-[#13ec5b] text-black shadow-lg shadow-[#13ec5b]/20" : "bg-neutral-100 opacity-60"}`}>
+   306→                  {c.name}
+   307→                </button>
+   308→              ))}
+   309→            </div>
+   310→          )}
+   311→        </div>
+   312→
+   313→        {familiasFiltradas.length === 0 && (
+   314→          <div className="mx-4 bg-neutral-50 border border-neutral-100 rounded-[2rem] p-8 text-center">
+   315→            <p className="text-[11px] font-black text-neutral-400 uppercase tracking-widest">Nada encontrado{busca ? ` para "${busca}"` : ""}</p>
+   316→          </div>
+   317→        )}
+   318→
+   319→        {/* ===== CATALOGO — 1 card por produto com foto grande + variantes ===== */}
+   320→        <div className="grid grid-cols-1 gap-8 px-4 pt-2">
+   321→          {familiasFiltradas.map(f => {
+   322→            const noCarrinho = qtdFamilia(f);
+   323→            const foto = fotoDe(f, produtoImagem);
+   324→            const catNome = categorias.find(c => c.id === f.categoryId)?.name || "";
+   325→            return (
+   326→              <article key={f.key} className="bg-white rounded-[2.5rem] border border-neutral-100 shadow-sm overflow-hidden">
+   327→                {/* FOTO grande (igual site antigo) */}
+   328→                <div className="w-full min-h-[320px] bg-neutral-50 flex items-center justify-center p-4">
+   329→                  {foto ? (
+   330→                    <img src={foto} alt={f.nome} loading="lazy"
+   331→                      className="max-w-full max-h-[400px] w-auto h-auto object-contain rounded-2xl"
+   332→                      onError={(e) => { e.currentTarget.style.display = "none"; e.currentTarget.parentElement?.classList.add("after:content-['Foto_indisponivel']"); }} />
+   333→                  ) : (
+   334→                    <div className="flex flex-col items-center justify-center gap-2 py-16">
+   335→                      <i className="fa-solid fa-cookie-bite text-neutral-200 text-6xl"></i>
+   336→                      <span className="text-[9px] font-black text-neutral-300 uppercase tracking-widest">{f.nome}</span>
+   337→                    </div>
+   338→                  )}
+   339→                </div>
+   340→
+   341→                <div className="p-6">
+   342→                  <div className="flex justify-between items-start gap-2 mb-0.5">
+   343→                    <h3 className="font-black text-xl leading-tight">{f.nome}</h3>
+   344→                    {noCarrinho > 0 && (
+   345→                      <span className="shrink-0 mt-1 bg-[#13ec5b]/20 text-[#0fb847] text-[8px] font-black uppercase px-2 py-1 rounded-full">
+   346→                        {noCarrinho} no carrinho
+   347→                      </span>
+   348→                    )}
+   349→                  </div>
+   350→                  {catNome && <p className="text-[10px] text-neutral-400 font-bold uppercase tracking-[0.2em] mb-6">{catNome}</p>}
+   351→
+   352→                  <div className="space-y-3">
+   353→                    {f.variantes.map(v => {
+   354→                      const p = prodMap[v.produtoId];
+   355→                      const q = carrinho[v.produtoId] || 0;
+   356→                      const upb = Math.max(1, Math.floor(Number((p as any)?.unidadesPorCaixa ?? 1)) || 1);
+   357→                      const isPack = upb > 1;
+   358→                      const boxes = Math.floor(q / upb);
+   359→                      return (
+   360→                        <div key={v.produtoId} className="flex items-center justify-between gap-2 p-4 bg-neutral-50 rounded-2xl border border-neutral-100">
+   361→                          <div className="flex flex-col min-w-0">
+   362→                            <span className="text-[10px] font-black text-neutral-400 uppercase tracking-widest flex items-center gap-1 flex-wrap">
+   363→                              {v.rotulo || "Unidade"}
+   364→                              {isPack && <span className="bg-[#13ec5b]/20 text-[#0fb847] text-[7px] px-1.5 py-0.5 rounded-md">Caixa {upb}un</span>}
+   365→                            </span>
+   366→                            <span className="font-black text-lg text-[#0fb847]">R$ {v.preco.toFixed(2)}</span>
+   367→                            {v.obs && (
+   368→                              <span className="mt-1 text-[10px] font-bold text-[#0fb847] bg-[#13ec5b]/10 border border-[#13ec5b]/30 rounded-xl px-2.5 py-1.5 leading-snug flex items-start gap-1.5">
+   369→                                <i className="fa-solid fa-circle-info mt-[2px] text-[9px] shrink-0"></i>
+   370→                                <span className="min-w-0">{v.obs}</span>
+   371→                              </span>
+   372→                            )}
+   373→                            {v.estoque <= 12 && <span className="text-[8px] font-bold text-neutral-400 uppercase">Só {v.estoque} em estoque</span>}
+   374→                          </div>
+   375→                          <div className="flex items-center gap-3 shrink-0">
+   376→                            {q > 0 ? (
+   377→                              <div className="flex items-center gap-3 bg-white rounded-full p-1.5 shadow-sm border border-neutral-100">
+   378→                                <button onClick={() => subQty(p, upb)} aria-label="Diminuir"
+   379→                                  className="w-9 h-9 flex items-center justify-center text-neutral-400 hover:text-red-500 transition-colors active:scale-90">
+   380→                                  <i className="fa-solid fa-minus text-lg"></i>
+   381→                                </button>
+   382→                                <div className="flex flex-col items-center min-w-[3rem]">
+   383→                                  <span className="text-sm font-black">{isPack ? `${boxes} cx` : q}</span>
+   384→                                  {isPack && <span className="text-[8px] font-bold text-neutral-400">{q} un</span>}
+   385→                                </div>
+   386→                                <button onClick={() => addQty(p, upb)} disabled={q >= v.estoque} aria-label="Aumentar"
+   387→                                  className="w-9 h-9 bg-[#13ec5b] rounded-full flex items-center justify-center text-black active:scale-90 transition-transform disabled:bg-neutral-200 disabled:text-neutral-400">
+   388→                                  <i className="fa-solid fa-plus text-lg"></i>
+   389→                                </button>
+   390→                              </div>
+   391→                            ) : (
+   392→                              <button onClick={() => addQty(p, upb)} disabled={v.estoque <= 0}
+   393→                                className="bg-neutral-100 px-6 py-2.5 rounded-full text-[10px] font-black uppercase tracking-widest text-[#0fb847] active:scale-95 transition-all shadow-sm flex flex-col items-center min-w-[120px] disabled:opacity-40">
+   394→                                <span>ADICIONAR {isPack ? "CAIXA" : ""}</span>
+   395→                                {isPack && <span className="text-[7px] opacity-60 mt-0.5">({upb} UNIDADES)</span>}
+   396→                              </button>
+   397→                            )}
+   398→                          </div>
+   399→                        </div>
+   400→                      );
+   401→                    })}
+   402→                  </div>
+   403→                </div>
+   404→              </article>
+   405→            );
+   406→          })}
+   407→        </div>
+   408→
+   409→        {/* ===== CHECKOUT — recibo cupom + pagamento (igual site antigo) ===== */}
+   410→        {itensCarrinho.length > 0 && (
+   411→          <div ref={checkoutRef} className="mt-16 px-4 space-y-6 pb-10 scroll-mt-20">
+   412→            {/* RECIBO estilo cupom fiscal */}
+   413→            <div className="p-8 bg-white text-black font-mono text-[11px] rounded-3xl border-t-[12px] border-[#13ec5b] shadow-2xl">
+   414→              <h3 className="text-center font-black text-sm uppercase mb-6 tracking-tighter">DOCE MANIA - ATACADO</h3>
+   415→              <div className="space-y-1 mb-6 border-b border-dashed pb-4">
+   416→                <p>CLIENTE: <span className="font-black">{client.nomeCompleto.toUpperCase()}</span></p>
+   417→                <p>PAGAMENTO: <span className="font-black">{forma}</span></p>
+   418→              </div>
+   419→              <div className="border-b border-dashed mb-6 pb-4 space-y-2">
+   420→                {itensCarrinho.map(({ produto: p, q }) => {
+   421→                  const rot = rotuloItem(familias, p.id);
+   422→                  const upb = Math.max(1, Math.floor(Number((p as any)?.unidadesPorCaixa ?? 1)) || 1);
+   423→                  return (
+   424→                    <div key={p.id} className="flex justify-between gap-4">
+   425→                      <span className="flex-1">{rotuloQtd(q, upb)} {rot.familia.toUpperCase()}{rot.variante ? ` (${rot.variante.toUpperCase()})` : ""}</span>
+   426→                      <span className="font-black">R$ {(p.preco * q).toFixed(2)}</span>
+   427→                    </div>
+   428→                  );
+   429→                })}
+   430→              </div>
+   431→              <div className="flex justify-between font-black text-lg pt-2 mb-4">
+   432→                <span>TOTAL</span>
+   433→                <span>R$ {totalCarrinho.toFixed(2)}</span>
+   434→              </div>
+   435→              <div className="text-center mt-6 pt-4 border-t border-dashed opacity-40">
+   436→                <p className="text-[8px] uppercase font-bold tracking-widest">Aviso: Preços especiais de atacado.</p>
+   437→                <p className="text-[8px] uppercase font-bold tracking-widest">Pedido sujeito a disponibilidade.</p>
+   438→              </div>
+   439→            </div>
+   440→
+   441→            {/* FORM do checkout */}
+   442→            <div className="bg-white p-6 sm:p-8 rounded-[2.5rem] border border-neutral-100 shadow-sm space-y-6">
+   443→              <div className="space-y-2">
+   444→                <label className="text-[10px] font-black uppercase tracking-widest text-neutral-400 ml-1">Cliente identificado</label>
+   445→                <div className="w-full bg-neutral-50 p-4 rounded-2xl border-2 border-transparent flex items-center gap-3">
+   446→                  <span className="w-9 h-9 shrink-0 rounded-full bg-[#13ec5b]/20 text-[#0fb847] flex items-center justify-center font-black text-[11px]">{primeiraSigla || "?"}</span>
+   447→                  <div className="min-w-0">
+   448→                    <p className="text-sm font-black break-words leading-tight">{client.nomeCompleto}</p>
+   449→                    <p className="text-[9px] font-bold text-neutral-400 break-words">{client.endereco}{client.bairro ? ` — ${client.bairro}` : ""}</p>
+   450→                  </div>
+   451→                </div>
+   452→                <p className="text-[9px] font-bold text-neutral-400 ml-1 italic">Seu pedido já chega identificado no sistema.</p>
+   453→              </div>
+   454→
+   455→              <div className="space-y-2">
+   456→                <label className="text-[10px] font-black uppercase tracking-widest text-neutral-400 ml-1">Forma de Pagamento</label>
+   457→                <div className="grid grid-cols-2 gap-2">
+   458→                  {(["DINHEIRO", "PIX"] as const).map(m => (
+   459→                    <button key={m} onClick={() => setForma(m)}
+   460→                      className={`py-4 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all ${forma === m ? "bg-black text-white" : "bg-neutral-100 opacity-60"}`}>
+   461→                      {m === "DINHEIRO" ? "Dinheiro" : "Pix"}
+   462→                    </button>
+   463→                  ))}
+   464→                </div>
+   465→                <p className="text-[9px] font-bold text-neutral-400 ml-1">Combinamos na entrega — isso só ajuda a equipe a se preparar.</p>
+   466→              </div>
+   467→
+   468→              <div className="space-y-2">
+   469→                <label htmlFor="obs-pedido" className="text-[10px] font-black uppercase tracking-widest text-neutral-400 ml-1">Alguma observação? (opcional)</label>
+   470→                <textarea id="obs-pedido" value={obs} onChange={e => setObs(e.target.value)} rows={3} maxLength={500}
+   471→                  placeholder="Ex.: entregar pela manhã, trocar X por Y..."
+   472→                  className="w-full p-4 bg-neutral-50 border border-neutral-100 rounded-2xl text-sm font-bold text-neutral-900 placeholder:text-neutral-300 outline-none focus:border-[#13ec5b] resize-none" />
+   473→              </div>
+   474→
+   475→              {erroEnvio && (
+   476→                <div className="bg-red-50 border border-red-100 rounded-2xl px-4 py-3">
+   477→                  <p className="text-[10px] font-black text-red-500 uppercase tracking-widest"><i className="fa-solid fa-circle-exclamation mr-1"></i>{erroEnvio}</p>
+   478→                </div>
+   479→              )}
+   480→
+   481→              <div className="space-y-3">
+   482→                <button onClick={enviarPedido} disabled={enviando || !isMinOk}
+   483→                  className={`w-full py-6 rounded-[2rem] font-black text-xs uppercase tracking-[0.2em] shadow-2xl transition-all active:scale-95 ${enviando || !isMinOk ? "bg-neutral-200 text-neutral-400 cursor-not-allowed shadow-none" : "bg-[#13ec5b] text-black shadow-[#13ec5b]/40"}`}>
+   484→                  {enviando ? "PROCESSANDO..." : !isMinOk ? `FALTAM R$ ${(MIN_PEDIDO - totalCarrinho).toFixed(2)} PARA O MÍNIMO` : "ENVIAR PEDIDO DE ATACADO"}
+   485→                </button>
+   486→                <div className="text-center px-4 space-y-2">
+   487→                  {!isMinOk && (
+   488→                    <p className="text-[9px] font-black text-red-500 uppercase tracking-widest animate-pulse">
+   489→                      Atingir R$ 200,00 libera os preços de atacado
+   490→                    </p>
+   491→                  )}
+   492→                  <p className="text-[9px] font-black text-neutral-400 uppercase tracking-widest leading-relaxed">
+   493→                    * Preços especiais de revenda válidos para<br/>pedidos acima de R$ 200,00.
+   494→                  </p>
+   495→                </div>
+   496→              </div>
+   497→            </div>
+   498→          </div>
+   499→        )}
+   500→      </main>
+   501→
+   502→      {/* ===== BARRA FLUTUANTE — ir para o pedido ===== */}
+   503→      {itensCarrinho.length > 0 && !resultado && !checkoutVisivel && (
+   504→        <div className="fixed bottom-4 inset-x-0 z-40 px-4 pointer-events-none">
+   505→          <button onClick={irParaCheckout}
+   506→            className="pointer-events-auto mx-auto flex max-w-md w-full items-center justify-between gap-3 bg-neutral-900 text-white rounded-2xl px-5 py-3.5 shadow-2xl active:scale-[0.98] transition-transform">
+   507→            <span className="flex items-center gap-2.5 min-w-0">
+   508→              <span className="relative shrink-0 w-9 h-9 bg-[#13ec5b] text-black rounded-xl flex items-center justify-center">
+   509→                <i className="fa-solid fa-basket-shopping text-sm"></i>
+   510→                <span className="absolute -top-1.5 -right-1.5 bg-white text-black text-[8px] font-black w-4.5 h-4.5 min-w-[18px] min-h-[18px] rounded-full flex items-center justify-center border-2 border-neutral-900">{qtdItens}</span>
+   511→              </span>
+   512→              <span className="text-left min-w-0">
+   513→                <span className="block text-[8px] font-bold uppercase tracking-widest text-white/50">Seu pedido</span>
+   514→                <span className="block text-sm font-black leading-tight">{fmt(totalCarrinho)}</span>
+   515→              </span>
+   516→            </span>
+   517→            <span className="shrink-0 text-[10px] font-black uppercase tracking-widest bg-[#13ec5b] text-black px-4 py-2.5 rounded-xl">
+   518→              Finalizar
+   519→            </span>
+   520→          </button>
+   521→        </div>
+   522→      )}
+   523→
+   524→      {/* ===== TELA DE SUCESSO ===== */}
+   525→      {resultado && (
+   526→        <div className="fixed inset-0 z-[100] bg-white/97 backdrop-blur-sm overflow-y-auto">
+   527→          <div className="min-h-full max-w-md mx-auto flex flex-col items-center justify-center px-6 py-10 text-center">
+   528→            <div className="w-16 h-16 bg-[#13ec5b] rounded-full flex items-center justify-center mb-4 shadow-xl shadow-[#13ec5b]/40">
+   529→              <i className="fa-solid fa-check text-black text-2xl"></i>
+   530→            </div>
+   531→            <h2 className="text-lg font-black uppercase tracking-tight">Pedido enviado!</h2>
+   532→            <p className="text-xs text-neutral-500 font-semibold mt-1 mb-6 max-w-xs">
+   533→              Já está no sistema, {client.nomeCompleto.split(" ")[0]}. Nossa equipe vai separar tudo e combinar a entrega com você.
+   534→            </p>
+   535→            {/* Recibo final */}
+   536→            <div className="w-full p-8 bg-white text-black font-mono text-[11px] rounded-3xl border-t-[12px] border-[#13ec5b] shadow-2xl mb-6 text-left">
+   537→              <h3 className="text-center font-black text-sm uppercase mb-6 tracking-tighter">DOCE MANIA - ATACADO</h3>
+   538→              <div className="space-y-1 mb-6 border-b border-dashed pb-4">
+   539→                <p>CLIENTE: <span className="font-black">{client.nomeCompleto.toUpperCase()}</span></p>
+   540→                <p>PEDIDO: <span className="font-black">#{resultado.pedidoId || "OK"}</span></p>
+   541→              </div>
+   542→              <div className="flex justify-between font-black text-lg pt-2">
+   543→                <span>TOTAL</span>
+   544→                <span>R$ {resultado.total.toFixed(2)}</span>
+   545→              </div>
+   546→              <div className="text-center mt-6 pt-4 border-t border-dashed opacity-40">
+   547→                <p className="text-[8px] uppercase font-bold tracking-widest">Aviso: Preços especiais de atacado.</p>
+   548→                <p className="text-[8px] uppercase font-bold tracking-widest">Pedido sujeito a disponibilidade.</p>
+   549→              </div>
+   550→            </div>
+   551→            <button onClick={novoPedido} className="bg-[#13ec5b] text-black font-black text-[10px] uppercase tracking-widest px-8 py-4 rounded-full shadow-xl shadow-[#13ec5b]/30 active:scale-95 transition-transform">
+   552→              Fazer outro pedido
+   553→            </button>
+   554→          </div>
+   555→        </div>
+   556→      )}
+   557→
+   558→      {/* ===== FOOTER SEO (igual site antigo) ===== */}
+   559→      <footer className="px-6 py-12 mt-12 bg-neutral-50 border-t border-neutral-100">
+   560→        <div className="max-w-2xl mx-auto space-y-10">
+   561→          <section>
+   562→            <h2 className="text-sm font-black uppercase tracking-widest text-[#0fb847] mb-4">
+   563→              Líder em Distribuição de Salgadinhos Atacado em Caxias do Sul
+   564→            </h2>
+   565→            <p className="text-[11px] leading-relaxed text-neutral-500 font-medium">
+   566→              A <strong>Doce Mania Atacado</strong> é a referência nº 1 e <strong>fornecedor premium de salgadinhos</strong>, doces e guloseimas em <strong>Caxias do Sul</strong>.
+   567→              Somos especialistas em <strong>Elma Chips no atacado</strong>, <strong>Toddynho</strong>, <strong>Pererekas</strong> e snacks de alta rotatividade.
+   568→              Se você busca <strong>comprar barato</strong> direto da distribuidora para seu mercado ou revenda, garantimos o melhor <strong>preço baixo</strong> e <strong>promoção</strong> constante.
+   569→            </p>
+   570→          </section>
+   571→
+   572→          <section className="grid grid-cols-1 md:grid-cols-2 gap-8">
+   573→            <div className="space-y-4">
+   574→              <h3 className="text-[10px] font-black uppercase tracking-widest">Atendimento e Contato</h3>
+   575→              <p className="text-[10px] text-neutral-500 font-medium leading-relaxed">
+   576→                <strong>Telefone/WhatsApp:</strong> <a href="tel:+5554991107242" className="text-[#0fb847] hover:underline">(54) 99110-7242</a><br/>
+   577→                <strong>Localização:</strong> Caxias do Sul - RS<br/>
+   578→                <strong>Especialidade:</strong> Distribuição de Elma Chips e Salgadinhos no Atacado.
+   579→              </p>
+   580→              <div className="flex gap-4">
+   581→                <a href="https://wa.me/5554991107242" target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-[9px] font-black uppercase tracking-widest bg-emerald-500 text-white px-3 py-1 rounded-full">
+   582→                  <i className="fa-solid fa-comment text-[12px]"></i> WhatsApp
+   583→                </a>
+   584→              </div>
+   585→            </div>
+   586→            <div className="space-y-4">
+   587→              <h3 className="text-[10px] font-black uppercase tracking-widest">Dúvidas Frequentes (FAQ)</h3>
+   588→              <div className="space-y-3">
+   589→                <div>
+   590→                  <h4 className="text-[9px] font-black text-neutral-400 uppercase">Quais marcas vocês trabalham no atacado?</h4>
+   591→                  <p className="text-[10px] text-neutral-500 font-medium">Somos o principal fornecedor de Elma Chips, Pererekas, Toddynho e guloseimas em Caxias do Sul.</p>
+   592→                </div>
+   593→                <div>
+   594→                  <h4 className="text-[9px] font-black text-neutral-400 uppercase">Qual o benefício de comprar na Doce Mania?</h4>
+   595→                  <p className="text-[10px] text-neutral-500 font-medium">Garantimos o menor preço de revenda e promoções exclusivas para parceiros de longo prazo.</p>
+   596→                </div>
+   597→              </div>
+   598→            </div>
+   599→          </section>
+   600→
+   601→          <section className="bg-white/50 p-4 rounded-xl border border-neutral-100">
+   602→            <h3 className="text-[9px] font-black uppercase tracking-widest text-neutral-400 mb-2">Termos Mais Pesquisados - Atacado Premium</h3>
+   603→            <p className="text-[8px] text-neutral-400 leading-relaxed font-bold uppercase tracking-wider">
+   604→              Salgadinho em Caxias do Sul • Elma Chips no Atacado • Fornecedor de Salgadinhos • Comprar Elma Chips Barato • Toddynho em Atacado • Pererekas Salgadinhos • Fornecedor de Snacks • Distribuidora Líder Serra Gaúcha • Preço de Fábrica Salgadinhos • Promoção Elma Chips Caxias
+   605→            </p>
+   606→          </section>
+   607→
+   608→          <div className="pt-8 border-t border-dashed border-neutral-200 text-center space-y-2">
+   609→            <p className="text-[9px] font-black text-[#0fb847] uppercase tracking-widest">
+   610→              DOCE MANIA - LÍDER EM ATACADO DE SNACKS
+   611→            </p>
+   612→            <p className="text-[7px] font-bold text-neutral-400 uppercase tracking-[0.3em]">
+   613→              CNPJ: 63.730.443/0001-77 • Caxias do Sul - RS • © 2026
+   614→            </p>
+   615→          </div>
+   616→        </div>
+   617→      </footer>
+   618→    </div>
+   619→  );
+   620→}
+   621→

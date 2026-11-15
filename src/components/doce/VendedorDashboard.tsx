@@ -1,0 +1,2452 @@
+"use client";
+// @ts-nocheck
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { User, Product, Client, Carga, Sale, Commission, ReceiveMethod, CargaPendente, CommissionPaymentLog, SystemMessage, Expense, Category, Subcategory } from '@/lib/types';
+import { saleService } from '@/services/saleService';
+import { authHeaders } from '@/services/userService';
+import { locationService } from '@/services/locationService';
+import { DIAS_SEMANA } from '@/lib/constants';
+import { ehContaAReceber, saldoAberto, preVendaNaFila } from '@/lib/contaAReceber';
+import { buscarCnpjReceita, mensagemCnpj, clienteAptoNfe, mascararCnpj, validaCnpj, CnpjBusca } from '@/lib/cnpjAutocomplete';
+// BLOCO 129: CEP automatico (ViaCEP) + cidade/UF/CEP vindos do GPS (Nominatim)
+import { mascararCep, buscarCep, cidadeDeEstado, ufDeEstado, cepDeEstado } from '@/lib/endereco';
+// BLOCO 71: cliente ESPECIAL GB só existe nas rotas liberadas (Rota 03 Edipo Pena / Rota 04 Gil Pantoja)
+import { podeClienteEspecialGB } from '@/lib/regraClienteGB';
+// BLOCO 134: fluxo "não pode esquecer de bater a nota" — painel de vendas com nota pendente
+import { vendaNotaPendente, intencaoNotaDaVenda, rotuloDocumentoNota } from '@/lib/regras-fiscais';
+import PDV from '@/components/doce/PDV';
+import Cupom from '@/components/doce/Cupom';
+import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
+import ConfirmModal from '@/components/doce/ConfirmModal';
+import LucroRotaVendedor from '@/components/doce/LucroRotaVendedor';
+// BLOCO 118: caixa da casa (dinheiro/pix recebidos com comprovantes) + regra do David (R5)
+import CaixaFechamento from '@/components/doce/CaixaFechamento';
+import { isDavidVendedor } from '@/lib/equipe';
+// BLOCO 82: impressão no iPhone — instruções do Bluefy quando a Apple bloqueia o Bluetooth
+import { isIOSDevice, TEXTO_IMPRESSAO_IOS, TITULO_IMPRESSAO_IOS } from '@/lib/iosPrint';
+// BLOCO 111: impressão térmica USB do PC — canal BT x USB persistente por dispositivo
+import { imprimirViaUsb, lerCanalImpressao } from '@/lib/usbPrint';
+import FilaEntregas from '@/components/doce/FilaEntregas';
+
+
+import ClientHistory from '@/components/doce/ClientHistory';
+import { DailyRouteState, loadLocalState, saveLocalState } from '@/utils/persistence';
+
+interface VendedorDashboardProps {
+  user: User;
+  products: Product[];
+  clients: Client[];
+  /** Lista COMPLETA de clientes (todas as rotas) — usada para resolver nomes na cobrança mesmo com cliente reassinado */
+  allClients?: Client[];
+  cargas: Carga[];
+  cargasPendentes: CargaPendente[];
+  sales: Sale[];
+  commissions: Commission[];
+  payoutLogs: CommissionPaymentLog[];
+  expenses: Expense[];
+  messages: SystemMessage[];
+  categories: Category[];
+  subcategories: Subcategory[];
+  markMessageAsRead: (id: string) => void;
+  processSale: (data: any) => Promise<Sale | null>;
+  processPreVenda: (data: any) => Promise<{ pedido: Sale | null; erro?: string }>;
+  addClient: (data: Omit<Client, 'id'>) => Promise<void>; 
+  // BLOCO 72: devolve true quando GRAVOU no banco (persistência provada)
+  updateClient: (id: string, data: Partial<Client>) => Promise<boolean>;
+  deleteClient: (id: string) => void; 
+  receivePayment: (id: string, method: ReceiveMethod, amount?: number) => void;
+  deleteSale: (id: string) => void;
+  aceitarCarga: (id: string) => Promise<{ ok: boolean; erro?: string }>;
+  addExpense: (sellerId: string, descricao: string, valor: number) => Promise<boolean>;
+  margemMinima: number;
+  margemMinimaAtiva: boolean;
+  pix1Name: string;
+  pix1Code: string | null;
+  pix2Name: string;
+  pix2Code: string | null;
+  dailyRouteState: DailyRouteState | null;
+  updateDailyRoute: (clientIds: string[], skippedClientIds: string[]) => void;
+  companyName: string;
+  companyCnpj: string;
+  clientOrder: string[];
+  setClientOrder: (ids: string[]) => void;
+}
+
+type TabType = 'HOME' | 'ROTEIRO' | 'CARGA' | 'HISTORY' | 'FINANCE' | 'CREDIT' | 'CLIENTES' | 'WEEKLY' | 'STOCK_VIEW' | 'AVISOS' | 'ENTREGAS' | 'LUCRO_ROTA' | 'CAIXA' | 'NOTAS_PENDENTES';
+
+// BLOCO 92 — Aba LUCRO DA ROTA: EXCLUSIVA do vendedor David (R5).
+// BLOCO 118 — regra do dono: comissao DESATIVADA para o David (R5): a aba
+// Financeiro sai do app dele e NENHUMA comissao nova e calculada/gravada para
+// ele (gate nas APIs + trigger no SQL 118 no banco).
+// BLOCO 118.3 — regra do dono: o CAIXA (Fechamento de Caixa) e EXCLUSIVO do
+// David (R5): "verifique de nao ter criado essa aba caixa para outros
+// vendedores! pois o sistema fluxo de trabalho e diferente para o david!
+// outros vendedores recebem comissao! somente a rota 5 devera ter caixa".
+// A compensacao dos demais vendedores e a COMISSAO — eles NAO tem caixa.
+const podeVerLucroRota = (u: any): boolean =>
+  !!u && String(u.role || '').toUpperCase() === 'VENDEDOR' && isDavidVendedor(u);
+// BLOCO 118: Financeiro (comissoes) nao existe para o David — os demais veem.
+const podeVerFinanceiro = (u: any): boolean => !!u && !isDavidVendedor(u);
+// BLOCO 118.3: Caixa existe SOMENTE para o David (R5) — nenhum outro vendedor.
+const podeVerCaixa = (u: any): boolean =>
+  !!u && String(u.role || '').toUpperCase() === 'VENDEDOR' && isDavidVendedor(u);
+
+// Helpers para comprovante
+const compressImage = (file: File): Promise<string> => new Promise((resolve) => {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      const MAX = 1200;
+      let w = img.width, h = img.height;
+      if (w > MAX || h > MAX) { if (w > h) { h = (h / w) * MAX; w = MAX; } else { w = (w / h) * MAX; h = MAX; } }
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d')!.drawImage(img, 0, 0, w, h);
+      resolve(canvas.toDataURL('image/jpeg', 0.6));
+    };
+    img.src = e.target?.result as string;
+  };
+  reader.readAsDataURL(file);
+});
+
+const shareImage = async (base64: string, fileName: string) => {
+  const res = await fetch(base64);
+  const blob = await res.blob();
+  const file = new File([blob], fileName, { type: 'image/jpeg' });
+  if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+    await navigator.share({ files: [file], title: 'Comprovante de Venda' });
+  } else {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = fileName; a.click();
+    URL.revokeObjectURL(url);
+  }
+};
+
+const VendedorDashboard: React.FC<VendedorDashboardProps> = ({ 
+  user, products = [], clients = [], allClients = [], cargas = [], cargasPendentes = [], sales = [], commissions = [], payoutLogs = [], expenses = [], messages = [], categories = [], subcategories = [], markMessageAsRead, processSale, processPreVenda, addClient, updateClient, deleteClient, receivePayment, deleteSale, aceitarCarga, addExpense, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, updateDailyRoute, companyName, companyCnpj, clientOrder, setClientOrder
+}) => {
+  const [activeTab, setActiveTab] = useState<TabType>(() => loadLocalState('v_activeTab', 'HOME'));
+  // BLOCO 118: se o estado guardado apontava para FINANCE e o vendedor é o David (comissao desativada), volta pra HOME
+  // BLOCO 118.3: idem para CAIXA (exclusivo do David) — vendedor sem caixa cai na HOME
+  useEffect(() => {
+    if (activeTab === 'FINANCE' && !podeVerFinanceiro(user)) setActiveTab('HOME');
+    if (activeTab === 'CAIXA' && !podeVerCaixa(user)) setActiveTab('HOME');
+  }, [activeTab, user]);
+  const [selectedClient, setSelectedClient] = useState<Client | null>(() => loadLocalState('v_selectedClient', null));
+  // Pre-venda: modo de atendimento escolhido ao abrir o cliente (Edipo)
+  const [modoSheet, setModoSheet] = useState<Client | null>(null);
+  const [modoAtendimento, setModoAtendimento] = useState<'PRONTA' | 'PRE_VENDA'>('PRONTA');
+  // BLOCO 122 (fluxo de 8 telas): o documento (NF-e/NFC-e/cupom) passou a ser
+  // escolhido DENTRO do PDV (tela 4) — o notaSheet/painéis antigos saíram.
+  // notaModo/nfcCpfModo sobrevivem só para o caso da van SEM NF (cupom forçado).
+  const [notaModo, setNotaModo] = useState<'NFE' | 'NFCE' | 'CUPOM' | null>(null);
+  const [nfcCpfModo, setNfcCpfModo] = useState('');
+  // BLOCO 122 (tela 4): "Completar cadastro agora" — guarda o atendimento para
+  // voltar direto à tela do modo depois de salvar o CNPJ/email.
+  const [reabrirModoAposSalvar, setReabrirModoAposSalvar] = useState<Client | null>(null);
+  const [viewingSale, setViewingSale] = useState<Sale | null>(() => loadLocalState('v_viewingSale', null));
+
+  // ====================================================================
+  // BLOCO 134 — NOTAS PENDENTES (regra do dono: "não podemos esquecer de
+  // bater essa nota"): vendas deste vendedor com intenção NF-e/NFC-e que
+  // a SEFAZ ainda NÃO autorizou. O banner vermelho na HOME fica até a
+  // última nota sair; cada item abre o cupom com a Janela Fiscal.
+  // ====================================================================
+  const notasPendentes = React.useMemo(() => (
+    sales
+      .filter(s => vendaNotaPendente({ modoNota: s.modoNota, detalhePagamento: s.detalhePagamento, notaStatus: s.notaStatus }))
+      .sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime())
+  ), [sales]);
+  // BLOCO 136: o sheet/banner de notas pendentes virou ABA (NOTAS_PENDENTES)
+
+  const [viewingClientHistory, setViewingClientHistory] = useState<Client | null>(null);
+  const [filterOverdueOnly, setFilterOverdueOnly] = useState(false);
+  const [creditTypeFilter, setCreditTypeFilter] = useState<'TODOS' | 'COMUM' | 'CHEQUE' | 'BOLETO'>('TODOS');
+  const [creditSearch, setCreditSearch] = useState('');
+  const [clientSearch, setClientSearch] = useState(''); // NOVO: busca na aba clientes
+  // BLOCO 122 (TELA 1): busca de TODOS os clientes na Rota do Dia — quem não
+  // é do dia aparece na seção "Fora da rota de hoje" e pode ser atendido igual
+  const [rotaBusca, setRotaBusca] = useState('');
+
+  // Comprovante: estado para modal de foto em contas a receber
+  const [comprovanteModalSale, setComprovanteModalSale] = useState<Sale | null>(null);
+  const [comprovantePreview, setComprovantePreview] = useState<string | null>(null);
+  const comprovanteFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [comprovanteUploading, setComprovanteUploading] = useState(false);
+
+  // Foto da ENTREGA (feita pelo entregador no a prazo) — visivel ao vendedor
+  const [fotoEntregaMap, setFotoEntregaMap] = useState<Record<string, boolean>>({});
+  const [fotoEntregaView, setFotoEntregaView] = useState<{ sale: Sale; url: string } | null>(null);
+  const [fotoEntregaLoading, setFotoEntregaLoading] = useState<string | null>(null);
+
+  const abrirFotoEntrega = async (s: Sale) => {
+    setFotoEntregaLoading(s.id);
+    try {
+      const res = await fetch(`/api/pre-venda/foto?saleId=${s.id}`, { headers: authHeaders() });
+      const d = await res.json().catch(() => null);
+      if (res.ok && d?.foto) setFotoEntregaView({ sale: s, url: d.foto });
+      else showToast(d?.error || 'Sem foto da entrega.', 'error');
+    } catch {
+      showToast('Nao foi possivel carregar a foto.', 'error');
+    } finally {
+      setFotoEntregaLoading(null);
+    }
+  };
+
+  const handleComprovanteCapture = async (saleId: string, file: File) => {
+    setComprovanteUploading(true);
+    const base64 = await compressImage(file);
+    const ok = await saleService.updateSale(saleId, { comprovanteFoto: base64 } as any);
+    setComprovanteUploading(false);
+    if (ok) setComprovantePreview(base64);
+  };
+
+  const handleComprovanteShare = async (sale: Sale) => {
+    // EGRESS: foto sai do banco sob demanda (nao vem mais na lista de vendas)
+    const foto = sale.comprovanteFoto || await saleService.getComprovanteFoto(sale.id).catch(() => null);
+    if (foto) shareImage(foto, `comprovante_${sale.id}.jpg`);
+    else showToast('Nenhum comprovante anexado nesta venda.', 'error');
+  };
+  
+  const [dismissedClientRiskIds, setDismissedClientRiskIds] = useState<string[]>(() => 
+    loadLocalState(`v_dismissed_risk_${user.id}`, [])
+  );
+
+  // Data atual para chaves de persistência diária
+  const todayStr = (() => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}-${String(n.getDate()).padStart(2,'0')}`; })();
+
+  // Persistir skips/reopens no localStorage para sobreviver refresh
+  const [optimisticSkipped, setOptimisticSkipped] = useState<string[]>(() =>
+    loadLocalState<string[]>(`v_optSkipped_${user.id}_${todayStr}`, [])
+  );
+  const [reopenedClientIds, setReopenedClientIds] = useState<string[]>(() =>
+    loadLocalState<string[]>(`v_reopened_${user.id}_${todayStr}`, [])
+  );
+  // BLOCO 35: clientes atendidos hoje (venda registrada) — o card da rota fica
+  // cinza NA HORA, inclusive para PRE-VENDA (que so entra em "sales" apos a
+  // entrega confirmada — Bloco 13). Persistido no dia, sobrevive a refresh.
+  const [atendidosHoje, setAtendidosHoje] = useState<string[]>(() =>
+    loadLocalState<string[]>(`v_atendidos_${user.id}_${todayStr}`, [])
+  );
+
+  useEffect(() => { saveLocalState('v_activeTab', activeTab); }, [activeTab]);
+  useEffect(() => { saveLocalState('v_selectedClient', selectedClient); }, [selectedClient]);
+  useEffect(() => { saveLocalState('v_viewingSale', viewingSale); }, [viewingSale]);
+
+  useEffect(() => { saveLocalState(`v_dismissed_risk_${user.id}`, dismissedClientRiskIds); }, [dismissedClientRiskIds, user.id]);
+
+  // Persistir optimisticSkipped e reopenedClientIds no localStorage
+  useEffect(() => { saveLocalState(`v_optSkipped_${user.id}_${todayStr}`, optimisticSkipped); }, [optimisticSkipped, user.id, todayStr]);
+  useEffect(() => { saveLocalState(`v_reopened_${user.id}_${todayStr}`, reopenedClientIds); }, [reopenedClientIds, user.id, todayStr]);
+  useEffect(() => { saveLocalState(`v_atendidos_${user.id}_${todayStr}`, atendidosHoje); }, [atendidosHoje, user.id, todayStr]);
+
+  // BLOCO 87 (sync entre aparelhos): o SERVIDOR e a fonte da verdade do estado
+  // pulado (o merge da rota do servidor chegou pelo Bloco 87 no doce-app).
+  // - Cliente que o SERVIDOR diz NAO estar mais pulado (reaberto em outro
+  //   aparelho da mesma conta) -> limpa o skip local (optimisticSkipped
+  //   persistido sobrevivia ao refresh e mantinha o card pulado pra sempre).
+  // - Cliente que o SERVIDOR diz estar pulado -> limpa reabertura local.
+  // Mudanca LOCAL de skip/reopen ja grava no servidor antes do proximo sync
+  // (lock de 5s), entao o efeito nunca desfaz o que o proprio aparelho fez.
+  useEffect(() => {
+    const serverSkipped = new Set(dailyRouteState?.skippedClientIds || []);
+    setOptimisticSkipped(prev => {
+      const next = prev.filter(id => serverSkipped.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+    setReopenedClientIds(prev => {
+      const next = prev.filter(id => !serverSkipped.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [dailyRouteState]);
+
+  // Se o cliente selecionado nao existe mais na lista, limpa a selecao
+  useEffect(() => {
+    if (selectedClient && !clients.find(c => c.id === selectedClient.id)) {
+      setSelectedClient(null);
+    }
+  }, [selectedClient, clients]);
+
+
+  const [showReceiveModal, setShowReceiveModal] = useState<Sale | null>(null);
+  const [valorRecebidoParcial, setValorRecebidoParcial] = useState<string>('');
+  const [editingClient, setEditingClient] = useState<Client | 'NEW' | null>(null); 
+  const [expandedDay, setExpandedDay] = useState<number | null>(null);
+  const [historyFilter, setHistoryFilter] = useState<'DIA' | 'SEMANA' | 'MES' | 'GERAL'>('DIA');
+  const [financeFilter, setFinanceFilter] = useState<'DIA' | 'SEMANA' | 'MES' | 'GERAL'>('DIA');
+  const [weeklySearch, setWeeklySearch] = useState('');
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [confirmAction, setConfirmAction] = useState<{title:string;message:string;icon:string;onConfirm:()=>void;type?:string}|null>(null);
+  const [cForm, setCForm] = useState<Partial<Client>>({});
+  const [cnpjBusca, setCnpjBusca] = useState<{ loading: boolean; msg: string; ok: boolean; endereco?: string }>({ loading: false, msg: '', ok: false });
+  // BLOCO 138: dados fiscais do cadastro ficam ATRAS DE UM BOTAO (tela amigavel) —
+  // cadastro novo abre FECHADO (so contato); editar abre ABERTO (dados visiveis).
+  const [fiscalAberto, setFiscalAberto] = useState(false);
+  const cnpjBuscadoRef = useRef('');
+  const cepBuscadoRef = useRef(''); // BLOCO 129: CEP já buscado (evita reconsulta a cada tecla)
+  const [confirmSkipId, setConfirmSkipId] = useState<string | null>(null);
+  const [expandedRouteClientId, setExpandedRouteClientId] = useState<string | null>(null);
+  const [showExpenseForm, setShowExpenseForm] = useState(false);
+  const [expenseDesc, setExpenseDesc] = useState('');
+  const [expenseVal, setExpenseVal] = useState('');
+
+  // ============================================================
+  // MODAL: Cliente incompleto (GPS + WhatsApp)
+  // ============================================================
+  const [clientInfoModal, setClientInfoModal] = useState<Client | null>(null);
+  // BLOCO 36: origem do modal (rota ou tela do modo) — a seta Voltar devolve pro lugar certo
+  const clientInfoFromModoRef = useRef(false);
+  const [gpsStatus, setGpsStatus] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
+  const [gpsCoords, setGpsCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [gpsPinStr, setGpsPinStr] = useState<string>('');
+  const [gpsEndereco, setGpsEndereco] = useState<string>('');
+  const [gpsBairro, setGpsBairro] = useState<string>('');
+  const [modalWhatsapp, setModalWhatsapp] = useState('');
+  // BLOCO 72: salvando contato no banco (trava o botão e mostra spinner)
+  const [savingContato, setSavingContato] = useState(false);
+
+  const isEmptyField = (val: any): boolean => {
+    if (val === null || val === undefined) return true;
+    const s = String(val).trim();
+    if (s === '') return true;
+    const placeholders = ['-', '.', '..', '0', 'n/a', 'nao informado', 'nao tem', 'sem endereco', 'sem telefone', 'informar', 's/n', 'n/i'];
+    if (placeholders.includes(s.toLowerCase())) return true;
+    if (s.replace(/[^a-zA-Z0-9]/g, '').length < 3) return true;
+    return false;
+  };
+
+  // ============================================================
+  // BLOCO 72 (regra nova do dono): A TELA DE WHATSAPP/LOCALIZACAO NAO TRAVA
+  // MAIS O ATENDIMENTO. Antes: cliente 'incompleto' abria o modal obrigatorio
+  // mesmo com os dados ja salvos (GPS faltando reabria o campo do WhatsApp).
+  // Agora: clicou no cliente -> direto pro modo de venda (cupom/NF-e/NFC-e).
+  // Atualizar contato virou OPCIONAL, pelo botao da tela do modo.
+  // ============================================================
+  const handleAtenderClient = (client: Client) => {
+    // BLOCO 13: TODOS os vendedores escolhem pronta entrega x pre-venda
+    setModoSheet(client);
+  };
+
+  // BLOCO 122 (tela 4 do PDV): cliente pediu NF-e sem CNPJ/email — fecha o PDV,
+  // abre o cadastro; ao salvar, volta direto para a tela do modo (o carrinho
+  // persiste no aparelho por cliente — nada se perde).
+  const completarCadastroDoPDV = (c: Client) => {
+    const alvo = clients.find(x => x.id === c.id) || c;
+    setReabrirModoAposSalvar(alvo);
+    setSelectedClient(null);
+    setModoSheet(null);
+    handleOpenEditClient(alvo);
+    showToast('Complete o cadastro (CNPJ/email) e salve — seu carrinho está guardado.', 'success');
+  };
+
+  // BLOCO 72: abre o modal de WhatsApp/Localizacao de forma VOLUNTARIA (botao
+  // 'Atualizar' / 'Completar cadastro agora' da tela do modo). Vem pre-
+  // preenchido com o que ja esta no banco — pode salvar so um campo.
+  const abrirClientInfoModal = (client: Client, fromModo: boolean = false) => {
+    clientInfoFromModoRef.current = fromModo;
+    // telefone lixo ('0', '-', vazio) NAO preenche — campo nasce limpo pra digitar
+    setModalWhatsapp(isEmptyField(client.telefone) ? '' : (client.telefone || ''));
+    setGpsCoords(null);
+    setGpsPinStr(client.pinLocalizacao || '');
+    setGpsStatus(client.pinLocalizacao && client.pinLocalizacao.length >= 5 ? 'done' : 'idle');
+    setGpsEndereco('');
+    setGpsBairro('');
+    setClientInfoModal(client);
+  };
+
+  // BLOCO 29 (ROTA 2): modo da VAN do vendedor — definido na CARGA pelo admin (1 ou outro)
+  const vanModo = React.useMemo(() => {
+    const modos = new Set(cargas.filter(c => c.vendedorId === user.id && c.modoNota).map(c => c.modoNota as string));
+    return modos.size === 1 ? ([...modos][0] as 'COM_NF' | 'SEM_NF') : null;
+  }, [cargas, user.id]);
+  // Dois estoques em casa já rodaram no banco? (produtos com estoque_nota presente)
+  const temDualEstoque = products.some(p => p.estoqueNota !== undefined);
+  // BLOCO 64 (decisão do chefe): o fluxo aprovado na ROTA 2 — pergunta de nota,
+  // wizard de pagamento (boleto/cheque/pix/dinheiro na data) e estoques COM NF/
+  // SEM NF — agora vale para TODOS os vendedores. NÃO depende mais da flag
+  // rota2 (que fica só para o piloto enxergar produtos de teste). A guarda
+  // temDualEstoque continua: se o SQL do bloco 29 não rodou no banco, degrada
+  // para o fluxo legado em vez de quebrar.
+  const fluxoNovoAtivo = temDualEstoque;
+
+  // Abre o PDV no modo escolhido no sheet (so para pre-vendedor).
+  // BLOCO 122: nota só vem fixada quando a VAN do dia é SEM NF (cupom forçado).
+  const abrirNoModo = (client: Client, modo: 'PRONTA' | 'PRE_VENDA', nota?: 'NFE' | 'NFCE' | 'CUPOM' | null, nfcCpf?: string) => {
+    setModoAtendimento(modo);
+    setModoSheet(null);
+    setNotaModo(nota ?? null);
+    setNfcCpfModo(nfcCpf || '');
+    setSelectedClient(client);
+  };
+
+  /**
+   * BLOCO 122 — fluxo de 8 telas do dono, tela a tela:
+   * 1) clicou no cliente -> PRONTA ENTREGA ou PRÉ-VENDA (tela 2)
+   * 2) PDV produtos e quantidades (tela 3)
+   * 3) documento cupom/NF-e/NFC-e DENTRO do PDV (tela 4)
+   * 4) à vista / a prazo (tela 5) + forma (tela 6)
+   * 5) cupom de conferência / resumo (tela 7) + documento verde (tela 8)
+   * Única exceção: VAN do dia SEM NF — cupom forçado, sem pergunta.
+   */
+  const escolherModoVenda = (client: Client, modo: 'PRONTA' | 'PRE_VENDA') => {
+    if (fluxoNovoAtivo && modo === 'PRONTA' && vanModo === 'SEM_NF') {
+      abrirNoModo(client, modo, 'CUPOM');
+      showToast('VAN DE HOJE: MERCADORIA SEM NF — venda em cupom.', 'success');
+      return;
+    }
+    abrirNoModo(client, modo);
+  };
+
+  const handleGetGPS = () => {
+    if (!('geolocation' in navigator)) return;
+    setGpsStatus('loading');
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        const pinStr = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+        setGpsCoords({ lat, lng });
+        setGpsPinStr(pinStr);
+        // Reverse geocoding para endereco e bairro
+        try {
+          const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}`, {
+            headers: { 'Accept-Language': 'pt-BR' }
+          });
+          const data = await response.json();
+          if (data?.address) {
+            const addr = data.address;
+            const rua = addr.road || addr.pedestrian || addr.street || '';
+            const numero = addr.house_number || '';
+            const bairro = addr.suburb || addr.neighbourhood || addr.city_district || addr.village || '';
+            setGpsEndereco(`${rua}${numero ? ', ' + numero : ''}`);
+            setGpsBairro(bairro);
+          }
+        } catch (e) { /* falha silenciosa - salva pelo menos coordenadas */ }
+        setGpsStatus('done');
+      },
+      () => setGpsStatus('error'),
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+  };
+
+  /** BLOCO 36: mascara progressiva de telefone BR — 54999999999 -> (54) 99999-9999 */
+  const formatarWhatsapp = (v: string): string => {
+    const d = (v || '').replace(/\D/g, '').slice(0, 11);
+    if (d.length <= 2) return d;
+    if (d.length <= 6) return `(${d.slice(0, 2)}) ${d.slice(2)}`;
+    if (d.length <= 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
+    return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
+  };
+  // WhatsApp digitado tem DDD + numero (10+ digitos)? — feedback em tempo real no modal
+  const whatsappOk = modalWhatsapp.replace(/\D/g, '').length >= 10;
+
+  const handleSaveClientInfo = async () => {
+    if (!clientInfoModal || savingContato) return;
+    // BLOCO 72 (regra nova do dono): os dois campos viraram OPCIONAIS — pode
+    // salvar so o WhatsApp, so a localizacao ou os dois. O que NAO pode e
+    // gravar lixo: WhatsApp digitado exige DDD + numero (10+ digitos).
+    const zapDigitado = !!modalWhatsapp.trim();
+    const zapInvalido = zapDigitado && modalWhatsapp.replace(/\D/g, '').length < 10;
+    if (zapInvalido) {
+      showToast('WhatsApp incompleto — digite DDD + número (ex: 54 99999-9999) ou apague para não alterar.', 'error');
+      return;
+    }
+    if (!zapDigitado && (!gpsPinStr || gpsPinStr.length < 5)) {
+      showToast('Nada para salvar — capture a localização ou digite o WhatsApp.', 'error');
+      return;
+    }
+    setSavingContato(true);
+    const updates: any = {};
+    if (zapDigitado) updates.telefone = modalWhatsapp.trim();
+    if (gpsPinStr && gpsPinStr.length >= 5) {
+      updates.pinLocalizacao = gpsPinStr;
+      if (gpsEndereco) updates.endereco = gpsEndereco;
+      if (gpsBairro) updates.bairro = gpsBairro;
+    }
+    // BLOCO 72: persistencia PROVADA — espera o banco gravar e checa o resultado
+    // (updateClient devolve true só quando o Supabase devolve a linha salva).
+    const ok = await updateClient(clientInfoModal.id, updates);
+    setSavingContato(false);
+    if (!ok) {
+      showToast('Não gravou no banco — verifique a conexão e tente de novo.', 'error');
+      return;
+    }
+    showToast('Gravado no banco ✓', 'success');
+    // BLOCO 36 FIX (bug do dono): snapshot do cliente JA ATUALIZADO na tela do
+    // modo — antes passava o objeto ANTIGO e a tela voltava dizendo 'cadastro
+    // incompleto' mesmo com o WhatsApp recem-salvo.
+    const atualizado = { ...clientInfoModal, ...updates } as Client;
+    setClientInfoModal(null);
+    setModoSheet(atualizado);
+  };
+
+  // BLOCO 36: seta Voltar do modal de informações — devolve para a tela do modo
+  // (quando aberto por ela) ou simplesmente fecha sem salvar (rota).
+  const voltarClientInfoModal = () => {
+    const c = clientInfoModal;
+    setClientInfoModal(null);
+    if (c && clientInfoFromModoRef.current) setModoSheet(clients.find(x => x.id === c.id) || c);
+  };
+
+  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  };
+
+  // GPS: rastreamento SILENCIOSO — sem chip, sem toast, nenhum aviso na UI do
+  // vendedor. Diagnostico apenas via console.debug (visivel em debug remoto).
+  // Nota: o aviso de permissao (1a vez) e o icone de localizacao na barra de
+  // status sao do navegador/OS — nenhuma aplicacao consegue oculta-los.
+  useEffect(() => {
+    if (!('geolocation' in navigator)) return;
+    let watchId: number | null = null;
+    let lastSave = 0;
+    const MIN_INTERVAL = 300_000; // EGRESS: salva no maximo a cada 5 min (era 1 min)
+
+    const sendLocation = async (lat: number, lng: number) => {
+      // EGRESS: app em background nao gasta banda; intervalo 60s → 5min
+      if (typeof document !== 'undefined' && document.hidden) return;
+      const now = Date.now();
+      if (now - lastSave < MIN_INTERVAL) return;
+      lastSave = now;
+      const r = await locationService.saveLocation(user.id, lat, lng);
+      if (!r.ok) console.debug(`[gps] falha ao salvar (${r.status})`, r.detail || '');
+    };
+
+    const onGeoError = (err: GeolocationPositionError) => {
+      console.debug(`[gps] erro code=${err.code}`, err.message);
+      // TIMEOUT: o fallback tenta de novo a cada 3 min
+    };
+
+    // Tenta watchPosition primeiro (mais eficiente)
+    if (navigator.geolocation.watchPosition) {
+      watchId = navigator.geolocation.watchPosition(
+        (pos) => { sendLocation(pos.coords.latitude, pos.coords.longitude); },
+        onGeoError,
+        { enableHighAccuracy: false, timeout: 15000, maximumAge: 60000 }
+      );
+    }
+
+    // Fallback: envia via interval tambem
+    const fallback = setInterval(() => {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => { sendLocation(pos.coords.latitude, pos.coords.longitude); },
+        onGeoError,
+        { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 }
+      );
+    }, 3 * 60 * 1000);
+
+    // Primeiro envio imediato
+    navigator.geolocation.getCurrentPosition(
+      (pos) => { sendLocation(pos.coords.latitude, pos.coords.longitude); },
+      onGeoError,
+      { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 }
+    );
+
+    return () => {
+      if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+      clearInterval(fallback);
+    };
+  }, [user.id]);
+
+  // Memo para última venda de cada cliente (mantido para uso em outras abas)
+  const lastSaleByClient = useMemo(() => {
+    const map = new Map<string, Date>();
+    sales.forEach(s => {
+      const existing = map.get(s.clientId);
+      const saleDate = new Date(s.data);
+      if (!existing || saleDate > existing) {
+        map.set(s.clientId, saleDate);
+      }
+    });
+    return map;
+  }, [sales]);
+
+  const formatLastSaleDate = (clientId: string) => {
+    const date = lastSaleByClient.get(clientId);
+    if (!date) return '';
+    return `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}`;
+  };
+
+  const atRiskClients = useMemo(() => {
+    const today = new Date();
+    return clients.filter(c => {
+      if (!c.ativo) return false;
+      if (dismissedClientRiskIds.includes(c.id)) return false;
+
+      const cSales = sales.filter(s => s.clientId === c.id);
+      if (cSales.length === 0) return false;
+      const lastSale = cSales.reduce((latest, s) => {
+        const d = new Date(s.data);
+        return d > latest ? d : latest;
+      }, new Date(0));
+      const diffDays = Math.ceil(Math.abs(today.getTime() - lastSale.getTime()) / (1000 * 60 * 60 * 24));
+      return diffDays >= 25; 
+    }).map(c => {
+      const cSales = sales.filter(s => s.clientId === c.id);
+      const lastSale = cSales.reduce((latest, s) => {
+        const d = new Date(s.data);
+        return d > latest ? d : latest;
+      }, new Date(0));
+      const diffDays = Math.ceil(Math.abs(today.getTime() - lastSale.getTime()) / (1000 * 60 * 60 * 24));
+      return { ...c, diasSemCompra: diffDays, dataUltimaVenda: lastSale };
+    }).sort((a, b) => b.diasSemCompra - a.diasSemCompra);
+  }, [clients, sales, dismissedClientRiskIds]);
+
+  const handleDismissRisk = (clientId: string) => {
+    setDismissedClientRiskIds(prev => [...prev, clientId]);
+    showToast("Aviso arquivado.");
+  };
+
+  const handleMarkMessageAsRead = (msgId: string) => {
+    markMessageAsRead(msgId);
+    showToast("Mensagem marcada como lida.");
+  };
+
+  const filterByPeriod = (date: any, period: string) => {
+    if (!date) return false;
+    const d = new Date(date);
+    const today = new Date();
+    if (period === 'DIA') return d.toDateString() === today.toDateString();
+    if (period === 'SEMANA') {
+      const weekAgo = new Date();
+      weekAgo.setDate(today.getDate() - 7);
+      return d >= weekAgo;
+    }
+    if (period === 'MES') return d.getMonth() === today.getMonth() && d.getFullYear() === today.getFullYear();
+    return true;
+  };
+
+  const isSameDay = (date: Date | undefined) => {
+    if (!date) return false;
+    const d = new Date(date);
+    const today = new Date();
+    return d.toDateString() === today.toDateString();
+  };
+
+  const diaAtual = new Date().getDay();
+  const minhaCarga = useMemo(() => (cargas || []).filter(c => c.vendedorId === user.id), [cargas, user.id]);
+  // BLOCO 11: so as pendentes DESTE vendedor. Antes: qualquer pendente de
+  // qualquer vendedor mostrava o card "ACEITAR CARGA" aqui — e o botao
+  // aceitava cargasPendentes[0] (que podia ser de OUTRO vendedor).
+  const minhasPendentes = useMemo(() => (cargasPendentes || []).filter(cp => cp.vendedorId === user.id), [cargasPendentes, user.id]);
+  
+  const orderedCargaProducts = useMemo(() => {
+    const cargaMap = new Map(minhaCarga.map(c => [c.produtoId, c]));
+    return (products || [])
+      .filter(p => cargaMap.has(p.id))
+      .map(p => ({
+        product: p,
+        carga: cargaMap.get(p.id)!
+      }));
+  }, [products, minhaCarga]);
+
+  const rotaDeHoje = useMemo(() => {
+    const clientMap = new Map((clients || []).map(c => [c.id, c]));
+    const clientIds = dailyRouteState?.clientIds || [];
+
+    // BLOCO 86 (bug do dono): "clientes nao aparecem no dia de hoje".
+    // A rota do dia era um SNAPSHOT congelado (clientIds gravados quando a
+    // rota foi montada no primeiro acesso do dia). Cliente cadastrado DEPOIS
+    // disso (novo cliente ja nasce com diaRoteiro = hoje) ou cliente com
+    // diaRoteiro alterado para hoje NUNCA entrava — so no dia seguinte,
+    // quando a rota era remontada.
+    // FIX: a rota do dia = snapshot + TODOS os clientes ativos da rota do
+    // vendedor com diaRoteiro === hoje (novos entram no fim, na ordem
+    // global). Recalcula a cada mudanca de clients (cadastro, edicao,
+    // reload) — a aba Rota do Dia passa a ser sempre completa, ao vivo.
+    const orderMap = new Map(clientOrder.map((id, idx) => [id, idx]));
+    const sortFn = (a: Client, b: Client) => {
+      const idxA = orderMap.get(a.id) ?? (a.ordem || 0);
+      const idxB = orderMap.get(b.id) ?? (b.ordem || 0);
+      return idxA - idxB;
+    };
+
+    // 1. Snapshot da rota (ordem montada + clientes puxados na mao) — preservado.
+    const snapshot = clientIds
+      .map(id => clientMap.get(id))
+      .filter((c): c is Client => !!c && (c.ativo ?? false))
+      .sort(sortFn);
+
+    // 2. Clientes do dia que NAO estao no snapshot — entram automaticamente.
+    const snapshotIds = new Set(clientIds);
+    const doDia = (clients || [])
+      .filter(c =>
+        (c.ativo ?? false) &&
+        c.rota === (user.rota || 'ROTA_01') &&
+        c.diaRoteiro === diaAtual &&
+        !snapshotIds.has(c.id)
+      )
+      .sort(sortFn);
+
+    return [...snapshot, ...doDia];
+  }, [clients, dailyRouteState, clientOrder, user.rota, diaAtual]);
+
+  // NOVO: Clientes filtrados pela busca
+  const filteredClients = useMemo(() => {
+    let result = clients
+      .filter(c => c.rota === (user.rota || 'ROTA_01'))
+      .sort((a, b) => {
+        const orderMap = new Map(clientOrder.map((id, idx) => [id, idx]));
+        const idxA = orderMap.get(a.id) ?? (a.ordem || 0);
+        const idxB = orderMap.get(b.id) ?? (b.ordem || 0);
+        return idxA - idxB;
+      });
+    
+    if (clientSearch.trim()) {
+      const search = clientSearch.toLowerCase();
+      result = result.filter(c => 
+        c.nomeFantasia.toLowerCase().includes(search) ||
+        c.telefone?.includes(search) ||
+        c.bairro?.toLowerCase().includes(search)
+      );
+    }
+    return result;
+  }, [clients, user.rota, clientOrder, clientSearch]);
+
+  const handleSkipClient = () => { 
+    if (!confirmSkipId) return;
+    const clientIdToSkip = confirmSkipId; // captura ANTES de limpar
+    try {
+      // Atualiza estado local imediatamente (independente do Supabase)
+      setOptimisticSkipped(prev => [...new Set([...prev, clientIdToSkip])]);
+      setConfirmSkipId(null);
+      setReopenedClientIds(prev => prev.filter(id => id !== clientIdToSkip));
+      showToast("Visita pulada.");
+
+      // Persiste no Supabase em background (nao bloqueia a UI)
+      // Inclui optimisticSkipped para evitar perder skips rapidos consecutivos
+      const currentClientIds = dailyRouteState?.clientIds || [];
+      const baseSkipped = dailyRouteState?.skippedClientIds || [];
+      const newSkipped = [...new Set([...baseSkipped, ...optimisticSkipped, clientIdToSkip])];
+      updateDailyRoute(currentClientIds, newSkipped).catch((err: any) => {
+        console.error('[PULAR] Erro ao salvar pular no Supabase:', err);
+      });
+    } catch (err) {
+      console.error('[PULAR] Erro inesperado:', err);
+      showToast("Erro ao pular visita.", "error");
+    }
+  };
+
+  const handleReopenClient = (clientId: string) => {
+    try {
+      // Atualiza estado local imediatamente
+      setOptimisticSkipped(prev => prev.filter(id => id !== clientId));
+      setReopenedClientIds(prev => [...prev, clientId]);
+      // BLOCO 35: reabrir tira o cliente da lista de atendidos de hoje
+      setAtendidosHoje(prev => prev.filter(id => id !== clientId));
+      showToast("Visita reaberta.");
+
+      // Persiste no Supabase em background
+      // Inclui optimisticSkipped para manter consistencia
+      const currentClientIds = dailyRouteState?.clientIds || [];
+      const baseSkipped = dailyRouteState?.skippedClientIds || [];
+      const newSkipped = [...new Set([...baseSkipped, ...optimisticSkipped])].filter(id => id !== clientId);
+      updateDailyRoute(currentClientIds, newSkipped).catch((err: any) => {
+        console.error('[REABRIR] Erro ao salvar reabrir no Supabase:', err);
+      });
+    } catch (err) {
+      console.error('[REABRIR] Erro inesperado:', err);
+      showToast("Erro ao reabrir visita.", "error");
+    }
+  };
+
+  /** BLOCO 35: venda registrada hoje — marca o cliente como ATENDIDO na hora
+   * (card cinza na rota), mesmo para PRE-VENDA que ainda nao entrou em "sales".
+   * Tambem desfaz pulo anterior: quem foi atendido nao esta "pulado". */
+  const markClienteAtendido = (clientId: string) => {
+    if (!clientId) return;
+    setAtendidosHoje(prev => [...new Set([...prev, clientId])]);
+    setOptimisticSkipped(prev => prev.filter(id => id !== clientId));
+    setReopenedClientIds(prev => prev.filter(id => id !== clientId));
+    const baseSkipped = dailyRouteState?.skippedClientIds || [];
+    if (baseSkipped.includes(clientId)) {
+      // Promise.resolve: a prop e tipada como void, mas a implementacao real e
+      // async — garante catch de rejeicao sem violar o tipo (baseline tsc).
+      void Promise.resolve(updateDailyRoute(dailyRouteState?.clientIds || [], baseSkipped.filter(id => id !== clientId)))
+        .catch((err: any) => console.error('[ATENDIDO] Erro ao remover pulo no Supabase:', err));
+    }
+  };
+
+  const handleAddToTodayRoute = (clientId: string) => { 
+    if (!(dailyRouteState?.clientIds || []).includes(clientId)) { 
+      const newRoute = [...(dailyRouteState?.clientIds || []), clientId];
+      updateDailyRoute(newRoute, dailyRouteState?.skippedClientIds || []);
+      setDismissedClientRiskIds(prev => [...prev, clientId]);
+      showToast("Adicionado à rota e aviso removido!"); 
+    } 
+  };
+
+  const handleOpenEditClient = (c: Client | 'NEW') => {
+    if (c === 'NEW') setCForm({ nomeFantasia: '', nome: '', telefone: '', endereco: '', bairro: '', diaRoteiro: diaAtual, ativo: true, ativarCnpj: false, cnpj: '', pinLocalizacao: '', ordem: 0, rota: user.rota, razaoSocial: '', inscricaoEstadual: '', enderecoNumero: '', enderecoCep: '', enderecoMunicipio: '', enderecoUf: '', clienteEspecialGb: false });
+    else setCForm({ ...c, endereco: (c.endereco && c.endereco !== '0') ? c.endereco : '', bairro: (c.bairro && c.bairro !== '0') ? c.bairro : '' });
+    setCnpjBusca({ loading: false, msg: '', ok: false });
+    cnpjBuscadoRef.current = '';
+    // BLOCO 138: NOVO = fiscal fechado (tela amigavel); EDITAR = fiscal aberto (dados ja cadastrados visiveis).
+    setFiscalAberto(c !== 'NEW');
+    setEditingClient(c);
+  };
+
+  const handlePinLocation = async () => {
+    if (!navigator.geolocation) { showToast("GPS não suportado neste navegador.", "error"); return; }
+    showToast("Aguardando GPS...");
+    navigator.geolocation.getCurrentPosition(
+      async (p) => {
+        const lat = p.coords.latitude;
+        const lng = p.coords.longitude;
+        const pinStr = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+        setCForm(prev => ({ ...prev, pinLocalizacao: pinStr }));
+        try {
+          const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}`, {
+            headers: { 'Accept-Language': 'pt-BR' }
+          });
+          const data = await response.json();
+          if (data && data.address) {
+            const addr = data.address;
+            const rua = addr.road || addr.pedestrian || addr.street || '';
+            const numero = addr.house_number || '';
+            const bairro = addr.suburb || addr.neighbourhood || addr.city_district || addr.village || '';
+            const fullAddr = `${rua}${numero ? ', ' + numero : ''}`;
+            // BLOCO 64: o numero vindo do GPS tambem preenche o campo Número/Sala
+            // (antes so ia dentro do texto do endereco e o campo ficava vazio).
+            // BLOCO 129: o GPS agora também preenche CIDADE/UF/CEP (só quando
+            // o campo está vazio — nunca sobrescreve o digitado).
+            setCForm(prev => ({
+              ...prev,
+              pinLocalizacao: pinStr,
+              endereco: fullAddr || '',
+              enderecoNumero: numero || prev.enderecoNumero || '',
+              bairro: bairro || '',
+              enderecoMunicipio: cidadeDeEstado(addr) || prev.enderecoMunicipio || '',
+              enderecoUf: ufDeEstado(addr) || prev.enderecoUf || '',
+              enderecoCep: cepDeEstado(addr) || prev.enderecoCep || '',
+            }));
+            if (fullAddr || bairro) showToast("Localização e endereço capturados!");
+            else showToast("Coordenadas capturadas!");
+          } else {
+            showToast("Coordenadas capturadas!");
+          }
+        } catch (error) {
+          showToast("Coordenadas capturadas, sem endereço.", "error");
+        }
+      },
+      (error) => {
+        let msg = "Erro ao acessar GPS.";
+        if (error.code === 1) msg = "Permissão de localização negada.";
+        if (error.code === 2) msg = "Sinal de GPS indisponível.";
+        if (error.code === 3) msg = "Tempo esgotado ao buscar GPS.";
+        showToast(msg, "error");
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+  };
+
+  /** Preenche os dados do cliente com o retorno da Receita (autocomplete CNPJ). */
+  const aplicarCnpjNoForm = (d: CnpjBusca) => {
+    setCForm(prev => ({
+      ...prev,
+      razaoSocial: d.razaoSocial || prev.razaoSocial || '',
+      nomeFantasia: prev.nomeFantasia || d.nomeFantasia || '',
+      endereco: d.endereco || prev.endereco || '',
+      bairro: d.bairro || prev.bairro || '',
+      enderecoNumero: d.numero || prev.enderecoNumero || '',
+      enderecoCep: d.cep || prev.enderecoCep || '',
+      enderecoMunicipio: d.municipio || prev.enderecoMunicipio || '',
+      enderecoUf: d.uf || prev.enderecoUf || '',
+      telefone: prev.telefone || d.telefone || '',
+      // Bloco 12: email so preenche se a Receita tiver e o campo estiver vazio
+      email: prev.email || d.email || '',
+    }));
+  };
+
+  const executarBuscaCnpj = async (digitos: string) => {
+    cnpjBuscadoRef.current = digitos;
+    setCnpjBusca({ loading: true, msg: '⏳ Buscando CNPJ na Receita Federal...', ok: false });
+    const r = await buscarCnpjReceita(digitos);
+    if (!r.ok) { setCnpjBusca({ loading: false, msg: mensagemCnpj(r).msg, ok: false }); return; }
+    aplicarCnpjNoForm(r);
+    setCnpjBusca({ loading: false, ...mensagemCnpj(r) });
+  };
+
+  /** BLOCO 138 (regra do dono): o cadastro NAO pede mais CPF — so CNPJ.
+   *  14 digitos busca a Receita e preenche razao social/endereco/telefone
+   *  automaticamente. IE a Receita nao publica (dado de cada SEFAZ estadual). */
+  const handleCnpjChange = (raw: string) => {
+    const mascarado = mascararCnpj(raw);
+    setCForm(prev => ({ ...prev, cnpj: mascarado }));
+    const digitos = mascarado.replace(/\D/g, '');
+    if (digitos.length < 14) {
+      cnpjBuscadoRef.current = '';
+      if (cnpjBusca.msg || cnpjBusca.loading) setCnpjBusca({ loading: false, msg: '', ok: false });
+      return;
+    }
+    if (cnpjBuscadoRef.current === digitos) return;
+    void executarBuscaCnpj(digitos);
+  };
+
+  /** BLOCO 129: CEP digitado busca o endereço (ViaCEP) e preenche rua/bairro/cidade/UF. */
+  const handleCepChange = (raw: string) => {
+    const mascarado = mascararCep(raw);
+    setCForm(prev => ({ ...prev, enderecoCep: mascarado }));
+    const digitos = mascarado.replace(/\D/g, '');
+    if (digitos.length !== 8) return;
+    if (cepBuscadoRef.current === digitos) return;
+    cepBuscadoRef.current = digitos;
+    void (async () => {
+      const r = await buscarCep(digitos);
+      if (!r.ok) { showToast(`CEP: ${r.erro || 'nao encontrado'}`, 'error'); return; }
+      setCForm(prev => ({
+        ...prev,
+        endereco: r.logradouro || prev.endereco || '',
+        bairro: r.bairro || prev.bairro || '',
+        enderecoMunicipio: r.cidade || prev.enderecoMunicipio || '',
+        enderecoUf: r.uf || prev.enderecoUf || '',
+      }));
+      showToast('Endereço preenchido pelo CEP!');
+    })();
+  };
+
+  const handleSaveClientBasic = async () => {
+    if (!cForm.nomeFantasia || !cForm.telefone) { showToast("Preencha ao menos Nome e Telefone.", 'error'); return; }
+    const cnpjDigitos = (cForm.cnpj || '').replace(/\D/g, '');
+    // BLOCO 138 (regra do dono): cadastro pede so CNPJ — e OPCIONAL (aceita
+    // salvar sem documento para preencher depois em Editar Cliente).
+    if (cnpjDigitos.length > 0 && cnpjDigitos.length !== 14) { showToast("CNPJ incompleto — complete os 14 dígitos ou apague o campo.", 'error'); return; }
+    if (cnpjDigitos.length > 0 && !validaCnpj(cnpjDigitos)) { showToast("CNPJ inválido (dígitos verificadores não conferem).", 'error'); return; }
+
+    const clientData: Omit<Client, 'id'> = {
+      nomeFantasia: cForm.nomeFantasia!,
+      telefone: cForm.telefone!,
+      endereco: cForm.endereco || '',
+      bairro: cForm.bairro || '',
+      diaRoteiro: cForm.diaRoteiro ?? diaAtual,
+      ordem: cForm.ordem ?? 0,
+      ativo: cForm.ativo ?? true,
+      ativarCnpj: cForm.ativarCnpj ?? false,
+      cnpj: cForm.cnpj,
+      pinLocalizacao: cForm.pinLocalizacao,
+      nome: cForm.nome,
+      observacoes: cForm.observacoes,
+      rota: user.rota,
+      razaoSocial: cForm.razaoSocial,
+      inscricaoEstadual: cForm.inscricaoEstadual,
+      enderecoNumero: cForm.enderecoNumero,
+      enderecoCep: cForm.enderecoCep,
+      enderecoMunicipio: cForm.enderecoMunicipio,
+      enderecoUf: cForm.enderecoUf,
+      email: cForm.email,
+      // BLOCO 70B/71: tipo do cliente também no app do vendedor — no EDIT o
+      // setCForm({...c}) já carrega o flag atual (preserva).
+      // BLOCO 71 (regra do dono): o flag só vale nas rotas liberadas (Rota 03
+      // Edipo Pena / Rota 04 Gil Pantoja) — a rota gravada é sempre a do
+      // vendedor (acima), então a guarda usa user.rota. Fora delas: NORMAL.
+      clienteEspecialGb: podeClienteEspecialGB(user.rota) ? (cForm.clienteEspecialGb ?? false) : false
+    };
+
+    // BLOCO 76 (bug do dono): "coloca o cnpj e nao esta salvando" — o form
+    // fechava SEM esperar o banco e sem avisar quando o update falhava.
+    // Agora: persistencia PROVADA (igual Bloco 72) — só fecha com o banco
+    // confirmando; falhou, o modal fica aberto e o vendedor sabe.
+    if (editingClient === 'NEW') {
+      const gravado = await addClient(clientData);
+      if (!gravado) { showToast('Não gravou no banco — verifique a conexão e tente de novo.', 'error'); return; }
+      showToast('Cliente salvo no banco ✓', 'success');
+    } else if (typeof editingClient === 'object') {
+      const ok = await updateClient(editingClient.id, clientData);
+      if (!ok) { showToast('Não gravou no banco — verifique a conexão e tente de novo.', 'error'); return; }
+      showToast('Cliente salvo no banco ✓', 'success');
+    }
+    // BLOCO 122: veio da TELA 4 do PDV ("Completar cadastro agora") — volta
+    // direto para a tela do modo. O carrinho segue guardado no aparelho.
+    if (reabrirModoAposSalvar) {
+      setModoSheet(clients.find(x => x.id === reabrirModoAposSalvar.id) || reabrirModoAposSalvar);
+      setReabrirModoAposSalvar(null);
+    }
+    setEditingClient(null);
+  };
+
+  const handleConfirmReceive = (method: ReceiveMethod) => {
+    if (!showReceiveModal) return;
+    const valor = parseFloat(valorRecebidoParcial);
+    const saldoEmAberto = Number(((showReceiveModal.valorTotal ?? 0) - (showReceiveModal.valorPago ?? 0)).toFixed(2)); 
+    if (isNaN(valor) || valor <= 0 || valor > saldoEmAberto) {
+      showToast("Valor inválido.", "error");
+      return;
+    }
+    receivePayment(showReceiveModal.id, method, valor);
+    setShowReceiveModal(null);
+    setValorRecebidoParcial('');
+  };
+
+  const handleLaunchExpense = async () => {
+    const val = parseFloat(expenseVal);
+    if (!expenseDesc || isNaN(val) || val <= 0) {
+      showToast("Preencha descrição e valor.", "error");
+      return;
+    }
+    const success = await addExpense(user.id, expenseDesc, val);
+    if (success) {
+      showToast("Despesa lançada!");
+      setExpenseDesc('');
+      setExpenseVal('');
+      setShowExpenseForm(false);
+    }
+  };
+
+  // NOVO: Mover cliente DENTRO DO DIA (para aba ROTEIRO SEMANAL) - PERSISTE NO SUPABASE
+  const moveClientInDay = (clientId: string, dir: 'UP' | 'DOWN', day: number) => {
+    // 1. Pega todos os clientes ativos da rota do vendedor, ordenados pela ordem global atual (clientOrder)
+    const allClientsSorted = [...clients]
+      .filter(c => c.ativo && c.rota === (user.rota || 'ROTA_01'))
+      .sort((a, b) => {
+        const orderMap = new Map(clientOrder.map((id, idx) => [id, idx]));
+        const idxA = orderMap.get(a.id) ?? (a.ordem || 0);
+        const idxB = orderMap.get(b.id) ?? (b.ordem || 0);
+        return idxA - idxB;
+      });
+
+    // 2. Separa os clientes do dia alvo e dos outros dias
+    const dayClients = allClientsSorted.filter(c => c.diaRoteiro === day);
+    const otherDayClients = allClientsSorted.filter(c => c.diaRoteiro !== day);
+    
+    const dayClientIds = dayClients.map(c => c.id);
+    const idx = dayClientIds.indexOf(clientId);
+    if (idx === -1) return;
+
+    // 3. Reordena apenas dentro do dia
+    const newDayOrder = [...dayClientIds];
+    if (dir === 'UP' && idx > 0) {
+      [newDayOrder[idx], newDayOrder[idx-1]] = [newDayOrder[idx-1], newDayOrder[idx]];
+    } else if (dir === 'DOWN' && idx < newDayOrder.length - 1) {
+      [newDayOrder[idx], newDayOrder[idx+1]] = [newDayOrder[idx+1], newDayOrder[idx]];
+    }
+
+    // 4. Reconstrói a ordem global mantendo a ordem relativa dos outros dias
+    const otherDayIds = otherDayClients.map(c => c.id);
+    
+    // Encontra onde o primeiro cliente desse dia estava na ordem global original
+    const firstDayClientGlobalIdx = allClientsSorted.findIndex(c => c.diaRoteiro === day);
+    
+    let newGlobalOrder: string[];
+    if (firstDayClientGlobalIdx === -1) {
+      // Se não tinha clientes nesse dia, adiciona no final
+      newGlobalOrder = [...otherDayIds, ...newDayOrder];
+    } else {
+      // Insere o dia reordenado na posição correta
+      newGlobalOrder = [
+        ...otherDayIds.slice(0, firstDayClientGlobalIdx),
+        ...newDayOrder,
+        ...otherDayIds.slice(firstDayClientGlobalIdx)
+      ];
+    }
+
+    // 5. Salva no Supabase via App.tsx -> appSettingsService
+    setClientOrder(newGlobalOrder);
+    showToast("Ordem do dia atualizada e salva!");
+  };
+
+  // NOVO: Mover cliente para outro dia
+  const moveClientToDay = (clientId: string, newDay: number) => {
+    updateClient(clientId, { diaRoteiro: newDay });
+    showToast(`Cliente movido para ${DIAS_SEMANA[newDay]}`);
+  };
+
+  const MenuCard = ({ icon, title, tab, color, badge }: any) => (
+    <button onClick={() => setActiveTab(tab)} className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col items-center gap-3 active:scale-95 transition-all text-center relative">
+      {badge && <div className="absolute -top-1.5 -right-1.5 bg-red-600 text-white text-[8px] font-black min-w-[20px] h-5 rounded-full flex items-center justify-center border-2 border-white animate-bounce px-0.5">{badge === true ? '' : badge}</div>}
+      <div className={`w-14 h-14 ${color} rounded-2xl flex items-center justify-center text-xl shadow-inner`}><i className={`fa-solid ${icon}`}></i></div>
+      <span className="text-[11px] font-black uppercase text-gray-700">{title}</span>
+    </button>
+  );
+
+  const filteredHistory = useMemo(() => (sales || []).filter(s => s.vendedorId === user.id && filterByPeriod(s.data, historyFilter)).sort((a, b) => (new Date(b.data).getTime() ?? 0) - (new Date(a.data).getTime() ?? 0)), [sales, user.id, historyFilter]);
+
+  // BLOCO 15 — RECIBO: admin liberou, vendedor confirma que recebeu.
+  // liberadoPendente = repasses do admin ainda sem o aceite (recibo) deste vendedor.
+  const [recibosLocais, setRecibosLocais] = useState<Set<string>>(new Set());
+  const [dandoRecibo, setDandoRecibo] = useState(false);
+  const liberadoPendente = useMemo(() =>
+    (payoutLogs || []).filter(l => l.vendedorId === user.id && l.aceitado === false && !recibosLocais.has(l.id)),
+  [payoutLogs, user.id, recibosLocais]);
+  const liberadoPendenteTotal = liberadoPendente.reduce((a, l) => a + (l.valorPago ?? 0), 0);
+
+  const darRecibo = async () => {
+    if (dandoRecibo || liberadoPendente.length === 0) return;
+    setDandoRecibo(true);
+    try {
+      const res = await fetch('/api/comissoes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ acao: 'RECIBO' }),
+      });
+      const d = await res.json().catch(() => null);
+      if (res.ok && d?.ok) {
+        setRecibosLocais(prev => new Set([...prev, ...liberadoPendente.map(l => l.id)]));
+        showToast(`Recibo registrado! R$ ${liberadoPendenteTotal.toFixed(2)} confirmado.`);
+      } else {
+        showToast(String(d?.error || 'Nao foi possivel registrar o recibo.'));
+      }
+    } catch {
+      showToast('Sem conexao para registrar o recibo.');
+    } finally {
+      setDandoRecibo(false);
+    }
+  }; 
+  
+  const financeStats = useMemo(() => {
+    const vCommsAll = (commissions || []).filter(c => c.vendedorId === user.id);
+    const vCommsFiltered = vCommsAll.filter(c => filterByPeriod(c.dataGeracao, financeFilter));
+
+    const totalGerado = vCommsFiltered.reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
+    const aReceber = vCommsAll.filter(c => c.status === 'A_RECEBER').reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
+    const liberadas = vCommsAll.filter(c => c.status === 'DISPONIVEL').reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
+    const pagas = vCommsAll.filter(c => c.status === 'PAGO').reduce((acc, curr) => acc + (curr.valor ?? 0), 0);
+    
+    return { 
+      totalGerado: Number(totalGerado.toFixed(2)),
+      aReceber: Number(aReceber.toFixed(2)),
+      liberadas: Number(liberadas.toFixed(2)), 
+      pagas: Number(pagas.toFixed(2)) 
+    };
+  }, [commissions, user.id, financeFilter]);
+
+  const historySummary = useMemo(() => filteredHistory.reduce((acc, sale) => {
+    acc.total += (sale.valorTotal ?? 0); 
+    // BLOCO 22: "A Prazo" mostra o saldo A RECEBER de venda entregue — venda
+    // paga aparece no cartao Dinheiro/Pix (metodo real gravado ao receber).
+    if (sale.metodoPagamento === 'DINHEIRO') acc.dinheiro += (sale.valorTotal ?? 0);
+    if (sale.metodoPagamento === 'PIX') acc.pix += (sale.valorTotal ?? 0);
+    if (ehContaAReceber(sale)) acc.prazo += saldoAberto(sale);
+    return acc;
+  }, { total: 0, dinheiro: 0, pix: 0, prazo: 0 }), [filteredHistory]);
+
+  // Nome do cliente SEMPRE resolve (mesmo com cliente reassinado de rota):
+  // busca primeiro na lista completa (todas as rotas), depois na da rota.
+  const nomeClienteDe = useCallback((clientId: string): string => {
+    const c = (allClients || []).find(x => x.id === clientId) || (clients || []).find(x => x.id === clientId);
+    return c?.nomeFantasia || 'Cliente';
+  }, [allClients, clients]);
+
+  // Clientes da MINHA rota ATUAL (a carteira de cobrança segue o cliente,
+  // não quem fez a venda: cliente passado de Rota 2 p/ Rota 1 cobra aqui).
+  const clientesDaMinhaRota = useMemo(() => {
+    const minhaRota = user.rota || 'ROTA_01';
+    return new Set((allClients || clients || []).filter(c => c.rota === minhaRota).map(c => c.id));
+  }, [allClients, clients, user.rota]);
+
+  const contasAReceber = useMemo(() => {
+    // BLOCO 22: entrega + saldo define a divida (nao mais o metodo gravado) —
+    // pre-venda na fila nao e divida; venda paga sai daqui; parcial mostra o
+    // restante que antes sumia.
+    let filtered = (sales || []).filter(s =>
+      (s.vendedorId === user.id || clientesDaMinhaRota.has(s.clientId)) &&
+      ehContaAReceber(s)
+    );
+    if (filterOverdueOnly) {
+      const today = new Date();
+      today.setHours(0,0,0,0);
+      filtered = filtered.filter(s => {
+        if (!s.dataVencimento) return false;
+        const dueDate = new Date(s.dataVencimento);
+        dueDate.setHours(0,0,0,0);
+        return dueDate <= today;
+      });
+    }
+
+    if (creditTypeFilter !== 'TODOS') {
+      filtered = filtered.filter(s => {
+        const desc = s.detalhePagamento?.toUpperCase() || '';
+        if (creditTypeFilter === 'CHEQUE') return desc.includes('CHEQUE');
+        if (creditTypeFilter === 'BOLETO') return desc.includes('BOLETO');
+        if (creditTypeFilter === 'COMUM') return desc.includes('COMUM') || (!desc.includes('CHEQUE') && !desc.includes('BOLETO'));
+        return true;
+      });
+    }
+
+    if (creditSearch) {
+      filtered = filtered.filter(s => nomeClienteDe(s.clientId).toLowerCase().includes(creditSearch.toLowerCase()));
+    }
+
+    return filtered;
+  }, [sales, user.id, clientesDaMinhaRota, filterOverdueOnly, creditTypeFilter, creditSearch, nomeClienteDe]);
+
+  // Busca em lote quais vendas a prazo em aberto tem foto da entrega (entregador)
+  useEffect(() => {
+    if (activeTab !== 'CREDIT') return;
+    const ids = contasAReceber.map(s => s.id);
+    if (ids.length === 0) return;
+    let alive = true;
+    (async () => {
+      try {
+        const res = await fetch(`/api/pre-venda/foto?saleIds=${encodeURIComponent(ids.join(','))}`, { headers: authHeaders() });
+        if (!res.ok) return;
+        const d = await res.json().catch(() => null);
+        if (alive && d?.temFoto) setFotoEntregaMap(prev => ({ ...prev, ...d.temFoto }));
+      } catch { /* silencioso */ }
+    })();
+    return () => { alive = false; };
+  }, [activeTab, contasAReceber]);
+
+  const valorTotalCarga = useMemo(() => minhaCarga.reduce((acc, curr) => {
+    const p = products.find(prod => prod.id === curr.produtoId);
+    return acc + ((curr.quantidade ?? 0) * (p?.precoVenda ?? 0)); 
+  }, 0), [minhaCarga, products]);
+
+  const totalUnidadesCarga = useMemo(() => minhaCarga.reduce((acc, curr) => acc + (curr.quantidade ?? 0), 0), [minhaCarga]);
+
+  const unifiedHistory = useMemo(() => {
+    const combined = [
+      ...(payoutLogs || []).map(p => ({ 
+        id: p.id, 
+        data: new Date(p.dataPagamento), 
+        desc: p.tipo === 'TOTAL' ? 'Pagamento Integral' : 'Repasse Parcial', 
+        valor: p.valorPago, 
+        tipo: 'REPASSE' as const 
+      })),
+      ...(expenses || []).map(e => ({ 
+        id: e.id, 
+        data: new Date(e.createdAt), 
+        desc: e.descricao, 
+        valor: e.valor, 
+        tipo: 'DESPESA' as const 
+      }))
+    ];
+    return combined.sort((a, b) => b.data.getTime() - a.data.getTime());
+  }, [payoutLogs, expenses]);
+
+  const handleNavigateToCredit = () => {
+    setSelectedClient(null);
+    setActiveTab('CREDIT');
+  };
+
+  const handlePrintCarga = async () => {
+    setConfirmAction({
+      title: 'Imprimir Carga',
+      message: 'Deseja imprimir sua carga? Conecte a impressora Bluetooth e confirme.',
+      icon: 'fa-solid fa-print',
+      onConfirm: async () => {
+        setConfirmAction(null);
+        const W = 32;
+        const pR = (s: string, n: number) => s.substring(0, n).padEnd(n);
+        const pL = (s: string, n: number) => s.substring(0, n).padStart(n);
+        const ctr = (s: string, n: number) => { const x = s.substring(0, n); const sp = Math.max(0, Math.floor((n - x.length) / 2)); return ' '.repeat(sp) + x; };
+        let t = '';
+        t += '*'.repeat(W) + '\n';
+        t += ctr('CARGA DO VENDEDOR', W) + '\n';
+        t += '*'.repeat(W) + '\n';
+        t += `Vendedor: ${user.nome}\n`;
+        t += `Data: ${new Date().toLocaleDateString()}\n`;
+        t += '-'.repeat(W) + '\n';
+        const dW = 18, qW = 6, vW = 8;
+        t += pR('PRODUTO', dW) + pL('QTD', qW) + pL('VALOR', vW) + '\n';
+        t += '-'.repeat(W) + '\n';
+        (orderedCargaProducts || []).forEach(({ product: p, carga: c }) => {
+          const nome = (p?.nome ?? '???').substring(0, dW);
+          const qty = String(c.quantidade);
+          const val = (c.quantidade * (p?.precoVenda ?? 0)).toFixed(2);
+          t += pR(nome, dW) + pL(qty, qW) + pL(val, vW) + '\n';
+        });
+        t += '-'.repeat(W) + '\n';
+        t += pR('TOTAL:', W - 10) + pL('R$ ' + valorTotalCarga.toFixed(2), 10) + '\n';
+        t += pR('UNIDADES:', W - 6) + pL(String(totalUnidadesCarga), 6) + '\n';
+        t += '='.repeat(W) + '\n';
+        t += '\n\n\n\n\n\n\n\n';
+        // BLOCO 111: canal USB do PC — lista de carga sai pela janela de impressão
+        if (lerCanalImpressao() === 'USB') {
+          imprimirViaUsb(t, '56MM', (m) => {
+            setConfirmAction({ title: 'Erro na Impressao', message: 'Falha: ' + m, icon: 'fa-solid fa-triangle-exclamation', type: 'alert', onConfirm: () => setConfirmAction(null) });
+          });
+          setConfirmAction({ title: 'Janela de impressão aberta', message: 'Escolha a impressora térmica USB do computador e confirme.', icon: 'fa-solid fa-desktop', type: 'success', onConfirm: () => setConfirmAction(null) });
+          return;
+        }
+        try {
+          const ok = await bluetoothPrinter.print(t, '56MM', { skipConfirm: true });
+          if (!ok) {
+            setConfirmAction({ title: 'Impressao nao realizada', message: 'Nenhuma impressora foi conectada.\n\n1. Ligue a impressora Bluetooth\n2. Tente imprimir novamente\n3. Selecione o aparelho na janela do Chrome', icon: 'fa-solid fa-bluetooth-b', type: 'alert', onConfirm: () => setConfirmAction(null) });
+          }
+        } catch (err: any) {
+          const msg = err?.message || 'Erro desconhecido';
+          // BLOCO 82: no iPhone, ensina o caminho que funciona (app Bluefy) em vez de "não disponível" seco
+          if (msg.includes('BLUETOOTH_NAO_SUPORTADO')) {
+            setConfirmAction({ title: isIOSDevice() ? TITULO_IMPRESSAO_IOS : 'Erro na Impressao', message: isIOSDevice() ? TEXTO_IMPRESSAO_IOS : 'Bluetooth nao disponivel neste dispositivo.', icon: isIOSDevice() ? 'fa-brands fa-apple' : 'fa-solid fa-triangle-exclamation', type: 'alert', onConfirm: () => setConfirmAction(null) });
+          } else {
+            setConfirmAction({ title: 'Erro na Impressao', message: 'Falha: ' + msg, icon: 'fa-solid fa-triangle-exclamation', type: 'alert', onConfirm: () => setConfirmAction(null) });
+          }
+        }
+      }
+    });
+  };
+
+
+  if (selectedClient) {
+    const pdvClient = clients.find(c => c.id === selectedClient.id);
+    if (!pdvClient) {
+      return null;
+    }
+
+  return (
+      <PDV
+        /* BLOCO 122: key por cliente+modo — cada atendimento nasce limpo e no modo certo */
+        key={`${pdvClient.id}_${modoAtendimento}`}
+        client={pdvClient} products={products} minhaCarga={minhaCarga} vendedorId={user.id} onCancel={() => setSelectedClient(null)}
+        onFinish={(finishedSale) => {
+          // BLOCO 35: cliente ATENDIDO — card cinza na rota na hora (inclusive pre-venda)
+          markClienteAtendido(finishedSale?.clientId || selectedClient.id);
+          setSelectedClient(null);
+          setActiveTab('ROTEIRO');
+          showToast(modoAtendimento === 'PRE_VENDA' ? "Pedido de pre-venda registrado!" : "Venda realizada com sucesso!", 'success');
+        }}
+        processSale={processSale} processPreVenda={processPreVenda} modoVenda={modoAtendimento} margemMinima={margemMinima} margemMinimaAtiva={margemMinimaAtiva} pix1Name={pix1Name} pix1Code={pix1Code} pix2Name={pix2Name} pix2Code={pix2Code}
+        /* BLOCO 29/64: catálogo pelo estoque do modo — fluxo novo geral (todos os
+           vendedores). Produtos de TESTE continuam só para quem tem a flag rota2. */
+        rota2={fluxoNovoAtivo}
+        verProdutosTeste={user.rota2 === true}
+        modoAtendimento={notaModo}
+        nfcCpfInicial={nfcCpfModo}
+        /* BLOCO 122 (tela 4): NF-e sem CNPJ/email → "Completar cadastro agora" */
+        onCompletarCadastro={completarCadastroDoPDV}
+        sales={sales} 
+        onNavigateToCredit={handleNavigateToCredit}
+        categories={categories}
+        subcategories={subcategories}
+      />
+    );
+  }
+
+  if (viewingSale) {
+    const cupomClient = clients.find(c => c.id === viewingSale.clientId);
+    if (!cupomClient) {
+      setTimeout(() => setViewingSale(null), 0);
+      return null;
+    }
+    const canDeleteSale = (() => {
+      const saleDate = new Date(viewingSale.data);
+      const now = new Date();
+      const sameDay = saleDate.getFullYear() === now.getFullYear()
+        && saleDate.getMonth() === now.getMonth()
+        && saleDate.getDate() === now.getDate();
+      return sameDay;
+    })();
+    return ( <Cupom sale={viewingSale} client={cupomClient} products={products} onClose={() => setViewingSale(null)} onDeleteSale={deleteSale} allowDelete={canDeleteSale} showToast={showToast} allowNota /> );
+  }
+
+  // BLOCO 136: a lista de NOTAS PENDENTES virou ABA (NOTAS_PENDENTES) —
+  // renderizada no fluxo principal de abas (depois da HOME), com voltar para
+  // a HOME pelo botão padrão. Toque no card abre o cupom da venda; ao fechar,
+  // o vendedor volta pra MESMA aba (a pendência some quando a SEFAZ autoriza).
+
+
+  return (
+    <div className="space-y-4 pb-20">
+      {toast && (
+        <div className="fixed top-20 left-4 right-4 z-[300] flex justify-center pointer-events-none">
+          <div className={`${toast.type === 'success' ? 'bg-emerald-600' : 'bg-rose-600'} text-white px-6 py-3 rounded-2xl shadow-2xl font-black text-xs uppercase flex items-center gap-3 animate-in slide-in-from-top`}>
+            <i className={`fa-solid ${toast.type === 'success' ? 'fa-circle-check' : 'fa-circle-exclamation'}`}></i>{toast.message}
+          </div>
+        </div>
+      )}
+
+      {activeTab !== 'HOME' && <button onClick={() => { setActiveTab('HOME'); setCreditSearch(''); }} className="w-10 h-10 bg-white text-blue-600 rounded-xl flex items-center justify-center shadow-sm border border-gray-100 mb-2 active:scale-90 transition-transform"><i className="fa-solid fa-arrow-left"></i></button>}
+
+      {activeTab === 'ENTREGAS' && <FilaEntregas user={user} showToast={showToast} modo="VENDEDOR" />}
+
+      {/* BLOCO 92: Lucro da Rota — só renderiza pro David, mesmo que o estado guarde a aba */}
+      {activeTab === 'LUCRO_ROTA' && podeVerLucroRota(user) && <LucroRotaVendedor user={user} showToast={showToast} />}
+
+      {activeTab === 'HOME' && (
+        <div className="py-4 space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+          <MenuCard icon="fa-route" title="Rota do Dia" tab="ROTEIRO" color="bg-blue-50 text-blue-600" />
+          {/* BLOCO 13: TODO vendedor acompanha a fila de entregas dos seus pedidos (leitura) */}
+          <MenuCard icon="fa-truck" title="Entregas" tab="ENTREGAS" color="bg-emerald-50 text-emerald-600" />
+          {/* BLOCO 136 (regra do dono): notas pendentes viraram ABA (não é mais banner) — o badge conta as vendas sem a nota batida */}
+          <MenuCard icon="fa-file-circle-exclamation" title="Notas Pendentes" tab="NOTAS_PENDENTES" color="bg-rose-50 text-rose-600" badge={notasPendentes.length > 0 ? notasPendentes.length : false} />
+          <MenuCard icon="fa-bell" title="Avisos" tab="AVISOS" color="bg-rose-50 text-rose-600" badge={atRiskClients.length > 0 ? atRiskClients.length : false} />
+          <MenuCard icon="fa-truck-fast" title="Minha Carga" tab="CARGA" color="bg-purple-50 text-purple-600" badge={minhasPendentes.length > 0} />
+          <MenuCard icon="fa-receipt" title="Vendas" tab="HISTORY" color="bg-blue-50 text-[#1E3A5F]" />
+          {/* BLOCO 118: Financeiro NAO aparece para o David (R5) — comissao desativada */}
+          {podeVerFinanceiro(user) && <MenuCard icon="fa-wallet" title="Financeiro" tab="FINANCE" color="bg-emerald-50 text-[#1F7A4D]" badge={(messages || []).some(m => !m.lida && m.type === 'COMMISSION_CONFIRMATION')} />}
+          {/* BLOCO 92: aba exclusiva do David (R5) — lucro da rota na mão do vendedor */}
+          {podeVerLucroRota(user) && <MenuCard icon="fa-chart-line" title="Lucro da Rota" tab="LUCRO_ROTA" color="bg-teal-50 text-teal-600" />}
+          {/* BLOCO 118.3 (regra do dono): CAIXA EXCLUSIVO do David (R5) — os demais vendedores recebem comissao e NAO tem caixa */}
+          {podeVerCaixa(user) && <MenuCard icon="fa-cash-register" title="Caixa" tab="CAIXA" color="bg-gray-100 text-gray-700" />}
+          <MenuCard icon="fa-file-invoice-dollar" title="Contas a Receber" tab="CREDIT" color="bg-rose-50 text-rose-600" />
+          <MenuCard icon="fa-users" title="Clientes" tab="CLIENTES" color="bg-green-50 text-green-600" />
+          <MenuCard icon="fa-calendar-days" title="Roteiro Semanal" tab="WEEKLY" color="bg-indigo-50 text-indigo-600" />
+          <MenuCard icon="fa-boxes-stacked" title="Estoque" tab="STOCK_VIEW" color="bg-yellow-50 text-yellow-600" />
+          </div>
+        </div>
+      )}
+
+      {/* ====================================================================
+          BLOCO 136 (regra do dono): ABA NOTAS PENDENTES — substitui o banner
+          vermelho da HOME. A venda pode fechar sem nota, mas o app NÃO deixa
+          esquecer: a lista fica viva aqui com badge na HOME até a SEFAZ
+          autorizar. Toque no card abre o cupom com a Janela Fiscal dentro.
+          ==================================================================== */}
+      {activeTab === 'NOTAS_PENDENTES' && (
+        <div className="space-y-4">
+          <header className="px-1 flex flex-col gap-1">
+            <h2 className="text-xl font-black text-gray-800 tracking-tight leading-none">Notas Pendentes</h2>
+            <p className="text-[10px] font-black uppercase text-rose-500">Vendas sem a nota batida — toque para bater</p>
+          </header>
+          {notasPendentes.length === 0 && (
+            <div className="text-center py-20 opacity-30 flex flex-col items-center gap-4">
+              <i className="fa-solid fa-circle-check text-5xl"></i>
+              <p className="font-black uppercase tracking-widest text-[10px]">Tudo em dia!</p>
+            </div>
+          )}
+          <div className="grid gap-2">
+            {notasPendentes.map(s => {
+              const c = clients.find(x => x.id === s.clientId);
+              const inten = intencaoNotaDaVenda(s as { modoNota?: string | null; detalhePagamento?: string | null });
+              return (
+                <button key={s.id} onClick={() => setViewingSale(s)}
+                  className="w-full bg-white rounded-3xl border border-rose-100 p-4 shadow-sm flex items-center gap-3 active:scale-[0.98] transition-all text-left">
+                  <div className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 ${s.notaStatus === 'REJEITADA' ? 'bg-rose-50 text-rose-600' : 'bg-amber-50 text-amber-600'}`}>
+                    <i className={`fa-solid ${s.notaStatus === 'REJEITADA' ? 'fa-circle-xmark' : 'fa-hourglass-half'}`}></i>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-black text-gray-800 text-xs uppercase truncate">{c?.nomeFantasia || 'Cliente'}</p>
+                    <p className="text-[9px] font-bold text-gray-400 mt-0.5">
+                      {new Date(s.data).toLocaleDateString('pt-BR')} · R$ {(Number(s.valorTotal) || 0).toFixed(2)}
+                      <span className={`ml-2 px-1.5 py-0.5 rounded ${inten === 'NFE' ? 'bg-violet-50 text-violet-600' : 'bg-blue-50 text-blue-600'}`}>{rotuloDocumentoNota((s as { notaTipo?: string }).notaTipo, inten === 'NFE' ? 'NF-e' : 'NFC-e')}</span>
+                      {s.notaStatus === 'REJEITADA' && s.notaErro ? <span className="block text-rose-500 mt-0.5 truncate">SEFAZ: {s.notaErro}</span> : null}
+                    </p>
+                  </div>
+                  <i className="fa-solid fa-chevron-right text-[10px] text-gray-300"></i>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'AVISOS' && (
+        <div className="space-y-4">
+          <header className="px-1 flex flex-col gap-1">
+            <h2 className="text-xl font-black text-gray-800 tracking-tight leading-none">Avisos</h2>
+            <p className="text-[10px] font-black uppercase text-gray-400">Clientes ausentes há mais de 25 dias</p>
+          </header>
+          <div className="grid gap-2">
+            {atRiskClients.map(c => {
+              const lastDate = formatLastSaleDate(c.id);
+              return (
+                <div key={c.id} className="bg-white p-4 rounded-3xl border border-rose-50 shadow-sm flex items-center justify-between transition-all group">
+                  <div className="flex-1 min-w-0 pr-3">
+                    <h4 className="font-black text-gray-800 text-xs uppercase break-words">{c.nomeFantasia}</h4>
+                    <div className="flex items-center gap-2 mt-1 flex-wrap">
+                      <span className="text-[9px] font-black text-rose-600 uppercase bg-rose-50 px-2 py-0.5 rounded-lg">{c.diasSemCompra} dias</span>
+                      <span className="text-[9px] text-gray-400 font-bold uppercase truncate">Ult: {new Date(c.dataUltimaVenda).toLocaleDateString()}</span>
+                      {lastDate && (
+                        <span className="text-[9px] text-indigo-600 font-black uppercase bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100">
+                          <i className="fa-solid fa-clock mr-1 text-[7px]"></i>Últ: {lastDate}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={() => handleDismissRisk(c.id)}
+                      className="bg-emerald-50 text-emerald-600 w-10 h-10 rounded-2xl flex items-center justify-center border border-emerald-100 active:scale-90 transition-all"
+                      title="Marcar como visto"
+                    >
+                      <i className="fa-solid fa-check"></i>
+                    </button>
+                    <button 
+                      onClick={() => handleAddToTodayRoute(c.id)}
+                      className="bg-blue-600 text-white w-10 h-10 rounded-2xl flex items-center justify-center shadow-lg active:scale-90 transition-all"
+                      title="Puxar p/ hoje"
+                    >
+                      <i className="fa-solid fa-plus"></i>
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+            {atRiskClients.length === 0 && (
+              <div className="text-center py-20 opacity-30 flex flex-col items-center gap-4">
+                <i className="fa-solid fa-circle-check text-5xl"></i>
+                <p className="font-black uppercase tracking-widest text-[10px]">Tudo em dia!</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'ROTEIRO' && (() => {
+        // BLOCO 122 (TELA 1 do fluxo de 8 telas): busca de TODOS os clientes —
+        // quem não está na rota de hoje aparece embaixo e pode ser atendido do
+        // mesmo jeito. Novo cliente direto daqui (antes: sair do fluxo).
+        const q = rotaBusca.trim().toLowerCase();
+        const qDig = rotaBusca.replace(/\D/g, '');
+        const bate = (c: Client) =>
+          (c.nomeFantasia || '').toLowerCase().includes(q) ||
+          (c.nome || '').toLowerCase().includes(q) ||
+          (qDig.length > 0 && (c.telefone || '').replace(/\D/g, '').includes(qDig)) ||
+          (q.length > 1 && (c.bairro || '').toLowerCase().includes(q));
+        const rotaNaBusca = q ? rotaDeHoje.filter(bate) : rotaDeHoje;
+        const idsHoje = new Set(rotaDeHoje.map(c => c.id));
+        const foraDaRota = q
+          ? clients.filter(c => (c.ativo ?? true) && c.rota === (user.rota || 'ROTA_01') && !idsHoje.has(c.id) && bate(c))
+          : [];
+        return (
+        <div className="space-y-4">
+          <header className="flex justify-between items-center px-1">
+            <div className="flex flex-col items-start"><h2 className="text-xl font-black text-gray-800 tracking-tight leading-none">{DIAS_SEMANA[diaAtual] ?? 'N/D'}</h2><span className="text-[10px] font-black uppercase text-gray-400 mt-1">{new Date().toLocaleDateString()}</span></div>
+            <div className="flex items-center gap-2">
+              <span className="bg-blue-100 text-blue-600 text-[10px] px-2 py-1 rounded-lg font-black uppercase">{rotaNaBusca.length} VISITAS</span>
+              <button onClick={() => handleOpenEditClient('NEW')} className="bg-green-600 text-white px-3 py-2 rounded-xl font-black text-[10px] uppercase shadow-md active:scale-95">
+                <i className="fa-solid fa-user-plus mr-1.5"></i>Novo
+              </button>
+            </div>
+          </header>
+
+          {/* BLOCO 122: busca de todos os clientes (nome, telefone, bairro) */}
+          <div className="px-1 relative">
+            <div className="relative">
+              <i className="fa-solid fa-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-lg"></i>
+              <input
+                type="text"
+                value={rotaBusca}
+                onChange={e => setRotaBusca(e.target.value)}
+                placeholder="Buscar cliente (nome, telefone, bairro)..."
+                className="w-full pl-12 pr-10 py-3 bg-white border border-gray-200 rounded-2xl shadow-sm text-sm outline-none focus:ring-2 focus:ring-blue-100"
+              />
+              {rotaBusca && (
+                <button onClick={() => setRotaBusca('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 active:text-gray-600 p-2" aria-label="Limpar busca">
+                  <i className="fa-solid fa-xmark text-lg"></i>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {rotaNaBusca.map(c => {
+            const isSold = (sales || []).some(s => s.clientId === c.id && isSameDay(s.data));
+            const isSkipped = (dailyRouteState?.skippedClientIds || []).includes(c.id) || optimisticSkipped.includes(c.id);
+            // BLOCO 35: atendidosHoje cobre PRE-VENDA (que nao entra em sales ate a entrega)
+            const isVisited = (isSold || isSkipped || atendidosHoje.includes(c.id)) && !reopenedClientIds.includes(c.id);
+            const lastSale = (sales || []).filter(s => s.clientId === c.id).sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime())[0];
+            const isExpanded = expandedRouteClientId === c.id;
+            return (
+              <div key={c.id} className={`rounded-3xl border transition-all overflow-hidden ${isVisited ? 'bg-gray-100 border-gray-200 grayscale opacity-60' : 'bg-white border-gray-100 shadow-sm'}`}>
+                <div className={`p-4 flex items-center justify-between`}>
+                  <div className="flex-1 min-w-0 cursor-pointer pr-3" onClick={() => setViewingClientHistory(c)}>
+                    <p className="font-bold text-gray-800 leading-tight uppercase">{c.nomeFantasia ?? 'Cliente'}</p>
+
+                  </div>
+                  {!isVisited ? (
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <button onClick={() => handleAtenderClient(c)} className="bg-blue-600 text-white px-4 py-2 rounded-2xl font-black text-xs uppercase shadow-lg whitespace-nowrap">Atender</button>
+                      <button onClick={() => setConfirmSkipId(c.id)} className="w-9 h-9 bg-gray-50 text-gray-400 rounded-xl flex items-center justify-center" title="Pular"><i className="fa-solid fa-forward text-[10px]"></i></button>
+                      <button onClick={(e) => { e.stopPropagation(); setExpandedRouteClientId(isExpanded ? null : c.id); }} className={`w-9 h-9 rounded-lg flex items-center justify-center transition-all ${isExpanded ? 'bg-blue-100 text-blue-600 rotate-180' : 'bg-gray-50 text-gray-400'}`}><i className="fa-solid fa-chevron-down text-[10px]"></i></button>
+                    </div>
+                  ) : (
+                    <button onClick={() => handleReopenClient(c.id)} className="bg-white text-blue-600 border border-blue-200 px-4 py-2 rounded-xl text-[9px] font-black uppercase whitespace-nowrap">Reabrir</button>
+                  )}
+                </div>
+                {isExpanded && !isVisited && (
+                  <div className="px-4 pb-4 pt-0 space-y-2 animate-in slide-in-from-top-1 duration-200">
+                    <div className="flex items-center gap-2 bg-gray-50 p-3 rounded-2xl">
+                      <i className="fa-solid fa-calendar text-blue-400 text-xs"></i>
+                      <span className="text-[10px] text-gray-600 font-semibold">Ultimo pedido: {lastSale ? `${lastSale.data.toLocaleDateString()} — R$ ${lastSale.valorTotal.toFixed(2)}` : 'Nenhum registro'}</span>
+                    </div>
+                    <div className="flex gap-2">
+                      {c.telefone && (
+                        <button onClick={() => { const phone = c.telefone.replace(/\D/g, ''); window.open(`https://wa.me/55${phone}`, '_blank'); }} className="flex-1 bg-green-50 text-green-600 py-2.5 rounded-xl flex items-center justify-center gap-2 text-[10px] font-black uppercase active:scale-95">
+                          <i className="fa-brands fa-whatsapp text-sm"></i> WhatsApp
+                        </button>
+                      )}
+                      <button onClick={() => { if (c.localizacao?.lat && c.localizacao?.lng) { window.open(`https://www.google.com/maps/dir/?api=1&destination=${c.localizacao.lat},${c.localizacao.lng}&travelmode=driving`, '_blank'); } else { window.open(`https://www.google.com/maps/search/${encodeURIComponent((c.endereco || '') + ', ' + (c.bairro || ''))}`, '_blank'); } }} className="flex-1 bg-blue-50 text-blue-600 py-2.5 rounded-xl flex items-center justify-center gap-2 text-[10px] font-black uppercase active:scale-95">
+                        <i className="fa-solid fa-diamond-turn-right text-xs"></i> Navegar
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {/* BLOCO 122: clientes FORA da rota de hoje — busca global completa.
+              Tudo que casou e não é do dia aparece aqui, com Atender igual. */}
+          {foraDaRota.length > 0 && (
+            <div className="space-y-2 pt-1">
+              <p className="text-[10px] font-black text-gray-400 uppercase px-1 tracking-wider">Fora da rota de hoje ({foraDaRota.length})</p>
+              {foraDaRota.map(c => (
+                <div key={c.id} className="bg-white p-4 rounded-3xl border border-amber-200 shadow-sm flex items-center justify-between">
+                  <div className="flex-1 min-w-0 pr-3">
+                    <p className="font-bold text-gray-800 leading-tight uppercase break-words">{c.nomeFantasia ?? 'Cliente'}</p>
+                    <p className="text-[9px] text-gray-400 font-semibold uppercase mt-0.5 break-words">
+                      {c.endereco || '—'}{c.bairro ? ` — ${c.bairro}` : ''}{c.telefone ? ` · ${c.telefone}` : ''}
+                    </p>
+                  </div>
+                  <button onClick={() => handleAtenderClient(c)} className="bg-blue-600 text-white px-4 py-2 rounded-2xl font-black text-xs uppercase shadow-lg whitespace-nowrap">Atender</button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {q && rotaNaBusca.length === 0 && foraDaRota.length === 0 && (
+            <div className="py-14 text-center opacity-50 flex flex-col items-center gap-3">
+              <i className="fa-solid fa-magnifying-glass-minus text-4xl"></i>
+              <p className="font-black uppercase tracking-widest text-[10px]">Nada encontrado para "{rotaBusca}".</p>
+              <p className="text-[9px] font-bold text-gray-400 uppercase">Se for novo, toque em Novo lá em cima.</p>
+            </div>
+          )}
+        </div>
+        );
+      })()}
+
+      {activeTab === 'CLIENTES' && (
+        <div className="space-y-4">
+          <header className="px-1 flex justify-between items-center">
+            <h2 className="text-xs font-black text-gray-400 uppercase tracking-wider">Meus Clientes</h2>
+            <button onClick={() => handleOpenEditClient('NEW')} className="bg-green-600 text-white px-4 py-2 rounded-xl font-black text-xs uppercase shadow-md active:scale-95">
+              <i className="fa-solid fa-user-plus mr-2"></i>Novo
+            </button>
+          </header>
+          
+          {/* NOVO: Campo de busca com lupa */}
+          <div className="px-1 relative">
+            <div className="relative">
+              <i className="fa-solid fa-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-lg"></i>
+              <input
+                type="text"
+                value={clientSearch}
+                onChange={e => setClientSearch(e.target.value)}
+                placeholder="Buscar por nome, telefone ou bairro..."
+                className="w-full pl-12 pr-4 py-3 bg-white border border-gray-200 rounded-2xl shadow-sm text-sm outline-none focus:ring-2 focus:ring-green-100"
+              />
+              {clientSearch && (
+                <button
+                  onClick={() => setClientSearch('')}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 active:text-gray-600 p-2"
+                >
+                  <i className="fa-solid fa-xmark text-lg"></i>
+                </button>
+              )}
+            </div>
+            {clientSearch && (
+              <p className="text-[10px] text-green-600 font-black uppercase mt-2 ml-1">
+                {filteredClients.length} cliente(s) encontrado(s)
+              </p>
+            )}
+          </div>
+
+          <div className="grid gap-3 px-1">
+            {filteredClients.map(c => (
+              <div key={c.id} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex items-center gap-3 transition-all min-w-0 active:scale-95 group">
+                {/* SEM SETAS DE ORDENAÇÃO - REMOVIDAS CONFORME SOLICITADO */}
+                {/* BLOCO 109 (padrao BLOCO 99 do admin): card a prova de estouro —
+                    nome quebra de linha (break-words) e NUNCA empurra o botao editar de lado */}
+                <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setViewingClientHistory(c)}>
+                  <div className="flex items-center gap-2 flex-wrap min-w-0">
+                    <h4 className="font-bold text-gray-800 text-sm leading-tight uppercase break-words min-w-0">{c.nomeFantasia ?? 'Cliente'}</h4>
+                    {/* BLOCO 70B: selo do cliente ESPECIAL GB na lista */}
+                    {c.clienteEspecialGb && <span className="text-[8px] font-black text-amber-700 bg-amber-100 border border-amber-200 px-1.5 py-0.5 rounded-md uppercase whitespace-nowrap flex-shrink-0"><i className="fa-solid fa-star mr-0.5"></i>GB</span>}
+                    {c.telefone && (
+                      <a
+                        href={`https://wa.me/55${c.telefone.replace(/\D/g, '')}`}
+                        target="_blank"
+                        className="text-emerald-500 flex-shrink-0"
+                        onClick={(e) => e.stopPropagation()}
+                        aria-label={`WhatsApp ${c.nomeFantasia ?? 'cliente'}`}
+                      >
+                        <i className="fa-brands fa-whatsapp text-lg"></i>
+                      </a>
+                    )}
+                  </div>
+                  <p className="text-[10px] text-gray-400 font-semibold uppercase mt-1 break-words">{c.telefone} • {DIAS_SEMANA[c.diaRoteiro]}</p>
+                </div>
+                <div className="flex flex-col gap-1 flex-shrink-0">
+                  <button onClick={(e) => { e.stopPropagation(); handleOpenEditClient(c); }} className="w-10 h-10 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center active:scale-95" aria-label={`Editar ${c.nomeFantasia ?? 'cliente'}`}><i className="fa-solid fa-pencil-alt text-xs"></i></button>
+                </div>
+              </div>
+            ))}
+            {filteredClients.length === 0 && clientSearch && (
+              <div className="text-center py-12 opacity-30 flex flex-col items-center gap-4">
+                <i className="fa-solid fa-magnifying-glass text-4xl text-gray-300"></i>
+                <p className="font-black uppercase tracking-widest text-[10px]">Nenhum cliente encontrado</p>
+                <p className="text-[9px] text-gray-400">Tente outra busca</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'WEEKLY' && (
+        <div className="space-y-6 py-4">
+          <div className="px-1 flex justify-between items-center"><h2 className="text-xl font-black text-gray-800 tracking-tight">Roteiro Semanal</h2></div>
+          <div className="px-1"><input value={weeklySearch} onChange={e => setWeeklySearch(e.target.value)} placeholder="Filtrar por nome..." className="w-full p-4 bg-white border border-gray-100 rounded-2xl shadow-sm text-sm outline-none focus:ring-2 focus:ring-indigo-100" /></div>
+          <div className="space-y-3 px-1">
+            {[1, 2, 3, 4, 5, 6].map(dia => {
+              const isOpen = expandedDay === dia;
+              const clientsInDay = (clients || [])
+                .filter(c => c.diaRoteiro === dia && c.ativo && c.rota === (user.rota || 'ROTA_01') && (weeklySearch === '' || (c.nomeFantasia || '').toLowerCase().includes(weeklySearch.toLowerCase())))
+                .sort((a, b) => {
+                  const orderMap = new Map(clientOrder.map((id, idx) => [id, idx]));
+                  const idxA = orderMap.get(a.id) ?? (a.ordem || 0);
+                  const idxB = orderMap.get(b.id) ?? (b.ordem || 0);
+                  return idxA - idxB;
+                }); 
+              return (
+                <div key={dia} className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
+                  <button onClick={() => setExpandedDay(isOpen ? null : dia)} className={`w-full flex items-center justify-between p-5 text-left ${isOpen ? 'bg-indigo-50 text-indigo-700' : 'bg-white text-gray-700'}`}>
+                    <div className="flex items-center gap-3"><div className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-[10px] ${isOpen ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-400'}`}>{dia}</div><span className="font-black uppercase text-xs tracking-tight">{DIAS_SEMANA[dia]}</span></div>
+                    <div className="flex items-center gap-2"><span className="text-[9px] font-black uppercase opacity-40">{clientsInDay.length} clients</span><i className={`fa-solid ${isOpen ? 'fa-chevron-up' : 'fa-chevron-down'} text-[10px]`}></i></div>
+                  </button>
+                  {isOpen && (
+                    <div className="p-4 bg-white space-y-2 border-t border-indigo-50">
+                      {clientsInDay.map(c => (
+                        <div key={c.id} className="p-3 bg-gray-50 rounded-2xl flex items-center justify-between group">
+                          <div className="flex flex-col gap-1 mr-3">
+                            <button onClick={(e)=>{e.stopPropagation(); moveClientInDay(c.id, 'UP', dia);}} className="w-9 h-9 bg-white border text-gray-400 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-chevron-up text-[10px]"></i></button>
+                            <button onClick={(e)=>{e.stopPropagation(); moveClientInDay(c.id, 'DOWN', dia);}} className="w-9 h-9 bg-white border text-gray-400 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-chevron-down text-[10px]"></i></button>
+                          </div>
+                          <div className="flex-1 cursor-pointer min-w-0" onClick={() => setViewingClientHistory(c)}>
+                            <p className="font-bold text-gray-800 text-xs uppercase break-words">{c.nomeFantasia}</p>
+                            <p className="text-[9px] text-gray-400 font-bold mt-0.5">{c.bairro || 'Sem Bairro'}</p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button onClick={() => handleAddToTodayRoute(c.id)} className="w-9 h-9 bg-indigo-100 text-indigo-600 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-plus text-xs"></i></button>
+                            <button onClick={(e)=>{e.stopPropagation(); handleOpenEditClient(c);}} className="w-9 h-9 bg-blue-50 text-blue-600 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-pencil-alt text-xs"></i></button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'CARGA' && (
+        <div className="space-y-4">
+          {minhasPendentes.length > 0 && (() => {
+            const pend = minhasPendentes[0];
+            const itensPend = pend.itens || [];
+            const unidadesPend = itensPend.reduce((a, i) => a + (i.quantidade || 0), 0);
+            const precoMap = new Map(products.map(p => [p.id, p.precoVenda || 0]));
+            const valorPend = itensPend.reduce((a, i) => a + (i.quantidade || 0) * (precoMap.get(i.produtoId) || 0), 0);
+            const handleAceitar = async () => {
+              const r = await aceitarCarga(pend.id);
+              if (r?.ok) showToast('Carga aceita! Estoque da van atualizado.');
+              else showToast(r?.erro || 'Erro ao aceitar a carga.', 'error');
+            };
+            return (
+              <div className="bg-orange-50 p-6 rounded-3xl shadow-xl flex flex-col gap-4 items-center text-center">
+                <i className="fa-solid fa-truck-loading text-orange-600 text-4xl mb-2"></i>
+                <h3 className="text-xl font-black text-orange-800 uppercase">Nova Carga Disponível!</h3>
+                <p className="text-xs font-black text-orange-700 uppercase">{unidadesPend} unidades · R$ {valorPend.toFixed(2)}</p>
+                {unidadesPend > 0 ? (
+                  <button onClick={handleAceitar} className="w-full bg-orange-600 text-white font-black py-5 rounded-2xl shadow-lg active:scale-95 text-sm uppercase">ACEITAR CARGA</button>
+                ) : (
+                  <p className="text-[11px] font-bold text-red-600 uppercase">Esta carga veio vazia (erro de envio). Peça ao admin para reenviar.</p>
+                )}
+              </div>
+            );
+          })()}
+          <div className="bg-purple-600 text-white p-6 rounded-3xl shadow-xl flex justify-between items-center gap-3 min-w-0">
+                 <div className="min-w-0"><p className="text-[10px] font-black uppercase opacity-60">Valor Total Carga</p><h3 className="text-xl sm:text-2xl font-black tabular-nums break-words">R$ {valorTotalCarga.toFixed(2)}</h3></div>
+                 <div className="text-right min-w-0"><p className="text-[10px] font-black uppercase opacity-60">Volume Total</p><h3 className="text-xl sm:text-2xl font-black tabular-nums">{totalUnidadesCarga}</h3></div>
+              </div>
+
+              <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left">
+                    <thead className="bg-gray-50"><tr><th className="px-3 py-3 text-[10px] font-black text-gray-400 uppercase">Item</th><th className="px-3 py-3 text-center text-[10px] font-black text-gray-400 uppercase">Preço</th><th className="px-3 py-3 text-right text-[10px] font-black text-gray-400 uppercase">Qtd</th></tr></thead>
+                    <tbody className="divide-y divide-gray-50">
+                      {orderedCargaProducts.map(({ product: p, carga: c }) => (
+                        <tr key={c.produtoId}>
+                          <td className="px-3 py-3 text-xs font-semibold uppercase break-words min-w-[110px]">{p.nome ?? 'Desc.'}</td>
+                          <td className="px-3 py-3 text-center text-xs text-gray-400 whitespace-nowrap">R$ {(p.precoVenda ?? 0).toFixed(2)}</td>
+                          <td className="px-3 py-3 text-right font-black text-lg text-blue-600">{c.quantidade}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+                            <button 
+                onClick={handlePrintCarga}
+                className="w-full bg-slate-800 text-white font-black py-5 rounded-[2rem] shadow-xl active:scale-95 transition-all uppercase text-[11px] tracking-[0.2em] flex items-center justify-center gap-3"
+              >
+                <i className="fa-solid fa-print text-lg"></i> Imprimir Carga
+              </button>
+        </div>
+      )}
+
+      {activeTab === 'HISTORY' && (
+        <div className="space-y-4">
+          <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner">{(['DIA', 'SEMANA', 'MES', 'GERAL'] as const).map(f => (<button key={f} onClick={() => setHistoryFilter(f)} className={`flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase ${historyFilter === f ? 'bg-white text-[#1E3A5F] shadow-sm' : 'text-gray-400'}`}>{f}</button>))}</div>
+          <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-md flex flex-col gap-4">
+             <div className="flex justify-between items-center gap-2 min-w-0 border-b border-gray-100 pb-3"><span className="text-xs font-black text-gray-400 uppercase shrink-0">Total Geral</span><span className="text-xl sm:text-2xl font-black text-gray-900 tabular-nums break-words text-right">R$ {historySummary.total.toFixed(2)}</span></div>
+             <div className="grid grid-cols-3 gap-2">
+                <div className="text-center bg-emerald-50 p-2 px-1 rounded-xl min-w-0"><p className="text-[9px] font-black text-emerald-600 uppercase mb-1">Dinheiro</p><p className="text-[11px] sm:text-sm font-black text-emerald-700 tabular-nums break-words">R$ {historySummary.dinheiro.toFixed(2)}</p></div>
+                <div className="text-center bg-blue-50 p-2 px-1 rounded-xl min-w-0"><p className="text-[9px] font-black text-blue-600 uppercase mb-1">Pix</p><p className="text-[11px] sm:text-sm font-black text-blue-700 tabular-nums break-words">R$ {historySummary.pix.toFixed(2)}</p></div>
+                <div className="text-center bg-orange-50 p-2 px-1 rounded-xl min-w-0"><p className="text-[9px] font-black text-orange-600 uppercase mb-1">A Receber</p><p className="text-[11px] sm:text-sm font-black text-orange-700 tabular-nums break-words">R$ {historySummary.prazo.toFixed(2)}</p></div>
+             </div>
+          </div>
+          <div className="grid gap-3 px-1">
+            {filteredHistory.map(s => {
+              const client = clients.find(c => c.id === s.clientId);
+              const isCheque = s.metodoPagamento === 'A_PRAZO' && s.detalhePagamento?.toUpperCase().includes('CHEQUE');
+              const naFila = preVendaNaFila(s);
+              
+              return (
+                <div key={s.id} className={`bg-white p-5 rounded-[2rem] border shadow-sm flex items-center justify-between min-w-0 transition-all active:scale-[0.98] hover:border-blue-200 group ${naFila ? 'border-dashed border-amber-200' : 'border-gray-100'}`}>
+                  <div className="flex-1 min-w-0 pr-4">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mb-1 min-w-0">
+                      {naFila ? (
+                        <span className="text-[8px] font-black px-2 py-0.5 rounded-full uppercase tracking-wide bg-amber-50 text-amber-600 border border-amber-100">NA FILA</span>
+                      ) : (
+                        <span className={`text-[8px] font-black px-2 py-0.5 rounded-full uppercase tracking-wide ${
+                          s.metodoPagamento === 'DINHEIRO' ? 'bg-emerald-50 text-emerald-600' : 
+                          s.metodoPagamento === 'PIX' ? 'bg-blue-50 text-blue-600' : 
+                          isCheque ? 'bg-purple-50 text-purple-600' :
+                          'bg-orange-50 text-orange-600'
+                        }`}>
+                          {isCheque ? 'CHEQUE' : s.metodoPagamento === 'A_PRAZO' ? 'PRAZO' : s.metodoPagamento}
+                        </span>
+                      )}
+                      <span className="text-[9px] text-gray-300 font-bold">{new Date(s.data).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
+                      {/* BLOCO 135 (regra do dono): badge com o documento CERTO — NFC quando é NFC-e, NF-e quando é NF-e ("onde tem NF 17 deve aparecer NFC 17, pois é NFC e não NFE") */}
+                      {s.notaStatus === 'AUTORIZADA' && (<span className="text-[8px] font-black px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-600 uppercase">{rotuloDocumentoNota(s.notaTipo)} {s.notaNumero || '✓'}</span>)}
+                      {s.notaStatus === 'REJEITADA' && (<span className="text-[8px] font-black px-1.5 py-0.5 rounded-full bg-rose-50 text-rose-600 uppercase">{rotuloDocumentoNota(s.notaTipo)} ✗</span>)}
+                      {s.notaStatus === 'EMITINDO' && (<span className="text-[8px] font-black px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-600 uppercase">{rotuloDocumentoNota(s.notaTipo)}...</span>)}
+                    </div>
+                    <h4 className="font-black text-gray-800 text-[13px] leading-tight uppercase break-words cursor-pointer hover:text-blue-600" onClick={() => setViewingClientHistory(client!)}>
+                      {client?.nomeFantasia ?? 'Cliente'}
+                    </h4>
+                  </div>
+                  <div className="text-right flex items-center gap-2 sm:gap-4 shrink-0">
+                    <div>
+                      <p className="text-sm font-black text-gray-800 leading-none tabular-nums whitespace-nowrap">R$ {s.valorTotal.toFixed(2)}</p>
+                      <p className="text-[9px] text-gray-400 font-bold uppercase mt-1">Total</p>
+                    </div>
+                    <button onClick={() => setViewingSale(s)} className="w-10 h-10 bg-gray-50 text-gray-400 group-hover:bg-blue-600 group-hover:text-white rounded-2xl flex items-center justify-center transition-all">
+                      <i className="fa-solid fa-file-invoice text-sm"></i>
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* BLOCO 118: render também protegido — David (R5) nunca vê o Financeiro (comissao desativada) */}
+      {activeTab === 'FINANCE' && podeVerFinanceiro(user) && (
+        <div className="space-y-6">
+           {liberadoPendenteTotal > 0 && (
+             <div className="bg-gradient-to-r from-amber-500 to-orange-500 rounded-3xl p-5 shadow-lg text-white">
+               <div className="flex items-center justify-between gap-3 min-w-0">
+                 <div className="min-w-0">
+                   <p className="text-[9px] font-black uppercase opacity-80"><i className="fa-solid fa-hand-holding-dollar mr-1"></i>Comissão liberada pelo admin</p>
+                   <h3 className="text-xl sm:text-2xl font-black mt-0.5 tabular-nums break-words">R$ {liberadoPendenteTotal.toFixed(2)}</h3>
+                   <p className="text-[9px] font-bold uppercase opacity-80 mt-1">Confirme que recebeu — toque no recibo</p>
+                 </div>
+                 <button onClick={darRecibo} disabled={dandoRecibo} className="bg-white text-amber-600 font-black px-3 py-3.5 rounded-2xl shadow-md active:scale-95 transition-transform text-[10px] uppercase whitespace-nowrap shrink-0">
+                   <i className={`fa-solid ${dandoRecibo ? 'fa-spinner fa-spin' : 'fa-file-signature'} mr-1.5`}></i>{dandoRecibo ? 'Enviando' : 'Dar recibo'}
+                 </button>
+               </div>
+             </div>
+           )}
+           <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner">{(['DIA', 'SEMANA', 'MES', 'GERAL'] as const).map(f => (<button key={f} onClick={() => setFinanceFilter(f)} className={`flex-1 py-2 rounded-xl text-[9px] font-black uppercase ${financeFilter === f ? 'bg-white text-emerald-600 shadow-sm' : 'text-gray-400'}`}>{f}</button>))}</div>
+           
+           <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col text-center">
+              <p className="text-[9px] font-black uppercase text-gray-400 mb-1">Comissões Geradas no Período</p>
+              <h2 className="text-2xl font-black text-blue-600 tabular-nums break-words">R$ {financeStats.totalGerado.toFixed(2)}</h2>
+           </div>
+
+           <div className="grid grid-cols-2 gap-3">
+              <div className="bg-orange-50 p-4 rounded-3xl shadow-sm border border-orange-100 min-w-0">
+                <p className={`text-[9px] font-black text-orange-600 uppercase mb-1`}>A receber</p>
+                <p className="text-lg sm:text-xl font-black text-orange-700 tabular-nums break-words">R$ {financeStats.aReceber.toFixed(2)}</p>
+                <p className={`text-[9px] font-bold text-orange-400 uppercase mt-1`}>Vendas a prazo</p>
+              </div>
+              <div className={`${financeStats.liberadas < 0 ? 'bg-rose-50 border-rose-100' : 'bg-emerald-50 border-emerald-100'} p-4 rounded-3xl shadow-md border min-w-0`}>
+                <p className={`text-[9px] font-black ${financeStats.liberadas < 0 ? 'text-rose-600' : 'text-emerald-600'} uppercase mb-1`}>Liberadas</p>
+                <p className={`text-lg sm:text-xl font-black ${financeStats.liberadas < 0 ? 'text-rose-700' : 'text-emerald-700'} tabular-nums break-words`}>R$ {financeStats.liberadas.toFixed(2)}</p>
+                <p className={`text-[9px] font-bold ${financeStats.liberadas < 0 ? 'text-rose-400' : 'text-emerald-400'} uppercase mt-1`}>Disponível para saque</p>
+              </div>
+           </div>
+
+           <div className="bg-gray-900 text-white p-6 rounded-[2.5rem] shadow-xl flex justify-between items-center gap-3 min-w-0">
+              <div>
+                 <p className="text-[10px] font-black uppercase opacity-60 mb-1">Total Já Pago pelo Admin (com recibo)</p>
+                 <h3 className="text-xl sm:text-2xl font-black text-emerald-400 tabular-nums break-words">R$ {financeStats.pagas.toFixed(2)}</h3>
+              </div>
+              <i className="fa-solid fa-circle-check text-emerald-400 text-3xl opacity-30"></i>
+           </div>
+
+           <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-xs font-black text-gray-800 uppercase tracking-widest">Lançar Despesa</h3>
+                <button 
+                  onClick={() => setShowExpenseForm(!showExpenseForm)} 
+                  className={`w-10 h-10 rounded-2xl flex items-center justify-center transition-all ${showExpenseForm ? 'bg-rose-100 text-rose-600' : 'bg-blue-100 text-blue-600'}`}
+                >
+                  <i className={`fa-solid ${showExpenseForm ? 'fa-xmark' : 'fa-plus'}`}></i>
+                </button>
+              </div>
+              
+              {showExpenseForm && (
+                <div className="space-y-4 animate-in fade-in slide-in-from-top-2 duration-300">
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Descrição do Gasto</label>
+                    <input 
+                      value={expenseDesc} 
+                      onChange={e => setExpenseDesc(e.target.value)} 
+                      placeholder="Ex: Combustível, Almoço..." 
+                      className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-semibold outline-none"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Valor R$</label>
+                    <input 
+                      type="number" 
+                      value={expenseVal} 
+                      onChange={e => setExpenseVal(e.target.value)} 
+                      placeholder="0.00" 
+                      className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-lg font-black outline-none"
+                    />
+                  </div>
+                  <button 
+                    onClick={handleLaunchExpense}
+                    className="w-full bg-rose-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 transition-all uppercase text-xs tracking-widest"
+                  >
+                    Confirmar Despesa
+                  </button>
+                </div>
+              )}
+           </div>
+
+           {/* Historico de Repasses oculto - visivel apenas no admin (tela Caixa) */}
+
+           <div className="space-y-2 pt-4">
+             <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">Notificações</h3>
+             <div className="bg-white rounded-3xl border border-gray-100 shadow-sm divide-y divide-gray-50 overflow-hidden">
+                {messages.filter(m => m.vendedorId === user.id).sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime()).map(m => (
+                    <div key={m.id} className={`p-4 flex justify-between items-center transition-colors ${!m.lida ? 'bg-blue-50/50' : 'bg-white'}`}>
+                        <div className="flex-1 pr-3">
+                            <p className={`text-[11px] font-black uppercase leading-none mb-1 ${!m.lida ? 'text-blue-700' : 'text-gray-700'}`}>{m.titulo}</p>
+                            <p className="text-[10px] font-semibold text-gray-500 mt-1">{m.mensagem}</p>
+                            <p className="text-[9px] text-gray-400 mt-1">{new Date(m.data).toLocaleDateString()} {new Date(m.data).toLocaleTimeString()}</p>
+                        </div>
+                        {!m.lida && m.type === 'COMMISSION_CONFIRMATION' && (
+                            <button 
+                                onClick={() => handleMarkMessageAsRead(m.id)} 
+                                className="bg-emerald-600 text-white px-3 py-2 rounded-xl text-[9px] font-black uppercase active:scale-95 shadow-md"
+                            >
+                                Confirmar
+                            </button>
+                        )}
+                        {m.lida && <i className="fa-solid fa-check-circle text-emerald-500 text-lg"></i>}
+                    </div>
+                ))}
+                {messages.filter(m => m.vendedorId === user.id).length === 0 && (
+                    <div className="text-center py-8 opacity-30 italic text-[9px] uppercase font-bold tracking-widest">Nenhuma notificação.</div>
+                )}
+             </div>
+           </div>
+        </div>
+      )}
+
+      {/* BLOCO 118.3: Caixa EXCLUSIVO do David (R5) — render protegido mesmo que o estado guarde a aba */}
+      {activeTab === 'CAIXA' && podeVerCaixa(user) && <CaixaFechamento user={user} showToast={showToast} />}
+
+      {activeTab === 'CREDIT' && (
+        <div className="space-y-4">
+          <header className="px-1 flex justify-between items-center">
+            <h2 className="text-xs font-black text-gray-400 uppercase tracking-wider">Contas a Receber</h2>
+            <button 
+              onClick={() => setFilterOverdueOnly(!filterOverdueOnly)}
+              className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all flex items-center gap-2 shadow-sm ${filterOverdueOnly ? 'bg-rose-600 text-white' : 'bg-white text-gray-400 border border-gray-100'}`}
+            >
+              <i className={`fa-solid ${filterOverdueOnly ? 'fa-calendar-exclamation' : 'fa-calendar-days'}`}></i>
+              {filterOverdueOnly ? 'Vencidas/Hoje' : 'Todas'}
+            </button>
+          </header>
+
+          <div className="flex flex-wrap bg-gray-100 p-1 rounded-2xl mx-1 shadow-inner overflow-hidden gap-1">
+            {(['TODOS', 'COMUM', 'CHEQUE', 'BOLETO'] as const).map(t => (
+              <button 
+                key={t} 
+                onClick={() => setCreditTypeFilter(t)} 
+                className={`flex-1 min-w-[70px] py-2.5 rounded-xl text-[9px] font-black uppercase transition-all ${creditTypeFilter === t ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}
+              >
+                {t === 'COMUM' ? 'Comum' : t}
+              </button>
+            ))}
+          </div>
+
+          <div className="px-1">
+            <input value={creditSearch} onChange={e => setCreditSearch(e.target.value)} placeholder="Buscar cliente..." className="w-full p-4 bg-white border border-gray-100 rounded-2xl shadow-sm text-sm outline-none focus:ring-2 focus:ring-blue-100" />
+          </div>
+
+          <div className="grid gap-3">
+            {contasAReceber.map(s => {
+              const saldo = Number(((s.valorTotal ?? 0) - (s.valorPago ?? 0)).toFixed(2)); 
+              const today = new Date();
+              today.setHours(0,0,0,0);
+              const dueDate = s.dataVencimento ? new Date(s.dataVencimento) : null;
+              if (dueDate) dueDate.setHours(0,0,0,0);
+              const isOverdue = dueDate ? dueDate <= today : false;
+
+              return (
+              <div key={s.id} className={`p-5 rounded-3xl border shadow-sm flex flex-col transition-all min-w-0 ${isOverdue ? 'bg-rose-50 border-rose-200' : 'bg-white border-gray-100'}`}>
+                <div className="flex justify-between items-start mb-2 gap-2">
+                   <div className="flex-1 pr-4 min-w-0">
+                      <h4 className={`font-bold text-sm leading-tight uppercase cursor-pointer break-words ${isOverdue ? 'text-rose-900' : 'text-gray-800'}`} onClick={() => { const c = (allClients || []).find(x => x.id === s.clientId) || clients.find(x => x.id === s.clientId); if (c) setViewingClientHistory(c); }}>{nomeClienteDe(s.clientId)}</h4>
+                      <div className="flex flex-col mt-2">
+                        <span className={`text-[9px] font-black uppercase ${isOverdue ? 'text-rose-600' : 'text-gray-400'}`}>Vencimento</span>
+                        <span className={`text-xs font-black ${isOverdue ? 'text-rose-700' : 'text-gray-800'}`}>{s.dataVencimento ? new Date(s.dataVencimento).toLocaleDateString() : 'N/D'}</span>
+                        <span className="text-[9px] font-black uppercase text-blue-600 mt-1 break-all">{s.detalhePagamento || 'COMUM'}</span>
+                      </div>
+                      
+                      {s.detalhePagamento && (
+                        <div className="mt-3 space-y-1">
+                          <p className="text-[9px] font-black text-gray-400 uppercase">Histórico de Recebimentos:</p>
+                          <div className="bg-gray-50/50 p-2 rounded-xl border border-gray-100 max-h-24 overflow-y-auto">
+                            {s.detalhePagamento.split('|').map((log, i) => (
+                              <p key={i} className="text-[9px] font-bold text-gray-500 border-b border-gray-100 last:border-0 pb-1 mb-1 break-all">{log.trim()}</p>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                   </div>
+                   <div className="text-right">
+                      <span className={`text-[9px] font-black px-2 py-0.5 rounded uppercase ${isOverdue ? 'bg-rose-600 text-white animate-pulse' : 'bg-orange-100 text-orange-600'}`}>
+                        {isOverdue ? 'VENCIDO / HOJE' : 'PENDENTE'}
+                      </span>
+                      <p className="text-base sm:text-lg font-black mt-2 text-rose-600 tabular-nums break-words">Saldo: R$ {saldo.toFixed(2)}</p>
+                   </div>
+                </div>
+                <button onClick={(e) => { e.stopPropagation(); setShowReceiveModal(s); setValorRecebidoParcial(saldo.toString()); }} className={`w-full py-3 rounded-2xl text-[10px] font-black uppercase mt-3 shadow-lg active:scale-95 ${isOverdue ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white'}`}>Receber Agora</button>
+                <div className="flex gap-2 mt-2">
+                  {(s.comprovanteFoto || s.metodoPagamento === 'PIX') ? (
+                    <>
+                      <button onClick={async (e) => { e.stopPropagation(); const foto = s.comprovanteFoto || await saleService.getComprovanteFoto(s.id).catch(() => null); if (!foto) { showToast('Nenhum comprovante anexado ainda.', 'error'); return; } setComprovanteModalSale(s); setComprovantePreview(foto); }} className="flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase bg-blue-50 text-blue-600 active:scale-95 flex items-center justify-center gap-1.5 border border-blue-100">
+                        <i className="fa-solid fa-image"></i>Ver Foto
+                      </button>
+                      <button onClick={(e) => { e.stopPropagation(); handleComprovanteShare(s); }} className="flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase bg-emerald-50 text-emerald-600 active:scale-95 flex items-center justify-center gap-1.5 border border-emerald-100">
+                        <i className="fa-brands fa-whatsapp"></i>Compartilhar
+                      </button>
+                    </>
+                  ) : (
+                    <button onClick={(e) => { e.stopPropagation(); setComprovanteModalSale(s); setComprovantePreview(null); setTimeout(() => comprovanteFileInputRef.current?.click(), 100); }} className="w-full py-2.5 rounded-xl text-[9px] font-black uppercase bg-amber-50 text-amber-600 active:scale-95 flex items-center justify-center gap-1.5 border border-amber-100">
+                      <i className="fa-solid fa-camera"></i>Tirar Foto do Comprovante
+                    </button>
+                  )}
+                </div>
+                {fotoEntregaMap[s.id] && (
+                  <button onClick={(e) => { e.stopPropagation(); abrirFotoEntrega(s); }} disabled={fotoEntregaLoading === s.id} className="w-full py-2.5 rounded-xl text-[9px] font-black uppercase mt-2 bg-teal-50 text-teal-600 active:scale-95 flex items-center justify-center gap-1.5 border border-teal-100">
+                    <i className={`fa-solid ${fotoEntregaLoading === s.id ? 'fa-spinner fa-spin' : 'fa-truck-fast'}`}></i>Foto da Entrega (Entregador)
+                  </button>
+                )}
+              </div>
+            )})}
+            {contasAReceber.length === 0 && (
+               <div className="text-center py-20 opacity-20 italic font-black uppercase tracking-widest text-[10px]">Nenhuma conta pendente</div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'STOCK_VIEW' && (
+        <div className="space-y-4">
+          <header className="px-1"><h2 className="text-xs font-black text-gray-400 uppercase tracking-wider">Estoque Central</h2></header>
+          <div className="grid gap-3">
+            {products.map(p => ( 
+              <div key={p.id} className="bg-white px-4 py-3 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between">
+                <div className="flex-1 min-w-0"><h3 className="font-bold text-gray-800 text-sm leading-tight uppercase break-words">{p.nome}</h3><div className="flex items-center gap-2 mt-1"><span className="text-[10px] font-black bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded tracking-tighter"><i className="fa-solid fa-house mr-1 text-[8px]"></i>{p.estoquePrincipal} un</span></div></div>
+                <div className="text-right shrink-0"><p className="text-sm font-black text-emerald-600 tabular-nums whitespace-nowrap">R$ {p.precoVenda.toFixed(2)}</p></div> 
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {clientInfoModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[320] flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 max-h-[90dvh] overflow-y-auto">
+            <div className="bg-gradient-to-br from-amber-400 to-orange-500 p-6 text-center relative">
+              {/* BLOCO 36: seta Voltar — o vendedor nao fica mais preso na tela */}
+              <button onClick={voltarClientInfoModal} aria-label="Voltar"
+                className="absolute top-5 left-5 w-9 h-9 bg-white/25 rounded-xl flex items-center justify-center text-white active:scale-90 transition-transform">
+                <i className="fa-solid fa-arrow-left"></i>
+              </button>
+              <div className="w-14 h-14 bg-white/20 rounded-2xl flex items-center justify-center mx-auto mb-3">
+                <i className="fa-brands fa-whatsapp text-white text-2xl"></i>
+              </div>
+              {/* BLOCO 72: tela virou opcional — o título não assusta mais */}
+              <h3 className="font-black text-white text-base uppercase tracking-tight">WhatsApp e Localização</h3>
+              <p className="text-white/80 text-[10px] font-bold uppercase mt-1">{clientInfoModal.nomeFantasia}</p>
+            </div>
+
+            <div className="p-6 space-y-4">
+              {/* BLOCO 36: o que falta EM TEMPO REAL — insere o WhatsApp e o chip fica verde na hora */}
+              <div className="flex items-center justify-center gap-2">
+                <span className={`text-[9px] font-black uppercase px-2.5 py-1.5 rounded-lg border ${gpsStatus === 'done' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
+                  <i className={`fa-solid ${gpsStatus === 'done' ? 'fa-check' : 'fa-location-dot'} mr-1`}></i>
+                  Localização {gpsStatus === 'done' ? 'ok' : 'pendente'}
+                </span>
+                <span className={`text-[9px] font-black uppercase px-2.5 py-1.5 rounded-lg border ${whatsappOk ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
+                  {whatsappOk ? <i className="fa-solid fa-check mr-1"></i> : <i className="fa-brands fa-whatsapp mr-1"></i>}
+                  WhatsApp {whatsappOk ? 'ok' : 'pendente'}
+                </span>
+              </div>
+              {/* BLOCO 72: deixa claro que agora é opcional */}
+              <p className="text-[9px] font-bold text-gray-400 text-center -mt-1 leading-snug">Opcional — preencha só o que precisa. Salva direto no banco.</p>
+
+              <div className={`p-4 rounded-2xl border-2 border-dashed flex items-center gap-3 transition-all ${gpsStatus === 'done' ? 'bg-emerald-50 border-emerald-300' : gpsStatus === 'loading' ? 'bg-blue-50 border-blue-300 animate-pulse' : 'bg-amber-50 border-amber-200'}`}>
+                <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${gpsStatus === 'done' ? 'bg-emerald-100' : 'bg-amber-100'}`}>
+                  <i className={`fa-solid ${gpsStatus === 'done' ? 'fa-check text-emerald-600' : gpsStatus === 'loading' ? 'fa-spinner fa-spin text-blue-600' : 'fa-location-crosshairs text-amber-500'}`}></i>
+                </div>
+                <div className="flex-1">
+                  <p className="text-[10px] font-black text-gray-800 uppercase">Localizacao</p>
+                  {gpsStatus === 'done' ? (
+                    /* BLOCO 35 (regra do dono): mostrar RUA e BAIRRO — nunca lat/lng */
+                    gpsEndereco || gpsBairro ? (
+                      <p className="text-[10px] font-black text-emerald-700 mt-0.5 leading-snug">
+                        {gpsEndereco}{gpsEndereco && gpsBairro ? ' — ' : ''}{gpsBairro}
+                      </p>
+                    ) : (
+                      <p className="text-[9px] text-gray-400 mt-0.5">Localização capturada</p>
+                    )
+                  ) : gpsStatus === 'loading' ? (
+                    <p className="text-[9px] text-gray-400 mt-0.5">Obtendo localizacao...</p>
+                  ) : (
+                    <p className="text-[9px] text-gray-400 mt-0.5">Nao capturada</p>
+                  )}
+                </div>
+                {gpsStatus !== 'done' && (
+                  <button onClick={handleGetGPS} disabled={gpsStatus === 'loading'} className="bg-amber-500 text-white text-[9px] font-black uppercase px-3 py-2.5 rounded-xl active:scale-95 transition-transform whitespace-nowrap disabled:opacity-50">
+                    <i className="fa-solid fa-crosshairs mr-1"></i>Capturar
+                  </button>
+                )}
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[10px] font-black text-gray-400 uppercase ml-1">WhatsApp do Cliente</label>
+                <div className="relative">
+                  <i className="fa-brands fa-whatsapp absolute left-4 top-1/2 -translate-y-1/2 text-emerald-500 text-lg"></i>
+                  <input
+                    type="tel"
+                    value={modalWhatsapp}
+                    onChange={e => setModalWhatsapp(formatarWhatsapp(e.target.value))}
+                    placeholder="(54) 99999-9999"
+                    inputMode="tel"
+                    className={`w-full pl-12 pr-10 py-4 rounded-2xl font-black text-sm outline-none border-2 transition-all ${whatsappOk ? 'bg-emerald-50/60 border-emerald-300 focus:border-emerald-400' : 'bg-gray-50 border-transparent focus:border-emerald-200'}`}
+                  />
+                  {whatsappOk && (
+                    <i className="fa-solid fa-circle-check absolute right-4 top-1/2 -translate-y-1/2 text-emerald-500"></i>
+                  )}
+                </div>
+                <p className={`text-[9px] font-bold ml-1 ${whatsappOk ? 'text-emerald-600' : 'text-gray-400'}`}>
+                  {whatsappOk ? 'WhatsApp completo (DDD + número)' : 'Digite com DDD — ex: 54 99999-9999'}
+                </p>
+              </div>
+            </div>
+
+            <div className="p-5 pt-0 flex flex-col gap-2">
+              <button
+                onClick={handleSaveClientInfo}
+                disabled={savingContato}
+                className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest flex items-center justify-center gap-2 disabled:opacity-60"
+              >
+                <i className={`fa-solid ${savingContato ? 'fa-spinner fa-spin' : 'fa-floppy-disk'}`}></i>
+                {savingContato ? 'Gravando no banco...' : 'Salvar dados'}
+              </button>
+              {/* BLOCO 72: o modal é voluntário — Voltar devolve pra tela do modo
+                  sem salvar nada (era 'Atender sem preencher' do fluxo antigo) */}
+              <button
+                onClick={voltarClientInfoModal}
+                className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest text-center"
+              >
+                <i className="fa-solid fa-arrow-left mr-1.5"></i>Voltar sem salvar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmSkipId && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[300] flex items-center justify-center p-6">
+          <div className="bg-white w-full max-w-xs rounded-3xl p-8 text-center shadow-2xl animate-in zoom-in-95 duration-200">
+            <h3 className="font-black text-gray-800 text-lg mb-4">Pular Cliente?</h3>
+            <p className="text-sm text-gray-500 mb-6 font-medium uppercase">Deseja realmente pular o atendimento deste cliente hoje?</p>
+            <div className="flex flex-col gap-2">
+              <button onClick={handleSkipClient} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest">Sim, Pular</button>
+              <button onClick={() => setConfirmSkipId(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Voltar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showReceiveModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[250] flex items-center justify-center p-6">
+           <div className="bg-white w-full max-w-xs rounded-3xl p-5 sm:p-8 shadow-2xl animate-in zoom-in-95 duration-200 max-h-[90dvh] overflow-y-auto">
+              <h3 className="font-black text-gray-800 text-sm uppercase mb-4 text-center tracking-tight">Confirmar Recebimento</h3>
+              <div className="bg-gray-50 p-4 rounded-2xl mb-4"><p className="text-[10px] font-black text-gray-400 uppercase mb-1">Saldo Devedor</p><p className="text-lg sm:text-xl font-black text-rose-600 tabular-nums break-words">R$ {((showReceiveModal.valorTotal ?? 0) - (showReceiveModal.valorPago ?? 0)).toFixed(2)}</p></div>
+              
+              {showReceiveModal.detalhePagamento && (
+                <div className="mb-6 text-left">
+                  <p className="text-[9px] font-black text-gray-400 uppercase mb-2 ml-1">Histórico de Recebimentos</p>
+                  <div className="bg-gray-50 p-3 rounded-xl space-y-1 max-h-32 overflow-y-auto border border-gray-100">
+                    {showReceiveModal.detalhePagamento.split('|').map((log, i) => (
+                      <p key={i} className="text-[10px] font-bold text-gray-600 border-b border-gray-200 pb-1 last:border-0">{log.trim()}</p>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="space-y-4 mb-6"><p className="text-[10px] font-black text-gray-400 uppercase text-left ml-1">Valor a Receber</p><input type="number" value={valorRecebidoParcial} onChange={e => setValorRecebidoParcial(e.target.value)} className="w-full p-4 bg-white border border-gray-200 rounded-2xl font-black text-xl text-center outline-none" /></div>
+              {/* BLOCO 124 (regra do dono): no caixa do David os pagamentos são
+                  DINHEIRO e PIX; a venda a prazo é TODA BOLETO — recebe como
+                  BOLETO (fecha o saldo, não vira metodo da venda, não entra no
+                  caixa à vista). */}
+              <div className="grid grid-cols-2 gap-3 mb-3">
+                 <button onClick={() => handleConfirmReceive('DINHEIRO')} className="w-full bg-gray-900 text-white py-4 rounded-2xl shadow-lg active:scale-95 font-black uppercase text-xs tracking-widest">DINHEIRO</button>
+                 <button onClick={() => handleConfirmReceive('PIX')} className="w-full bg-blue-600 text-white py-4 rounded-2xl shadow-lg active:scale-95 font-black uppercase text-xs tracking-widest">PIX</button>
+              </div>
+              <button onClick={() => handleConfirmReceive('BOLETO')} className="w-full bg-slate-600 text-white py-4 rounded-2xl shadow-lg active:scale-95 font-black uppercase text-xs tracking-widest mb-3 flex items-center justify-center gap-2"><i className="fa-solid fa-file-invoice-dollar text-[11px]"></i>BOLETO (a prazo)</button>
+              <button onClick={() => setShowReceiveModal(null)} className="w-full py-3 text-gray-400 font-semibold uppercase text-[9px] tracking-widest text-center">Cancelar</button>
+           </div>
+        </div>
+      )}
+
+      {editingClient && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[310] flex items-end sm:items-center justify-center p-4">
+          <div className="bg-white w-full max-w-md rounded-t-[2rem] sm:rounded-[2rem] shadow-2xl p-5 sm:p-8 pb-[calc(1.25rem+env(safe-area-inset-bottom))] animate-in slide-in-from-bottom duration-300 max-h-[90dvh] overflow-y-auto">
+             <div className="flex justify-between items-center mb-6"><h3 className="font-black text-gray-800 uppercase text-sm tracking-tight">{editingClient === 'NEW' ? 'Novo Cliente' : 'Editar Cliente'}</h3></div>
+             <div className="space-y-4 pb-6">
+                {/* BLOCO 138: dados fiscais atrás de UM botao (cadastro novo abre fechado, editar abre aberto) — CNPJ com busca na Receita, IE manual (SEFAZ estadual), email NF-e */}
+                {(() => { const aptoNfe = clienteAptoNfe({ cnpj: cForm.cnpj, email: cForm.email }); return (
+                <div className="rounded-2xl bg-blue-50 border border-blue-100 overflow-hidden"><button type="button" onClick={() => setFiscalAberto(v => !v)} className="w-full px-4 py-4 flex items-center justify-between gap-2 active:opacity-80" aria-expanded={fiscalAberto}><span className="text-[10px] font-black text-blue-600 uppercase flex items-center gap-1"><i className="fa-solid fa-file-invoice"></i> Dados fiscais (opcional)</span><span className="flex items-center gap-1.5 shrink-0">{aptoNfe ? <span className="text-[9px] font-black text-emerald-700 bg-emerald-100 border border-emerald-200 px-2 py-1 rounded-lg uppercase whitespace-nowrap"><i className="fa-solid fa-circle-check mr-1"></i>Apto a NF-e</span> : <span className="text-[9px] font-black text-gray-500 bg-white border border-gray-200 px-2 py-1 rounded-lg uppercase whitespace-nowrap">Preencher depois</span>}<i className={`fa-solid ${fiscalAberto ? 'fa-chevron-up' : 'fa-chevron-down'} text-blue-400 text-[10px]`}></i></span></button>{fiscalAberto && (<div className="bg-blue-50 border-t border-blue-100 p-4 space-y-1"><label className="text-[10px] font-black text-blue-600 uppercase ml-1 flex items-center gap-1"><i className="fa-solid fa-file-invoice"></i> CNPJ (opcional — Receita preenche o resto)</label><input value={cForm.cnpj || ''} onChange={e => handleCnpjChange(e.target.value)} placeholder="00.000.000/0000-00" inputMode="numeric" className="w-full p-4 bg-white border rounded-2xl font-semibold" />{cnpjBusca.msg && <p className={`text-[9px] font-bold leading-snug ${cnpjBusca.loading ? 'text-gray-500' : cnpjBusca.ok ? 'text-green-600' : 'text-amber-600'}`}>{cnpjBusca.msg}</p>}{cnpjBusca.ok && cnpjBusca.endereco && <p className="text-[9px] font-bold text-blue-700 bg-blue-100/60 border border-blue-200 rounded-xl px-3 py-2 leading-snug"><i className="fa-solid fa-map-location-dot mr-1"></i>{cnpjBusca.endereco}</p>}
+                {/* BLOCO 132: razão social + IE também no cadastro do vendedor —
+                    a NF-e exige os dois; antes só o admin tinha o campo. */}
+                <div className="space-y-1 mt-2"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Razão Social (NF-e)</label><input value={cForm.razaoSocial || ''} onChange={e => setCForm({...cForm, razaoSocial: e.target.value})} placeholder="Nome oficial da empresa no CNPJ" className="w-full p-4 bg-white border rounded-2xl font-semibold uppercase" /></div>
+                <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Inscrição Estadual</label><input value={cForm.inscricaoEstadual || ''} onChange={e => setCForm({...cForm, inscricaoEstadual: e.target.value})} placeholder="IE ou ISENTO" className="w-full p-4 bg-white border rounded-2xl font-semibold uppercase" /></div>
+                <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Email (NF-e)</label><input type="email" value={cForm.email || ''} onChange={e => setCForm({...cForm, email: e.target.value})} placeholder="financeiro@empresa.com" className="w-full p-4 bg-white border rounded-2xl font-semibold" /></div><p className="text-[9px] font-bold text-blue-400 leading-snug">CNPJ completo (14): a Receita preenche razão social, endereço, telefone e o EMAIL para o XML da NF-e (quando a empresa o publica). IE a Receita não publica — preencha se o cliente informar. Sem CNPJ o cadastro aceita igual: salve agora e preencha depois em Editar Cliente (a venda sai NFC-e de consumidor).</p></div>
+                )}</div>
+                ); })()}
+                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Nome Fantasia (Estabelecimento)</label><input value={cForm.nomeFantasia || ''} onChange={e => setCForm({...cForm, nomeFantasia: e.target.value})} placeholder="Ex: Doce da Maria" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100 uppercase" /></div>
+               <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Nome do Cliente</label><input value={cForm.nome || ''} onChange={e => setCForm({...cForm, nome: e.target.value})} placeholder="Nome real para chamar o cliente" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100" /></div>
+                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Telefone / WhatsApp</label><input value={cForm.telefone || ''} onChange={e => setCForm({...cForm, telefone: e.target.value})} placeholder="Telefone" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100" /></div>
+                {/* BLOCO 71: TIPO DO CLIENTE — SÓ dentro da Rota 03 (Edipo Pena) e Rota 04 (Gil Pantoja). Outras rotas: a opção nem aparece e o cliente é sempre NORMAL. */}
+                {podeClienteEspecialGB(user.rota) ? (
+                <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 space-y-2"><p className="text-[9px] font-black text-amber-600 uppercase tracking-widest flex items-center gap-1"><i className="fa-solid fa-star"></i> Tipo do Cliente — Preços do PDV</p><div className="grid grid-cols-2 gap-2"><button type="button" onClick={() => setCForm({...cForm, clienteEspecialGb: false})} className={`py-3 rounded-2xl font-black text-[10px] uppercase tracking-wide border transition-all ${!cForm.clienteEspecialGb ? 'bg-white border-blue-500 text-blue-600 shadow-sm' : 'bg-white border-gray-200 text-gray-400'}`}>Normal</button><button type="button" onClick={() => setCForm({...cForm, clienteEspecialGb: true})} className={`py-3 rounded-2xl font-black text-[10px] uppercase tracking-wide border transition-all flex items-center justify-center gap-1 ${cForm.clienteEspecialGb ? 'bg-amber-500 border-amber-500 text-white shadow-md' : 'bg-white border-gray-200 text-gray-400'}`}><i className="fa-solid fa-star text-[9px]"></i> Especial GB</button></div><p className="text-[9px] font-bold text-amber-500 leading-snug">NORMAL: usa os preços de hoje do PDV. ESPECIAL GB: recebe o PREÇO ESPECIAL GB de cada produto do estoque principal — produto sem preço GB segue o preço normal. Opção disponível apenas nas rotas 03 (Edipo Pena) e 04 (Gil Pantoja).</p></div>
+                ) : cForm.clienteEspecialGb ? (
+                <p className="text-[9px] font-bold text-amber-600 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 leading-snug"><i className="fa-solid fa-circle-info mr-1"></i>Este cliente estava como ESPECIAL GB, mas esta rota não tem preço GB — ao salvar ele volta a NORMAL.</p>
+                ) : null}
+                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Endereço</label><input value={cForm.endereco || ''} onChange={e => setCForm({...cForm, endereco: e.target.value})} placeholder="Endereço" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100 uppercase" /></div>
+                {/* BLOCO 64: numero/sala do endereco — salvava sempre vazio porque o
+                vendedor nao tinha o campo; agora sai na fila e na impressao. */}
+                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Número / Sala</label><input value={cForm.enderecoNumero || ''} onChange={e => setCForm({...cForm, enderecoNumero: e.target.value})} placeholder="Ex: 123 ou Sala 5" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100 uppercase" /></div>
+                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Bairro</label><input value={cForm.bairro || ''} onChange={e => setCForm({...cForm, bairro: e.target.value})} placeholder="Bairro" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100 uppercase" /></div>
+                {/* BLOCO 129: CEP automatico (ViaCEP) + Cidade/UF — a NFC-e leva o destinatario do cadastro (BLOCO 128) */}
+                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">CEP</label><input value={cForm.enderecoCep || ''} onChange={e => handleCepChange(e.target.value)} placeholder="00000-000" inputMode="numeric" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100" /></div>
+                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Cidade</label><input value={cForm.enderecoMunicipio || ''} onChange={e => setCForm({...cForm, enderecoMunicipio: e.target.value})} placeholder="Cidade" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100 uppercase" /></div>
+                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">UF</label><select value={cForm.enderecoUf || ''} onChange={e => setCForm({...cForm, enderecoUf: e.target.value})} className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100"><option value="">—</option>{['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'].map(uf => (<option key={uf} value={uf}>{uf}</option>))}</select></div>
+                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Dia de Atendimento</label><select value={cForm.diaRoteiro ?? 1} onChange={e => setCForm({...cForm, diaRoteiro: parseInt(e.target.value)})} className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100">{[1, 2, 3, 4, 5, 6].map(d => (<option key={d} value={d}>{DIAS_SEMANA[d] ?? 'N/D'}</option>))}</select></div> 
+                
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Rota de Atendimento</label>
+                  <div className="w-full p-4 bg-gray-100 rounded-2xl font-black text-blue-600 text-xs uppercase shadow-inner border border-blue-50 flex justify-between items-center">
+                    <span>{user.rota ? `Rota ${user.rota.replace('ROTA_', '')}` : 'Sem Rota'}</span>
+                    <i className="fa-solid fa-lock text-[10px] opacity-30"></i>
+                  </div>
+                </div>
+
+                <button onClick={handlePinLocation} className="w-full bg-indigo-50 text-indigo-600 font-black py-3 rounded-2xl uppercase text-[10px] tracking-widest flex items-center justify-center gap-2 mb-2"><i className="fa-solid fa-location-dot"></i> Capturar Localização Atual</button>
+                <div className="flex flex-col gap-2 mt-4"><button onClick={handleSaveClientBasic} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-lg uppercase text-xs">Salvar Alterações</button><button onClick={() => { setEditingClient(null); setReabrirModoAposSalvar(null); }} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px]">Cancelar</button></div>
+             </div>
+          </div>
+        </div>
+      )}
+
+      {viewingClientHistory && (
+        <ClientHistory 
+          client={viewingClientHistory} 
+          sales={sales} 
+          products={products} 
+          onClose={() => setViewingClientHistory(null)} 
+        />
+      )}
+
+      {/* MODAL: Visualizar comprovante */}
+      {comprovanteModalSale && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 max-h-[90dvh] overflow-y-auto">
+            <div className="bg-gradient-to-br from-blue-500 to-indigo-600 p-5 text-center">
+              <div className="w-12 h-12 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-2">
+                <i className="fa-solid fa-file-circle-check text-white text-xl"></i>
+              </div>
+              <h3 className="font-black text-white text-sm uppercase">Comprovante</h3>
+              <p className="text-white/70 text-[9px] font-bold mt-1">{clients.find(c => c.id === comprovanteModalSale.clientId)?.nomeFantasia || 'Cliente'}</p>
+            </div>
+            <div className="p-5">
+              {comprovantePreview ? (
+                <img src={comprovantePreview} className="w-full max-h-[55dvh] object-contain rounded-2xl border border-gray-100" alt="Comprovante" />
+              ) : (
+                <button
+                  onClick={() => comprovanteFileInputRef.current?.click()}
+                  disabled={comprovanteUploading}
+                  className="w-full bg-amber-50 border-2 border-dashed border-amber-300 rounded-2xl p-10 flex flex-col items-center gap-3 active:scale-95"
+                >
+                  {comprovanteUploading ? <i className="fa-solid fa-spinner fa-spin text-amber-500 text-2xl"></i> : <i className="fa-solid fa-camera text-amber-500 text-2xl"></i>}
+                  <span className="text-[10px] font-black text-amber-700 uppercase">{comprovanteUploading ? 'Processando...' : 'Tirar Foto'}</span>
+                </button>
+              )}
+              {comprovantePreview && (
+                <div className="grid grid-cols-2 gap-2 mt-3">
+                  <button onClick={() => handleComprovanteShare(comprovanteModalSale)} className="py-3 rounded-xl text-[9px] font-black uppercase bg-emerald-50 text-emerald-600 active:scale-95 flex items-center justify-center gap-1.5 border border-emerald-100">
+                    <i className="fa-brands fa-whatsapp"></i>Compartilhar
+                  </button>
+                  <button onClick={() => { setComprovantePreview(null); setTimeout(() => comprovanteFileInputRef.current?.click(), 100); }} className="py-3 rounded-xl text-[9px] font-black uppercase bg-gray-100 text-gray-600 active:scale-95 flex items-center justify-center gap-1.5">
+                    <i className="fa-solid fa-camera-rotate"></i>Refazer
+                  </button>
+                </div>
+              )}
+            </div>
+            <div className="p-5 pt-0">
+              <button onClick={() => setComprovanteModalSale(null)} className="w-full bg-gray-100 text-gray-500 font-black py-3 rounded-2xl active:scale-95 uppercase text-[10px]">Fechar</button>
+            </div>
+          </div>
+          <input
+            ref={comprovanteFileInputRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={e => {
+              const f = e.target.files?.[0];
+              if (f && comprovanteModalSale) handleComprovanteCapture(comprovanteModalSale.id, f);
+              e.target.value = '';
+            }}
+          />
+        </div>
+      )}
+
+      {/* MODAL: Foto da entrega (entregador) */}
+      {fotoEntregaView && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[210] flex items-center justify-center p-4" onClick={() => setFotoEntregaView(null)}>
+          <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="bg-gradient-to-br from-teal-500 to-emerald-600 p-5 text-center">
+              <div className="w-12 h-12 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-2">
+                <i className="fa-solid fa-truck-fast text-white text-xl"></i>
+              </div>
+              <h3 className="font-black text-white text-sm uppercase">Foto da Entrega</h3>
+              <p className="text-white/70 text-[9px] font-bold mt-1">{nomeClienteDe(fotoEntregaView.sale.clientId)}</p>
+            </div>
+            <div className="p-5">
+              <img src={fotoEntregaView.url} className="w-full max-h-[55dvh] object-contain rounded-2xl border border-gray-100" alt="Foto da entrega" />
+              <div className="grid grid-cols-2 gap-2 mt-3">
+                <button onClick={() => shareImage(fotoEntregaView.url, `entrega_${fotoEntregaView.sale.id}.jpg`)} className="py-3 rounded-xl text-[9px] font-black uppercase bg-emerald-50 text-emerald-600 active:scale-95 flex items-center justify-center gap-1.5 border border-emerald-100">
+                  <i className="fa-brands fa-whatsapp"></i>Compartilhar
+                </button>
+                <button onClick={() => setFotoEntregaView(null)} className="py-3 rounded-xl text-[9px] font-black uppercase bg-gray-100 text-gray-600 active:scale-95 flex items-center justify-center gap-1.5">
+                  <i className="fa-solid fa-xmark"></i>Fechar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+          {confirmAction && (
+        <ConfirmModal
+          title={confirmAction.title}
+          message={confirmAction.message}
+          icon={confirmAction.icon}
+          type={(confirmAction.type as any) || 'confirm'}
+          onConfirm={confirmAction.onConfirm}
+          onCancel={() => setConfirmAction(null)}
+        />
+      )}
+
+      {/* ===== SHEET: ESCOLHER MODO (PRE-VENDEDOR) ===== */}
+      {modoSheet && (() => {
+        // BLOCO 35: dados do cadastro nesta tela — rua/bairro/telefone (sem lat/lng).
+        // Completo = mostra e pergunta se estao corretos; incompleto = pede obrigatorio.
+        // BLOCO 36 FIX: usa o client MAIS RECENTE (depois de salvar GPS/WhatsApp no
+        // modal, o snapshot antigo dizia 'incompleto' com o WhatsApp ja preenchido).
+        const modoClient = clients.find(c => c.id === modoSheet.id) || modoSheet;
+        const faltaGps = !modoClient.pinLocalizacao || modoClient.pinLocalizacao.length < 5;
+        const faltaTel = isEmptyField(modoClient.telefone);
+        const cadastroOk = !faltaGps && !faltaTel;
+        return (
+        <div className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-sm flex items-end justify-center" onClick={() => setModoSheet(null)}>
+          <div className="bg-white w-full max-w-md rounded-t-3xl p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] animate-in slide-in-from-bottom duration-300 max-h-[92dvh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-4"></div>
+            <p className="text-[9px] font-black text-gray-400 uppercase text-center tracking-widest">Atender cliente</p>
+            <h3 className="text-sm font-black text-gray-800 uppercase text-center mt-1 capitalize">{modoClient.nomeFantasia}</h3>
+
+            {cadastroOk ? (
+              <div className="mt-4 rounded-2xl bg-gray-50 border border-gray-100 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex-1 min-w-0 space-y-1.5">
+                    <p className="text-[11px] font-black text-gray-700 leading-snug">
+                      <i className="fa-solid fa-location-dot text-amber-500 mr-1.5"></i>
+                      {modoClient.endereco || '—'}{modoClient.endereco && modoClient.bairro ? ' — ' : ''}{modoClient.bairro || ''}
+                    </p>
+                    <p className="text-[11px] font-bold text-emerald-600 break-words">
+                      <i className="fa-brands fa-whatsapp mr-1.5"></i>{modoClient.telefone}
+                    </p>
+                  </div>
+                  {/* BLOCO 72: Atualizar abre o modal rápido de WhatsApp/Localização
+                      (opcional) — o cadastro completo continua na aba CLIENTES */}
+                  <button onClick={() => abrirClientInfoModal(modoClient, true)} title="Atualizar WhatsApp e Localização"
+                    className="flex-shrink-0 bg-white border border-gray-200 text-gray-500 text-[9px] font-black uppercase px-3 py-2.5 rounded-xl active:scale-95 transition-transform">
+                    <i className="fa-solid fa-pen mr-1"></i>Atualizar
+                  </button>
+                </div>
+                <p className="text-[9px] font-bold text-gray-400 uppercase text-center mt-3">Dados corretos? Se não, toque em Atualizar (WhatsApp/GPS).</p>
+              </div>
+            ) : (
+              <div className="mt-4 rounded-2xl bg-amber-50 border-2 border-dashed border-amber-300 p-4">
+                <p className="text-[10px] font-black text-amber-700 uppercase"><i className="fa-solid fa-triangle-exclamation mr-1.5"></i>Cadastro incompleto</p>
+                <p className="text-[9px] font-bold text-amber-600 mt-1">
+                  Falta: {faltaGps ? 'localização do estabelecimento' : ''}{faltaGps && faltaTel ? ' e ' : ''}{faltaTel ? 'WhatsApp' : ''}.
+                </p>
+                {/* BLOCO 72: NÃO trava — pode vender direto; completar é opcional */}
+                <p className="text-[9px] font-bold text-amber-500 mt-1 leading-snug">Pode vender mesmo assim — complete quando der.</p>
+                <button onClick={() => abrirClientInfoModal(modoClient, true)}
+                  className="w-full mt-3 bg-amber-500 text-white text-[9px] font-black uppercase py-3 rounded-xl active:scale-95 transition-transform">
+                  <i className="fa-solid fa-circle-plus mr-1.5"></i>Completar cadastro agora
+                </button>
+              </div>
+            )}
+
+            <p className="text-[10px] text-gray-400 font-semibold text-center mt-4">Como voce vai vender agora?</p>
+            <div className="grid grid-cols-2 gap-2.5 mt-3">
+              <button onClick={() => escolherModoVenda(modoClient, 'PRONTA')}
+                className="py-5 rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-600 text-white shadow-md active:scale-95 transition-transform">
+                <i className="fa-solid fa-truck-fast text-lg block mb-1.5"></i>
+                <span className="text-[10px] font-black uppercase">Pronta entrega</span>
+                <span className="block text-[8px] font-bold text-blue-100 mt-0.5">Vende da carga da van</span>
+              </button>
+              <button onClick={() => escolherModoVenda(modoClient, 'PRE_VENDA')}
+                className="py-5 rounded-2xl bg-gradient-to-br from-emerald-600 to-teal-600 text-white shadow-md active:scale-95 transition-transform">
+                <i className="fa-solid fa-clipboard-list text-lg block mb-1.5"></i>
+                <span className="text-[10px] font-black uppercase">Pre-venda</span>
+                <span className="block text-[8px] font-bold text-emerald-100 mt-0.5">Pedido na fila — entregador entrega</span>
+              </button>
+            </div>
+            <button onClick={() => setModoSheet(null)} className="w-full mt-3 py-3 text-gray-400 font-bold text-[9px] uppercase tracking-widest">Cancelar</button>
+          </div>
+        </div>
+        );
+      })()}
+
+</div>
+  );
+};
+
+export default VendedorDashboard;

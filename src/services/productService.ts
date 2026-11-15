@@ -1,0 +1,287 @@
+import { supabase } from '@/lib/supabaseClient';
+import { Product } from '@/lib/types';
+
+export const productService = {
+  async getAllProducts(): Promise<Product[]> {
+    const { data, error } = await supabase.from('products').select('*');
+    if (error) {
+      console.error('Erro ao buscar produtos:', error);
+      return [];
+    }
+    return (data || []).map(p => ({
+      id: p.id,
+      nome: p.nome ?? '',
+      precoCusto: Number(p.preco_custo) || 0,
+      precoVenda: Number(p.preco_venda) || 0,
+      precoMinimo: Number(p.preco_minimo) || 0,
+      comissaoPercentual: Number(p.comissao_percentual) || 0,
+      // Bloco 14: comissão de pré-venda — undefined = usa o padrão (Bloco 23: 5%)
+      comissaoPvPercentual: (p.comissao_pv_percentual === null || p.comissao_pv_percentual === undefined) ? undefined : Number(p.comissao_pv_percentual),
+      // Bloco 23: vínculo manual do produto à família do catálogo do portal (null = automático pelo nome)
+      familiaCatalogo: (p.familia_catalogo === null || p.familia_catalogo === undefined) ? null : String(p.familia_catalogo).trim() || null,
+      estoquePrincipal: Number(p.estoque_principal) || 0,
+      ativo: !!p.ativo,
+      categoryId: p.category_id,
+      subcategoryId: p.subcategory_id,
+      // Fiscais (Bloco 12) — podem nao existir antes do SQL
+      ncm: p.ncm || undefined,
+      cest: p.cest || undefined,
+      cfop: p.cfop || undefined,
+      ean: p.ean || undefined,
+      unidade: p.unidade || undefined,
+      origem: p.origem || undefined,
+      // Bloco 15: foto + caixa do atacado (podem nao existir antes do SQL)
+      imagem: p.imagem || undefined,
+      unidadesPorCaixa: (p.unidades_por_caixa === null || p.unidades_por_caixa === undefined) ? undefined : Number(p.unidades_por_caixa),
+      // Bloco 18: observacao do produto — SO o cliente ve (catalogo do portal)
+      obs: p.obs || null,
+      // BLOCO 29 (ROTA 2): dois estoques em casa — undefined = SQL ainda nao rodado (fallback legado)
+      estoqueNota: (p.estoque_nota === null || p.estoque_nota === undefined) ? undefined : (Number(p.estoque_nota) || 0),
+      estoqueSemnf: (p.estoque_semnf === null || p.estoque_semnf === undefined) ? undefined : (Number(p.estoque_semnf) || 0),
+      produtoTeste: !!p.produto_teste,
+      // BLOCO 70: preço especial GB — undefined = SQL ainda nao rodado (cai no preço normal)
+      precoEspecialGb: (p.preco_especial_gb === null || p.preco_especial_gb === undefined) ? undefined : (Number(p.preco_especial_gb) || 0),
+      // BLOCO 108: modo cupom — undefined = SQL ainda nao rodado (cai no custo)
+      precoCupom: (p.preco_cupom === null || p.preco_cupom === undefined) ? undefined : (Number(p.preco_cupom) || 0),
+    })) as Product[];
+  },
+
+  async insertProduct(product: Omit<Product, 'id'>): Promise<Product | null> {
+    // BLOCO 23 — padrão do dono: comissão SEMPRE do produto; vazio = 10% PE / 5% PV
+    const peInformada = Number(product.comissaoPercentual);
+    const comissaoPe = (product.comissaoPercentual === null || product.comissaoPercentual === undefined || !isFinite(peInformada))
+      ? 10 /* COMISSAO_PE_DEFAULT */ : peInformada;
+    const payload = {
+      nome: product.nome,
+      preco_custo: product.precoCusto,
+      preco_venda: product.precoVenda,
+      preco_minimo: product.precoMinimo,
+      comissao_percentual: comissaoPe,
+      estoque_principal: product.estoquePrincipal,
+      ativo: product.ativo,
+      category_id: product.categoryId,
+      subcategory_id: product.subcategoryId
+    };
+    // Fiscais (Bloco 12): envia com fallback — se a coluna ainda nao existir,
+    // o Supabase rejeita o insert e refaz sem elas.
+    const fiscal: Record<string, string | null> = {};
+    if (product.ncm !== undefined) fiscal.ncm = product.ncm || null;
+    if (product.cest !== undefined) fiscal.cest = product.cest || null;
+    if (product.cfop !== undefined) fiscal.cfop = product.cfop || null;
+    if (product.ean !== undefined) fiscal.ean = product.ean || null;
+    if (product.unidade !== undefined) fiscal.unidade = product.unidade || null;
+    if (product.origem !== undefined) fiscal.origem = product.origem || null;
+    // Bloco 15: foto + caixa do atacado
+    const b15: Record<string, string | number | null> = {};
+    if (product.imagem !== undefined) b15.imagem = product.imagem || null;
+    if (product.unidadesPorCaixa !== undefined) b15.unidades_por_caixa = Math.max(1, Math.floor(Number(product.unidadesPorCaixa) || 1));
+    // Bloco 18: observacao para o cliente (portal)
+    const b18: Record<string, string | null> = {};
+    if (product.obs !== undefined) b18.obs = product.obs || null;
+    // Bloco 23: vínculo manual à família do catálogo (null/undefined = automático)
+    const b23: Record<string, string | null> = {};
+    if (product.familiaCatalogo) b23.familia_catalogo = String(product.familiaCatalogo).trim().slice(0, 80);
+    // BLOCO 29 (ROTA 2): dois estoques em casa + produto de teste
+    const b29: Record<string, number | boolean | null> = {};
+    if (product.estoqueNota !== undefined) b29.estoque_nota = Number(product.estoqueNota) || 0;
+    if (product.estoqueSemnf !== undefined) b29.estoque_semnf = Number(product.estoqueSemnf) || 0;
+    if (product.produtoTeste !== undefined) b29.produto_teste = !!product.produtoTeste;
+    // Bloco 14: comissão PV — BLOCO 23: vazio grava o PADRÃO 5 (regra do dono)
+    const extra14: Record<string, number | null> = {};
+    if (product.comissaoPvPercentual !== undefined && product.comissaoPvPercentual !== null) {
+      extra14.comissao_pv_percentual = Number(product.comissaoPvPercentual);
+    } else {
+      extra14.comissao_pv_percentual = 5; /* COMISSAO_PV_DEFAULT */
+    }
+
+    // BLOCO 70: preço especial GB (0 = produto sem preço GB → cai no normal)
+    const b69: Record<string, number> = {};
+    if (product.precoEspecialGb !== undefined) b69.preco_especial_gb = Number(product.precoEspecialGb) || 0;
+    // BLOCO 108: preço cupom (0 = NFC anônima do modo cupom sai no preço de custo)
+    const b108: Record<string, number> = {};
+    if (product.precoCupom !== undefined) b108.preco_cupom = Number(product.precoCupom) || 0;
+
+    let { data, error } = await supabase.from('products').insert({ ...payload, ...fiscal, ...extra14, ...b15, ...b18, ...b23, ...b29, ...b69, ...b108 }).select().single();
+    if (error && /preco_cupom/i.test(error.message || '')) {
+      console.warn('Coluna preco_cupom ausente (Bloco 108 nao rodado). Salvando sem ela.');
+      const sem108: Record<string, unknown> = { ...payload, ...fiscal, ...extra14, ...b15, ...b18, ...b23, ...b29, ...b69 };
+      ({ data, error } = await supabase.from('products').insert(sem108).select().single());
+    } else if (error && /preco_especial_gb/i.test(error.message || '')) {
+      console.warn('Coluna preco_especial_gb ausente (Bloco 69 nao rodado). Salvando sem ela.');
+      const sem69: Record<string, unknown> = { ...payload, ...fiscal, ...extra14, ...b15, ...b18, ...b23, ...b29 };
+      ({ data, error } = await supabase.from('products').insert(sem69).select().single());
+    } else if (error && /estoque_nota|estoque_semnf|produto_teste/i.test(error.message || '')) {
+      console.warn('Colunas do Bloco 29 ausentes (estoques COM NF/SEM NF). Salvando sem elas.');
+      const sem29: Record<string, unknown> = { ...payload, ...fiscal, ...extra14, ...b15, ...b18, ...b23 };
+      ({ data, error } = await supabase.from('products').insert(sem29).select().single());
+    } else if (error && /familia_catalogo/i.test(error.message || '')) {
+      console.warn('Coluna familia_catalogo ausente (Bloco 23 nao rodado). Salvando sem vínculo.');
+      const sem23: Record<string, unknown> = { ...payload, ...fiscal, ...extra14, ...b15, ...b18 };
+      ({ data, error } = await supabase.from('products').insert(sem23).select().single());
+    } else if (error && /comissao_pv_percentual/i.test(error.message || '')) {
+      console.warn('Coluna comissao_pv_percentual ausente (Bloco 14 nao rodado). Salvando sem ela.');
+      ({ data, error } = await supabase.from('products').insert({ ...payload, ...fiscal, ...b15, ...b18 }).select().single());
+    } else if (error && /imagem|unidades_por_caixa/i.test(error.message || '')) {
+      console.warn('Colunas foto/caixa ausentes (Bloco 15 nao rodado). Salvando sem elas.');
+      const sem15: Record<string, unknown> = { ...payload, ...fiscal, ...extra14, ...b18 };
+      delete (sem15 as any).imagem; delete (sem15 as any).unidades_por_caixa;
+      ({ data, error } = await supabase.from('products').insert(sem15).select().single());
+    } else if (error && /\bobs\b/i.test(error.message || '')) {
+      console.warn('Coluna obs ausente (Bloco 18 nao rodado). Salvando sem ela.');
+      ({ data, error } = await supabase.from('products').insert({ ...payload, ...fiscal, ...extra14, ...b15 }).select().single());
+    } else if (error && /ncm|cest|cfop|\bean\b|unidade|origem/i.test(error.message || '')) {
+      console.warn('Colunas fiscais de produto ausentes (Bloco 12 nao rodado). Salvando sem elas.');
+      ({ data, error } = await supabase.from('products').insert({ ...payload, ...extra14 }).select().single());
+    }
+    if (error) {
+      console.error('Erro ao inserir produto:', error);
+      return null;
+    }
+    return {
+      ...data,
+      id: data.id,
+      nome: data.nome,
+      precoCusto: data.preco_custo,
+      precoVenda: data.preco_venda,
+      precoMinimo: data.preco_minimo,
+      comissaoPercentual: data.comissao_percentual,
+      comissaoPvPercentual: (data.comissao_pv_percentual === null || data.comissao_pv_percentual === undefined) ? undefined : Number(data.comissao_pv_percentual),
+      familiaCatalogo: (data.familia_catalogo === null || data.familia_catalogo === undefined) ? null : String(data.familia_catalogo).trim() || null,
+      estoquePrincipal: data.estoque_principal,
+      ativo: data.ativo,
+      categoryId: data.category_id,
+      subcategoryId: data.subcategory_id,
+      ncm: data.ncm || undefined,
+      cest: data.cest || undefined,
+      cfop: data.cfop || undefined,
+      ean: data.ean || undefined,
+      unidade: data.unidade || undefined,
+      origem: data.origem || undefined,
+      imagem: data.imagem || undefined,
+      unidadesPorCaixa: (data.unidades_por_caixa === null || data.unidades_por_caixa === undefined) ? undefined : Number(data.unidades_por_caixa),
+      obs: data.obs || null,
+      estoqueNota: (data.estoque_nota === null || data.estoque_nota === undefined) ? undefined : (Number(data.estoque_nota) || 0),
+      estoqueSemnf: (data.estoque_semnf === null || data.estoque_semnf === undefined) ? undefined : (Number(data.estoque_semnf) || 0),
+      produtoTeste: !!data.produto_teste,
+      precoEspecialGb: (data.preco_especial_gb === null || data.preco_especial_gb === undefined) ? undefined : (Number(data.preco_especial_gb) || 0),
+    } as Product;
+  },
+
+  async updateProduct(id: string, updates: Partial<Product>): Promise<Product | null> {
+    const payload: any = {};
+    if (updates.nome !== undefined) payload.nome = updates.nome;
+    if (updates.precoCusto !== undefined) payload.preco_custo = updates.precoCusto;
+    if (updates.precoVenda !== undefined) payload.preco_venda = updates.precoVenda;
+    if (updates.precoMinimo !== undefined) payload.preco_minimo = updates.precoMinimo;
+    if (updates.comissaoPercentual !== undefined) payload.comissao_percentual = updates.comissaoPercentual;
+    // Bloco 14: comissão PV — null = volta ao padrão (Bloco 23: 5% na leitura)
+    if (updates.comissaoPvPercentual !== undefined) payload.comissao_pv_percentual = updates.comissaoPvPercentual;
+    // Bloco 23: vínculo manual à família do catálogo — null/vazio = volta ao automático
+    if (updates.familiaCatalogo !== undefined) payload.familia_catalogo = (updates.familiaCatalogo ? String(updates.familiaCatalogo).trim().slice(0, 80) : '') || null;
+    if (updates.estoquePrincipal !== undefined) payload.estoque_principal = updates.estoquePrincipal;
+    if (updates.ativo !== undefined) payload.ativo = updates.ativo;
+    if (updates.categoryId !== undefined) payload.category_id = updates.categoryId;
+    if (updates.subcategoryId !== undefined) payload.subcategory_id = updates.subcategoryId;
+    // Fiscais (Bloco 12)
+    if (updates.ncm !== undefined) payload.ncm = updates.ncm || null;
+    if (updates.cest !== undefined) payload.cest = updates.cest || null;
+    if (updates.cfop !== undefined) payload.cfop = updates.cfop || null;
+    if (updates.ean !== undefined) payload.ean = updates.ean || null;
+    if (updates.unidade !== undefined) payload.unidade = updates.unidade || null;
+    if (updates.origem !== undefined) payload.origem = updates.origem || null;
+    // Bloco 15: foto + caixa do atacado
+    if (updates.imagem !== undefined) payload.imagem = updates.imagem || null;
+    if (updates.unidadesPorCaixa !== undefined) payload.unidades_por_caixa = Math.max(1, Math.floor(Number(updates.unidadesPorCaixa) || 1));
+    // Bloco 18: observacao para o cliente (portal) — vazio = limpa
+    if (updates.obs !== undefined) payload.obs = updates.obs || null;
+    // BLOCO 29 (ROTA 2): dois estoques em casa + produto de teste
+    if (updates.estoqueNota !== undefined) payload.estoque_nota = Number(updates.estoqueNota) || 0;
+    if (updates.estoqueSemnf !== undefined) payload.estoque_semnf = Number(updates.estoqueSemnf) || 0;
+    if (updates.produtoTeste !== undefined) payload.produto_teste = !!updates.produtoTeste;
+    // BLOCO 70: preço especial GB — 0/vazio = sem preço GB (cai no normal)
+    if (updates.precoEspecialGb !== undefined) payload.preco_especial_gb = Number(updates.precoEspecialGb) || 0;
+    // BLOCO 108: preço cupom — 0 = NFC do modo cupom sai no preço de custo
+    if (updates.precoCupom !== undefined) payload.preco_cupom = Number(updates.precoCupom) || 0;
+
+    let { data, error } = await supabase.from('products').update(payload).eq('id', id).select().single();
+    if (error && /preco_cupom/i.test(error.message || '')) {
+      const fb108: Record<string, unknown> = { ...payload };
+      delete fb108.preco_cupom;
+      ({ data, error } = await supabase.from('products').update(fb108).eq('id', id).select().single());
+    } else if (error && /preco_especial_gb/i.test(error.message || '')) {
+      const fb69: Record<string, unknown> = { ...payload };
+      delete fb69.preco_especial_gb;
+      ({ data, error } = await supabase.from('products').update(fb69).eq('id', id).select().single());
+    } else if (error && /estoque_nota|estoque_semnf|produto_teste/i.test(error.message || '')) {
+      const fb29: Record<string, unknown> = { ...payload };
+      delete fb29.estoque_nota; delete fb29.estoque_semnf; delete fb29.produto_teste;
+      ({ data, error } = await supabase.from('products').update(fb29).eq('id', id).select().single());
+    } else if (error && /familia_catalogo/i.test(error.message || '')) {
+      const fb23: Record<string, unknown> = { ...payload };
+      delete fb23.familia_catalogo;
+      ({ data, error } = await supabase.from('products').update(fb23).eq('id', id).select().single());
+    } else if (error && /comissao_pv_percentual/i.test(error.message || '')) {
+      const fb14: Record<string, unknown> = { ...payload };
+      delete fb14.comissao_pv_percentual;
+      ({ data, error } = await supabase.from('products').update(fb14).eq('id', id).select().single());
+    } else if (error && /imagem|unidades_por_caixa/i.test(error.message || '')) {
+      const fb15: Record<string, unknown> = { ...payload };
+      delete fb15.imagem; delete fb15.unidades_por_caixa;
+      ({ data, error } = await supabase.from('products').update(fb15).eq('id', id).select().single());
+    } else if (error && /\bobs\b/i.test(error.message || '')) {
+      const fb18: Record<string, unknown> = { ...payload };
+      delete fb18.obs;
+      ({ data, error } = await supabase.from('products').update(fb18).eq('id', id).select().single());
+    } else if (error && /ncm|cest|cfop|\bean\b|unidade|origem/i.test(error.message || '')) {
+      const fallback: Record<string, unknown> = { ...payload };
+      delete fallback.ncm; delete fallback.cest; delete fallback.cfop;
+      delete fallback.ean; delete fallback.unidade; delete fallback.origem;
+      ({ data, error } = await supabase.from('products').update(fallback).eq('id', id).select().single());
+    }
+    if (error) {
+      console.error('Erro ao atualizar produto:', error);
+      return null;
+    }
+    return {
+      ...data,
+      id: data.id,
+      nome: data.nome,
+      precoCusto: data.preco_custo,
+      precoVenda: data.preco_venda,
+      precoMinimo: data.preco_minimo,
+      comissaoPercentual: data.comissao_percentual,
+      comissaoPvPercentual: (data.comissao_pv_percentual === null || data.comissao_pv_percentual === undefined) ? undefined : Number(data.comissao_pv_percentual),
+      familiaCatalogo: (data.familia_catalogo === null || data.familia_catalogo === undefined) ? null : String(data.familia_catalogo).trim() || null,
+      estoquePrincipal: data.estoque_principal,
+      ativo: data.ativo,
+      categoryId: data.category_id,
+      subcategoryId: data.subcategory_id,
+      ncm: data.ncm || undefined,
+      cest: data.cest || undefined,
+      cfop: data.cfop || undefined,
+      ean: data.ean || undefined,
+      unidade: data.unidade || undefined,
+      origem: data.origem || undefined,
+      imagem: data.imagem || undefined,
+      unidadesPorCaixa: (data.unidades_por_caixa === null || data.unidades_por_caixa === undefined) ? undefined : Number(data.unidades_por_caixa),
+      obs: data.obs || null,
+      estoqueNota: (data.estoque_nota === null || data.estoque_nota === undefined) ? undefined : (Number(data.estoque_nota) || 0),
+      estoqueSemnf: (data.estoque_semnf === null || data.estoque_semnf === undefined) ? undefined : (Number(data.estoque_semnf) || 0),
+      produtoTeste: !!data.produto_teste,
+      precoEspecialGb: (data.preco_especial_gb === null || data.preco_especial_gb === undefined) ? undefined : (Number(data.preco_especial_gb) || 0),
+    } as Product;
+  },
+
+  async deleteProduct(id: string): Promise<boolean> {
+    const { error } = await supabase.from('products').delete().eq('id', id);
+    if (error) {
+      if (error.code === '23503') {
+        const { error: updateError } = await supabase.from('products').update({ ativo: false }).eq('id', id);
+        return !updateError;
+      }
+      console.error('Erro ao excluir produto:', error);
+      return false;
+    }
+    return true;
+  }
+};

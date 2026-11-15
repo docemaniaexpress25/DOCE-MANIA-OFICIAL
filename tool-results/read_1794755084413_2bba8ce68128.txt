@@ -1,0 +1,602 @@
+     1→import { NextRequest, NextResponse } from 'next/server';
+     2→import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/serverSupabase';
+     3→import { sessionFromRequest, isAdminSession } from '@/lib/session';
+     4→import { hasEntregaTables, hasBoletoFotoColumn, hasModoVendaColumn, hasCargaCheckColumns, hasNotaColumns } from '@/lib/serverSchema';
+     5→import { salvarFotoSupabase } from '@/lib/fotoStorage';
+     6→import { sendPushToUser } from '@/lib/pushSender';
+     7→import QRCode from 'qrcode';
+     8→import { buildPixPayload, generateTxid, lerChavePixEntrega } from '@/lib/pix';
+     9→// BLOCO 21: regra ÚNICA da comissão de pré-venda (compartilhada com /api/pre-venda/venda)
+    10→import { comissaoPvDeItens, comissaoPeDeItens, COMISSAO_PV_DEFAULT, round2 } from '@/lib/comissaoPv';
+    11→// BLOCO 118: caixa (fechamento) — dinheiro/pix recebido na entrega entra no ledger
+    12→import { registrarPagamentoCaixa } from '@/lib/caixaLedger';
+    13→// BLOCO 118.3 (regra do dono): o CAIXA é EXCLUSIVO do David (Rota 5) — os
+    14→// demais vendedores ganham comissão e NÃO têm caixa.
+    15→import { isDavidNome } from '@/lib/equipe';
+    16→// BLOCO 123: regras fiscais ARMADAS porém DESLIGADAS (FISCAL_OBRIGATORIO=false
+    17→// até o dono implantar a API fiscal) — bloqueio de carga sem nota batida.
+    18→import { FISCAL_OBRIGATORIO, cargaBloqueadaPorNota } from '@/lib/regras-fiscais';
+    19→
+    20→/**
+    21→ * PRÉ-VENDA / ROTAS DE ENTREGA (estilo Shopee)
+    22→ *
+    23→ * GET  /api/pre-venda            -> rota de HOJE do usuario logado + paradas
+    24→ *                                  (vendedor pre-venda)
+    25→ * GET  /api/pre-venda?all=1      -> [ADMIN/ENTREGADOR] todas as rotas de hoje + pendentes
+    26→ * GET  /api/pre-venda?config=1   -> [ADMIN] % da comissao de pre-venda
+    27→ * POST /api/pre-venda            -> acoes:
+    28→ *   { acao: 'GERAR_ROTA', vendedorId? }  finaliza o dia e monta a rota ordenada
+    29→ *       (vendedor: propria rota; admin/entregador: pode indicar vendedorId;
+    30→ *        admin sem vendedorId gera para TODOS com pendentes)
+    31→ *       Regeneravel enquanto NENHUMA entrega estiver confirmada.
+    32→ *   { acao: 'INICIAR_ROTA', lat?, lng? }            sai para entrega
+    33→ *   { acao: 'ENTREGUE', saleId, pagamento, valorRecebido?, foto?, lat?, lng? }
+    34→ *       DINHEIRO/PIX aceitam PARCIAL (valorRecebido < restante -> PENDENTE);
+    35→ *       PIX e BOLETO EXIGEM foto (comprovante/boleto); geram comissao do
+    36→ *       vendedor (taxa propria da pre-venda) proporcional ao recebido.
+    37→ *   { acao: 'FALHOU', saleId, motivo, lat?, lng? }  nao entregue (ausente/recusou/...)
+    38→ *   { acao: 'REABRIR', saleId }                     devolve a parada para a fila
+    39→ *   { acao: 'EXCLUIR_VENDA', saleId }               vendedor ate 11h59 do dia;
+    40→ *                                                    admin a qualquer hora
+    41→ *   { acao: 'SET_CONFIG', comissaoPct }             [ADMIN] taxa da pre-venda
+    42→ *
+    43→ * Fluxo de status:
+    44→ *   sale.entrega_status: PENDENTE -> EM_ROTA -> ENTREGUE | FALHOU
+    45→ *   rota.status:         GERADA  -> EM_ROTA -> CONCLUIDA
+    46→ *   Tudo roda via service_role; tabelas entrega_rotas/entrega_eventos ficam
+    47→ *   FECHADAS para anon/authenticated (RLS, padrao do projeto).
+    48→ *
+    49→ * DINHEIRO: a venda pre-venda so entra na receita/caixa/comissao QUANDO a
+    50→ * entrega e confirmada com pagamento aqui (nunca no registro do pedido).
+    51→ */
+    52→
+    53→const TZ = 'America/Sao_Paulo';
+    54→const OFF = '-03:00'; // SP sem horario de verao desde 2019
+    55→
+    56→function todayStr(): string {
+    57→  return new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    58→}
+    59→function dayRangeIso(): { start: string; end: string } {
+    60→  const d = todayStr();
+    61→  return { start: new Date(`${d}T00:00:00${OFF}`).toISOString(), end: new Date(`${d}T23:59:59.999${OFF}`).toISOString() };
+    62→}
+    63→
+    64→const SALE_COLS = 'id, vendedor_id, client_id, valor_total, valor_pago, metodo_pagamento, detalhe_pagamento, status_pagamento, entrega_status, entrega_seq, route_id, data_venda';
+    65→const CLIENT_COLS_BASE = 'id, nome_fantasia, endereco, bairro, telefone, cnpj';
+    66→// BLOCO 46 (regra do dono): e-mail do cliente vai no rodapé do cupom (envio
+    67→// do XML da NF-e). Alguns bancos antigos não têm clients.email — os tiers de
+    68→// fetchClientsFlex tentam COM email e degradam para o tier sem email.
+    69→const CLIENT_COLS_EMAIL = `${CLIENT_COLS_BASE}, email`;
+    70→const CLIENT_COLS_GPS = `${CLIENT_COLS_EMAIL}, localizacao, pin_localizacao`;
+    71→// BLOCO 64: endereco_numero (numero/sala do cliente) — a fila de entregas e a
+    72→// impressao da ordem mostram "Rua X, 123 — Bairro". Em bancos antigos sem a
+    73→// coluna, o tier decai para o GPS e o numero simplesmente vem vazio.
+    74→const CLIENT_COLS_NUM = `${CLIENT_COLS_GPS}, endereco_numero`;
+    75→// BLOCO 125: portal_code — QR do catálogo do cliente no cupom (fila do
+    76→// admin/entregador/secretario). Tier próprio: banco SEM a coluna degrada.
+    77→const CLIENT_COLS_PORTAL = `${CLIENT_COLS_NUM}, portal_code`;
+    78→
+    79→/**
+    80→ * clients com colunas de GPS flexíveis. Bancos SEM clients.localizacao
+    81→ * (Bloco 12 incompleto) rejeitam o select inteiro (42703) — sem isso o mapa
+    82→ * de clientes fica vazio e TODA parada aparece como "Cliente" sem endereço,
+    83→ * telefone e sem botão de MAPA/ZAP. Tenta a versão completa e degrada.
+    84→ */
+    85→async function fetchClientsFlex(supabase: any, ids: string[]) {
+    86→  if (!ids || ids.length === 0) return { data: [] as any[] };
+    87→  // BLOCO 46: tiers COM email primeiro; sem email só no último (banco antigo)
+    88→  // BLOCO 64: primeiro tier busca tambem o endereco_numero (numero/sala)
+    89→  // BLOCO 125: primeiro tier busca tambem o portal_code (QR do cupom)
+    90→  for (const cols of [CLIENT_COLS_PORTAL, CLIENT_COLS_NUM, CLIENT_COLS_GPS, `${CLIENT_COLS_EMAIL}, pin_localizacao`, CLIENT_COLS_EMAIL, CLIENT_COLS_BASE]) {
+    91→    const r = await supabase.from('clients').select(cols).in('id', ids);
+    92→    if (!r.error) return r;
+    93→  }
+    94→  return { data: [] as any[] };
+    95→}
+    96→
+    97→// ---------------------------------------------------------------------------
+    98→// Colunas uuid (sales.entregador_id, caixa_fechamentos.entregador_id,
+    99→// entrega_eventos.user_id) REJEITAM valores nao-UUID ("invalid input syntax
+   100→// for type uuid"). O login fixo da base (ENTREGADOR/SECRETARIO, PIN 1234)
+   101→// nao tem linha em app_users — o id da sessao e a string "ENTREGADOR", e
+   102→// gravar direto derruba a confirmacao de entrega (500 "Erro ao registrar a
+   103→// entrega") e o fechamento de caixa.
+   104→// Regra do resolver:
+   105→//   1. id ja e UUID (usuario real/admin) -> usa o proprio id (nominal);
+   106→//   2. pseudo-usuario -> se existir EXATAMENTE 1 usuario real ativo com esse
+   107→//      perfil, usa o id dele (a entrega passa a ser nominal automaticamente);
+   108→//   3. senao, UUID fixo e estavel do acesso da base (o caixa e o historico
+   109→//      ficam agrupados no mesmo "entregador" — nunca mais quebram).
+   110→// ---------------------------------------------------------------------------
+   111→const RE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+   112→const UUID_ACESSO_FIXO: Record<string, string> = {
+   113→  ENTREGADOR: 'e6e10000-0000-4000-8000-00000000e6e1',
+   114→  SECRETARIO: 'e6e20000-0000-4000-8000-00000000e6e2',
+   115→};
+   116→async function resolveEntregadorUuid(supabase: any, userId: string): Promise<string | null> {
+   117→  if (!userId) return null;
+   118→  if (RE_UUID.test(userId)) return userId;
+   119→  const perfil = String(userId).toUpperCase();
+   120→  try {
+   121→    const { data, error } = await supabase
+   122→      .from('app_users').select('id, perfil, ativo').eq('perfil', perfil).eq('ativo', true);
+   123→    if (!error && Array.isArray(data)) {
+   124→      if (data.length === 1) return data[0].id as string;
+   125→      // 2+ usuarios reais: nao da para adivinhar quem esta entregando —
+   126→      // mantem o UUID do acesso fixo (sem quebrar; o nominal volta quando
+   127→      // entrarem com o login real de um deles).
+   128→    }
+   129→    // BLOCO 33: ids NAO-uuid (ex. mock E2E 'adminuser') — o toUpperCase do id
+   130→    // nao e perfil. Tenta localizar o usuario pelo proprio id.
+   131→    const alt = await supabase.from('app_users').select('id, ativo').eq('id', userId).eq('ativo', true).limit(1);
+   132→    if (!alt.error && Array.isArray(alt.data) && alt.data.length === 1) return alt.data[0].id as string;
+   133→  } catch { /* app_users inacessivel: segue com o UUID fixo */ }
+   134→  return UUID_ACESSO_FIXO[perfil] || null;
+   135→}
+   136→
+   137→// BLOCO 13: colunas novas da fila continua (podem nao existir antes do SQL)
+   138→const FILA_COLS_13 = `${SALE_COLS}, tipo_venda, trocas, prioridade, separado, separado_em, entregador_id, data_vencimento`;
+   139→
+   140→// BLOCO 31: ordem_entrega (posicao da parada definida pelo admin com setas).
+   141→// Sonda 1x por processo — pre-SQL a fila segue no formato antigo (sem ordem).
+   142→let _temOrdemEntrega: boolean | null = null;
+   143→async function hasOrdemEntregaColumn(): Promise<boolean> {
+   144→  if (_temOrdemEntrega !== null) return _temOrdemEntrega;
+   145→  try {
+   146→    const { error } = await getServiceClient().from('sales').select('ordem_entrega').limit(1);
+   147→    _temOrdemEntrega = !error;
+   148→  } catch { _temOrdemEntrega = false; }
+   149→  return _temOrdemEntrega;
+   150→}
+   151→
+   152→// BLOCO 98: sales.trocas_valor (valor das trocas em R$ PRECO DE CUSTO).
+   153→// Sonda 1x por processo — sem a coluna o campo simplesmente nao sai na fila.
+   154→let _temTrocasValor: boolean | null = null;
+   155→async function hasTrocasValorColumn(): Promise<boolean> {
+   156→  if (_temTrocasValor !== null) return _temTrocasValor;
+   157→  try {
+   158→    const { error } = await getServiceClient().from('sales').select('trocas_valor').limit(1);
+   159→    _temTrocasValor = !error;
+   160→  } catch { _temTrocasValor = false; }
+   161→  return _temTrocasValor;
+   162→}
+   163→
+   164→/** Carimbo pt-BR (America/Sao_Paulo) compativel com o parser do portal do cliente:
+   165→ *  "12/02/2025 14:33" -> o portal le " | 12/02/2025 14:33: R$ 50.00 (DINHEIRO)" */
+   166→function carimboAgora(): string {
+   167→  return new Intl.DateTimeFormat('pt-BR', {
+   168→    timeZone: TZ, day: '2-digit', month: '2-digit', year: 'numeric',
+   169→    hour: '2-digit', minute: '2-digit', hour12: false,
+   170→  }).format(new Date());
+   171→}
+   172→
+   173→/** Hora atual em Sao Paulo como HH:MM (para a janela de exclusao ate 11h59) */
+   174→function horaAgoraSP(): string {
+   175→  return new Intl.DateTimeFormat('pt-BR', {
+   176→    timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false,
+   177→  }).format(new Date());
+   178→}
+   179→
+   180→/**
+   181→ * BLOCO 14 — interruptores das melhorias (admin liga/desliga em Configuracoes).
+   182→ * Colunas melhor_* em app_settings; se o SQL 14 nao rodou, tudo LIGADO.
+   183→ */
+   184→async function getMelhorias(supabase: any): Promise<{ trocaSeparacao: boolean; pushEntrega: boolean; whatsapp: boolean; bairroCard: boolean; fotoEntrega: boolean; pushFalha: boolean }> {
+   185→  try {
+   186→    const { data } = await supabase
+   187→      .from('app_settings')
+   188→      .select('melhor_troca_separacao, melhor_push_entrega, melhor_whatsapp, melhor_bairro, melhor_foto_entrega, melhor_push_falha')
+   189→      .eq('id', 'global_settings')
+   190→      .maybeSingle();
+   191→    return {
+   192→      trocaSeparacao: data?.melhor_troca_separacao !== false,
+   193→      pushEntrega: data?.melhor_push_entrega !== false,
+   194→      whatsapp: data?.melhor_whatsapp !== false,
+   195→      bairroCard: data?.melhor_bairro !== false,
+   196→      fotoEntrega: data?.melhor_foto_entrega !== false,
+   197→      pushFalha: data?.melhor_push_falha !== false,
+   198→    };
+   199→  } catch {
+   200→    return { trocaSeparacao: true, pushEntrega: true, whatsapp: true, bairroCard: true, fotoEntrega: true, pushFalha: true };
+   201→  }
+   202→}
+   203→
+   204→/**
+   205→ * BLOCO 14 — Comissão de PRE-VENDA: criada/ATUALIZADA sempre na entrega
+   206→ * confirmada (qualquer forma de pagamento), com o VALOR CHEIO da venda.
+   207→ *   - à vista quitado no aceite  -> DISPONIVEL (vendedor pode receber)
+   208→ *   - parcial / boleto / nao pago -> A_RECEBER (entra quando o dinheiro
+   209→ *     da venda entrar completo — o recebimento posterior vira DISPONIVEL)
+   210→ */
+   211→/**
+   212→ * BLOCO 14/98 — comissao da PRE-VENDA entregue.
+   213→ * usarComissaoPe (regra do dono, Bloco 98): o VENDEDOR que entrega a PROPIA
+   214→ * venda ganha a taxa de PRONTA ENTREGA do produto (foi ele que vendeu e
+   215→ * levou). Entregador dedicado/admin: taxa de PRE-VENDA, como sempre.
+   216→ * Nunca reduz valor de comissão já registrada e nunca trava a entrega.
+   217→ */
+   218→async function registrarComissaoPreVenda(supabase: any, sale: any, quitada: boolean, usarComissaoPe = false) {
+   219→  try {
+   220→    // BLOCO 118 (regra do dono): comissao desativada para o David (R5) —
+   221→    // nao calcula nem grava (o trigger do SQL 118 no banco tambem descarta).
+   222→    if (sale.vendedor_id) {
+   223→      const { data: vd118 } = await supabase
+   224→        .from('app_users').select('nome').eq('id', sale.vendedor_id).limit(1).maybeSingle();
+   225→      if (vd118 && /^david/i.test(String(vd118.nome || '').trim())) return;
+   226→    }
+   227→
+   228→    const { data: items } = await supabase
+   229→      .from('sale_items').select('produto_id, quantidade, preco_venda').eq('sale_id', sale.id);
+   230→    const itens = items || [];
+   231→    if (itens.length === 0) return;
+   232→
+   233→    const comissao = usarComissaoPe
+   234→      ? await comissaoPeDeItens(supabase, itens)
+   235→      : await comissaoPvDeItens(supabase, itens);
+   236→    if (!(comissao > 0)) return;
+   237→
+   238→    const total = Math.max(Number(sale.valor_total || 0), 0.01);
+   239→    const payload = {
+   240→      seller_id: sale.vendedor_id,
+   241→      valor_comissao: comissao,
+   242→      valor_base: round2(Number(sale.valor_total || 0)),
+   243→      percentual: round2((comissao / total) * 100),
+   244→      status: quitada ? 'DISPONIVEL' : 'A_RECEBER',
+   245→    };
+   246→
+   247→    // evita duplicar se a parada for reaberta e re-entregue: atualiza a row
+   248→    // (a comissao conta no dia em que a entrega foi EFETIVADA: created_at
+   249→    // anda junto com a re-entrega — data de entrega = data da comissao)
+   250→    const { data: existente } = await supabase
+   251→      .from('commissions').select('id').eq('sale_id', sale.id).limit(1);
+   252→    if (existente && existente.length > 0) {
+   253→      await supabase.from('commissions')
+   254→        .update({ ...payload, created_at: new Date().toISOString() })
+   255→        .eq('id', existente[0].id);
+   256→    } else {
+   257→      await supabase.from('commissions').insert({
+   258→        sale_id: sale.id,
+   259→        ...payload,
+   260→        valor_pago: 0,
+   261→        created_at: new Date().toISOString(),
+   262→      });
+   263→    }
+   264→  } catch (e: any) {
+   265→    // comissao nunca deve travar a entrega
+   266→    console.error('[pre-venda] comissao pre-venda falhou:', e?.message);
+   267→  }
+   268→}
+   269→
+   270→/** Aviso ao vendedor (push + mensagem no app) — Bloco 14 */
+   271→async function avisarVendedor(supabase: any, vendedorId: string | null | undefined, clientId: string | null | undefined, title: string, corpo: string) {
+   272→  try {
+   273→    if (!vendedorId) return;
+   274→    let nomeCli = 'cliente';
+   275→    if (clientId) {
+   276→      const { data: cli } = await supabase.from('clients').select('nome_fantasia').eq('id', clientId).maybeSingle();
+   277→      nomeCli = cli?.nome_fantasia || nomeCli;
+   278→    }
+   279→    await sendPushToUser(vendedorId, { title, body: `${nomeCli} — ${corpo}`, url: '/' });
+   280→    await supabase.from('system_messages').insert({
+   281→      vendedor_id: vendedorId,
+   282→      titulo: title,
+   283→      mensagem: `${nomeCli}: ${corpo}`,
+   284→      data: new Date().toISOString(),
+   285→      lida: false,
+   286→    });
+   287→  } catch (e: any) {
+   288→    console.error('[pre-venda] aviso vendedor falhou:', e?.message);
+   289→  }
+   290→}
+   291→
+   292→/** Forma de pagamento a cobrar na entrega (gravada pelo pedido: "cobrar X na entrega")
+   293→ *  BLOCO 27: pedido PAGO NA VISITA (a vista do wizard ROTA 2) -> PAGO_VISITA
+   294→ *  (o entregador NÃO cobra nada — só entrega). */
+   295→function formaPgtoDeSale(s: any): string {
+   296→  const det = String(s.detalhe_pagamento || '');
+   297→  if (/PAGO NA VISITA/i.test(det)) return 'PAGO_VISITA';
+   298→  const m = det.match(/cobrar\s+(DINHEIRO|PIX|BOLETO|CHEQUE)/i);
+   299→  if (m) return m[1].toUpperCase();
+   300→  const mp = String(s.metodo_pagamento || '').toUpperCase();
+   301→  if (mp === 'DINHEIRO' || mp === 'PIX' || mp === 'BOLETO') return mp;
+   302→  return 'DINHEIRO';
+   303→}
+   304→
+   305→/** BLOCO 40: sales.modo_nota entra no select SO quando a coluna existe
+   306→ *  (sonda em cache — pre-SQL o select inteiro quebraria 42703 e a fila sumiria). */
+   307→async function salesColsComModo(): Promise<string> {
+   308→  const temModo = await hasModoVendaColumn();
+   309→  return temModo ? 'modo_nota' : '';
+   310→}
+   311→
+   312→async function fetchParadas(supabase: any, routeId: string) {
+   313→  // BLOCO 40: modo_nota entra quando a coluna existe (tipo de documento no cupom)
+   314→  const modoCol = await salesColsComModo();
+   315→  const { data: salesRows, error } = await supabase
+   316→    .from('sales')
+   317→    .select(`${SALE_COLS}${modoCol ? `, ${modoCol}` : ''}`)
+   318→    .eq('route_id', routeId)
+   319→    .order('entrega_seq', { ascending: true });
+   320→  if (error) throw error;
+   321→  return salesRows || [];
+   322→}
+   323→
+   324→async function enrichParadas(supabase: any, salesRows: any[]) {
+   325→  if (salesRows.length === 0) return [];
+   326→  const clientIds = [...new Set(salesRows.map((s: any) => s.client_id).filter(Boolean))];
+   327→  const saleIds = salesRows.map((s: any) => s.id);
+   328→
+   329→  const [clientsRes, itemsRes, eventsRes, fotosRes] = await Promise.all([
+   330→    fetchClientsFlex(supabase, clientIds),
+   331→    supabase.from('sale_items').select('sale_id, produto_id, quantidade, preco_venda').in('sale_id', saleIds),
+   332→    supabase.from('entrega_eventos').select('sale_id, status, motivo, criado_em').in('sale_id', saleIds).order('criado_em', { ascending: true }),
+   333→    // Bloco 6: foto do boleto (so consulta se a coluna existir)
+   334→    hasBoletoFotoColumn().then(ok =>
+   335→      ok ? supabase.from('entrega_eventos').select('sale_id').not('foto', 'is', null).in('sale_id', saleIds)
+   336→         : Promise.resolve({ data: [] as any[] })),
+   337→  ]);
+   338→
+   339→  const clientMap: Record<string, any> = {};
+   340→  (clientsRes.data || []).forEach((c: any) => { clientMap[c.id] = c; });
+   341→
+   342→  // Nomes dos produtos
+   343→  const prodIds = [...new Set((itemsRes.data || []).map((i: any) => i.produto_id))];
+   344→  const prodMap: Record<string, string> = {};
+   345→  if (prodIds.length > 0) {
+   346→    const { data: prods } = await supabase.from('products').select('id, nome').in('id', prodIds);
+   347→    (prods || []).forEach((p: any) => { prodMap[p.id] = p.nome; });
+   348→  }
+   349→
+   350→  const itemsBySale: Record<string, any[]> = {};
+   351→  (itemsRes.data || []).forEach((i: any) => {
+   352→    (itemsBySale[i.sale_id] = itemsBySale[i.sale_id] || []).push({
+   353→      nome: prodMap[i.produto_id] || 'Produto',
+   354→      produtoId: i.produto_id,
+   355→      quantidade: i.quantidade,
+   356→      precoVenda: Number(i.preco_venda || 0),
+   357→    });
+   358→  });
+   359→
+   360→  const temFotoSet: Record<string, boolean> = {};
+   361→  (fotosRes.data || []).forEach((f: any) => { temFotoSet[f.sale_id] = true; });
+   362→
+   363→  const eventsBySale: Record<string, any[]> = {};
+   364→  (eventsRes.data || []).forEach((e: any) => {
+   365→    (eventsBySale[e.sale_id] = eventsBySale[e.sale_id] || []).push({ status: e.status, motivo: e.motivo, criado_em: e.criado_em });
+   366→  });
+   367→
+   368→  return salesRows.map((s: any) => {
+   369→    const c = clientMap[s.client_id] || {};
+   370→    let lat: number | null = null, lng: number | null = null;
+   371→    if (c.localizacao && typeof c.localizacao.lat === 'number') { lat = c.localizacao.lat; lng = c.localizacao.lng; }
+   372→    else if (c.pin_localizacao && c.pin_localizacao.includes(',')) {
+   373→      const [a, b] = String(c.pin_localizacao).split(',').map((x: string) => parseFloat(x.trim()));
+   374→      if (isFinite(a) && isFinite(b)) { lat = a; lng = b; }
+   375→    }
+   376→    return {
+   377→      saleId: s.id,
+   378→      seq: s.entrega_seq,
+   379→      entregaStatus: s.entrega_status,
+   380→      valorTotal: Number(s.valor_total),
+   381→      valorPago: Number(s.valor_pago || 0),
+   382→      statusPagamento: s.status_pagamento,
+   383→      formaPgto: formaPgtoDeSale(s),
+   384→      condicao: /A PRAZO/i.test(String(s.detalhe_pagamento || '')) ? 'APRAZO' : 'AVISTA',
+   385→      // BLOCO 40 (regra do dono): dados REAIS da venda para o cupom — tipo do
+   386→      // documento (NF-e/NFC-e) e forma de pagamento. Sem isso o Cupom.tsx
+   387→      // reconstruia o detalhe do zero e a escolha "COM NOTA" se perdia.
+   388→      detalhePagamento: s.detalhe_pagamento || null,
+   389→      metodoPagamento: s.metodo_pagamento || null,
+   390→      modoNota: s.modo_nota || null,
+   391→      temFoto: !!temFotoSet[s.id],
+   392→      motivo: null as string | null,
+   393→      cliente: {
+   394→        id: s.client_id,
+   395→        nome: c.nome_fantasia || 'Cliente',
+   396→        endereco: c.endereco || '',
+   397→        // BLOCO 64: numero/sala do endereco (impressao da fila mostra "Rua X, 123")
+   398→        numero: c.endereco_numero || '',
+   399→        bairro: c.bairro || '',
+   400→        telefone: c.telefone || '',
+   401→        // BLOCO 40: CNPJ para o rodape do cupom NF-e ("NF-e: <cnpj>")
+   402→        cnpj: c.cnpj || null,
+   403→        // BLOCO 46: e-mail para o rodape do cupom (envio do XML)
+   404→        email: c.email || null,
+   405→        // BLOCO 125: portal_code — QR do catalogo do cliente no cupom
+   406→        portalCodigo: c.portal_code || null,
+   407→        lat, lng,
+   408→      },
+   409→      itens: itemsBySale[s.id] || [],
+   410→      eventos: eventsBySale[s.id] || [],
+   411→    };
+   412→  });
+   413→}
+   414→
+   415→async function routeSummary(supabase: any, route: any) {
+   416→  const paradas = await enrichParadas(supabase, await fetchParadas(supabase, route.id));
+   417→  const paradasFmt = paradas.map(p => ({
+   418→    ...p,
+   419→    motivo: (p.eventos && [...p.eventos].reverse().find(e => e.motivo)?.motivo) || null,
+   420→  }));
+   421→  let vendedorNome = '';
+   422→  if (route.vendedor_id) {
+   423→    const { data: u } = await supabase.from('app_users').select('nome').eq('id', route.vendedor_id).limit(1).maybeSingle();
+   424→    vendedorNome = u?.nome || '';
+   425→  }
+   426→  return {
+   427→    rota: {
+   428→      id: route.id,
+   429→      data: route.data,
+   430→      status: route.status,
+   431→      totalParadas: route.total_paradas,
+   432→      criadaEm: route.criada_em,
+   433→      iniciadaEm: route.iniciada_em,
+   434→      concluidaEm: route.concluida_em,
+   435→      vendedorId: route.vendedor_id,
+   436→      vendedorNome,
+   437→    },
+   438→    paradas: paradasFmt,
+   439→  };
+   440→}
+   441→
+   442→async function pendentesDoDia(supabase: any, vendedorId?: string) {
+   443→  const { start, end } = dayRangeIso();
+   444→  let q = supabase
+   445→    .from('sales')
+   446→    .select('id, valor_total')
+   447→    .eq('tipo_venda', 'PRE_VENDA')
+   448→    .eq('entrega_status', 'PENDENTE')
+   449→    .is('route_id', null)
+   450→    .gte('data_venda', start)
+   451→    .lte('data_venda', end);
+   452→  if (vendedorId) q = q.eq('vendedor_id', vendedorId);
+   453→  const { data } = await q;
+   454→  const rows = data || [];
+   455→  return { count: rows.length, valor: rows.reduce((a: number, s: any) => a + Number(s.valor_total || 0), 0) };
+   456→}
+   457→
+   458→async function getRotaDeHoje(supabase: any, vendedorId: string) {
+   459→  const { data } = await supabase
+   460→    .from('entrega_rotas')
+   461→    .select('*')
+   462→    .eq('vendedor_id', vendedorId)
+   463→    .eq('data', todayStr())
+   464→    .maybeSingle();
+   465→  return data || null;
+   466→}
+   467→
+   468→async function logEvento(supabase: any, routeId: string, saleId: string | null, userId: string, status: string, motivo?: string | null, lat?: number | null, lng?: number | null, foto?: string | null) {
+   469→  const row: any = {
+   470→    route_id: routeId,
+   471→    sale_id: saleId,
+   472→    user_id: userId,
+   473→    status,
+   474→    motivo: motivo || null,
+   475→    lat: typeof lat === 'number' ? lat : null,
+   476→    lng: typeof lng === 'number' ? lng : null,
+   477→  };
+   478→  if (foto && (await hasBoletoFotoColumn())) row.foto = foto;
+   479→  await supabase.from('entrega_eventos').insert(row);
+   480→}
+   481→
+   482→async function checarConclusao(supabase: any, routeId: string) {
+   483→  const { data: rest } = await supabase
+   484→    .from('sales')
+   485→    .select('id')
+   486→    .eq('route_id', routeId)
+   487→    .in('entrega_status', ['PENDENTE', 'EM_ROTA']);
+   488→  if (!rest || rest.length === 0) {
+   489→    await supabase.from('entrega_rotas').update({ status: 'CONCLUIDA', concluida_em: new Date().toISOString() }).eq('id', routeId);
+   490→  }
+   491→}
+   492→
+   493→// ============================================================================
+   494→// BLOCO 13 — FILA CONTINUA
+   495→// ============================================================================
+   496→
+   497→/** logEvento tolerante: nunca bloqueia a acao principal por falha de log */
+   498→async function logEventoSeguro(supabase: any, routeId: string | null, saleId: string | null, userId: string, status: string, motivo?: string | null, lat?: number | null, lng?: number | null, foto?: string | null) {
+   499→  try {
+   500→    const userUuid = await resolveEntregadorUuid(supabase, userId);
+   501→    const row: any = { route_id: routeId, sale_id: saleId, user_id: userUuid, status, motivo: motivo || null, lat: typeof lat === 'number' ? lat : null, lng: typeof lng === 'number' ? lng : null };
+   502→    if (!userUuid) delete row.user_id;
+   503→    if (foto && (await hasBoletoFotoColumn())) row.foto = foto;
+   504→    try {
+   505→      await supabase.from('entrega_eventos').insert(row);
+   506→    } catch (e: any) {
+   507→      // route_id pode ser NOT NULL em bancos antigos: tenta sem rota
+   508→      if (routeId === null) {
+   509→        const { route_id: _drop, ...semRota } = row;
+   510→        try { await supabase.from('entrega_eventos').insert(semRota); } catch { /* ignora */ }
+   511→      } else { throw e; }
+   512→    }
+   513→  } catch (e: any) {
+   514→    console.error('[pre-venda] logEvento falhou (nao bloqueia):', e?.message);
+   515→  }
+   516→}
+   517→
+   518→/** Update de venda tolerante: se as colunas do Bloco 13 nao existem, refaz sem elas */
+   519→async function updateSaleFlex(supabase: any, saleId: string, payload: Record<string, unknown>): Promise<{ ok: boolean; sem13: boolean; erro?: string }> {
+   520→  const { error } = await supabase.from('sales').update(payload).eq('id', saleId);
+   521→  if (!error) return { ok: true, sem13: false };
+   522→  const msg = String(error.message || '');
+   523→  if (/trocas|prioridade|separado|entregador_id|trocas_valor/i.test(msg)) {
+   524→    const flex = { ...payload };
+   525→    delete flex.trocas; delete flex.prioridade; delete flex.separado; delete flex.separado_em; delete flex.entregador_id; delete flex.trocas_valor;
+   526→    // Se sobrar algo de verdade (ex.: entrega_status), aplica sem as colunas novas.
+   527→    // Se NAO sobrar nada, o update seria vazio = sucesso falso. Exige o SQL.
+   528→    if (Object.keys(flex).length === 0) {
+   529→      return { ok: false, sem13: true, erro: 'Banco desatualizado: rode o Bloco 13 do SQL.' };
+   530→    }
+   531→    const { error: err2 } = await supabase.from('sales').update(flex).eq('id', saleId);
+   532→    if (!err2) return { ok: true, sem13: true };
+   533→    return { ok: false, sem13: true, erro: err2.message };
+   534→  }
+   535→  // CHECK legado em sales.metodo_pagamento: so aceita DINHEIRO/PIX/A_PRAZO.
+   536→  // Se o update for rejeitado por constraint com metodo fora disso (ex.:
+   537→  // BOLETO gravado por codigo antigo), refaz com A_PRAZO — a forma real
+   538→  // continua registrada no detalhe_pagamento (a fila parseia de lá).
+   539→  if (/violat|check constraint/i.test(error.message || '') && payload.metodo_pagamento && !['DINHEIRO', 'PIX', 'A_PRAZO'].includes(String(payload.metodo_pagamento))) {
+   540→    const flex2 = { ...payload, metodo_pagamento: 'A_PRAZO' };
+   541→    const { error: err3 } = await supabase.from('sales').update(flex2).eq('id', saleId);
+   542→    if (!err3) return { ok: true, sem13: false };
+   543→    return { ok: false, sem13: false, erro: err3.message };
+   544→  }
+   545→  return { ok: false, sem13: false, erro: error.message };
+   546→}
+   547→
+   548→/** Monta o item da fila (formato UI) a partir das rows de sales.
+   549→ * BLOCO 119.2 (bug do entregador): donoRecebimento = identidade da sessao
+   550→ * resolvida para o mundo das cargas (uuid). O login fixo ENTREGADOR tem id
+   551→ * "ENTREGADOR" (nao-uuid) e a carga gravada em sales.entregador_id e UUID —
+   552→ * comparar no CLIENTE nunca bate e o botao de receber nao aparece. O SERVIDOR
+   553→ * conhece o uuid resolvido (resolveEntregadorUuid) e declara minhaCarga em
+   554→ * cada item; o cliente so obedece. Admin recebe undefined (pode receber tudo).
+   555→ * BLOCO 120.1 (regra do dono): para VENDEDOR, minhaCarga = CARREGADA no nome
+   556→ * dele (check de carga do admin/secretario: carga_confirmada_em + entregador_id
+   557→ * = ele). Venda propria SEM carregamento NAO e recebivel — so conferencia. */
+   558→async function enrichFila(supabase: any, salesRows: any[], donoRecebimento?: string | null, perfilRecebimento?: string) {
+   559→  if (salesRows.length === 0) return [];
+   560→  const clientIds = [...new Set(salesRows.map((s: any) => s.client_id).filter(Boolean))];
+   561→  const saleIds = salesRows.map((s: any) => s.id);
+   562→  // BLOCO 96: nomes tambem dos ENTREGADORES atribuidos (badge do card + caixa)
+   563→  const vendedorIds = [...new Set([
+   564→    ...salesRows.map((s: any) => s.vendedor_id).filter(Boolean),
+   565→    ...salesRows.map((s: any) => s.entregador_id).filter(Boolean),
+   566→  ])];
+   567→
+   568→  const [clientsRes, itemsRes, usersRes, fotosRes] = await Promise.all([
+   569→    fetchClientsFlex(supabase, clientIds),
+   570→    supabase.from('sale_items').select('sale_id, produto_id, quantidade, preco_venda').in('sale_id', saleIds),
+   571→    vendedorIds.length > 0 ? supabase.from('app_users').select('id, nome').in('id', vendedorIds) : Promise.resolve({ data: [] }),
+   572→    hasBoletoFotoColumn().then(ok =>
+   573→      ok ? supabase.from('entrega_eventos').select('sale_id').not('foto', 'is', null).in('sale_id', saleIds)
+   574→         : Promise.resolve({ data: [] as any[] })),
+   575→  ]);
+   576→
+   577→  const clientMap: Record<string, any> = {};
+   578→  (clientsRes.data || []).forEach((c: any) => { clientMap[c.id] = c; });
+   579→  const userMap: Record<string, string> = {};
+   580→  (usersRes.data || []).forEach((u: any) => { userMap[u.id] = u.nome; });
+   581→
+   582→  const prodIds = [...new Set((itemsRes.data || []).map((i: any) => i.produto_id))];
+   583→  const prodMap: Record<string, string> = {};
+   584→  if (prodIds.length > 0) {
+   585→    const { data: prods } = await supabase.from('products').select('id, nome').in('id', prodIds);
+   586→    (prods || []).forEach((p: any) => { prodMap[p.id] = p.nome; });
+   587→  }
+   588→
+   589→  const itemsBySale: Record<string, any[]> = {};
+   590→  (itemsRes.data || []).forEach((i: any) => {
+   591→    (itemsBySale[i.sale_id] = itemsBySale[i.sale_id] || []).push({
+   592→      nome: prodMap[i.produto_id] || 'Produto',
+   593→      produtoId: i.produto_id,
+   594→      quantidade: i.quantidade,
+   595→      precoVenda: Number(i.preco_venda || 0),
+   596→    });
+   597→  });
+   598→
+   599→  const temFotoSet: Record<string, boolean> = {};
+   600→  (fotosRes.data || []).forEach((f: any) => { temFotoSet[f.sale_id] = true; });
+
+[showing lines 1-600 of 2274; use offset=601 with limit to continue reading]

@@ -61,13 +61,23 @@ export type FocusDoc = 'nfe' | 'nfce';
 
 /**
  * BLOCO 117 (doc reference/webhooks + docs/webhooks): a Focus publica eventos
- * SEPARADOS por tipo de documento — `nfe` dispara SÓ NF-e autorizada, `nfce`
- * dispara SÓ NFC-e autorizada e `nfce_contingencia` fecha o ciclo da NFC-e
- * emitida em contingência offline (efetivada/cancelada/inutilizada). Cada
- * gatilho monitora UM evento, por isso o app instala os TRES — antes instalava
- * so `nfe` e as NFC-e nunca avisavam o app (status ficava parado).
+ * SEPARADOS por tipo de documento — `nfe` dispara SÓ NF-e autorizada e
+ * `nfce_contingencia` fecha o ciclo da NFC-e em contingência (efetivada,
+ * com erro e CANCELADA). Cada gatilho monitora UM evento.
+ *
+ * BLOCO 150 (PROVA REAL em produção + schema oficial do POST /v2/hooks):
+ * o evento `nfce` NÃO existe no enum válido da API ("O valor informado para
+ * o parâmetro 'event' é inválido" — enum oficial: nfe, nfse, nfsen,
+ * nfce_contingencia, nfe_recebida, nfe_recebida_falha_consulta, nfsen_recebida,
+ * cte_recebida, inutilizacao, cte, mdfe, nfcom, nfce_consulta_automatica).
+ * A tabela em prosa da doc menciona `nfce`, mas o SERVIDOR rejeita — tentar
+ * criar esse gatilho falhava sempre com HTTP 400 e fazia o reparo gritar
+ * falha para sempre. NFC-e do APP não precisa de webhook (a resposta da
+ * emissão é síncrona); NFC-e do PAINEL entra pelo backup mensal (AVULSAS) ou
+ * importação manual (ref/chave) — e cancelamentos via contingência avisam
+ * pelo nfce_contingencia.
  */
-export const HOOKS_DO_APP = ['nfe', 'nfce', 'nfce_contingencia'] as const;
+export const HOOKS_DO_APP = ['nfe', 'nfce_contingencia'] as const;
 export type FocusHookEvent = (typeof HOOKS_DO_APP)[number];
 
 export function isEventoDoApp(event: unknown): boolean {

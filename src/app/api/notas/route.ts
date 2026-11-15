@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { after } from 'next/server';
 import { getServiceClient, devBridge } from '@/lib/serverSupabase';
 import { sessionFromRequest } from '@/lib/session';
-import { hasNotaColumns, hasProductFiscalColumns, hasBoletoColumns, hasPrecoCupom, hasNotaEmitidaEm, hasClientModoCupom } from '@/lib/serverSchema';
+import { hasNotaColumns, hasProductFiscalColumns, hasBoletoColumns, hasPrecoCupom, hasNotaEmitidaEm, hasClientModoCupom, hasProductCodigoColumn, hasEstoquesNotaColumns, hasEstoqueBaixadoColumn, hasModoVendaColumn } from '@/lib/serverSchema';
 import { lerEmitentePayload, lerErpConfig } from '@/lib/erpConfig';
 import {
   getFocusConfig,
@@ -14,6 +14,7 @@ import {
   montarPayloadNfe,
   montarPayloadNfce,
   tpagDeMetodo,
+  labelTpag,
   refForSale,
   nextTentativa,
   validaCpfCnpj,
@@ -24,6 +25,7 @@ import {
   FocusNfePayloadV2,
 } from '@/lib/focusNfe';
 import { arquivarDaConsulta, invalidaPresenca } from '@/lib/focusArquivos';
+import { cancelarCobranca, isInterConfigured } from '@/lib/interBoleto';
 // BLOCO 142: prazo SEFAZ de cancelamento (NFC-e 30min / NF-e 24h) — fonte única front+servidor
 import { prazoCancelamentoNota } from '@/lib/regras-fiscais';
 
@@ -255,15 +257,150 @@ export async function POST(req: NextRequest) {
       nota_status: res.cancelada ? 'CANCELADA' : sale.nota_status,
       nota_erro: res.cancelada ? null : res.motivo || null,
     });
+
+    // -----------------------------------------------------------------
+    // BLOCO 145 — CASCATA AUTOMÁTICA DO CANCELAMENTO (regra do dono):
+    // nota cancelada na SEFAZ = a venda DEIXA DE EXISTIR no sistema:
+    //   1. BOLETO gerado no Inter é CANCELADO automaticamente;
+    //   2. produtos VOLTAM AO ESTOQUE (reserva de pré-venda no estoque
+    //      de casa, contadores de saída 1/2 e carga da van via RPC
+    //      excluir_venda_estornar_estoque);
+    //   3. a VENDA é EXCLUÍDA do sistema (itens, comissões, comprovantes,
+    //      eventos de entrega).
+    // Falha de qualquer etapa NUNCA desfaz o cancelamento na SEFAZ —
+    // vira aviso na resposta para o admin resolver manualmente.
+    // -----------------------------------------------------------------
+    const cascade: string[] = [];
+    if (res.cancelada) {
+      // ----- 1) BOLETO INTER -----
+      try {
+        if (await hasBoletoColumns()) {
+          const { data: sB } = await db.from('sales')
+            .select('inter_boleto_codigo, inter_boleto_status')
+            .eq('id', saleId).single();
+          const codigoB = String((sB as Record<string, unknown>)?.inter_boleto_codigo || '');
+          const statusB = String((sB as Record<string, unknown>)?.inter_boleto_status || '').toUpperCase();
+          if (codigoB && !['CANCELADO', 'EXPIRADO', 'FALHA_EMISSAO'].includes(statusB)) {
+            if (isInterConfigured()) {
+              const rB = await cancelarCobranca(codigoB, `NF ${res.numero || ''} cancelada`.slice(0, 50));
+              if (rB.ok || rB.status === 202) {
+                await db.from('sales').update({ inter_boleto_status: 'CANCELADO', inter_boleto_erro: null }).eq('id', saleId);
+                cascade.push('Boleto bancário cancelado no Inter');
+              } else {
+                cascade.push(`Boleto NÃO cancelado (${rB.erro || 'falha no Inter'}) — cancele manualmente`);
+              }
+            } else {
+              cascade.push('Boleto existe mas o Inter não está configurado — cancele manualmente');
+            }
+          }
+        }
+      } catch (eB) {
+        cascade.push(`Boleto não cancelado (${(eB as Error).message}) — cancele manualmente`);
+      }
+
+      // ----- 2) ESTOQUE DE VOLTA + 3) EXCLUSÃO DA VENDA -----
+      try {
+        const [temBaixado, temModo, temEstoques] = await Promise.all([
+          hasEstoqueBaixadoColumn(), hasModoVendaColumn(), hasEstoquesNotaColumns(),
+        ]);
+        const selX = [
+          'id, route_id, nota_tipo',
+          temBaixado ? ', estoque_baixado' : '',
+          temModo ? ', modo_nota' : '',
+        ].join('');
+        const { data: sX } = await db.from('sales').select(selX).eq('id', saleId).single();
+        const sRow = (sX as Record<string, unknown>) || {};
+
+        // 2a) reserva da PRÉ-VENDA (estoque_baixado) → devolve ao ESTOQUE TOTAL de casa
+        if (temBaixado && sRow.estoque_baixado === true) {
+          await db.from('sales').update({ estoque_baixado: false }).eq('id', saleId);
+          const { data: itensRes } = await db.from('sale_items').select('produto_id, quantidade').eq('sale_id', saleId);
+          const devolve = new Map<string, number>();
+          for (const it of ((itensRes || []) as unknown) as Record<string, unknown>[]) {
+            const pid = String(it.produto_id || '');
+            if (pid) devolve.set(pid, (devolve.get(pid) || 0) + (Number(it.quantidade) || 0));
+          }
+          const idsDev = [...devolve.keys()];
+          if (idsDev.length > 0) {
+            const { data: prodsDev } = await db.from('products').select('id, estoque_principal').in('id', idsDev);
+            for (const p of ((prodsDev || []) as unknown) as Record<string, unknown>[]) {
+              await db.from('products').update({
+                estoque_principal: (Number(p.estoque_principal) || 0) + (devolve.get(String(p.id)) || 0),
+              }).eq('id', String(p.id));
+            }
+            cascade.push('Estoque TOTAL (casa) reposto');
+          }
+        }
+
+        // 2b) abate o CONTADOR DE SAÍDA (estoque 1 COM NF / estoque 2 SEM NF)
+        if (temEstoques) {
+          const modoVenda = String(sRow.modo_nota || sRow.nota_tipo || '').toUpperCase();
+          const colContador = modoVenda === 'CUPOM' ? 'estoque_semnf' : 'estoque_nota';
+          const { data: itensRes } = await db.from('sale_items').select('produto_id, quantidade').eq('sale_id', saleId);
+          const totais = new Map<string, number>();
+          for (const it of ((itensRes || []) as unknown) as Record<string, unknown>[]) {
+            const pid = String(it.produto_id || '');
+            if (pid) totais.set(pid, (totais.get(pid) || 0) + (Number(it.quantidade) || 0));
+          }
+          const idsC = [...totais.keys()];
+          if (idsC.length > 0) {
+            const { data: prodsC } = await db.from('products').select(`id, ${colContador}`).in('id', idsC);
+            for (const p of ((prodsC || []) as unknown) as Record<string, unknown>[]) {
+              const q = totais.get(String(p.id)) || 0;
+              if (q <= 0) continue;
+              await db.from('products').update({
+                [colContador]: Math.max(0, (Number(p[colContador]) || 0) - q),
+              }).eq('id', String(p.id));
+            }
+            cascade.push('Contador de saídas (estoque 1/2) corrigido');
+          }
+        }
+
+        // 2c) carga da VAN + 3) exclusão (comissões, comprovantes, itens, venda)
+        const rRpc = await db.rpc('excluir_venda_estornar_estoque', { p_sale_id: saleId });
+        if (rRpc.error) {
+          // fallback manual — mesmo contrato do RPC (padrão do projeto)
+          const { data: itensRes } = await db.from('sale_items').select('produto_id, quantidade').eq('sale_id', saleId);
+          const { data: sVend } = await db.from('sales').select('vendedor_id').eq('id', saleId).single();
+          const vendedorId = String((sVend as Record<string, unknown>)?.vendedor_id || '');
+          for (const it of ((itensRes || []) as unknown) as Record<string, unknown>[]) {
+            const { data: cRow } = await db.from('cargas').select('quantidade')
+              .eq('vendedor_id', vendedorId).eq('produto_id', String(it.produto_id)).maybeSingle();
+            await db.from('cargas').update({ quantidade: (Number((cRow as Record<string, unknown>)?.quantidade) || 0) + (Number(it.quantidade) || 0) })
+              .eq('vendedor_id', vendedorId).eq('produto_id', String(it.produto_id));
+          }
+          await db.from('commissions').delete().eq('sale_id', saleId);
+          await db.from('payment_comprovantes').delete().eq('sale_id', saleId);
+          await db.from('entrega_eventos').delete().eq('sale_id', saleId);
+          await db.from('sale_items').delete().eq('sale_id', saleId);
+          await db.from('sales').delete().eq('id', saleId);
+        }
+        cascade.push('Venda excluída do sistema — estoque devolvido (carga da van + casa)');
+
+        // 2d) rota de entrega: recalcula o total de paradas (best-effort)
+        const routeId = String(sRow.route_id || '');
+        if (routeId) {
+          try {
+            const { count } = await db.from('sales').select('id', { count: 'exact', head: true }).eq('route_id', routeId);
+            await db.from('entrega_rotas').update({ total_paradas: count || 0 }).eq('id', routeId);
+          } catch { /* rota já pode ter sido removida */ }
+        }
+      } catch (eC) {
+        cascade.push(`Exclusão/estoque não concluída (${(eC as Error).message}) — revise a venda manualmente`);
+      }
+    }
+
     // BLOCO 116 (doc reference/cancelar_nfce.md): NFC-e so pode ser
     // cancelada em ate 30 MINUTOS apos a emissao (NF-e: 24h). O aviso vai
     // na resposta para o admin saber por que a SEFAZ pode recusar.
     return NextResponse.json({
       ok: res.cancelada,
-      aviso:
-        doc === 'nfce'
+      aviso: res.cancelada
+        ? `Nota cancelada na SEFAZ. ${cascade.length > 0 ? cascade.join(' · ') + '.' : ''}`
+        : (doc === 'nfce'
           ? 'NFC-e so pode ser cancelada em ate 30 minutos apos a emissao (regra da SEFAZ).'
-          : undefined,
+          : undefined),
+      cascade,
       prazo: prazo ? { expiraEm: prazo.expiraEm, prazoLabel: prazo.prazoLabel, textoRestante: prazo.textoRestante } : undefined,
       nota: { ...notaPublica(sale as Record<string, unknown>), ...res },
     });
@@ -361,6 +498,8 @@ export async function POST(req: NextRequest) {
 
   // Itens + codigos fiscais (colunas ncm/cest/cfop se o Bloco 10 ja rodou)
   const fiscalCols = await hasProductFiscalColumns();
+  // BLOCO 145: codigo INTERNO do produto (aparece na NF — nao é o EAN)
+  const temCodigoProduto = await hasProductCodigoColumn();
   const { data: items } = await db
     .from('sale_items')
     .select('produto_id, quantidade, preco_venda')
@@ -371,6 +510,7 @@ export async function POST(req: NextRequest) {
   const prodCols = [
     'id, nome',
     fiscalCols ? 'ncm, cest, cfop, ean, unidade, origem' : '',
+    temCodigoProduto ? 'codigo' : '',
     // BLOCO 108: preco_cupom (0 = cai no custo) + custo como fallback
     temPrecoCupom ? 'preco_cupom' : '',
     'preco_custo',
@@ -391,7 +531,9 @@ export async function POST(req: NextRequest) {
     const custo = Number(p.preco_custo) || 0;
     const valorUnitCupom = precoCupom > 0 ? precoCupom : custo > 0 ? custo : Number(i.preco_venda) || 0;
     return {
-      codigo: String(p.id || '').slice(0, 8),
+      // BLOCO 145: codigo INTERNO do cadastro (o que APARECE NA NF);
+      // sem cadastro, prefixo do id (legado). NAO é o EAN.
+      codigo: (temCodigoProduto && String(p.codigo || '').trim()) || String(p.id || '').slice(0, 8),
       descricao: String(p.nome || 'Produto'),
       ncm: fiscalCols ? (p.ncm as string) || undefined : undefined,
       cfop: fiscalCols ? (p.cfop as string) || undefined : undefined,
@@ -417,6 +559,12 @@ export async function POST(req: NextRequest) {
     valor_pagamento: Math.round(valorTotal * 100) / 100,
   };
 
+  // BLOCO 145 — FORMA DE PAGAMENTO SEMPRE APARECE NA NOTA (regra do dono):
+  // além do grupo detPag do XML (impresso na DANFE), o rótulo legível entra
+  // nas informações adicionais — NFC-e anonima, contingencia e qualquer
+  // layout de impressora mostram a forma de pagamento.
+  const pagamentoLabel = labelTpag(tp.forma);
+
   // Data de emissao: AGORA (NFC-e recusa dhEmi com +5 min; a NF-e "batida"
   // pelo botao tambem emite na hora — a data da venda vai nas informacoes)
   const dataEmissao = new Date();
@@ -425,8 +573,8 @@ export async function POST(req: NextRequest) {
     ? new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date(sale.data_venda as string))
     : '';
   const informacoes = precoAnonimo
-    ? `Venda cupom ${vendaCurta} — NFC-e nao identificada${modoCupom ? ' (modo cupom)' : ''}. Emitida em ${carimbo()}.`
-    : `Venda ${vendaCurta}${dataVendaTxt ? ` de ${dataVendaTxt}` : ''} registrada pelo app Doce Mania. NF-e emitida em ${carimbo()}.`;
+    ? `Venda cupom ${vendaCurta} — NFC-e nao identificada${modoCupom ? ' (modo cupom)' : ''}. Forma de pagamento: ${pagamentoLabel}. Emitida em ${carimbo()}.`
+    : `Venda ${vendaCurta}${dataVendaTxt ? ` de ${dataVendaTxt}` : ''} registrada pelo app Doce Mania. Forma de pagamento: ${pagamentoLabel}. Emitida em ${carimbo()}.`;
 
   // Destinatario + payload por tipo de documento
   let payload;

@@ -53,6 +53,10 @@ export interface Product {
   ean?: string;
   unidade?: string;
   origem?: string;
+  /** BLOCO 145 — CÓDIGO INTERNO do produto (o que APARECE NA NF como
+   *  codigo_produto). NÃO é o EAN/código de barras — é o código interno de
+   *  controle do dono. Vazio = o app usa um prefixo do id (legado). */
+  codigo?: string;
   /** Bloco 15: foto do produto no catalogo do portal (URL) — sobrepoe a foto do catalogo antigo */
   imagem?: string;
   /** Bloco 15: caixa fechada com N unidades (atacado) — 1/undefined = vende solto */

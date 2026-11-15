@@ -1,0 +1,592 @@
+     1→     1→import { NextRequest, NextResponse } from 'next/server';
+     2→     2→import { after } from 'next/server';
+     3→     3→import { getServiceClient, devBridge } from '@/lib/serverSupabase';
+     4→     4→import { sessionFromRequest } from '@/lib/session';
+     5→     5→import { hasNotaColumns, hasProductFiscalColumns, hasBoletoColumns, hasPrecoCupom, hasNotaEmitidaEm, hasClientModoCupom } from '@/lib/serverSchema';
+     6→     6→import { lerEmitentePayload, lerErpConfig } from '@/lib/erpConfig';
+     7→     7→import {
+     8→     8→  getFocusConfig,
+     9→     9→  isFocusConfigured,
+    10→    10→  emitirNfe,
+    11→    11→  consultarNota,
+    12→    12→  cancelarNota,
+    13→    13→  interpretarResultado,
+    14→    14→  montarPayloadNfe,
+    15→    15→  montarPayloadNfce,
+    16→    16→  tpagDeMetodo,
+    17→    17→  refForSale,
+    18→    18→  nextTentativa,
+    19→    19→  validaCpfCnpj,
+    20→    20→  numeroDoEndereco,
+    21→    21→  FocusDoc,
+    22→    22→  FocusDestinatarioV2,
+    23→    23→  FocusFormaPagamento,
+    24→    24→  FocusNfePayloadV2,
+    25→    25→} from '@/lib/focusNfe';
+    26→    26→import { arquivarDaConsulta, invalidaPresenca } from '@/lib/focusArquivos';
+    27→    27→// BLOCO 142: prazo SEFAZ de cancelamento (NFC-e 30min / NF-e 24h) — fonte única front+servidor
+    28→    28→import { prazoCancelamentoNota } from '@/lib/regras-fiscais';
+    29→    29→
+    30→    30→/**
+    31→    31→ * NOTAS FISCAIS (Bloco 10) — emissao de NF-e / NFC-e na venda de pronta entrega.
+    32→    32→ *
+    33→    33→ * BLOCO 85: payload atualizado para a API Focus v2.0 (formato "flat" da
+    34→    34→ * referencia oficial doc.focusnfe.com.br — ago/2026). Mudancas que importam:
+    35→    35→ * - destinatario RASO (cnpj_destinatario, nome_destinatario...), sem objeto cliente
+    36→    36→ * - pagamento: PIX = tPag 17 (16 e deposito bancario!)
+    37→    37→ * - NFC-e: data_emissao SEMPRE "agora" (SEFAZ recusa dhEmi > 5 min)
+    38→    38→ * - NF-e: emissao no momento em que o usuario "bate" a nota (data de emissao
+    39→    39→ *   real), referencia da venda vai nas informacoes adicionais
+    40→    40→ *
+    41→    41→ * POST /api/notas   { acao: 'EMITIR', saleId, tipo?: 'NFE'|'NFCE' }
+    42→    42→ *                   { acao: 'CONSULTAR', saleId }
+    43→    43→ *                   { acao: 'CANCELAR', saleId, justificativa }   [ADMIN]
+    44→    44→ * GET  /api/notas?saleId=...  -> status da integracao Focus + nota da venda
+    45→    45→ *                                (sem chamada externa; usado pelo Cupom para
+    46→    46→ *                                avisar quando o env FOCUS_NFE_TOKEN falta)
+    47→    47→ *
+    48→    48→ * Regras:
+    49→    49→ * - Vendedor so mexe nas PROPRIAS vendas; admin em qualquer uma.
+    50→    50→ * - Cliente com CNPJ valido -> NF-e (modelo 55). Consumidor final -> NFC-e.
+    51→    51→ * - NF-e exige cadastro minimo (CNPJ + razao — Bloco 77, regra do dono).
+    52→    52→ * - Se as colunas do Bloco 10 ainda nao existirem no Supabase, responde 503
+    53→    53→ *   com instrucao clara (probe serverSchema, padrao do projeto).
+    54→    54→ */
+    55→    55→
+    56→    56→interface NotaPublica {
+    57→    57→  status: string;
+    58→    58→  numero: string;
+    59→    59→  ref: string;
+    60→    60→  pdfUrl: string;
+    61→    61→  erro: string;
+    62→    62→  /** BLOCO 135: tipo real do documento ('NFE'|'NFCE') — rotula badge NFC/NF-e */
+    63→    63→  tipo: string;
+    64→    64→  /** BLOCO 142: quando a SEFAZ autorizou (ISO) — base do prazo de cancelamento */
+    65→    65→  emitidaEm: string | null;
+    66→    66→}
+    67→    67→
+    68→    68→const BAD = (status: number, erro: string, extra: Record<string, unknown> = {}) =>
+    69→    69→  NextResponse.json({ ok: false, erro, ...extra }, { status });
+    70→    70→
+    71→    71→function carimbo(): string {
+    72→    72→  return new Intl.DateTimeFormat('pt-BR', {
+    73→    73→    timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric',
+    74→    74→    hour: '2-digit', minute: '2-digit', hour12: false,
+    75→    75→  }).format(new Date());
+    76→    76→}
+    77→    77→
+    78→    78→async function atualizarNota(saleId: string, patch: Record<string, unknown>) {
+    79→    79→  await getServiceClient().from('sales').update(patch).eq('id', saleId);
+    80→    80→}
+    81→    81→
+    82→    82→function notaPublica(s: Record<string, unknown>): NotaPublica {
+    83→    83→  return {
+    84→    84→    status: (s.nota_status as string) || 'NAO_EMITIDA',
+    85→    85→    numero: (s.nota_numero as string) || '',
+    86→    86→    ref: (s.nota_ref as string) || '',
+    87→    87→    pdfUrl: (s.nota_pdf_url as string) || '',
+    88→    88→    erro: (s.nota_erro as string) || '',
+    89→    89→    // BLOCO 135: o front precisa saber se o documento é NFC-e ou NF-e
+    90→    90→    // ("NF 17" virava NFC/NF-e errado no card quando a consulta não dizia o tipo)
+    91→    91→    tipo: (s.nota_tipo as string) || '',
+    92→    92→    // BLOCO 142: data de autorização da SEFAZ — o front usa para o prazo de cancelar
+    93→    93→    emitidaEm: (s.nota_emitida_em as string) || null,
+    94→    94→  };
+    95→    95→}
+    96→    96→
+    97→    97→// BLOCO 142: nota_emitida_em entra SÓ quando a coluna existe (SQL do Bloco 108);
+    98→    98→// sem ela a leitura inteira quebraria (mesmo padrão de probe do projeto).
+    99→    99→const COLS_NOTA_BASE = 'id, vendedor_id, client_id, valor_total, metodo_pagamento, detalhe_pagamento, status_pagamento, data_venda, nota_status, nota_tipo, nota_numero, nota_ref, nota_pdf_url, nota_xml_url, nota_erro';
+   100→   100→const colsNota = async () => ((await hasNotaEmitidaEm()) ? `${COLS_NOTA_BASE}, nota_emitida_em` : COLS_NOTA_BASE);
+   101→   101→
+   102→   102→/** Data-hora legível pt-BR p/ as mensagens de prazo (mesmo formato do carimbo). */
+   103→   103→function fmtDataBR(iso: string): string {
+   104→   104→  try {
+   105→   105→    return new Intl.DateTimeFormat('pt-BR', {
+   106→   106→      timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric',
+   107→   107→      hour: '2-digit', minute: '2-digit', hour12: false,
+   108→   108→    }).format(new Date(iso));
+   109→   109→  } catch { return iso; }
+   110→   110→}
+   111→   111→
+   112→   112→export async function GET(req: NextRequest) {
+   113→   113→  const bridged = await devBridge(req);
+   114→   114→  if (bridged) return bridged;
+   115→   115→  const session = sessionFromRequest(req);
+   116→   116→  if (!session) return BAD(401, 'Sessao expirada. Faca login novamente.');
+   117→   117→
+   118→   118→  const saleId = req.nextUrl.searchParams.get('saleId') || '';
+   119→   119→  if (!saleId) return BAD(400, 'Parametro ausente (saleId).');
+   120→   120→
+   121→   121→  // Status da integracao (sem tocar a Focus) — o Cupom usa para avisar
+   122→   122→  // quando o env da Vercel esta faltando em vez de erro generico no clique.
+   123→   123→  const cfg = getFocusConfig();
+   124→   124→  const focus = {
+   125→   125→    configurado: isFocusConfigured(),
+   126→   126→    ambiente: cfg.ambiente,
+   127→   127→    emitenteCnpj: !!cfg.cnpj,
+   128→   128→  };
+   129→   129→
+   130→   130→  if (!(await hasNotaColumns())) {
+   131→   131→    return NextResponse.json({ ok: true, focus, nota: null });
+   132→   132→  }
+   133→   133→
+   134→   134→  const db = getServiceClient();
+   135→   135→  const { data: sale, error } = await db.from('sales').select(await colsNota()).eq('id', saleId).single();
+   136→   136→  if (error || !sale) return BAD(404, 'Venda nao encontrada.');
+   137→   137→  if (session.perfil !== 'ADMIN' && session.sub !== sale.vendedor_id) {
+   138→   138→    return BAD(403, 'Voce so pode ver a nota das suas proprias vendas.');
+   139→   139→  }
+   140→   140→  return NextResponse.json({ ok: true, focus, nota: notaPublica(sale as Record<string, unknown>) });
+   141→   141→}
+   142→   142→
+   143→   143→export async function POST(req: NextRequest) {
+   144→   144→  const bridged = await devBridge(req);
+   145→   145→  if (bridged) return bridged;
+   146→   146→  const session = sessionFromRequest(req);
+   147→   147→  if (!session) return BAD(401, 'Sessao expirada. Faca login novamente.');
+   148→   148→
+   149→   149→  const body = await req.json().catch(() => ({}));
+   150→   150→  const acao = body.acao as string;
+   151→   151→  const saleId = body.saleId as string;
+   152→   152→  if (!saleId || !acao) return BAD(400, 'Parametros ausentes (acao, saleId).');
+   153→   153→
+   154→   154→  if (!(await hasNotaColumns())) {
+   155→   155→    return BAD(503, 'Colunas de nota fiscal nao existem ainda no Supabase. Rode o SQL do Bloco 10 (docs/NOTAS-FISCAIS.md).');
+   156→   156→  }
+   157→   157→
+   158→   158→  const db = getServiceClient();
+   159→   159→
+   160→   160→  // Carrega a venda e valida permissao
+   161→   161→  const { data: sale, error: saleErr } = await db
+   162→   162→    .from('sales')
+   163→   163→    .select(await colsNota())
+   164→   164→    .eq('id', saleId)
+   165→   165→    .single();
+   166→   166→
+   167→   167→  if (saleErr || !sale) return BAD(404, 'Venda nao encontrada.');
+   168→   168→  if (session.perfil !== 'ADMIN' && session.sub !== sale.vendedor_id) {
+   169→   169→    return BAD(403, 'Voce so pode emitir nota para suas proprias vendas.');
+   170→   170→  }
+   171→   171→
+   172→   172→  // ---------- CONSULTAR ----------
+   173→   173→  if (acao === 'CONSULTAR') {
+   174→   174→    if (!sale.nota_ref) return BAD(422, 'Esta venda ainda nao tem nota emitida.');
+   175→   175→    if (!isFocusConfigured()) return BAD(503, 'Focus NFe nao configurada (env FOCUS_NFE_TOKEN no Vercel).');
+   176→   176→
+   177→   177→    const doc: FocusDoc = sale.nota_tipo === 'NFCE' ? 'nfce' : 'nfe';
+   178→   178→    const r = await consultarNota(doc, sale.nota_ref as string);
+   179→   179→    if (!r.ok || !r.data || 'erro' in r.data) {
+   180→   180→      return BAD(502, (r.data as { erro?: string }).erro || 'Falha ao consultar a Focus NFe.', { nota: notaPublica(sale as Record<string, unknown>) });
+   181→   181→    }
+   182→   182→    const res = interpretarResultado(r.data as Record<string, unknown>);
+   183→   183→    const patch: Record<string, unknown> = {
+   184→   184→      nota_status: res.autorizada ? 'AUTORIZADA' : res.cancelada ? 'CANCELADA' : res.motivo ? 'REJEITADA' : 'EMITINDO',
+   185→   185→      nota_numero: res.numero || sale.nota_numero || null,
+   186→   186→      nota_pdf_url: res.pdfUrl || sale.nota_pdf_url || null,
+   187→   187→      nota_xml_url: res.xmlUrl || sale.nota_xml_url || null,
+   188→   188→      nota_erro: res.autorizada ? null : res.motivo || null,
+   189→   189→    };
+   190→   190→    // Bloco 25: guarda a chave de acesso (44 dig) p/ atrelar a NF-e ao boleto Inter
+   191→   191→    if (res.chave && (await hasBoletoColumns())) patch.nota_chave = res.chave;
+   192→   192→    // BLOCO 142: primeira vez que a SEFAZ confirma a autorização, grava a
+   193→   193→    // data-hora oficial — é a BASE do prazo de cancelamento (NFC-e 30min/NF-e 24h)
+   194→   194→    if (res.autorizada && res.dataAutorizacao && (await hasNotaEmitidaEm()) && !(sale as Record<string, unknown>).nota_emitida_em) {
+   195→   195→      const dAuto = new Date(res.dataAutorizacao);
+   196→   196→      if (!isNaN(dAuto.getTime())) patch.nota_emitida_em = dAuto.toISOString();
+   197→   197→    }
+   198→   198→    await atualizarNota(saleId, patch);
+   199→   199→    return NextResponse.json({ ok: true, nota: { ...notaPublica(sale as Record<string, unknown>), ...res } });
+   200→   200→  }
+   201→   201→
+   202→   202→  // ---------- CANCELAR (ADMIN) ----------
+   203→   203→  if (acao === 'CANCELAR') {
+   204→   204→    if (session.perfil !== 'ADMIN') return BAD(403, 'Somente o admin pode cancelar notas.');
+   205→   205→    if (!sale.nota_ref) return BAD(422, 'Esta venda nao tem nota para cancelar.');
+   206→   206→    const just = (body.justificativa as string) || '';
+   207→   207→    if (just.trim().length < 15) return BAD(422, 'Justificativa obrigatoria (minimo 15 caracteres — regra da SEFAZ).');
+   208→   208→    if (!isFocusConfigured()) return BAD(503, 'Focus NFe nao configurada (env FOCUS_NFE_TOKEN no Vercel).');
+   209→   209→
+   210→   210→    const doc: FocusDoc = sale.nota_tipo === 'NFCE' ? 'nfce' : 'nfe';
+   211→   211→
+   212→   212→    // ---------------------------------------------------------------
+   213→   213→    // BLOCO 142 — GUARDA DO PRAZO SEFAZ (NFC-e 30min / NF-e 24h após a
+   214→   214→    // autorização). Passado o prazo a SEFAZ RECUSA o evento — o servidor
+   215→   215→    // recusa antes com mensagem clara. Usa a data-hora REAL de autorização:
+   216→   216→    // sales.nota_emitida_em; quando ela não existe (venda antiga) consulta
+   217→   217→    // a Focus UMA vez (data_autorizacao) e grava. Sem timestamp real o
+   218→   218→    // julgamento fica com a SEFAZ — nunca bloqueia por chute (a NF-e pode
+   219→   219→    // ter sido batida DIAS depois da venda).
+   220→   220→    // ---------------------------------------------------------------
+   221→   221→    let prazo: ReturnType<typeof prazoCancelamentoNota> | null = null;
+   222→   222→    if (String(sale.nota_status).toUpperCase() === 'AUTORIZADA') {
+   223→   223→      let baseAutorizacao = (await hasNotaEmitidaEm()) ? ((sale as Record<string, unknown>).nota_emitida_em as string) || null : null;
+   224→   224→      if (!baseAutorizacao && sale.nota_ref) {
+   225→   225→        try {
+   226→   226→          const c = await consultarNota(doc, sale.nota_ref as string);
+   227→   227→          if (c.ok && c.data && !('erro' in c.data)) {
+   228→   228→            const ci = interpretarResultado(c.data as Record<string, unknown>);
+   229→   229→            if (ci.autorizada && ci.dataAutorizacao) {
+   230→   230→              const dAuto = new Date(ci.dataAutorizacao);
+   231→   231→              if (!isNaN(dAuto.getTime())) {
+   232→   232→                baseAutorizacao = dAuto.toISOString();
+   233→   233→                if (await hasNotaEmitidaEm()) await atualizarNota(saleId, { nota_emitida_em: baseAutorizacao });
+   234→   234→              }
+   235→   235→            }
+   236→   236→          }
+   237→   237→        } catch { /* Focus indisponível -> a SEFAZ decide no cancelamento */ }
+   238→   238→      }
+   239→   239→      prazo = prazoCancelamentoNota({ tipo: sale.nota_tipo as string, status: 'AUTORIZADA', emitidaEm: baseAutorizacao });
+   240→   240→      if (prazo.expirado && baseAutorizacao) {
+   241→   241→        return BAD(
+   242→   242→          422,
+   243→   243→          `Cancelamento FORA DO PRAZO da SEFAZ — ${doc === 'nfce' ? 'NFC-e' : 'NF-e'} autorizada em ${fmtDataBR(baseAutorizacao)} e o prazo de ${prazo.prazoLabel} já venceu. O evento de cancelamento seria recusado.`,
+   244→   244→          { nota: notaPublica(sale as Record<string, unknown>), prazo: { expiraEm: prazo.expiraEm, expirado: true, prazoLabel: prazo.prazoLabel } },
+   245→   245→        );
+   246→   246→      }
+   247→   247→    }
+   248→   248→
+   249→   249→    const r = await cancelarNota(doc, sale.nota_ref as string, just);
+   250→   250→    if (!r.ok || !r.data || 'erro' in r.data) {
+   251→   251→      return BAD(502, (r.data as { erro?: string }).erro || 'Falha ao cancelar na Focus NFe.', { nota: notaPublica(sale as Record<string, unknown>) });
+   252→   252→    }
+   253→   253→    const res = interpretarResultado(r.data as Record<string, unknown>);
+   254→   254→    await atualizarNota(saleId, {
+   255→   255→      nota_status: res.cancelada ? 'CANCELADA' : sale.nota_status,
+   256→   256→      nota_erro: res.cancelada ? null : res.motivo || null,
+   257→   257→    });
+   258→   258→    // BLOCO 116 (doc reference/cancelar_nfce.md): NFC-e so pode ser
+   259→   259→    // cancelada em ate 30 MINUTOS apos a emissao (NF-e: 24h). O aviso vai
+   260→   260→    // na resposta para o admin saber por que a SEFAZ pode recusar.
+   261→   261→    return NextResponse.json({
+   262→   262→      ok: res.cancelada,
+   263→   263→      aviso:
+   264→   264→        doc === 'nfce'
+   265→   265→          ? 'NFC-e so pode ser cancelada em ate 30 minutos apos a emissao (regra da SEFAZ).'
+   266→   266→          : undefined,
+   267→   267→      prazo: prazo ? { expiraEm: prazo.expiraEm, prazoLabel: prazo.prazoLabel, textoRestante: prazo.textoRestante } : undefined,
+   268→   268→      nota: { ...notaPublica(sale as Record<string, unknown>), ...res },
+   269→   269→    });
+   270→   270→  }
+   271→   271→
+   272→   272→  // ---------- EMITIR ----------
+   273→   273→  if (acao !== 'EMITIR') return BAD(400, `Acao desconhecida: ${acao}`);
+   274→   274→
+   275→   275→  if (sale.nota_status === 'AUTORIZADA') {
+   276→   276→    return NextResponse.json({ ok: true, jaEmitida: true, nota: notaPublica(sale as Record<string, unknown>) });
+   277→   277→  }
+   278→   278→  if (!isFocusConfigured()) {
+   279→   279→    return BAD(503, 'Focus NFe nao configurada. Defina FOCUS_NFE_TOKEN no Vercel (docs/NOTAS-FISCAIS.md).');
+   280→   280→  }
+   281→   281→
+   282→   282→  const cfg = getFocusConfig();
+   283→   283→
+   284→   284→  // ------------------------------------------------------------------
+   285→   285→  // BLOCO 108 — MODO CUPOM (regra do dono): cliente que "quer somente
+   286→   286→  // cupom" recebe e paga o cupom normal; a NFC-e ANONIMA que alimenta
+   287→   287→  // a fiscal sai com o PREÇO CUPOM do produto (products.preco_cupom;
+   288→   288→  // 0 = cai no preço de custo). Liga/desliga nas Configurações ERP.
+   289→   289→  // Cliente marcado modo_cupom entra no modo AUTOMATICAMENTE.
+   290→   290→  // ------------------------------------------------------------------
+   291→   291→  const erp = await lerErpConfig();
+   292→   292→  const temPrecoCupom = await hasPrecoCupom();
+   293→   293→  const temClientModoCupom = await hasClientModoCupom();
+   294→   294→  const temEmitidaEm = await hasNotaEmitidaEm();
+   295→   295→  const emitentePayload = (await lerEmitentePayload()) as Partial<FocusNfePayloadV2>;
+   296→   296→
+   297→   297→  // Cliente da venda
+   298→   298→  const { data: client } = await db
+   299→   299→    .from('clients')
+   300→   300→    .select(`nome_fantasia, nome, cnpj, telefone, endereco, bairro, razao_social, inscricao_estadual, endereco_numero, endereco_cep, endereco_municipio, endereco_uf, email${temClientModoCupom ? ', modo_cupom' : ''}`)
+   301→   301→    .eq('id', sale.client_id)
+   302→   302→    .single();
+   303→   303→
+   304→   304→  if (!client) return BAD(422, 'Cliente da venda nao encontrado.');
+   305→   305→
+   306→   306→  const modoCupomPed = body.modoCupom === true;
+   307→   307→  const clientModoCupom = temClientModoCupom && (client as Record<string, unknown>).modo_cupom === true;
+   308→   308→  if (modoCupomPed && !erp.cupomDuploNfc) {
+   309→   309→    return BAD(422, 'Modo cupom DESLIGADO. Ligue em Configuracoes -> ERP Fiscal & Automacoes (cupomDuploNfc).');
+   310→   310→  }
+   311→   311→  const modoCupom = erp.cupomDuploNfc && (modoCupomPed || clientModoCupom);
+   312→   312→
+   313→   313→  // Tipo automatico: CNPJ valido -> NFe; caso contrario NFC-e (consumidor)
+   314→   314→  const cpfCnpj = validaCpfCnpj(client.cnpj);
+   315→   315→  const tipoEscolhido = (body.tipo as string) || '';
+   316→   316→  let doc: FocusDoc;
+   317→   317→  if (modoCupom) {
+   318→   318→    doc = 'nfce'; // BLOCO 108: modo cupom e SEMPRE NFC-e anonima (sem consumidor)
+   319→   319→  } else if (tipoEscolhido === 'NFE' || tipoEscolhido === 'NFCE') {
+   320→   320→    doc = tipoEscolhido === 'NFE' ? 'nfe' : 'nfce';
+   321→   321→  } else {
+   322→   322→    doc = cpfCnpj === 'CNPJ' ? 'nfe' : 'nfce';
+   323→   323→  }
+   324→   324→
+   325→   325→  // ------------------------------------------------------------------
+   326→   326→  // BLOCO 137 (regra do dono): NFC-e ANONIMA = PREÇO ESPECIAL. A NFC-e sai
+   327→   327→  // sem consumidor (CONSUMIDOR NAO IDENTIFICADO) quando nao tem CPF
+   328→   328→  // digitado E o cadastro nao tem documento valido — ou quando e o modo
+   329→   329→  // cupom (BLOCO 108). Nesses casos os itens vao no PREÇO CUPOM do produto
+   330→   330→  // (preco_cupom; 0 = custo; 0 = preço da venda) e o total da NFC e a soma
+   331→   331→  // desses valores. BUG do papel corrigido: a NFC-e "sem CPF" emitida pela
+   332→   332→  // tela 8 do PDV ou pela fila do admin saia no PREÇO CHEIO da venda porque
+   333→   333→  // so o modo cupom explicito precificava (a mensagem do XML mostrava
+   334→   334→  // "Venda ... registrada pelo app" em vez de "Venda cupom ...").
+   335→   335→  // NFC-e identificada e NF-e continuam no preço digitado pelo vendedor.
+   336→   336→  // ------------------------------------------------------------------
+   337→   337→  const uf = String(client.endereco_uf || '').toUpperCase().trim();
+   338→   338→  const municipio = String(client.endereco_municipio || '').trim();
+   339→   339→  const logradouro = String(client.endereco || '').trim();
+   340→   340→  const bairro = String(client.bairro || '').trim();
+   341→   341→  const razao = String(client.razao_social || client.nome_fantasia || '').trim();
+   342→   342→  const cpfNaNota = String(body.cpf || '').replace(/\D/g, '');
+   343→   343→  const nfceIdentificada = doc === 'nfce' && (!!cpfNaNota || (!modoCupom && !!razao && !!cpfCnpj));
+   344→   344→  const nfceAnonima = doc === 'nfce' && !nfceIdentificada;
+   345→   345→  const precoAnonimo = modoCupom || nfceAnonima;
+   346→   346→
+   347→   347→  // BLOCO 117 (doc reference/emitir_nfce.md — NFCeRequest required): a NFC-e
+   348→   348→  // EXIGE cnpj_emitente no payload (a NF-e cai no cadastro da conta). Sem
+   349→   349→  // CNPJ (nem na tela ERP Fiscal, nem no env), recusamos ANTES de marcar a
+   350→   350→  // venda EMITINDO — com instrucao clara, em vez de rejeicao criptica da Focus.
+   351→   351→  if (doc === 'nfce') {
+   352→   352→    const cnpjEmit =
+   353→   353→      String(erp.emitente.cnpj || '').replace(/\D/g, '') || String(cfg.cnpj || '').replace(/\D/g, '');
+   354→   354→    if (!cnpjEmit) {
+   355→   355→      return BAD(
+   356→   356→        503,
+   357→   357→        'A NFC-e exige o CNPJ do emitente. Cadastre em Configuracoes -> ERP Fiscal & Automacoes (Dados do emitente) ou defina FOCUS_NFE_CNPJ na Vercel.'
+   358→   358→      );
+   359→   359→    }
+   360→   360→  }
+   361→   361→
+   362→   362→  // Itens + codigos fiscais (colunas ncm/cest/cfop se o Bloco 10 ja rodou)
+   363→   363→  const fiscalCols = await hasProductFiscalColumns();
+   364→   364→  const { data: items } = await db
+   365→   365→    .from('sale_items')
+   366→   366→    .select('produto_id, quantidade, preco_venda')
+   367→   367→    .eq('sale_id', saleId);
+   368→   368→  if (!items || items.length === 0) return BAD(422, 'Venda sem itens — nao e possivel emitir nota.');
+   369→   369→
+   370→   370→  const prodIds = [...new Set(items.map((i: Record<string, unknown>) => i.produto_id as string))];
+   371→   371→  const prodCols = [
+   372→   372→    'id, nome',
+   373→   373→    fiscalCols ? 'ncm, cest, cfop, ean, unidade, origem' : '',
+   374→   374→    // BLOCO 108: preco_cupom (0 = cai no custo) + custo como fallback
+   375→   375→    temPrecoCupom ? 'preco_cupom' : '',
+   376→   376→    'preco_custo',
+   377→   377→  ].filter(Boolean).join(', ');
+   378→   378→  const { data: prodsData } = await db
+   379→   379→    .from('products')
+   380→   380→    .select(prodCols)
+   381→   381→    .in('id', prodIds);
+   382→   382→  const prods = (prodsData || []) as unknown as Record<string, unknown>[];
+   383→   383→  const prodMap = new Map(prods.map(p => [p.id as string, p]));
+   384→   384→
+   385→   385→  const payloadItems = items.map((i: Record<string, unknown>) => {
+   386→   386→    const p = (prodMap.get(i.produto_id as string) || {}) as Record<string, unknown>;
+   387→   387→    // BLOCO 108 (regra do dono): no modo cupom a NFC anônima sai com o
+   388→   388→    // PREÇO CUPOM do produto; sem preco_cupom (0), usa o PREÇO DE CUSTO;
+   389→   389→    // sem custo também (0), cai no preço de venda da venda.
+   390→   390→    const precoCupom = temPrecoCupom ? Number(p.preco_cupom) || 0 : 0;
+   391→   391→    const custo = Number(p.preco_custo) || 0;
+   392→   392→    const valorUnitCupom = precoCupom > 0 ? precoCupom : custo > 0 ? custo : Number(i.preco_venda) || 0;
+   393→   393→    return {
+   394→   394→      codigo: String(p.id || '').slice(0, 8),
+   395→   395→      descricao: String(p.nome || 'Produto'),
+   396→   396→      ncm: fiscalCols ? (p.ncm as string) || undefined : undefined,
+   397→   397→      cfop: fiscalCols ? (p.cfop as string) || undefined : undefined,
+   398→   398→      ean: fiscalCols ? (p.ean as string) || undefined : undefined,
+   399→   399→      unidade: fiscalCols ? ((p.unidade as string) || 'UN') : 'UN',
+   400→   400→      origem: fiscalCols ? (p.origem as string) || undefined : undefined,
+   401→   401→      quantidade: Number(i.quantidade) || 0,
+   402→   402→      valorUnitario: precoAnonimo ? valorUnitCupom : (Number(i.preco_venda) || 0),
+   403→   403→    };
+   404→   404→  });
+   405→   405→
+   406→   406→  // BLOCO 108/137: na NFC-e ANONIMA (modo cupom ou consumidor nao
+   407→   407→  // identificado) o TOTAL da NFC e a soma dos preços especiais
+   408→   408→  // (a venda real continua no valor que o cliente pagou — gravado no banco)
+   409→   409→  const valorTotalCupom = Math.round(payloadItems.reduce((acc, it) => acc + it.quantidade * it.valorUnitario, 0) * 100) / 100;
+   410→   410→  const valorTotal = precoAnonimo ? valorTotalCupom : (Number(sale.valor_total) || 0);
+   411→   411→
+   412→   412→  // Pagamento v2.0 — PIX = tPag 17 (armadilha: 16 e deposito bancario)
+   413→   413→  const tp = tpagDeMetodo(sale.metodo_pagamento as string);
+   414→   414→  const pagamento: FocusFormaPagamento = {
+   415→   415→    indicador_pagamento: tp.indicador,
+   416→   416→    forma_pagamento: tp.forma,
+   417→   417→    valor_pagamento: Math.round(valorTotal * 100) / 100,
+   418→   418→  };
+   419→   419→
+   420→   420→  // Data de emissao: AGORA (NFC-e recusa dhEmi com +5 min; a NF-e "batida"
+   421→   421→  // pelo botao tambem emite na hora — a data da venda vai nas informacoes)
+   422→   422→  const dataEmissao = new Date();
+   423→   423→  const vendaCurta = String(saleId).slice(0, 8).toUpperCase();
+   424→   424→  const dataVendaTxt = sale.data_venda
+   425→   425→    ? new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date(sale.data_venda as string))
+   426→   426→    : '';
+   427→   427→  const informacoes = precoAnonimo
+   428→   428→    ? `Venda cupom ${vendaCurta} — NFC-e nao identificada${modoCupom ? ' (modo cupom)' : ''}. Emitida em ${carimbo()}.`
+   429→   429→    : `Venda ${vendaCurta}${dataVendaTxt ? ` de ${dataVendaTxt}` : ''} registrada pelo app Doce Mania. NF-e emitida em ${carimbo()}.`;
+   430→   430→
+   431→   431→  // Destinatario + payload por tipo de documento
+   432→   432→  let payload;
+   433→   433→  if (doc === 'nfe') {
+   434→   434→    // BLOCO 77 (regra do dono): a NF-e NAO e batida por este app (o dono
+   435→   435→    // emite no sistema externo dele) — aqui o app so CONTROLA a venda como
+   436→   436→    // NF. Exigencia minima: CNPJ valido (+ razao, que cai no nome fantasia).
+   437→   437→    // Endereco/bairro/municipio/UF seguem do cadastro best-effort e NAO
+   438→   438→    // bloqueiam mais o registro da venda como NF.
+   439→   439→    const faltando: string[] = [];
+   440→   440→    if (!cpfCnpj) faltando.push('CNPJ valido');
+   441→   441→    if (!razao) faltando.push('Razao social / nome fantasia');
+   442→   442→    if (faltando.length > 0) {
+   443→   443→      return BAD(422, `Cadastro incompleto para NF-e. Complete no cadastro do cliente: ${faltando.join(', ')}.`);
+   444→   444→    }
+   445→   445→    const destinatario: FocusDestinatarioV2 = {
+   446→   446→      nome: razao,
+   447→   447→      cpf_cnpj: String(client.cnpj).replace(/\D/g, ''),
+   448→   448→      inscricao_estadual: String(client.inscricao_estadual || '').trim() || undefined,
+   449→   449→      logradouro: logradouro || undefined,
+   450→   450→      numero: numeroDoEndereco(client.endereco_numero as string, logradouro),
+   451→   451→      bairro: bairro || undefined,
+   452→   452→      municipio: municipio || undefined,
+   453→   453→      uf: uf || undefined,
+   454→   454→      cep: String(client.endereco_cep || '').replace(/\D/g, '') || undefined,
+   455→   455→      email: String((client as Record<string, unknown>).email || '').trim() || undefined,
+   456→   456→      telefone: String(client.telefone || '').replace(/\D/g, '') || undefined,
+   457→   457→    };
+   458→   458→    payload = montarPayloadNfe({
+   459→   459→      dataEmissao,
+   460→   460→      natureza: cfg.natureza,
+   461→   461→      ufEmitente: cfg.ufEmitente,
+   462→   462→      destinatario,
+   463→   463→      itens: payloadItems,
+   464→   464→      valorTotalVenda: valorTotal,
+   465→   465→      pagamento,
+   466→   466→      informacoesAdicionais: informacoes,
+   467→   467→      emitente: emitentePayload,
+   468→   468→    });
+   469→   469→  } else {
+   470→   470→    // NFC-e (Bloco 12): escolha explicita do vendedor na tela de venda
+   471→   471→    // - CPF informado (e valido): NFC-e identificando o consumidor
+   472→   472→    // - Sem CPF: NFC-e ANONIMA (CONSUMIDOR NAO IDENTIFICADO) — BLOCO 137:
+   473→   473→    //   sai no PREÇO ESPECIAL (precoAnonimo ja decidido acima)
+   474→   474→    let destinatario: FocusDestinatarioV2 | undefined;
+   475→   475→    if (cpfNaNota) {
+   476→   476→      if (validaCpfCnpj(cpfNaNota) !== 'CPF') {
+   477→   477→        return BAD(422, 'CPF invalido (digitos verificadores nao conferem). Corrija o CPF ou deixe vazio para NFC-e sem identificacao.');
+   478→   478→      }
+   479→   479→      const nomeConsumidor = String(client.nome || client.nome_fantasia || '').trim();
+   480→   480→      destinatario = {
+   481→   481→        nome: (nomeConsumidor || 'CONSUMIDOR').slice(0, 60),
+   482→   482→        cpf_cnpj: cpfNaNota,
+   483→   483→        logradouro: logradouro || undefined,
+   484→   484→        numero: numeroDoEndereco(client.endereco_numero as string, logradouro),
+   485→   485→        bairro: bairro || undefined,
+   486→   486→        municipio: municipio || undefined,
+   487→   487→        uf: uf || cfg.ufEmitente,
+   488→   488→        cep: String(client.endereco_cep || '').replace(/\D/g, '') || undefined,
+   489→   489→      };
+   490→   490→    } else if (razao && cpfCnpj && !modoCupom) {
+   491→   491→      // BLOCO 128 (pedido do dono): a NFC-e — escolhida na tela OU automatica —
+   492→   492→      // identifica o destinatario pelo CADASTRO sempre que o cliente tem
+   493→   493→      // CPF/CNPJ valido, e leva o ENDERECO COMPLETO do cadastro
+   494→   494→      // (logradouro/numero/bairro/MUNICIPIO/UF + CEP). A SEFAZ nao aceita
+   495→   495→      // destinatario sem documento, entao cadastro sem CPF/CNPJ valido segue
+   496→   496→      // anonimo (como antes — NFC-e de consumidor de passagem).
+   497→   497→      destinatario = {
+   498→   498→        nome: razao.slice(0, 60),
+   499→   499→        cpf_cnpj: String(client.cnpj).replace(/\D/g, ''),
+   500→   500→        logradouro: logradouro || undefined,
+   501→   501→        numero: numeroDoEndereco(client.endereco_numero as string, logradouro),
+   502→   502→        bairro: bairro || undefined,
+   503→   503→        municipio: municipio || undefined,
+   504→   504→        uf: uf || cfg.ufEmitente,
+   505→   505→        cep: String(client.endereco_cep || '').replace(/\D/g, '') || undefined,
+   506→   506→      };
+   507→   507→    }
+   508→   508→    // Sem CPF digitado E sem documento valido no cadastro: NFC-e anonima.
+   509→   509→    payload = montarPayloadNfce({
+   510→   510→      dataEmissao,
+   511→   511→      natureza: undefined, // v2.0 NFC-e tem padrao proprio ("VENDA AO CONSUMIDOR")
+   512→   512→      ufEmitente: cfg.ufEmitente,
+   513→   513→      destinatario,
+   514→   514→      itens: payloadItems,
+   515→   515→      valorTotalVenda: valorTotal,
+   516→   516→      pagamento,
+   517→   517→      informacoesAdicionais: informacoes,
+   518→   518→      emitente: emitentePayload,
+   519→   519→    });
+   520→   520→  }
+   521→   521→
+   522→   522→  const ref = refForSale(saleId, nextTentativa(sale.nota_ref as string));
+   523→   523→
+   524→   524→  // Marca EMITINDO antes de chamar a Focus (rastreabilidade se cair a conexao)
+   525→   525→  await atualizarNota(saleId, { nota_status: 'EMITINDO', nota_tipo: doc === 'nfce' ? 'NFCE' : 'NFE', nota_ref: ref, nota_erro: null });
+   526→   526→
+   527→   527→  const r = await emitirNfe(doc, ref, payload);
+   528→   528→  if (!r.ok || !r.data || 'erro' in r.data) {
+   529→   529→    const erro = (r.data as { erro?: string }).erro || `HTTP ${r.status}`;
+   530→   530→    await atualizarNota(saleId, { nota_status: 'REJEITADA', nota_erro: erro });
+   531→   531→    return BAD(502, erro, { nota: { status: 'REJEITADA', ref } });
+   532→   532→  }
+   533→   533→
+   534→   534→  const res = interpretarResultado(r.data as Record<string, unknown>);
+   535→   535→  const patch: Record<string, unknown> = {
+   536→   536→    nota_status: res.autorizada ? 'AUTORIZADA' : res.processando ? 'EMITINDO' : 'REJEITADA',
+   537→   537→    nota_numero: res.numero || null,
+   538→   538→    nota_pdf_url: res.pdfUrl || null,
+   539→   539→    nota_xml_url: res.xmlUrl || null,
+   540→   540→    nota_erro: res.autorizada ? null : res.motivo || 'Aguardando SEFAZ',
+   541→   541→  };
+   542→   542→  // Bloco 25: guarda a chave de acesso (44 dig) p/ atrelar a NF-e ao boleto Inter
+   543→   543→  if (res.chave && (await hasBoletoColumns())) patch.nota_chave = res.chave;
+   544→   544→  // BLOCO 108: carimbo de emissao autorizada (historico completo do admin)
+   545→   545→  if (res.autorizada && temEmitidaEm) patch.nota_emitida_em = new Date().toISOString();
+   546→   546→  const { error: errPatch } = await db.from('sales').update(patch).eq('id', saleId);
+   547→   547→  if (errPatch && temEmitidaEm) {
+   548→   548→    // coluna nota_emitida_em ainda nao existe (SQL 108 pendente) — grava sem ela
+   549→   549→    delete patch.nota_emitida_em;
+   550→   550→    await atualizarNota(saleId, patch);
+   551→   551→  }
+   552→   552→
+   553→   553→  // -------------------------------------------------------------------
+   554→   554→  // BLOCO 141 (regra do dono — "salve dentro do nosso sistema"): quando a
+   555→   555→  // nota autoriza na MESMA requisicao (sincrona — NFC-e e boa parte das
+   556→   556→  // NF-e), PDF e XML sao arquivados no NOSSO storage em background
+   557→   557→  // (after). Assim o portal/estoque de arquivos nasce junto com a nota,
+   558→   558→  // sem depender do botao IMPORTAR. Best-effort: falha nao afeta a venda.
+   559→   559→  // -------------------------------------------------------------------
+   560→   560→  if (res.autorizada) {
+   561→   561→    after(async () => {
+   562→   562→      try {
+   563→   563→        await arquivarDaConsulta(doc, ref, r.data as unknown as Record<string, unknown>);
+   564→   564→        invalidaPresenca();
+   565→   565→      } catch (e) {
+   566→   566→        console.warn('[notas:emitir] arquivamento em background falhou (importador cobre):', (e as Error).message);
+   567→   567→      }
+   568→   568→    });
+   569→   569→  }
+   570→   570→
+   571→   571→  return NextResponse.json({
+   572→   572→    ok: res.autorizada || res.processando,
+   573→   573→    nota: {
+   574→   574→      status: patch.nota_status,
+   575→   575→      numero: res.numero,
+   576→   576→      ref,
+   577→   577→      pdfUrl: res.pdfUrl,
+   578→   578→      erro: patch.nota_erro,
+   579→   579→      // BLOCO 135: tipo do documento emitido — badge certo (NFC/NF-e) na hora
+   580→   580→      tipo: doc === 'nfce' ? 'NFCE' : 'NFE',
+   581→   581→      // BLOCO 82: dados p/ imprimir o mini DANFE 80mm logo apos a autorizacao
+   582→   582→      // (sem precisar de outra consulta) — o app usa na hora da venda
+   583→   583→      chave: res.chave || '',
+   584→   584→      serie: res.serie || '',
+   585→   585→      protocolo: res.protocolo || '',
+   586→   586→      dataAutorizacao: res.dataAutorizacao || '',
+   587→   587→      qrCode: res.qrCode || '',
+   588→   588→      emitente: res.emitente,
+   589→   589→    },
+   590→   590→  });
+   591→   591→}
+   592→   592→

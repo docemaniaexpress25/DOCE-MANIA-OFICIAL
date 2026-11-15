@@ -13,7 +13,8 @@ import PrinterSelector from '@/components/doce/PrinterSelector';
 // NFC-e identificada / NFC-e anônima) e a tela do cupom fica limpa
 import JanelaFiscal from '@/components/doce/JanelaFiscal';
 // BLOCO 134: venda pode fechar SEM nota — mas o app não deixa esquecer
-import { vendaNotaPendente, intencaoNotaDaVenda } from '@/lib/regras-fiscais';
+// BLOCO 145: os avisos de "NOTA PENDENTE" saíram — as notas de saída que
+// estavam em outros sistemas JÁ FORAM BATIDAS lá (sem aviso vermelho no app).
 // BLOCO 72: grava o contato via API server-side (service_role) — persistência garantida
 import { authHeaders } from '@/services/userService';
 // BLOCO 139: confirmação do RECEBIMENTO REAL na janela de impressão — grava valor_pago/status no banco
@@ -164,19 +165,18 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
       case 'REJEITADA': return { cls: 'bg-rose-50 text-rose-700 border-rose-200', icon: 'fa-circle-xmark', txt: 'Rejeitada — abrir janela fiscal' };
       case 'CANCELADA': return { cls: 'bg-gray-100 text-gray-500 border-gray-200', icon: 'fa-ban', txt: 'Nota cancelada' };
       default: {
-        // BLOCO 134: cupom simples (sem intenção de nota) x NOTA PENDENTE
-        const intencao = intencaoNotaDaVenda(sale as { modoNota?: string | null; detalhePagamento?: string | null });
-        if (intencao === 'NFE') return { cls: 'bg-rose-50 text-rose-700 border-rose-200', icon: 'fa-triangle-exclamation', txt: 'NOTA PENDENTE — falta bater a NF-e' };
-        if (intencao === 'NFCE') return { cls: 'bg-rose-50 text-rose-700 border-rose-200', icon: 'fa-triangle-exclamation', txt: 'NOTA PENDENTE — falta bater a NFC-e' };
+        // BLOCO 145: sem aviso de pendência — a intenção de documento vira
+        // badge NEUTRO (as notas de terceiros foram batidas fora do sistema).
+        const intencao = sale.modoNota === 'NFE' || String(sale.detalhePagamento || '').toUpperCase().includes('COM NOTA: NF-E')
+          ? 'NFE'
+          : sale.modoNota === 'NFCE' || String(sale.detalhePagamento || '').toUpperCase().includes('COM NOTA: NFC') ? 'NFCE' : null;
+        if (intencao === 'NFE') return { cls: 'bg-gray-50 text-gray-600 border-gray-200', icon: 'fa-file-invoice', txt: 'NF-e escolhida — acompanhamento no Portal Fiscal' };
+        if (intencao === 'NFCE') return { cls: 'bg-gray-50 text-gray-600 border-gray-200', icon: 'fa-file-invoice', txt: 'NFC-e escolhida — acompanhamento no Portal Fiscal' };
         return { cls: 'bg-gray-50 text-gray-500 border-gray-200', icon: 'fa-file-invoice', txt: 'Cupom simples — sem nota fiscal' };
       }
     }
   };
   const nb = notaBadge();
-  // BLOCO 134: a venda pode fechar sem nota — mas o banner VERMELHO fica na
-  // tela até a SEFAZ autorizar (o app não deixa esquecer de bater a nota)
-  const intencaoVenda = intencaoNotaDaVenda(sale as { modoNota?: string | null; detalhePagamento?: string | null });
-  const notaPendente = isVendaSalva && vendaNotaPendente({ modoNota: sale.modoNota, detalhePagamento: sale.detalhePagamento, notaStatus: nota.status });
 
   // Subscribe to print job status
   useEffect(() => {
@@ -608,26 +608,11 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
           </button>
 
           {/* ============================================================
-              BLOCO 134 — PARTE FISCAL (o "número 2"): UM botão abre a
-              JANELA FISCAL (NF-e / NFC-e identificada / NFC anônima /
-              cupom fiscal 80mm / situação na SEFAZ) — com botão VOLTAR.
-              A venda pode fechar sem nota — o BANNER VERMELHO fica aqui
-              até a SEFAZ autorizar (o app não deixa esquecer).
+              BLOCO 145: o BANNER VERMELHO de "NOTA PENDENTE" foi EXCLUÍDO
+              (regra do dono — as notas de saída de terceiros já foram
+              batidas em outro sistema). O botão FISCAL único abaixo segue
+              abrindo a Janela Fiscal (NF-e / NFC-e / NFC anônima).
               ============================================================ */}
-          {isVendaSalva && notaPendente && (
-            <div className="rounded-2xl border-2 border-rose-300 bg-rose-50 p-3.5">
-              <div className="flex items-center gap-2">
-                <i className="fa-solid fa-triangle-exclamation text-rose-600"></i>
-                <p className="text-[10px] font-black text-rose-700 uppercase flex-1">Nota pendente — falta bater a {intencaoVenda === 'NFE' ? 'NF-e' : 'NFC-e'}</p>
-              </div>
-              <p className="text-[8px] font-bold text-rose-500 leading-snug mt-1.5">A venda foi finalizada SEM a nota. Abra a janela fiscal e emita até a SEFAZ AUTORIZAR — este aviso vermelho só sai quando a nota estiver batida.</p>
-              <button onClick={() => setFiscalAberto(true)} className="w-full mt-2.5 bg-rose-600 text-white font-black py-3.5 rounded-xl text-[10px] uppercase tracking-widest active:scale-95 flex items-center justify-center gap-2">
-                <i className="fa-solid fa-bolt"></i> Bater a nota agora
-              </button>
-            </div>
-          )}
-
-          {/* BLOCO 134: BOTÃO FISCAL ÚNICO — abre a Janela Fiscal (NF-e · NFC-e · NFC anônima) */}
           {isVendaSalva && (
             <button onClick={() => setFiscalAberto(true)} aria-expanded={fiscalAberto}
               className={`w-full rounded-2xl border-2 px-3 py-3.5 flex items-center gap-2.5 active:scale-[0.98] transition-all text-left ${nb.cls}`}>

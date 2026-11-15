@@ -113,6 +113,11 @@ export function hasPrecoCupom(): Promise<boolean> {
   return probeColumn('products', 'preco_cupom', 'precoCupom');
 }
 
+/** products.codigo existe? (BLOCO 145 — codigo INTERNO do produto, o que aparece na NF) */
+export function hasProductCodigoColumn(): Promise<boolean> {
+  return probeColumn('products', 'codigo', 'codigoProduto');
+}
+
 /** clients.modo_cupom existe? (Bloco 108 — cliente que quer somente cupom) */
 export function hasClientModoCupom(): Promise<boolean> {
   return probeColumn('clients', 'modo_cupom', 'clientModoCupom');

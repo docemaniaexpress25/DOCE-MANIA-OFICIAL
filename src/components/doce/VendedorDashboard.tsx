@@ -13,7 +13,7 @@ import { mascararCep, buscarCep, cidadeDeEstado, ufDeEstado, cepDeEstado } from 
 // BLOCO 71: cliente ESPECIAL GB só existe nas rotas liberadas (Rota 03 Edipo Pena / Rota 04 Gil Pantoja)
 import { podeClienteEspecialGB } from '@/lib/regraClienteGB';
 // BLOCO 134: fluxo "não pode esquecer de bater a nota" — painel de vendas com nota pendente
-import { vendaNotaPendente, intencaoNotaDaVenda, rotuloDocumentoNota } from '@/lib/regras-fiscais';
+import { rotuloDocumentoNota } from '@/lib/regras-fiscais';
 import PDV from '@/components/doce/PDV';
 import Cupom from '@/components/doce/Cupom';
 import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
@@ -149,18 +149,11 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const [viewingSale, setViewingSale] = useState<Sale | null>(() => loadLocalState('v_viewingSale', null));
 
   // ====================================================================
-  // BLOCO 134 — NOTAS PENDENTES (regra do dono: "não podemos esquecer de
-  // bater essa nota"): vendas deste vendedor com intenção NF-e/NFC-e que
-  // a SEFAZ ainda NÃO autorizou. O banner vermelho na HOME fica até a
-  // última nota sair; cada item abre o cupom com a Janela Fiscal.
+  // BLOCO 145 — PORTAL FISCAL (antes "NOTAS PENDENTES"): as notas de saída
+  // que estavam em outros sistemas JÁ FORAM BATIDAS lá — acabou a lista de
+  // pendências e os avisos vermelhos. A aba virou PORTAL FISCAL: só o botão
+  // de acesso ao portal (/notas).
   // ====================================================================
-  const notasPendentes = React.useMemo(() => (
-    sales
-      .filter(s => vendaNotaPendente({ modoNota: s.modoNota, detalhePagamento: s.detalhePagamento, notaStatus: s.notaStatus }))
-      .sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime())
-  ), [sales]);
-  // BLOCO 136: o sheet/banner de notas pendentes virou ABA (NOTAS_PENDENTES)
-
   const [viewingClientHistory, setViewingClientHistory] = useState<Client | null>(null);
   const [filterOverdueOnly, setFilterOverdueOnly] = useState(false);
   const [creditTypeFilter, setCreditTypeFilter] = useState<'TODOS' | 'COMUM' | 'CHEQUE' | 'BOLETO'>('TODOS');
@@ -1361,8 +1354,8 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
           <MenuCard icon="fa-route" title="Rota do Dia" tab="ROTEIRO" color="bg-blue-50 text-blue-600" />
           {/* BLOCO 13: TODO vendedor acompanha a fila de entregas dos seus pedidos (leitura) */}
           <MenuCard icon="fa-truck" title="Entregas" tab="ENTREGAS" color="bg-emerald-50 text-emerald-600" />
-          {/* BLOCO 136 (regra do dono): notas pendentes viraram ABA (não é mais banner) — o badge conta as vendas sem a nota batida */}
-          <MenuCard icon="fa-file-circle-exclamation" title="Notas Pendentes" tab="NOTAS_PENDENTES" color="bg-rose-50 text-rose-600" badge={notasPendentes.length > 0 ? notasPendentes.length : false} />
+          {/* BLOCO 145 (regra do dono): "Notas Pendentes" virou PORTAL FISCAL — só o botão de acesso */}
+          <MenuCard icon="fa-file-invoice" title="Portal Fiscal" tab="NOTAS_PENDENTES" color="bg-emerald-50 text-emerald-600" />
           <MenuCard icon="fa-bell" title="Avisos" tab="AVISOS" color="bg-rose-50 text-rose-600" badge={atRiskClients.length > 0 ? atRiskClients.length : false} />
           <MenuCard icon="fa-truck-fast" title="Minha Carga" tab="CARGA" color="bg-purple-50 text-purple-600" badge={minhasPendentes.length > 0} />
           <MenuCard icon="fa-receipt" title="Vendas" tab="HISTORY" color="bg-blue-50 text-[#1E3A5F]" />
@@ -1381,46 +1374,25 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       )}
 
       {/* ====================================================================
-          BLOCO 136 (regra do dono): ABA NOTAS PENDENTES — substitui o banner
-          vermelho da HOME. A venda pode fechar sem nota, mas o app NÃO deixa
-          esquecer: a lista fica viva aqui com badge na HOME até a SEFAZ
-          autorizar. Toque no card abre o cupom com a Janela Fiscal dentro.
+          BLOCO 145 (regra do dono): a aba virou PORTAL FISCAL — as notas que
+          estavam em outros sistemas JÁ FORAM BATIDAS lá. Fim da lista de
+          pendências e dos avisos. Aqui fica SOMENTE o botão de acesso.
           ==================================================================== */}
       {activeTab === 'NOTAS_PENDENTES' && (
         <div className="space-y-4">
           <header className="px-1 flex flex-col gap-1">
-            <h2 className="text-xl font-black text-gray-800 tracking-tight leading-none">Notas Pendentes</h2>
-            <p className="text-[10px] font-black uppercase text-rose-500">Vendas sem a nota batida — toque para bater</p>
+            <h2 className="text-xl font-black text-gray-800 tracking-tight leading-none">Portal Fiscal</h2>
+            <p className="text-[10px] font-black uppercase text-gray-400">Notas de saída — emissão, DANFE/XML e cancelamento</p>
           </header>
-          {notasPendentes.length === 0 && (
-            <div className="text-center py-20 opacity-30 flex flex-col items-center gap-4">
-              <i className="fa-solid fa-circle-check text-5xl"></i>
-              <p className="font-black uppercase tracking-widest text-[10px]">Tudo em dia!</p>
-            </div>
-          )}
-          <div className="grid gap-2">
-            {notasPendentes.map(s => {
-              const c = clients.find(x => x.id === s.clientId);
-              const inten = intencaoNotaDaVenda(s as { modoNota?: string | null; detalhePagamento?: string | null });
-              return (
-                <button key={s.id} onClick={() => setViewingSale(s)}
-                  className="w-full bg-white rounded-3xl border border-rose-100 p-4 shadow-sm flex items-center gap-3 active:scale-[0.98] transition-all text-left">
-                  <div className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 ${s.notaStatus === 'REJEITADA' ? 'bg-rose-50 text-rose-600' : 'bg-amber-50 text-amber-600'}`}>
-                    <i className={`fa-solid ${s.notaStatus === 'REJEITADA' ? 'fa-circle-xmark' : 'fa-hourglass-half'}`}></i>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-black text-gray-800 text-xs uppercase truncate">{c?.nomeFantasia || 'Cliente'}</p>
-                    <p className="text-[9px] font-bold text-gray-400 mt-0.5">
-                      {new Date(s.data).toLocaleDateString('pt-BR')} · R$ {(Number(s.valorTotal) || 0).toFixed(2)}
-                      <span className={`ml-2 px-1.5 py-0.5 rounded ${inten === 'NFE' ? 'bg-violet-50 text-violet-600' : 'bg-blue-50 text-blue-600'}`}>{rotuloDocumentoNota((s as { notaTipo?: string }).notaTipo, inten === 'NFE' ? 'NF-e' : 'NFC-e')}</span>
-                      {s.notaStatus === 'REJEITADA' && s.notaErro ? <span className="block text-rose-500 mt-0.5 truncate">SEFAZ: {s.notaErro}</span> : null}
-                    </p>
-                  </div>
-                  <i className="fa-solid fa-chevron-right text-[10px] text-gray-300"></i>
-                </button>
-              );
-            })}
-          </div>
+          <a href="/notas" target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 bg-blue-600 text-white rounded-3xl px-5 py-6 shadow-lg active:scale-[0.98] transition-transform">
+            <span className="w-12 h-12 rounded-2xl bg-white/15 flex items-center justify-center shrink-0"><i className="fa-solid fa-file-invoice text-xl"></i></span>
+            <span className="flex-1 flex flex-col items-start">
+              <span className="text-sm font-black uppercase tracking-widest">Acessar o Portal Fiscal</span>
+              <span className="text-[9px] font-bold opacity-80 leading-snug">Notas do app · avulsas · XML de terceiros — PDF, XML, emitir e cancelar</span>
+            </span>
+            <i className="fa-solid fa-up-right-from-square text-xs opacity-70"></i>
+          </a>
+          <p className="text-[9px] font-bold text-gray-400 leading-snug px-1">O acesso usa o PIN do administrador. As notas de saída que estavam em outros sistemas JÁ FORAM BATIDAS lá — não existe mais pendência de nota no app.</p>
         </div>
       )}
 

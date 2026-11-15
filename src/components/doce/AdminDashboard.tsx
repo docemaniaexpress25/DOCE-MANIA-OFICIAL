@@ -12,7 +12,7 @@ import { mascararCep, buscarCep, cidadeDeEstado, ufDeEstado, cepDeEstado } from 
 import { podeClienteEspecialGB } from '@/lib/regraClienteGB';
 // BLOCO 134: fluxo "não pode esquecer de bater a nota" — painel de vendas com nota pendente
 // BLOCO 142: prazo SEFAZ de cancelamento (NFC-e 30min / NF-e 24h) — botão some quando vence
-import { vendaNotaPendente, intencaoNotaDaVenda, rotuloDocumentoNota, prazoCancelamentoNota, PrazoCancelamento } from '@/lib/regras-fiscais';
+import { rotuloDocumentoNota, prazoCancelamentoNota, PrazoCancelamento } from '@/lib/regras-fiscais';
 import { notaService } from '@/services/notaService';
 import { buscarEanProduto, soDigitosEan, eanCompleto, mensagemEan, EanBusca } from '@/lib/eanAutocomplete';
 import Cupom from '@/components/doce/Cupom';
@@ -143,16 +143,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [selectedSale, setSelectedSale] = useState<Sale | null>(() => loadLocalState('admin_selectedSale', null));
 
   // ====================================================================
-  // BLOCO 134 — NOTAS PENDENTES (admin enxerga TODAS as vendas): intenção
-  // NF-e/NFC-e sem autorização da SEFAZ. Banner na HOME + sheet com a
-  // lista; toque abre o cupom da venda com a Janela Fiscal dentro.
+  // BLOCO 145 — PORTAL FISCAL (antes "NOTAS PENDENTES"): as notas de
+  // saída que estavam em outros sistemas JÁ FORAM BATIDAS lá — não
+  // existe mais lista de pendências no app (nem avisos, nem badge).
+  // A aba virou PORTAL FISCAL: só o botão de acesso ao portal (/notas).
   // ====================================================================
-  const notasPendentes = React.useMemo(() => (
-    (props.sales || [])
-      .filter(s => vendaNotaPendente({ modoNota: s.modoNota, detalhePagamento: s.detalhePagamento, notaStatus: s.notaStatus }))
-      .sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime())
-  ), [props.sales]);
-  // BLOCO 136: o sheet/banner de notas pendentes virou ABA (NOTAS_PENDENTES)
   const [viewingClientHistory, setViewingClientHistory] = useState<Client | null>(null);
   const [filterOverdueOnly, setFilterOverdueOnly] = useState(false);
   const [routeFilter, setRouteFilter] = useState<string>('TODOS');
@@ -355,7 +350,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [newSubName, setNewSubName] = useState('');
   const [editingSub, setEditingSub] = useState<Subcategory | null>(null);
 
-  const [pForm, setPForm] = useState({ nome: '', custo: '', venda: '', comissao: '', comissaoPv: '', margem: '', ativo: true, estoquePrincipal: '', categoryId: '', subcategoryId: '', precoMinimo: '', precoEspecialGb: '', ncm: '', cest: '', cfop: '', ean: '', unidade: 'UN', origem: '0', imagem: '', caixa: '', obs: '', estoqueNota: '', estoqueSemnf: '' });
+  const [pForm, setPForm] = useState({ codigo: '', nome: '', custo: '', venda: '', comissao: '', comissaoPv: '', margem: '', ativo: true, estoquePrincipal: '', categoryId: '', subcategoryId: '', precoMinimo: '', precoEspecialGb: '', ncm: '', cest: '', cfop: '', ean: '', unidade: 'UN', origem: '0', imagem: '', caixa: '', obs: '', estoqueNota: '', estoqueSemnf: '' });
   const [clientForm, setClientForm] = useState<Partial<Client>>({ nomeFantasia: '', nome: '', telefone: '', endereco: '', bairro: '', diaRoteiro: 1, ativo: true, ativarCnpj: false, cnpj: '', pinLocalizacao: '', ordem: 0, rota: 'ROTA_01', razaoSocial: '', inscricaoEstadual: '', enderecoNumero: '', enderecoCep: '', enderecoMunicipio: '', enderecoUf: '', email: '', clienteEspecialGb: false, modoCupom: false });
   const [cnpjBusca, setCnpjBusca] = useState<{ loading: boolean; msg: string; ok: boolean; endereco?: string }>({ loading: false, msg: '', ok: false });
   // BLOCO 138: dados fiscais do cadastro ficam ATRAS DE UM BOTAO (tela amigavel) —
@@ -948,6 +943,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         precoEspecialGb: '0.00',
         precoCupom: '0.00',
         comissaoPv: '',
+        codigo: '',
         ncm: '', cest: '', cfop: '5102', ean: '', unidade: 'UN', origem: '0', imagem: '', caixa: '', obs: ''
       });
     } else {
@@ -970,6 +966,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         precoEspecialGb: (p.precoEspecialGb ?? 0).toFixed(2),
         precoCupom: (p.precoCupom ?? 0).toFixed(2),
         comissaoPv: (p.comissaoPvPercentual === undefined || p.comissaoPvPercentual === null) ? '' : Number(p.comissaoPvPercentual).toFixed(2),
+        codigo: p.codigo || '',
         ncm: p.ncm || '', cest: p.cest || '', cfop: p.cfop || '5102', ean: p.ean || '', unidade: p.unidade || 'UN', origem: p.origem || '0', imagem: p.imagem || '', caixa: (p.unidadesPorCaixa === undefined || p.unidadesPorCaixa === null) ? '' : String(p.unidadesPorCaixa), obs: p.obs || ''
       });
     }
@@ -997,6 +994,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       estoqueSemnf: parseInt(pForm.estoqueSemnf) || 0,
       categoryId: pForm.categoryId || undefined, 
       subcategoryId: pForm.subcategoryId || undefined,
+      // BLOCO 145: código INTERNO do produto (o que APARECE NA NF — não é o EAN)
+      codigo: (pForm.codigo || '').trim() || undefined,
       ncm: (pForm.ncm || '').trim() || undefined,
       cest: (pForm.cest || '').trim() || undefined,
       cfop: (pForm.cfop || '').trim() || undefined,
@@ -1010,7 +1009,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     };
     // BLOCO 14 + 23: comissão PV — vazio = padrão do dono (5% gravado no produto)
     data.comissaoPvPercentual = pForm.comissaoPv === '' ? null : parseFloat(pForm.comissaoPv);
-    if (showProductModal === 'NEW') props.addProduct(data.nome!, data.precoCusto!, data.precoVenda!, data.comissaoPercentual!, data.estoquePrincipal, data.categoryId, data.subcategoryId, data.precoMinimo, { ncm: data.ncm, cest: data.cest, cfop: data.cfop, ean: data.ean, unidade: data.unidade, origem: data.origem, comissaoPvPercentual: data.comissaoPvPercentual ?? undefined, imagem: data.imagem, unidadesPorCaixa: data.unidadesPorCaixa, obs: data.obs, estoqueNota: data.estoqueNota, estoqueSemnf: data.estoqueSemnf, precoEspecialGb: data.precoEspecialGb, precoCupom: data.precoCupom });
+    if (showProductModal === 'NEW') props.addProduct(data.nome!, data.precoCusto!, data.precoVenda!, data.comissaoPercentual!, data.estoquePrincipal, data.categoryId, data.subcategoryId, data.precoMinimo, { codigo: data.codigo, ncm: data.ncm, cest: data.cest, cfop: data.cfop, ean: data.ean, unidade: data.unidade, origem: data.origem, comissaoPvPercentual: data.comissaoPvPercentual ?? undefined, imagem: data.imagem, unidadesPorCaixa: data.unidadesPorCaixa, obs: data.obs, estoqueNota: data.estoqueNota, estoqueSemnf: data.estoqueSemnf, precoEspecialGb: data.precoEspecialGb, precoCupom: data.precoCupom });
     else if (typeof showProductModal === 'object') props.updateProduct(showProductModal.id, data);
     setShowProductModal(null);
     showToast("Produto salvo!");
@@ -1744,8 +1743,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           <div className="px-2 flex items-center justify-between"><div><h2 className="text-2xl font-black text-gray-800 tracking-tight">Painel Administrativo</h2><p className="text-xs text-gray-400 font-semibold uppercase tracking-wider">Gestão e Controle Total</p></div><div className="flex items-center gap-2"><button onClick={() => setShowNotifPrefs(true)} className="w-10 h-10 bg-white text-gray-400 rounded-xl flex items-center justify-center shadow-sm border border-gray-100 active:scale-90"><i className="fa-solid fa-sliders text-xs"></i></button><button onClick={() => { setShowNotifPanel(!showNotifPanel); if (showNotifPanel) markAllRead(); }} className="w-10 h-10 bg-white text-blue-600 rounded-xl flex items-center justify-center shadow-sm border border-gray-100 active:scale-90 relative"><i className="fa-solid fa-bell text-sm"></i>{unreadCount > 0 && (<span className="absolute -top-1 -right-1 w-5 h-5 bg-rose-500 text-white text-[8px] font-black rounded-full flex items-center justify-center animate-pulse">{unreadCount > 9 ? '9+' : unreadCount}</span>)}</button></div></div>
           <div className="grid grid-cols-2 gap-4">
             <MenuCard icon="fa-boxes-stacked" title="Estoque" tab="CATALOGO" color="bg-blue-50 text-blue-600" />
-            {/* BLOCO 136 (regra do dono): notas pendentes viraram ABA (não é mais banner) — badge conta as vendas sem a nota batida */}
-            <MenuCard icon="fa-file-circle-exclamation" title="Notas Pendentes" tab="NOTAS_PENDENTES" color="bg-rose-50 text-rose-600" badge={notasPendentes.length > 0 ? notasPendentes.length : false} />
+            <MenuCard icon="fa-file-invoice" title="Portal Fiscal" tab="NOTAS_PENDENTES" color="bg-emerald-50 text-emerald-600" />
             <MenuCard icon="fa-file-code" title="XML → Produtos" tab="FISCAL_XML" color="bg-teal-50 text-teal-600" />
             <MenuCard icon="fa-store" title="Catalogo Portal" tab="CATALOGO_PORTAL" color="bg-emerald-50 text-emerald-600" />
             <MenuCard icon="fa-tags" title="Categorias" tab="CATEGORIAS" color="bg-indigo-50 text-indigo-600" />
@@ -1770,54 +1768,27 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       )}
 
       {/* ====================================================================
-          BLOCO 136 (regra do dono): ABA NOTAS PENDENTES — substitui o banner
-          vermelho da HOME. Vendas com NF-e/NFC-e escolhida que a SEFAZ ainda
-          NÃO autorizou ficam vivas aqui até resolver. Toque abre o cupom da
-          venda com a Janela Fiscal dentro; ao fechar, volta pra MESMA aba.
+          BLOCO 145 (regra do dono): a aba virou PORTAL FISCAL. As notas que
+          estavam em outros sistemas JÁ FORAM BATIDAS lá — a lista de
+          pendências/avisos foi EXCLUÍDA do app. Aqui fica SOMENTE o botão
+          de acesso ao portal (/notas): emissão, DANFE/XML, avulsas, XML de
+          terceiros e cancelamento dentro do prazo SEFAZ.
           ==================================================================== */}
       {activeTab === 'NOTAS_PENDENTES' && (
         <div className="space-y-4">
           <header className="px-1 flex flex-col gap-1">
-            <h2 className="text-xl font-black text-gray-800 tracking-tight leading-none">Notas Pendentes</h2>
-            <p className="text-[10px] font-black uppercase text-rose-500">NF-e/NFC-e escolhidas e não autorizadas — toque para bater</p>
-            {/* BLOCO 140: PORTAL DE NOTAS (link externo, mesmo PIN do admin) —
-                administração completa das notas de saída: DANFE/XML, emitir,
-                editar, clonar, cancelar, no estilo do portal do cliente. */}
-            <a href="/notas" target="_blank" rel="noopener noreferrer" className="mt-1 w-fit flex items-center gap-2 bg-blue-600 text-white rounded-xl px-4 py-2.5 shadow-sm active:scale-95 transition-transform">
-              <i className="fa-solid fa-up-right-from-square text-[10px]"></i>
-              <span className="text-[10px] font-black uppercase tracking-wider">Portal de Notas (PDF/XML · clonar · cancelar)</span>
-            </a>
+            <h2 className="text-xl font-black text-gray-800 tracking-tight leading-none">Portal Fiscal</h2>
+            <p className="text-[10px] font-black uppercase text-gray-400">Notas de saída — emissão, DANFE/XML e cancelamento</p>
           </header>
-          {notasPendentes.length === 0 && (
-            <div className="text-center py-20 opacity-30 flex flex-col items-center gap-4">
-              <i className="fa-solid fa-circle-check text-5xl"></i>
-              <p className="font-black uppercase tracking-widest text-[10px]">Tudo em dia!</p>
-            </div>
-          )}
-          <div className="grid gap-2">
-            {notasPendentes.map(s => {
-              const c = props.clients.find(x => x.id === s.clientId);
-              const v = props.users.find(x => x.id === s.vendedorId);
-              const inten = intencaoNotaDaVenda(s as { modoNota?: string | null; detalhePagamento?: string | null });
-              return (
-                <button key={s.id} onClick={() => setSelectedSale(s)}
-                  className="w-full bg-white rounded-3xl border border-rose-100 p-4 shadow-sm flex items-center gap-3 active:scale-[0.98] transition-all text-left">
-                  <div className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 ${s.notaStatus === 'REJEITADA' ? 'bg-rose-50 text-rose-600' : 'bg-amber-50 text-amber-600'}`}>
-                    <i className={`fa-solid ${s.notaStatus === 'REJEITADA' ? 'fa-circle-xmark' : 'fa-hourglass-half'}`}></i>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-black text-gray-800 text-xs uppercase truncate">{c?.nomeFantasia || 'Cliente'}</p>
-                    <p className="text-[9px] font-bold text-gray-400 mt-0.5">
-                      {new Date(s.data).toLocaleDateString('pt-BR')} · R$ {(Number(s.valorTotal) || 0).toFixed(2)}{v ? ` · ${v.nome}` : ''}
-                      <span className={`ml-2 px-1.5 py-0.5 rounded ${inten === 'NFE' ? 'bg-violet-50 text-violet-600' : 'bg-blue-50 text-blue-600'}`}>{rotuloDocumentoNota((s as { notaTipo?: string }).notaTipo, inten === 'NFE' ? 'NF-e' : 'NFC-e')}</span>
-                      {s.notaStatus === 'REJEITADA' && s.notaErro ? <span className="block text-rose-500 mt-0.5 truncate">SEFAZ: {s.notaErro}</span> : null}
-                    </p>
-                  </div>
-                  <i className="fa-solid fa-chevron-right text-[10px] text-gray-300"></i>
-                </button>
-              );
-            })}
-          </div>
+          <a href="/notas" target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 bg-blue-600 text-white rounded-3xl px-5 py-6 shadow-lg active:scale-[0.98] transition-transform">
+            <span className="w-12 h-12 rounded-2xl bg-white/15 flex items-center justify-center shrink-0"><i className="fa-solid fa-file-invoice text-xl"></i></span>
+            <span className="flex-1 flex flex-col items-start">
+              <span className="text-sm font-black uppercase tracking-widest">Acessar o Portal Fiscal</span>
+              <span className="text-[9px] font-bold opacity-80 leading-snug">Notas do app · avulsas · XML de terceiros — PDF, XML, emitir e cancelar</span>
+            </span>
+            <i className="fa-solid fa-up-right-from-square text-xs opacity-70"></i>
+          </a>
+          <p className="text-[9px] font-bold text-gray-400 leading-snug px-1">As notas pendentes saíram do app: as notas de saída que estavam em outros sistemas JÁ FORAM BATIDAS lá. O cancelamento na SEFAZ exclui a venda, repõe o estoque e cancela o boleto automaticamente.</p>
         </div>
       )}
 
@@ -2903,6 +2874,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-4 space-y-3">
           <div className="flex items-center justify-between gap-2 flex-wrap"><p className="text-[9px] font-black text-indigo-600 uppercase tracking-widest flex items-center gap-1"><i className="fa-solid fa-file-invoice"></i> Dados Fiscais (NF-e / NFC-e)</p>{/* BLOCO 133: termômetro fiscal do produto — NCM+CFOP preenchidos = nota sai sem rejeição */}
           {(pForm.ncm || '').replace(/\D/g, '').length >= 4 && (pForm.cfop || '').replace(/\D/g, '').length >= 4 ? <span className="text-[8px] font-black text-emerald-700 bg-emerald-100 border border-emerald-200 px-2 py-1 rounded-lg uppercase whitespace-nowrap"><i className="fa-solid fa-circle-check mr-1"></i>Fiscal OK</span> : <span className="text-[8px] font-black text-amber-700 bg-amber-100 border border-amber-200 px-2 py-1 rounded-lg uppercase whitespace-nowrap"><i className="fa-solid fa-triangle-exclamation mr-1"></i>Complete NCM/CFOP</span>}</div>
+        {/* ===== BLOCO 145: CÓDIGO INTERNO DO PRODUTO — o código que APARECE NA NF (não é o EAN) ===== */}
+          <div className="space-y-1">
+            <label className="text-[9px] font-black text-blue-600 uppercase ml-1">Código do Produto (aparece na NF) — código INTERNO, não é o EAN</label>
+            <input value={pForm.codigo} onChange={e => setPForm({...pForm, codigo: e.target.value})} placeholder="Ex: 001, DM-125, PROD-78" className="w-full p-4 bg-white border rounded-2xl font-bold text-base min-w-0" />
+            <p className="text-[8px] font-bold text-blue-400 leading-snug">Este código sai no campo codigo_produto da NF-e/NFC-e. Vazio = o app usa o prefixo do id (legado).</p>
+          </div>
           <div className="space-y-1">
             <label className="text-[9px] font-black text-gray-400 uppercase ml-1">EAN / Código de Barras</label>
             <input value={pForm.ean} onChange={e => handleEanChange(e.target.value)} placeholder="Digite ou escaneie — ex: 7894900011517" inputMode="numeric" className="w-full p-4 bg-white border rounded-2xl font-bold text-base min-w-0 tracking-widest" />

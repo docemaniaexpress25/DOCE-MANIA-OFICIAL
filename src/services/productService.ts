@@ -30,6 +30,8 @@ export const productService = {
       ean: p.ean || undefined,
       unidade: p.unidade || undefined,
       origem: p.origem || undefined,
+      // BLOCO 145: código INTERNO do produto (aparece na NF — nao é o EAN)
+      codigo: p.codigo || undefined,
       // Bloco 15: foto + caixa do atacado (podem nao existir antes do SQL)
       imagem: p.imagem || undefined,
       unidadesPorCaixa: (p.unidades_por_caixa === null || p.unidades_por_caixa === undefined) ? undefined : Number(p.unidades_por_caixa),
@@ -71,6 +73,8 @@ export const productService = {
     if (product.ean !== undefined) fiscal.ean = product.ean || null;
     if (product.unidade !== undefined) fiscal.unidade = product.unidade || null;
     if (product.origem !== undefined) fiscal.origem = product.origem || null;
+    // BLOCO 145: código interno do produto (cai na NF como codigo_produto)
+    if (product.codigo !== undefined) fiscal.codigo = String(product.codigo || '').trim().slice(0, 60) || null;
     // Bloco 15: foto + caixa do atacado
     const b15: Record<string, string | number | null> = {};
     if (product.imagem !== undefined) b15.imagem = product.imagem || null;
@@ -129,8 +133,8 @@ export const productService = {
     } else if (error && /\bobs\b/i.test(error.message || '')) {
       console.warn('Coluna obs ausente (Bloco 18 nao rodado). Salvando sem ela.');
       ({ data, error } = await supabase.from('products').insert({ ...payload, ...fiscal, ...extra14, ...b15 }).select().single());
-    } else if (error && /ncm|cest|cfop|\bean\b|unidade|origem/i.test(error.message || '')) {
-      console.warn('Colunas fiscais de produto ausentes (Bloco 12 nao rodado). Salvando sem elas.');
+    } else if (error && /ncm|cest|cfop|\bean\b|unidade|origem|\bcodigo\b/i.test(error.message || '')) {
+      console.warn('Colunas fiscais de produto ausentes (Bloco 12/145 nao rodado). Salvando sem elas.');
       ({ data, error } = await supabase.from('products').insert({ ...payload, ...extra14 }).select().single());
     }
     if (error) {
@@ -157,6 +161,7 @@ export const productService = {
       ean: data.ean || undefined,
       unidade: data.unidade || undefined,
       origem: data.origem || undefined,
+      codigo: data.codigo || undefined,
       imagem: data.imagem || undefined,
       unidadesPorCaixa: (data.unidades_por_caixa === null || data.unidades_por_caixa === undefined) ? undefined : Number(data.unidades_por_caixa),
       obs: data.obs || null,
@@ -189,6 +194,8 @@ export const productService = {
     if (updates.ean !== undefined) payload.ean = updates.ean || null;
     if (updates.unidade !== undefined) payload.unidade = updates.unidade || null;
     if (updates.origem !== undefined) payload.origem = updates.origem || null;
+    // BLOCO 145: código interno — vazio = limpa (a NF volta pro prefixo do id)
+    if (updates.codigo !== undefined) payload.codigo = String(updates.codigo || '').trim().slice(0, 60) || null;
     // Bloco 15: foto + caixa do atacado
     if (updates.imagem !== undefined) payload.imagem = updates.imagem || null;
     if (updates.unidadesPorCaixa !== undefined) payload.unidades_por_caixa = Math.max(1, Math.floor(Number(updates.unidadesPorCaixa) || 1));
@@ -232,10 +239,10 @@ export const productService = {
       const fb18: Record<string, unknown> = { ...payload };
       delete fb18.obs;
       ({ data, error } = await supabase.from('products').update(fb18).eq('id', id).select().single());
-    } else if (error && /ncm|cest|cfop|\bean\b|unidade|origem/i.test(error.message || '')) {
+    } else if (error && /ncm|cest|cfop|\bean\b|unidade|origem|\bcodigo\b/i.test(error.message || '')) {
       const fallback: Record<string, unknown> = { ...payload };
       delete fallback.ncm; delete fallback.cest; delete fallback.cfop;
-      delete fallback.ean; delete fallback.unidade; delete fallback.origem;
+      delete fallback.ean; delete fallback.unidade; delete fallback.origem; delete fallback.codigo;
       ({ data, error } = await supabase.from('products').update(fallback).eq('id', id).select().single());
     }
     if (error) {
@@ -262,6 +269,7 @@ export const productService = {
       ean: data.ean || undefined,
       unidade: data.unidade || undefined,
       origem: data.origem || undefined,
+      codigo: data.codigo || undefined,
       imagem: data.imagem || undefined,
       unidadesPorCaixa: (data.unidades_por_caixa === null || data.unidades_por_caixa === undefined) ? undefined : Number(data.unidades_por_caixa),
       obs: data.obs || null,

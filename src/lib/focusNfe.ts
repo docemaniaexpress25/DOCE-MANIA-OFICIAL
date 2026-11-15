@@ -221,6 +221,24 @@ export function tpagDeMetodo(metodo?: string | null): { forma: string; indicador
   return { forma: '01', indicador: 0 }; // DINHEIRO e padrao
 }
 
+/**
+ * BLOCO 145 — FORMA DE PAGAMENTO SEMPRE VISÍVEL na nota: rótulo legível do
+ * tPag que vai no payload (a SEFAZ imprime na DANFE, mas o rótulo entra
+ * TAMBÉM nas informações adicionais para nunca faltar em nenhum layout).
+ */
+export function labelTpag(forma: string): string {
+  const f = String(forma || '');
+  if (f === '01') return 'Dinheiro';
+  if (f === '02') return 'Cheque';
+  if (f === '03') return 'Cartao de credito';
+  if (f === '04') return 'Cartao de debito';
+  if (f === '15') return 'Boleto bancario';
+  if (f === '16') return 'Deposito bancario';
+  if (f === '17') return 'PIX';
+  if (f === '91') return 'Pagamento posterior';
+  return 'Dinheiro';
+}
+
 // ---------------------------------------------------------------------------
 // Payload v2.0
 // ---------------------------------------------------------------------------
@@ -248,7 +266,7 @@ export interface FocusItemV2 {
   valor_desconto?: number;
   inclui_no_total: 0 | 1;
   icms_origem: number;               // 0 nacional, 1/2 estrangeira...
-  icms_situacao_tributaria: string;  // CSOSN 102 (Simples Nacional sem credito)
+  icms_situacao_tributaria: string;  // BLOCO 145: NF-e=CSOSN 101 / NFC-e=CSOSN 102 (regra do dono)
   pis_situacao_tributaria: string;   // 49 = outras saidas (Simples Nacional)
   cofins_situacao_tributaria: string;
 }
@@ -414,16 +432,33 @@ function montarItensV2(opts: {
   // Desconto (troca/desconto geral) entra concentrado no primeiro item
   const descontoTotal = round2(Math.max(0, itensTotal - opts.valorTotalVenda));
 
+  // -----------------------------------------------------------------
+  // BLOCO 145 — REGRA FISCAL DO DONO (fixa, vale SEMPRE):
+  //   CFOP 5102 (venda de mercadoria, mesma UF) em TODA NF-e E NFC-e.
+  //   Só vira 6102 quando o destinatario é de OUTRA UF (exigência SEFAZ
+  //   — operação interestadual). O cfop do cadastro do produto é
+  //   IGNORADO na saída: o cadastro pode ter trazido CFOP de COMPRA
+  //   (1102/2102) do XML de terceiros e isso rejeitava a nota.
+  // -----------------------------------------------------------------
+  const cfopSaida = opts.ufDestino && opts.ufDestino !== opts.ufEmitente ? '6102' : '5102';
+
+  // BLOCO 145 — REGRA FISCAL DO DONO (fixa):
+  //   NF-e (venda para PJ)  -> CSOSN 101 (Simples Nacional c/ permissão de crédito)
+  //   NFC-e (consumidor)    -> CSOSN 102 (Simples Nacional sem crédito)
+  const csosn = opts.doc === 'nfe' ? '101' : '102';
+
   const items: FocusItemV2[] = opts.itens.map((it, i) => {
     const bruto = round2(it.quantidade * it.valorUnitario);
     const desconto = i === 0 ? descontoTotal : 0;
     const item: FocusItemV2 = {
       // NFe v2.0 pede numero_item integer; NFC-e v2.0 pede string
       numero_item: (opts.doc === 'nfe' ? i + 1 : String(i + 1)) as unknown as number,
+      // BLOCO 145: codigo_produto = CÓDIGO INTERNO do cadastro (o que o dono
+      // vê na NF); sem cadastro, prefixo do id (legado). NÃO é o EAN.
       codigo_produto: (it.codigo || `P${i + 1}`).slice(0, 60),
       descricao: normalizaTexto(it.descricao, 120),
       codigo_ncm: soDigitos(it.ncm) || '21069090',
-      cfop: soDigitos(it.cfop) || (opts.ufDestino === opts.ufEmitente ? '5102' : '6102'),
+      cfop: cfopSaida,
       unidade_comercial: it.unidade || 'UN',
       unidade_tributavel: it.unidade || 'UN',
       quantidade_comercial: it.quantidade,
@@ -433,7 +468,7 @@ function montarItensV2(opts: {
       valor_bruto: bruto,
       inclui_no_total: 1,
       icms_origem: Number(soDigitos(it.origem) || '0') || 0,
-      icms_situacao_tributaria: '102', // CSOSN 102 — Simples Nacional, sem ICMS
+      icms_situacao_tributaria: csosn, // BLOCO 145: NF-e=101 / NFC-e=102 (regra do dono)
       pis_situacao_tributaria: '49',   // Simples Nacional: outras saidas
       cofins_situacao_tributaria: '49',
     };

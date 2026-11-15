@@ -608,6 +608,12 @@ alter table public.products     add column if not exists preco_cupom numeric(12,
 alter table public.clients      add column if not exists modo_cupom  boolean not null default false;
 alter table public.app_settings add column if not exists erp_config  jsonb not null default '{}'::jsonb;
 
+-- [BLOCO 145] CÓDIGO INTERNO DO PRODUTO — o código que APARECE NA NF
+-- (NÃO é o EAN; o app envia este código no campo codigo_produto da NF-e/NFC-e)
+alter table public.products add column if not exists codigo text;
+create unique index if not exists products_codigo_uidx
+  on public.products (codigo) where codigo is not null and codigo <> '';
+
 -- Fiscal das notas (Bloco 10/109 — INFERIDO DO CÓDIGO: notas/cupom/pre-venda)
 alter table public.sales add column if not exists nota_status     text;  -- EMITINDO | AUTORIZADA | REJEITADA | CANCELADA
 alter table public.sales add column if not exists nota_tipo       text;  -- NFE | NFCE

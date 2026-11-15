@@ -164,3 +164,30 @@ reconsulta as notas em status `EMITINDO` na Focus e espelha o resultado. Protegi
    aplicado e o que falta (tabelas, colunas, RPCs).
 5. Login inicial do admin criado pelo seed: PIN **123456** (troque no primeiro acesso).
    Os PINs dos usuários reais existem só como hash — quem conhece é a equipe.
+
+---
+
+## 9. BLOCO 145 — Código interno do produto + cascata do cancelamento
+
+**SQL novo:** `sql/bloco145_codigo_produto.sql` (já embutido no `00-SETUP-COMPLETO-SUPABASE.sql`):
+
+```sql
+alter table public.products add column if not exists codigo text;
+create unique index if not exists products_codigo_uidx
+  on public.products (codigo) where codigo is not null and codigo <> '';
+```
+
+- `products.codigo` = **código INTERNO do produto (o que APARECE NA NF como `cProd`/codigo_produto)** — NÃO é o EAN.
+- Cadastro do produto no app tem a caixa "Código do Produto (aparece na NF)" no bloco Dados Fiscais.
+
+**Regras fiscais fixas (código, sem SQL):**
+- NF-e (venda PJ): CFOP **5102** (6102 só interestadual) + CSOSN **101**.
+- NFC-e (consumidor): CFOP **5102** + CSOSN **102**.
+- Forma de pagamento SEMPRE na nota (grupo detPag + rótulo nas informações adicionais).
+
+**Cascata do cancelamento** (ao cancelar NF-e/NFC-e dentro do prazo SEFAZ — NFC-e 30min / NF-e 24h):
+1. Boleto do Inter é cancelado automaticamente;
+2. Estoque volta (reserva de pré-venda → estoque de casa, contadores de saída 1/2, carga da van via RPC `excluir_venda_estornar_estoque`);
+3. A venda é EXCLUÍDA do sistema (itens, comissões, comprovantes, eventos).
+
+Aba "Notas Pendentes" virou **PORTAL FISCAL** (só o botão de acesso a `/notas`) — as notas de terceiros já foram batidas fora do sistema.

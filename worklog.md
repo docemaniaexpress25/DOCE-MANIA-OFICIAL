@@ -2053,4 +2053,19 @@ O QUE O DONO PRECISA SABER:
 2. ATENÇÃO: se a G GAMBINO SILVESTRIN FOR contribuinte de ICMS (tem Inscrição Estadual), o certo é CADASTRAR A IE dela no cliente — com IE no cadastro a nota volta a sair com CSOSN 101 (com crédito para o cliente). Sem IE, ela é não contribuinte e a nota sai correta com 102.
 3. Clientes PF (CPF) sempre saem com 102 — correto por definição.
 
+## bloco161 — PLANILHA EXCEL P/ O DONO COMPLETAR NCM/CEST/CFOP (o dono: "ME TRAGA UMA TABELA EM EXCEL DE TODOS OS PRODUTOS COM TABELA DE NCM, CFOP, CEST VOU COMPLETAR PELA TABELA E DEPOIS VC SOBE PRA MIM") (2026-11-16)
+
+FEITO: public/produtos-fiscal.xlsx (aba PRODUTOS + aba COMO PREENCHER), gerado dos dados REAIS do cadastro via /api/produtos-fiscal (gerador local-gera-planilha.py, gitignored; xlsx skill com templates/base.py):
+1. ABA PRODUTOS — 120 produtos (linhas 5-124), colunas: ID (chave p/ reimportar), CÓDIGO, NOME, EAN, UN, NCM, CEST, CFOP, ORIGEM, ATIVO. Painel congelado (ID/CODIGO/NOME + cabeçalho), auto-filtro B4:K124. Colunas de código em formato TEXTO (@) — zero à esquerda do CEST (ex 0500500) sobrevive ao Excel.
+2. CÉLULA AMARELA = FALTA (bate exato com o cadastro: NCM 59, CEST 60, CFOP 11, EAN 116, UN/ORIGEM 0).
+3. VALIDAÇÃO DE DADOS nas colunas (espelha a validação da API do bloco 156, o Excel BLOQUEIA o erro antes de eu subir): NCM=8 dígitos, CEST=7, CFOP=4, EAN 8-14, UN lista (UN,KG,G,PC,CX,LT,ML,MG,MT), ORIGEM lista 0-8.
+4. ABA COMO PREENCHER — regra + exemplo por coluna, 7 avisos (não apagar ID/linhas; só amarelas; me mandar o .xlsx de volta), situação atual do cadastro e nota honesta: NCM/orígem vão na nota na emissão (sem NCM sai 21069090); CFOP do cadastro é informativo (emissão usa 5102/6102 automático por UF); CEST fica guardado p/ ST futura.
+
+REIMPORTAÇÃO (quando o dono devolver o arquivo): eu leio o .xlsx linha a linha e gravo via PATCH /api/produtos-fiscal (id + ncm/cest/cfop/ean/unidade/origem — mesma validação SEFAZ), confirmando o resultado produto a produto.
+
+QA: xlsx.py validate = passed (0 issues); inspect (2 abas, 120 dataRows); leitura de volta conferindo header, linha real, contagem de amarelas por coluna == stats do cadastro, 6 dataValidations, freeze E5, filtro B4:K124.
+
+ENTREGA: arquivo no public/ — baixa no PREVIEW (/produtos-fiscal.xlsx) já agora e na produção depois do deploy. SQL: nenhum.
+
+
 

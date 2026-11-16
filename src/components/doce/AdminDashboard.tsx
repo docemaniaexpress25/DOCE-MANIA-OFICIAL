@@ -129,7 +129,8 @@ interface AdminDashboardProps {
 }
 
 // BLOCO 118: 'CAIXA' agora é o FECHAMENTO DE CAIXA — as comissões viram aba 'COMISSOES'
-type TabType = 'HOME' | 'CATALOGO' | 'CATALOGO_PORTAL' | 'FISCAL_XML' | 'ENTRADAS' | 'CATEGORIAS' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'COMISSOES' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'COMPROVANTES' | 'ENTREGAS' | 'LUCRO' | 'BACKUP' | 'SETTINGS' | 'CONFIG_ERP' | 'ESTOQUE_MOV' | 'NOTAS_PENDENTES';
+// BLOCO 156: 'FISCAL_PRODUTOS' = portal /fiscal-produtos — lista editável NCM/CEST/CFOP
+type TabType = 'HOME' | 'CATALOGO' | 'CATALOGO_PORTAL' | 'FISCAL_XML' | 'ENTRADAS' | 'CATEGORIAS' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'COMISSOES' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'COMPROVANTES' | 'ENTREGAS' | 'LUCRO' | 'BACKUP' | 'SETTINGS' | 'CONFIG_ERP' | 'ESTOQUE_MOV' | 'NOTAS_PENDENTES' | 'FISCAL_PRODUTOS';
 
 type ReportType = 'RESUMO' | 'TOP_CLIENTES' | 'TOP_PRODUTOS' | 'CLIENTES_RISCO' | 'VENDAS_CATEGORIAS' | 'PRODUTOS_RENTAVEIS' | null;
 type ReportFilterType = 'RESUMO' | 'TOP_PRODUTOS' | 'TOP_CLIENTES' | 'CATEGORIAS' | 'VENDEDORES' | 'DIVIDAS' | 'PRODUTOS_RENTAVEIS';
@@ -1759,6 +1760,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             <MenuCard icon="fa-file-invoice" title="Portal Fiscal" tab="NOTAS_PENDENTES" color="bg-emerald-50 text-emerald-600" />
             {/* BLOCO 149: Portal de Entradas — notas XML de fornecedores (migra a antiga aba XML → Produtos) */}
             <MenuCard icon="fa-file-import" title="Portal de Entradas" tab="ENTRADAS" color="bg-teal-50 text-teal-600" />
+            {/* BLOCO 156: Produtos Fiscais — lista EDITÁVEL de NCM/CEST/CFOP de todo o catálogo */}
+            <MenuCard icon="fa-clipboard-list" title="Produtos Fiscais" tab="FISCAL_PRODUTOS" color="bg-amber-50 text-amber-600" />
             <MenuCard icon="fa-store" title="Catalogo Portal" tab="CATALOGO_PORTAL" color="bg-emerald-50 text-emerald-600" />
             <MenuCard icon="fa-tags" title="Categorias" tab="CATEGORIAS" color="bg-indigo-50 text-indigo-600" />
             <MenuCard icon="fa-truck-ramp-box" title="Cargas" tab="CARGAS" color="bg-orange-50 text-orange-600" />
@@ -1827,6 +1830,31 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             <i className="fa-solid fa-up-right-from-square text-xs opacity-70"></i>
           </a>
           <p className="text-[9px] font-bold text-gray-400 leading-snug px-1">Arraste vários XMLs (ou .zip) de uma vez — cada nota vira UMA linha. Expanda a linha para conferir os itens, vincule aos produtos do catálogo e dê entrada no estoque com 1 clique.</p>
+        </div>
+      )}
+
+      {/* ====================================================================
+          BLOCO 156 (regra do dono): PRODUTOS FISCAIS — lista EDITÁVEL de TODOS
+          os produtos com NCM, CEST, CFOP, EAN, unidade e origem. Portal próprio
+          (/fiscal-produtos) no mesmo padrão do Portal Fiscal e de Entradas:
+          PIN do admin, tabela planilha, validação SEFAZ na digitação e SALVAR
+          TUDO. O que é gravado aqui sai EXATAMENTE na NF-e/NFC-e.
+          ==================================================================== */}
+      {activeTab === 'FISCAL_PRODUTOS' && (
+        <div className="space-y-4">
+          <header className="px-1 flex flex-col gap-1">
+            <h2 className="text-xl font-black text-gray-800 tracking-tight leading-none">Produtos Fiscais</h2>
+            <p className="text-[10px] font-black uppercase text-gray-400">NCM · CEST · CFOP — lista editável do catálogo</p>
+          </header>
+          <a href="/fiscal-produtos" target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 bg-amber-600 text-white rounded-3xl px-5 py-6 shadow-lg active:scale-[0.98] transition-transform">
+            <span className="w-12 h-12 rounded-2xl bg-white/15 flex items-center justify-center shrink-0"><i className="fa-solid fa-clipboard-list text-xl"></i></span>
+            <span className="flex-1 flex flex-col items-start">
+              <span className="text-sm font-black uppercase tracking-widest">Abrir Lista Editável</span>
+              <span className="text-[9px] font-bold opacity-80 leading-snug">Todo o catálogo em planilha · NCM, CEST, CFOP, EAN, unidade e origem · valida SEFAZ na digitação · salvar tudo de uma vez · exportar CSV</span>
+            </span>
+            <i className="fa-solid fa-up-right-from-square text-xs opacity-70"></i>
+          </a>
+          <p className="text-[9px] font-bold text-gray-400 leading-snug px-1">Os códigos gravados aqui são os que saem na NF-e/NFC-e. Produto SEM NCM sai na nota com o código genérico 21069090 — complete pelo filtro "sem NCM" do portal antes de emitir.</p>
         </div>
       )}
 

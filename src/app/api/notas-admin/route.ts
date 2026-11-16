@@ -10,7 +10,10 @@ import {
   hasNotaEmitidaEm,
   hasEstoqueBaixadoColumn,
 } from '@/lib/serverSchema';
-import { presencaArquivos, listarMetasAvulsas, lerMetaAvulsa, gravarMetaAvulsa, NotaAvulsaMeta } from '@/lib/focusArquivos';
+import { presencaArquivos, listarMetasAvulsas, lerMetaAvulsa, gravarMetaAvulsa, importarAvulsa, invalidaPresenca, NotaAvulsaMeta } from '@/lib/focusArquivos';
+// BLOCO 155: cancelamento na SEFAZ da avulsa FOCUS (nota batida fora do app).
+import { cancelarNota, interpretarResultado, isFocusConfigured, FocusDoc } from '@/lib/focusNfe';
+import { prazoCancelamentoNota } from '@/lib/regras-fiscais';
 import { createShareToken } from '@/lib/shareLinks';
 
 /**
@@ -23,6 +26,7 @@ import { createShareToken } from '@/lib/shareLinks';
  * POST /api/notas-admin  { acao: 'AUTH', pin }              -> token ADMIN
  *                        { acao: 'EDITAR', saleId, patch }  -> metodo/detalhe do registro
  *                        { acao: 'CLONAR', saleId }         -> nova venda igual (sem nota)
+ *                        { acao: 'CANCELAR_AVULSA', ref, justificativa } -> cancela na SEFAZ a avulsa FOCUS (BLOCO 155)
  * GET  /api/notas-admin?acao=lista                        -> todas as notas (mais recentes primeiro)
  * GET  /api/notas-admin?acao=detalhe&id=...               -> venda + itens + cliente (ver o que foi pedido)
  *
@@ -471,6 +475,82 @@ export async function POST(req: NextRequest) {
       .single();
     if (error || !upd) return BAD(404, 'Venda nao encontrada (ou falha ao salvar).');
     return NextResponse.json({ ok: true, venda: upd as Record<string, unknown> });
+  }
+
+  // -----------------------------------------------------------------
+  // BLOCO 155 — CANCELAR_AVULSA: o dono PRECISA cancelar notas batidas
+  // FORA do app (painel da Focus) pelo portal — a NF 154 ("fora do app")
+  // não tinha botão porque podeCancelar exigia !n.avulsa. O servidor
+  // cancela pela REF da avulsa (DELETE /v2/{doc}/{ref} na Focus, mesma
+  // função já provada pelo cancelamento de vendas no /api/notas) e
+  // REIMPORTA: status CANCELADO + XML do cancelamento arquivado no
+  // Storage. XML de TERCEIRO não cancela (emissor é outro CNPJ).
+  // -----------------------------------------------------------------
+  if (acao === 'CANCELAR_AVULSA') {
+    const refAvulsa = String(body.ref || (String(body.saleId || '').startsWith('AVULSA-') ? String(body.saleId).slice('AVULSA-'.length) : '') || '');
+    if (!refAvulsa) return BAD(400, 'Parametro ausente (ref).');
+    const just = String(body.justificativa || '');
+    if (just.trim().length < 15) return BAD(422, 'Justificativa obrigatoria (minimo 15 caracteres — regra da SEFAZ).');
+    if (!isFocusConfigured()) return BAD(503, 'Focus NFe nao configurada (env FOCUS_NFE_TOKEN no Vercel).');
+
+    const meta = await lerMetaAvulsa(refAvulsa);
+    if (!meta) return BAD(404, 'Registro arquivado da nota não encontrado — reimporte pela Focus (BUSCAR TODAS).');
+    if (String(meta.origem || 'FOCUS').toUpperCase() !== 'FOCUS') {
+      return BAD(422, 'XML de TERCEIRO não pode ser cancelado pela nossa conta — o cancelamento é feito pelo emissor original.');
+    }
+    const statusMeta = String(meta.status || '').toUpperCase();
+    if (statusMeta !== 'AUTORIZADO') {
+      return BAD(422, `Situação "${meta.status || '?'}" não permite cancelamento — só nota AUTORIZADA pode ser cancelada na SEFAZ.`);
+    }
+
+    const doc: FocusDoc = meta.doc === 'NFCE' ? 'nfce' : 'nfe';
+
+    // GUARDA DO PRAZO SEFAZ (mesma regra da venda: NFC-e 30min / NF-e 24h) —
+    // com a data REAL de autorização da meta; sem ela, a SEFAZ decide
+    // (a NF-e pode ter sido batida DIAS depois de qualquer data chute).
+    if (meta.dataAutorizacao || meta.dataEmissao) {
+      const prazo = prazoCancelamentoNota({ tipo: meta.doc, status: 'AUTORIZADA', emitidaEm: meta.dataAutorizacao || meta.dataEmissao || null });
+      if (prazo.expirado) {
+        const quando = new Date(meta.dataAutorizacao || meta.dataEmissao);
+        return BAD(422, `Cancelamento FORA DO PRAZO da SEFAZ — ${doc === 'nfce' ? 'NFC-e' : 'NF-e'} autorizada em ${isNaN(quando.getTime()) ? String(meta.dataAutorizacao || meta.dataEmissao) : quando.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })} e o prazo de ${prazo.prazoLabel} já venceu. O evento seria recusado.`);
+      }
+    }
+
+    const r = await cancelarNota(doc, meta.ref, just);
+    if (!r.ok || !r.data || 'erro' in r.data) {
+      return BAD(502, (r.data as { erro?: string }).erro || 'Falha ao cancelar na Focus NFe.');
+    }
+    const res = interpretarResultado(r.data as Record<string, unknown>);
+    if (!res.cancelada) {
+      return BAD(502, res.motivo || 'A SEFAZ não confirmou o cancelamento — consulte a nota em alguns segundos.');
+    }
+
+    // Reimporta: status CANCELADO + XML do cancelamento arquivado no Storage.
+    // Preserva as edições locais (pagamento/observação/vendedor) da meta antiga.
+    let avisoArquivo = '';
+    try {
+      const re = await importarAvulsa(meta.ref, meta.doc);
+      if (re.ok && re.meta) {
+        const metaNova: NotaAvulsaMeta = {
+          ...re.meta,
+          // o evento foi ACEITO pela SEFAZ; a propagação do status pode demorar
+          // alguns segundos — o portal mostra CANCELADO desde já (mesma
+          // filosofia do congelamento do cancelamento, bloco 147).
+          status: 'CANCELADO',
+          pagamento: meta.pagamento || re.meta.pagamento,
+          pagamentoDetalhe: meta.pagamentoDetalhe,
+          vendedor: meta.vendedor,
+        };
+        await gravarMetaAvulsa(metaNova);
+      }
+      invalidaPresenca();
+    } catch { avisoArquivo = ' O XML do cancelamento será arquivado na próxima sincronização.'; }
+
+    return NextResponse.json({
+      ok: true,
+      aviso: `Nota ${meta.numero ? `Nº ${meta.numero}` : meta.ref} cancelada na SEFAZ.${avisoArquivo}`,
+      status: 'CANCELADO',
+    });
   }
 
   // ---------- CLONAR (copia a venda p/ emitir o documento fiscal de novo) ----------

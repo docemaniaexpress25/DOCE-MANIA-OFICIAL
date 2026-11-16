@@ -556,10 +556,14 @@ export default function PortalNotasPage() {
     if (justificativa.trim().length < 15) { showToast('Justificativa obrigatória (mínimo 15 caracteres — regra da SEFAZ).', false); return; }
     setBusyId('cancel');
     try {
-      const res = await fetch('/api/notas', {
+      const res = await fetch(cancelModal.avulsa ? '/api/notas-admin' : '/api/notas', {
         method: 'POST',
         headers: headers(token),
-        body: JSON.stringify({ acao: 'CANCELAR', saleId: cancelModal.id, justificativa: justificativa.trim() }),
+        body: JSON.stringify(cancelModal.avulsa
+          // BLOCO 155: avulsa FOCUS cancela pela REF (ação nova do notas-admin);
+          // a venda interna nem existe (“fora do app”) — saleId não se aplica.
+          ? { acao: 'CANCELAR_AVULSA', ref: cancelModal.ref, justificativa: justificativa.trim() }
+          : { acao: 'CANCELAR', saleId: cancelModal.id, justificativa: justificativa.trim() }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { showToast(data.erro || 'Falha ao cancelar na SEFAZ.', false); return; }
@@ -1293,7 +1297,13 @@ export default function PortalNotasPage() {
                     const podeEmitir = n.status === 'REJEITADA' || n.status === 'CANCELADA' || n.status === 'NAO_EMITIDA';
                     const ocupado = busyId === n.id;
                     const prazo = prazoCancelDe(n);
-                    const podeCancelar = !n.avulsa && (n.status === 'AUTORIZADA' || n.status === 'EMITINDO') && !!n.ref && prazo.dentroDoPrazo;
+                    // BLOCO 155: a avulsa FOCUS (nota batida no painel da Focus /
+                    // congelada de venda excluída) TAMBÉM cancela pela ref —
+                    // XML de TERCEIRO não (emissor é outro CNPJ). Era aqui que o
+                    // botão de cancelar “sumia” na NF 154: a condição exigia
+                    // !n.avulsa e a linha “fora do app” nunca ganha o ícone.
+                    const podeCancelar = (n.status === 'AUTORIZADA' || n.status === 'EMITINDO') && prazo.dentroDoPrazo
+                      && (n.avulsa ? String(n.origem || 'FOCUS').toUpperCase() === 'FOCUS' && !!n.ref : !!n.ref);
                     const temBoletoVivo = !n.avulsa && !!n.boletoStatus && BOLETO_VIVO.includes(String(n.boletoStatus).toUpperCase());
                     const bm = temBoletoVivo ? metaBoleto(n.boletoStatus as string) : null;
                     return (

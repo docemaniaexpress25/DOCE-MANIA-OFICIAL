@@ -8,20 +8,27 @@ import { salvarFotoSupabase } from '@/lib/fotoStorage';
  * caixa_pagamentos (fechamento_id NULL = caixa aberto). Pontos de entrada:
  *
  *   VENDA       -> PDV salva venda à vista do David (dinheiro/pix)   [client]
+ *                  BLOCO 165: a FONTE PRINCIPAL agora é a TRIGGER SQL
+ *                  trg_caixa_david_sales (sql/bloco165...) — grava direto no
+ *                  banco a todo INSERT/UPDATE de venda do David (à vista PAGO
+ *                  OU a prazo=BOLETO), à prova de sessão expirada. O POST
+ *                  client-side segue como redundância (idempotente por
+ *                  sale_id+metodo+valor — nunca duplica).
  *   ENTREGA     -> /api/pre-venda acao ENTREGUE de venda DO DAVID
  *                  cobrada na entrega (DINHEIRO/PIX/MISTO)           [server]
  *   AJUSTE      -> correção manual do admin                          [server]
  *
- * NÃO entram (a prazo / conta da empresa): RECEBIMENTO de contas a receber
- * (boletos que caem na conta, recebimentos manuais) e PORTAL (pix confirmado
- * no portal) — a API /api/caixa RECUSA essas origens (400).
+ * BLOCO 165 (mudança de regra do dono): BOLETO (venda a prazo do David) AGORA
+ * ENTRA no caixa — "deve aparecer todos os recebidos em dinheiro, pix e
+ * boletos! desde sexta dia 13". Contas a RECEBER manual/portal continuam fora
+ * (boletos que caem na conta da empresa via recebimento manual do admin).
  *
  * O admin fecha o caixa a qualquer instante: a API /api/caixa acao FECHAR
  * cria o snapshot em caixa_fechamentos_geral e "prende" os pagamentos abertos
  * (fechamento_id = id do fechamento). Log de pagamentos = rastreio total.
  */
 
-export type CaixaMetodo = 'DINHEIRO' | 'PIX' | 'DEPOSITO';
+export type CaixaMetodo = 'DINHEIRO' | 'PIX' | 'DEPOSITO' | 'BOLETO';
 export type CaixaOrigem = 'VENDA' | 'ENTREGA' | 'RECEBIMENTO' | 'PORTAL' | 'AJUSTE';
 
 export interface PagamentoCaixaInput {
@@ -53,7 +60,7 @@ export async function registrarPagamentoCaixa(
 ): Promise<{ ok: boolean; id?: string; erro?: string }> {
   try {
     const metodo = String(p.metodo || '').toUpperCase();
-    if (!['DINHEIRO', 'PIX', 'DEPOSITO'].includes(metodo)) {
+    if (!['DINHEIRO', 'PIX', 'DEPOSITO', 'BOLETO'].includes(metodo)) {
       return { ok: false, erro: 'metodo invalido' };
     }
     const origem = String(p.origem || '').toUpperCase();

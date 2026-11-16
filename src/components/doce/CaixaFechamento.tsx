@@ -76,6 +76,8 @@ const METODO_LABEL: Record<string, { txt: string; cls: string }> = {
   DINHEIRO: { txt: 'Dinheiro', cls: 'bg-emerald-600 text-white' },
   PIX: { txt: 'Pix', cls: 'bg-violet-600 text-white' },
   DEPOSITO: { txt: 'Depósito', cls: 'bg-slate-600 text-white' },
+  // BLOCO 165: boleto (venda a prazo do David) agora entra no caixa
+  BOLETO: { txt: 'Boleto', cls: 'bg-amber-500 text-white' },
 };
 
 const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) => {
@@ -84,7 +86,7 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [pagamentos, setPagamentos] = useState<PagamentoCaixa[]>([]);
-  const [totais, setTotais] = useState({ dinheiro: 0, pix: 0, deposito: 0, total: 0 });
+  const [totais, setTotais] = useState({ dinheiro: 0, pix: 0, deposito: 0, boleto: 0, total: 0 });
   const [desde, setDesde] = useState<string | null>(null);
   const [historico, setHistorico] = useState<FechamentoResumo[]>([]);
 
@@ -117,7 +119,7 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
         return;
       }
       setPagamentos(d.aberto?.pagamentos || []);
-      setTotais(d.aberto?.totais || { dinheiro: 0, pix: 0, deposito: 0, total: 0 });
+      setTotais(d.aberto?.totais || { dinheiro: 0, pix: 0, deposito: 0, boleto: 0, total: 0 });
       setDesde(d.aberto?.desde || null);
       setHistorico(d.historico || []);
     } catch {
@@ -255,7 +257,7 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
               <i className="fa-solid fa-trash-can text-xs"></i>
             </button>
           )}
-          <p className={`text-[11px] font-black text-right ${p.metodo === 'DINHEIRO' ? 'text-emerald-600' : p.metodo === 'PIX' ? 'text-violet-600' : 'text-slate-600'}`}>
+          <p className={`text-[11px] font-black text-right ${p.metodo === 'DINHEIRO' ? 'text-emerald-600' : p.metodo === 'PIX' ? 'text-violet-600' : p.metodo === 'BOLETO' ? 'text-amber-600' : 'text-slate-600'}`}>
             {fmt(p.valor)}
           </p>
         </div>
@@ -270,6 +272,8 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
     const ordem: { key: string; label: string; icon: string; cor: string; chip: string }[] = [
       { key: 'DINHEIRO', label: 'Dinheiro na mão', icon: 'fa-solid fa-money-bill-wave', cor: 'text-emerald-600', chip: 'bg-emerald-600 text-white' },
       { key: 'PIX', label: 'Pix recebido', icon: 'fa-brands fa-pix', cor: 'text-violet-600', chip: 'bg-violet-600 text-white' },
+      // BLOCO 165: boletos das vendas a prazo do David (conferir com os prazos vendidos)
+      { key: 'BOLETO', label: 'Boletos gerados (a prazo)', icon: 'fa-solid fa-barcode', cor: 'text-amber-600', chip: 'bg-amber-500 text-white' },
       { key: 'DEPOSITO', label: 'Depósito (conta da empresa)', icon: 'fa-solid fa-building-columns', cor: 'text-slate-600', chip: 'bg-slate-600 text-white' },
     ];
     return ordem
@@ -295,7 +299,7 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
       <div className="bg-gray-50 border border-gray-100 rounded-2xl p-3 mx-1">
         <p className="text-[8px] font-black text-gray-500 uppercase leading-relaxed">
           <i className="fa-solid fa-circle-info text-gray-400 mr-1"></i>
-          Mostra SÓ dinheiro e Pix recebidos À VISTA pelo David. Vendas a prazo, boletos que caem na conta da empresa e Contas a Receber NÃO entram nesta tela.
+          Mostra TUDO que o David recebe/gera: dinheiro e Pix À VISTA (com comprovante) + os BOLETOS das vendas a prazo dele (conferir com os prazos). Recebimentos manuais e pix do portal (conta da empresa) NÃO entram nesta tela.
         </p>
       </div>
 
@@ -320,7 +324,7 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
           {/* BLOCO 119: CARD HERÓI — total + as 3 contas com CONTAGEM de pagamentos.
               A conferência é direta: quanto tem, de onde veio, quantos comprovantes. */}
           <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-md mx-1">
-            <p className="text-[8px] font-black text-gray-400 uppercase mb-3">Caixa aberto — à vista (dinheiro + pix)</p>
+            <p className="text-[8px] font-black text-gray-400 uppercase mb-3">Caixa aberto — dinheiro + pix à vista + boletos do David</p>
             <div className="bg-gray-900 rounded-2xl p-4">
               <div className="flex items-center justify-between">
                 <div>
@@ -360,6 +364,15 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
                 <p className="text-[15px] font-black text-violet-700 mt-1">{fmt(totais.pix)}</p>
               </div>
             </div>
+            {totais.boleto > 0 && (
+              <div className="bg-amber-50 p-3 rounded-2xl mt-2 flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <i className="fa-solid fa-barcode text-amber-500 text-sm"></i>
+                  <p className="text-[9px] font-black text-amber-600 uppercase">Boletos gerados (a prazo)</p>
+                </div>
+                <p className="text-[13px] font-black text-amber-700">{fmt(totais.boleto)}</p>
+              </div>
+            )}
             {totais.deposito > 0 && (
               <div className="bg-slate-50 p-3 rounded-2xl mt-2 flex items-center justify-between">
                 <div className="flex items-center gap-1.5">
@@ -407,7 +420,7 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
             <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-8 text-center mx-1">
               <i className="fa-solid fa-inbox text-3xl text-gray-200"></i>
               <p className="text-[9px] font-black uppercase text-gray-400 mt-2 tracking-widest">Nenhum pagamento no caixa aberto</p>
-              <p className="text-[8px] font-bold text-gray-300 uppercase mt-1">Só entra À VISTA: venda à vista e entrega cobrada (dinheiro/pix) do David</p>
+              <p className="text-[8px] font-bold text-gray-300 uppercase mt-1">Entra à vista (venda/entrega cobrada em dinheiro/pix) e os BOLETOS gerados nas vendas a prazo do David</p>
             </div>
           )}
 
@@ -489,6 +502,7 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
               <div className="pt-1">
                 <div className="flex justify-between text-[10px] font-black uppercase"><span className="text-emerald-600">Dinheiro</span><span className="text-gray-700">{fmt(totais.dinheiro)}</span></div>
                 <div className="flex justify-between text-[10px] font-black uppercase"><span className="text-violet-600">Pix</span><span className="text-gray-700">{fmt(totais.pix)}</span></div>
+                {totais.boleto > 0 && <div className="flex justify-between text-[10px] font-black uppercase"><span className="text-amber-600">Boletos (a prazo)</span><span className="text-gray-700">{fmt(totais.boleto)}</span></div>}
                 {totais.deposito > 0 && <div className="flex justify-between text-[10px] font-black uppercase"><span className="text-slate-600">Depósito</span><span className="text-gray-700">{fmt(totais.deposito)}</span></div>}
                 <div className="flex justify-between text-sm font-black uppercase pt-1 border-t border-gray-200"><span className="text-gray-800">Total</span><span className="text-emerald-600">{fmt(totais.total)}</span></div>
                 <p className="text-[8px] font-bold text-gray-400 uppercase">{pagamentos.length} pagamento(s) no log</p>

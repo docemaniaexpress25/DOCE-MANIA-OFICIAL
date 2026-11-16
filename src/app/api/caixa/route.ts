@@ -7,19 +7,23 @@ import { isDavidNome } from '@/lib/equipe';
 
 /**
  * BLOCO 118 — CAIXA: FECHAMENTO PERSISTIDO + LEDGER DE PAGAMENTOS
- * BLOCO 118.3 (regra do dono): o CAIXA é EXCLUSIVO do DAVID (Rota 5) e só
- * recebe À VISTA. "O que me interessa sao as vendas com dinheiro e pix que
- * ele recebe a vista! as vendas a prazo que ele recebe no contas a receber
- * nao precisam constar nessa tela!" — recebimentos de contas a receber
- * (boletos que caem na conta da empresa, pix do portal, recebimentos manuais)
- * NÃO entram; vendas de OUTROS vendedores não entram (compensação deles é
- * comissão). Somente: venda à vista do David + entrega cobrada (dinheiro/pix)
- * de venda do David + ajuste manual do admin.
+ * BLOCO 118.3 (regra do dono): o CAIXA é EXCLUSIVO do DAVID (Rota 5).
+ * BLOCO 165 (mudança de regra do dono, 16/11/2026): "o caixa do david esta
+ * zerado! mas deve aparecer todos os recebidos em dinheiro, pix e boletos!
+ * desde sexta dia 13" — o caixa passa a mostrar DINHEIRO/PIX À VISTA + os
+ * BOLETOS gerados nas vendas a prazo dele (o recebimento real segue no Contas
+ * a Receber). Recebimento MANUAL do admin e pix do PORTAL continuam fora;
+ * vendas de OUTROS vendedores não entram (compensação deles é comissão).
+ * Fonte principal do ledger: TRIGGER SQL trg_caixa_david_sales (bloco 165)
+ * — à prova de sessão expirada (causa do caixa zerado). O POST é redundância
+ * idempotente. Ajuste manual do admin entra via AJUSTE.
  *
  * GET  /api/caixa                      [ADMIN | SECRETARIO | VENDEDOR]
  *   Caixa corrente (aberto) + histórico de fechamentos:
- *   { ok, aberto: { desde, pagamentos[], totais{dinheiro,pix,deposito,total} },
+ *   { ok, aberto: { desde, pagamentos[], totais{dinheiro,pix,deposito,boleto,total} },
  *          historico: [{id, fechadoEm, fechadoPorNome, totais, qtde, observacao}] }
+ *   BLOCO 165: BOLETO (venda a prazo do David) entrou no caixa — o dono quer
+ *   "todos os recebidos em dinheiro, pix e boletos". total = soma de TUDO.
  *   Pagamentos NÃO trazem a foto inline — o <img> busca por GET /api/caixa/foto?id=.
  *
  * POST /api/caixa                      body { acao: 'REGISTRAR' | 'FECHAR' | 'EXCLUIR' }
@@ -27,7 +31,10 @@ import { isDavidNome } from '@/lib/equipe';
  *     { origem VENDA|ENTREGA|AJUSTE, metodo, valor, saleId?, cliente?, vendedor?, comprovante?, detalhe? }
  *     Grava 1 linha no ledger (dataURL de comprovante vai ao Storage). Idempotente
  *     por venda+método+valor ainda abertos. VENDA/ENTREGA só para vendedor David.
- *     RECEBIMENTO/PORTAL recusados (a prazo não entra no caixa).
+ *     BLOCO 165: a fonte PRINCIPAL é a trigger SQL trg_caixa_david_sales (grava
+ *     direto no banco, à prova de sessão expirada) — este POST é redundância
+ *     (a idempotência impede duplicar).
+ *     RECEBIMENTO/PORTAL recusados (recebimento manual/portal não entra).
  *   EXCLUIR [ADMIN | SECRETARIO] (BLOCO 124):
  *     { id } — apaga UMA linha do LEDGER do caixa ABERTO (fechamento_id null).
  *     Correção do dono: entrada errada no caixa (ex. recebimento a prazo que
@@ -78,18 +85,20 @@ export async function GET(req: NextRequest) {
     if (rowsErr) throw rowsErr;
 
     const pags = (rows || []) as any[];
-    const totais = { dinheiro: 0, pix: 0, deposito: 0, total: 0 };
+    const totais = { dinheiro: 0, pix: 0, deposito: 0, boleto: 0, total: 0 };
     for (const p of pags) {
       const v = Number(p.valor || 0);
       const m = String(p.metodo || '').toUpperCase();
       if (m === 'DINHEIRO') totais.dinheiro += v;
       else if (m === 'PIX') totais.pix += v;
       else if (m === 'DEPOSITO') totais.deposito += v;
+      else if (m === 'BOLETO') totais.boleto += v;
       totais.total += v;
     }
     totais.dinheiro = round2(totais.dinheiro);
     totais.pix = round2(totais.pix);
     totais.deposito = round2(totais.deposito);
+    totais.boleto = round2(totais.boleto);
     totais.total = round2(totais.total);
 
     // Último fechamento = início da janela do caixa corrente
@@ -168,8 +177,8 @@ export async function POST(req: NextRequest) {
     // ---------------- REGISTRAR (ledger) ----------------
     if (acao === 'REGISTRAR') {
       const metodo = String(body.metodo || '').toUpperCase() as CaixaMetodo;
-      if (!['DINHEIRO', 'PIX', 'DEPOSITO'].includes(metodo)) {
-        return NextResponse.json({ ok: false, error: 'Metodo invalido (DINHEIRO/PIX/DEPOSITO).' }, { status: 400 });
+      if (!['DINHEIRO', 'PIX', 'DEPOSITO', 'BOLETO'].includes(metodo)) {
+        return NextResponse.json({ ok: false, error: 'Metodo invalido (DINHEIRO/PIX/DEPOSITO/BOLETO).' }, { status: 400 });
       }
       const valor = Number(body.valor || 0);
       if (!(valor > 0)) {
@@ -290,19 +299,25 @@ export async function POST(req: NextRequest) {
       if (rowsErr) throw rowsErr;
 
       const pags = (rows || []) as any[];
-      const totais = { dinheiro: 0, pix: 0, deposito: 0, total: 0 };
+      const totais = { dinheiro: 0, pix: 0, deposito: 0, boleto: 0, total: 0 };
       for (const p of pags) {
         const v = Number(p.valor || 0);
         const m = String(p.metodo || '').toUpperCase();
         if (m === 'DINHEIRO') totais.dinheiro += v;
         else if (m === 'PIX') totais.pix += v;
         else if (m === 'DEPOSITO') totais.deposito += v;
+        else if (m === 'BOLETO') totais.boleto += v;
         totais.total += v;
       }
       totais.dinheiro = round2(totais.dinheiro);
       totais.pix = round2(totais.pix);
       totais.deposito = round2(totais.deposito);
+      totais.boleto = round2(totais.boleto);
       totais.total = round2(totais.total);
+      // BLOCO 165: total_geral soma TUDO (dinheiro + pix + deposito + boleto).
+      // Sem coluna total_boleto no snapshot (sem ALTER TABLE): os boletos ficam
+      // no jsonb "pagamentos" e o detalhe do fechamento os mostra.
+      totais.total = round2(totais.dinheiro + totais.pix + totais.deposito + totais.boleto);
 
       // Nome do admin que fecha
       let nomeAdmin: string | null = null;

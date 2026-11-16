@@ -2138,3 +2138,32 @@ QA:
 SQL PARA O DONO RODAR: NENHUM. Nenhuma mudança de schema/API/dados — só interface (um botão a menos, um rótulo novo).
 
 INSTRUÇÃO AO DONO: depois do deploy, na Janela Fiscal a nota autorizada mostra agora: [IMPRIMIR MINI-DANFE] (azul, imprime na térmica) → [Abrir DANFE A4 (Focus)] → [Cancelar nota]. O botão preto de preview não existe mais.
+
+
+## bloco165 — CAIXA DO DAVID ZERADO: CAUSA RAIZ + TRIGGER SQL AUTOMÁTICA + BOLETOS ENTREM NO CAIXA + BACKFILL DESDE 13/11 (o dono: "O CAIXA DO DAVID ESTA ZERADO! MAS DEVE APARECER TODOS OS RECEBIDOS EM DINHEIRO, PIX E BOLETOS! DESDE SEXTA DIA 13, VEJA TBM O PQ DESSE BUG DE NAO APARECER OS VALORES E ARRUME POR FAVOR") (2026-11-16)
+
+DIAGNÓSTICO (com dados REAIS do Supabase de produção via REST):
+1. As tabelas caixa_pagamentos / caixa_fechamentos_geral existem e estão VAZIAS (o anon vê [] por RLS fechada; a tela do dono via API/service_role também lê vazio = caixa zerado de verdade).
+2. Vendas do David (id 7c989927, Rota 5) desde 13/11: 11 vendas — 7 À VISTA PAGO (DINHEIRO 1671.16+1008.25+124.2+229.8+173.99 = 3207.40; PIX 1076.95+1613.51 = 2690.46) + 4 A PRAZO/BOLETO (1111.44+419.72+410.32+956.89 = 2898.37). NENHUMA entrou no ledger.
+3. HISTÓRICO: o único registro que o caixa já tinha (POSTO MODELO II, PIX 3075.96, criado 13/11 18:02 UTC pelo front antigo) foi APAGADO pelo dono no bloco 124 (pedido dele). Desde então NADA mais gravou.
+
+CAUSAS RAIZ (3 juntas):
+a) O registro do caixa na venda à vista era CLIENT-SIDE (doce-app processSale → POST /api/caixa com a SESSÃO HTTP do vendedor, fire-and-forget .catch(()=>{}), sem checar res.ok). A sessão JWT expira em 7 dias: quando expirou, a venda continuou gravando (RPC anon direto) mas o POST do caixa dava 401 EM SILÊNCIO. À prova: vendas de 16/11 19:17 (PIX 1613.51, detalhe "CAIXA: Pix recebido...") não estão no ledger.
+b) BLOCO 153 (PDV confirmarCaixaAvista): a tela "caixa" da pronta entrega SÓ escreve TEXTO no detalhePagamento — nunca chamou /api/caixa REGISTRAR (bug de implementação do próprio 153).
+c) Regra antiga: boleto/a prazo NÃO entrava no caixa — o dono AGORA quer que entre ("dinheiro, pix e boletos").
+
+FEITO:
+1. sql/bloco165_caixa_david_boletos.sql (NOVO, o dono roda no SQL Editor):
+   A) TRIGGER trg_caixa_david_sales (AFTER INSERT OR UPDATE ON sales, SECURITY DEFINER): toda venda DO DAVID (nome ~ 'david%', à prova de renome/id) à vista PAGO (DINHEIRO/PIX; MISTO grava como DINHEIRO) insere 1 linha origem VENDA valor=COALESCE(NULLIF(valor_pago,0),valor_total); toda venda a prazo dele (A_PRAZO) insere 1 linha metodo BOLETO valor_total com vencimento no detalhe. Idempotente server-side (NOT EXISTS sale_id+metodo+valor+fechamento IS NULL) — UPDATE de nota/entrega não duplica. À PROVA de sessão expirada/front antigo/fluxo novo.
+   B) BACKFILL: insere as 11 vendas do David desde 2026-11-13 00:00 -03 (7 à vista PAGO + 4 boletos) com criado_em = data_venda real, EXCETO a d6485c79 (POSTO MODELO II apagada pelo dono no 124 — NÃO volta). Idempotente.
+   C) Conferência: SELECT por metodo no fim do arquivo.
+2. caixaLedger.ts: CaixaMetodo + 'BOLETO' (registrarPagamentoCaixa aceita; AJUSTE manual pode lançar boleto). Documentação atualizada (fonte principal = trigger).
+3. /api/caixa: GET devolve totais{dinheiro,pix,deposito,boleto,total} (total = soma de tudo); REGISTRAR aceita BOLETO; FECHAR grava total_geral = dinheiro+pix+deposito+boleto (sem coluna total_boleto no snapshot — sem ALTER TABLE; boletos ficam no jsonb pagamentos e aparecem no detalhe do fechamento).
+4. CaixaFechamento.tsx (UI): card amber "Boletos gerados (a prazo)" no resumo; grupo BOLETO na conferência por forma ("Boletos gerados (a prazo)"); badge/metodo BOLETO; linha "Boletos (a prazo)" no resumo do fechamento; textos da regra atualizados ("Mostra TUDO que o David recebe/gera...").
+5. doce-app.tsx (processSale): POST client-side MANTIDO como redundância (idempotência impede duplicar com a trigger); comentário com a causa raiz. PDV.tsx (bloco 153): comentário de que o handler só grava o detalhe (o ledger vem da trigger).
+
+REGRA NOVA CONFIRMADA PELO DONO: caixa do David = dinheiro/pix À VISTA + BOLETOS gerados nas vendas a prazo dele. Recebimento MANUAL do admin e pix do PORTAL (conta da empresa) continuam FORA. Vendas de outros vendedores continuam fora (comissão).
+
+SQL PARA O DONO RODAR: SIM — sql/bloco165_caixa_david_boletos.sql no SQL Editor do Supabase (produção). Uma vez só, idempotente. Sem isso o caixa continua zerado para vendas NOVAS (a trigger é a fonte principal) e o backfill de 13/11 não entra.
+
+INSTRUÇÃO AO DONO: (1) rode o SQL acima; (2) atualize o app (deploy) e abra Fechamento de Caixa — deve mostrar ~Dinheiro R$ 3.207,40 + Pix R$ 2.690,46 + Boletos R$ 2.898,37 = R$ 8.796,23 desde sexta 13 (valores exatos das vendas reais); (3) a partir de agora TODO dinheiro/pix/boleto de venda do David entra SOZINHO no caixa (trigger no banco), sem depender de login/sessão; (4) se quiser conferir: select metodo, count(*), sum(valor) from caixa_pagamentos where fechamento_id is null group by metodo.

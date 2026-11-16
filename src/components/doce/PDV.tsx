@@ -311,6 +311,9 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   // na tela de sucesso. A venda já nasce PAGO (BLOCO 152): o caixa só
   // anota no detalhe o valor recebido, o troco e a conta do Pix — assim a
   // venda à vista nunca fica "em aberto" e o vendedor recebe na hora certa.
+  // BLOCO 165: o LEDGER do caixa (caixa_pagamentos) é alimentado pela
+  // TRIGGER SQL trg_caixa_david_sales na gravação da venda (e pela
+  // redundância do processSale) — este handler SÓ grava o texto no detalhe.
   // ============================================================
   const [caixaConfirmado, setCaixaConfirmado] = useState(false);
   const [caixaSalvando, setCaixaSalvando] = useState(false);

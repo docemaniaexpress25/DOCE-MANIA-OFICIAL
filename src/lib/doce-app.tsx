@@ -757,6 +757,15 @@ const App: React.FC = () => {
         // (Rota 5) e só recebe À VISTA. Venda à vista (dinheiro/pix) do David
         // entra no ledger do Fechamento de Caixa na hora; dos DEMAIS vendedores
         // NÃO entra (a compensação deles é comissão). Best-effort: nunca trava.
+        // BLOCO 165 (16/11/2026): a FONTE PRINCIPAL do ledger agora é a TRIGGER
+        // SQL trg_caixa_david_sales (sql/bloco165) — grava direto no banco a
+        // todo INSERT/UPDATE de venda do David (à vista PAGO OU a prazo =
+        // BOLETO, regra nova do dono). Causa raiz do caixa zerado desde 13/11:
+        // este POST client-side dependia da SESSÃO HTTP do vendedor (JWT 7d)
+        // e engolia o erro em silêncio — sessão expirada = venda grava (RPC
+        // anon) mas caixa não. A trigger é à prova disso; este POST segue
+        // como redundância (idempotência por sale_id+metodo+valor — nunca
+        // duplica com a trigger).
         try {
           const metodoCaixa = String(saleData.metodoPagamento || '').toUpperCase();
           const pagoCaixa = String(saleData.statusPagamento || 'PAGO').toUpperCase();

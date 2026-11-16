@@ -16,7 +16,7 @@ import { getServiceClient } from '@/lib/serverSupabase';
 const TTL_MS = 30_000;
 
 type Probe = { ok: boolean; at: number };
-const probes: Record<string, Probe | null> = { preVenda: null, entrega: null, foto: null, nota: null, fiscalProduto: null, rota2: null, estoquesNota: null, modoCarga: null, pendenteModo: null, modoVenda: null, produtoTeste: null, notaEmitidaEm: null, precoCupom: null, clientModoCupom: null, erpConfig: null };
+const probes: Record<string, Probe | null> = { preVenda: null, entrega: null, foto: null, nota: null, fiscalProduto: null, rota2: null, estoquesNota: null, modoCarga: null, pendenteModo: null, modoVenda: null, produtoTeste: null, notaEmitidaEm: null, precoCupom: null, clientModoCupom: null, erpConfig: null, codigoGb: null, clientGb: null };
 
 async function probeColumn(table: string, column: string, key: string): Promise<boolean> {
   const now = Date.now();
@@ -121,6 +121,16 @@ export function hasProductCodigoColumn(): Promise<boolean> {
 /** clients.modo_cupom existe? (Bloco 108 — cliente que quer somente cupom) */
 export function hasClientModoCupom(): Promise<boolean> {
   return probeColumn('clients', 'modo_cupom', 'clientModoCupom');
+}
+
+/** products.codigo_especial_gb existe? (BLOCO 157 — código que sobe na NF do cliente ESPECIAL GB) */
+export function hasProductCodigoGbColumn(): Promise<boolean> {
+  return probeColumn('products', 'codigo_especial_gb', 'codigoGb');
+}
+
+/** clients.cliente_especial_gb existe? (BLOCO 70 aplicado — cliente ESPECIAL GB) */
+export function hasClientEspecialGbColumn(): Promise<boolean> {
+  return probeColumn('clients', 'cliente_especial_gb', 'clientGb');
 }
 
 /** app_settings.erp_config existe? (Bloco 108 — central de automacoes ERP) */

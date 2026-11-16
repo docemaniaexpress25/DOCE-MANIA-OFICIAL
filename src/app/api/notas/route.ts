@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { after } from 'next/server';
 import { getServiceClient, devBridge } from '@/lib/serverSupabase';
 import { sessionFromRequest } from '@/lib/session';
-import { hasNotaColumns, hasProductFiscalColumns, hasBoletoColumns, hasPrecoCupom, hasNotaEmitidaEm, hasClientModoCupom, hasProductCodigoColumn } from '@/lib/serverSchema';
+import { hasNotaColumns, hasProductFiscalColumns, hasBoletoColumns, hasPrecoCupom, hasNotaEmitidaEm, hasClientModoCupom, hasProductCodigoColumn, hasProductCodigoGbColumn, hasClientEspecialGbColumn } from '@/lib/serverSchema';
 // BLOCO 147: cascata do cancelamento (arquivar nota cancelada no portal + estoque + exclusão da venda)
 import { finalizarVendaCancelada } from '@/lib/cascataCancelamento';
 import { lerEmitentePayload, lerErpConfig } from '@/lib/erpConfig';
@@ -358,12 +358,15 @@ export async function POST(req: NextRequest) {
   const temPrecoCupom = await hasPrecoCupom();
   const temClientModoCupom = await hasClientModoCupom();
   const temEmitidaEm = await hasNotaEmitidaEm();
+  // BLOCO 157: código do produto ESPECIAL GB (sobe na NF desses clientes) + flag do cliente
+  const temCodigoGb = await hasProductCodigoGbColumn();
+  const temClientGb = await hasClientEspecialGbColumn();
   const emitentePayload = (await lerEmitentePayload()) as Partial<FocusNfePayloadV2>;
 
   // Cliente da venda
   const { data: client } = await db
     .from('clients')
-    .select(`nome_fantasia, nome, cnpj, telefone, endereco, bairro, razao_social, inscricao_estadual, endereco_numero, endereco_cep, endereco_municipio, endereco_uf, email${temClientModoCupom ? ', modo_cupom' : ''}`)
+    .select(`nome_fantasia, nome, cnpj, telefone, endereco, bairro, razao_social, inscricao_estadual, endereco_numero, endereco_cep, endereco_municipio, endereco_uf, email${temClientModoCupom ? ', modo_cupom' : ''}${temClientGb ? ', cliente_especial_gb' : ''}`)
     .eq('id', sale.client_id)
     .single();
 
@@ -440,6 +443,8 @@ export async function POST(req: NextRequest) {
     'id, nome',
     fiscalCols ? 'ncm, cest, cfop, ean, unidade, origem' : '',
     temCodigoProduto ? 'codigo' : '',
+    // BLOCO 157: código do produto ESPECIAL GB (quando o cliente da nota for ESPECIAL GB)
+    temCodigoGb ? 'codigo_especial_gb' : '',
     // BLOCO 108: preco_cupom (0 = cai no custo) + custo como fallback
     temPrecoCupom ? 'preco_cupom' : '',
     'preco_custo',
@@ -451,6 +456,16 @@ export async function POST(req: NextRequest) {
   const prods = (prodsData || []) as unknown as Record<string, unknown>[];
   const prodMap = new Map(prods.map(p => [p.id as string, p]));
 
+  // ------------------------------------------------------------------
+  // BLOCO 157 (regra do dono): cliente ESPECIAL GB -> a nota desses
+  // clientes sobe com o CÓDIGO DO PRODUTO ESPECIAL GB (products.
+  // codigo_especial_gb) no lugar do código interno — igual ao Preço
+  // Especial GB no PDV. Produto sem código GB ou cliente NORMAL segue
+  // o código interno (ou prefixo do id, legado). NFC-e ANÔNIMA (modo
+  // cupom / sem identificação) NÃO usa: a nota não é "para o cliente".
+  // ------------------------------------------------------------------
+  const clienteEspecialGb = !precoAnonimo && temClientGb && (client as unknown as Record<string, unknown>).cliente_especial_gb === true;
+
   const payloadItems = items.map((i: Record<string, unknown>) => {
     const p = (prodMap.get(i.produto_id as string) || {}) as Record<string, unknown>;
     // BLOCO 108 (regra do dono): no modo cupom a NFC anônima sai com o
@@ -459,10 +474,13 @@ export async function POST(req: NextRequest) {
     const precoCupom = temPrecoCupom ? Number(p.preco_cupom) || 0 : 0;
     const custo = Number(p.preco_custo) || 0;
     const valorUnitCupom = precoCupom > 0 ? precoCupom : custo > 0 ? custo : Number(i.preco_venda) || 0;
+    // BLOCO 157: código especial GB tem prioridade para cliente ESPECIAL GB
+    const codEspecialGb = temCodigoGb ? String(p.codigo_especial_gb || '').trim() : '';
     return {
-      // BLOCO 145: codigo INTERNO do cadastro (o que APARECE NA NF);
-      // sem cadastro, prefixo do id (legado). NAO é o EAN.
-      codigo: (temCodigoProduto && String(p.codigo || '').trim()) || String(p.id || '').slice(0, 8),
+      // BLOCO 145/157: cliente ESPECIAL GB + produto com código especial ->
+      // sobe o código ESPECIAL; sem, o código INTERNO do cadastro; sem
+      // cadastro, prefixo do id (legado). NAO é o EAN.
+      codigo: (clienteEspecialGb && codEspecialGb) || (temCodigoProduto && String(p.codigo || '').trim()) || String(p.id || '').slice(0, 8),
       descricao: String(p.nome || 'Produto'),
       ncm: fiscalCols ? (p.ncm as string) || undefined : undefined,
       cfop: fiscalCols ? (p.cfop as string) || undefined : undefined,

@@ -1,6 +1,25 @@
 # Worklog - DOCE MANIA App
 
 ---
+Task ID: 157
+Agent: Z.ai Code (sessão principal)
+Task: BLOCO 157 (pedido do dono: "TEVE ALGUNS PRODUTOS QUE EU COLOQUEI O EAN PRA PESQUISAR! AGORA TO TENTANDO TIRAR E ELE FICA SALVO! ENTAO ARRUME ISSO! CRIE TBM UMA CAIXA CODIGO DO PRODUTO ESPECIAL GB! LEMBRA QUE JA TEMOS O PRECO ESPECIAL GB, ENTAO QUANDO A NOTA FOR PARA ESSES CLIENTES TEM QUE SUBIR O CODIGO ESPECIAL PRA ELES TBM") — FIX do EAN que não saia + CÓDIGO DO PRODUTO ESPECIAL GB no cadastro e na NF-e/NFC-e de cliente ESPECIAL GB.
+
+Work Log:
+- CAUSA RAIZ DO EAN QUE NÃO SAIA (comprovada em código): no handleSaveProduct do admin, os campos limpáveis eram montados com `|| undefined` (codigo, ncm, cest, cfop, ean, imagem). Quando o dono APAGAVA o campo, o valor ia `undefined` — e o productService.updateProduct só inclui no UPDATE os campos que vieram DEFINIDOS (`if (updates.ean !== undefined)`), então o EAN antigo NUNCA era apagado do banco (o mesmo valia para NCM/CEST/CFOP/código interno/imagem — o dono não teria como limpar NENHUM deles pelo form). FIX: o form agora manda STRING VAZIA para esses 6 campos (o updateProduct já converte '' → null = limpa). Prova em E2E mock: preencheu EAN+GB → salvou → leu de volta; apagou os dois com TECLADO (Ctrl+A+Delete, jeito humano) → SALVAR → banco ficou ean=null e codigo_especial_gb=null → reabriu VAZIO. Nota de engenharia: o `agent-browser fill ""` NÃO dispara o onChange do React em input controlado (DOM limpa, estado interno não) — por isso a 1ª rodada do teste parecia falhar; com teclado o fluxo real funciona.
+- NOVO CAMPO products.codigo_especial_gb (BLOCO 157): types.ts Product.codigoEspecialGb; productService grava/lê nas 3 vias (getAll/insert/update) com fallback silencioso quando a coluna ainda não existe (padrão Bloco 70 — vazio = null = NF usa o código interno); sondas novas no serverSchema (hasProductCodigoGbColumn, hasClientEspecialGbColumn) para a emissão não quebrar antes do SQL rodar.
+- FORMULÁRIO DO PRODUTO (admin): nova caixa "Código do Produto Especial GB (aparece na NF do cliente ESPECIAL GB)" — AMBAR, EXATAMENTE abaixo do "Preço Especial GB" (ordem DOM comprovada no browser: Preço GB=17, Código GB=18, Preço Cupom=19), com explicação ("este código sobe no lugar do código interno; vazio = segue o código normal"); pForm ganhou codigoEspecialGb, preenchido ao EDITAR e gravado ao SALVAR (vazio limpa).
+- NF-e/NFC-e (/api/notas EMITIR): quando o cliente da venda é ESPECIAL_GB (clients.cliente_especial_gb=true) e a nota é IDENTIFICADA (não é NFC-e anônima/modo cupom — nota anônima não é "para o cliente"), cada item sobe com products.codigo_especial_gb no campo codigo_produto, NO LUGAR do código interno do Bloco 145; produto sem código GB ou cliente NORMAL: nada muda (código interno / prefixo do id, legado). Colunas puxadas por sonda (codigo_especial_gb + cliente_especial_gb) — deploy seguro antes/depois do SQL.
+- SQL entregue ao dono (sql/bloco157_codigo_especial_gb.sql — rodar no SQL Editor do Supabase, idempotente): alter table products add column if not exists codigo_especial_gb text + comment. Enquanto não rodar, o app salva tudo SEM o campo (fallback) — código novo é inerte até lá.
+- VALIDAÇÕES LOCAIS: lint 0 erros/8 warnings (baseline exata); tsc com diff rigoroso antes/depois (git stash + comm): 1 erro NOVO no /api/notas (cast direto ParserError→Record no client ESPECIAL_GB) corrigido com cast duplo `as unknown as` → 104 erros = BASELINE EXATA; E2E mock completo (NEXT_PUBLIC_E2E_MOCK + /api/e2e-supabase, admin PIN 123456): caixa GB visível abaixo do Preço GB, EAN+GB salvos e lidos de volta, limpeza persistindo null nos DOIS campos, console sem erros de JS (só warnings de push permission, esperados no headless).
+
+Stage Summary:
+- O dono pode APAGAR o EAN (e NCM/CEST/CFOP/código/foto) do produto e o apagado agora PERSISTE — antes o valor antigo voltava sempre.
+- Cliente ESPECIAL GB passa a ter identidade própria também na NOTA: além do PREÇO ESPECIAL GB (Bloco 70, vence no PDV), o cadastro de cada produto aceita um CÓDIGO ESPECIAL GB que sobe na NF-e/NFC-e emitida para esses clientes.
+- PENDENTE DO DONO: rodar sql/bloco157_codigo_especial_gb.sql no SQL Editor do Supabase (idempotente). Até lá o campo não aparece no banco e a nota segue com o código interno.
+- QA: lint 0/8; tsc 104=104 (diff rigoroso); E2E mock do formulário com ciclo completo de gravação e limpeza.
+
+---
 Task ID: 156
 Agent: Z.ai Code (sessão principal)
 Task: BLOCO 156 (pedido do dono: "ME TRAGA UMA LISTA EDITAVEL DE TODOS OS PRODUTOS COM NCM CEST E CFOP, LISTA EDITAVEL") — PORTAL DE PRODUTOS FISCAIS (/fiscal-produtos): o catálogo INTEIRO em formato planilha com NCM, CEST, CFOP, EAN, unidade e origem EDITÁVEIS na linha, validação SEFAZ na digitação, SALVAR TUDO, filtros por faltantes e exportação CSV. O que é gravado aqui é EXATAMENTE o que sai na NF-e/NFC-e.

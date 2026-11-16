@@ -67,6 +67,8 @@ export const productService = {
       produtoTeste: !!p.produto_teste,
       // BLOCO 70: preço especial GB — undefined = SQL ainda nao rodado (cai no preço normal)
       precoEspecialGb: (p.preco_especial_gb === null || p.preco_especial_gb === undefined) ? undefined : (Number(p.preco_especial_gb) || 0),
+      // BLOCO 157: código do produto ESPECIAL GB (sobe na NF de cliente especial GB)
+      codigoEspecialGb: p.codigo_especial_gb ? String(p.codigo_especial_gb) : undefined,
       // BLOCO 108: modo cupom — undefined = SQL ainda nao rodado (cai no custo)
       precoCupom: (p.preco_cupom === null || p.preco_cupom === undefined) ? undefined : (Number(p.preco_cupom) || 0),
     })) as Product[];
@@ -125,12 +127,19 @@ export const productService = {
     // BLOCO 70: preço especial GB (0 = produto sem preço GB → cai no normal)
     const b69: Record<string, number> = {};
     if (product.precoEspecialGb !== undefined) b69.preco_especial_gb = Number(product.precoEspecialGb) || 0;
+    // BLOCO 157: código do produto ESPECIAL GB (vazio = null → NF usa o código interno)
+    const b157: Record<string, string | null> = {};
+    if (product.codigoEspecialGb !== undefined) b157.codigo_especial_gb = String(product.codigoEspecialGb || '').trim().slice(0, 60) || null;
     // BLOCO 108: preço cupom (0 = NFC anônima do modo cupom sai no preço de custo)
     const b108: Record<string, number> = {};
     if (product.precoCupom !== undefined) b108.preco_cupom = Number(product.precoCupom) || 0;
 
-    let { data, error } = await supabase.from('products').insert({ ...payload, ...fiscal, ...extra14, ...b15, ...b18, ...b23, ...b29, ...b69, ...b108 }).select().single();
-    if (error && /preco_cupom/i.test(error.message || '')) {
+    let { data, error } = await supabase.from('products').insert({ ...payload, ...fiscal, ...extra14, ...b15, ...b18, ...b23, ...b29, ...b69, ...b157, ...b108 }).select().single();
+    if (error && /codigo_especial_gb/i.test(error.message || '')) {
+      console.warn('Coluna codigo_especial_gb ausente (Bloco 157 nao rodado). Salvando sem ela.');
+      const sem157: Record<string, unknown> = { ...payload, ...fiscal, ...extra14, ...b15, ...b18, ...b23, ...b29, ...b69, ...b108 };
+      ({ data, error } = await supabase.from('products').insert(sem157).select().single());
+    } else if (error && /preco_cupom/i.test(error.message || '')) {
       console.warn('Coluna preco_cupom ausente (Bloco 108 nao rodado). Salvando sem ela.');
       const sem108: Record<string, unknown> = { ...payload, ...fiscal, ...extra14, ...b15, ...b18, ...b23, ...b29, ...b69 };
       ({ data, error } = await supabase.from('products').insert(sem108).select().single());
@@ -200,6 +209,7 @@ export const productService = {
       estoqueSemnf: (data.estoque_semnf === null || data.estoque_semnf === undefined) ? undefined : (Number(data.estoque_semnf) || 0),
       produtoTeste: !!data.produto_teste,
       precoEspecialGb: (data.preco_especial_gb === null || data.preco_especial_gb === undefined) ? undefined : (Number(data.preco_especial_gb) || 0),
+      codigoEspecialGb: data.codigo_especial_gb ? String(data.codigo_especial_gb) : undefined,
     } as Product;
     return { ok: true, produto };
   },
@@ -239,11 +249,18 @@ export const productService = {
     if (updates.produtoTeste !== undefined) payload.produto_teste = !!updates.produtoTeste;
     // BLOCO 70: preço especial GB — 0/vazio = sem preço GB (cai no normal)
     if (updates.precoEspecialGb !== undefined) payload.preco_especial_gb = Number(updates.precoEspecialGb) || 0;
+    // BLOCO 157: código do produto ESPECIAL GB — vazio = limpa (NF volta pro código interno)
+    if (updates.codigoEspecialGb !== undefined) payload.codigo_especial_gb = String(updates.codigoEspecialGb || '').trim().slice(0, 60) || null;
     // BLOCO 108: preço cupom — 0 = NFC do modo cupom sai no preço de custo
     if (updates.precoCupom !== undefined) payload.preco_cupom = Number(updates.precoCupom) || 0;
 
     let { data, error } = await supabase.from('products').update(payload).eq('id', id).select().single();
-    if (error && /preco_cupom/i.test(error.message || '')) {
+    if (error && /codigo_especial_gb/i.test(error.message || '')) {
+      console.warn('Coluna codigo_especial_gb ausente (Bloco 157 nao rodado). Atualizando sem ela.');
+      const fb157: Record<string, unknown> = { ...payload };
+      delete fb157.codigo_especial_gb;
+      ({ data, error } = await supabase.from('products').update(fb157).eq('id', id).select().single());
+    } else if (error && /preco_cupom/i.test(error.message || '')) {
       const fb108: Record<string, unknown> = { ...payload };
       delete fb108.preco_cupom;
       ({ data, error } = await supabase.from('products').update(fb108).eq('id', id).select().single());
@@ -315,6 +332,7 @@ export const productService = {
       estoqueSemnf: (data.estoque_semnf === null || data.estoque_semnf === undefined) ? undefined : (Number(data.estoque_semnf) || 0),
       produtoTeste: !!data.produto_teste,
       precoEspecialGb: (data.preco_especial_gb === null || data.preco_especial_gb === undefined) ? undefined : (Number(data.preco_especial_gb) || 0),
+      codigoEspecialGb: data.codigo_especial_gb ? String(data.codigo_especial_gb) : undefined,
     } as Product;
     return { ok: true, produto };
   },

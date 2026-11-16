@@ -72,6 +72,10 @@ export interface Product {
   /** BLOCO 70: PREÇO ESPECIAL GB — preço exclusivo para clientes ESPECIAL GB.
    *  0/undefined/null = produto sem preço GB → cai no preço normal do PDV. */
   precoEspecialGb?: number | null;
+  /** BLOCO 157: CÓDIGO DO PRODUTO ESPECIAL GB — quando a NF-e/NFC-e é emitida
+   *  para um cliente ESPECIAL GB, este código sobe no campo codigo_produto no
+   *  lugar do código interno. Vazio/undefined = usa o código interno normal. */
+  codigoEspecialGb?: string | null;
   /** BLOCO 108 — MODO CUPOM: preço da "caixa" para a NFC anônima do cliente
    *  que quer só cupom (0 = usa o preço de custo do produto). */
   precoCupom?: number;

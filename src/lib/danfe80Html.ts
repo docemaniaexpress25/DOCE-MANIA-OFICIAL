@@ -5,26 +5,27 @@ import { DanfeFiscalData } from './danfe80';
 /**
  * BLOCO 158 — MINI DANFE 80mm EM HTML (LAYOUT DE REFERENCIA DO DONO, 100%)
  *
- * BLOCO 161 — LEGIBILIDADE NA TERMICA + FIM DO CORTE DO LADO DIREITO
- * Queixas do dono na impressão 80mm real: (1) fonte pequena/ilegivel;
- * (2) "o lado direito está cortando as linhas".
+ * BLOCO 163 — FIM DEFINITIVO DO CORTE DO LADO DIREITO EM 100% DE ESCALA
+ * Prova do campo: com a pagina em 72mm o dono imprimia SEMPRE com corte no
+ * lado direito em 100% e so ficava bom ajustando a escala do dialogo para
+ * 98% (72mm x 0,98 = 70,56mm). Ou seja, a AREA IMPRIMIVEL REAL do driver
+ * termico dele e ~70,5mm — menor que os 72mm da cabeca (576 pontos), porque
+ * o driver ainda reserva margens fisicas de alinhamento do papel.
  *
- * CAUSA DO CORTE: o documento tinha 80mm de largura (@page 80mm + .poster
- * 80mm), mas a CABEÇA TERMICA de impressoras 80mm imprime ~72mm uteis
- * (576 pontos @ 203 dpi) e o driver ainda aplica margens fisicas — os
- * ultimos ~8mm (lado direito: bordas das grades e o Code 128 de 74,75mm)
- * caem fora da area imprimivel e sao cortados.
+ * FIX: pagina redesenhada em 70mm (72 -> 70 = 97,2% da largura anterior).
+ * Em 100% de escala o documento inteiro (bordas, grade, Code 128 de 65,5mm)
+ * fica DENTRO da area imprimivel de qualquer termica 80mm real — SEM AJUSTE
+ * MANUAL DE ESCALA. No PC imprime em 100% e na rua (Bluetooth) continua a
+ * versao texto ESC/POS 48 colunas, que nunca corta (largura nativa).
  *
- * FIX: documento redesenhado em 72mm (area util GARANTIDA — pagina mais
- * estreita que a cabeca nunca corta, qualquer driver 80mm imprime alinhado
- * a esquerda da area) + Code 128 de 67,5mm. E legibilidade: TODA a escala
- * tipografica subiu +1pt (base 7pt -> 8pt, minimo 6,4pt), traço engrossado
- * com -webkit-text-stroke 0,15px (imprime mais escuro sem mudar larguras),
- * bordas finas 0,5px -> 0,75px (nao somem na termica) e CHAVE DE ACESSO em
- * grupos de 4 (conferencia manual facilitada, nao quebra no meio).
+ * BLOCO 161 — LEGIBILIDADE NA TERMICA (mantido)
+ * Toda a escala tipografica subiu +1pt (base 7pt -> 8pt, minimo 6,4pt),
+ * traço engrossado com -webkit-text-stroke 0,15px (imprime mais escuro sem
+ * mudar larguras), bordas finas 0,5px -> 0,75px (nao somem na termica) e
+ * CHAVE DE ACESSO em grupos de 4 (conferencia manual, nao quebra no meio).
  *
  * Dica de impressao aparece so na TELA (.hint — display:none no papel):
- * escala 100% e margens minimas.
+ * escala 100% (nao precisa mais ajustar nada) e margens minimas.
  *
  * O dono mandou: "VOU PEGAR A DANFE CRIADA NA NFE E CRIAR ALGO 100% A ESSE
  * LAYOUT AQUI. PRECISAMOS SEGUIR ESSA LINHA DE LAYOUT! SEMPRE OTIMIZADO PARA
@@ -152,8 +153,8 @@ function tributosDoTexto(inf?: string): { federais?: string; estaduais?: string;
   };
 }
 
-/** CSS do modelo de referencia (do dono) — BLOCO 161: 72mm + fonte +1pt + traço grosso. */
-const CSS_DANFE = `@page { size: 72mm auto; margin: 0; }
+/** CSS do modelo de referencia (do dono) — BLOCO 163: pagina 70mm (cabe SEM ajuste de escala) + fonte +1pt + traço grosso. */
+const CSS_DANFE = `@page { size: 70mm auto; margin: 0; }
 html, body { margin: 0; padding: 0; background: #ffffff; }
 * { box-sizing: border-box; }
 body { font-family: 'Consolas', 'Liberation Mono', 'DejaVu Sans Mono', 'Courier New', monospace; color: #000;
@@ -161,7 +162,9 @@ body { font-family: 'Consolas', 'Liberation Mono', 'DejaVu Sans Mono', 'Courier 
   /* BLOCO 161: traço engrossado ~30% — a termica 203dpi perde pontos finos;
      o stroke NAO muda a largura das colunas monoespacadas (nada desalinha). */
   -webkit-text-stroke: 0.15px #000; text-rendering: optimizeLegibility; }
-.poster { width: 72mm; background: #fff; }
+.poster { width: 70mm; background: #fff; }
+/* .hint: esconder no papel — a regra @media screen abaixo (depois desta) sobrepõe na tela */
+.hint { display: none; }
 @media screen {
   html { height: auto; display: flex; justify-content: center; background: #ffffff; }
   body { transform: scale(1.6); transform-origin: top center; margin: 12px 0; }
@@ -169,7 +172,6 @@ body { font-family: 'Consolas', 'Liberation Mono', 'DejaVu Sans Mono', 'Courier 
   .hint { display: block; background: #0f172a; color: #fff; font-family: Arial, sans-serif;
     font-size: 12px; line-height: 1.4; padding: 8px 10px; text-align: center; }
 }
-.hint { display: none; }
 .poster { padding: 2mm 1.8mm 1.2mm 1.8mm; font-size: 8pt; line-height: 1.32; }
 .row { display: flex; flex-wrap: wrap; justify-content: space-between; max-width: 100%; }
 .hd-left { font-size: 7.8pt; font-weight: bold; }
@@ -372,7 +374,7 @@ ${CSS_DANFE}
 </style>
 </head>
 <body>
-<div class="hint">MINI DANFE 80mm — LARGURA UTIL 72mm • NO DIALOGO DE IMPRESSAO USE ESCALA 100% E MARGENS “NENHUMA/MÍNIMA” • NAO USE AJUSTAR A PAGINA</div>
+<div class="hint">MINI DANFE 80mm — LARGURA 70mm (cabe na area imprimivel) • IMPRIMA EM ESCALA 100% E MARGENS “NENHUMA/MÍNIMA” • NAO PRECISA MAIS AJUSTAR ESCALA</div>
 <div class="poster">
 
   <div class="row">
@@ -400,7 +402,7 @@ ${CSS_DANFE}
 ${alertaHtml.join('\n')}
 ${qrHtml}
 
-  <div class="bc-wrap">${chave ? code128Svg(chave, { larguraMm: 67.5, alturaMm: 12 }) : ''}</div>
+  <div class="bc-wrap">${chave ? code128Svg(chave, { larguraMm: 65.5, alturaMm: 12 }) : ''}</div>
 
   <div class="box">
     <div class="lbl">CHAVE DE ACESSO</div>

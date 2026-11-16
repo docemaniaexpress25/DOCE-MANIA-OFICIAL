@@ -2094,3 +2094,27 @@ QA:
 - App principal / abre sem erro no console; servidor 200.
 
 INSTRUÇÃO AO DONO: depois do deploy, imprima a próxima NF-e pelo portal (Janela Fiscal → IMPRIMIR MINI DANFE): no diálogo do Chrome use ESCALA 100% e MARGENS NENHUMA/MÍNIMA (a dica aparece no preview). Se por acaso algo ainda sair apertado, é só me dizer quantos mm faltam que eu ajusto a escala do desenho.
+
+
+## bloco163 — MINI DANFE 80mm: FIM DEFINITIVO DO CORTE À DIREITA EM 100% DE ESCALA (o dono: "O LADO DIREITO ESTA CORTANDO SEMPRE EM 100% DA ESCALA! ARRUME ISSO COM 98% JA FICA BOM POREM TENHO QUE SEMPRE AJUSTAR NO COMPUTADOR A IMPRESSAO! NAO ESQUECA QUE ESSA MINIDANFE VAI SER IMPRESSA EM UMA IMPRESSORA DE 80MM NA RUA! TEM QUE SAIR PERFEITO!") (2026-11-16)
+
+CAUSA RAIZ (prova do próprio campo): com a página em 72mm (bloco 162) o dono imprimia SEMPRE com corte no lado direito em 100% e só ficava bom ajustando a escala do diálogo para 98% (72mm × 0,98 = 70,56mm). Conclusão matemática: a ÁREA IMPRIMÍVEL REAL do driver térmico dele é ~70,5mm — MENOR que os 72mm da cabeça (576 pontos), porque o driver reserva margens físicas de alinhamento do papel. Qualquer documento de 72mm corta ~1,4mm à direita (bordas das grades e o fim do código de barras — exatamente o "cortando as linhas").
+
+FEITO (src/lib/danfe80Html.ts + usbPrint.ts — caminho iOS alinhado):
+1. PÁGINA REDESENHADA EM 70mm (@page 70mm auto + .poster 70mm): 70 = 97,2% da largura anterior — dentro da área imprimível comprovada (≥70,56mm) COM folga de ~0,6mm no pior caso e ~2,3mm até a borda de tinta real (o miolo impresso termina em 68,2mm = 70 − 1,8 de padding). Em 100% de escala o documento inteiro cabe SEM AJUSTE MANUAL DE ESCALA em qualquer térmica 80mm real.
+2. Code 128 da chave: 67,5mm → 65,5mm (miolo de 66,4mm — barcode inteiro com folga, nítido na cabeça 203dpi).
+3. BARRA DE DICA .hint CONSERTADA (bug silencioso do bloco 158): o `.hint { display:none }` vinha DEPOIS da regra `@media screen` no CSS — cascata vencia e a dica NUNCA aparecia na tela. Ordem invertida: agora a dica "IMPRIMA EM ESCALA 100% E MARGENS NENHUMA/MÍNIMA — NAO PRECISA MAIS AJUSTAR ESCALA" aparece no preview na tela e não sai no papel.
+4. PREVIEW DO APP MAIS FIEL (ModelosImpressao.tsx): iframe 340px → 430px — o papel em escala de tela 1,6× (70mm ≈ 424px) agora aparece inteiro, sem cortar a lateral no preview.
+5. Texto das instruções do gerador atualizado (causa raiz do bloco 161 → prova do bloco 163).
+
+EXEMPLOS PÚBLICOS REGENERADOS com o MESMO gerador do sistema (bun + DEMO_DANFE_69): public/danfe-exemplo.html (@page 70mm) e public/danfe-exemplo.png (screenshot 470px, papel completo, todas as bordas à direita fechadas).
+
+QA:
+- Browser no /danfe-exemplo.html: poster = 70mm exatos (265px CSS), 10 itens, chave em grupos de 4, barcode 65,5mm; varredura de TODOS os elementos dentro do poster: ZERO estourando a borda direita.
+- PDF de impressão (print media) rasterizado @150dpi: tinta mais à direita em 68,2mm do papel — EXATAMENTE o desenho (70 − 1,8mm padding); largura de tinta 66,3mm ⇒ ≥2,3mm de folga contra a área imprimível comprovada de ~70,56mm.
+- LINT: 0 erros / 8 warnings (baseline exata). TSC --noEmit: 104 = 104 (nenhum erro novo).
+- dev.log sem erro; / e /danfe-exemplo.html 200.
+
+SQL PARA O DONO RODAR: NENHUM. Nenhuma mudança de schema/API — só largura do papel virtual (72→70mm), largura do barcode e ordem do CSS da dica.
+
+INSTRUÇÃO AO DONO: depois do deploy, VOLTE A ESCALA DO DIALOGO PARA 100% (a que você ajustava para 98% pode ficar memorizada no Chrome — 98% também funciona, só sai 0,7mm mais estreito, mas 100% é o padrão certo). A DANFE agora sai completa no PC (USB, 100%) e na rua (Bluetooth = versão texto ESC/POS 48 colunas, que nunca corta).

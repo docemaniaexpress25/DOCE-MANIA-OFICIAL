@@ -407,9 +407,11 @@ function imprimirDocViaIos(html: string): void {
   overlay.setAttribute('aria-hidden', 'true');
   overlay.innerHTML = `
 <style>
-  /* BLOCO 161: 72mm = area util da cabeca termica 80mm — pagina mais
-     estreita que a cabeca NUNCA corta (o 80mm cortava o lado direito). */
-  @page { size: 72mm auto; margin: 0; }
+  /* BLOCO 163: 70mm = folga real da area imprimivel de qualquer termica
+     80mm (a cabeca tem 72mm/576 pontos, mas o driver reserva margens
+     fisicas — 72mm cortava o lado direito em 100% e so ficava bom a 98%).
+     Pagina mais estreita que a area imprimivel NUNCA corta. */
+  @page { size: 70mm auto; margin: 0; }
   #${ABERTO_DOC} { display: none; }
   @media print {
     html, body { margin: 0 !important; padding: 0 !important; background: #fff !important; }

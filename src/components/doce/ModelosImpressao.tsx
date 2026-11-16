@@ -135,7 +135,7 @@ const ModelosImpressao: React.FC<ModelosImpressaoProps> = ({ abrir, onClose, cup
               srcDoc={htmlDanfe}
               title="Mini DANFE 80mm"
               onLoad={ajustarAlturaIframe}
-              className="w-[340px] max-w-full mx-auto block bg-white rounded shadow-lg border-0"
+              className="w-[430px] max-w-full mx-auto block bg-white rounded shadow-lg border-0"
               style={{ minHeight: '320px' }}
             />
           ) : (

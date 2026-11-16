@@ -1939,3 +1939,18 @@ QA PÓS-DEPLOY NA PRODUÇÃO (2026-11-16, deploy acb11d0..23d7467 no ar):
 - BUSCAR TODAS NA FOCUS: modal → BUSCAR AGORA → 3x POST /api/notas-importar → 200. A varredura PUXOU O QUE FALTAVA: autorizadas 7 → 12 (+5), canceladas 1 → 3 (+2), total 64 → 71 no período, DANFE/XML no sistema 8 → 15. A sincronização que o dono reclamou está puxando de verdade.
 - Filtro ORIGEM: Painel da Focus → TODAS(13)/AUTORIZADA(10) corretos; busca por ref/numero ("154") → 1 resultado exato (Nº 154 NF-E · FOCUS · girardi sul atacado ltda · AUTORIZADA, com PDF/XML/WhatsApp/rotação/editar/excluir na linha).
 - Console sem erros. Lint 0 erros / 8 warnings e tsc 104 = 104 idêntico ao bloco 153 (diff linha a linha, nenhum erro novo) revalidados antes do push.
+
+## bloco155 — BOTÃO CANCELAR DE VOLTA NA AVULSA FOCUS (o dono: "o botao de cancelar sumio e nao consigo cancelar a nf 154! arrume isso") (2026-11-16)
+
+CAUSA RAIZ: `podeCancelar` no portal exigia `!n.avulsa` — linhas "fora do app" (importadas da Focus e as CONGELADAS de venda excluída, que hoje usam ref VENDA-*) nunca ganhavam o ícone de cancelar. A NF 154 (girardi sul atacado ltda, R$ 0,00, autorizada 16/11 08:03, ref VENDA-2ea01f89…) era exatamente esse caso.
+
+FEITO:
+1. NOVA AÇÃO CANCELAR_AVULSA no /api/notas-admin (sessão admin do portal): resolve a meta pelo ref/saleId AVULSA-*, bloqueia XML de TERCEIRO (emissor é outro CNPJ — cancelamento é do emissor original), só AUTORIZADO cancela, GUARDA DO PRAZO SEFAZ (NFC-e 30min / NF-e 24h) com a data REAL de autorização da meta (sem base confiável = a SEFAZ decide, nunca bloqueia por chute), cancela pela MESMA função já provada do cancelamento de vendas (DELETE /v2/{doc}/{ref} na Focus com justificativa >= 15), REIMPORTA a avulsa (status CANCELADO + XML do cancelamento arquivado no Storage) preservando pagamento/observação/vendedor locais, e mostra CANCELADO desde já mesmo se a propagação do status demorar (filosofia do bloco 147).
+2. UI do portal: podeCancelar agora aceita avulsa FOCUS com ref (chips AUTORIZADA/EMITINDO + dentro do prazo como antes); o modal de cancelamento funciona igual (contagem regressiva ao vivo mostrou "restam 22h 16min — regra SEFAZ: 24 horas" na NF 154); o POST ramifica para CANCELAR_AVULSA quando a linha é avulsa (saleId não se aplica — a venda nem existe).
+
+QA:
+- Lint 0 erros / 8 warnings; tsc 104 = 104 IDÊNTICO ao bloco 154 (diff linha a linha, nenhum erro novo).
+- agent-browser no portal LOCAL (código novo): NF 154 ganhou o ícone de cancelar na posição correta (entre editar e excluir); modal abriu com o dado certo da nota e a contagem "RESTAM 22H 16MIN (REGRA SEFAZ: 24 HORAS)"; validação de justificativa presente. Confirmação NÃO clicada (cancelamento é irreversível — decisão do dono).
+- PRODUÇÃO pós-deploy (57148fd no ar): AUTH ok; CANCELAR_AVULSA testado com uma avulsa JÁ CANCELADA (Nº 27, ref VENDA-b4b9bd31) → HTTP 422 "Situação \"CANCELADO\" não permite cancelamento — só nota AUTORIZADA pode ser cancelada na SEFAZ." — prova a rota nova no ar com auth + meta lookup + guarda de status, SEM tocar em nota autorizada.
+- PLOT TWIST DO TESTE: durante a verificação a NF 154 apareceu CANCELADA no portal (canceladas 3 → 4) — o cancelamento foi feito no PAINEL DA FOCUS (não foi pelo nosso portal nem pelo QA) e o STATUS CHEGOU SOZINHO ao portal (webhook/cron) — é o sincronismo de status do bloco 154 funcionando na prática. DANFE/XML arquivados (pdfLocal/xmlLocal true).
+- LIMITAÇÃO HONESTA: nenhum cancelamento REAL foi disparado pelo portal (irreversível) — o caminho de cancelamento usa a MESMA cancelarNota() já provada em produção pelo cancelamento de vendas (bloco 147). Quando o dono cancelar a próxima nota autorizada pela avulsa, o fluxo completo (reimport + XML do cancelamento) roda.

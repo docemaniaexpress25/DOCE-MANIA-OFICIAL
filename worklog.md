@@ -2014,3 +2014,23 @@ QA:
 - agent-browser REAL: public/danfe-exemplo.html renderizou 1:1 com o modelo do dono (comparação lado a lado dos 2 screenshots: cabeçalho, destaque, barras, chave/protocolo, emitente/destinatário, datas, 10 itens com CST/CFOP, cálculo do imposto 3x4, transportador, dados adicionais, fisco, footer, recebimento). Única diferença consciente: o modelo mostrava "TEL:" do emitente — o sistema não tem telefone do emitente no payload fiscal, linha omitida.
 - Code 128 validado visualmente (padrão de barras nítido, largura 74.75mm) e app principal sem erro no console após recarregar.
 - LIMITAÇÃO HONESTA: impressão térmica física não pode ser testada no sandbox — o papel sai pelo MESMO diálogo de impressão do canal USB (já provado em produção) agora com o documento novo; o dono imprime a NF-e 69 de teste ou a próxima nota e confere o rolo.
+
+## bloco159 — HOTFIX DEPLOY VERCEL (o dono: "ERRO NO DEPLOY DA VERCEL! Build error occurred Error: ENOENT: no such file or directory, open '/vercel/path0/.next/next-server.js.nft.json' ... [BUILD_UTILS_SPAWN_1] Command "npm run build" exited with 1") (2026-11-16)
+
+CAUSA RAIZ (prova linha a linha no git): o commit 606bcf1 (UUID automático, entre o 156 e o 157) CRIOU o package-lock.json no repositório (15.353 linhas, npm install acidental junto com screenshots de QA). ANTES dele o repo só tinha bun.lock e a Vercel instalava com BUN — next 16.1.3, exatamente a árvore do sandbox, e TODOS os deploys (153→156) passavam. DEPOIS dele a Vercel passou a detectar npm (package-lock.json tem precedência na detecção) e instalou next 16.3.1 (resolvido pelo npm, DIFERENTE do bun.lock) — e a build com next 16.3.1 + output "standalone" (inútil na Vercel, é coisa de self-host) quebrou na etapa de file tracing com o ENOENT .next/next-server.js.nft.json. Drift de versão do Next entre sandbox (bun 16.1.3) e Vercel (npm 16.3.1).
+
+FEITO (defesa em 3 camadas):
+1. package-lock.json REMOVIDO do repo e colocado no .gitignore — bun.lock volta a ser a ÚNICA fonte de versões; a Vercel detecta o bun.lock e instala EXATAMENTE a mesma árvore que roda no sandbox (next 16.1.3, a versão de todos os deploys que passaram). Os 2 arquivos de código que vieram no mesmo commit (api/boletos-sync e lib/impressao.ts) são reais e foram PRESERVADOS.
+2. next FIXADO em "16.1.3" EXATO no package.json (sem ^) — nenhum resolvedor (npm/bun/CI) pode subir a versão por conta própria de novo.
+3. Build Vercel-safe: next.config usa output "standalone" APENAS fora da Vercel (process.env.VERCEL ? undefined : "standalone"); "npm run build" virou "next build" PURO e o caminho self-host (cp .next/static + public para .next/standalone) morou no script novo "build:standalone" (o start do standalone continua igual).
+
+SQL PARA O DONO RODAR: NENHUM.
+
+QA:
+- LINT: 0 erros / 8 warnings (baseline exata do bloco 153).
+- Dev local reiniciou limpo após a mudança de next.config (log: Next.js 16.1.3 Turbopack, Ready, / e /api/users 200).
+- bun.lock confirma next@16.1.3 = package.json fixado (nenhum lock novo gerado; árvore local intacta).
+- TSC não revalidado: nenhum arquivo TypeScript foi alterado neste bloco (só package.json/next.config/.gitignore).
+
+INSTRUÇÃO AO DONO: o deploy deste push já invalida cache automaticamente (lockfile/config mudaram); se a Vercel falhar de novo por qualquer motivo, use "Redeploy" com "Use existing Build Cache" DESMARCADO. Este deploy leva TAMBÉM os blocos 157 e 158 que não chegaram ao ar (EAN limpa de verdade + Código Especial GB + MINI DANFE 80mm — exemplo público em /danfe-exemplo.png e /danfe-exemplo.html).
+

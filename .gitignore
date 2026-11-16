@@ -36,6 +36,11 @@ yarn-error.log*
 # vercel
 .vercel
 
+# BLOCO 159: lockfile do npm FORA do repo — bun.lock e a unica fonte de
+# versoes; com package-lock.json presente a Vercel usa npm e instala versoes
+# de Next diferentes do ambiente que roda de verdade (causa do erro nft.json)
+/package-lock.json
+
 
 # typescript
 *.tsbuildinfo

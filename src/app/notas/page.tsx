@@ -167,6 +167,10 @@ function tipoDe(tipo: string, modoNota: string): 'NFE' | 'NFCE' {
 type FiltroStatus = 'TODAS' | 'AUTORIZADA' | 'EMITINDO' | 'PENDENTE' | 'REJEITADA' | 'CANCELADA';
 type FiltroPeriodo = 'TUDO' | 'HOJE' | '7D' | '30D' | 'MES';
 type FiltroTipo = 'TODOS' | 'NFE' | 'NFCE';
+// BLOCO 154: origem do documento — APP (venda do sistema), FOCUS (nota do
+// painel da Focus importada) ou XML (sistema de terceiros). Nota arquivada de
+// venda excluída entra em FOCUS (veio da API da Focus).
+type FiltroOrigem = 'TODAS' | 'APP' | 'FOCUS' | 'XML';
 
 const PERIODO_META: { key: FiltroPeriodo; label: string }[] = [
   { key: 'HOJE', label: 'Hoje' },
@@ -239,7 +243,10 @@ export default function PortalNotasPage() {
   const [busca, setBusca] = useState('');
   const [filtro, setFiltro] = useState<FiltroStatus>('TODAS');
   const [filtroTipo, setFiltroTipo] = useState<FiltroTipo>('TODOS');
+  const [filtroOrigem, setFiltroOrigem] = useState<FiltroOrigem>('TODAS');
   const [periodo, setPeriodo] = useState<FiltroPeriodo>('TUDO');
+  // BLOCO 154: sincronização de STATUS com a Focus (botão no cabeçalho)
+  const [syncBusy, setSyncBusy] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
 
   // Importação da Focus (PDF/XML dentro do sistema)
@@ -431,12 +438,15 @@ export default function PortalNotasPage() {
   // BLOCO 146: filtro por TIPO (NF-e / NFC-e) + regra do dono "a última nota
   // batida sempre em primeiro lugar (de cima pra baixo)" — reordena pela
   // emissão do documento mesmo que a API venha com ordenação antiga.
+  // BLOCO 154: filtro por ORIGEM (app / Focus / XML) + busca também pela REF.
+  const origemDe = (n: NotaRow): Exclude<FiltroOrigem, 'TODAS'> => (!n.avulsa ? 'APP' : String(n.origem || 'FOCUS') === 'XML' ? 'XML' : 'FOCUS');
   const listaFiltrada = useMemo(() => {
     const q = busca.trim().toLowerCase();
     // BLOCO 150: o chip "Pendente" filtra pelo status real NAO_EMITIDA
     const filtroStatus = filtro === 'PENDENTE' ? 'NAO_EMITIDA' : filtro;
     const base = notas.filter(n => {
       if (filtroTipo !== 'TODOS' && tipoDe(n.tipo, n.modoNota) !== filtroTipo) return false;
+      if (filtroOrigem !== 'TODAS' && origemDe(n) !== filtroOrigem) return false;
       if (filtro !== 'TODAS' && String(n.status || '').toUpperCase() !== filtroStatus) return false;
       if (!dentroPeriodo(n.dataVenda, periodo)) return false;
       if (!q) return true;
@@ -445,12 +455,13 @@ export default function PortalNotasPage() {
         (n.cliente || '').toLowerCase().includes(q) ||
         (n.clienteDoc || '').toLowerCase().includes(q) ||
         (n.chave || '').includes(q) ||
+        (n.ref || '').toLowerCase().includes(q) ||
         (n.vendedor || '').toLowerCase().includes(q)
       );
     });
     const batida = (n: NotaRow): string => String(n.emitidaEm || n.dataVenda || '');
     return [...base].sort((a, b) => batida(b).localeCompare(batida(a)));
-  }, [notas, busca, filtro, filtroTipo, periodo]);
+  }, [notas, busca, filtro, filtroTipo, filtroOrigem, periodo]);
 
   const kpis = useMemo(() => {
     const visiveis = notas.filter(n => dentroPeriodo(n.dataVenda, periodo));
@@ -477,6 +488,7 @@ export default function PortalNotasPage() {
     const q = busca.trim().toLowerCase();
     return notas.filter(n => {
       if (filtroTipo !== 'TODOS' && tipoDe(n.tipo, n.modoNota) !== filtroTipo) return false;
+      if (filtroOrigem !== 'TODAS' && origemDe(n) !== filtroOrigem) return false;
       if (!dentroPeriodo(n.dataVenda, periodo)) return false;
       if (!q) return true;
       return (
@@ -484,10 +496,11 @@ export default function PortalNotasPage() {
         (n.cliente || '').toLowerCase().includes(q) ||
         (n.clienteDoc || '').toLowerCase().includes(q) ||
         (n.chave || '').includes(q) ||
+        (n.ref || '').toLowerCase().includes(q) ||
         (n.vendedor || '').toLowerCase().includes(q)
       );
     });
-  }, [notas, busca, filtroTipo, periodo]);
+  }, [notas, busca, filtroTipo, filtroOrigem, periodo]);
 
   const contagem = useCallback((f: FiltroStatus) => {
     if (f === 'TODAS') return listaSemStatus.length;
@@ -614,6 +627,8 @@ export default function PortalNotasPage() {
     if (!token || importBusy) return;
     setImportBusy(true);
     let okCount = 0, falhas = 0, semArq = 0, avulsasNovas = 0;
+    // BLOCO 154: notas órfãs (venda excluída) reconstituídas nas rodadas AVULSAS
+    let reconstituidasTotais = 0;
     try {
       setImportProg({ fase: 'Notas do app', done: 0, total: 0 });
       for (let i = 0; i < 50; i++) {
@@ -643,6 +658,7 @@ export default function PortalNotasPage() {
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) break;
         avulsasNovas += Number(data.novas) || 0;
+        reconstituidasTotais += Number(data.reconstituidas) || 0;
         if (data.suportado === false) avulsasMsg = String(data.msg || '');
         // BLOCO 150: gatilho quebrado na Focus = notas novas NUNCA chegam em
         // tempo real — o dono precisa ver isso na hora (era o buraco NFC-e).
@@ -652,6 +668,8 @@ export default function PortalNotasPage() {
       }
       const partes = [`${okCount} nota(s) arquivada(s)`];
       if (avulsasNovas > 0) partes.push(`${avulsasNovas} do painel da Focus`);
+      // BLOCO 154: notas recuperadas de venda excluída (arquivos nossos + Focus)
+      if (reconstituidasTotais > 0) partes.push(`${reconstituidasTotais} recuperada(s) de venda excluída`);
       if (semArq > 0) partes.push(`${semArq} sem arquivo ainda`);
       if (falhas > 0) partes.push(`${falhas} com falha`);
       showToast(avulsasMsg && avulsasNovas === 0 ? `Arquivamento concluído (${partes.join(' · ')}). ${avulsasMsg}` : `Importação concluída: ${partes.join(' · ')}.`);
@@ -690,6 +708,30 @@ export default function PortalNotasPage() {
     } catch {
       showToast('Falha de conexão ao importar.', false);
     } finally { setPasteBusy(false); }
+  };
+
+  // ---------- BLOCO 154: SINCRONIZAR STATUS COM A FOCUS ----------
+  // "O portal deve ser 100% funcional e sincronizado com a api focus
+  // principalmente na questao de quando muda o status da nota" — este botao
+  // faz o MESMO trabalho do cron notas-sync sob demanda: reconsulta as notas
+  // EMITINDO da venda na Focus (autorizou? cancelou? rejeitou?) e atualiza os
+  // status das AVULSAS que ainda nao estao em estado final.
+  const sincronizarStatus = async () => {
+    if (!token || syncBusy) return;
+    setSyncBusy(true);
+    try {
+      const res = await fetch('/api/notas-sync', { headers: headers(token) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) { showToast(data.erro || 'Falha ao sincronizar com a Focus.', false); return; }
+      const partes: string[] = [];
+      if (Number(data.processadas) > 0) partes.push(`${data.processadas} nota(s) do app reconsultada(s)`);
+      if (Number(data.autorizadas) > 0) partes.push(`${data.autorizadas} autorizada(s) agora`);
+      if (Number(data.avulsasAtualizadas) > 0) partes.push(`${data.avulsasAtualizadas} status de avulsa atualizado(s)`);
+      showToast(partes.length > 0 ? `Sincronizado com a Focus: ${partes.join(' · ')}.` : 'Sincronizado — nada pendente na Focus agora.');
+      void carregar(token);
+    } catch {
+      showToast('Falha de conexão ao sincronizar.', false);
+    } finally { setSyncBusy(false); }
   };
 
   const atualizarAvulsa = async (n: NotaRow) => {
@@ -1041,6 +1083,15 @@ export default function PortalNotasPage() {
             </div>
             <div className="flex-1" />
             <div className="flex items-center gap-2 shrink-0">
+              {/* BLOCO 154: sincronização de STATUS com a Focus sob demanda */}
+              <button
+                onClick={() => void sincronizarStatus()}
+                disabled={syncBusy}
+                className="bg-sky-400 hover:bg-sky-300 disabled:opacity-60 text-sky-950 rounded-xl px-3.5 h-9 text-[10px] font-black uppercase tracking-wider active:scale-95 transition-all shadow-lg shadow-sky-900/30 flex items-center gap-1.5"
+                title="Reconsulta a Focus e atualiza o STATUS das notas (autorizou, cancelou, rejeitou) — mesmo trabalho do cron automático, agora na mão"
+              >
+                <i className={`fa-solid fa-arrows-rotate ${syncBusy ? 'fa-spin' : ''}`}></i>{syncBusy ? 'Sincronizando...' : 'Sincronizar status'}
+              </button>
               <button
                 onClick={() => { setXmlOpen(true); setXmlRes(null); }}
                 className="bg-teal-400 hover:bg-teal-300 text-teal-950 rounded-xl px-3.5 h-9 text-[10px] font-black uppercase tracking-wider active:scale-95 transition-all shadow-lg shadow-teal-900/30 flex items-center gap-1.5"
@@ -1052,14 +1103,14 @@ export default function PortalNotasPage() {
                 onClick={() => setConf({
                   titulo: 'Buscar TODAS na Focus?',
                   texto: 'A varredura busca TODAS as notas do CNPJ na API da Focus (do app e do painel), baixa PDF e XML e arquiva tudo dentro do sistema. Pode demorar alguns minutos.',
-                  detalhe: 'Notas que já estão arquivadas são puladas (nunca duplica).',
+                  detalhe: 'Notas já arquivadas são puladas (nunca duplica). Notas de vendas EXCLUÍDAS também voltam — os arquivos ficaram no sistema e a nota é reimportada da Focus com o status real.',
                   icone: 'fa-cloud-arrow-down',
                   botao: 'Buscar agora',
                   run: importarTudo,
                 })}
                 disabled={importBusy}
                 className="bg-emerald-400 hover:bg-emerald-300 disabled:opacity-60 text-emerald-950 rounded-xl px-3.5 h-9 text-[10px] font-black uppercase tracking-wider active:scale-95 transition-all shadow-lg shadow-emerald-900/30 flex items-center gap-1.5"
-                title="Varre a API da Focus (NF-e + NFC-e do CNPJ) e grava PDF (DANFE) e XML de TODAS as notas DENTRO do sistema"
+                title="Varre a API da Focus (NF-e + NFC-e do CNPJ) e grava PDF (DANFE) e XML de TODAS as notas DENTRO do sistema — inclusive notas de vendas excluídas"
               >
                 <i className={`fa-solid fa-cloud-arrow-down ${importBusy ? 'fa-bounce' : ''}`}></i>{importBusy ? 'Importando...' : 'Buscar TODAS na Focus'}
               </button>
@@ -1109,7 +1160,7 @@ export default function PortalNotasPage() {
           <input
             value={busca}
             onChange={e => setBusca(e.target.value)}
-            placeholder="Buscar por número, cliente, CNPJ, chave ou vendedor..."
+            placeholder="Buscar por número, cliente, CNPJ, chave, ref ou vendedor..."
             className="w-full pl-9 pr-3 py-2.5 bg-white border border-gray-200 rounded-xl shadow-sm text-xs font-semibold outline-none focus:ring-2 focus:ring-blue-100"
             aria-label="Buscar nota"
           />
@@ -1132,6 +1183,18 @@ export default function PortalNotasPage() {
           <option value="TODOS">NF-e + NFC-e</option>
           <option value="NFE">Só NF-e</option>
           <option value="NFCE">Só NFC-e</option>
+        </select>
+        {/* BLOCO 154: filtro por ORIGEM — app / painel da Focus / XML de terceiro */}
+        <select
+          value={filtroOrigem}
+          onChange={e => setFiltroOrigem(e.target.value as FiltroOrigem)}
+          className="bg-white border border-gray-200 rounded-xl shadow-sm px-3 py-2.5 text-[10px] font-black uppercase text-gray-600 outline-none"
+          aria-label="Origem do documento"
+        >
+          <option value="TODAS">Toda origem</option>
+          <option value="APP">Emitidas no app</option>
+          <option value="FOCUS">Painel da Focus</option>
+          <option value="XML">XML terceiros</option>
         </select>
         <div className="flex gap-1.5 overflow-x-auto">
           {(['TODAS', 'AUTORIZADA', 'PENDENTE', 'EMITINDO', 'REJEITADA', 'CANCELADA'] as FiltroStatus[]).map(f => {

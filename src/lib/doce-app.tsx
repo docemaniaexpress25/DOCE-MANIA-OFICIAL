@@ -900,6 +900,25 @@ const App: React.FC = () => {
   };
 
   const deleteSale = async (id: string) => {
+    // BLOCO 154 (regra do dono): ANTES de apagar a venda, congela a NOTA
+    // FISCAL no Portal Fiscal ("todas as notas geradas pela focus devem ficar
+    // salvas no nosso portal, mesmo que eu exclua a venda"). Best-effort:
+    // falha AVISA e nao bloqueia a exclusao (o portal reimporta depois pelo
+    // backup mensal ou pela ref/chave).
+    try {
+      const { authHeaders } = await import('@/services/userService');
+      const resArq = await fetch('/api/pre-venda', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ acao: 'ARQUIVAR_NOTA_EXCLUSAO', saleId: id }),
+      });
+      const dArq = await resArq.json().catch(() => null);
+      if (!resArq.ok || !dArq?.ok) {
+        setAdminNotification('Atencao: a nota fiscal pode NAO ter sido arquivada no portal. Depois de excluir, use Portal Fiscal > Buscar TODAS na Focus.');
+      }
+    } catch {
+      setAdminNotification('Atencao: sem conexao para arquivar a nota antes da exclusao. Depois, use Portal Fiscal > Buscar TODAS na Focus.');
+    }
     // BLOCO 13: pedido de pre-venda pendente — exclui pela API da fila
     // (nao pode estornar estoque: a baixa so acontece na entrega).
     if (pvPendentesRef.current.has(id)) {
@@ -913,7 +932,7 @@ const App: React.FC = () => {
         const d = await res.json().catch(() => null);
         if (res.ok && d?.ok) {
           pvPendentesRef.current.delete(id);
-          setAdminNotification('Pedido cancelado!');
+          setAdminNotification(d?.aviso ? `Pedido cancelado. ${String(d.aviso)}` : 'Pedido cancelado!');
           fetchTransactionalData();
           return;
         }

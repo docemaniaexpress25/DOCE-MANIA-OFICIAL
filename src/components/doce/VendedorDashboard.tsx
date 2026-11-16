@@ -1319,14 +1319,11 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       setTimeout(() => setViewingSale(null), 0);
       return null;
     }
-    const canDeleteSale = (() => {
-      const saleDate = new Date(viewingSale.data);
-      const now = new Date();
-      const sameDay = saleDate.getFullYear() === now.getFullYear()
-        && saleDate.getMonth() === now.getMonth()
-        && saleDate.getDate() === now.getDate();
-      return sameDay;
-    })();
+    // BLOCO 154 (regra do dono): a exclusao de venda e APENAS do ADMIN — o
+    // vendedor nao tem mais o botao "Estornar / Excluir Venda". Se precisar
+    // excluir um pedido (ou cancelar uma NFC-e/NF-e atrelada), fala com o
+    // admin/escritorio.
+    const canDeleteSale = false;
     return ( <Cupom sale={viewingSale} client={cupomClient} products={products} onClose={() => setViewingSale(null)} onDeleteSale={deleteSale} allowDelete={canDeleteSale} showToast={showToast} allowNota /> );
   }
 

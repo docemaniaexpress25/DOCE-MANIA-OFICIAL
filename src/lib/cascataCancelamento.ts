@@ -29,6 +29,73 @@ import { arquivarNotaCancelada } from '@/lib/focusArquivos';
  * avisos para o admin resolver manualmente.
  */
 
+/**
+ * BLOCO 154 — CONGELA A NOTA DE UMA VENDA NO PORTAL FISCAL (avulsa).
+ *
+ * Regra do dono: "TODAS as notas geradas pela Focus devem ficar salvas no
+ * nosso portal, MESMO QUE EU EXCLUA A VENDA no meu sistema". Chamado:
+ *  - no CANCELAMENTO da nota (finalizarVendaCancelada) — statusFinal CANCELADO;
+ *  - na EXCLUSAO de venda (API pre-venda) — status REAL preservado
+ *    (AUTORIZADA continua AUTORIZADA no portal, com DANFE/XML).
+ *
+ * Enriquece a avulsa com cliente (fantasia), vendedor, numero, chave, valor e
+ * pagamento da venda original. Falha NUNCA sobe excecao — vira motivo para o
+ * chamador avisar o admin (o Portal reimporta depois por ref/chave/backup).
+ */
+export async function arquivarNotaDaVenda(
+  sRow: Record<string, unknown>,
+  opts?: { statusFinal?: string },
+): Promise<{ ok: boolean; motivo?: string }> {
+  const db = getServiceClient();
+  const ref = String(sRow.nota_ref || '');
+  const tipoNota = String(sRow.nota_tipo || '').toUpperCase();
+  if (!ref || (tipoNota !== 'NFCE' && tipoNota !== 'NFE')) return { ok: false, motivo: 'SEM_NOTA' };
+  try {
+    let clienteNome = '';
+    let clienteDoc = '';
+    if (String(sRow.client_id || '')) {
+      const { data: cRow } = await db.from('clients')
+        .select('nome_fantasia, nome, cnpj')
+        .eq('id', String(sRow.client_id)).single();
+      clienteNome = String(cRow?.nome_fantasia || cRow?.nome || '');
+      clienteDoc = String(cRow?.cnpj || '');
+    }
+    let vendedorNome = '';
+    if (String(sRow.vendedor_id || '')) {
+      const { data: vRow } = await db.from('app_users')
+        .select('nome')
+        .eq('id', String(sRow.vendedor_id)).single();
+      vendedorNome = String(vRow?.nome || '');
+    }
+    const st = String(sRow.nota_status || '').toUpperCase();
+    // Exclusao preserva o status REAL da nota — cancelamento continua forçando
+    // CANCELADO (o chamador manda, default mantem o contrato do BLOCO 147).
+    const statusFinal = opts?.statusFinal
+      || (st === 'AUTORIZADA' ? 'AUTORIZADO'
+        : st === 'REJEITADA' ? 'REJEITADO'
+          : st === 'EMITINDO' ? 'EMITINDO'
+            : 'CANCELADO');
+    const rA = await arquivarNotaCancelada(
+      tipoNota === 'NFCE' ? 'nfce' : 'nfe',
+      ref,
+      {
+        numero: String(sRow.nota_numero || ''),
+        chave: String(sRow.nota_chave || ''),
+        valor: Number(sRow.valor_total) || 0,
+        cliente: clienteNome,
+        clienteDoc,
+        pagamento: String(sRow.metodo_pagamento || ''),
+        vendedor: vendedorNome,
+        emitidaEm: String(sRow.nota_emitida_em || ''),
+      },
+      statusFinal,
+    );
+    return rA.ok ? { ok: true } : { ok: false, motivo: rA.motivo || 'erro' };
+  } catch (eA) {
+    return { ok: false, motivo: (eA as Error).message };
+  }
+}
+
 export async function finalizarVendaCancelada(saleId: string): Promise<string[]> {
   const cascade: string[] = [];
   const db = getServiceClient();
@@ -51,40 +118,14 @@ export async function finalizarVendaCancelada(saleId: string): Promise<string[]>
   const sRow = ((sX as unknown) as Record<string, unknown>) || {};
 
   // ----- 0) ARQUIVA A NOTA CANCELADA NO PORTAL (CANCELADAS) -----
+  // BLOCO 154: a congelacao agora e o helper arquivarNotaDaVenda (mesmo
+  // caminho da EXCLUSAO de venda) — um unico codigo para as duas regras.
   const ref = String(sRow.nota_ref || '');
-  const tipoNota = String(sRow.nota_tipo || '').toUpperCase();
-  if (ref && (tipoNota === 'NFCE' || tipoNota === 'NFE')) {
+  if (ref) {
     try {
-      let clienteNome = '';
-      let clienteDoc = '';
-      if (String(sRow.client_id || '')) {
-        const { data: cRow } = await db.from('clients')
-          .select('nome_fantasia, nome, cnpj')
-          .eq('id', String(sRow.client_id)).single();
-        clienteNome = String(cRow?.nome_fantasia || cRow?.nome || '');
-        clienteDoc = String(cRow?.cnpj || '');
-      }
-      let vendedorNome = '';
-      if (String(sRow.vendedor_id || '')) {
-        const { data: vRow } = await db.from('app_users')
-          .select('nome')
-          .eq('id', String(sRow.vendedor_id)).single();
-        vendedorNome = String(vRow?.nome || '');
-      }
-      const rA = await arquivarNotaCancelada(
-        tipoNota === 'NFCE' ? 'nfce' : 'nfe',
-        ref,
-        {
-          numero: String(sRow.nota_numero || ''),
-          valor: Number(sRow.valor_total) || 0,
-          cliente: clienteNome,
-          clienteDoc,
-          pagamento: String(sRow.metodo_pagamento || ''),
-          vendedor: vendedorNome,
-        },
-      );
+      const rA = await arquivarNotaDaVenda(sRow, { statusFinal: 'CANCELADO' });
       if (rA.ok) cascade.push('Nota cancelada arquivada no Portal Fiscal (filtro CANCELADAS)');
-      else cascade.push(`Arquivamento da nota cancelada falhou (${rA.motivo || 'erro'}) — reimporte depois em Ações > Importar`);
+      else if (rA.motivo !== 'SEM_NOTA') cascade.push(`Arquivamento da nota cancelada falhou (${rA.motivo || 'erro'}) — reimporte depois em Ações > Importar`);
     } catch (eA) {
       cascade.push(`Arquivamento da nota cancelada falhou (${(eA as Error).message}) — reimporte depois em Ações > Importar`);
     }

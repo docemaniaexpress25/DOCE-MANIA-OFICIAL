@@ -1899,3 +1899,36 @@ QA:
 - Fluxo à vista pronta entrega: tela 6 só seleção → conferência → tela 8 grava PAGO → SUCESSO mostra nota + CAIXA (dinheiro/troco/QR Pix/misto) → confirmação anota "| CAIXA:" no detalhe.
 - Pré-venda NÃO mudou (DINHEIRO/PIX informativos "entregador cobra na entrega" intactos; MISTO segue bloqueado na UI).
 - Boleto: vencimento do form = data_vencimento da venda; valor = saldo em aberto (igual antes); CEP/CNPJ pagador continuam validados na geração.
+
+## bloco154 — NOTAS INDEPENDENTES DA VENDA (exclusão não apaga mais nota do portal) · SYNC de STATUS com a Focus no portal e no cron · EXCLUSÃO DE VENDA SÓ PRA O ADMIN (2026-11-16)
+
+DONO PEDIU (verbatim): "eu exclui uma venda e automaticamente vc excluiu do portal das notas o nfe! e tentei sincronizar e nao esta puxando! veja todas eu disse todas as notas geradas pela focus devem ficar salvas no nosso portal! mesmo que eu exclua a venda no meu sistema! crie essa regra e melhore os filtros no portal de notas. ele deve ser 100% funcional e sincronizado com api focus principalmente na questao de quando muda o status da nota! libere a exclusao da venda apenas para o admin, se o vendedor quiser excluir uma venda e automaticamente cancelar uma nfc ou nfe ele devera falar conosco!"
+
+CAUSA RAIZ ACHADA (2 buracos):
+1. A nota fiscal vivia como COLUNAS na linha da venda (sales.nota_*). O CANCELAMENTO congelava a nota como avulsa (bloco 147), mas a EXCLUSÃO simples (EXCLUIR_VENDA / RPC do cupom) apagava a linha SEM congelar nada — a NF sumia do portal.
+2. O "sincronizar" não puxava de volta porque a importação usa os BACKUPS MENSAIS da Focus, que são PARCIAIS (dia 1 + sábados) — nota recente não está no ZIP ainda. E os arquivos PDF/XML da nota excluída CONTINUAM no nosso Storage (a exclusão nunca limpou o bucket).
+
+FEITO:
+1. NOTA SOBREVIVE À EXCLUSÃO (a regra nova): ANTES de apagar a venda, a nota é CONGELADA no Portal Fiscal como avulsa com o STATUS REAL (AUTORIZADA continua AUTORIZADA, com DANFE/XML, cliente, valor, pagamento e vendedor da venda original). Três caminhos cobertos:
+   a. API EXCLUIR_VENDA (/api/pre-venda) arquivava antes do delete e devolve aviso se falhar;
+   b. NOVA ação ARQUIVAR_NOTA_EXCLUSAO (admin-only) chamada pelo CUPOM antes do caminho RPC (saleService.deleteSale) — a exclusão pelo cupom também congela;
+   c. cancelamento (cascataCancelamento) unificado no MESMO helper arquivarNotaDaVenda (um só código para as duas regras; statusForçado CANCELADO mantido).
+2. RECUPERAÇÃO DE ÓRFÃS (reconstituirOrfas): lista os arquivos PDF/XML nas pastas NFE/ e NFCE/ do bucket, acha refs/chaves que não pertencem a venda nem a avulsa ("órfãs" = notas de vendas excluídas cujos arquivos ficaram) e REIMPORTA cada uma pela Focus (status real + DANFE/XML clicáveis). Roda dentro de AVULSAS (botão Buscar TODAS na Focus) em TODOS os caminhos de resposta — a nota perdida do dono volta por lá (ou por Importar nota específica com ref/chave).
+3. SYNC DE STATUS 100% ("principalmente na questao de quando muda o status da nota"):
+   a. NOVO BOTÃO "SINCRONIZAR STATUS" no cabeçalho do portal — chama /api/notas-sync (agora aceita sessão do portal; ganhou devBridge como as outras rotas — antes o token do portal nem validava na sync) e reconsulta na Focus as vendas EMITINDO + atualiza status de AVULSAS que ainda não estão em estado final;
+   b. CRON notas-sync (4x/dia, já existente) faz o MESMO trabalho sozinho agora: varre vendas EMITINDO E reconsulta as avulsas não-finais (PROCESSANDO/EMITINDO) — cancelamento tardio/denegação chegam ao portal sem ninguém clicar;
+   c. linhaAvulsa mapeia TODOS os status da Focus (AUTORIZADO/CANCELADO/INUTILIZADO/REJEITADO/ERRO_AUTORIZACAO/DENEGADO/PROCESSANDO_AUTORIZACAO) para os filtros do portal — avulsa autorizada de venda excluída aparecia com status cru antes.
+4. EXCLUSÃO DE VENDA APENAS DO ADMIN: servidor (EXCLUIR_VENDA) devolve 403 com a mensagem "A exclusao de vendas agora e feita APENAS pelo administrador. Para excluir este pedido (ou cancelar uma NF-e/NFC-e atrelada), fale com o admin." para vendedor/entregador/secretário (a janela de "até 11h59" do vendedor SAIU — horaAgoraSP removida). No cupom do VENDEDOR o botão "Estornar / Excluir Venda" NÃO aparece mais (canDeleteSale=false); o ADMIN mantém o botão (confirmado no teste real) e o modal agora avisa "A NOTA FISCAL (se houver) fica arquivada no Portal Fiscal".
+5. FILTROS DO PORTAL MELHORADOS: novo filtro por ORIGEM (Toda origem / Emitidas no app / Painel da Focus / XML terceiros) — as contagens dos chips respeitam a origem; busca agora acha também pela REF; toast da importação mostra "X recuperada(s) de venda excluída"; texto do Buscar TODAS explica que notas de vendas excluídas voltam.
+
+SQL PARA O DONO RODAR: NENHUM (tudo usa o bucket notas-fiscais e colunas que já existem).
+
+ARQUIVOS: api/pre-venda/route.ts (EXCLUIR_VENDA admin-only + congelamento + ARQUIVAR_NOTA_EXCLUSAO), lib/cascataCancelamento.ts (helper arquivarNotaDaVenda), lib/focusArquivos.ts (statusFinal no arquivarNotaCancelada + reconstituirOrfas/refsDasPastas), api/notas-importar/route.ts (órfãs no AVULSAS + reconstituidas na resposta), api/notas-sync/route.ts (devBridge + refresh de avulsas + avulsasAtualizadas), api/notas-admin/route.ts (mapa de status da linhaAvulsa), notas/page.tsx (botão Sincronizar status, filtro de origem, busca por ref, toasts), VendedorDashboard.tsx (sem botão excluir), Cupom.tsx (modal avisa que a NF fica no portal), lib/doce-app.tsx (deleteSale arquiva antes de apagar).
+
+QA:
+- LINT: 0 erros / 8 warnings (baseline exata do bloco 153).
+- TSC --noEmit: 104 ANTES x 104 DEPOIS — NENHUM erro novo (2 erros introduzidos no caminho corrigidos na hora: import de hasBoletoColumns/hasNotaEmitidaEm).
+- agent-browser REAL (PIN 635241): portal /notas logado — lista 64 notas, chips TODAS(64)/AUTORIZADA(7)/PENDENTE(56); botão SINCRONIZAR STATUS clicou e POST /api/notas-sync voltou 200 (após o fix do devBridge — antes dava 401); filtro ORIGEM funcionando (Emitidas no app=58, Painel da Focus=6 com 5 autorizadas, XML terceiros=0 — bate com o rodapé "6 FORA DO APP · 0 VIA XML").
+- API REAL: sem sessão → bloqueado; admin + ação nova ARQUIVAR_NOTA_EXCLUSAO com venda inexistente → "Pedido nao encontrado" (gate de admin passa, ação alcançada); admin no cupom de venda real mantém ESTORNAR/EXCLUIR VENDA com o modal novo (cancelado sem excluir nada).
+- varredura AVULSAS rodou 3x na produção atual (código antigo via bridge): todos os 5 XMLs do backup mensal já estão no sistema — a recuperação de órfãs entra no ar com este deploy.
+- LIMITAÇÃO HONESTA: não excluí venda real (dado de produção) nem validei sessão de vendedor (PINs de produção não estão no sandbox) — o caminho de congelamento usa a MESMA função já provada em produção pelo cancelamento (bloco 147) e os gates foram testados por API. Teste do dono depois do deploy: (1) excluir uma venda com NF como admin → a nota deve PERMANECER no portal (filtro AUTORIZADAS/CANCELADAS) com DANFE/XML; (2) login de vendedor → cupom SEM botão de excluir, API responde "fale com o admin"; (3) portal → SINCRONIZAR STATUS → "nada pendente" ou status atualizado; (4) BUSCAR TODAS NA FOCUS → nota(s) de venda excluída volta(m) ("X recuperada(s) de venda excluída").

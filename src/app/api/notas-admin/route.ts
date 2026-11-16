@@ -141,12 +141,20 @@ function linhaNota(
 
 /** BLOCO 141: avulsa (fora do app) -> mesma forma da linha da tabela. */
 function linhaAvulsa(m: NotaAvulsaMeta, presenca?: { pdf: boolean; xml: boolean; can: boolean }): LinhaNota {
-  const autorizada = m.status === 'AUTORIZADO';
+  // BLOCO 154: mapeia TODOS os status da Focus para os do portal — com a
+  // regra "nota sobrevive a venda excluida", avulsa agora nasce tambem
+  // AUTORIZADO/REJEITADO/EMITINDO (antes so AUTORIZADO/CANCELADO).
+  const st = String(m.status || '').toUpperCase();
+  const status = st === 'AUTORIZADO' ? 'AUTORIZADA'
+    : st.startsWith('CANCELADO') || st === 'INUTILIZADO' ? 'CANCELADA'
+      : st === 'REJEITADO' || st === 'ERRO_AUTORIZACAO' || st === 'DENEGADO' ? 'REJEITADA'
+        : st === 'PROCESSANDO_AUTORIZACAO' || st === 'EMITINDO' || st === 'PROCESSING' ? 'EMITINDO'
+          : st || 'AUTORIZADA';
   return {
     id: `AVULSA-${m.ref}`,
     numero: m.numero,
     tipo: m.doc,
-    status: autorizada ? 'AUTORIZADA' : m.status.startsWith('CANCELADO') ? 'CANCELADA' : m.status || 'AUTORIZADA',
+    status,
     ref: m.ref,
     pdfUrl: '',
     xmlUrl: '',

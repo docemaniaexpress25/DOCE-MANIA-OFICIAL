@@ -13,6 +13,7 @@ import {
   excluirAvulsa,
   docDaChave,
   invalidaPresenca,
+  reconstituirOrfas,
 } from '@/lib/focusArquivos';
 import { FocusDoc, isFocusConfigured, garantirHooksFocus } from '@/lib/focusNfe';
 import { importarLoteXml, XmlLoteArquivo } from '@/lib/xmlNotas';
@@ -33,6 +34,10 @@ import { importarLoteXml, XmlLoteArquivo } from '@/lib/xmlNotas';
  *                                        TODAS as notas do mes — app + PAINEL);
  *                                        cada chave nova importa completa (ate
  *                                        8/chamada). Fallback: varredura legada.
+ *                                        BLOCO 154: recupera tambem as NOTAS
+ *                                        ORFAS (venda excluida, PDF/XML que
+ *                                        ficaram no nosso storage) reimportando
+ *                                        pela Focus com o status real.
  *   { acao: 'ATUALIZAR_AVULSA', ref } -> re-consulta 1 avulsa e atualiza
  *                                        metadados + arquivos.
  *   { acao: 'EXCLUIR_AVULSA', ref }   -> apaga metadados + arquivos da avulsa.
@@ -193,6 +198,16 @@ export async function POST(req: NextRequest) {
     // mes (NFe + NFCe, app + PAINEL). Comprovado real (HTTP 200). Cada chave
     // desconhecida vira avulsa importada completa (DANFE + XML + metadados).
     const backup = await importarDoBackupFocus(LOTE_AVULSAS);
+    // ---------------- BLOCO 154: RECONSTITUICAO DE ORFAS ----------------
+    // Nota de venda EXCLUIDA pelo admin: os arquivos PDF/XML ficaram no nosso
+    // storage, mas a linha sales sumiu — a nota some do portal. Aqui ela volta:
+    // achamos a ref nos arquivos do bucket e reimportamos pela Focus (status
+    // real, DANFE/XML clicaveis). Roda em TODOS os caminhos de resposta.
+    const orfas = await reconstituirOrfas(6).catch(() => null);
+    const orfasNovas = Number(orfas?.reconstituidas) || 0;
+    const orfasMsg = orfasNovas > 0
+      ? ` ${orfasNovas} nota(s) RECUPERADA(S) de venda excluida (arquivos nossos + Focus).`
+      : '';
     if (backup.suportado) {
       const msg = backup.motivo === 'SEM_BACKUPS'
         ? 'Focus sem backups mensais disponiveis ainda (geram depois das primeiras notas do mes).'
@@ -210,12 +225,14 @@ export async function POST(req: NextRequest) {
         ? ' O backup oficial e parcial (sabados): notas emitidas apos o ultimo ZIP chegam em tempo real pelo webhook ou cole a ref/chave do painel.'
         : '';
       return NextResponse.json({
-        ok: true, suportado: true, fonte: 'backups', fim: backup.fim,
-        conhecidas: conhecidas.size, novas: backup.novas, puladas: backup.puladas,
-        erros: backup.erros, totalNaFocus: backup.chavesNoBackup, restantes: backup.restantes,
-        mes: backup.mes || null, mesesComBackup: backup.mesesComBackup, danfesGravados: backup.danfesGravados,
+        ok: true, suportado: true, fonte: 'backups', fim: backup.fim && (orfas?.restantes || 0) === 0,
+        conhecidas: conhecidas.size, novas: backup.novas + orfasNovas, puladas: backup.puladas,
+        erros: backup.erros, totalNaFocus: backup.chavesNoBackup,
+        restantes: Math.max(0, backup.restantes) + Math.max(0, orfas?.restantes || 0),
+        reconstituidas: orfasNovas, mes: backup.mes || null, mesesComBackup: backup.mesesComBackup,
+        danfesGravados: backup.danfesGravados,
         hooksReparados: reparo.criados, hooksFalhas: reparo.falhas,
-        msg: `${msg}${dicaReparo}${dicaParcial}`,
+        msg: `${msg}${orfasMsg}${dicaReparo}${dicaParcial}`,
       });
     }
 
@@ -223,9 +240,10 @@ export async function POST(req: NextRequest) {
     const lista = await listarRefsFocus();
     if (!lista.suportado) {
       return NextResponse.json({
-        ok: true, suportado: false, fim: true, conhecidas: conhecidas.size, novas: 0, puladas: 0, erros: [],
+        ok: true, suportado: false, fim: true, conhecidas: conhecidas.size, novas: orfasNovas, puladas: 0, erros: [],
+        reconstituidas: orfasNovas,
         motivo: lista.motivo || 'listagem indisponivel',
-        msg: `Notas do app conferidas. A listagem por CNPJ nao respondeu nesta conta (${lista.motivo || '?'}). Para uma nota especifica do painel da Focus, use o importador manual (ref ou chave de acesso).`,
+        msg: `Notas do app conferidas.${orfasMsg} A listagem por CNPJ nao respondeu nesta conta (${lista.motivo || '?'}). Para uma nota especifica do painel da Focus, use o importador manual (ref ou chave de acesso).`,
       });
     }
 
@@ -242,9 +260,10 @@ export async function POST(req: NextRequest) {
 
     if (candidatos.length === 0) {
       return NextResponse.json({
-        ok: true, suportado: true, fim: true, conhecidas: conhecidas.size, novas: 0, puladas: 0, erros: [],
+        ok: true, suportado: true, fim: true, conhecidas: conhecidas.size, novas: orfasNovas, puladas: 0, erros: [],
+        reconstituidas: orfasNovas,
         totalNaFocus, listadas: { NFE: lista.docs.NFE, NFCE: lista.docs.NFCE }, cnpj: lista.cnpj,
-        msg: 'Conferido: todas as notas da Focus ja estao no sistema.',
+        msg: orfasNovas > 0 ? `${orfasNovas} nota(s) recuperada(s) de venda excluida.` : 'Conferido: todas as notas da Focus ja estao no sistema.',
       });
     }
 
@@ -260,7 +279,8 @@ export async function POST(req: NextRequest) {
     invalidaPresenca();
     const fim = novas + puladas + erros.length >= candidatos.length;
     return NextResponse.json({
-      ok: true, suportado: true, fim, conhecidas: conhecidas.size, novas, puladas, erros: erros.slice(0, 8),
+      ok: true, suportado: true, fim, conhecidas: conhecidas.size, novas: novas + orfasNovas, puladas, erros: erros.slice(0, 8),
+      reconstituidas: orfasNovas,
       totalNaFocus, listadas: { NFE: lista.docs.NFE, NFCE: lista.docs.NFCE }, cnpj: lista.cnpj,
       restantes: Math.max(0, candidatos.length - novas - puladas - erros.length),
     });

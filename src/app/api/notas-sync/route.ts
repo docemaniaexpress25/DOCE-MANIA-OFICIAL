@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServiceClient } from '@/lib/serverSupabase';
+import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/serverSupabase';
 import { sessionFromRequest } from '@/lib/session';
 import { hasNotaColumns, hasBoletoColumns } from '@/lib/serverSchema';
 import { isFocusConfigured, consultarNota, interpretarResultado, FocusDoc, garantirHooksFocus } from '@/lib/focusNfe';
+// BLOCO 154: as notas AVULSAS (painel da Focus / XML de terceiro / arquivadas
+// de venda excluida) tambem sincronizam status no cron.
+import { listarMetasAvulsas, importarAvulsa, invalidaPresenca } from '@/lib/focusArquivos';
 
 /**
  * BLOCO 108 — SINCRONIZACAO AUTOMATICA DE NOTAS (cron da Vercel).
@@ -25,6 +28,14 @@ import { isFocusConfigured, consultarNota, interpretarResultado, FocusDoc, garan
 const LIMITE = 15;
 
 export async function GET(req: NextRequest) {
+  // Preview/bridge primeiro (padrao do projeto): no sandbox quem responde e a
+  // producao — o token do portal do admin nasce assinado LA, entao a roda de
+  // "Sincronizar status" do portal só valida se rodar no mesmo ambiente.
+  if (!isServerSupabaseConfigured()) {
+    const bridged = await devBridge(req);
+    if (bridged) return bridged;
+  }
+
   // --- autorizacao: cron (Bearer CRON_SECRET) OU admin logado ---
   const auth = req.headers.get('authorization') || '';
   const secret = process.env.CRON_SECRET || '';
@@ -115,11 +126,35 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // -----------------------------------------------------------------
+  // BLOCO 154 — STATUS DAS AVULSAS TAMBEM SINCRONIZA ("100% sincronizado
+  // com a api focus principalmente na questao de quando muda o status da
+  // nota"): notas importadas do painel da Focus / XML de terceiro /
+  // arquivadas de venda excluida podem mudar de status na SEFAZ
+  // (cancelamento tardio, denegacao). O cron reconsulta as que ainda NAO
+  // estao em estado final e atualiza os metadados (reimportacao idempotente
+  // — mesma ref = mesmo JSON sobrescrito). Lote curto: rate limit.
+  // -----------------------------------------------------------------
+  const FINAIS = new Set(['AUTORIZADO', 'CANCELADO', 'REJEITADO', 'ERRO_AUTORIZACAO', 'DENEGADO', 'INUTILIZADO']);
+  let avulsasAtualizadas = 0;
+  try {
+    const metas = await listarMetasAvulsas();
+    const aRefrescar = metas
+      .filter((m) => !FINAIS.has(String(m.status || '').toUpperCase()))
+      .slice(0, 6);
+    for (const m of aRefrescar) {
+      const r = await importarAvulsa(m.ref, m.doc === 'NFCE' ? 'NFCE' : 'NFE');
+      if (r.ok) avulsasAtualizadas++;
+    }
+    if (avulsasAtualizadas > 0) invalidaPresenca();
+  } catch { /* best-effort — o portal cobre depois */ }
+
   return NextResponse.json({
     ok: true,
     varridas: fila.length,
     processadas: resultados.length,
     autorizadas: resultados.filter((r) => r.status === 'AUTORIZADA').length,
+    avulsasAtualizadas,
     hooksReparados,
     resultados,
   });

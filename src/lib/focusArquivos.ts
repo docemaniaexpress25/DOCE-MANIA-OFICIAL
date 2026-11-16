@@ -926,13 +926,17 @@ export async function importarAvulsa(ref: string, docHint?: 'NFE' | 'NFCE'): Pro
  * "as notas canceladas estao sumindo do portal, elas devem aparecer em
  * CANCELADAS!").
  *
- * O cancelamento da venda apaga a linha `sales` — sem isso a nota CANCELADA
- * desaparecia do Portal Fiscal. Aqui, ANTES da exclusao, a nota e congelada:
- * consulta COMPLETA na Focus, arquiva XML + DANFE + XML do cancelamento no
- * nosso Storage e grava o JSON de metadados com status CANCELADO — o portal
- * lista ela no filtro CANCELADAS com DANFE/XML clicaveis, cliente, valor,
- * pagamento e vendedor da venda original. Idempotente (mesma ref = mesmo
- * arquivo; importes posteriores da Focus nao duplicam).
+ * BLOCO 154 (regra do dono — "TODAS as notas geradas pela Focus devem ficar
+ * salvas no nosso portal, MESMO QUE EU EXCLUA A VENDA"): a mesma congelacao
+ * agora serve a EXCLUSAO de venda — o 4o parametro (statusFinal) preserva o
+ * status REAL da nota (AUTORIZADO fica AUTORIZADO; so o cancelamento continua
+ * forçando CANCELADO). Assim a nota sobrevive a venda no Portal Fiscal com
+ * DANFE/XML, cliente, valor, pagamento e vendedor.
+ *
+ * A nota e congelada ANTES da exclusao: consulta COMPLETA na Focus, arquiva
+ * XML + DANFE (+ XML do cancelamento, quando existe) no nosso Storage e grava
+ * o JSON de metadados — o portal lista ela com DANFE/XML clicaveis.
+ * Idempotente (mesma ref = mesmo arquivo; importes posteriores nao duplicam).
  */
 export async function arquivarNotaCancelada(
   doc: FocusDoc,
@@ -947,6 +951,7 @@ export async function arquivarNotaCancelada(
     pagamento?: string;
     vendedor?: string;
   },
+  statusFinal?: string,
 ): Promise<{ ok: boolean; motivo?: string; meta?: NotaAvulsaMeta }> {
   if (!getFocusConfig().token) return { ok: false, motivo: 'FOCUS_NAO_CONFIGURADA' };
   const tokenNota = String(ref || '').trim().replace(/[^A-Za-z0-9_-]/g, '').slice(0, 60);
@@ -973,9 +978,10 @@ export async function arquivarNotaCancelada(
     doc: doc === 'nfce' ? 'NFCE' : 'NFE',
     numero: String(data?.numero || req.numero || extra?.numero || ''),
     serie: String(data?.serie || req.serie || ''),
-    // O dono cancelou — o portal DEVE mostrar em CANCELADAS mesmo se a
-    // consulta chegar antes do evento propagar na Focus.
-    status: 'CANCELADO',
+    // Cancelamento: o portal DEVE mostrar em CANCELADAS mesmo se a consulta
+    // chegar antes do evento propagar na Focus. Exclusao de venda (BLOCO 154):
+    // preserva o status REAL (AUTORIZADO nao vira cancelado).
+    status: (statusFinal || 'CANCELADO').toUpperCase(),
     chave: String(data?.chave_nfe || extra?.chave || '').replace(/\D/g, '').slice(-44),
     dataEmissao: String(req.data_emissao || data?.data_emissao || extra?.emitidaEm || ''),
     dataAutorizacao: String(data?.data_autorizacao || (data?.protocolo_nota_fiscal as Record<string, unknown> | undefined)?.data_recebimento || extra?.emitidaEm || ''),
@@ -991,6 +997,106 @@ export async function arquivarNotaCancelada(
   const salvo = await gravarNoStorage(`${pastaAvulsa()}/${meta.ref}.json`, Buffer.from(JSON.stringify(meta, null, 2)), 'application/json');
   if (!salvo) return { ok: false, motivo: 'FALHA_GRAVACAO' };
   return { ok: true, meta };
+}
+
+// ---------------------------------------------------------------------------
+// BLOCO 154 — RECONSTITUICAO DE NOTAS ORFAS NO NOSSO STORAGE.
+//
+// Bug do dono: excluiu uma venda e a NFe SUMIU do portal (a nota vivia na
+// linha `sales` — so o CANCELAMENTO congelava). O PDF/XML da nota, porem,
+// CONTINUAM no nosso bucket (a exclusao nunca limpou o storage) — e a Focus
+// ainda tem a nota. Esta rotina lista os ARQUIVOS nas pastas NFE/ e NFCE/ do
+// bucket, acha refs/chaves que nao pertencem a nenhuma venda nem a nenhuma
+// avulsa ja importada ("orfás") e REIMPORTA cada uma pela API da Focus
+// (importarAvulsa aceita ref VENDA-... e chave de 44 dig). O metadata nasce
+// com o status REAL e o DANFE/XML clicaveis — a nota volta ao portal.
+// Lote curto: cada nota custa ate 4 reqs na Focus (rate limit 100/min).
+// ---------------------------------------------------------------------------
+
+export interface OrfasResultado {
+  suportado: boolean;
+  motivo?: string;
+  verificadas: number;   // refs encontradas nos arquivos do bucket
+  orfas: number;         // refs sem venda e sem avulsa
+  reconstituidas: number;// importadas nesta rodada
+  restantes: number;     // ficaram para a proxima rodada (rate limit/tempo)
+  erros: { ref: string; erro: string }[];
+}
+
+async function refsDasPastas(): Promise<{ ref: string; doc: 'NFE' | 'NFCE' }[]> {
+  const db = getServiceClient();
+  const achados = new Map<string, 'NFE' | 'NFCE'>();
+  for (const pasta of ['NFE', 'NFCE'] as const) {
+    for (let offset = 0; offset < 5000; offset += 1000) {
+      try {
+        const { data, error } = await db.storage.from(BUCKET).list(pasta, { limit: 1000, offset, sortBy: { column: 'name', order: 'asc' } });
+        if (error || !data || data.length === 0) break;
+        for (const f of data) {
+          if (!f.name || f.name.endsWith('-can.xml')) continue;
+          const base = f.name.replace(/\.(pdf|html|xml)$/i, '');
+          if (base) achados.set(base, pasta);
+        }
+        if (data.length < 1000) break;
+      } catch { break; }
+    }
+  }
+  return [...achados.entries()].map(([ref, doc]) => ({ ref, doc }));
+}
+
+export async function reconstituirOrfas(lote = 6): Promise<OrfasResultado> {
+  const vazio: OrfasResultado = { suportado: false, verificadas: 0, orfas: 0, reconstituidas: 0, restantes: 0, erros: [] };
+  const { token } = getFocusConfig();
+  if (!token) return { ...vazio, motivo: 'FOCUS_NAO_CONFIGURADA' };
+
+  const db = getServiceClient();
+  const arquivos = await refsDasPastas();
+  if (arquivos.length === 0) return { ...vazio, suportado: true, motivo: 'SEM_ARQUIVOS' };
+
+  // conhecidas: refs/chaves de vendas (qualquer status) + avulsas ja importadas
+  const conhecidas = new Set<string>();
+  for (let range = 0; range < 5000; range += 1000) {
+    try {
+      const { data, error } = await db.from('sales').select('nota_ref, nota_chave').not('nota_ref', 'is', null).range(range, range + 999);
+      if (error || !data) break;
+      for (const r of (data as unknown) as { nota_ref: string; nota_chave?: string }[]) {
+        const ref = String(r.nota_ref || '');
+        if (ref) conhecidas.add(ref);
+        const chave = String(r.nota_chave || '').replace(/\D/g, '').slice(-44);
+        if (chave.length === 44) conhecidas.add(chave);
+      }
+      if ((data as unknown[]).length < 1000) break;
+    } catch { break; }
+  }
+  const metas = await listarMetasAvulsas();
+  for (const m of metas) {
+    if (m.ref) conhecidas.add(m.ref);
+    if (m.chave && m.chave.length === 44) conhecidas.add(m.chave);
+  }
+
+  const orfas = arquivos.filter(a => !conhecidas.has(a.ref));
+  const erros: { ref: string; erro: string }[] = [];
+  let reconstituidas = 0;
+  const inicio = Date.now();
+  for (const o of orfas) {
+    if (reconstituidas >= lote) continue;
+    if (Date.now() - inicio > TETO_MS_GRANDE) continue;
+    // ref do app (VENDA-...) e chave de 44 digitos (nota do painel) ambas vao
+    // na importarAvulsa — a que nao existir na Focus falha e fica para o
+    // backup mensal cobrir depois.
+    const docHint = o.doc === 'NFCE' ? 'NFCE' : 'NFE';
+    const r = await importarAvulsa(o.ref, docHint);
+    if (r.ok) reconstituidas++;
+    else erros.push({ ref: o.ref, erro: r.motivo || 'erro' });
+  }
+  invalidaPresenca();
+  return {
+    suportado: true,
+    verificadas: arquivos.length,
+    orfas: orfas.length,
+    reconstituidas,
+    restantes: Math.max(0, orfas.length - reconstituidas - erros.length),
+    erros: erros.slice(0, 8),
+  };
 }
 
 /** Exclui uma avulsa (metadados + DANFE/XML na pasta do documento). */

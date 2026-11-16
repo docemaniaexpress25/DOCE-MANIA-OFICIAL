@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/serverSupabase';
 import { sessionFromRequest, isAdminSession } from '@/lib/session';
-import { hasEntregaTables, hasBoletoFotoColumn, hasModoVendaColumn, hasCargaCheckColumns, hasNotaColumns } from '@/lib/serverSchema';
+import { hasEntregaTables, hasBoletoFotoColumn, hasModoVendaColumn, hasCargaCheckColumns, hasNotaColumns, hasBoletoColumns, hasNotaEmitidaEm } from '@/lib/serverSchema';
 import { salvarFotoSupabase } from '@/lib/fotoStorage';
 import { sendPushToUser } from '@/lib/pushSender';
 import QRCode from 'qrcode';
@@ -16,6 +16,9 @@ import { isDavidNome } from '@/lib/equipe';
 // BLOCO 123: regras fiscais ARMADAS porém DESLIGADAS (FISCAL_OBRIGATORIO=false
 // até o dono implantar a API fiscal) — bloqueio de carga sem nota batida.
 import { FISCAL_OBRIGATORIO, cargaBloqueadaPorNota } from '@/lib/regras-fiscais';
+// BLOCO 154 (regra do dono): TODAS as notas ficam salvas no portal MESMO
+// EXCLUINDO a venda — a nota é congelada (avulsa) antes da venda ser apagada.
+import { arquivarNotaDaVenda } from '@/lib/cascataCancelamento';
 
 /**
  * PRÉ-VENDA / ROTAS DE ENTREGA (estilo Shopee)
@@ -36,8 +39,10 @@ import { FISCAL_OBRIGATORIO, cargaBloqueadaPorNota } from '@/lib/regras-fiscais'
  *       vendedor (taxa propria da pre-venda) proporcional ao recebido.
  *   { acao: 'FALHOU', saleId, motivo, lat?, lng? }  nao entregue (ausente/recusou/...)
  *   { acao: 'REABRIR', saleId }                     devolve a parada para a fila
- *   { acao: 'EXCLUIR_VENDA', saleId }               vendedor ate 11h59 do dia;
- *                                                    admin a qualquer hora
+ *   { acao: 'EXCLUIR_VENDA', saleId }               APENAS O ADMIN (BLOCO 154);
+ *                                                    a nota atrelada é
+ *                                                    congelada no portal
+ *                                                    antes de apagar
  *   { acao: 'SET_CONFIG', comissaoPct }             [ADMIN] taxa da pre-venda
  *
  * Fluxo de status:
@@ -170,12 +175,8 @@ function carimboAgora(): string {
   }).format(new Date());
 }
 
-/** Hora atual em Sao Paulo como HH:MM (para a janela de exclusao ate 11h59) */
-function horaAgoraSP(): string {
-  return new Intl.DateTimeFormat('pt-BR', {
-    timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false,
-  }).format(new Date());
-}
+// BLOCO 154: a janela "excluir ate 11h59" do vendedor SAIU — a exclusao de
+// venda e APENAS do admin (horaAgoraSP removida junto).
 
 /**
  * BLOCO 14 — interruptores das melhorias (admin liga/desliga em Configuracoes).
@@ -1803,10 +1804,43 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, documento: docNovo });
     }
 
+    // ---------- ARQUIVAR_NOTA_EXCLUSAO (BLOCO 154 — regra do dono) ----------
+    // Congela a NOTA da venda no Portal Fiscal (avulsa com o status REAL) ANTES
+    // de uma exclusao que NAO passa pela API (caminho RPC do cupom). Depois
+    // disso a venda pode ser apagada sem a nota sumir do portal.
+    // Idempotente: rodar de novo só regrava o mesmo JSON (mesma ref).
+    if (acao === 'ARQUIVAR_NOTA_EXCLUSAO') {
+      if (!admin) {
+        return NextResponse.json({ ok: false, error: 'Somente o admin gerencia exclusao de vendas e notas fiscais.' }, { status: 403 });
+      }
+      if (!(await hasNotaColumns())) {
+        return NextResponse.json({ ok: true, arquivada: false, msg: 'Schema fiscal ausente — nada a arquivar.' });
+      }
+      const [temChaveN, temEmitN] = await Promise.all([hasBoletoColumns(), hasNotaEmitidaEm()]);
+      const selNota = [
+        'id, vendedor_id, client_id, valor_total, metodo_pagamento, nota_ref, nota_tipo, nota_status, nota_numero',
+        temChaveN ? ', nota_chave' : '',
+        temEmitN ? ', nota_emitida_em' : '',
+      ].join('');
+      const { data: sArq } = await supabase.from('sales').select(selNota).eq('id', saleId).maybeSingle();
+      const sA = ((sArq || {}) as unknown) as Record<string, unknown>;
+      if (!String(sA.nota_ref || '')) {
+        return NextResponse.json({ ok: true, arquivada: false, msg: 'Venda sem nota fiscal — nada a arquivar.' });
+      }
+      const rArq = await arquivarNotaDaVenda(sA);
+      if (!rArq.ok) {
+        return NextResponse.json({ ok: false, error: `Falha ao arquivar a nota no portal: ${rArq.motivo || 'erro'}` }, { status: 500 });
+      }
+      return NextResponse.json({ ok: true, arquivada: true, msg: 'Nota congelada no Portal Fiscal — a venda pode ser excluida sem perder a NF.' });
+    }
+
     // ---------- EXCLUIR_VENDA ----------
-    // Vendedor: somente o proprio pedido, registrado HOJE, ate as 11h59
-    // (America/Sao_Paulo) e sem entrega confirmada. Admin: a qualquer hora.
-    // A venda sai da rota de entrega (ou da fila de pendentes).
+    // BLOCO 154 (regra do dono): a exclusao de venda e APENAS do ADMIN. O
+    // vendedor que precisar excluir um pedido (ou cancelar uma NFC-e/NF-e
+    // atrelada a ele) deve falar com o admin/escritorio. E ANTES de apagar a
+    // venda, a NOTA FISCAL e congelada no Portal Fiscal ("TODAS as notas
+    // geradas pela focus devem ficar salvas no nosso portal, mesmo que eu
+    // exclua a venda") — AUTORIZADA continua AUTORIZADA no portal.
     if (acao === 'EXCLUIR_VENDA') {
       if (saleRow.entrega_status === 'ENTREGUE') {
         return NextResponse.json({ ok: false, error: 'Pedido ja entregue — exclusao indisponivel.' }, { status: 409 });
@@ -1815,17 +1849,25 @@ export async function POST(req: NextRequest) {
         if (session.perfil === 'ENTREGADOR') {
           return NextResponse.json({ ok: false, error: 'Entregador nao pode excluir pedidos.' }, { status: 403 });
         }
-        if (saleRow.vendedor_id !== userId) {
-          return NextResponse.json({ ok: false, error: 'Este pedido nao e seu.' }, { status: 403 });
-        }
-        const vendido = new Date(saleRow.data_venda);
-        const { start, end } = dayRangeIso();
-        if (vendido.getTime() < new Date(start).getTime() || vendido.getTime() > new Date(end).getTime()) {
-          return NextResponse.json({ ok: false, error: 'So e possivel excluir pedidos registrados hoje.' }, { status: 403 });
-        }
-        const [hh, mm] = horaAgoraSP().split(':').map(Number);
-        if (hh > 11 || (hh === 11 && mm > 59)) {
-          return NextResponse.json({ ok: false, error: 'Prazo de exclusao expirou (ate 11:59). Solicite ao administrador.' }, { status: 403 });
+        return NextResponse.json({ ok: false, error: 'A exclusao de vendas agora e feita APENAS pelo administrador. Para excluir este pedido (ou cancelar uma NF-e/NFC-e atrelada), fale com o admin.' }, { status: 403 });
+      }
+      // BLOCO 154: congela a nota ANTES de apagar a venda (best-effort mas
+      // com aviso na resposta — o Portal reimporta depois se falhar).
+      let avisoNota = '';
+      if (await hasNotaColumns()) {
+        const [temChaveN, temEmitN] = await Promise.all([hasBoletoColumns(), hasNotaEmitidaEm()]);
+        const selNota = [
+          'nota_ref, nota_tipo, nota_status, nota_numero',
+          temChaveN ? ', nota_chave' : '',
+          temEmitN ? ', nota_emitida_em' : '',
+        ].join('');
+        const { data: sNotaEx } = await supabase.from('sales').select(selNota).eq('id', saleId).maybeSingle();
+        const sN = ((sNotaEx || {}) as unknown) as Record<string, unknown>;
+        if (String(sN.nota_ref || '')) {
+          const rArq = await arquivarNotaDaVenda(sN);
+          if (!rArq.ok) {
+            avisoNota = `A nota ${String(sN.nota_ref)} NAO foi arquivada no portal (${rArq.motivo || 'erro'}) — use Portal Fiscal > Buscar TODAS na Focus para recuperar.`;
+          }
         }
       }
       // BLOCO 88: pedido RESERVADO (estoque baixa no registro agora) — devolve
@@ -1873,7 +1915,9 @@ export async function POST(req: NextRequest) {
         await supabase.from('entrega_rotas').update({ total_paradas: count || 0 }).eq('id', saleRow.route_id);
         await logEvento(supabase, saleRow.route_id, null, userId, 'PEDIDO_EXCLUIDO', 'Pedido excluido da rota', lat, lng);
       }
-      return NextResponse.json({ ok: true });
+      // BLOCO 154: aviso quando a nota NAO conseguiu ser congelada (a venda foi
+      // excluida, mas o portal precisa reimportar pelo backup/ref).
+      return NextResponse.json({ ok: true, ...(avisoNota ? { aviso: avisoNota } : {}) });
     }
 
     // ============================================================================

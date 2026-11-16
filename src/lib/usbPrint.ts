@@ -407,7 +407,9 @@ function imprimirDocViaIos(html: string): void {
   overlay.setAttribute('aria-hidden', 'true');
   overlay.innerHTML = `
 <style>
-  @page { size: 80mm auto; margin: 0; }
+  /* BLOCO 161: 72mm = area util da cabeca termica 80mm — pagina mais
+     estreita que a cabeca NUNCA corta (o 80mm cortava o lado direito). */
+  @page { size: 72mm auto; margin: 0; }
   #${ABERTO_DOC} { display: none; }
   @media print {
     html, body { margin: 0 !important; padding: 0 !important; background: #fff !important; }

@@ -2069,3 +2069,28 @@ ENTREGA: arquivo no public/ — baixa no PREVIEW (/produtos-fiscal.xlsx) já ago
 
 
 
+
+## bloco162 — MINI DANFE 80mm: LEGIBILIDADE NA TERMICA + FIM DO CORTE DO LADO DIREITO (o dono: "FALANDO EM MINIDANFE, ACHO QUE DA PRA MELHORAR A FONTE E DEIXAR O TAMANHO 1 NUMERO MAIOR, OUTRA COISA NOTEI QUE FICA ILEGIVEL PRECISAMOS MELHORAR ISSO NA IMPRESSAO 80MM E O LADO DIREITO ESTA CORTANDO AS LINHAS! TRABALHE MELHOR ESSE LAYOUT") (2026-11-16)
+
+CAUSA RAIZ DO CORTE À DIREITA (prova matemática): o documento era desenhado com 80mm de largura (@page 80mm + .poster 80mm + Code 128 de 74,75mm), mas a CABEÇA TÉRMICA das impressoras 80mm imprime ~72mm úteis (576 pontos @ 203 dpi) e o driver ainda aplica margens físicas — os últimos ~8mm do documento (bordas/linhas das grades à direita e o próprio código de barras) caem FORA da área imprimível e são cortados. A fonte pequena (base 7pt, rótulos de 5,4pt) em traço fino fazia o resto ficar ilegível no rolo.
+
+FEITO (src/lib/danfe80Html.ts — mesmo gerador usado em PDV, Janela Fiscal, Fila de Entregas e Modelos de Impressão; usbPrint.ts — caminho iOS alinhado):
+1. DOCUMENTO REDESENHADO EM 72mm (@page 72mm auto): página MAIS ESTREITA que a cabeça nunca corta — qualquer driver 80mm imprime alinhado à esquerda da área útil. Padding lateral 2,5mm → 1,8mm.
+2. Code 128 da chave: 74,75mm → 67,5mm (dentro do novo miolo de 68,4mm — barcode inteiro no papel, nada cortado).
+3. FONTE +1 NÚMERO EM TUDO (pedido do dono): base 7pt → 8pt; rótulos 5,4/5,5/5,6/5,8/6pt → 6,4/6,5/6,6/6,8/7pt; itens 6,5 → 7,5pt; impostos 6,8 → 7,8pt; valor total 11,5 → 12,5pt; emitente/destinatário 6,6 → 7,6pt; dados adicionais 5,8 → 6,8pt; recebimento 6,2 → 7,2pt; rodapé 5,6 → 6,6pt.
+4. TRAÇO ENGROSSADO: -webkit-text-stroke 0,15px no corpo (imprime ~30% mais escuro na térmica — a cabeça 203dpi perde pontos finos) SEM mudar a largura das colunas monoespaçadas (nada desalinha); removido o -webkit-font-smoothing antialiased (que deixava o traço fino).
+5. BORDAS FINAS 0,5px → 0,75px (grade do imposto/transportador não somem na termica) e recortes 0,25mm → 0,3mm.
+6. CHAVE DE ACESSO EM GRUPOS DE 4 ("4326 1063 7204 ...") com quebra só entre grupos — antes o break-all cortava os 44 dígitos no meio de qualquer número; conferência olho nu facilitada (mesmo formato dos grupos do cupom de texto).
+7. LAYOUT REFINADO: faixa lateral do destaque 30mm → 26mm (valor total ganha espaço); TRANSPORTADOR volta para 4 colunas NA MESMA LINHA (QUANTIDADE → QTDE e pesos "0,000" com (KG) no rótulo — as palavras longas estouravam 20% da largura e empurravam o PESO LIQUIDO para baixo); CST/CFOP do item em nowrap (nunca quebram); rec-space 17mm → 15mm.
+8. DICA DE IMPRESSÃO SÓ NA TELA (.hint, display:none no papel): banner com "ESCALA 100% + MARGENS NENHUMA/MÍNIMA — NÃO USE AJUSTAR A PÁGINA" aparece no preview (/danfe-exemplo.html) e no papel não sai nada.
+
+SQL PARA O DONO RODAR: NENHUM. Nenhuma mudança de schema/API — só o HTML/CSS do documento.
+
+QA:
+- Regenerado public/danfe-exemplo.html + public/danfe-exemplo.png com o MESMO gerador do sistema (scripts/gera-danfe-exemplo.ts).
+- Screenshot lado a lado: fonte visivelmente maior em todas as seções, chave em grupos de 4 quebrando limpa, transportador em 4 colunas numa linha, NADA cortado na margem direita (bordas das grades fecham).
+- PDF de impressão (print media, /tmp/danfe-print-teste.pdf): documento 72mm sai COMPLETO sem corte horizontal — a dica .hint não aparece no papel.
+- LINT: 0 erros / 8 warnings (baseline exata). TSC --noEmit: 104 = 104 (nenhum erro novo). pesoKg removido (ficou sem uso).
+- App principal / abre sem erro no console; servidor 200.
+
+INSTRUÇÃO AO DONO: depois do deploy, imprima a próxima NF-e pelo portal (Janela Fiscal → IMPRIMIR MINI DANFE): no diálogo do Chrome use ESCALA 100% e MARGENS NENHUMA/MÍNIMA (a dica aparece no preview). Se por acaso algo ainda sair apertado, é só me dizer quantos mm faltam que eu ajusto a escala do desenho.

@@ -5,6 +5,27 @@ import { DanfeFiscalData } from './danfe80';
 /**
  * BLOCO 158 — MINI DANFE 80mm EM HTML (LAYOUT DE REFERENCIA DO DONO, 100%)
  *
+ * BLOCO 161 — LEGIBILIDADE NA TERMICA + FIM DO CORTE DO LADO DIREITO
+ * Queixas do dono na impressão 80mm real: (1) fonte pequena/ilegivel;
+ * (2) "o lado direito está cortando as linhas".
+ *
+ * CAUSA DO CORTE: o documento tinha 80mm de largura (@page 80mm + .poster
+ * 80mm), mas a CABEÇA TERMICA de impressoras 80mm imprime ~72mm uteis
+ * (576 pontos @ 203 dpi) e o driver ainda aplica margens fisicas — os
+ * ultimos ~8mm (lado direito: bordas das grades e o Code 128 de 74,75mm)
+ * caem fora da area imprimivel e sao cortados.
+ *
+ * FIX: documento redesenhado em 72mm (area util GARANTIDA — pagina mais
+ * estreita que a cabeca nunca corta, qualquer driver 80mm imprime alinhado
+ * a esquerda da area) + Code 128 de 67,5mm. E legibilidade: TODA a escala
+ * tipografica subiu +1pt (base 7pt -> 8pt, minimo 6,4pt), traço engrossado
+ * com -webkit-text-stroke 0,15px (imprime mais escuro sem mudar larguras),
+ * bordas finas 0,5px -> 0,75px (nao somem na termica) e CHAVE DE ACESSO em
+ * grupos de 4 (conferencia manual facilitada, nao quebra no meio).
+ *
+ * Dica de impressao aparece so na TELA (.hint — display:none no papel):
+ * escala 100% e margens minimas.
+ *
  * O dono mandou: "VOU PEGAR A DANFE CRIADA NA NFE E CRIAR ALGO 100% A ESSE
  * LAYOUT AQUI. PRECISAMOS SEGUIR ESSA LINHA DE LAYOUT! SEMPRE OTIMIZADO PARA
  * IMPRESSAO EM 80MM, DEIXE A MELHOR DEFINICAO DE QUALIDADE DA FONTE."
@@ -73,9 +94,14 @@ const unit5 = (v: number | undefined | null): string =>
   new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 5, maximumFractionDigits: 5 })
     .format(Number.isFinite(Number(v)) ? Number(v) : 0);
 
-const pesoKg = (v: number): string =>
-  `${new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 3, maximumFractionDigits: 3 })
-    .format(Number.isFinite(v) ? v : 0)} kg`;
+/**
+ * BLOCO 161 — CHAVE DE ACESSO em grupos de 4 ("4326 1063 7204 ...").
+ * A termica quebrava os 44 digitos no meio de qualquer numero (break-all);
+ * com grupos de 4 a quebra cai sempre entre grupos e o dono confere a chave
+ * olho nu — mesmo formato dos grupos do cupom de texto (danfeTexto).
+ */
+const chaveGrupos4 = (k: string): string =>
+  k.replace(/(\d{4})(?=\d)/g, '$1 ').trim();
 
 /** Linha de CEP sobe para a linha anterior (modelo: "Caxias do Sul - RS   CEP: 95012-400"). */
 function linhasEndereco(endereco?: string): string[] {
@@ -126,83 +152,89 @@ function tributosDoTexto(inf?: string): { federais?: string; estaduais?: string;
   };
 }
 
-/** CSS do modelo de referencia (do dono) — reproduzido 1:1. */
-const CSS_DANFE = `@page { size: 80mm auto; margin: 0; }
+/** CSS do modelo de referencia (do dono) — BLOCO 161: 72mm + fonte +1pt + traço grosso. */
+const CSS_DANFE = `@page { size: 72mm auto; margin: 0; }
 html, body { margin: 0; padding: 0; background: #ffffff; }
 * { box-sizing: border-box; }
 body { font-family: 'Consolas', 'Liberation Mono', 'DejaVu Sans Mono', 'Courier New', monospace; color: #000;
   background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact;
-  -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
-.poster { width: 80mm; background: #fff; }
+  /* BLOCO 161: traço engrossado ~30% — a termica 203dpi perde pontos finos;
+     o stroke NAO muda a largura das colunas monoespacadas (nada desalinha). */
+  -webkit-text-stroke: 0.15px #000; text-rendering: optimizeLegibility; }
+.poster { width: 72mm; background: #fff; }
 @media screen {
   html { height: auto; display: flex; justify-content: center; background: #ffffff; }
   body { transform: scale(1.6); transform-origin: top center; margin: 12px 0; }
   .poster { box-shadow: 0 0 24px rgba(0,0,0,0.35); }
+  .hint { display: block; background: #0f172a; color: #fff; font-family: Arial, sans-serif;
+    font-size: 12px; line-height: 1.4; padding: 8px 10px; text-align: center; }
 }
-.poster { padding: 2.2mm 2.5mm 1.5mm 2.5mm; font-size: 7pt; line-height: 1.3; }
+.hint { display: none; }
+.poster { padding: 2mm 1.8mm 1.2mm 1.8mm; font-size: 8pt; line-height: 1.32; }
 .row { display: flex; flex-wrap: wrap; justify-content: space-between; max-width: 100%; }
-.hd-left { font-size: 6.8pt; font-weight: bold; }
-.hd-left .t2 { font-weight: normal; font-size: 6.2pt; }
-.hd-right { text-align: right; font-size: 6.8pt; font-weight: bold; white-space: nowrap; }
+.hd-left { font-size: 7.8pt; font-weight: bold; }
+.hd-left .t2 { font-weight: normal; font-size: 7.2pt; }
+.hd-right { text-align: right; font-size: 7.8pt; font-weight: bold; white-space: nowrap; }
 .hd-right .out { font-weight: normal; }
 .destaque { display: flex; border: 1.6px solid #000; margin-top: 1.4mm; }
 .destaque > div { padding: 1.1mm 1.4mm; min-width: 0; }
 .destaque .vlr { flex: 1 1 auto; border-right: 1.6px solid #000; }
-.destaque .vlr b { font-size: 11.5pt; line-height: 1.15; display: block; }
-.destaque .lbl { font-size: 6pt; font-weight: bold; }
-.destaque .side { flex: 0 0 30mm; font-size: 6.4pt; }
-.destaque .side b { display: block; font-size: 7pt; }
+.destaque .vlr b { font-size: 12.5pt; line-height: 1.15; display: block; }
+.destaque .lbl { font-size: 7pt; font-weight: bold; }
+.destaque .side { flex: 0 0 26mm; font-size: 7.4pt; }
+.destaque .side b { display: block; font-size: 8pt; }
 .bc-wrap { text-align: center; margin: 1.4mm 0 0 0; }
-.bc-wrap svg { display: block; margin: 0 auto; }
+.bc-wrap svg { display: block; margin: 0 auto; max-width: 100%; }
 .box { border: 1px solid #000; padding: 0.9mm 1.2mm; margin-top: 1.2mm; }
-.box .lbl { font-size: 6.1pt; font-weight: bold; }
-.box .val { font-size: 7pt; word-break: break-all; }
-.emit-name { font-size: 6.6pt; font-weight: bold; word-break: break-word; }
-.small { font-size: 6.2pt; }
+.box .lbl { font-size: 7.1pt; font-weight: bold; }
+.box .val { font-size: 8pt; word-break: break-all; }
+.box .val.chv { word-break: break-word; letter-spacing: 0.3px; line-height: 1.4; }
+.emit-name { font-size: 7.6pt; font-weight: bold; word-break: break-word; }
+.small { font-size: 7.2pt; }
 .grid2 { display: flex; flex-wrap: wrap; max-width: 100%; }
 .grid2 > div { flex: 1 1 0; min-width: 0; border: 1px solid #000; padding: 0.8mm 1.2mm; }
 .grid2 > div + div { margin-left: -1px; }
-.grid2 .lbl { font-size: 6.1pt; font-weight: bold; }
-.sect-title { font-size: 7.2pt; font-weight: bold; margin: 1.4mm 0 0.4mm 0; }
+.grid2 .lbl { font-size: 7.1pt; font-weight: bold; }
+.sect-title { font-size: 8.2pt; font-weight: bold; margin: 1.4mm 0 0.4mm 0; }
 .ihead, .item2 { display: flex; flex-wrap: wrap; justify-content: space-between; max-width: 100%; gap: 0 1.5mm; }
-.ihead { font-size: 6.2pt; font-weight: bold; border-bottom: 1px solid #000; padding-bottom: 0.5mm; }
+.ihead { font-size: 7.2pt; font-weight: bold; border-bottom: 1px solid #000; padding-bottom: 0.5mm; }
 .item { margin: 0.55mm 0 0.65mm 0; }
-.item1 { display: flex; gap: 1.5mm; align-items: baseline; font-size: 6.5pt; }
+.item1 { display: flex; gap: 1.5mm; align-items: baseline; font-size: 7.5pt; }
 .item1 .cod { font-weight: bold; flex: 0 0 auto; }
 .item1 .desc { font-weight: bold; flex: 1 1 auto; min-width: 0; word-break: break-word; }
-.item1 .cf { flex: 0 0 auto; }
-.item2 { font-size: 6.5pt; margin-top: 0.25mm; }
+.item1 .cf { flex: 0 0 auto; white-space: nowrap; }
+.item2 { font-size: 7.5pt; margin-top: 0.25mm; }
 .item2 b { font-weight: bold; }
 .imp-row { display: flex; max-width: 100%; }
-.imp-row > div { flex: 1 1 0; min-width: 0; border: 0.5px solid #000; padding: 0.7mm 1mm; }
+.imp-row > div { flex: 1 1 0; min-width: 0; border: 0.75px solid #000; padding: 0.7mm 1mm; }
 .imp-row:first-child > div { border-top: none; }
 .imp-row > div:first-child { border-left: none; }
 .imp-row > div:last-child { border-right: none; }
-.imp-row .ilbl { display: block; font-size: 5.4pt; font-weight: bold; line-height: 1.25; }
-.imp-row b { display: block; font-size: 6.8pt; margin-top: 0.2mm; }
-.imp-row .vnf b { font-size: 7.6pt; }
+.imp-row .ilbl { display: block; font-size: 6.4pt; font-weight: bold; line-height: 1.25; }
+.imp-row b { display: block; font-size: 7.8pt; margin-top: 0.2mm; }
+.imp-row .vnf b { font-size: 8.6pt; }
 .tr-grid { display: flex; flex-wrap: wrap; max-width: 100%; border: 1px solid #000; }
-.tr-grid > div { border: 0.5px solid #000; padding: 0.7mm 1.2mm; font-size: 6.3pt; }
-.tr-grid .lbl { font-weight: bold; font-size: 6.1pt; }
+.tr-grid > div { border: 0.75px solid #000; padding: 0.7mm 1.2mm; font-size: 7.3pt; }
+.tr-grid .lbl { font-weight: bold; font-size: 7.1pt; }
 .w20 { flex: 0 0 20%; } .w25 { flex: 0 0 25%; } .w30 { flex: 0 0 30%; } .w40 { flex: 0 0 40%; }
-.adic { font-size: 5.8pt; line-height: 1.45; text-align: left; word-break: break-word; }
+.adic { font-size: 6.8pt; line-height: 1.45; text-align: left; word-break: break-word; }
 .fisco { min-height: 7mm; }
-.footer { text-align: center; font-size: 5.6pt; margin-top: 1.6mm; }
+.footer { text-align: center; font-size: 6.6pt; margin-top: 1.6mm; }
 .rec { border: 0.5mm solid #000; margin-top: 1.5mm; background: #fff; }
-.rec-msg { padding: 1mm 1.25mm; border-bottom: 0.25mm solid #000;
-  font-size: 6.2pt; font-weight: bold; line-height: 1.35; word-break: break-word; }
+.rec-msg { padding: 1mm 1.25mm; border-bottom: 0.3mm solid #000;
+  font-size: 7.2pt; font-weight: bold; line-height: 1.35; word-break: break-word; }
 .rec-row { display: flex; align-items: stretch; }
-.rec-data { flex: 0 0 24mm; border-right: 0.25mm solid #000; padding: 1mm 1.25mm; }
+.rec-data { flex: 0 0 24mm; border-right: 0.3mm solid #000; padding: 1mm 1.25mm; }
 .rec-sign { flex: 1 1 0; min-width: 0; padding: 1mm 1.25mm; }
-.rec .lbl { font-size: 5.5pt; font-weight: bold; letter-spacing: 0.2px; }
-.rec-dia { font-size: 7.5pt; font-weight: bold; margin-top: 1.25mm; letter-spacing: 0.5px; white-space: nowrap; }
-.rec-space { height: 17mm; }
-.rec-cut { border-top: 0.25mm dashed #000; margin-top: 1.5mm; padding-top: 1mm;
-  text-align: center; font-size: 5.5pt; font-weight: bold; letter-spacing: 0.3px; }
+.rec .lbl { font-size: 6.5pt; font-weight: bold; letter-spacing: 0.2px; }
+.rec-dia { font-size: 8.5pt; font-weight: bold; margin-top: 1.25mm; letter-spacing: 0.5px; white-space: nowrap; }
+.rec-space { height: 15mm; }
+.rec-cut { border-top: 0.3mm dashed #000; margin-top: 1.5mm; padding-top: 1mm;
+  text-align: center; font-size: 6.5pt; font-weight: bold; letter-spacing: 0.3px; }
 .qr-wrap { text-align: center; margin: 1.4mm 0 0 0; }
 .qr-wrap img { display: block; margin: 0 auto; width: 30mm; height: 30mm; }
-.qr-wrap .qlbl { font-size: 5.8pt; font-weight: bold; margin-top: 0.6mm; }
-.alerta { border: 1.2px solid #000; padding: 1mm 1.2mm; margin-top: 1.2mm; font-size: 6.4pt; font-weight: bold; text-align: center; }`;
+.qr-wrap .qlbl { font-size: 6.8pt; font-weight: bold; margin-top: 0.6mm; }
+.alerta { border: 1.2px solid #000; padding: 1mm 1.2mm; margin-top: 1.2mm; font-size: 7.4pt; font-weight: bold; text-align: center; }`;
 
 /**
  * Gera o documento HTML completo do MINI DANFE 80mm (layout de referencia).
@@ -262,7 +294,7 @@ export async function danfeFiscal80Html(d: DanfeFiscalData): Promise<string> {
     <div class="item1">
       <span class="cod">${escapeHtml(cod)}</span>
       <span class="desc">${escapeHtml(desc)}</span>
-      <span class="cf">${escapeHtml(cst)}&nbsp;&nbsp;${escapeHtml(cfop)}</span>
+      <span class="cf">${escapeHtml(cst)} ${escapeHtml(cfop)}</span>
     </div>
     <div class="item2">
       <span>${escapeHtml(un)}</span><span>${qtd4(it.quantidade)}</span><span>${unit5(it.valorUnitario)}</span>
@@ -340,6 +372,7 @@ ${CSS_DANFE}
 </style>
 </head>
 <body>
+<div class="hint">MINI DANFE 80mm — LARGURA UTIL 72mm • NO DIALOGO DE IMPRESSAO USE ESCALA 100% E MARGENS “NENHUMA/MÍNIMA” • NAO USE AJUSTAR A PAGINA</div>
 <div class="poster">
 
   <div class="row">
@@ -367,11 +400,11 @@ ${CSS_DANFE}
 ${alertaHtml.join('\n')}
 ${qrHtml}
 
-  <div class="bc-wrap">${chave ? code128Svg(chave, { larguraMm: 74.75, alturaMm: 12 }) : ''}</div>
+  <div class="bc-wrap">${chave ? code128Svg(chave, { larguraMm: 67.5, alturaMm: 12 }) : ''}</div>
 
   <div class="box">
     <div class="lbl">CHAVE DE ACESSO</div>
-    <div class="val">${escapeHtml(chave)}</div>
+    <div class="val chv">${escapeHtml(chaveGrupos4(chave))}</div>
     ${d.protocolo ? `<div class="lbl" style="margin-top:0.6mm">PROTOCOLO DE AUTORIZACAO DE USO</div>
     <div class="val">${escapeHtml(d.protocolo)} ${escapeHtml(dhAut.data)} ${escapeHtml(dhAut.hora)}</div>` : ''}
   </div>
@@ -428,9 +461,9 @@ ${itensHtml}
   <div class="sect-title">TRANSPORTADOR / VOLUMES</div>
   <div class="tr-grid">
     <div class="w40"><div class="lbl">FRETE POR CONTA</div>[9] 9-SEM FRETE</div>
-    <div class="w20"><div class="lbl">QUANTIDADE</div>0</div>
-    <div class="w20"><div class="lbl">PESO BRUTO</div>${pesoKg(0)}</div>
-    <div class="w20" style="flex:1 1 0"><div class="lbl">PESO LIQUIDO</div>${pesoKg(0)}</div>
+    <div class="w20"><div class="lbl">QTDE</div>0</div>
+    <div class="w20"><div class="lbl">PESO BRUTO (KG)</div>0,000</div>
+    <div class="w20" style="flex:1 1 0"><div class="lbl">PESO LIQUIDO (KG)</div>0,000</div>
   </div>
 
   <div class="sect-title">DADOS ADICIONAIS</div>

@@ -5,85 +5,92 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Mini DANFE 80mm - NF-e 69 Serie 1</title>
 <style>
-@page { size: 80mm auto; margin: 0; }
+@page { size: 72mm auto; margin: 0; }
 html, body { margin: 0; padding: 0; background: #ffffff; }
 * { box-sizing: border-box; }
 body { font-family: 'Consolas', 'Liberation Mono', 'DejaVu Sans Mono', 'Courier New', monospace; color: #000;
   background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact;
-  -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
-.poster { width: 80mm; background: #fff; }
+  /* BLOCO 161: traço engrossado ~30% — a termica 203dpi perde pontos finos;
+     o stroke NAO muda a largura das colunas monoespacadas (nada desalinha). */
+  -webkit-text-stroke: 0.15px #000; text-rendering: optimizeLegibility; }
+.poster { width: 72mm; background: #fff; }
 @media screen {
   html { height: auto; display: flex; justify-content: center; background: #ffffff; }
   body { transform: scale(1.6); transform-origin: top center; margin: 12px 0; }
   .poster { box-shadow: 0 0 24px rgba(0,0,0,0.35); }
+  .hint { display: block; background: #0f172a; color: #fff; font-family: Arial, sans-serif;
+    font-size: 12px; line-height: 1.4; padding: 8px 10px; text-align: center; }
 }
-.poster { padding: 2.2mm 2.5mm 1.5mm 2.5mm; font-size: 7pt; line-height: 1.3; }
+.hint { display: none; }
+.poster { padding: 2mm 1.8mm 1.2mm 1.8mm; font-size: 8pt; line-height: 1.32; }
 .row { display: flex; flex-wrap: wrap; justify-content: space-between; max-width: 100%; }
-.hd-left { font-size: 6.8pt; font-weight: bold; }
-.hd-left .t2 { font-weight: normal; font-size: 6.2pt; }
-.hd-right { text-align: right; font-size: 6.8pt; font-weight: bold; white-space: nowrap; }
+.hd-left { font-size: 7.8pt; font-weight: bold; }
+.hd-left .t2 { font-weight: normal; font-size: 7.2pt; }
+.hd-right { text-align: right; font-size: 7.8pt; font-weight: bold; white-space: nowrap; }
 .hd-right .out { font-weight: normal; }
 .destaque { display: flex; border: 1.6px solid #000; margin-top: 1.4mm; }
 .destaque > div { padding: 1.1mm 1.4mm; min-width: 0; }
 .destaque .vlr { flex: 1 1 auto; border-right: 1.6px solid #000; }
-.destaque .vlr b { font-size: 11.5pt; line-height: 1.15; display: block; }
-.destaque .lbl { font-size: 6pt; font-weight: bold; }
-.destaque .side { flex: 0 0 30mm; font-size: 6.4pt; }
-.destaque .side b { display: block; font-size: 7pt; }
+.destaque .vlr b { font-size: 12.5pt; line-height: 1.15; display: block; }
+.destaque .lbl { font-size: 7pt; font-weight: bold; }
+.destaque .side { flex: 0 0 26mm; font-size: 7.4pt; }
+.destaque .side b { display: block; font-size: 8pt; }
 .bc-wrap { text-align: center; margin: 1.4mm 0 0 0; }
-.bc-wrap svg { display: block; margin: 0 auto; }
+.bc-wrap svg { display: block; margin: 0 auto; max-width: 100%; }
 .box { border: 1px solid #000; padding: 0.9mm 1.2mm; margin-top: 1.2mm; }
-.box .lbl { font-size: 6.1pt; font-weight: bold; }
-.box .val { font-size: 7pt; word-break: break-all; }
-.emit-name { font-size: 6.6pt; font-weight: bold; word-break: break-word; }
-.small { font-size: 6.2pt; }
+.box .lbl { font-size: 7.1pt; font-weight: bold; }
+.box .val { font-size: 8pt; word-break: break-all; }
+.box .val.chv { word-break: break-word; letter-spacing: 0.3px; line-height: 1.4; }
+.emit-name { font-size: 7.6pt; font-weight: bold; word-break: break-word; }
+.small { font-size: 7.2pt; }
 .grid2 { display: flex; flex-wrap: wrap; max-width: 100%; }
 .grid2 > div { flex: 1 1 0; min-width: 0; border: 1px solid #000; padding: 0.8mm 1.2mm; }
 .grid2 > div + div { margin-left: -1px; }
-.grid2 .lbl { font-size: 6.1pt; font-weight: bold; }
-.sect-title { font-size: 7.2pt; font-weight: bold; margin: 1.4mm 0 0.4mm 0; }
+.grid2 .lbl { font-size: 7.1pt; font-weight: bold; }
+.sect-title { font-size: 8.2pt; font-weight: bold; margin: 1.4mm 0 0.4mm 0; }
 .ihead, .item2 { display: flex; flex-wrap: wrap; justify-content: space-between; max-width: 100%; gap: 0 1.5mm; }
-.ihead { font-size: 6.2pt; font-weight: bold; border-bottom: 1px solid #000; padding-bottom: 0.5mm; }
+.ihead { font-size: 7.2pt; font-weight: bold; border-bottom: 1px solid #000; padding-bottom: 0.5mm; }
 .item { margin: 0.55mm 0 0.65mm 0; }
-.item1 { display: flex; gap: 1.5mm; align-items: baseline; font-size: 6.5pt; }
+.item1 { display: flex; gap: 1.5mm; align-items: baseline; font-size: 7.5pt; }
 .item1 .cod { font-weight: bold; flex: 0 0 auto; }
 .item1 .desc { font-weight: bold; flex: 1 1 auto; min-width: 0; word-break: break-word; }
-.item1 .cf { flex: 0 0 auto; }
-.item2 { font-size: 6.5pt; margin-top: 0.25mm; }
+.item1 .cf { flex: 0 0 auto; white-space: nowrap; }
+.item2 { font-size: 7.5pt; margin-top: 0.25mm; }
 .item2 b { font-weight: bold; }
 .imp-row { display: flex; max-width: 100%; }
-.imp-row > div { flex: 1 1 0; min-width: 0; border: 0.5px solid #000; padding: 0.7mm 1mm; }
+.imp-row > div { flex: 1 1 0; min-width: 0; border: 0.75px solid #000; padding: 0.7mm 1mm; }
 .imp-row:first-child > div { border-top: none; }
 .imp-row > div:first-child { border-left: none; }
 .imp-row > div:last-child { border-right: none; }
-.imp-row .ilbl { display: block; font-size: 5.4pt; font-weight: bold; line-height: 1.25; }
-.imp-row b { display: block; font-size: 6.8pt; margin-top: 0.2mm; }
-.imp-row .vnf b { font-size: 7.6pt; }
+.imp-row .ilbl { display: block; font-size: 6.4pt; font-weight: bold; line-height: 1.25; }
+.imp-row b { display: block; font-size: 7.8pt; margin-top: 0.2mm; }
+.imp-row .vnf b { font-size: 8.6pt; }
 .tr-grid { display: flex; flex-wrap: wrap; max-width: 100%; border: 1px solid #000; }
-.tr-grid > div { border: 0.5px solid #000; padding: 0.7mm 1.2mm; font-size: 6.3pt; }
-.tr-grid .lbl { font-weight: bold; font-size: 6.1pt; }
+.tr-grid > div { border: 0.75px solid #000; padding: 0.7mm 1.2mm; font-size: 7.3pt; }
+.tr-grid .lbl { font-weight: bold; font-size: 7.1pt; }
 .w20 { flex: 0 0 20%; } .w25 { flex: 0 0 25%; } .w30 { flex: 0 0 30%; } .w40 { flex: 0 0 40%; }
-.adic { font-size: 5.8pt; line-height: 1.45; text-align: left; word-break: break-word; }
+.adic { font-size: 6.8pt; line-height: 1.45; text-align: left; word-break: break-word; }
 .fisco { min-height: 7mm; }
-.footer { text-align: center; font-size: 5.6pt; margin-top: 1.6mm; }
+.footer { text-align: center; font-size: 6.6pt; margin-top: 1.6mm; }
 .rec { border: 0.5mm solid #000; margin-top: 1.5mm; background: #fff; }
-.rec-msg { padding: 1mm 1.25mm; border-bottom: 0.25mm solid #000;
-  font-size: 6.2pt; font-weight: bold; line-height: 1.35; word-break: break-word; }
+.rec-msg { padding: 1mm 1.25mm; border-bottom: 0.3mm solid #000;
+  font-size: 7.2pt; font-weight: bold; line-height: 1.35; word-break: break-word; }
 .rec-row { display: flex; align-items: stretch; }
-.rec-data { flex: 0 0 24mm; border-right: 0.25mm solid #000; padding: 1mm 1.25mm; }
+.rec-data { flex: 0 0 24mm; border-right: 0.3mm solid #000; padding: 1mm 1.25mm; }
 .rec-sign { flex: 1 1 0; min-width: 0; padding: 1mm 1.25mm; }
-.rec .lbl { font-size: 5.5pt; font-weight: bold; letter-spacing: 0.2px; }
-.rec-dia { font-size: 7.5pt; font-weight: bold; margin-top: 1.25mm; letter-spacing: 0.5px; white-space: nowrap; }
-.rec-space { height: 17mm; }
-.rec-cut { border-top: 0.25mm dashed #000; margin-top: 1.5mm; padding-top: 1mm;
-  text-align: center; font-size: 5.5pt; font-weight: bold; letter-spacing: 0.3px; }
+.rec .lbl { font-size: 6.5pt; font-weight: bold; letter-spacing: 0.2px; }
+.rec-dia { font-size: 8.5pt; font-weight: bold; margin-top: 1.25mm; letter-spacing: 0.5px; white-space: nowrap; }
+.rec-space { height: 15mm; }
+.rec-cut { border-top: 0.3mm dashed #000; margin-top: 1.5mm; padding-top: 1mm;
+  text-align: center; font-size: 6.5pt; font-weight: bold; letter-spacing: 0.3px; }
 .qr-wrap { text-align: center; margin: 1.4mm 0 0 0; }
 .qr-wrap img { display: block; margin: 0 auto; width: 30mm; height: 30mm; }
-.qr-wrap .qlbl { font-size: 5.8pt; font-weight: bold; margin-top: 0.6mm; }
-.alerta { border: 1.2px solid #000; padding: 1mm 1.2mm; margin-top: 1.2mm; font-size: 6.4pt; font-weight: bold; text-align: center; }
+.qr-wrap .qlbl { font-size: 6.8pt; font-weight: bold; margin-top: 0.6mm; }
+.alerta { border: 1.2px solid #000; padding: 1mm 1.2mm; margin-top: 1.2mm; font-size: 7.4pt; font-weight: bold; text-align: center; }
 </style>
 </head>
 <body>
+<div class="hint">MINI DANFE 80mm — LARGURA UTIL 72mm • NO DIALOGO DE IMPRESSAO USE ESCALA 100% E MARGENS “NENHUMA/MÍNIMA” • NAO USE AJUSTAR A PAGINA</div>
 <div class="poster">
 
   <div class="row">
@@ -111,11 +118,11 @@ body { font-family: 'Consolas', 'Liberation Mono', 'DejaVu Sans Mono', 'Courier 
 
 
 
-  <div class="bc-wrap"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 297 47.679" width="74.75mm" height="12mm" preserveAspectRatio="none" role="img" aria-label="Codigo de barras da chave de acesso"><rect x="10.000" y="0" width="2" height="47.679" fill="#000"></rect><rect x="13.000" y="0" width="1" height="47.679" fill="#000"></rect><rect x="16.000" y="0" width="3" height="47.679" fill="#000"></rect><rect x="21.000" y="0" width="1" height="47.679" fill="#000"></rect><rect x="23.000" y="0" width="2" height="47.679" fill="#000"></rect><rect x="28.000" y="0" width="3" height="47.679" fill="#000"></rect><rect x="32.000" y="0" width="3" height="47.679" fill="#000"></rect><rect x="37.000" y="0" width="1" height="47.679" fill="#000"></rect><rect x="40.000" y="0" width="2" height="47.679" fill="#000"></rect><rect x="43.000" y="0" width="2" height="47.679" fill="#000"></rect><rect x="47.000" y="0" width="1" height="47.679" fill="#000"></rect><rect x="51.000" y="0" width="1" height="47.679" fill="#000"></rect><rect x="54.000" y="0" width="1" height="47.679" fill="#000"></rect><rect x="56.000" y="0" width="1" height="47.679" fill="#000"></rect><rect x="59.000" y="0" width="2" height="47.679" fill="#000"></rect><rect x="65.000" y="0" width="1" height="47.679" fill="#000"></rect><rect x="68.000" y="0" width="2" height="47.679" fill="#000"></rect><rect x="74.000" y="0" width="1" height="47.679" fill="#000"></rect><rect x="76.000" y="0" width="1" height="47.679" fill="#000"></rect><rect x="79.000" y="0" width="1" height="47.679" fill="#000"></rect><rect x="83.000" y="0" width="2" height="47.679" fill="#000"></rect><rect x="87.000" y="0" width="1" height="47.679" fill="#000"></rect><rect x="89.000" y="0" width="2" height="47.679" fill="#000"></rect><rect x="94.000" y="0" width="3" height="47.679" fill="#000"></rect><rect x="98.000" y="0" width="2" height="47.679" fill="#000"></rect><rect x="101.000" y="0" width="2" height="47.679" fill="#000"></rect><rect x="105.000" y="0" width="2" height="47.679" fill="#000"></rect><rect x="109.000" y="0" width="2" height="47.679" fill="#000"></rect><rect x="113.000" y="0" width="2" height="47.679" fill="#000"></rect><rect x="116.000" y="0" width="2" height="47.679" fill="#000"></rect><rect x="120.000" y="0" width="4" height="47.679" fill="#000"></rect><rect x="125.000" y="0" width="3" height="47.679" fill="#000"></rect><rect x="129.000" y="0" width="1" height="47.679" fill="#000"></rect><rect x="131.000" y="0" width="3" height="47.679" fill="#000"></rect><rect x="135.000" y="0" width="1" height="47.679" fill="#000"></rect><rect x="139.000" y="0" width="2" height="47.679" fill="#000"></rect><rect x="142.000" y="0" width="2" height="47.679" fill="#000"></rect><rect x="145.000" y="0" width="2" height="47.679" fill="#000"></rect><rect x="149.000" y="0" width="2" height="47.679" fill="#000"></rect><rect x="153.000" y="0" width="2" height="47.679" fill="#000"></rect><rect x="157.000" y="0" width="1" height="47.679" fill="#000"></rect><rect x="161.000" y="0" width="1" height="47.679" fill="#000"></rect><rect x="164.000" y="0" width="2" height="47.679" fill="#000"></rect><rect x="167.000" y="0" width="2" height="47.679" fill="#000"></rect><rect x="171.000" y="0" width="2" height="47.679" fill="#000"></rect><rect x="175.000" y="0" width="2" height="47.679" fill="#000"></rect><rect x="178.000" y="0" width="2" height="47.679" fill="#000"></rect><rect x="182.000" y="0" width="2" height="47.679" fill="#000"></rect><rect x="186.000" y="0" width="2" height="47.679" fill="#000"></rect><rect x="189.000" y="0" width="2" height="47.679" fill="#000"></rect><rect x="193.000" y="0" width="2" height="47.679" fill="#000"></rect><rect x="197.000" y="0" width="1" height="47.679" fill="#000"></rect><rect x="199.000" y="0" width="2" height="47.679" fill="#000"></rect><rect x="203.000" y="0" width="1" height="47.679" fill="#000"></rect><rect x="208.000" y="0" width="1" height="47.679" fill="#000"></rect><rect x="211.000" y="0" width="2" height="47.679" fill="#000"></rect><rect x="214.000" y="0" width="3" height="47.679" fill="#000"></rect><rect x="219.000" y="0" width="2" height="47.679" fill="#000"></rect><rect x="223.000" y="0" width="1" height="47.679" fill="#000"></rect><rect x="227.000" y="0" width="1" height="47.679" fill="#000"></rect><rect x="230.000" y="0" width="4" height="47.679" fill="#000"></rect><rect x="235.000" y="0" width="1" height="47.679" fill="#000"></rect><rect x="239.000" y="0" width="1" height="47.679" fill="#000"></rect><rect x="241.000" y="0" width="3" height="47.679" fill="#000"></rect><rect x="245.000" y="0" width="2" height="47.679" fill="#000"></rect><rect x="250.000" y="0" width="1" height="47.679" fill="#000"></rect><rect x="252.000" y="0" width="1" height="47.679" fill="#000"></rect><rect x="255.000" y="0" width="4" height="47.679" fill="#000"></rect><rect x="261.000" y="0" width="1" height="47.679" fill="#000"></rect><rect x="263.000" y="0" width="3" height="47.679" fill="#000"></rect><rect x="269.000" y="0" width="1" height="47.679" fill="#000"></rect><rect x="271.000" y="0" width="2" height="47.679" fill="#000"></rect><rect x="274.000" y="0" width="2" height="47.679" fill="#000"></rect><rect x="279.000" y="0" width="3" height="47.679" fill="#000"></rect><rect x="283.000" y="0" width="1" height="47.679" fill="#000"></rect><rect x="285.000" y="0" width="2" height="47.679" fill="#000"></rect></svg></div>
+  <div class="bc-wrap"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 297 52.800" width="67.5mm" height="12mm" preserveAspectRatio="none" role="img" aria-label="Codigo de barras da chave de acesso"><rect x="10.000" y="0" width="2" height="52.800" fill="#000"></rect><rect x="13.000" y="0" width="1" height="52.800" fill="#000"></rect><rect x="16.000" y="0" width="3" height="52.800" fill="#000"></rect><rect x="21.000" y="0" width="1" height="52.800" fill="#000"></rect><rect x="23.000" y="0" width="2" height="52.800" fill="#000"></rect><rect x="28.000" y="0" width="3" height="52.800" fill="#000"></rect><rect x="32.000" y="0" width="3" height="52.800" fill="#000"></rect><rect x="37.000" y="0" width="1" height="52.800" fill="#000"></rect><rect x="40.000" y="0" width="2" height="52.800" fill="#000"></rect><rect x="43.000" y="0" width="2" height="52.800" fill="#000"></rect><rect x="47.000" y="0" width="1" height="52.800" fill="#000"></rect><rect x="51.000" y="0" width="1" height="52.800" fill="#000"></rect><rect x="54.000" y="0" width="1" height="52.800" fill="#000"></rect><rect x="56.000" y="0" width="1" height="52.800" fill="#000"></rect><rect x="59.000" y="0" width="2" height="52.800" fill="#000"></rect><rect x="65.000" y="0" width="1" height="52.800" fill="#000"></rect><rect x="68.000" y="0" width="2" height="52.800" fill="#000"></rect><rect x="74.000" y="0" width="1" height="52.800" fill="#000"></rect><rect x="76.000" y="0" width="1" height="52.800" fill="#000"></rect><rect x="79.000" y="0" width="1" height="52.800" fill="#000"></rect><rect x="83.000" y="0" width="2" height="52.800" fill="#000"></rect><rect x="87.000" y="0" width="1" height="52.800" fill="#000"></rect><rect x="89.000" y="0" width="2" height="52.800" fill="#000"></rect><rect x="94.000" y="0" width="3" height="52.800" fill="#000"></rect><rect x="98.000" y="0" width="2" height="52.800" fill="#000"></rect><rect x="101.000" y="0" width="2" height="52.800" fill="#000"></rect><rect x="105.000" y="0" width="2" height="52.800" fill="#000"></rect><rect x="109.000" y="0" width="2" height="52.800" fill="#000"></rect><rect x="113.000" y="0" width="2" height="52.800" fill="#000"></rect><rect x="116.000" y="0" width="2" height="52.800" fill="#000"></rect><rect x="120.000" y="0" width="4" height="52.800" fill="#000"></rect><rect x="125.000" y="0" width="3" height="52.800" fill="#000"></rect><rect x="129.000" y="0" width="1" height="52.800" fill="#000"></rect><rect x="131.000" y="0" width="3" height="52.800" fill="#000"></rect><rect x="135.000" y="0" width="1" height="52.800" fill="#000"></rect><rect x="139.000" y="0" width="2" height="52.800" fill="#000"></rect><rect x="142.000" y="0" width="2" height="52.800" fill="#000"></rect><rect x="145.000" y="0" width="2" height="52.800" fill="#000"></rect><rect x="149.000" y="0" width="2" height="52.800" fill="#000"></rect><rect x="153.000" y="0" width="2" height="52.800" fill="#000"></rect><rect x="157.000" y="0" width="1" height="52.800" fill="#000"></rect><rect x="161.000" y="0" width="1" height="52.800" fill="#000"></rect><rect x="164.000" y="0" width="2" height="52.800" fill="#000"></rect><rect x="167.000" y="0" width="2" height="52.800" fill="#000"></rect><rect x="171.000" y="0" width="2" height="52.800" fill="#000"></rect><rect x="175.000" y="0" width="2" height="52.800" fill="#000"></rect><rect x="178.000" y="0" width="2" height="52.800" fill="#000"></rect><rect x="182.000" y="0" width="2" height="52.800" fill="#000"></rect><rect x="186.000" y="0" width="2" height="52.800" fill="#000"></rect><rect x="189.000" y="0" width="2" height="52.800" fill="#000"></rect><rect x="193.000" y="0" width="2" height="52.800" fill="#000"></rect><rect x="197.000" y="0" width="1" height="52.800" fill="#000"></rect><rect x="199.000" y="0" width="2" height="52.800" fill="#000"></rect><rect x="203.000" y="0" width="1" height="52.800" fill="#000"></rect><rect x="208.000" y="0" width="1" height="52.800" fill="#000"></rect><rect x="211.000" y="0" width="2" height="52.800" fill="#000"></rect><rect x="214.000" y="0" width="3" height="52.800" fill="#000"></rect><rect x="219.000" y="0" width="2" height="52.800" fill="#000"></rect><rect x="223.000" y="0" width="1" height="52.800" fill="#000"></rect><rect x="227.000" y="0" width="1" height="52.800" fill="#000"></rect><rect x="230.000" y="0" width="4" height="52.800" fill="#000"></rect><rect x="235.000" y="0" width="1" height="52.800" fill="#000"></rect><rect x="239.000" y="0" width="1" height="52.800" fill="#000"></rect><rect x="241.000" y="0" width="3" height="52.800" fill="#000"></rect><rect x="245.000" y="0" width="2" height="52.800" fill="#000"></rect><rect x="250.000" y="0" width="1" height="52.800" fill="#000"></rect><rect x="252.000" y="0" width="1" height="52.800" fill="#000"></rect><rect x="255.000" y="0" width="4" height="52.800" fill="#000"></rect><rect x="261.000" y="0" width="1" height="52.800" fill="#000"></rect><rect x="263.000" y="0" width="3" height="52.800" fill="#000"></rect><rect x="269.000" y="0" width="1" height="52.800" fill="#000"></rect><rect x="271.000" y="0" width="2" height="52.800" fill="#000"></rect><rect x="274.000" y="0" width="2" height="52.800" fill="#000"></rect><rect x="279.000" y="0" width="3" height="52.800" fill="#000"></rect><rect x="283.000" y="0" width="1" height="52.800" fill="#000"></rect><rect x="285.000" y="0" width="2" height="52.800" fill="#000"></rect></svg></div>
 
   <div class="box">
     <div class="lbl">CHAVE DE ACESSO</div>
-    <div class="val">43261063720443000177550010000000691310985885</div>
+    <div class="val chv">4326 1063 7204 4300 0177 5500 1000 0000 6913 1098 5885</div>
     <div class="lbl" style="margin-top:0.6mm">PROTOCOLO DE AUTORIZACAO DE USO</div>
     <div class="val">243260455305958 30/10/2026 10:20:16</div>
   </div>
@@ -153,7 +160,7 @@ body { font-family: 'Consolas', 'Liberation Mono', 'DejaVu Sans Mono', 'Courier 
     <div class="item1">
       <span class="cod">GRTSC100</span>
       <span class="desc">G RUFFLES TUBO SOUR E CREAM 100G</span>
-      <span class="cf">0101&nbsp;&nbsp;5102</span>
+      <span class="cf">0101 5102</span>
     </div>
     <div class="item2">
       <span>un</span><span>14,0000</span><span>11,05000</span>
@@ -164,7 +171,7 @@ body { font-family: 'Consolas', 'Liberation Mono', 'DejaVu Sans Mono', 'Courier 
     <div class="item1">
       <span class="cod">GRTO100</span>
       <span class="desc">G RUFFLES TUBO ORIGINAL 100G</span>
-      <span class="cf">0101&nbsp;&nbsp;5102</span>
+      <span class="cf">0101 5102</span>
     </div>
     <div class="item2">
       <span>un</span><span>14,0000</span><span>11,05000</span>
@@ -175,7 +182,7 @@ body { font-family: 'Consolas', 'Liberation Mono', 'DejaVu Sans Mono', 'Courier 
     <div class="item1">
       <span class="cod">GRORG68</span>
       <span class="desc">G RUFFLES ORIGINAL 68G</span>
-      <span class="cf">0101&nbsp;&nbsp;5102</span>
+      <span class="cf">0101 5102</span>
     </div>
     <div class="item2">
       <span>un</span><span>15,0000</span><span>9,04000</span>
@@ -186,7 +193,7 @@ body { font-family: 'Consolas', 'Liberation Mono', 'DejaVu Sans Mono', 'Courier 
     <div class="item1">
       <span class="cod">GDQN75</span>
       <span class="desc">G DORITOS QUEIJO NACHO 75G</span>
-      <span class="cf">0101&nbsp;&nbsp;5102</span>
+      <span class="cf">0101 5102</span>
     </div>
     <div class="item2">
       <span>un</span><span>38,0000</span><span>9,04000</span>
@@ -197,7 +204,7 @@ body { font-family: 'Consolas', 'Liberation Mono', 'DejaVu Sans Mono', 'Courier 
     <div class="item1">
       <span class="cod">GFDP85</span>
       <span class="desc">G FANDANGOS PRESUNTO 85G</span>
-      <span class="cf">0101&nbsp;&nbsp;5102</span>
+      <span class="cf">0101 5102</span>
     </div>
     <div class="item2">
       <span>un</span><span>15,0000</span><span>6,79000</span>
@@ -208,7 +215,7 @@ body { font-family: 'Consolas', 'Liberation Mono', 'DejaVu Sans Mono', 'Courier 
     <div class="item1">
       <span class="cod">GCHR90</span>
       <span class="desc">G CHEETOS REQUEIJAO 90G</span>
-      <span class="cf">0101&nbsp;&nbsp;5102</span>
+      <span class="cf">0101 5102</span>
     </div>
     <div class="item2">
       <span>un</span><span>30,0000</span><span>7,69000</span>
@@ -219,7 +226,7 @@ body { font-family: 'Consolas', 'Liberation Mono', 'DejaVu Sans Mono', 'Courier 
     <div class="item1">
       <span class="cod">GCHL80</span>
       <span class="desc">G CHEETOS LUA 80G</span>
-      <span class="cf">0101&nbsp;&nbsp;5102</span>
+      <span class="cf">0101 5102</span>
     </div>
     <div class="item2">
       <span>un</span><span>15,0000</span><span>8,39000</span>
@@ -230,7 +237,7 @@ body { font-family: 'Consolas', 'Liberation Mono', 'DejaVu Sans Mono', 'Courier 
     <div class="item1">
       <span class="cod">GPB160</span>
       <span class="desc">G PINGO D OURO BACON 160G</span>
-      <span class="cf">0101&nbsp;&nbsp;5102</span>
+      <span class="cf">0101 5102</span>
     </div>
     <div class="item2">
       <span>un</span><span>28,0000</span><span>9,50000</span>
@@ -241,7 +248,7 @@ body { font-family: 'Consolas', 'Liberation Mono', 'DejaVu Sans Mono', 'Courier 
     <div class="item1">
       <span class="cod">GTDC200</span>
       <span class="desc">G TODDYNHO CHOCOLATE 200ML</span>
-      <span class="cf">0101&nbsp;&nbsp;5102</span>
+      <span class="cf">0101 5102</span>
     </div>
     <div class="item2">
       <span>un</span><span>27,0000</span><span>2,34000</span>
@@ -252,7 +259,7 @@ body { font-family: 'Consolas', 'Liberation Mono', 'DejaVu Sans Mono', 'Courier 
     <div class="item1">
       <span class="cod">GKEC330</span>
       <span class="desc">G KERO COCO 330ML</span>
-      <span class="cf">0101&nbsp;&nbsp;5102</span>
+      <span class="cf">0101 5102</span>
     </div>
     <div class="item2">
       <span>un</span><span>12,0000</span><span>5,69000</span>
@@ -284,9 +291,9 @@ body { font-family: 'Consolas', 'Liberation Mono', 'DejaVu Sans Mono', 'Courier 
   <div class="sect-title">TRANSPORTADOR / VOLUMES</div>
   <div class="tr-grid">
     <div class="w40"><div class="lbl">FRETE POR CONTA</div>[9] 9-SEM FRETE</div>
-    <div class="w20"><div class="lbl">QUANTIDADE</div>0</div>
-    <div class="w20"><div class="lbl">PESO BRUTO</div>0,000 kg</div>
-    <div class="w20" style="flex:1 1 0"><div class="lbl">PESO LIQUIDO</div>0,000 kg</div>
+    <div class="w20"><div class="lbl">QTDE</div>0</div>
+    <div class="w20"><div class="lbl">PESO BRUTO (KG)</div>0,000</div>
+    <div class="w20" style="flex:1 1 0"><div class="lbl">PESO LIQUIDO (KG)</div>0,000</div>
   </div>
 
   <div class="sect-title">DADOS ADICIONAIS</div>

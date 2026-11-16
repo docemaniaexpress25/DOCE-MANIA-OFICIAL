@@ -2131,7 +2131,9 @@ FEITO:
 
 QA:
 - LINT: 0 erros / 8 warnings (baseline exata). TSC --noEmit: 104 = 104 (nenhum erro novo; grep JanelaFiscal/PDV = vazio).
-- showToast continua em uso (bloqueioBoleto + avisar) — nenhum prop órfão.
+- showToast continua em uso (bloqueioBoleto + avisar) — nenhum prop órfã.
+- DEPLOY: commit 703a22f = SUCCESS na Vercel (doce-mania-oficial2, "Deployment has completed") — build de produção concluído com o código novo.
+- QA DE UI (honesto): o agent-browser não passou das telas de PIN — o PIN de vendedor não é conhecido no sandbox e o PIN admin 635241 foi RECUSADO pelo Portal de Notas ("PIN incorreto", com os 6 dígitos digitados na ordem correta, duas tentativas) — o dono possivelmente trocou o PIN do admin. Os botões não puderam ser vistos na tela por falta de login; a garantia é o código (lint/tsc) + build SUCCESS do commit exato na Vercel.
 
 SQL PARA O DONO RODAR: NENHUM. Nenhuma mudança de schema/API/dados — só interface (um botão a menos, um rótulo novo).
 

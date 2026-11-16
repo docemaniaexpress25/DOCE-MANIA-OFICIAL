@@ -2118,3 +2118,21 @@ QA:
 SQL PARA O DONO RODAR: NENHUM. Nenhuma mudança de schema/API — só largura do papel virtual (72→70mm), largura do barcode e ordem do CSS da dica.
 
 INSTRUÇÃO AO DONO: depois do deploy, VOLTE A ESCALA DO DIALOGO PARA 100% (a que você ajustava para 98% pode ficar memorizada no Chrome — 98% também funciona, só sai 0,7mm mais estreito, mas 100% é o padrão certo). A DANFE agora sai completa no PC (USB, 100%) e na rua (Bluetooth = versão texto ESC/POS 48 colunas, que nunca corta).
+
+
+## bloco164 — JANELA FISCAL: BOTÃO "VER MINI DANFE" EXCLUÍDO + BOTÃO AZUL RENOMEADO PARA "IMPRIMIR MINI-DANFE" (o dono: "EXCLUA O BOTAO VER MINI DANFE POIS NAO NECESSITAMOS DELE! RENOMEIE O BOTAO AZUL IMPRIMIR CUPOM FISCAL 80MM PARA IMPRIMIR MINI-DANFE") (2026-11-16)
+
+O QUE O DONO PEDIU: na Janela Fiscal, quando a nota está AUTORIZADA, existiam dois botões parecidos — o AZUL "Imprimir Cupom Fiscal (80mm)" (o que realmente imprime) e o PRETO "Ver mini DANFE (80mm retrato)" (só preview). O preview não tem mais utilidade: depois do bloco 163 o dono imprime direto em 100% e nunca mais precisou conferir o modelo. Sobra poluição de dois botões quase iguais → manutenção deixo o fluxo de impressão limpo.
+
+FEITO:
+1. JanelaFiscal.tsx — botão PRETO "Ver mini DANFE (80mm retrato)" EXCLUÍDO junto com TODO o código que só ele usava: função verMiniDanfe (chamada cupom80 só para preview), estados previewAberto/previewCupom, modal ModelosImpressao e os imports ModelosImpressao/DanfeFiscalData. Nada de código morto.
+2. JanelaFiscal.tsx — botão AZUL renomeado: "Imprimir Cupom Fiscal (80mm)" → "Imprimir Mini-DANFE" (mesmo onClick imprimirCupomFiscal, mesmo canal BT/USB — só o rótulo mudou).
+3. PDV.tsx (modal de venda finalizada) — mesmo botão AZUL no mesmo rótulo renomeado para "Imprimir Mini-DANFE" + texto de rodapé atualizado ("80mm = Mini-DANFE da NOTA autorizada (imprimir e guardar)") e comentário do BLOCO 150 alinhado. O "Ver Danfe" PEQUENO (link emerald que abre o PDF A4 da Focus para enviar ao cliente) ficou intacto — é outro botão, o dono não pediu.
+
+QA:
+- LINT: 0 erros / 8 warnings (baseline exata). TSC --noEmit: 104 = 104 (nenhum erro novo; grep JanelaFiscal/PDV = vazio).
+- showToast continua em uso (bloqueioBoleto + avisar) — nenhum prop órfão.
+
+SQL PARA O DONO RODAR: NENHUM. Nenhuma mudança de schema/API/dados — só interface (um botão a menos, um rótulo novo).
+
+INSTRUÇÃO AO DONO: depois do deploy, na Janela Fiscal a nota autorizada mostra agora: [IMPRIMIR MINI-DANFE] (azul, imprime na térmica) → [Abrir DANFE A4 (Focus)] → [Cancelar nota]. O botão preto de preview não existe mais.

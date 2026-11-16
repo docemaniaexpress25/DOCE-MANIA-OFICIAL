@@ -2219,17 +2219,17 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                 <span className="text-[10px] font-black text-emerald-700 uppercase flex-1">{notaResult.numero ? `Nota ${notaResult.numero} ` : ''}Autorizada</span>
               </div>
               {/* BLOCO 150: "Ver Danfe" PEQUENO (só abre o PDF da nota JÁ emitida,
-                  para enviar ao cliente) — o botão de IMPRIMIR E GUARDAR é o
-                  Cupom Fiscal 80mm, fiel ao documento autorizado */}
+                  para enviar ao cliente) — o botão de IMPRIMIR E GUARDAR é a
+                  Mini-DANFE 80mm, fiel ao documento autorizado */}
               {notaResult.pdfUrl && (
                 <a href={notaResult.pdfUrl} target="_blank" rel="noopener noreferrer" className="w-full bg-white border border-emerald-300 text-emerald-700 font-black py-2.5 rounded-xl active:scale-95 uppercase text-[9px] tracking-widest flex items-center justify-center">
                   <i className="fa-solid fa-file-pdf mr-1.5"></i>Ver Danfe{notaResult.numero ? ` — Nota ${notaResult.numero}` : ''}
                 </a>
               )}
               <button onClick={handleImprimirDanfeModal} disabled={notaEmitindo} className="w-full bg-blue-600 text-white font-black py-3.5 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest disabled:opacity-60 flex items-center justify-center">
-                <i className={`fa-solid ${notaEmitindo ? 'fa-spinner fa-spin' : 'fa-print'} mr-2`}></i>{notaEmitindo ? 'Imprimindo...' : 'Imprimir Cupom Fiscal (80mm)'}
+                <i className={`fa-solid ${notaEmitindo ? 'fa-spinner fa-spin' : 'fa-print'} mr-2`}></i>{notaEmitindo ? 'Imprimindo...' : 'Imprimir Mini-DANFE'}
               </button>
-              <p className="text-[8px] font-bold text-gray-400 uppercase text-center leading-snug">80mm = cupom da NOTA autorizada (imprimir e guardar) · o boleto segue o valor X da venda</p>
+              <p className="text-[8px] font-bold text-gray-400 uppercase text-center leading-snug">80mm = Mini-DANFE da NOTA autorizada (imprimir e guardar) · o boleto segue o valor X da venda</p>
             </div>
           )}
           {!sucessoData.isPreVenda && notaResult?.status === 'REJEITADA' && (

@@ -129,7 +129,6 @@ export default function PortalProdutosFiscaisPage() {
 
   // Dados
   const [produtos, setProdutos] = useState<ProdutoFiscal[]>([]);
-  const [stats, setStats] = useState<Stats | null>(null);
   const [carregando, setCarregando] = useState(false);
   const [erroLista, setErroLista] = useState('');
 
@@ -181,7 +180,6 @@ export default function PortalProdutosFiscaisPage() {
       }
       if (!res.ok || !d?.ok) { setErroLista(d?.erro || `Erro ${res.status}`); return; }
       setProdutos((d.produtos || []) as ProdutoFiscal[]);
-      setStats((d.stats || null) as Stats | null);
       setEdits({});
       setLinha({});
     } catch {
@@ -399,7 +397,28 @@ export default function PortalProdutosFiscaisPage() {
     showToast(`CSV exportado: ${filtrados.length} produto(s).`);
   };
 
-  const kpis = { total: stats?.total ?? produtos.length, ...{ ativos: stats?.ativos ?? 0, comNcm: stats?.comNcm ?? 0, semNcm: stats?.semNcm ?? 0, semCfop: stats?.semCfop ?? 0, semCest: stats?.semCest ?? 0, comEan: stats?.comEan ?? 0 } };
+  // ---------- KPIs DERIVADOS da lista em memória (atualizam NA HORA ao salvar) ----------
+  // BLOCO 156 (QA em produção): antes vinham só do GET e ficavam velhos depois de
+  // salvar — o dono salvava o NCM e o contador "sem NCM" não mudava sem clicar
+  // em ATUALIZAR. Derivando de `produtos`, cada gravação atualiza os contadores.
+  const kpis = useMemo<Stats>(() => {
+    const total = produtos.length;
+    const comNcm = produtos.filter(p => p.ncm).length;
+    const comCfop = produtos.filter(p => p.cfop).length;
+    const comCest = produtos.filter(p => p.cest).length;
+    const comEan = produtos.filter(p => p.ean).length;
+    return {
+      total,
+      ativos: produtos.filter(p => p.ativo).length,
+      comNcm,
+      semNcm: total - comNcm,
+      comCfop,
+      semCfop: total - comCfop,
+      comCest,
+      semCest: total - comCest,
+      comEan,
+    };
+  }, [produtos]);
 
   // ================= TELA: PIN =================
   if (booting) {
@@ -524,11 +543,11 @@ export default function PortalProdutosFiscaisPage() {
 
       <main className="flex-1 w-full max-w-[1600px] mx-auto px-4 py-4 space-y-3">
         {/* ================= ALERTA SEM NCM ================= */}
-        {stats && stats.semNcm > 0 && (
+        {kpis.semNcm > 0 && (
           <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5 flex items-center gap-2.5">
             <i className="fa-solid fa-triangle-exclamation text-amber-600"></i>
             <p className="text-[11px] font-bold text-amber-800">
-              {stats.semNcm} produto(s) SEM NCM — a nota sai com o código genérico <b>21069090</b> na emissão. Use o filtro <b>sem NCM</b> abaixo e complete antes de emitir.
+              {kpis.semNcm} produto(s) SEM NCM — a nota sai com o código genérico <b>21069090</b> na emissão. Use o filtro <b>sem NCM</b> abaixo e complete antes de emitir.
             </p>
           </div>
         )}

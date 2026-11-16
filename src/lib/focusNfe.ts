@@ -437,6 +437,7 @@ function montarItensV2(opts: {
   ufDestino: string;
   ufEmitente: string;
   doc: FocusDoc;
+  destContribuinte?: boolean; // BLOCO 160: NF-e p/ destinatario COM IE (contribuinte)
 }): { items: FocusItemV2[]; valorProdutos: number; descontoTotal: number } {
   const itensTotal = round2(opts.itens.reduce((acc, it) => acc + it.quantidade * it.valorUnitario, 0));
   // Desconto (troca/desconto geral) entra concentrado no primeiro item
@@ -453,9 +454,15 @@ function montarItensV2(opts: {
   const cfopSaida = opts.ufDestino && opts.ufDestino !== opts.ufEmitente ? '6102' : '5102';
 
   // BLOCO 145 — REGRA FISCAL DO DONO (fixa):
-  //   NF-e (venda para PJ)  -> CSOSN 101 (Simples Nacional c/ permissão de crédito)
   //   NFC-e (consumidor)    -> CSOSN 102 (Simples Nacional sem crédito)
-  const csosn = opts.doc === 'nfe' ? '101' : '102';
+  // BLOCO 160 — CSOSN da NF-e segue o DESTINATARIO (prova real: NF de R$
+  //   835,32 p/ G GAMBINO SILVESTRIN — CNPJ SEM IE no cadastro — rejeitada com
+  //   "Rejeicao: CSOSN incompativel na operacao com Nao Contribuinte
+  //   [nItem:1]"). CSOSN 101 (Simples c/ permissão de crédito) SO vale para
+  //   destinatario CONTRIBUINTE (com IE — é pra ele que o crédito é repassado);
+  //   destinatario NAO contribuinte (sem IE / ISENTA) sai com 102 (sem
+  //   crédito), o mesmo do NFC-e — que é o que a SEFAZ aceita nesse caso.
+  const csosn = opts.doc === 'nfce' ? '102' : opts.destContribuinte ? '101' : '102';
 
   const items: FocusItemV2[] = opts.itens.map((it, i) => {
     const bruto = round2(it.quantidade * it.valorUnitario);
@@ -540,8 +547,13 @@ export function montarPayloadNfe(opts: {
 }): FocusNfePayloadV2 {
   const ufEmit = opts.ufEmitente || getFocusConfig().ufEmitente;
   const ufDestino = (opts.destinatario.uf || '').toUpperCase();
+  // BLOCO 160: contribuinte = tem IE que NAO seja ISENTO — MESMA condicao do
+  // destinatarioV2 (que define indIEDest=1). Sem IE / ISENTA -> nao
+  // contribuinte (indIEDest=9) -> CSOSN 102 no item.
+  const ieDest = (opts.destinatario.inscricao_estadual || '').trim();
   const { items, valorProdutos, descontoTotal } = montarItensV2({
     itens: opts.itens, valorTotalVenda: opts.valorTotalVenda, ufDestino, ufEmitente: ufEmit, doc: 'nfe',
+    destContribuinte: !!ieDest && !/^isen/i.test(ieDest),
   });
 
   return {

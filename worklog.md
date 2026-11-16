@@ -2034,3 +2034,23 @@ QA:
 
 INSTRUÇÃO AO DONO: o deploy deste push já invalida cache automaticamente (lockfile/config mudaram); se a Vercel falhar de novo por qualquer motivo, use "Redeploy" com "Use existing Build Cache" DESMARCADO. Este deploy leva TAMBÉM os blocos 157 e 158 que não chegaram ao ar (EAN limpa de verdade + Código Especial GB + MINI DANFE 80mm — exemplo público em /danfe-exemplo.png e /danfe-exemplo.html).
 
+## bloco160 — CSOSN DA NF-e SEGUE O DESTINATÁRIO (o dono: "NOTA 156 DEU ERRO DE CSOSN ME DIGA O PORQUE! TO TENTANDO VER O PQ NAO BATEU A NF! erro > Rejeicao: CSOSN incompativel na operacao com Nao Contribuinte [nItem:1]") (2026-11-16)
+
+DIAGNÓSTICO COM PROVA (linha REJEITADA no portal, ref VENDA-fd00f737…-r2): venda de R$ 835,32 (boleto a prazo, vendedor Gil pantoja) para **G GAMBINO SILVESTRIN, CNPJ 08.965.975/0001-66, SEM Inscrição Estadual no cadastro**. O destinatarioV2 marca indIEDest=9 (não contribuinte) quando o cliente não tem IE, MAS o item saía com **CSOSN 101** — regra fixa do bloco 145 ("NF-e = 101") que ignorava o tipo de destinatário. CSOSN 101 = "Simples Nacional COM permissão de crédito": só vale para destinatário CONTRIBUINTE (o crédito é repassado a ele) — para NÃO contribuinte a SEFAZ rejeita exatamente com "CSOSN incompatível na operação com Não Contribuinte". A NF 155 (Mercado Prates) autorizou porque esse cliente TEM IE (contribuinte, indIEDest=1). O número "156" era só o próximo número da série no painel — a nota foi rejeitada e nem ganhou número.
+
+FEITO:
+1. focusNfe.ts (montarItensV2 + montarPayloadNfe): CSOSN da NF-e agora SEGUE O DESTINATÁRIO — contribuinte (IE preenchida e ≠ ISENTO/ISENTA, MESMA condição que define indIEDest=1) → **101** (regra do dono para PJ atacado MANTIDA); não contribuinte (sem IE / ISENTO / CPF) → **102** (sem crédito — aceito pela SEFAZ, o mesmo do NFC-e). NFC-e segue 102 intocado. A condição é calculada no mesmo lugar que monta o destinatário para nunca divergir.
+2. Nenhuma mudança de schema/API/UI — só o gerador de payload. spedy.ts (NFC-e 102) não é tocado.
+
+SQL PARA O DONO RODAR: NENHUM.
+
+QA:
+- Script de payload (bun, SEM emitir nada na Focus): 8/8 PASS — NF-e CNPJ sem IE → 102 + indIEDest=9 (caso Gambino); NF-e CNPJ com IE → 101 + indIEDest=1 (atacado); IE=ISENTO/ISENTA → 102; CPF → 102; NFC-e identificada e anônima → 102; 3 itens → todos com o CSOSN certo.
+- LINT: 0 erros / 8 warnings (baseline exata). TSC --noEmit: 104 = 104 (nenhum erro novo).
+
+O QUE O DONO PRECISA SABER:
+1. Após o deploy, basta REEMITIR a venda da Gambino (portal/venda → Emitir NF): o item sai com CSOSN 102 e a SEFAZ autoriza.
+2. ATENÇÃO: se a G GAMBINO SILVESTRIN FOR contribuinte de ICMS (tem Inscrição Estadual), o certo é CADASTRAR A IE dela no cliente — com IE no cadastro a nota volta a sair com CSOSN 101 (com crédito para o cliente). Sem IE, ela é não contribuinte e a nota sai correta com 102.
+3. Clientes PF (CPF) sempre saem com 102 — correto por definição.
+
+

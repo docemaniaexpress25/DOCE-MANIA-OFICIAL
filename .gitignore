@@ -65,3 +65,6 @@ skills/
 dev.log
 download/
 agent-ctx/
+
+# runtime do dev (muda toda hora, nunca deve ir pro git)
+.zscripts/dev.pid

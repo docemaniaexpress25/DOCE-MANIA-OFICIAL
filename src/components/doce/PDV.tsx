@@ -11,11 +11,13 @@ import { wakeLockManager } from '@/utils/wakeLock';
 // BLOCO 82: impressão no iPhone — instruções do Bluefy quando a Apple bloqueia o Bluetooth
 import { isIOSDevice, TEXTO_IMPRESSAO_IOS, TITULO_IMPRESSAO_IOS } from '@/lib/iosPrint';
 // BLOCO 111: impressão térmica USB do PC — canal BT x USB persistente por dispositivo
-import { imprimirViaUsb, lerCanalImpressao, salvarCanalImpressao, CanalImpressao } from '@/lib/usbPrint';
+import { imprimirHtmlViaUsb, imprimirViaUsb, lerCanalImpressao, salvarCanalImpressao, CanalImpressao } from '@/lib/usbPrint';
 import { saleService } from '@/services/saleService';
 import { notaService } from '@/services/notaService';
 // BLOCO 131: cupom fiscal PERFEITO 80mm — dados do XML autorizado pela SEFAZ
 import { danfeFiscal80 } from '@/lib/danfe80';
+// BLOCO 158: canal USB imprime o layout de REFERENCIA do dono (HTML 80mm)
+import { danfeFiscal80Html } from '@/lib/danfe80Html';
 import { clienteAptoNfe, mascararCpf, validaCpf } from '@/lib/cnpjAutocomplete';
 // BLOCO 123: regras fiscais ARMADAS porém DESLIGADAS (FISCAL_OBRIGATORIO=false
 // até o dono implantar a API fiscal) — pronta entrega só conclui com NF-e/NFC-e
@@ -434,7 +436,9 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       } : prev);
       // BLOCO 111: canal USB do PC — DANFE 80mm sai pela janela de impressão
       if (lerCanalImpressao() === 'USB') {
-        imprimirViaUsb(texto, '80MM', (m) => {
+        // BLOCO 158: sai com o LAYOUT DE REFERENCIA do dono (HTML 80mm)
+        const html = await danfeFiscal80Html(cup);
+        imprimirHtmlViaUsb(html, (m) => {
           setAppModal({ title: 'Cupom Fiscal', message: `Falha na impressão USB: ${m}`, icon: 'fa-solid fa-triangle-exclamation', iconColor: 'text-rose-500', type: 'error' });
         });
         setAppModal({ title: 'Cupom Fiscal', message: 'Janela de impressão aberta — escolha a térmica USB do computador e confirme.', icon: 'fa-solid fa-desktop', iconColor: 'text-violet-500', type: 'success' });

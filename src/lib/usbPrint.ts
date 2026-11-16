@@ -375,6 +375,152 @@ function abrirJanelaUsb(corpo: string, width: PrinterWidth, onError?: (msg: stri
   }
 }
 
+// ============================================================
+// BLOCO 158 — IMPRESSAO DE DOCUMENTO HTML PRONTO (MINI DANFE 80mm)
+// O canal USB nao precisa mais morfar texto 48 colunas: quando o chamador
+// ja tem o DOCUMENTO HTML completo (@page 80mm auto — ex. danfe80Html),
+// a folha sai com o layout de referencia do dono (grade, codigo de barras
+// SVG e fonte Consolas — melhor definicao na termica).
+// - Desktop: o HTML inteiro vai no iframe escondido (srcdoc) e imprime.
+// - iOS: o Safari ignora print() de iframe — o mesmo padrao do BLOCO 120:
+//   extrai <style> e <body> do documento e monta no overlay do proprio
+//   documento + PAINEL DE REFORCO com botao "IMPRIMIR" (gesto direto).
+// ============================================================
+
+/** Extrai <style> e <body> de um documento HTML completo. */
+const extrairDocHtml = (html: string): { css: string; corpo: string } => {
+  const style = html.match(/<style>([\s\S]*?)<\/style>/i);
+  const body = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+  return { css: style ? style[1] : '', corpo: body ? body[1] : html };
+};
+
+const ABERTO_DOC = 'dm-impressao-doc';
+
+function imprimirDocViaIos(html: string): void {
+  const { css, corpo } = extrairDocHtml(html);
+
+  try { document.getElementById(ABERTO_DOC)?.remove(); } catch { /* ja removido */ }
+  try { document.getElementById(PAINEL_ID)?.remove(); } catch { /* ja removido */ }
+
+  const overlay = document.createElement('div');
+  overlay.id = ABERTO_DOC;
+  overlay.setAttribute('aria-hidden', 'true');
+  overlay.innerHTML = `
+<style>
+  @page { size: 80mm auto; margin: 0; }
+  #${ABERTO_DOC} { display: none; }
+  @media print {
+    html, body { margin: 0 !important; padding: 0 !important; background: #fff !important; }
+    body > *:not(#${ABERTO_DOC}) { display: none !important; }
+    #${ABERTO_DOC} { display: block !important; }
+  }
+</style>
+<style>${css}</style>
+${corpo}`;
+
+  // Reaproveita o PAINEL DE REFORCO do iOS (mesmo id/fluxo do cupom)
+  const painel = document.createElement('div');
+  painel.id = PAINEL_ID;
+  painel.setAttribute('role', 'dialog');
+  painel.setAttribute('aria-label', 'Impressão do documento');
+  painel.style.cssText = [
+    'position: fixed', 'left: 12px', 'right: 12px',
+    'bottom: calc(12px + env(safe-area-inset-bottom))',
+    'z-index: 2147483000', 'background: #0f172a', 'color: #fff',
+    'border-radius: 16px', 'padding: 14px', 'max-width: 420px', 'margin: 0 auto',
+    'box-shadow: 0 10px 30px rgba(0,0,0,.35)',
+    "font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+  ].join(';');
+  painel.innerHTML = `
+<p style="margin:0 0 10px;font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;">Mini DANFE pronto para imprimir</p>
+<button id="dm-ios-print-btn" style="width:100%;min-height:44px;padding:14px 0;border:0;border-radius:12px;background:#059669;color:#fff;font-size:14px;font-weight:900;text-transform:uppercase;letter-spacing:.5px;">IMPRIMIR MINI DANFE</button>
+<p style="margin:8px 0 0;font-size:10px;line-height:1.5;color:#cbd5e1;">Na folha do iPhone escolha uma impressora <b>AirPrint</b>. Impressora termica somente Bluetooth continua no aparelho Android ou no PC.</p>
+<button id="dm-ios-print-close" style="width:100%;margin-top:8px;min-height:44px;padding:10px 0;border:0;border-radius:12px;background:#1e293b;color:#94a3b8;font-size:11px;font-weight:800;text-transform:uppercase;">FECHAR</button>`;
+
+  let limpo = false;
+  const limpar = () => {
+    if (limpo) return;
+    limpo = true;
+    try { overlay.remove(); } catch { /* ja removido */ }
+    try { painel.remove(); } catch { /* ja removido */ }
+    try { window.removeEventListener('afterprint', limpar); } catch { /* nada */ }
+  };
+
+  painel.querySelector('#dm-ios-print-btn')?.addEventListener('click', () => {
+    try { window.print(); } catch { /* folha nao abriu — painel continua */ }
+  });
+  painel.querySelector('#dm-ios-print-close')?.addEventListener('click', limpar);
+  window.addEventListener('afterprint', limpar);
+  setTimeout(limpar, 120000);
+
+  document.body.appendChild(overlay);
+  document.body.appendChild(painel);
+
+  try { window.print(); } catch { /* painel segue como plano B */ }
+}
+
+/**
+ * PONTO DE ENTRADA do canal USB para DOCUMENTO HTML COMPLETO.
+ * `html` deve ser o documento inteiro (com <style> e @page 80mm).
+ */
+export function imprimirHtmlViaUsb(html: string, onError?: (msg: string) => void): void {
+  if (typeof document === 'undefined') {
+    const msg = 'SEM_DOCUMENTO';
+    if (onError) onError(msg); else console.error('[usbPrint]', msg);
+    return;
+  }
+  // iOS primeiro — o iframe escondido nao imprime no Safari do iPhone.
+  if (dispositivoIOS()) {
+    try {
+      imprimirDocViaIos(html);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (onError) onError(msg); else console.error('[usbPrint]', msg);
+    }
+    return;
+  }
+
+  const iframe = document.createElement('iframe');
+  iframe.setAttribute('aria-hidden', 'true');
+  iframe.style.position = 'fixed';
+  iframe.style.right = '0';
+  iframe.style.bottom = '0';
+  iframe.style.width = '0';
+  iframe.style.height = '0';
+  iframe.style.border = '0';
+  iframe.style.opacity = '0';
+  iframe.srcdoc = html;
+
+  const remover = () => {
+    try { iframe.remove(); } catch { /* ja removido */ }
+  };
+  const falhar = (e: unknown) => {
+    remover();
+    const msg = e instanceof Error ? e.message : String(e);
+    if (onError) onError(msg);
+    else console.error('[usbPrint]', msg);
+  };
+
+  iframe.addEventListener('load', () => {
+    try {
+      const w = iframe.contentWindow;
+      if (!w) throw new Error('IFRAME_BLOQUEADO');
+      w.addEventListener('afterprint', remover);
+      w.focus();
+      w.print();
+      setTimeout(remover, 60000);
+    } catch (e) {
+      falhar(e);
+    }
+  });
+
+  try {
+    document.body.appendChild(iframe);
+  } catch (e) {
+    falhar(e);
+  }
+}
+
 /**
  * PONTO DE ENTRADA do canal USB (assinatura de sempre).
  * BLOCO 125: sem [[QR:...]] o fluxo e 100% SYNC (mesmo comportamento, gesto

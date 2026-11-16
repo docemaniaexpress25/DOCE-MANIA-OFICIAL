@@ -9,9 +9,11 @@ import {
 } from '@/services/notaService';
 // BLOCO 134: a janela fiscal imprime o CUPOM FISCAL 80mm PERFEITO (danfe80)
 import { danfeFiscal80 } from '@/lib/danfe80';
+// BLOCO 158: canal USB imprime o layout de REFERENCIA do dono (HTML 80mm)
+import { danfeFiscal80Html } from '@/lib/danfe80Html';
 import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
 // BLOCO 111: canal USB do PC — o cupom fiscal também sai na térmica USB
-import { imprimirViaUsb, lerCanalImpressao } from '@/lib/usbPrint';
+import { imprimirHtmlViaUsb, lerCanalImpressao } from '@/lib/usbPrint';
 // BLOCO 132: regras de documento do cadastro (CPF/CNPJ no mesmo campo)
 import { tipoDocDigitos, validaCpfOuCnpj } from '@/lib/cnpjAutocomplete';
 // BLOCO 134 (regra do dono): preço anônimo SÓ na NFC-e anônima; o cupom
@@ -250,7 +252,10 @@ const JanelaFiscal: React.FC<JanelaFiscalProps> = ({ sale, client, nota, focus, 
       }
       const texto = danfeFiscal80(cup);
       if (lerCanalImpressao() === 'USB') {
-        imprimirViaUsb(texto, '80MM', (m) => setErro(`Falha na janela de impressão USB: ${m}`));
+        // BLOCO 158: canal USB sai com o LAYOUT DE REFERENCIA do dono (HTML
+        // 80mm com grade, codigo de barras e fonte de melhor definicao).
+        const html = await danfeFiscal80Html(cup);
+        imprimirHtmlViaUsb(html, (m) => setErro(`Falha na janela de impressão USB: ${m}`));
         setInfo('Janela de impressão aberta — escolha a térmica USB do computador.');
         return;
       }

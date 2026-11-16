@@ -2,24 +2,25 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { DanfeFiscalData, danfeFiscal80 } from '@/lib/danfe80';
+import { danfeFiscal80Html } from '@/lib/danfe80Html';
+import { DEMO_DANFE_69 } from '@/lib/danfeDemo';
 import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
-import { imprimirViaUsb, lerCanalImpressao, dispositivoIOS } from '@/lib/usbPrint';
+import { imprimirHtmlViaUsb, lerCanalImpressao, dispositivoIOS } from '@/lib/usbPrint';
 
 /**
  * MODELOS DE IMPRESSAO 80mm — VISUALIZACAO + IMPRESSAO do MINI DANFE.
  *
- * "vou anexar aqui um pdf da nfe e um pdf do boleto! esses sao os modelos
- *  padrao para imprimir a4 na impressora comum, porem tbm precisamos de
- *  modelos menores ou seja mini danfe e mini boleto para ser impressos tanto
- *  na 80mm pelo bluetooth ou pelo 80mm usb!"
+ * BLOCO 158 (dono: "PEGAR A DANFE CRIADA NA NFE E CRIAR ALGO 100% A ESSE
+ * LAYOUT AQUI... SEMPRE OTIMIZADO PARA IMPRESSAO EM 80MM, DEIXE A MELHOR
+ * DEFINICAO DE QUALIDADE DA FONTE"): o preview agora mostra o LAYOUT DE
+ * REFERENCIA do dono (grade, caixa de valor total em destaque, codigo de
+ * barras CODE 128 e fonte monoespacada de melhor definicao) — exatamente a
+ * folha que sai no canal USB. Bluetooth segue no texto 48 colunas (ESC/POS
+ * nao desenha grade/box).
  *
- * BLOCO 152: o MINI BOLETO (80mm paisagem) foi EXCLUIDO pelo dono — o boleto
- * do app e o PDF ORIGINAL do Inter. Este modal sobra apenas com o:
- *  - MINI DANFE (80mm RETRATO): papel renderizado com o texto do cupom fiscal
- *    (danfeFiscal80) — mesma folha que sai no rolo.
- *
- * Canais: Bluetooth (Web Bluetooth, raster) e USB do PC (papel virtual
- * do navegador). O canal padrao do dispositivo e o mesmo do cupom.
+ * Canais: Bluetooth (Web Bluetooth, texto ESC/POS) e USB do PC (papel
+ * virtual do navegador com o HTML do layout novo). O canal padrao do
+ * dispositivo e o mesmo do cupom.
  */
 
 interface ModelosImpressaoProps {
@@ -31,74 +32,10 @@ interface ModelosImpressaoProps {
 }
 
 // ---------------------------------------------------------------------------
-// Dados DEMO do DANFE — exatamente os do PDF A4 anexado pelo dono (NF-e 139)
+// Dados DEMO — NF-e 69 Serie 1 do MODELO DE REFERENCIA do dono
+// (Mini DANFE 80mm - NF-e 69 Serie 1.html) — vivem em src/lib/danfeDemo.ts
 // ---------------------------------------------------------------------------
-const DEMO_CUPOM: DanfeFiscalData = {
-  autorizada: true,
-  modelo: 'NFE',
-  numero: '000000139',
-  serie: '1',
-  chave: '43261163720443000177550010000001391693448071',
-  protocolo: '243260472622402',
-  dataAutorizacao: '2026-11-12T17:57:36-03:00',
-  dataEmissao: '2026-11-12T17:41:00-03:00',
-  natureza: 'VENDA',
-  emitente: {
-    nome: 'DOCE MANIA EXPRESS LTDA',
-    fantasia: 'DOCE MANIA ATACADISTA',
-    cnpj: '63720443000177',
-    ie: '0290764262',
-    endereco: 'Rua dos Mimo-de-Venus, 185\nCinquentenario - 95012400\nCaxias do Sul/RS',
-  },
-  destinatario: {
-    nome: 'CLEUZA MARIA DA SILVA PORTO',
-    doc: '34970849000100',
-    ie: '8002233148',
-    endereco: 'Rua Paul A. Harrys 350 SALALOTE 001\nCinquentenario - 95012430\nCaxias do Sul/RS',
-  },
-  itens: [
-    { codigo: 'DOR120', descricao: 'DORITOS NACHO 120G', quantidade: 5, unidade: 'un', valorUnitario: 11.59, valorTotal: 57.95, ncm: '19059090', cst: '0101', cfop: '5102' },
-    { codigo: 'RFS68', descricao: 'RUFFLES SAL 68G', quantidade: 5, unidade: 'un', valorUnitario: 7.59, valorTotal: 37.95, ncm: '20052000', cst: '0101', cfop: '5102' },
-    { codigo: 'RUFCEB68', descricao: 'RUFFLES CEBOLA E SALSA 68G', quantidade: 3, unidade: 'un', valorUnitario: 7.59, valorTotal: 22.77, ncm: '20052000', cst: '0101', cfop: '5102' },
-    { codigo: 'FDP85', descricao: 'FANDANGOS PRESUNTO 85G', quantidade: 5, unidade: 'un', valorUnitario: 7.59, valorTotal: 37.95, ncm: '19041000', cst: '0101', cfop: '5102' },
-    { codigo: 'CHON90', descricao: 'CHEETOS ONDA 90G', quantidade: 10, unidade: 'un', valorUnitario: 7.59, valorTotal: 75.9, ncm: '19041000', cst: '0101', cfop: '5102' },
-    { codigo: 'PPIC55', descricao: 'PINGO PICANHA 55G', quantidade: 5, unidade: 'un', valorUnitario: 4.99, valorTotal: 24.95, ncm: '19059090', cst: '0101', cfop: '5102' },
-    { codigo: 'STI160', descricao: 'STIKSY 160G', quantidade: 10, unidade: 'un', valorUnitario: 9.59, valorTotal: 95.9, ncm: '19059090', cst: '0101', cfop: '5102' },
-    { codigo: 'TOD200', descricao: 'TODDYNHO 200ML', quantidade: 27, unidade: 'un', valorUnitario: 2.98, valorTotal: 80.46, ncm: '22029900', cst: '0101', cfop: '5102' },
-    { codigo: 'KERO330', descricao: 'KERO COCO 330ML', quantidade: 12, unidade: 'un', valorUnitario: 6.29, valorTotal: 75.48, ncm: '20098921', cst: '0101', cfop: '5102' },
-    { codigo: 'CEB91', descricao: 'CEBOLITOS 91G', quantidade: 3, unidade: 'un', valorUnitario: 7.99, valorTotal: 23.97, ncm: '19041000', cst: '0101', cfop: '5102' },
-  ],
-  quantidadeItens: 85,
-  valorProdutos: 932.21,
-  valorDesconto: 0,
-  valorTotal: 932.21,
-  valorTributos: 271.76,
-  baseIcms: 0,
-  valorIcms: 0,
-  pagamentos: [{ forma: 'BOLETO BANCARIO', valor: 932.21 }],
-  troco: 0,
-  informacoes: 'Valor aproximado dos tributos: R$ 126,65 federais R$ 145,11 estaduais Fonte: IBPT/empresometro.com.br AA45DF',
-  simplesNacional: true,
-  fonte: 'XML',
-};
-
-// ---------------------------------------------------------------------------
-// Papel termico 80mm em HTML (o texto 48 colunas como sai no rolo)
-// ---------------------------------------------------------------------------
-const Papel80: React.FC<{ texto: string }> = ({ texto }) => (
-  <div className="relative mx-auto w-[300px] max-w-full">
-    {/* topo do rolo (recorte) */}
-    <div className="h-3 rounded-t-[3px] bg-white border border-b-0 border-gray-300"
-      style={{ backgroundImage: 'repeating-linear-gradient(90deg, #d4d4d8 0 6px, transparent 6px 12px)' }} />
-    <div className="bg-white border-x border-gray-300 px-4 py-4 font-mono text-[11px] leading-[1.45] whitespace-pre text-black shadow-sm"
-      style={{ letterSpacing: '-0.3px' }}>
-      {texto}
-    </div>
-    {/* base do rolo (recorte) */}
-    <div className="h-3 rounded-b-[3px] bg-white border border-t-0 border-gray-300"
-      style={{ backgroundImage: 'repeating-linear-gradient(90deg, #d4d4d8 0 6px, transparent 6px 12px)' }} />
-  </div>
-);
+const DEMO_CUPOM: DanfeFiscalData = DEMO_DANFE_69;
 
 const ModelosImpressao: React.FC<ModelosImpressaoProps> = ({ abrir, onClose, cupom, showToast }) => {
   const [ocupado, setOcupado] = useState<'bt' | 'usb' | ''>('');
@@ -117,23 +54,36 @@ const ModelosImpressao: React.FC<ModelosImpressaoProps> = ({ abrir, onClose, cup
   const cupomFinal = cupom || DEMO_CUPOM;
   const ehDemo = !cupom;
 
-  // texto do mini DANFE (48 colunas) — renderizado no papel
+  // BLOCO 158: HTML do layout de referencia (a folha que sai no USB).
+  // O gerador e async (QR da NFC-e) — estado preenchido no useEffect.
+  const [htmlDanfe, setHtmlDanfe] = useState('');
+  useEffect(() => {
+    if (!abrir) { setHtmlDanfe(''); return; }
+    let vivo = true;
+    danfeFiscal80Html(cupomFinal)
+      .then((h) => { if (vivo) setHtmlDanfe(h); })
+      .catch(() => { if (vivo) setHtmlDanfe(''); });
+    return () => { vivo = false; };
+  }, [abrir, cupomFinal]);
+
+  // texto 48 colunas — usado só no canal Bluetooth (ESC/POS)
   const textoDanfe = useMemo(() => {
     try { return danfeFiscal80(cupomFinal); } catch { return ''; }
   }, [cupomFinal]);
 
   if (!abrir) return null;
 
-  // ---------- impressao do mini DANFE (texto 48 colunas) ----------
+  // ---------- impressao do mini DANFE (USB = HTML / BT = texto) ----------
   const imprimirDanfe = async (canal: 'bt' | 'usb') => {
-    if (!textoDanfe) return;
     setOcupado(canal);
     try {
       if (canal === 'usb' || lerCanalImpressao() === 'USB') {
-        imprimirViaUsb(textoDanfe, '80MM', (m) => showToast?.(`Falha na janela USB: ${m}`, 'error'));
+        if (!htmlDanfe) { showToast?.('Cupom indisponível para o layout.', 'error'); return; }
+        imprimirHtmlViaUsb(htmlDanfe, (m) => showToast?.(`Falha na janela USB: ${m}`, 'error'));
         showToast?.('Janela de impressão aberta — escolha a térmica USB.', 'success');
         return;
       }
+      if (!textoDanfe) return;
       const ok = await bluetoothPrinter.print(textoDanfe, '80MM', { skipConfirm: true });
       if (ok) showToast?.('Mini DANFE enviado à impressora Bluetooth!', 'success');
       else showToast?.('Impressão não realizada — conecte a impressora.', 'error');
@@ -150,6 +100,14 @@ const ModelosImpressao: React.FC<ModelosImpressaoProps> = ({ abrir, onClose, cup
   const canalAtualSel = canalAtual;
   const iosSel = montado && ios;
 
+  /** Ajusta a altura do iframe ao conteudo (papel do tamanho real). */
+  const ajustarAlturaIframe = (e: React.SyntheticEvent<HTMLIFrameElement>) => {
+    try {
+      const doc = e.currentTarget.contentDocument;
+      if (doc) e.currentTarget.style.height = `${Math.ceil(doc.documentElement.scrollHeight)}px`;
+    } catch { /* cross-origin impossivel com srcdoc — ignora */ }
+  };
+
   return (
     <div className="fixed inset-0 z-[170] bg-black/80 backdrop-blur-sm flex flex-col" role="dialog" aria-label="Modelos de impressão 80mm">
       {/* HEADER */}
@@ -158,21 +116,36 @@ const ModelosImpressao: React.FC<ModelosImpressaoProps> = ({ abrir, onClose, cup
           <i className="fa-solid fa-xmark"></i>
         </button>
         <div className="flex-1 min-w-0">
-          <p className="text-[10px] font-black uppercase tracking-widest">Modelos de impressão 80mm</p>
-          <p className="text-[9px] font-bold text-white/60 truncate">Mini DANFE (retrato) — como sai na térmica</p>
+          <p className="text-[10px] font-black uppercase tracking-widest">Mini DANFE 80mm</p>
+          <p className="text-[9px] font-bold text-white/60 truncate">Layout de referência — como sai na térmica</p>
         </div>
         {ehDemo && (
-          <span className="text-[8px] font-black uppercase bg-amber-400 text-amber-950 px-2 py-1 rounded-md shrink-0">Exemplo NF-e 139</span>
+          <span className="text-[8px] font-black uppercase bg-amber-400 text-amber-950 px-2 py-1 rounded-md shrink-0">Exemplo NF-e 69</span>
         )}
       </div>
 
-      {/* CONTEUDO — PREVIEW */}
+      {/* CONTEUDO — PREVIEW do papel 80mm (HTML real, isolado no iframe) */}
       <div className="flex-1 overflow-y-auto bg-slate-950/60 p-4">
         <div className="space-y-3">
           <p className="text-[9px] font-black text-white/50 uppercase tracking-wide text-center">
             Papel térmico 80mm — como sai da impressora
           </p>
-          <Papel80 texto={textoDanfe || 'Cupom indisponível'} />
+          {htmlDanfe ? (
+            <iframe
+              srcDoc={htmlDanfe}
+              title="Mini DANFE 80mm"
+              onLoad={ajustarAlturaIframe}
+              className="w-[340px] max-w-full mx-auto block bg-white rounded shadow-lg border-0"
+              style={{ minHeight: '320px' }}
+            />
+          ) : (
+            <p className="text-center text-[10px] font-bold text-white/60 py-10">Cupom indisponível</p>
+          )}
+          {!iosSel && (
+            <p className="text-[8px] font-bold text-white/40 text-center leading-snug">
+              USB: sai EXATAMENTE esta folha (layout de referência). Bluetooth: sai a versão texto de 48 colunas (ESC/POS não desenha grade).
+            </p>
+          )}
         </div>
       </div>
 

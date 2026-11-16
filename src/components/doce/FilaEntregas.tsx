@@ -11,9 +11,11 @@ import TrocasBox from '@/components/doce/TrocasBox';
 import { notaService } from '@/services/notaService';
 // BLOCO 131: cupom fiscal PERFEITO 80mm — dados do XML autorizado pela SEFAZ
 import { danfeFiscal80 } from '@/lib/danfe80';
+// BLOCO 158: canal USB imprime o layout de REFERENCIA do dono (HTML 80mm)
+import { danfeFiscal80Html } from '@/lib/danfe80Html';
 import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
 // BLOCO 111: impressão térmica USB do PC — canal BT x USB persistente por dispositivo
-import { imprimirViaUsb, lerCanalImpressao, dispositivoIOS } from '@/lib/usbPrint';
+import { imprimirHtmlViaUsb, lerCanalImpressao, dispositivoIOS } from '@/lib/usbPrint';
 // BLOCO 123: regras fiscais ARMADAS porém DESLIGADAS (flag em
 // src/lib/regras-fiscais.ts) + troca do documento fiscal pelo ADMIN na fila
 // (NF-e <-> NFC-e com/sem CPF <-> só cupom) — "o admin tem poder de editar tudo".
@@ -329,7 +331,9 @@ const AcaoFiscalAdmin: React.FC<{ p: FilaItem; showToast: (m: string, t?: 'succe
       showToast('Enviando cupom fiscal à impressora...', 'success');
       // BLOCO 111: canal USB do PC — DANFE sai pela janela de impressão
       if (lerCanalImpressao() === 'USB') {
-        imprimirViaUsb(texto, '80MM', (m) => {
+        // BLOCO 158: sai com o LAYOUT DE REFERENCIA do dono (HTML 80mm)
+        const html = await danfeFiscal80Html(cup);
+        imprimirHtmlViaUsb(html, (m) => {
           showToast(`Erro na impressão do cupom fiscal: ${m}`, 'error');
         });
         showToast('Cupom fiscal na janela de impressão — escolha a térmica USB do PC.', 'success');

@@ -34,11 +34,11 @@ import { isInterConfigured, recuperarCobranca, interpretarCobranca } from '@/lib
 /** BLOCO 167: persiste o evento em webhook_logs (best-effort — nunca trava). */
 async function logEvento(
   db: ReturnType<typeof getServiceClient>,
-  e: { evento: unknown; codigo?: string; seuNumero?: string; saleId?: string | null; resultado: string; processado: boolean }
+  e: { evento: unknown; codigo?: string; seuNumero?: string; saleId?: string | null; resultado: string; processado: boolean; origem?: string }
 ) {
   try {
     const { error } = await db.from('webhook_logs').insert({
-      origem: 'INTER',
+      origem: e.origem || 'INTER',
       evento: (e.evento ?? null) as any,
       codigo: (e.codigo || '').slice(0, 120) || null,
       seu_numero: (e.seuNumero || '').slice(0, 60) || null,
@@ -50,6 +50,27 @@ async function logEvento(
   } catch (err: any) {
     // SQL 167 ainda nao rodou (tabela nao existe) — webhook segue funcionando.
     console.warn('[inter-webhook] log nao persistido:', err?.message);
+  }
+}
+
+/**
+ * BLOCO 172: marca DE ONDE veio a baixa (origem estruturada p/ o log de
+ * pagamentos do app). UPDATE SEPARADO best-effort — se o SQL 172 ainda nao
+ * rodou (colunas ausentes), NAO quebra a baixa que ja aconteceu acima.
+ */
+async function marcarBaixaOrigem(
+  db: ReturnType<typeof getServiceClient>,
+  saleId: string,
+  origem: string
+) {
+  try {
+    const { error } = await db
+      .from('sales')
+      .update({ baixa_origem: origem, baixa_em: new Date().toISOString() })
+      .eq('id', saleId);
+    if (error) console.warn('[inter-webhook] baixa_origem nao gravada:', error.message);
+  } catch (err: any) {
+    console.warn('[inter-webhook] baixa_origem nao gravada:', err?.message);
   }
 }
 
@@ -100,16 +121,31 @@ export async function POST(req: NextRequest) {
   if (codigo) {
     const { data } = await db
       .from('sales')
-      .select('id, valor_total, valor_pago, status_pagamento, metodo_pagamento, detalhe_pagamento, inter_boleto_codigo, inter_boleto_status')
+      .select('id, valor_total, valor_pago, status_pagamento, metodo_pagamento, detalhe_pagamento, inter_boleto_codigo, inter_boleto_seu_numero, inter_boleto_status')
       .eq('inter_boleto_codigo', codigo)
       .limit(1)
       .maybeSingle();
     sale = (data as Record<string, unknown>) || null;
   }
-  if (!sale && saleIdPeloSeuNumero) {
+  if (!sale && seuNumero) {
+    // BLOCO 172 — FIX: o seuNumero gravado na emissao é TRUNCADO (DM + 9 chars
+    // do UUID, ex. DMDBB1E53EE) — o fallback antigo buscava .eq('id', truncado)
+    // e NUNCA casava. O casamento correto é pelo campo gravado na emissao
+    // (cobre o seuNumero normal e as reemissoes DM...-r2/r3).
+    const { data: porSeuNumero } = await db
+      .from('sales')
+      .select('id, valor_total, valor_pago, status_pagamento, metodo_pagamento, detalhe_pagamento, inter_boleto_codigo, inter_boleto_seu_numero, inter_boleto_status')
+      .eq('inter_boleto_seu_numero', seuNumero)
+      .limit(1)
+      .maybeSingle();
+    sale = (porSeuNumero as Record<string, unknown>) || null;
+  }
+  if (!sale && saleIdPeloSeuNumero && /^[0-9a-f-]{36}$/i.test(saleIdPeloSeuNumero)) {
+    // fallback final: seuNumero completo tipo DM<uuid> (nao existe hoje, mas
+    // protege contra mudanca de formato) — so aceita UUID real.
     const { data } = await db
       .from('sales')
-      .select('id, valor_total, valor_pago, status_pagamento, metodo_pagamento, detalhe_pagamento, inter_boleto_codigo, inter_boleto_status')
+      .select('id, valor_total, valor_pago, status_pagamento, metodo_pagamento, detalhe_pagamento, inter_boleto_codigo, inter_boleto_seu_numero, inter_boleto_status')
       .eq('id', saleIdPeloSeuNumero)
       .limit(1)
       .maybeSingle();
@@ -117,7 +153,7 @@ export async function POST(req: NextRequest) {
   }
   if (!sale) {
     console.warn('[inter-webhook] venda nao encontrada p/ codigo', codigo || seuNumero);
-    await logEvento(db, { evento: body, codigo, seuNumero, resultado: 'VENDA_NAO_ENCONTRADA — boleto não emitido pelo app?', processado: false });
+    await logEvento(db, { evento: body, codigo, seuNumero, resultado: 'VENDA_NAO_ENCONTRADA — boleto emitido FORA do app? Boletos gerados direto no Internet Banking nao tem venda vinculada: baixar manual no Contas a Receber', processado: false });
     return NextResponse.json({ ok: true, processado: false, motivo: 'VENDA_NAO_ENCONTRADA' });
   }
 
@@ -177,6 +213,9 @@ export async function POST(req: NextRequest) {
     await logEvento(db, { evento: body, codigo, seuNumero, saleId: String(sale.id), resultado: `FALHA_GRAVACAO — ${error.message}`, processado: false });
     return NextResponse.json({ ok: true, processado: false, motivo: 'FALHA_GRAVACAO' });
   }
+
+  // BLOCO 172: origem da baixa (best-effort — não trava se SQL 172 faltar).
+  await marcarBaixaOrigem(db, String(sale.id), 'WEBHOOK_INTER');
 
   // BLOCO 167: a trigger trg_baixa_boleto_caixa (SQL 167) já deu a baixa no
   // CAIXA (pago_em) como reação ao UPDATE acima — nada extra a fazer aqui.

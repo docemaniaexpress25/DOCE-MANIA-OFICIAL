@@ -32,6 +32,51 @@ import { isInterConfigured, recuperarCobranca, interpretarCobranca } from '@/lib
 
 const LIMITE = 15;
 
+/**
+ * BLOCO 172: persiste o evento do CRON em webhook_logs (mesma tabela do
+ * webhook — origem 'CRON' para diferenciar). Best-effort: SQL 167/172 ausentes
+ * não quebram o sync.
+ */
+async function logCronEvento(
+  db: ReturnType<typeof getServiceClient>,
+  e: { codigo?: string; seuNumero?: string; saleId?: string; resultado: string; processado: boolean }
+) {
+  try {
+    const { error } = await db.from('webhook_logs').insert({
+      origem: 'CRON',
+      evento: { fonte: 'boletos-sync' } as any,
+      codigo: (e.codigo || '').slice(0, 120) || null,
+      seu_numero: (e.seuNumero || '').slice(0, 60) || null,
+      sale_id: e.saleId ? String(e.saleId).slice(0, 64) : null,
+      resultado: (e.resultado || '').slice(0, 300),
+      processado: e.processado,
+    });
+    if (error) console.warn('[boletos-sync] log nao persistido:', error.message);
+  } catch (err: any) {
+    console.warn('[boletos-sync] log nao persistido:', err?.message);
+  }
+}
+
+/**
+ * BLOCO 172: marca DE ONDE veio a baixa (origem estruturada). UPDATE SEPARADO
+ * best-effort — SQL 172 ausente NAO desfaz a baixa que ja aconteceu.
+ */
+async function marcarBaixaOrigem(
+  db: ReturnType<typeof getServiceClient>,
+  saleId: string,
+  origem: string
+) {
+  try {
+    const { error } = await db
+      .from('sales')
+      .update({ baixa_origem: origem, baixa_em: new Date().toISOString() })
+      .eq('id', saleId);
+    if (error) console.warn('[boletos-sync] baixa_origem nao gravada:', error.message);
+  } catch (err: any) {
+    console.warn('[boletos-sync] baixa_origem nao gravada:', err?.message);
+  }
+}
+
 export async function GET(req: NextRequest) {
   const auth = req.headers.get('authorization') || '';
   const secret = process.env.CRON_SECRET || '';
@@ -52,7 +97,7 @@ export async function GET(req: NextRequest) {
   const db = getServiceClient();
   const { data: abertos, error } = await db
     .from('sales')
-    .select('id, valor_total, valor_pago, status_pagamento, detalhe_pagamento, inter_boleto_status, inter_boleto_codigo, inter_boleto_vencimento')
+    .select('id, valor_total, valor_pago, status_pagamento, detalhe_pagamento, inter_boleto_status, inter_boleto_codigo, inter_boleto_seu_numero, inter_boleto_vencimento')
     .in('inter_boleto_status', ['EM_PROCESSAMENTO', 'A_RECEBER', 'ATRASADO'])
     .limit(LIMITE);
 
@@ -72,11 +117,13 @@ export async function GET(req: NextRequest) {
   for (const sale of fila) {
     const saleId = String(sale.id);
     const codigo = String(sale.inter_boleto_codigo || '');
+    const seuNumero = String((sale as any).inter_boleto_seu_numero || '');
     if (!codigo) continue;
     try {
       const r = await recuperarCobranca(codigo);
       if (!r.ok || !r.data || 'erro' in r.data) {
         falhas.push({ id: saleId, erro: 'consulta falhou' });
+        await logCronEvento(db, { codigo, seuNumero, saleId, resultado: `CRON — falha re-consultando cobranca ${codigo.slice(0, 18)}`, processado: false });
         continue;
       }
       const cob = interpretarCobranca(r.data as Record<string, unknown>);
@@ -107,9 +154,13 @@ export async function GET(req: NextRequest) {
         patch.inter_boleto_status = 'RECEBIDO';
         patch.detalhe_pagamento = `${logAnterior ? logAnterior + ' | ' : ''}BOLETO RECEBIDO (Inter) em ${carimbo} — baixa automatica (sync)`;
         baixadas++;
+        // BLOCO 172: o cron também fica visível no log de eventos (origem CRON)
+        // e marca a origem estruturada da baixa (CRON_INTER).
+        await logCronEvento(db, { codigo, seuNumero, saleId, resultado: `BOLETO PAGO (via sync diário) — baixa automatica R$ ${valorTotal.toFixed(2)} (contas a receber + caixa)`, processado: true });
       }
       await db.from('sales').update(patch).eq('id', saleId);
       if (pagoInter) {
+        if (sale.status_pagamento !== 'PAGO') await marcarBaixaOrigem(db, saleId, 'CRON_INTER');
         try {
           await db.from('commissions').update({ status: 'DISPONIVEL' }).eq('sale_id', saleId).eq('status', 'A_RECEBER');
         } catch { /* best-effort */ }

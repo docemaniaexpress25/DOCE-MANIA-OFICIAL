@@ -221,6 +221,10 @@ export const saleService = {
     if (updates.detalhePagamento !== undefined) payload.detalhe_pagamento = updates.detalhePagamento;
     if ((updates as any).comprovanteFoto !== undefined) payload.comprovante_foto = (updates as any).comprovanteFoto;
     if ((updates as any).modoNota !== undefined) payload.modo_nota = (updates as any).modoNota;
+    // BLOCO 172: origem da baixa de pagamento (log automático x manual).
+    // Colunas só existem após o SQL 172 — o chamador grava best-effort.
+    if ((updates as any).baixaOrigem !== undefined) payload.baixa_origem = (updates as any).baixaOrigem;
+    if ((updates as any).baixaEm !== undefined) payload.baixa_em = (updates as any).baixaEm;
     const { error } = await supabase.from('sales').update(payload).eq('id', id);
     return !error;
   },

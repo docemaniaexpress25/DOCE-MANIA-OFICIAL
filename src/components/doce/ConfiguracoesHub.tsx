@@ -40,11 +40,23 @@ interface BoletoConfig {
 interface WebhookLogEvento {
   id: string;
   criadoEm: string;
+  origem?: string | null;
   codigo?: string | null;
   seuNumero?: string | null;
   saleId?: string | null;
   resultado: string;
   processado: boolean;
+}
+
+// BLOCO 172 — recebimento com origem (sales.baixa_origem/baixa_em, SQL 172)
+interface RecebimentoLog {
+  id: string;
+  baixaEm: string;
+  baixaOrigem: string;
+  valor: number;
+  metodo: string;
+  cliente: string;
+  detalhe: string;
 }
 
 // BLOCO 116/117 — webhook da Focus (status em tempo real via API /v2/hooks)
@@ -143,6 +155,12 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
   const [logHook, setLogHook] = useState<WebhookLogEvento[] | null>(null);
   const [logHookErro, setLogHookErro] = useState('');
   const [logHookCarregando, setLogHookCarregando] = useState(false);
+
+  // BLOCO 172 — log de pagamentos e recebimentos (automático x manual)
+  const [recLogAberto, setRecLogAberto] = useState(false);
+  const [recLog, setRecLog] = useState<RecebimentoLog[] | null>(null);
+  const [recLogErro, setRecLogErro] = useState('');
+  const [recLogCarregando, setRecLogCarregando] = useState(false);
 
   const [toast, setToast] = useState<{ msg: string; tipo: 'success' | 'error' } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -316,6 +334,43 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
     const novo = !logAberto;
     setLogAberto(novo);
     if (novo && logHook === null) void carregarLogWebhook();
+  };
+
+  /* ===== BLOCO 172 — log de pagamentos e recebimentos (GET /api/recebimentos-log) ===== */
+  const carregarLogRecebimentos = useCallback(async () => {
+    setRecLogCarregando(true);
+    try {
+      const res = await fetch('/api/recebimentos-log', { headers: { ...authHeaders() } });
+      const d = await res.json().catch(() => null);
+      if (!res.ok || !d?.ok) {
+        setRecLogErro(String(d?.error || 'Falha ao carregar o log de recebimentos.'));
+        return;
+      }
+      setRecLog(Array.isArray(d.recebimentos) ? d.recebimentos : []);
+      setRecLogErro('');
+    } catch {
+      setRecLogErro('Sem conexão para carregar o log de recebimentos.');
+    } finally {
+      setRecLogCarregando(false);
+    }
+  }, []);
+
+  const alternarLogRecebimentos = () => {
+    const novo = !recLogAberto;
+    setRecLogAberto(novo);
+    if (novo && recLog === null) void carregarLogRecebimentos();
+  };
+
+  // BLOCO 172 — rótulo/cor da origem da baixa
+  const origemBaixa = (o: string): { label: string; cls: string; icon: string } => {
+    switch (o) {
+      case 'WEBHOOK_INTER': return { label: 'Automático (webhook Inter)', cls: 'bg-emerald-50 text-emerald-600', icon: 'fa-bolt' };
+      case 'CRON_INTER': return { label: 'Automático (sync diário)', cls: 'bg-emerald-50 text-emerald-600', icon: 'fa-arrows-rotate' };
+      case 'PIX_PORTAL': return { label: 'PIX do portal (confirmado)', cls: 'bg-teal-50 text-teal-600', icon: 'fa-mobile-screen' };
+      case 'MANUAL': return { label: 'Baixa manual no app', cls: 'bg-amber-50 text-amber-600', icon: 'fa-hand-holding-dollar' };
+      case 'PDV': return { label: 'À vista (PDV)', cls: 'bg-gray-100 text-gray-600', icon: 'fa-cash-register' };
+      default: return { label: o || '—', cls: 'bg-gray-100 text-gray-500', icon: 'fa-tag' };
+    }
   };
 
   /* ===== BLOCO 116 — webhook da Focus (instalar/remover via API da Focus) ===== */
@@ -586,9 +641,14 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
                     {logHook.map((e) => (
                       <div key={e.id} className="bg-white border border-slate-100 rounded-xl px-3 py-2">
                         <div className="flex items-center justify-between gap-2 flex-wrap">
-                          <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded-md ${e.processado ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600'}`}>
-                            {e.processado ? 'processado' : 'aviso/erro'}
-                          </span>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded-md ${e.processado ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600'}`}>
+                              {e.processado ? 'processado' : 'aviso/erro'}
+                            </span>
+                            {e.origem === 'CRON' && (
+                              <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded-md bg-sky-50 text-sky-600">sync diário</span>
+                            )}
+                          </div>
                           <span className="text-[8px] font-bold text-gray-400">{new Date(e.criadoEm).toLocaleDateString('pt-BR')} {new Date(e.criadoEm).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
                         </div>
                         <p className="text-[9px] font-bold text-gray-600 leading-snug mt-1 break-words">{e.resultado}</p>
@@ -600,6 +660,63 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
                   </div>
                 )}
                 <p className="text-[8px] font-semibold text-gray-400 leading-snug mt-2">O recebimento de cada boleto também fica gravado no histórico da venda (detalhe do pagamento) e no Contas a Receber.</p>
+              </div>
+            )}
+          </div>
+
+          {/* BLOCO 172 — LOG DE PAGAMENTOS E RECEBIMENTOS (automático x manual) */}
+          <div className="border-t border-gray-50 pt-3 space-y-2">
+            <button onClick={alternarLogRecebimentos} className="w-full flex items-center justify-between gap-2 text-left" aria-expanded={recLogAberto}>
+              <div className="flex items-start gap-3">
+                <i className="fa-solid fa-sack-dollar text-teal-500 mt-1"></i>
+                <div>
+                  <p className="text-[11px] font-bold text-gray-600 uppercase">Log de pagamentos e recebimentos</p>
+                  <p className="text-[9px] text-gray-400 font-semibold leading-snug mt-0.5">De onde veio cada baixa: automática (webhook/sync do Inter), Pix do portal ou baixa manual (por quem). Últimos 40.</p>
+                </div>
+              </div>
+              <i className={`fa-solid fa-chevron-${recLogAberto ? 'up' : 'down'} text-gray-300 text-xs flex-shrink-0`}></i>
+            </button>
+            {recLogAberto && (
+              <div className="bg-slate-50 border border-slate-100 rounded-2xl p-3">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-[8px] font-black text-slate-400 uppercase">Últimos 40 recebimentos</p>
+                  <button onClick={() => void carregarLogRecebimentos()} disabled={recLogCarregando} className="text-[9px] font-black uppercase text-teal-600 underline disabled:opacity-50 px-2 py-1">
+                    <i className={`fa-solid ${recLogCarregando ? 'fa-spinner fa-spin' : 'fa-rotate-right'} mr-1`}></i>Atualizar
+                  </button>
+                </div>
+                {recLogErro && <p className="text-[9px] font-bold text-rose-500 uppercase leading-snug">{recLogErro}</p>}
+                {!recLogErro && recLogCarregando && <p className="text-[9px] font-black text-gray-300 uppercase py-3 text-center"><i className="fa-solid fa-spinner fa-spin mr-1"></i>Carregando log...</p>}
+                {!recLogErro && !recLogCarregando && (recLog || []).length === 0 && (
+                  <p className="text-[9px] font-bold text-gray-400 uppercase leading-snug">
+                    Nenhum recebimento com origem registrada ainda. {recLog === null ? '' : 'Rode o SQL do Bloco 172 no Supabase (o dono recebeu no chat) — as próximas baixas (automáticas e manuais) aparecem aqui com a origem.'}
+                  </p>
+                )}
+                {!recLogErro && !recLogCarregando && recLog !== null && recLog.length > 0 && (
+                  <div className="space-y-1.5 max-h-72 overflow-y-auto">
+                    {recLog.map((r) => {
+                      const o = origemBaixa(r.baixaOrigem);
+                      return (
+                        <div key={r.id} className="bg-white border border-slate-100 rounded-xl px-3 py-2">
+                          <div className="flex items-center justify-between gap-2 flex-wrap">
+                            <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded-md inline-flex items-center gap-1 ${o.cls}`}>
+                              <i className={`fa-solid ${o.icon}`}></i>{o.label}
+                            </span>
+                            <span className="text-[8px] font-bold text-gray-400">{new Date(r.baixaEm).toLocaleDateString('pt-BR')} {new Date(r.baixaEm).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
+                          </div>
+                          <div className="flex items-center justify-between gap-2 mt-1 flex-wrap">
+                            <p className="text-[10px] font-black text-gray-700 uppercase break-words min-w-0">{r.cliente}</p>
+                            <p className="text-[11px] font-black text-emerald-600 tabular-nums flex-shrink-0">{r.valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
+                          </div>
+                          {r.baixaOrigem === 'MANUAL' && /— por (.+)$/.test(r.detalhe) && (
+                            <p className="text-[8px] font-bold text-amber-600 uppercase mt-0.5">Recebido por {r.detalhe.match(/— por (.+)$/)?.[1] || ''}</p>
+                          )}
+                          <p className="text-[8px] font-semibold text-gray-400 mt-0.5 truncate">{r.metodo || '—'}</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                <p className="text-[8px] font-semibold text-gray-400 leading-snug mt-2">Automáticos = o banco avisou (webhook/sync). Manuais = alguém deu baixa no Contas a Receber — sempre com o nome de quem recebeu.</p>
               </div>
             )}
           </div>

@@ -7,11 +7,13 @@
 - **Emissão**: `POST /api/boletos EMITIR` → `codigoSolicitacao` (EM_PROCESSAMENTO → A_RECEBER). seuNumero `DM<saleId>`; reemissão sufixo `-r2`. Regras: CEP obrigatório no pagador, min R$2,50, valor = saldo da venda; **NÃO enviar campo notaFiscal** (Inter recusa a cobrança inteira — 151); nota na mensagem (linha 2 = mensagem padrão do hub, máx 78 chars).
 - **WEBHOOK DE PAGAMENTO (baixa automática)** — `POST /api/webhooks/inter` (público):
   1. O dono cadastra no **Internet Banking PJ › API › Webhooks › Cobrança** a URL `https://sistema-doce-mania1.vercel.app/api/webhooks/inter`.
-  2. Chegou evento → acha a venda por `codigoSolicitacao` ou `seuNumero` (`DM<saleId>`) → **RE-CONSULTA a cobrança na API do Inter (mTLS) antes de dar baixa** ("payload mentiroso não move um centavo") → se RECEBIDO: `valor_pago=valor_total` + `status_pagamento='PAGO'` + `inter_boleto_status='RECEBIDO'`.
-  3. TODO evento (pago, sem código, venda não encontrada, já pago, falha) persiste em `webhook_logs` (167) → auditável em `/api/webhooks/inter-log` (admin/secretário) e no hub ERP (card Boletos › Log de eventos).
+  2. Chegou evento → acha a venda por `codigoSolicitacao` ou `inter_boleto_seu_numero` (bloco 172 corrigiu o fallback: seuNumero é TRUNCADO — DM+9 chars — então casa pelo campo gravado na emissão, nunca por ID) → **RE-CONSULTA a cobrança na API do Inter (mTLS) antes de dar baixa** ("payload mentiroso não move um centavo") → se RECEBIDO: `valor_pago=valor_total` + `status_pagamento='PAGO'` + `inter_boleto_status='RECEBIDO'` + `baixa_origem='WEBHOOK_INTER'`/`baixa_em` (SQL 172).
+  3. TODO evento (pago, sem código, venda não encontrada, já pago, falha) persiste em `webhook_logs` (167) → auditável em `/api/webhooks/inter-log` (admin/secretário) e no hub ERP (card Boletos › Log de eventos). Eventos do CRON também caem nessa tabela com `origem='CRON'` (170).
   4. **Baixa no CAIXA** acontece pela trigger SQL `trg_baixa_boleto_caixa` (reação ao UPDATE da venda → `pago_em=now()`).
   5. Responde 200 SEMPRE (evita reenvio infinito); idempotente (JA_PAGO tratado).
-  6. **Teste real só com boleto pago de verdade** (sandbox não pode mutar dado real). Rede de segurança: cron `/api/boletos-sync` `0 10 * * *` reconsulta até 15 cobranças abertas e baixa atrasadas/pagas (comissão A_RECEBER→DISPONIVEL).
+  6. **Teste real só com boleto pago de verdade** (sandbox não pode mutar dado real). Rede de segurança: cron `/api/boletos-sync` `0 10 * * *` reconsulta até 15 cobranças abertas e baixa atrasadas/pagas (comissão A_RECEBER→DISPONIVEL) — a baixa via cron marca `baixa_origem='CRON_INTER'` e grava webhook_logs.
+  7. **LIMITAÇÃO CONHECIDA (170): boleto emitido FORA do app** (direto no Internet Banking, ex. Sacolão Zimermann R$ 1.102 — venda 0ef39ad3) **não tem inter_boleto_codigo → nem webhook nem cron alcançam → baixa é MANUAL** (Contas a Receber › Receber › Boleto). O log de eventos registra VENDA_NAO_ENCONTRADA com essa orientação quando o Inter avisa um boleto sem venda vinculada.
+- **LOG DE PAGAMENTOS/RECEBIMENTOS (170)**: `sales.baixa_origem` (`WEBHOOK_INTER`, `CRON_INTER`, `MANUAL`, `PIX_PORTAL`, `PDV`) + `sales.baixa_em` — gravados por TODOS os caminhos de baixa (webhook, sync, comprovante portal, receiveAccount com "— por NOME" no detalhe). Leitura: `GET /api/recebimentos-log` (admin/secretário) → UI: Configurações › Boletos › "Log de pagamentos e recebimentos". Updates de origem são SEPARADOS e best-effort (SQL 172 ausente não quebra a baixa).
 - **Segurança do webhook**: público por natureza — a defesa é (a) nunca confiar no payload (re-consulta autenticada), (b) log completo para auditoria, (c) efeitos idempotentes. Não aceitar "baixa" direta do corpo do evento.
 
 ## 2. Focus NFe — NF-e/NFC-e — ATIVA
@@ -34,7 +36,8 @@
 
 - `src/lib/pix.ts`: BR Code **EMV QRCPS-MPM** estático com valor (campo 54) + txid + CRC16 Bacen. Chave: `app_settings.pix_chave_entrega` (PDV/entrega — bloco 62, valida CPF/CNPJ/telefone/email/aleatória com DV) ou env `PIX_KEY` (default CPF `01735712043`, `PIX_NAME='DOCE MANIA'`, `PIX_CITY='SAO PAULO'`).
 - Pontos de uso: PDV `GET /api/pix/venda?valor=`; portal do cliente (saldo devedor, txid único); QR dentro do boleto Inter; QR consulta no cupom fiscal (`montarQrNfce`); mini boleto.
-- **Não existe PSP de cobrança** (Mercado Pago/Asaas/Paggue/PagHipper não estão no sistema). Confirmação de Pix é MANUAL: foto do comprovante do cliente → revisão admin (Comprovantes) → CONFIRMAR baixa. Na entrega, Pix exige foto também.
+- **Não existe PSP de cobrança** (Mercado Pago/Asaas/Paggue/PagHipper não estão no sistema). Confirmação de Pix é MANUAL: foto do comprovante do cliente → revisão admin (Comprovantes) → CONFIRMAR baixa — grava `baixa_origem='PIX_PORTAL'` (170). Na entrega, Pix exige foto também.
+- **Pix via API Inter (extrato/cobrança) NÃO existe** — proposta do roadmap (conciliação automática de Pix) exige env extra; hoje Pix do portal só baixa com revisão humana.
 
 ## 5. Padrão universal de webhook seguro (copiar para qualquer integração nova)
 

@@ -86,6 +86,20 @@ export async function POST(req: NextRequest) {
       .eq('id', sale.id);
     if (saleUpErr) throw saleUpErr;
 
+    // BLOCO 172: origem da baixa (best-effort — update SEPARADO: se o SQL 172
+    // ainda não rodou, NÃO desfaz a baixa acima).
+    if (quitada) {
+      try {
+        const { error: origemErr } = await supabase
+          .from('sales')
+          .update({ baixa_origem: 'PIX_PORTAL', baixa_em: new Date().toISOString() })
+          .eq('id', sale.id);
+        if (origemErr) console.warn('[comprovantes/revisar] baixa_origem nao gravada:', origemErr.message);
+      } catch (e: any) {
+        console.warn('[comprovantes/revisar] baixa_origem nao gravada:', e?.message);
+      }
+    }
+
     // REGRA DO DONO: comissao entra quando o DINHEIRO entra. A baixa pelo
     // comprovante do portal vale como recebimento: quitou -> a comissao da
     // venda sai de AGUARDANDO (A_RECEBER) e fica DISPONIVEL para o acerto.

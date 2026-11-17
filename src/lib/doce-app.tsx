@@ -963,9 +963,11 @@ const App: React.FC = () => {
     const valorRecebido = amount || (sale.valorTotal - sale.valorPago);
     const novoValorPago = Number((sale.valorPago + valorRecebido).toFixed(2));
     const statusPagamento = novoValorPago >= sale.valorTotal ? 'PAGO' : 'PENDENTE';
-    
+
     const timestamp = new Date().toLocaleString('pt-BR');
-    const novoLog = `${timestamp}: R$ ${valorRecebido.toFixed(2)} (${method})`;
+    // BLOCO 172: o log de recebimento diz QUEM deu a baixa (automático diz a origem).
+    const quemRecebeu = currentUser?.nome?.trim() || 'Admin';
+    const novoLog = `${timestamp}: R$ ${valorRecebido.toFixed(2)} (${method}) — por ${quemRecebeu}`;
     const novoDetalhe = sale.detalhePagamento ? `${sale.detalhePagamento} | ${novoLog}` : novoLog;
 
     // BLOCO 22: quando o dinheiro entra, a venda DEIXA de ser "a prazo" —
@@ -982,11 +984,19 @@ const App: React.FC = () => {
     const success = await saleService.updateSale(saleId, updates);
 
     if (success) {
-      // BLOCO 118.3 (regra do dono): RECEBIMENTO de contas a receber NÃO entra
-      // mais no caixa — a tela mostra SÓ o dinheiro/pix À VISTA que o David
-      // (Rota 5) recebe. Vendas a prazo/boleto ficam no Contas a Receber e no
-      // webhook do banco. (Antes: origem RECEBIMENTO no ledger — removido.)
+      // BLOCO 172: origem da baixa (update SEPARADO best-effort — se o SQL 172
+      // ainda não rodou, NÃO quebra a baixa que acabou de acontecer).
       if (statusPagamento === 'PAGO') {
+        try {
+          await supabase
+            .from('sales')
+            .update({ baixa_origem: 'MANUAL', baixa_em: new Date().toISOString() })
+            .eq('id', saleId);
+        } catch { /* SQL 172 ausente — segue */ }
+        // BLOCO 118.3 (regra do dono): RECEBIMENTO de contas a receber NÃO entra
+        // mais no caixa — a tela mostra SÓ o dinheiro/pix À VISTA que o David
+        // (Rota 5) recebe. Vendas a prazo/boleto ficam no Contas a Receber e no
+        // webhook do banco. (Antes: origem RECEBIMENTO no ledger — removido.)
         const comm = commissions.find(c => c.saleId === saleId);
         if (comm && comm.status === 'A_RECEBER') {
           await commissionService.updateCommissionStatus(comm.id, 'DISPONIVEL');

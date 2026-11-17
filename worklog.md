@@ -2280,3 +2280,27 @@ FEITO:
 QA: lint 0 erros/8 warnings (baseline exata); tsc 104 (baseline — nenhum erro nos arquivos alterados); sem SQL novo (nada para o dono rodar).
 
 Teste do dono: Admin → Produtos Fiscais → editar Código e Cód. GB direto na planilha (ENTER salva a linha ou Salvar tudo) → código duplicado é recusado com mensagem clara → chips "Sem código"/"Sem cód. GB" mostram o que falta preencher.
+
+## bloco172 — BAIXA DE BOLETO NÃO OCORREU (Sacolão Zimermann R$ 1.102 — boleto FORA do app) + LOG DE ORIGEM DE PAGAMENTOS (automático x manual, com quem recebeu) (2026-11-17)
+
+PEDIDO DO DONO (17/11): "ok, acabei de receber um boleto aqui no inter! porem o sistema nao deu baixa! analise para mim por favor! boleto valore de 1102,00 do sacolão zimermann, encontre a falha e corrija! veja se o webhook esta funcional, nao esqueca de criar o sistema de log indicando de onde vem esse pagamento automatico e manuais tbm"
+
+DIAGNÓSTICO (REST anon em produção — dados reais):
+1. CAUSA RAIZ DO CASO: a venda 0ef39ad3-7249-4eed-b862-dbe2034d3b52 (Sacolao zimermann, R$ 1.102,00, venc. 18/11, ENTREGUE) NUNCA teve boleto emitido pela APP — inter_boleto_codigo/seu_numero/status TODOS null; o detalhe diz "10/11/2026, 16:03: boleto entregue (foto anexada)" = boleto gerado DIRETO no Internet Banking do Inter (fora do app). Webhook e cron só reconsultam cobrança com inter_boleto_codigo → boleto externo é INVISÍVEL para a baixa automática. Correção de fluxo: baixa MANUAL (Contas a Receber → Receber → Boleto) e, para o futuro, emitir boleto SEMPRE pelo app (switch autoBoletoAReceber já existe).
+2. WEBHOOK FUNCIONAL? Sim no ar: GET /api/webhooks/inter responde configurado:true (envs+mTLS ok) e a rota responde 200. Não dá para provar eventos recebidos sem sessão admin (webhook_logs é RLS-fechada, anon vê []) — conferência entregue no SQL 172 (query C) para o dono rodar.
+3. FALHA REAL NO CÓDIGO (corrigida): fallback do webhook por seuNumero buscava .eq('id', seuNumero.slice(2)) — mas o seuNumero gravado é TRUNCADO (DM + 9 chars, ex. DMDBB1E53EE) → NUNCA casava. Agora casa por inter_boleto_seu_numero (campo exato da emissão; cobre reemissão -r2/-r3) com guarda de UUID real no fallback final.
+4. FALHAS DE RASTREIO (corrigidas): cron boletos-sync baixava sem gravar webhook_logs (invisível no log do app); baixas manuais não diziam quem nem de onde vieram.
+
+FEITO:
+1. sql/bloco172_baixa_origem_pagamentos.sql (NOVO — NO CHAT para o dono): sales.baixa_origem (WEBHOOK_INTER/CRON_INTER/MANUAL/PIX_PORTAL/PDV) + sales.baixa_em + idx_sales_baixa_em; retroativo SÓ de hoje (PAGO sem origem = MANUAL); conferências C (últimos eventos do webhook — prova se o Inter está chamando) e D (últimas baixas com origem).
+2. src/app/api/webhooks/inter/route.ts — fallback seuNumero corrigido (por inter_boleto_seu_numero); baixa grava baixa_origem='WEBHOOK_INTER'+baixa_em via marcarBaixaOrigem() UPDATE SEPARADO best-effort (SQL ausente NUNCA desfaz a baixa); logEvento aceita origem; mensagem de VENDA_NAO_ENCONTRADA agora orienta "boleto FORA do app → baixar manual".
+3. src/app/api/boletos-sync/route.ts — baixa via cron grava webhook_logs com origem='CRON' (logCronEvento: baixa e falha de consulta) e marca baixa_origem='CRON_INTER'; select inclui inter_boleto_seu_numero.
+4. src/app/api/comprovantes/revisar/route.ts — CONFIRMAR (quitada) grava baixa_origem='PIX_PORTAL' (best-effort separado).
+5. src/services/saleService.ts — updateSale mapeia baixaOrigem/baixaEm.
+6. src/lib/doce-app.tsx — receiveAccount: log textual do detalhe agora diz "— por NOME de quem recebeu"; quando quitou, grava baixa_origem='MANUAL' (update separado try/catch, comissão/comportamento intactos).
+7. src/app/api/recebimentos-log/route.ts (NOVA) — admin/secretário; últimas 40 vendas PAGO com origem + nome do cliente (1 query extra em mapa); mensagem clara se SQL 172 faltar (42703 → 503 com instrução).
+8. src/components/doce/ConfiguracoesHub.tsx — NOVO card "Log de pagamentos e recebimentos" (Boletos): badge de origem colorido (Automático webhook/sync = verde, PIX portal = teal, Manual = âmbar com "Recebido por ..."), valor, cliente, data/hora, máx-h-72 com scroll; log do webhook agora mostra chip "sync diário" nos eventos de CRON.
+9. skills/docemania-expert/references/integracoes-webhooks.md — seções 1 e 4 atualizadas (fallback corrigido, limitação de boleto externo documentada, log de origem).
+QA: lint 0 erros/8 warnings (baseline exata). Todos os updates de origem são SEPARADOS e best-effort — se o SQL 172 não rodou, NENHUM caminho de baixa quebra (mesmo padrão do logEvento do 167).
+
+Teste do dono: (a) rodar SQL 172 no Supabase e conferir query C (eventos do webhook — se vazio, o boleto pago era externo); (b) baixar o boleto do Sacolão Zimermann em Contas a Receber → Receber → método Boleto (aparecerá no log como MANUAL por <nome>); (c) Configurações → Boletos → Log de pagamentos e recebimentos.

@@ -55,12 +55,15 @@ test
 prompt
 
 server.log
-# Skills directory
+# Skills: fora do repo, EXCETO a skill do projeto (backup via git)
 /skills/tool-results/
 upload/
 tool-results/
 upload/
-skills/
+skills/*
+!skills/docemania-expert
+# snapshots locais do backup-docemania.sh (nuvem = commit+push)
+backups/
 .gitignore.check
 dev.log
 download/

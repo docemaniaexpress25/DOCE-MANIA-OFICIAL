@@ -1,0 +1,23 @@
+{
+  "skill_name": "docemania-expert",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "O caixa do Deivid apareceu zerado de novo na tela. O que faço?",
+      "expected_output": "Resposta seguindo a sequência de diagnóstico obrigatória da skill (SQL pendente via /api/diagnostico-banco + perguntar se rodou o SQL 166/167; casamento por ID 7c989927; POST silencioso 401; RLS anon []). NÃO deve sugerir trocar nomes/adivinhar; deve citar DAVID_USER_ID e o padrão david|deivid; responder em português.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Quero que quando o boleto do Inter for pago, a venda baixe sozinha e apareça log. Como ativo isso?",
+      "expected_output": "Resposta explica o caminho: webhook /api/webhooks/inter já existe; dono cadastra a URL no Internet Banking PJ > API > Webhooks > Cobrança; segurança por re-consulta mTLS; log em webhook_logs + /api/webhooks/inter-log + hub ERP; rede de segurança cron boletos-sync 10h UTC; baixa no caixa via trigger trg_baixa_boleto_caixa; menciona testar com boleto real.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "Cria um relatório novo de vendas por vendedor pra mim no painel admin, com botão pra imprimir em PDF.",
+      "expected_output": "Antes de codificar: consulta as regras (aba REPORTS/ADMIN, mobile-first, não usar shadcn pesado no app doce, break-words, permissão admin no servidor, sonda de schema se coluna nova, QA baselines lint 0/8 e tsc 104, worklog por blocos, SQL no chat se precisar). Deve mencionar adicionar aba ao TabType do AdminDashboard e criar API com sessionFromRequest/isAdminSession, e perguntar/apresentar plano antes de implementar grande mudança.",
+      "files": []
+    }
+  ]
+}

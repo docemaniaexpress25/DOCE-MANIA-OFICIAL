@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Product, User, Carga, Sale, Commission, Client, ReceiveMethod, CommissionPaymentLog, Expense, Category, Subcategory, MelhoriasFlags } from '@/lib/types';
 import { ProdutoSalvoResultado } from '@/services/productService';
+import type { InsercaoClienteResultado } from '@/services/clientService';
 import ConfirmModal from '@/components/doce/ConfirmModal';
 import { DIAS_SEMANA } from '@/lib/constants';
 import { ehContaAReceber, saldoAberto, preVendaNaFila } from '@/lib/contaAReceber';
@@ -67,7 +68,8 @@ interface AdminDashboardProps {
   syncVendedorCargaRota2?: (vId: string, itens: { produtoId: string, quantidade: number }[], modo: 'COM_NF' | 'SEM_NF') => Promise<{ ok: boolean; erro?: string }>;
   applyCargaDirectlyRota2?: (vId: string, itens: { produtoId: string, quantidade: number }[], modo: 'COM_NF' | 'SEM_NF') => Promise<{ ok: boolean; erro?: string }>;
   cargasLoaded: boolean;
-  addClient: (data: Omit<Client, 'id'>) => void;
+  addClient: (data: Omit<Client, 'id'>) => Promise<InsercaoClienteResultado>;
+  // BLOCO 181: resultado diz se gravou NOVO ou ATUALIZOU o já existente (sem duplicado)
   updateClient: (id: string, data: Partial<Client>) => void;
   deleteClient: (id: string) => void;
   addUser: (nome: string, foto?: string, telefone?: string, role?: 'ADMIN' | 'VENDEDOR' | 'ENTREGADOR' | 'SECRETARIO') => void;
@@ -1198,7 +1200,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     void executarBuscaEan(digitos);
   };
 
-  const handleSaveClient = () => {
+  const handleSaveClient = async () => {
     if (!clientForm.nomeFantasia || !clientForm.telefone) { showToast("Preencha Nome e Telefone.", 'error'); return; }
     // BLOCO 153 (regra do dono): CEP SEMPRE preenchido — o boleto do Inter
     // EXIGE o CEP do pagador (8 dígitos) e a nota (NF-e/NFC-e) usa o endereço.
@@ -1208,10 +1210,16 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     if (cnpjDigitos.length > 0 && cnpjDigitos.length < 14) { showToast("CNPJ incompleto — complete os 14 dígitos ou apague o campo.", 'error'); return; }
     if (cnpjDigitos.length > 0 && !validaCnpj(cnpjDigitos)) { showToast("CNPJ inválido (dígitos verificadores não conferem).", 'error'); return; }
     const payload: Omit<Client, 'id'> = { nomeFantasia: clientForm.nomeFantasia!, telefone: clientForm.telefone!, endereco: clientForm.endereco || '', bairro: clientForm.bairro || '', diaRoteiro: clientForm.diaRoteiro ?? 1, ativo: clientForm.ativo ?? true, ativarCnpj: clientForm.ativarCnpj ?? false, cnpj: clientForm.cnpj, pinLocalizacao: clientForm.pinLocalizacao, ordem: clientForm.ordem ?? 0, nome: clientForm.nome, observacoes: clientForm.observacoes, rota: clientForm.rota || availableRoutes[0] || 'ROTA_01', razaoSocial: clientForm.razaoSocial, inscricaoEstadual: clientForm.inscricaoEstadual, enderecoNumero: clientForm.enderecoNumero, enderecoCep: clientForm.enderecoCep, enderecoMunicipio: clientForm.enderecoMunicipio, enderecoUf: clientForm.enderecoUf, email: clientForm.email, clienteEspecialGb: podeClienteEspecialGB(clientForm.rota || availableRoutes[0] || 'ROTA_01') ? (clientForm.clienteEspecialGb ?? false) : false, modoCupom: clientForm.modoCupom ?? false };
-    if (showClientModal === 'NEW') props.addClient(payload);
+    // BLOCO 181: espera o banco responder e DIZ a verdade — gravou novo ou
+    // mesclou no cadastro JÁ EXISTENTE (o guardião do insertClient nunca cria
+    // a segunda linha com o mesmo CNPJ/nome).
+    if (showClientModal === 'NEW') {
+      const r = await props.addClient(payload);
+      if (!r?.ok) { showToast('Não gravou no banco — verifique a conexão e tente de novo.', 'error'); return; }
+      showToast(r.mesclado ? `Cliente JÁ EXISTIA (${r.nomeExistente}) — cadastro EXISTENTE atualizado, sem criar duplicado ✓` : "Cliente salvo!");
+    }
     else if (typeof showClientModal === 'object') props.updateClient(showClientModal.id, payload);
     setShowClientModal(null);
-    showToast("Cliente salvo!");
   };
 
   const handleOpenUserModal = (u: User | 'NEW') => {

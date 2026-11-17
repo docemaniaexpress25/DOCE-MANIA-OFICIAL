@@ -12,6 +12,8 @@ import { buscarCnpjReceita, mensagemCnpj, clienteAptoNfe, mascararCnpj, validaCn
 import { mascararCep, buscarCep, cidadeDeEstado, ufDeEstado, cepDeEstado } from '@/lib/endereco';
 // BLOCO 71: cliente ESPECIAL GB só existe nas rotas liberadas (Rota 03 Edipo Pena / Rota 04 Gil Pantoja)
 import { podeClienteEspecialGB } from '@/lib/regraClienteGB';
+// BLOCO 181: resultado do salvamento com a verdade do banco (novo x mesclado)
+import type { InsercaoClienteResultado } from '@/services/clientService';
 // BLOCO 134: fluxo "não pode esquecer de bater a nota" — painel de vendas com nota pendente
 import { rotuloDocumentoNota } from '@/lib/regras-fiscais';
 import PDV from '@/components/doce/PDV';
@@ -50,7 +52,8 @@ interface VendedorDashboardProps {
   markMessageAsRead: (id: string) => void;
   processSale: (data: any) => Promise<Sale | null>;
   processPreVenda: (data: any) => Promise<{ pedido: Sale | null; erro?: string }>;
-  addClient: (data: Omit<Client, 'id'>) => Promise<void>; 
+  addClient: (data: Omit<Client, 'id'>) => Promise<InsercaoClienteResultado>;
+  // BLOCO 72/181: o resultado diz se gravou NOVO ou se ATUALIZOU o cliente já existente (sem criar duplicado)
   // BLOCO 72: devolve true quando GRAVOU no banco (persistência provada)
   updateClient: (id: string, data: Partial<Client>) => Promise<boolean>;
   deleteClient: (id: string) => void; 
@@ -279,6 +282,9 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const [fiscalAberto, setFiscalAberto] = useState(false);
   const cnpjBuscadoRef = useRef('');
   const cepBuscadoRef = useRef(''); // BLOCO 129: CEP já buscado (evita reconsulta a cada tecla)
+  // BLOCO 181: trava anti toque-duplo no SALVAR do cliente (o botão disparava
+  // dois inserts em seguida — fonte de duplicados no portal Clientes Fiscais)
+  const salvandoClienteRef = useRef(false);
   const [confirmSkipId, setConfirmSkipId] = useState<string | null>(null);
   const [expandedRouteClientId, setExpandedRouteClientId] = useState<string | null>(null);
   const [showExpenseForm, setShowExpenseForm] = useState(false);
@@ -860,6 +866,14 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     const r = await buscarCnpjReceita(digitos);
     if (!r.ok) { setCnpjBusca({ loading: false, msg: mensagemCnpj(r).msg, ok: false }); return; }
     aplicarCnpjNoForm(r);
+    // BLOCO 181 (regra do dono): ANTES de salvar, avisa se esse CNPJ JÁ É um
+    // cliente do app — o salvamento vai ATUALIZAR o cadastro existente (o
+    // guardião do insertClient nunca cria uma segunda linha).
+    const jaCadastrado = (clients || []).find((c) => (c.cnpj || '').replace(/\D/g, '') === digitos);
+    if (jaCadastrado) {
+      setCnpjBusca({ loading: false, ok: true, msg: `CNPJ JÁ CADASTRADO como "${(jaCadastrado.nomeFantasia || '').trim()}" — ao salvar, o sistema ATUALIZA esse cadastro (não cria duplicado).` });
+      return;
+    }
     setCnpjBusca({ loading: false, ...mensagemCnpj(r) });
   };
 
@@ -947,10 +961,23 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     // fechava SEM esperar o banco e sem avisar quando o update falhava.
     // Agora: persistencia PROVADA (igual Bloco 72) — só fecha com o banco
     // confirmando; falhou, o modal fica aberto e o vendedor sabe.
+    // BLOCO 181: guarda de TOQUE DUPLO (o botão disparava dois salvamentos
+    // em seguida — outra fonte de duplicados no portal) + aviso honesto
+    // quando o banco MESCLou no cliente já existente.
     if (editingClient === 'NEW') {
-      const gravado = await addClient(clientData);
-      if (!gravado) { showToast('Não gravou no banco — verifique a conexão e tente de novo.', 'error'); return; }
-      showToast('Cliente salvo no banco ✓', 'success');
+      if (salvandoClienteRef.current) return;
+      salvandoClienteRef.current = true;
+      try {
+        const r = await addClient(clientData);
+        if (!r?.ok) { showToast('Não gravou no banco — verifique a conexão e tente de novo.', 'error'); return; }
+        if (r.mesclado) {
+          showToast(`Cliente JÁ EXISTIA (${r.nomeExistente}) — cadastro EXISTENTE atualizado, sem criar duplicado ✓`);
+        } else {
+          showToast('Cliente salvo no banco ✓');
+        }
+      } finally {
+        salvandoClienteRef.current = false;
+      }
     } else if (typeof editingClient === 'object') {
       const ok = await updateClient(editingClient.id, clientData);
       if (!ok) { showToast('Não gravou no banco — verifique a conexão e tente de novo.', 'error'); return; }

@@ -12,6 +12,7 @@ import { offlineSync } from '@/utils/offlineSync';
 import { userService, clearSessionToken } from '@/services/userService';
 import { productService, ProdutoSalvoResultado } from '@/services/productService';
 import { clientService } from '@/services/clientService';
+import type { InsercaoClienteResultado } from '@/services/clientService';
 import { appSettingsService, AppSettings } from '@/services/appSettingsService';
 import { saleService } from '@/services/saleService';
 import { commissionService } from '@/services/commissionService';
@@ -614,10 +615,10 @@ const App: React.FC = () => {
     fetchCoreData();
   };
 
-  // BLOCO 76: devolve a linha gravada (ou null) — o form de cliente do
-  // vendedor usa isso para provar a persistencia e avisar quando falhou
-  // (antes o modal fechava como se tivesse salvo mesmo com erro no banco).
-  const addClient = async (data: Omit<Client, 'id'>): Promise<Client | null> => {
+  // BLOCO 76/181: devolve o RESULTADO HONESTO do banco (ok/mesclado/erro) —
+  // o form de cliente usa para avisar: gravou novo, mesclou no JÁ EXISTENTE
+  // (BLOCO 181: nunca cria duplicado) ou falhou.
+  const addClient = async (data: Omit<Client, 'id'>): Promise<InsercaoClienteResultado> => {
     const r = await clientService.insertClient(data);
     fetchCoreData();
     return r;

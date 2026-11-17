@@ -4,7 +4,142 @@ import { Client } from '@/lib/types';
 // BLOCO 71: cliente ESPECIAL GB só vale nas rotas liberadas (Rota 03 Edipo Pena / Rota 04 Gil Pantoja)
 import { podeClienteEspecialGB } from '@/lib/regraClienteGB';
 
-/** Codigo aleatorio do portal (12 chars) para clientes novos */
+/**
+ * BLOCO 181 — PORTAL CLIENTES FISCAIS SEM DUPLICADO (dono: "veja o porque vc
+ * duplicou alguns clientes no portal dos clientes! arrume isso agora mesmo!").
+ *
+ * Causa real (dado de produção, 18/11): a tabela clients tinha 14 grupos
+ * duplicados — 24 linhas extras com o MESMO CNPJ (LANCHERIA REGINA 7x,
+ * RADICAL GAMES 5x, MINI MERCADO CHIMARRAO 5x, COELHO/KLIPEL 4x...) criadas
+ * quando vendedor/admin recadastrava um cliente que já existia: o form do
+ * vendedor busca o CNPJ só na RECEITA (BLOCO 138), nunca na base do app, e o
+ * INSERT criava uma linha NOVA a cada salvamento. 27 vendas ficaram
+ * espalhadas entre linhas duplicadas.
+ *
+ * A partir deste bloco o insertClient é a PORTA ÚNICA com guardião
+ * anti-duplicado: ANTES de inserir ele procura o cliente já existente e, se
+ * achar, NÃO cria linha nova — ATUALIZA o cadastro existente preenchendo só
+ * os campos VAZIOS (nunca sobrescreve rota/dia/ordem/pin de outro vendedor) e
+ * devolve { mesclado: true } para o form avisar na tela.
+ *
+ * Regras de correspondência (nesta ordem):
+ *   1. CNPJ com 14 dígitos -> MESMO CNPJ (dígitos) = mesmo cliente;
+ *      se ninguém tem esse CNPJ, cai na regra 2 só quando existente
+ *      sem CNPJ tem o mesmo nome (preenche o CNPJ no cadastro antigo).
+ *   2. Sem CNPJ válido no form -> MESMO NOME normalizado (maiúsculas, 1
+ *      espaço) + existente SEM CNPJ + SEM CONFLITO DUPLO: a mescla só é
+ *      reprovada quando telefone E CEP são válidos nos dois lados E
+ *      DIFERENTES (outro contato e outro endereço = cliente outro; BAR DA
+ *      FATIMA: mesmo CEP/rua com telefone diferente = mesmo cliente).
+ */
+
+/** Resultado do insertClient com a verdade do que aconteceu no banco. */
+export interface InsercaoClienteResultado {
+  /** true = gravou (novo ou mesclado no existente). */
+  ok: boolean;
+  /** true = JÁ EXISTIA e o cadastro EXISTENTE foi atualizado (nada foi criado). */
+  mesclado: boolean;
+  /** Nome do cadastro já existente (para o toast do form). */
+  nomeExistente?: string;
+  cliente?: Client;
+  erro?: string;
+}
+
+const normTexto = (v: unknown): string => String(v ?? '').replace(/\s+/g, ' ').trim().toUpperCase();
+const digitos = (v: unknown): string => String(v ?? '').replace(/\D/g, '');
+/** Dado "válido" para comparar: telefone >= 8 dígitos, CEP = 8. Junk ('0', '') nunca conflita. */
+const telValido = (v: unknown): string => { const d = digitos(v); return d.length >= 8 ? d : ''; };
+const cepValido = (v: unknown): string => { const d = digitos(v); return d.length === 8 ? d : ''; };
+
+const COLS_DEDUP = 'id, nome_fantasia, nome, ativar_cnpj, cnpj, telefone, endereco, bairro, endereco_cep, endereco_numero, endereco_municipio, endereco_uf, razao_social, inscricao_estadual, email, ativo, localizacao, pin_localizacao, rota, dia_roteiro, ordem, portal_code';
+
+/**
+ * Procura o cliente JÁ CADASTRADO que corresponda ao que o form quer salvar —
+ * FUNÇÃO PURA sobre as linhas já buscadas (testável, QA BLOCO 181).
+ * Devolve a linha escolhida ou null (= pode criar cliente novo).
+ */
+export function procurarDuplicadoEntre(candidatos: Record<string, unknown>[], client: Omit<Client, 'id'>): Record<string, unknown> | null {
+  const cnpjDig = digitos(client.cnpj);
+  const nomeNorm = normTexto(client.nomeFantasia || client.nome);
+  if (!cnpjDig && !nomeNorm) return null;
+
+  // REGRA 1 — mesmo CNPJ (14 dígitos): a correspondência mais forte.
+  if (cnpjDig.length === 14) {
+    const mesmoCnpj = candidatos.find((c) => digitos(c.cnpj) === cnpjDig);
+    if (mesmoCnpj) return mesmoCnpj;
+    // CNPJ novo: só mescla com um MESMO NOME sem CNPJ (preenche o documento
+    // no cadastro antigo em vez de criar outro).
+    return candidatos.find((c) =>
+      !digitos(c.cnpj) && normTexto(c.nome_fantasia || c.nome) === nomeNorm
+    ) || null;
+  }
+
+  // REGRA 2 — mesmo nome SEM CNPJ e SEM CONFLITO DUPLO: telefone e CEP só
+  // reprovam a mescla quando AMBOS são válidos nos dois lados E DIFERENTES
+  // (outro contato E outro endereço = cliente outro). Um conflito só (ex.:
+  // BAR DA FATIMA — mesmo CEP/rua, telefone diferente por 1 dígito) ainda
+  // é o mesmo cliente: mescla e preenche os vazios.
+  const telForm = telValido(client.telefone);
+  const cepForm = cepValido(client.enderecoCep);
+  return candidatos.find((c) => {
+    if (digitos(c.cnpj)) return false; // existente tem CNPJ (diferente) — nunca mesclar por nome
+    if (normTexto(c.nome_fantasia || c.nome) !== nomeNorm) return false;
+    const telEx = telValido(c.telefone);
+    const cepEx = cepValido(c.endereco_cep);
+    const conflitaTel = !!(telForm && telEx && telForm !== telEx);
+    const conflitaCep = !!(cepForm && cepEx && cepForm !== cepEx);
+    return !(conflitaTel && conflitaCep);
+  }) || null;
+}
+
+/**
+ * Procura um cliente JÁ CADASTRADO que corresponda ao que o form quer salvar
+ * (busca no banco + regras do BLOCO 181). Devolve a linha crua do Supabase ou null.
+ */
+async function buscarDuplicado(client: Omit<Client, 'id'>): Promise<Record<string, unknown> | null> {
+  const cnpjDig = digitos(client.cnpj);
+  const nomeNorm = normTexto(client.nomeFantasia || client.nome);
+  if (!cnpjDig && !nomeNorm) return null;
+
+  const { data, error } = await supabase.from('clients').select(COLS_DEDUP).limit(2000);
+  if (error || !data?.length) return null;
+  return procurarDuplicadoEntre(data as Record<string, unknown>[], client);
+}
+
+/**
+ * Mescle PREENCHENDO VAZIOS (nunca sobrescreve o que o cadastro já tem):
+ * rota/dia_roteiro/ordem/pin/localizacao/especial-GB de outro vendedor são
+ * preservados — o recadastro só completa dado fiscal/contato que faltava e
+ * reativa o cliente. Devolve o patch (vazio = nada a gravar além de ativo).
+ */
+export function patchMescla(exist: Record<string, unknown>, client: Omit<Client, 'id'>): Record<string, unknown> {
+  const patch: Record<string, unknown> = { ativo: true }; // recadastrou = voltou a atender
+  const fill = (col: string, valor: unknown, atual: unknown) => {
+    const v = String(valor ?? '').trim();
+    if (v && !String(atual ?? '').trim()) patch[col] = v;
+  };
+  fill('nome_fantasia', client.nomeFantasia, exist.nome_fantasia);
+  fill('nome', client.nome, exist.nome);
+  fill('telefone', client.telefone, exist.telefone);
+  fill('endereco', client.endereco, exist.endereco);
+  fill('bairro', client.bairro, exist.bairro);
+  fill('endereco_numero', client.enderecoNumero, exist.endereco_numero);
+  fill('endereco_cep', client.enderecoCep, exist.endereco_cep);
+  fill('endereco_municipio', client.enderecoMunicipio, exist.endereco_municipio);
+  fill('endereco_uf', client.enderecoUf, exist.endereco_uf);
+  fill('razao_social', client.razaoSocial, exist.razao_social);
+  fill('inscricao_estadual', client.inscricaoEstadual, exist.inscricao_estadual);
+  fill('email', client.email, exist.email);
+  fill('observacoes', client.observacoes, exist.observacoes);
+  // CNPJ: entra mascarado quando o existente não tem documento.
+  fill('cnpj', client.cnpj, exist.cnpj);
+  if (client.ativarCnpj && !exist.ativar_cnpj) patch.ativar_cnpj = true;
+  fill('pin_localizacao', client.pinLocalizacao, exist.pin_localizacao);
+  fill('localizacao', client.localizacao, exist.localizacao);
+  delete patch.nome_fantasia; // nome NUNCA é alterado pela mescla (id do dono do cadastro)
+  return patch;
+}
+
 function generatePortalCode(): string {
   let hex = '';
   while (hex.length < 12) hex += Math.floor(Math.random() * 16).toString(16);
@@ -51,7 +186,49 @@ export const clientService = {
     return data.map(mapClient);
   },
 
-  async insertClient(client: Omit<Client, 'id'>): Promise<Client | null> {
+  /**
+   * BLOCO 181 — INSERT com guardião anti-duplicado: procurou e JÁ EXISTIA?
+   * NÃO cria linha nova — atualiza o cadastro existente (fill-blanks) e
+   * devolve { ok, mesclado: true, nomeExistente } para o form avisar.
+   */
+  async insertClient(client: Omit<Client, 'id'>): Promise<InsercaoClienteResultado> {
+    // ---- GUARDIÃO ANTI-DUPLICADO (antes de qualquer INSERT) ----
+    let duplicado: Record<string, unknown> | null = null;
+    try { duplicado = await buscarDuplicado(client); } catch { /* rede — segue o fluxo normal */ }
+    if (duplicado?.id) {
+      const patch = patchMescla(duplicado, client);
+      const idEx = String(duplicado.id);
+      const nomeEx = String(duplicado.nome_fantasia || duplicado.nome || '').trim();
+      let { data, error } = await supabase.from('clients').update(patch).eq('id', idEx).select().single();
+      // Colunas fiscais ausentes (SQL pendente): refaz sem elas — os campos
+      // base (telefone/endereco/cnpj...) continuam indo.
+      if (error && /razao_social|inscricao_estadual|endereco_numero|endereco_cep|endereco_municipio|endereco_uf|\bemail\b/i.test(error.message || '')) {
+        const base = { ...patch };
+        delete base.razao_social; delete base.inscricao_estadual;
+        delete base.endereco_numero; delete base.endereco_cep;
+        delete base.endereco_municipio; delete base.endereco_uf;
+        delete base.email;
+        ({ data, error } = await supabase.from('clients').update(base).eq('id', idEx).select().single());
+      }
+      if (error && /\bemail\b/i.test(error.message || '')) {
+        const semEmail = { ...patch }; delete semEmail.email;
+        ({ data, error } = await supabase.from('clients').update(semEmail).eq('id', idEx).select().single());
+      }
+      if (error && /localizacao/i.test(error.message || '')) {
+        const semGps = { ...patch }; delete semGps.localizacao;
+        ({ data, error } = await supabase.from('clients').update(semGps).eq('id', idEx).select().single());
+      }
+      if (!error && data) {
+        return {
+          ok: true,
+          mesclado: true,
+          nomeExistente: nomeEx || 'cliente já cadastrado',
+          cliente: mapClient(data),
+        };
+      }
+      if (error) return { ok: false, mesclado: true, nomeExistente: nomeEx, erro: error.message };
+    }
+
     const { nomeFantasia, nome, ativarCnpj, cnpj, telefone, endereco, bairro, ativo, localizacao, diaRoteiro, ordem, observacoes, pinLocalizacao, rota, razaoSocial, inscricaoEstadual, enderecoNumero, enderecoCep, enderecoMunicipio, enderecoUf, email } = client;
     const payload: Record<string, unknown> = {
       nome_fantasia: nomeFantasia,
@@ -112,9 +289,12 @@ export const clientService = {
     }
     if (error) {
       console.error('Erro ao inserir cliente:', error);
-      return null;
+      return { ok: false, mesclado: false, erro: error.message };
     }
     return {
+      ok: true,
+      mesclado: false,
+      cliente: {
       ...data,
       nomeFantasia: data.nome_fantasia,
       ativarCnpj: data.ativar_cnpj,
@@ -123,7 +303,8 @@ export const clientService = {
       pinLocalizacao: data.pin_localizacao,
       rota: data.rota,
       portalCodigo: data.portal_code,
-    } as Client;
+      } as Client,
+    };
   },
 
   async updateClient(id: string, updates: Partial<Client>): Promise<Client | null> {

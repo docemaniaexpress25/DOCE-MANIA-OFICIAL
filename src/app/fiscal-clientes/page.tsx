@@ -408,7 +408,7 @@ export default function PortalClientesFiscaisPage() {
       <div className={`min-h-screen bg-gray-100 flex items-center justify-center p-4 ${pinShake ? 'animate-shake' : ''}`}>
         <div className="bg-white rounded-3xl shadow-xl p-8 w-full max-w-sm text-center">
           <div className="w-16 h-16 rounded-2xl bg-teal-50 mx-auto flex items-center justify-center mb-4">
-            <i className="fa-solid fa-users-viewfinder text-teal-600 text-3xl"></i>
+            <i className="fa-solid fa-address-card text-teal-600 text-3xl"></i>
           </div>
           <h1 className="text-xl font-black text-gray-800 mb-1">Clientes Fiscais</h1>
           <p className="text-gray-400 text-sm mb-8 font-medium">Nome · CEP — destinatário da NF e do boleto</p>
@@ -465,7 +465,7 @@ export default function PortalClientesFiscaisPage() {
         <div className="bg-gradient-to-r from-teal-600 via-teal-700 to-cyan-800 text-white">
           <div className="max-w-[1600px] mx-auto px-4 py-2.5 flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-white/10 border border-white/10 flex items-center justify-center shrink-0">
-              <i className="fa-solid fa-users-viewfinder text-teal-100"></i>
+              <i className="fa-solid fa-address-card text-teal-100"></i>
             </div>
             <div className="min-w-0">
               <h1 className="text-[15px] font-black uppercase tracking-tight leading-none whitespace-nowrap">Clientes Fiscais <span className="text-teal-200">Nome · CEP · CNPJ · IE · Município</span></h1>
@@ -709,7 +709,7 @@ export default function PortalClientesFiscaisPage() {
       {/* ================= FOOTER FIXO ================= */}
       <footer className="mt-auto bg-white border-t border-gray-200">
         <div className="max-w-[1600px] mx-auto px-4 py-2.5 flex items-center gap-2 text-[9px] font-bold text-gray-400 uppercase tracking-wider">
-          <i className="fa-solid fa-users-viewfinder text-teal-600"></i>
+          <i className="fa-solid fa-address-card text-teal-600"></i>
           DOCE MANIA · Clientes Fiscais — nome e CEP editáveis
           <span className="ml-auto">{kpis.total} clientes · {kpis.comCep} com CEP · {kpis.semCep} sem CEP</span>
         </div>

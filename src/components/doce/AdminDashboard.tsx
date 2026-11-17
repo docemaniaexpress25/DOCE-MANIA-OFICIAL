@@ -1779,7 +1779,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             {/* BLOCO 156: Produtos Fiscais — lista EDITÁVEL de NCM/CEST/CFOP de todo o catálogo */}
             <MenuCard icon="fa-clipboard-list" title="Produtos Fiscais" tab="FISCAL_PRODUTOS" color="bg-amber-50 text-amber-600" />
             {/* BLOCO 174: Clientes Fiscais — nome/CEP editáveis (boleto do Inter precisa do CEP do cadastro) */}
-            <MenuCard icon="fa-users-viewfinder" title="Clientes Fiscais" tab="FISCAL_CLIENTES" color="bg-teal-50 text-teal-600" />
+            <MenuCard icon="fa-address-card" title="Clientes Fiscais" tab="FISCAL_CLIENTES" color="bg-teal-50 text-teal-600" />
             <MenuCard icon="fa-store" title="Catalogo Portal" tab="CATALOGO_PORTAL" color="bg-emerald-50 text-emerald-600" />
             <MenuCard icon="fa-tags" title="Categorias" tab="CATEGORIAS" color="bg-indigo-50 text-indigo-600" />
             <MenuCard icon="fa-truck-ramp-box" title="Cargas" tab="CARGAS" color="bg-orange-50 text-orange-600" />
@@ -1889,7 +1889,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             <p className="text-[10px] font-black uppercase text-gray-400">Nome · CEP — dados do destinatário editáveis</p>
           </header>
           <a href="/fiscal-clientes" target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 bg-teal-600 text-white rounded-3xl px-5 py-6 shadow-lg active:scale-[0.98] transition-transform">
-            <span className="w-12 h-12 rounded-2xl bg-white/15 flex items-center justify-center shrink-0"><i className="fa-solid fa-users-viewfinder text-xl"></i></span>
+            <span className="w-12 h-12 rounded-2xl bg-white/15 flex items-center justify-center shrink-0"><i className="fa-solid fa-address-card text-xl"></i></span>
             <span className="flex-1 flex flex-col items-start">
               <span className="text-sm font-black uppercase tracking-widest">Abrir Lista Editável</span>
               <span className="text-[9px] font-bold opacity-80 leading-snug">Todo o cadastro em planilha · nome e CEP editáveis · CNPJ, IE, município e UF para conferir · filtra quem está SEM CEP (boleto exige) · exportar CSV</span>

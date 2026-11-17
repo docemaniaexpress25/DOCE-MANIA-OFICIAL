@@ -49,6 +49,10 @@ import { DanfeFiscalData } from './danfe80';
  *                ICMS ST, VALOR PRODUTOS/FRETE/DESCONTO/OUTRAS DESP, VALOR
  *                TOTAL DA NOTA + TRIB. APROX. FEDERAIS/ESTADUAIS (Lei 12.741,
  *                parseados do infCpl quando presentes)
+ *   [pagamento]  FORMA DE PAGAMENTO / VALOR (tPag oficial) + TROCO
+ *                — BLOCO 180, regra do dono: TANTO NFC-e COMO NF-e SEMPRE
+ *                mostram a forma de pagamento (mesma regra do cupom de texto
+ *                BT danfe80 — o HTML USB nao tinha o bloco)
  *   [transport]  TRANSPORTADOR/VOLUMES: [9] 9-SEM FRETE + pesos (venda sem
  *                transportadora, como o modelo)
  *   [adic]       DADOS ADICIONAIS: Simples Nacional I/II + tributos + IBPT +
@@ -318,6 +322,26 @@ export async function danfeFiscal80Html(d: DanfeFiscalData): Promise<string> {
         : '';
 
   // ---------------------------------------------------------
+  // BLOCO 180 — FORMA DE PAGAMENTO / VALOR + TROCO (tPag oficial)
+  // Mesmo bloco do cupom de texto BT (danfe80): cada pagamento e uma
+  // linha FORMA | VALOR, TROCO no fim, e quando o XML nao traz o bloco
+  // <pag> a linha avisa "NAO INFORMADO" (nunca silencioso).
+  // ---------------------------------------------------------
+  const pags = d.pagamentos || [];
+  const pagRows = pags.length
+    ? pags.map((pg) => `<div class="imp-row">
+      <div><span class="ilbl">FORMA DE PAGAMENTO</span><b>${escapeHtml(ascii(pg.forma || 'PAGAMENTO'))}</b></div>
+      <div><span class="ilbl">VALOR (R$)</span><b>${money(pg.valor)}</b></div>
+    </div>`).join('\n')
+    : `<div class="imp-row">
+      <div><span class="ilbl">FORMA DE PAGAMENTO</span><b>NAO INFORMADO NO XML</b></div>
+      <div><span class="ilbl">VALOR (R$)</span><b>${money(d.valorTotal)}</b></div>
+    </div>`;
+  const trocoRow = (Number(d.troco) || 0) > 0
+    ? `<div class="imp-row"><div class="vnf"><span class="ilbl">TROCO</span><b>R$ ${money(d.troco)}</b></div><div></div></div>`
+    : '';
+
+  // ---------------------------------------------------------
   // DADOS ADICIONAIS
   // ---------------------------------------------------------
   const adicLinhas: string[] = [];
@@ -458,6 +482,12 @@ ${itensHtml}
       <div class="vnf"><span class="ilbl">VALOR TOTAL DA NOTA</span><b>R$ ${money(d.valorTotal)}</b></div>
       ${tribCell}
     </div>
+  </div>
+
+  <div class="sect-title">FORMA DE PAGAMENTO</div>
+  <div style="border:1px solid #000">
+${pagRows}
+${trocoRow}
   </div>
 
   <div class="sect-title">TRANSPORTADOR / VOLUMES</div>

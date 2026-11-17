@@ -12,6 +12,20 @@
  * número, bairro, município e UF — porque a NF-e identificada só sobe com o
  * endereço COMPLETO do cadastro. O dono corrige aqui e bate a nota.
  *
+ * BLOCO 178 (dono: "no momento que digitar faça a busca automatica do endereço
+ * completo e preencha, o mesmo vale para o cnpj — todos esses campos devem
+ * poder ser editados"):
+ *  - CEP com PREENCHIMENTO AUTOMÁTICO: digita os 8 dígitos -> ViaCEP (Correios)
+ *    preenche LOGRADOURO, BAIRRO, MUNICÍPIO e UF da linha na hora (debounce,
+ *    spinner e feedback inline; não rebusca o mesmo CEP; falha permite tentar
+ *    de novo);
+ *  - CNPJ com PREENCHIMENTO AUTOMÁTICO: digita os 14 dígitos -> /api/cnpj
+ *    (Receita/BrasilAPI, MESMA rota do cadastro) preenche RAZÃO SOCIAL,
+ *    LOGRADOURO, NÚMERO, BAIRRO, MUNICÍPIO, UF e CEP. CPF (11) não tem consulta
+ *    pública — feedback discreto explica que o endereço completa pelo CEP;
+ *  - TUDO EDITÁVEL: NOME, CPF/CNPJ, CEP, RAZÃO SOCIAL e IE (antes só leitura)
+ *    entraram na lista de inputs — a Receita puxa e o dono ajusta por cima.
+ *
  * MESMA linguagem do PORTAL FISCAL (/notas) e de PRODUTOS FISCAIS
  * (/fiscal-produtos):
  *  - PIN do admin (6 dígitos) — MESMA SESSÃO do portal fiscal (token /notas);
@@ -33,6 +47,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 // BLOCO 177: o CPF/CNPJ virou EDITÁVEL no portal — boleto a prazo do cliente
 // PF precisa do CPF (nfe = cnpj, nfc > cpf — regra do dono).
 import { validaCpfCnpj } from '@/lib/validaDoc';
+// BLOCO 178: busca do CEP nos CORREIOS (ViaCEP) — a mesma util do cadastro do
+// app (AdminDashboard/VendedorDashboard), pura e sem estado.
+import { buscarCep } from '@/lib/endereco';
 
 // ---------------- tipos ----------------
 interface ClienteFiscal {
@@ -50,13 +67,14 @@ interface ClienteFiscal {
   ativo: boolean;
 }
 
-type CKey = 'nome' | 'doc' | 'cep' | 'endereco' | 'numero' | 'bairro' | 'municipio' | 'uf';
+type CKey = 'nome' | 'doc' | 'cep' | 'razaoSocial' | 'ie' | 'endereco' | 'numero' | 'bairro' | 'municipio' | 'uf';
 
-const CAMPOS_EDIT: CKey[] = ['nome', 'doc', 'cep', 'endereco', 'numero', 'bairro', 'municipio', 'uf'];
+/** BLOCO 178: TODOS os campos do portal são editáveis (Razão Social e IE entrou). */
+const CAMPOS_EDIT: CKey[] = ['nome', 'doc', 'cep', 'razaoSocial', 'ie', 'endereco', 'numero', 'bairro', 'municipio', 'uf'];
 
 /** Campo do cliente que cada CKey edita (doc = CPF/CNPJ no MESMO campo cnpj). */
-const CAMPO_CLIENTE: Record<CKey, 'nome' | 'cnpj' | 'cep' | 'endereco' | 'numero' | 'bairro' | 'municipio' | 'uf'> = {
-  nome: 'nome', doc: 'cnpj', cep: 'cep', endereco: 'endereco', numero: 'numero', bairro: 'bairro', municipio: 'municipio', uf: 'uf',
+const CAMPO_CLIENTE: Record<CKey, 'nome' | 'cnpj' | 'cep' | 'razaoSocial' | 'ie' | 'endereco' | 'numero' | 'bairro' | 'municipio' | 'uf'> = {
+  nome: 'nome', doc: 'cnpj', cep: 'cep', razaoSocial: 'razaoSocial', ie: 'ie', endereco: 'endereco', numero: 'numero', bairro: 'bairro', municipio: 'municipio', uf: 'uf',
 };
 
 interface Stats {
@@ -126,6 +144,9 @@ function erroDeCampo(campo: CKey, valor: string): string {
     const u = v.toUpperCase().replace(/[^A-Z]/g, '');
     return u && u.length !== 2 ? '2 letras (RS)' : '';
   }
+  // BLOCO 178: Razão Social (120) e IE (20, aceita ISENTO) — vazio = limpa.
+  if (campo === 'razaoSocial') return v.length > 120 ? 'máx. 120 caracteres' : '';
+  if (campo === 'ie') return v.length > 20 ? 'máx. 20 caracteres' : '';
   return v.length > 60 ? 'máx. 60 caracteres' : '';
 }
 
@@ -133,6 +154,13 @@ interface LinhaEstado {
   salvando?: boolean;
   salvoEm?: number;
   erro?: string;
+}
+
+/** BLOCO 178: estado do preenchimento automático de UMA célula (CEP ou doc). */
+interface BuscaEstado {
+  buscando?: boolean;
+  msg?: string;
+  msgOk?: boolean;
 }
 
 interface ConfModal {
@@ -164,6 +192,15 @@ export default function PortalClientesFiscaisPage() {
   // Edição (apenas os campos alterados por cliente)
   const [edits, setEdits] = useState<Record<string, Partial<Record<CKey, string>>>>({});
   const [linha, setLinha] = useState<Record<string, LinhaEstado>>({});
+
+  // BLOCO 178: feedback do PREENCHIMENTO AUTOMÁTICO (CEP/CNPJ) por linha.
+  // Chave `${id}:cep` | `${id}:doc` -> estado { buscando, msg, msgOk }.
+  const [buscas, setBuscas] = useState<Record<string, BuscaEstado>>({});
+  const buscaTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  /** Último CEP/CNPJ que preencheu a linha com sucesso — evita rebuscar e sobrescrever edições. */
+  const buscaFeitaOk = useRef<Record<string, string>>({});
+  /** Último valor digitado — só limpa o feedback quando o valor muda de verdade. */
+  const ultimoDigitado = useRef<Record<string, string>>({});
 
   // Filtros
   const [busca, setBusca] = useState('');
@@ -211,6 +248,11 @@ export default function PortalClientesFiscaisPage() {
       setClientes((d.clientes || []) as ClienteFiscal[]);
       setEdits({});
       setLinha({});
+      setBuscas({});
+      buscaFeitaOk.current = {};
+      ultimoDigitado.current = {};
+      Object.values(buscaTimers.current).forEach(t => clearTimeout(t));
+      buscaTimers.current = {};
     } catch {
       setErroLista('Falha de conexão. Toque em ATUALIZAR.');
     } finally {
@@ -285,10 +327,13 @@ export default function PortalClientesFiscaisPage() {
   }, [edits]);
 
   const setValor = (c: ClienteFiscal, campo: CKey, bruto: string) => {
-    // máscara na digitação: nome 120 colapsado; CEP 00000-000; CPF/CNPJ com
-    // pontuação; UF 2 letras uppercase; demais textos até 60 (limite SEFAZ)
+    // máscara na digitação: nome/razão social 120 colapsado; CEP 00000-000;
+    // CPF/CNPJ com pontuação; UF 2 letras uppercase; IE até 20; demais textos
+    // até 60 (limite SEFAZ)
     let v: string;
     if (campo === 'nome') v = bruto.replace(/\s+/g, ' ').slice(0, 120);
+    else if (campo === 'razaoSocial') v = bruto.replace(/\s+/g, ' ').slice(0, 120);
+    else if (campo === 'ie') v = bruto.replace(/\s+/g, ' ').slice(0, 20);
     else if (campo === 'cep') v = mascararCep(bruto);
     else if (campo === 'doc') v = mascararDoc(bruto);
     else if (campo === 'uf') v = bruto.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 2);
@@ -336,6 +381,13 @@ export default function PortalClientesFiscaisPage() {
       setClientes(prev => prev.map(x => (x.id === salvo.id ? salvo : x)));
       setEdits(prev => { const n = { ...prev }; delete n[salvo.id]; return n; });
       setLinha(prev => ({ ...prev, [c.id]: { salvoEm: Date.now() } }));
+      // BLOCO 178: feedback de busca consumido após gravar — a linha vai para "salvo".
+      setBuscas(prev => {
+        const n = { ...prev };
+        delete n[`${salvo.id}:cep`];
+        delete n[`${salvo.id}:doc`];
+        return n;
+      });
       return true;
     } catch {
       setLinha(prev => ({ ...prev, [c.id]: { erro: 'Sem conexão.' } }));
@@ -377,8 +429,117 @@ export default function PortalClientesFiscaisPage() {
       texto: `${linhasAlteradas.length} linha(s) alteradas voltam ao que está gravado no banco.`,
       icone: 'fa-rotate-left',
       botao: 'Descartar',
-      run: () => { setEdits({}); setLinha({}); showToast('Alterações descartadas.'); },
+      run: () => { setEdits({}); setLinha({}); setBuscas({}); showToast('Alterações descartadas.'); },
     });
+  };
+
+  // -----------------------------------------------------------------
+  // BLOCO 178 — PREENCHIMENTO AUTOMÁTICO (pedido do dono: "no momento
+  // que digitar faça a busca automatica do endereço completo e preencha,
+  // o mesmo vale para o cnpj"):
+  //  · CEP (8 dígitos) -> ViaCEP/Correios -> logradouro, bairro, município, UF;
+  //  · CNPJ (14 dígitos com DV válido) -> /api/cnpj (Receita) -> razão social,
+  //    logradouro, número, bairro, município, UF e CEP;
+  //  · CPF (11) não tem consulta pública — feedback discreto orienta pelo CEP;
+  //  · debounce curto, spinner e mensagem INLINE na célula; não rebusca o
+  //    mesmo valor que já preencheu (protege edições manuais); falha permite
+  //    apagar e digitar de novo.
+  // -----------------------------------------------------------------
+  const setBuscaEstado = (id: string, campo: 'cep' | 'doc', st: Partial<BuscaEstado>) => {
+    const key = `${id}:${campo}`;
+    setBuscas(prev => ({ ...prev, [key]: { campo, ...(prev[key] || {}), ...st } }));
+  };
+
+  const buscarCepPara = async (c: { id: string }, d: string) => {
+    setBuscaEstado(c.id, 'cep', { buscando: true, msg: undefined, msgOk: undefined });
+    const r = await buscarCep(d);
+    if (r.ok) {
+      buscaFeitaOk.current[`${c.id}:cep`] = d;
+      setEdits(prev => {
+        const cur = prev[c.id] || {};
+        const prox = { ...cur };
+        if (r.logradouro) prox.endereco = r.logradouro.replace(/\s+/g, ' ').slice(0, 60);
+        if (r.bairro) prox.bairro = r.bairro.replace(/\s+/g, ' ').slice(0, 60);
+        if (r.cidade) prox.municipio = r.cidade.replace(/\s+/g, ' ').slice(0, 60);
+        if (r.uf) prox.uf = r.uf.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 2);
+        return { ...prev, [c.id]: prox };
+      });
+      const partes = [r.logradouro, r.bairro, r.cidade ? `${r.cidade}/${r.uf}` : ''].filter(Boolean).join(' · ');
+      setBuscaEstado(c.id, 'cep', { buscando: false, msgOk: true, msg: `Correios preencheram: ${partes || 'CEP válido'}` });
+    } else {
+      setBuscaEstado(c.id, 'cep', { buscando: false, msgOk: false, msg: r.erro || 'CEP não encontrado — corrija ou preencha na mão.' });
+    }
+  };
+
+  const buscarCnpjPara = async (c: { id: string }, d: string, tk: string) => {
+    setBuscaEstado(c.id, 'doc', { buscando: true, msg: undefined, msgOk: undefined });
+    try {
+      const res = await fetch(`/api/cnpj?cnpj=${encodeURIComponent(d)}`, { headers: { Authorization: `Bearer ${tk}` } });
+      const data = await res.json().catch(() => null) as Record<string, unknown> | null;
+      if (!res.ok || !data?.ok) {
+        setBuscaEstado(c.id, 'doc', { buscando: false, msgOk: false, msg: String(data?.erro || 'CNPJ não encontrado na Receita — preencha na mão.') });
+        return;
+      }
+      buscaFeitaOk.current[`${c.id}:doc`] = d;
+      setEdits(prev => {
+        const cur = prev[c.id] || {};
+        const prox = { ...cur };
+        if (data.razaoSocial) prox.razaoSocial = String(data.razaoSocial).replace(/\s+/g, ' ').slice(0, 120);
+        if (data.endereco) prox.endereco = String(data.endereco).replace(/\s+/g, ' ').slice(0, 60);
+        if (data.numero) prox.numero = String(data.numero).slice(0, 60);
+        if (data.bairro) prox.bairro = String(data.bairro).replace(/\s+/g, ' ').slice(0, 60);
+        if (data.municipio) prox.municipio = String(data.municipio).replace(/\s+/g, ' ').slice(0, 60);
+        if (data.uf) prox.uf = String(data.uf).toUpperCase().replace(/[^A-Z]/g, '').slice(0, 2);
+        const cepD = String(data.cep || '').replace(/\D/g, '');
+        if (cepD.length === 8) prox.cep = `${cepD.slice(0, 5)}-${cepD.slice(5)}`;
+        return { ...prev, [c.id]: prox };
+      });
+      const extras = [data.situacao ? String(data.situacao) : '', data.simples ? 'Simples Nacional' : '', data.mei ? 'MEI' : ''].filter(Boolean).join(' · ');
+      const nomeReceita = String(data.razaoSocial || data.nomeFantasia || 'dados recebidos');
+      setBuscaEstado(c.id, 'doc', {
+        buscando: false,
+        msgOk: data.situacaoOk !== false,
+        msg: `Receita: ${nomeReceita}${extras ? ` — ${extras}` : ''} · endereço preenchido`,
+      });
+    } catch {
+      setBuscaEstado(c.id, 'doc', { buscando: false, msgOk: false, msg: 'Falha de conexão ao consultar o CNPJ. Digite de novo para tentar.' });
+    }
+  };
+
+  /** onChange do CEP: máscara + debounce + busca automática nos Correios. */
+  const aoDigitarCep = (c: ClienteFiscal, bruto: string) => {
+    setValor(c, 'cep', bruto);
+    const d = bruto.replace(/\D/g, '');
+    const key = `${c.id}:cep`;
+    if (ultimoDigitado.current[key] !== d) {
+      ultimoDigitado.current[key] = d;
+      setBuscaEstado(c.id, 'cep', { msg: undefined, msgOk: undefined });
+    }
+    if (d.length !== 8) return;
+    if (buscaFeitaOk.current[key] === d) return; // já preencheu com esse CEP
+    clearTimeout(buscaTimers.current[key]);
+    buscaTimers.current[key] = setTimeout(() => void buscarCepPara(c, d), 450);
+  };
+
+  /** onChange do CPF/CNPJ: máscara + debounce + consulta na Receita (CNPJ 14). */
+  const aoDigitarDoc = (c: ClienteFiscal, bruto: string, tk: string) => {
+    setValor(c, 'doc', bruto);
+    const d = bruto.replace(/\D/g, '');
+    const key = `${c.id}:doc`;
+    if (ultimoDigitado.current[key] !== d) {
+      ultimoDigitado.current[key] = d;
+      setBuscaEstado(c.id, 'doc', { msg: undefined, msgOk: undefined });
+    }
+    if (d.length === 11) {
+      // CPF: sem consulta pública — orienta o dono pelo CEP.
+      if (validaCpfCnpj(d)) setBuscaEstado(c.id, 'doc', { msgOk: true, msg: 'CPF ok — a Receita não abre consulta de CPF; o CEP preenche o endereço.' });
+      return;
+    }
+    if (d.length !== 14) return;
+    if (buscaFeitaOk.current[key] === d) return;
+    if (!validaCpfCnpj(d)) return; // DV inválido: erro já aparece no campo
+    clearTimeout(buscaTimers.current[key]);
+    buscaTimers.current[key] = setTimeout(() => void buscarCnpjPara(c, d, tk), 500);
   };
 
   // ---------- filtros ----------
@@ -469,7 +630,7 @@ export default function PortalClientesFiscaisPage() {
             <i className="fa-solid fa-address-card text-teal-600 text-3xl"></i>
           </div>
           <h1 className="text-xl font-black text-gray-800 mb-1">Clientes Fiscais</h1>
-          <p className="text-gray-400 text-sm mb-8 font-medium">Nome · CPF/CNPJ · CEP · Endereço — destinatário da NF e do boleto</p>
+          <p className="text-gray-400 text-sm mb-8 font-medium">Nome · CPF/CNPJ · CEP · Endereço — CEP e CNPJ preenchem sozinhos</p>
           <div className="flex justify-center gap-3 mb-6" aria-label="PIN digitado">
             {[0, 1, 2, 3, 4, 5].map(i => (
               <div key={i} className={`w-4 h-4 rounded-full border-2 transition-colors ${pin.length > i ? 'bg-teal-600 border-teal-600' : 'border-gray-200'}`} />
@@ -509,11 +670,32 @@ export default function PortalClientesFiscaisPage() {
 
   const inputCls = (c: ClienteFiscal, k: CKey) => {
     const err = alteradoDe(c, k) && erroDeCampo(k, valorDe(c, k));
-    const base = `h-8 w-full rounded-lg border text-[12px] font-bold text-gray-800 px-2 transition-colors focus:outline-none focus:ring-2 ${(k === 'cep' || k === 'doc') ? 'font-mono tracking-wide' : ''}`;
+    const base = `h-8 w-full rounded-lg border text-[12px] font-bold text-gray-800 px-2 transition-colors focus:outline-none focus:ring-2 ${(k === 'cep' || k === 'doc' || k === 'ie') ? 'font-mono tracking-wide' : ''}`;
     if (err) return `${base} border-rose-300 bg-rose-50 focus:ring-rose-200`;
     if (alteradoDe(c, k)) return `${base} border-amber-300 bg-amber-50 focus:ring-amber-200`;
     if (valorDe(c, k)) return `${base} border-gray-200 bg-white focus:ring-gray-200`;
     return `${base} border-dashed border-gray-300 bg-gray-50/50 text-gray-400 focus:ring-gray-200`;
+  };
+
+  // BLOCO 178: mensagem INLINE do preenchimento automático (Correios/Receita).
+  const msgBuscaCelula = (c: ClienteFiscal, campo: 'cep' | 'doc', largura: string) => {
+    const b = buscas[`${c.id}:${campo}`];
+    if (!b) return null;
+    if (b.buscando) {
+      return (
+        <p className={`text-[8px] font-black text-teal-600 mt-0.5 truncate ${largura}`}>
+          <i className="fa-solid fa-spinner fa-spin mr-1"></i>
+          {campo === 'cep' ? 'buscando nos Correios...' : 'consultando a Receita...'}
+        </p>
+      );
+    }
+    if (!b.msg) return null;
+    return (
+      <p className={`text-[8px] font-black mt-0.5 truncate ${largura} ${b.msgOk ? 'text-emerald-600' : 'text-rose-500'}`} title={b.msg}>
+        {b.msgOk ? <i className="fa-solid fa-circle-check mr-1"></i> : <i className="fa-solid fa-circle-exclamation mr-1"></i>}
+        {b.msg}
+      </p>
+    );
   };
 
   return (
@@ -529,7 +711,7 @@ export default function PortalClientesFiscaisPage() {
               <h1 className="text-[15px] font-black uppercase tracking-tight leading-none whitespace-nowrap">Clientes Fiscais <span className="text-teal-200">Nome · CPF/CNPJ · CEP · Endereço do destinatário</span></h1>
               <p className="text-[10px] text-teal-100/70 font-semibold mt-1 leading-none truncate">
                 {nomeAdmin ? <><i className="fa-solid fa-user-shield mr-1 text-[8px]"></i>{nomeAdmin} · </> : null}
-                <span className="uppercase tracking-wide">NF-e exige endereço completo · CPF/CNPJ e CEP são o que o boleto do Inter puxa</span>
+                <span className="uppercase tracking-wide">digite o CEP (Correios) ou o CNPJ (Receita) e o sistema preenche o resto · tudo editável</span>
               </p>
             </div>
             <div className="flex-1" />
@@ -597,7 +779,7 @@ export default function PortalClientesFiscaisPage() {
           <div className="bg-stone-50 border border-stone-200 rounded-xl px-4 py-2.5 flex items-center gap-2.5">
             <i className="fa-solid fa-id-card text-stone-500"></i>
             <p className="text-[11px] font-bold text-stone-700">
-              {kpis.semCnpj} cliente(s) SEM CPF/CNPJ — o boleto A PRAZO não sai sem o documento do pagador (NFe = CNPJ · NFC/boleto PF = CPF). Use o filtro <b>sem CPF/CNPJ</b> e complete o cadastro.
+              {kpis.semCnpj} cliente(s) SEM CPF/CNPJ — o boleto A PRAZO não sai sem o documento do pagador (NFe = CNPJ · NFC/boleto PF = CPF). Use o filtro <b>sem CPF/CNPJ</b>: CNPJ completo puxa os dados da RECEITA sozinho.
             </p>
           </div>
         )}
@@ -673,15 +855,15 @@ export default function PortalClientesFiscaisPage() {
         {/* ================= TABELA PLANILHA ================= */}
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[2260px] text-left">
+            <table className="w-full min-w-[2400px] text-left">
               <thead>
                 <tr className="bg-gray-900 text-white text-[9px] font-black uppercase tracking-wider">
                   <th className="px-3 py-2.5 w-14">#</th>
                   <th className="px-3 py-2.5 min-w-[200px]">Nome <span className="text-gray-400 normal-case font-semibold">(editável)</span></th>
-                  <th className="px-3 py-2.5 w-44">CPF / CNPJ <span className="text-gray-400 normal-case font-semibold">(editável)</span></th>
-                  <th className="px-3 py-2.5 w-32">CEP <span className="text-gray-400 normal-case font-semibold">(editável)</span></th>
-                  <th className="px-3 py-2.5 min-w-[190px]">Razão Social</th>
-                  <th className="px-3 py-2.5 w-28">IE</th>
+                  <th className="px-3 py-2.5 w-44">CPF / CNPJ <span className="text-gray-400 normal-case font-semibold">(editável · CNPJ puxa a Receita)</span></th>
+                  <th className="px-3 py-2.5 w-32">CEP <span className="text-gray-400 normal-case font-semibold">(editável · puxa os Correios)</span></th>
+                  <th className="px-3 py-2.5 min-w-[190px]">Razão Social <span className="text-gray-400 normal-case font-semibold">(editável)</span></th>
+                  <th className="px-3 py-2.5 w-28">IE <span className="text-gray-400 normal-case font-semibold">(editável)</span></th>
                   <th className="px-3 py-2.5 min-w-[150px]">Município <span className="text-gray-400 normal-case font-semibold">(editável)</span></th>
                   <th className="px-3 py-2.5 w-16">UF <span className="text-gray-400 normal-case font-semibold">(editável)</span></th>
                   <th className="px-3 py-2.5 min-w-[180px]">Logradouro <span className="text-gray-400 normal-case font-semibold">(editável)</span></th>
@@ -723,43 +905,68 @@ export default function PortalClientesFiscaisPage() {
                           ) : null}
                         </div>
                       </td>
-                      {/* BLOCO 174: CEP editável — o que o BOLETO do Inter puxa do cadastro */}
+                      {/* BLOCO 174/178: CEP editável — ao completar 8 dígitos o ViaCEP
+                          (Correios) preenche logradouro/bairro/município/UF sozinho */}
                       <td className="px-3 py-1.5">
                         <input
                           value={valorDe(c, 'cep')}
-                          onChange={e => setValor(c, 'cep', e.target.value)}
+                          onChange={e => aoDigitarCep(c, e.target.value)}
                           onKeyDown={e => { if (e.key === 'Enter') void salvarLinha(c); }}
                           inputMode="numeric"
                           placeholder="00000-000"
                           className={inputCls(c, 'cep')}
                           aria-label={`CEP de ${c.nome}`}
                         />
+                        {msgBuscaCelula(c, 'cep', 'max-w-[128px]')}
                         {alteradoDe(c, 'cep') && erroDeCampo('cep', valorDe(c, 'cep')) ? (
                           <p className="text-[8px] font-black text-rose-500 mt-0.5">CEP: {erroDeCampo('cep', valorDe(c, 'cep'))}</p>
                         ) : null}
                       </td>
-                      {/* BLOCO 177: CPF/CNPJ EDITÁVEL — o documento do PAGADOR do
-                          boleto a prazo (NFe = CNPJ · NFC/boleto PF = CPF). Mesmo
-                          campo do cadastro, validação do dígito verificador. */}
+                      {/* BLOCO 177/178: CPF/CNPJ EDITÁVEL — ao completar 14 dígitos com
+                          DV válido, a RECEITA preenche razão social + endereço sozinhos
+                          (CPF 11 não tem consulta pública — feedback orienta pelo CEP). */}
                       <td className="px-3 py-1.5">
                         <input
                           value={valorDe(c, 'doc')}
-                          onChange={e => setValor(c, 'doc', e.target.value)}
+                          onChange={e => aoDigitarDoc(c, e.target.value, token || '')}
                           onKeyDown={e => { if (e.key === 'Enter') void salvarLinha(c); }}
                           inputMode="numeric"
                           placeholder="CPF ou CNPJ"
                           className={inputCls(c, 'doc')}
                           aria-label={`CPF/CNPJ de ${c.nome}`}
                         />
+                        {msgBuscaCelula(c, 'doc', 'max-w-[176px]')}
                         {alteradoDe(c, 'doc') && erroDeCampo('doc', valorDe(c, 'doc')) ? (
                           <p className="text-[8px] font-black text-rose-500 mt-0.5">CPF/CNPJ: {erroDeCampo('doc', valorDe(c, 'doc'))}</p>
                         ) : null}
                       </td>
+                      {/* BLOCO 178: RAZÃO SOCIAL editável — a Receita puxa no CNPJ e o dono ajusta por cima */}
                       <td className="px-3 py-1.5">
-                        <span className={`text-[11px] font-bold truncate block max-w-[240px] ${c.razaoSocial ? 'text-gray-600' : 'text-gray-300'}`} title={c.razaoSocial}>{c.razaoSocial || '—'}</span>
+                        <input
+                          value={valorDe(c, 'razaoSocial')}
+                          onChange={e => setValor(c, 'razaoSocial', e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') void salvarLinha(c); }}
+                          placeholder="Razão social (opcional)"
+                          className={inputCls(c, 'razaoSocial')}
+                          aria-label={`Razão social de ${c.nome}`}
+                        />
+                        {alteradoDe(c, 'razaoSocial') && erroDeCampo('razaoSocial', valorDe(c, 'razaoSocial')) ? (
+                          <p className="text-[8px] font-black text-rose-500 mt-0.5">Razão: {erroDeCampo('razaoSocial', valorDe(c, 'razaoSocial'))}</p>
+                        ) : null}
                       </td>
+                      {/* BLOCO 178: IE editável (aceita ISENTO) */}
                       <td className="px-3 py-1.5">
-                        <span className={`text-[11px] font-bold font-mono ${c.ie ? 'text-gray-700' : 'text-gray-300'}`}>{c.ie || '—'}</span>
+                        <input
+                          value={valorDe(c, 'ie')}
+                          onChange={e => setValor(c, 'ie', e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') void salvarLinha(c); }}
+                          placeholder="IE ou ISENTO"
+                          className={inputCls(c, 'ie')}
+                          aria-label={`IE de ${c.nome}`}
+                        />
+                        {alteradoDe(c, 'ie') && erroDeCampo('ie', valorDe(c, 'ie')) ? (
+                          <p className="text-[8px] font-black text-rose-500 mt-0.5">IE: {erroDeCampo('ie', valorDe(c, 'ie'))}</p>
+                        ) : null}
                       </td>
                       {/* BLOCO 176: MUNICÍPIO editável — o xMun do enderDest da NF-e */}
                       <td className="px-3 py-1.5">
@@ -862,7 +1069,7 @@ export default function PortalClientesFiscaisPage() {
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm px-4 py-3">
           <p className="text-[10px] font-bold text-gray-500 leading-relaxed">
             <i className="fa-solid fa-circle-info text-teal-600 mr-1.5"></i>
-            <b>Tudo editável:</b> Nome (obrigatório até 120) · CPF/CNPJ (11 ou 14 dígitos com dígito verificador — é o documento do PAGADOR do boleto a prazo: NFe = CNPJ, cliente PF = CPF) · CEP (8 dígitos, o CEP que o boleto do Inter puxa) · Logradouro (rua, SEM o número) · Nº (aceita S/N) · Bairro · Município · UF (2 letras) — limite SEFAZ de 60 caracteres por campo. <b>Somente leitura:</b> IE / Razão Social. A NF-e IDENTIFICADA só sobe com o endereço COMPLETO (rua + nº + bairro + município + UF + CEP); a NFC-e identificada com cadastro incompleto sai SEM endereço em vez de ser recusada. ENTER na linha salva só aquela linha.
+            <b>PREENCHIMENTO AUTOMÁTICO:</b> digite o CEP (8 dígitos) e os CORREIOS preenchem rua, bairro, município e UF da linha na hora; digite o CNPJ (14 dígitos) e a RECEITA preenche razão social, endereço completo e CEP — a linha fica âmbar, ENTER grava. CPF (11) não tem consulta pública: a Receita não abre CPF, então o endereço completa pelo CEP. <b>Tudo editável:</b> Nome (obrigatório até 120) · CPF/CNPJ (11 ou 14 com dígito verificador — documento do PAGADOR do boleto a prazo: NFe = CNPJ, cliente PF = CPF) · CEP · Razão Social · IE (aceita ISENTO) · Logradouro (rua, SEM o número) · Nº (aceita S/N) · Bairro · Município · UF — limite SEFAZ de 60 caracteres por campo. A NF-e IDENTIFICADA só sobe com o endereço COMPLETO (rua + nº + bairro + município + UF + CEP); a NFC-e identificada com cadastro incompleto sai SEM endereço em vez de ser recusada. ENTER na linha salva só aquela linha.
           </p>
         </div>
       </main>
@@ -871,7 +1078,7 @@ export default function PortalClientesFiscaisPage() {
       <footer className="mt-auto bg-white border-t border-gray-200">
         <div className="max-w-[1600px] mx-auto px-4 py-2.5 flex items-center gap-2 text-[9px] font-bold text-gray-400 uppercase tracking-wider">
           <i className="fa-solid fa-address-card text-teal-600"></i>
-          DOCE MANIA · Clientes Fiscais — nome, CPF/CNPJ, CEP e endereço fiscal editáveis
+          DOCE MANIA · Clientes Fiscais — tudo editável · CEP e CNPJ preenchem o endereço automaticamente
           <span className="ml-auto">{kpis.total} clientes · {kpis.semEndereco} sem logradouro · {kpis.semMunicipio} sem município · {kpis.semCep} sem CEP</span>
         </div>
       </footer>

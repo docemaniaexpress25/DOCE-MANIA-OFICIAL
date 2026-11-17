@@ -23,10 +23,17 @@ import { validaCpfCnpj, mascaraCpfCnpj } from '@/lib/validaDoc';
  *   - BAIRRO (bairro) — EDITÁVEL até 60;
  *   - MUNICÍPIO (endereco_municipio) — EDITÁVEL até 60;
  *   - UF (endereco_uf) — EDITÁVEL, 2 letras;
- *   - razão social e IE — somente leitura, para conferir.
+ *
+ * BLOCO 178 (dono: "no momento que digitar faça a busca automatica do endereço
+ * completo e preencha, o mesmo vale para o cnpj — todos esses campos devem
+ * poder ser editados"): o preenchimento automático acontece no FRONT (CEP ->
+ * ViaCEP/Correios, CNPJ -> /api/cnpj Receita) e TODO campo do portal virou
+ * EDITÁVEL. Esta API passa a aceitar também:
+ *   - RAZÃO SOCIAL (razao_social) — EDITÁVEL até 120; vazio = limpa;
+ *   - IE (inscricao_estadual) — EDITÁVEL até 20 (aceita ISENTO); vazio = limpa.
  *
  * GET   /api/clientes-fiscal          -> todos os clientes + contagens
- * PATCH /api/clientes-fiscal { id, nome?, documento?, cep?, endereco?, numero?, bairro?, municipio?, uf? }
+ * PATCH /api/clientes-fiscal { id, nome?, documento?, cep?, endereco?, numero?, bairro?, municipio?, uf?, razaoSocial?, ie? }
  *                                     -> grava e devolve o cliente atualizado
  *
  * Auth: MESMA SESSÃO do portal fiscal (/notas) — POST /api/notas-admin
@@ -50,6 +57,10 @@ interface ClientePatch {
   bairro?: unknown;
   municipio?: unknown;
   uf?: unknown;
+  /** BLOCO 178: razão social editável (a Receita puxa no CNPJ e o dono pode ajustar). */
+  razaoSocial?: unknown;
+  /** BLOCO 178: IE editável (aceita ISENTO — a NF-e usa quando existe). */
+  ie?: unknown;
 }
 
 /**
@@ -91,6 +102,16 @@ function validaPatch(patch: ClientePatch): { dados: Record<string, string | null
   if (patch.numero !== undefined) dados.endereco_numero = max60(patch.numero);
   if (patch.bairro !== undefined) dados.bairro = max60(patch.bairro);
   if (patch.municipio !== undefined) dados.endereco_municipio = max60(patch.municipio);
+  // BLOCO 178: RAZÃO SOCIAL editável (120 — mesmo limite do nome) e IE
+  // editável (20, aceita ISENTO). Vazio = limpa o campo no cadastro.
+  if (patch.razaoSocial !== undefined) {
+    const r = String(patch.razaoSocial ?? '').trim().replace(/\s+/g, ' ').slice(0, 120);
+    dados.razao_social = r || null;
+  }
+  if (patch.ie !== undefined) {
+    const s = String(patch.ie ?? '').trim().replace(/\s+/g, ' ').slice(0, 20);
+    dados.inscricao_estadual = s || null;
+  }
   if (patch.uf !== undefined) {
     const u = String(patch.uf ?? '').trim().toUpperCase().replace(/[^A-Z]/g, '').slice(0, 2);
     if (u && u.length !== 2) return { dados, erro: 'UF deve ter 2 letras (ex: RS). Vazio = limpa.' };

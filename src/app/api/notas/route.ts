@@ -21,6 +21,7 @@ import {
   nextTentativa,
   validaCpfCnpj,
   numeroDoEndereco,
+  faltandoEnderecoDestinatario,
   FocusDoc,
   FocusDestinatarioV2,
   FocusFormaPagamento,
@@ -529,24 +530,37 @@ export async function POST(req: NextRequest) {
     // BLOCO 77 (regra do dono): a NF-e NAO e batida por este app (o dono
     // emite no sistema externo dele) — aqui o app so CONTROLA a venda como
     // NF. Exigencia minima: CNPJ valido (+ razao, que cai no nome fantasia).
-    // Endereco/bairro/municipio/UF seguem do cadastro best-effort e NAO
-    // bloqueiam mais o registro da venda como NF.
     const faltando: string[] = [];
     if (!cpfCnpj) faltando.push('CNPJ valido');
     if (!razao) faltando.push('Razao social / nome fantasia');
-    if (faltando.length > 0) {
-      return BAD(422, `Cadastro incompleto para NF-e. Complete no cadastro do cliente: ${faltando.join(', ')}.`);
+    // BLOCO 176 (erro real: "Element 'nro' not expected. Expected is 'xLgr'"):
+    // o enderDest é OBRIGATÓRIO no modelo 55 e o schema SEFAZ aceita TODO OU
+    // NADA — logradouro vazio com numero preenchido (ou qualquer campo faltando)
+    // montava um XML que a Focus recusava DEPOIS de marcar a venda EMITINDO.
+    // Agora recusa ANTES, com a lista exata do que falta e onde corrigir.
+    const faltandoEnd = faltandoEnderecoDestinatario({
+      logradouro,
+      bairro,
+      municipio,
+      uf,
+      cep: String(client.endereco_cep || ''),
+    });
+    if (faltando.length > 0 || faltandoEnd.length > 0) {
+      return BAD(
+        422,
+        `Cadastro incompleto para NF-e. Complete no portal CLIENTES FISCAIS (menu admin) e tente de novo: ${[...faltando, ...faltandoEnd].join(', ')}.`
+      );
     }
     const destinatario: FocusDestinatarioV2 = {
       nome: razao,
       cpf_cnpj: String(client.cnpj).replace(/\D/g, ''),
       inscricao_estadual: String(client.inscricao_estadual || '').trim() || undefined,
-      logradouro: logradouro || undefined,
+      logradouro,
       numero: numeroDoEndereco(client.endereco_numero as string, logradouro),
-      bairro: bairro || undefined,
-      municipio: municipio || undefined,
-      uf: uf || undefined,
-      cep: String(client.endereco_cep || '').replace(/\D/g, '') || undefined,
+      bairro,
+      municipio,
+      uf,
+      cep: String(client.endereco_cep || '').replace(/\D/g, ''),
       email: String((client as Record<string, unknown>).email || '').trim() || undefined,
       telefone: String(client.telefone || '').replace(/\D/g, '') || undefined,
     };
@@ -572,32 +586,45 @@ export async function POST(req: NextRequest) {
         return BAD(422, 'CPF invalido (digitos verificadores nao conferem). Corrija o CPF ou deixe vazio para NFC-e sem identificacao.');
       }
       const nomeConsumidor = String(client.nome || client.nome_fantasia || '').trim();
+      // BLOCO 176: no modelo 65 o enderDest é OPCIONAL e o schema aceita TODO
+      // OU NADA — endereço parcial derruba a nota na Focus (o erro "nro not
+      // expected"). Completo vai; incompleto o destinatário sai SEM endereço
+      // (a nota não trava).
+      const enderCpf = {
+        logradouro,
+        numero: numeroDoEndereco(client.endereco_numero as string, logradouro),
+        bairro,
+        municipio,
+        uf: uf || cfg.ufEmitente,
+        cep: String(client.endereco_cep || '').replace(/\D/g, ''),
+      };
+      const enderCpfCompleto = faltandoEnderecoDestinatario(enderCpf).length === 0;
       destinatario = {
         nome: (nomeConsumidor || 'CONSUMIDOR').slice(0, 60),
         cpf_cnpj: cpfNaNota,
-        logradouro: logradouro || undefined,
-        numero: numeroDoEndereco(client.endereco_numero as string, logradouro),
-        bairro: bairro || undefined,
-        municipio: municipio || undefined,
-        uf: uf || cfg.ufEmitente,
-        cep: String(client.endereco_cep || '').replace(/\D/g, '') || undefined,
+        ...(enderCpfCompleto ? enderCpf : {}),
       };
     } else if (razao && cpfCnpj && !modoCupom) {
       // BLOCO 128 (pedido do dono): a NFC-e — escolhida na tela OU automatica —
       // identifica o destinatario pelo CADASTRO sempre que o cliente tem
-      // CPF/CNPJ valido, e leva o ENDERECO COMPLETO do cadastro
-      // (logradouro/numero/bairro/MUNICIPIO/UF + CEP). A SEFAZ nao aceita
+      // CPF/CNPJ valido, e leva o ENDERECO do cadastro. A SEFAZ nao aceita
       // destinatario sem documento, entao cadastro sem CPF/CNPJ valido segue
       // anonimo (como antes — NFC-e de consumidor de passagem).
+      // BLOCO 176: endereço TODO OU NADA — cadastro incompleto (ex. MERCADO
+      // DALAGE: nº 312 sem rua) sai SEM endereço em vez de derrubar a nota.
+      const enderCad = {
+        logradouro,
+        numero: numeroDoEndereco(client.endereco_numero as string, logradouro),
+        bairro,
+        municipio,
+        uf: uf || cfg.ufEmitente,
+        cep: String(client.endereco_cep || '').replace(/\D/g, ''),
+      };
+      const enderCadCompleto = faltandoEnderecoDestinatario(enderCad).length === 0;
       destinatario = {
         nome: razao.slice(0, 60),
         cpf_cnpj: String(client.cnpj).replace(/\D/g, ''),
-        logradouro: logradouro || undefined,
-        numero: numeroDoEndereco(client.endereco_numero as string, logradouro),
-        bairro: bairro || undefined,
-        municipio: municipio || undefined,
-        uf: uf || cfg.ufEmitente,
-        cep: String(client.endereco_cep || '').replace(/\D/g, '') || undefined,
+        ...(enderCadCompleto ? enderCad : {}),
       };
     }
     // Sem CPF digitado E sem documento valido no cadastro: NFC-e anonima.

@@ -175,12 +175,44 @@ function soDigitos(v?: string | null): string {
   return (v || '').replace(/\D/g, '');
 }
 
-/** 'S/N' quando o numero nao esta preenchido; tenta extrair do logradouro */
+/**
+ * Numero do endereço do destinatário — 'S/N' APENAS quando existe logradouro
+ * (convenção SEFAZ aceita). BLOCO 176 (erro real do dono): com logradouro VAZIO
+ * devolve '' — antes devolvia 'S/N' sempre e o payload saía com
+ * numero_destinatario SEM logradouro_destinatario, e o XML da Focus montava
+ * <enderDest> começando por <nro>S/N</nro> sem <xLgr> — recusa
+ * "Element 'nro': This element is not expected. Expected is ( 'xLgr' ).
+ * -- xpath: /NFe/infNFe/dest/enderDest/nro". Tenta extrair o número do final
+ * do logradouro ("Avenida Itália 325" -> 325) quando o campo numero está vazio.
+ */
 export function numeroDoEndereco(numero?: string | null, logradouro?: string | null): string {
+  const lgr = (logradouro || '').trim();
   const n = soDigitos(numero);
   if (n) return n;
-  const m = (logradouro || '').trim().match(/(\d+)\s*$/);
+  if (!lgr) return '';
+  const m = lgr.match(/(\d+)\s*$/);
   return m ? m[1] : 'S/N';
+}
+
+/**
+ * BLOCO 176 — endereço do destinatário é TODO OU NADA no XML da SEFAZ:
+ * o schema exige (quando o enderDest existe) xLgr + nro + xBairro + cMun +
+ * xMun + UF + CEP. Um só campo faltando derruba a nota na Focus com erro de
+ * sequência do schema (o "nro not expected" acima). Devolve os RÓTULOS do que
+ * falta no cadastro (vazio = completo) — a emissão usa para:
+ *  - NF-e identificada: RECUSAR antes com instrução clara (enderDest é
+ *    obrigatório no modelo 55);
+ *  - NFC-e identificada: enviar o endereço só se completo; incompleto sai SEM
+ *    endereço (o enderDest é opcional no modelo 65) — a nota não trava.
+ */
+export function faltandoEnderecoDestinatario(d: FocusDestinatarioV2): string[] {
+  const faltando: string[] = [];
+  if (!String(d.logradouro || '').trim()) faltando.push('Logradouro (rua)');
+  if (!String(d.bairro || '').trim()) faltando.push('Bairro');
+  if (!String(d.municipio || '').trim()) faltando.push('Município');
+  if (!/^[A-Z]{2}$/.test(String(d.uf || '').toUpperCase().trim())) faltando.push('UF');
+  if (soDigitos(d.cep).length !== 8) faltando.push('CEP (8 dígitos)');
+  return faltando;
 }
 
 /** Valida CPF (11 digitos) ou CNPJ (14 digitos) por digitos verificadores */
@@ -518,8 +550,14 @@ function destinatarioV2(d: FocusDestinatarioV2, doc: FocusDoc): Partial<FocusNfe
   } else if (docDigitos) {
     out.indicador_inscricao_estadual_destinatario = 9; // nao contribuinte
   }
-  if (d.logradouro) out.logradouro_destinatario = normalizaTexto(d.logradouro, 60);
-  if (d.numero) out.numero_destinatario = d.numero.slice(0, 60);
+  // BLOCO 176 (defesa final): o numero NUNCA vai sem logradouro — o XML da
+  // SEFAZ exige xLgr ANTES de nro; sem xLgr a Focus recusa com erro de schema
+  // ("Element 'nro' not expected"). O endereço completo/parcial é decidido
+  // ANTES na emissão (faltandoEnderecoDestinatario); aqui é a rede de proteção.
+  if (d.logradouro) {
+    out.logradouro_destinatario = normalizaTexto(d.logradouro, 60);
+    if (d.numero) out.numero_destinatario = d.numero.slice(0, 60);
+  }
   if (d.bairro) out.bairro_destinatario = normalizaTexto(d.bairro, 60);
   if (d.municipio) out.municipio_destinatario = normalizaTexto(d.municipio, 60);
   if (d.uf) out.uf_destinatario = d.uf.toUpperCase().slice(0, 2);

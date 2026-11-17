@@ -9,16 +9,23 @@ import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/s
  * clientes para eu poder editar dados dos clientes! coloque somente
  * informaçoes relevantes ao fiscal tbm o nome e cep editaveis".
  *
- * Mostra SÓ o que a NF-e/NFC-e (destinatário) e o BOLETO do Inter usam:
+ * BLOCO 176 (erro real ao bater a nota: "Element 'nro' not expected. Expected
+ * is 'xLgr'" — cliente MERCADO DALAGE com nº 312 e SEM logradouro): o portal
+ * agora também EDITA o ENDEREÇO FISCAL do destinatário — logradouro (rua),
+ * número, bairro, município e UF — porque a NF-e identificada EXIGE o endereço
+ * completo do cadastro e o dono precisa consertar o cadastro na mão. Continua
+ * mostrando só o que a NF-e/NFC-e (destinatário) e o BOLETO do Inter usam:
  *   - NOME (nome_fantasia) — EDITÁVEL, obrigatório (catálogo, PDV, NF);
- *   - CEP (endereco_cep) — EDITÁVEL, 8 dígitos, gravado mascarado 00000-000.
- *     É o CEP que o BOLETO do Inter exige do pagador (o BoletoCard puxa o
- *     enderecoCep do cadastro; cliente sem CEP força a digitação no PDV);
- *   - razão social, CNPJ, IE, município, UF, endereço/número/bairro —
- *     somente leitura, para conferir o cadastro fiscal na mesma tela.
+ *   - CEP (endereco_cep) — EDITÁVEL, 8 dígitos, gravado mascarado 00000-000;
+ *   - LOGRADOURO (endereco) — EDITÁVEL até 60 (limite SEFAZ do xLgr);
+ *   - NÚMERO (endereco_numero) — EDITÁVEL até 60 (aceita S/N);
+ *   - BAIRRO (bairro) — EDITÁVEL até 60;
+ *   - MUNICÍPIO (endereco_municipio) — EDITÁVEL até 60;
+ *   - UF (endereco_uf) — EDITÁVEL, 2 letras;
+ *   - razão social, CNPJ, IE — somente leitura, para conferir.
  *
  * GET   /api/clientes-fiscal          -> todos os clientes + contagens
- * PATCH /api/clientes-fiscal { id, nome?, cep? }
+ * PATCH /api/clientes-fiscal { id, nome?, cep?, endereco?, numero?, bairro?, municipio?, uf? }
  *                                     -> grava e devolve o cliente atualizado
  *
  * Auth: MESMA SESSÃO do portal fiscal (/notas) — POST /api/notas-admin
@@ -36,9 +43,23 @@ const soDigitos = (v: unknown) => String(v ?? '').replace(/\D/g, '');
 interface ClientePatch {
   nome?: unknown;
   cep?: unknown;
+  endereco?: unknown;
+  numero?: unknown;
+  bairro?: unknown;
+  municipio?: unknown;
+  uf?: unknown;
 }
 
-/** Normaliza + valida o patch. Nome vazio é RECUSADO; CEP vazio = limpa. */
+/**
+ * BLOCO 176: limites do schema SEFAZ (xLgr/nro/xBairro/xMun = 60; UF = 2).
+ * Texto vazio = LIMPA o campo (a emissão recusa NF-e e avisa o que falta).
+ */
+const max60 = (v: unknown): string | null => {
+  const t = String(v ?? '').trim().replace(/\s+/g, ' ').slice(0, 60);
+  return t || null;
+};
+
+/** Normaliza + valida o patch. Nome vazio é RECUSADO; demais vazios = limpa. */
 function validaPatch(patch: ClientePatch): { dados: Record<string, string | null>; erro?: string } {
   const dados: Record<string, string | null> = {};
 
@@ -51,6 +72,15 @@ function validaPatch(patch: ClientePatch): { dados: Record<string, string | null
     const d = soDigitos(patch.cep);
     if (d && d.length !== 8) return { dados, erro: 'CEP deve ter 8 dígitos (ex: 95034-240). Vazio = limpa.' };
     dados.endereco_cep = d ? `${d.slice(0, 5)}-${d.slice(5)}` : null;
+  }
+  if (patch.endereco !== undefined) dados.endereco = max60(patch.endereco);
+  if (patch.numero !== undefined) dados.endereco_numero = max60(patch.numero);
+  if (patch.bairro !== undefined) dados.bairro = max60(patch.bairro);
+  if (patch.municipio !== undefined) dados.endereco_municipio = max60(patch.municipio);
+  if (patch.uf !== undefined) {
+    const u = String(patch.uf ?? '').trim().toUpperCase().replace(/[^A-Z]/g, '').slice(0, 2);
+    if (u && u.length !== 2) return { dados, erro: 'UF deve ter 2 letras (ex: RS). Vazio = limpa.' };
+    dados.endereco_uf = u || null;
   }
   return { dados };
 }
@@ -108,7 +138,7 @@ export async function GET(req: NextRequest) {
   });
 }
 
-// ---------------- PATCH: grava nome/CEP de UM cliente ----------------
+// ---------------- PATCH: grava nome/CEP/endereço fiscal de UM cliente ----------------
 export async function PATCH(req: NextRequest) {
   // Preview/bridge primeiro (padrao do projeto): no sandbox quem responde é a produção.
   if (!isServerSupabaseConfigured()) {

@@ -26,6 +26,25 @@
  *  - TUDO EDITÁVEL: NOME, CPF/CNPJ, CEP, RAZÃO SOCIAL e IE (antes só leitura)
  *    entraram na lista de inputs — a Receita puxa e o dono ajusta por cima.
  *
+ * BLOCO 179 (dono: "otimize o portal dos clientes, esta pessimo fazer a ediçao,
+ * nao conseguimos visualizar e editar as informaçoes que estao no canto,
+ * diminua o espaço para nome da cidade, otimize isso. veja quem ja esta com o
+ * cep e ja preencha"):
+ *  - PLANILHA REORDENADA: o bloco de ENDEREÇO agora é VIZINHO do CEP —
+ *    CEP -> LOGRADOURO -> Nº -> BAIRRO -> CIDADE -> UF — o que os Correios
+ *    preenchem aparece na frente do dono (antes ficava no canto direito,
+ *    fora da tela, depois de razão social/IE);
+ *  - PLANILHA MENOR: largura total 2400 -> ~1295px (cabe na tela do PC SEM
+ *    rolagem horizontal) e a coluna CIDADE diminuiu (150 -> 105px fixo — o
+ *    nome longo rola DENTRO do input); "Município" virou "Cidade";
+ *  - LOTE "PREENCHER": um clique vê quem JÁ TEM CEP e está com o endereço
+ *    incompleto (chip "CEP sem endereço" + barra teal com o botão) e os
+ *    CORREIOS completam TODOS de uma vez — preenche SÓ os campos VAZIOS
+ *    (nunca sobrescreve o que o dono digitou) e grava direto no cadastro,
+ *    com progresso x/y no botão;
+ *  - cabeçalhos enxutos (tudo já é editável desde o 178) — dica só fica no
+ *    CEP (Correios) e no CPF/CNPJ (Receita).
+ *
  * MESMA linguagem do PORTAL FISCAL (/notas) e de PRODUTOS FISCAIS
  * (/fiscal-produtos):
  *  - PIN do admin (6 dígitos) — MESMA SESSÃO do portal fiscal (token /notas);
@@ -90,7 +109,7 @@ interface Stats {
   semMunicipio: number;
 }
 
-type Filtro = 'TODOS' | 'SEM_CEP' | 'SEM_ENDERECO' | 'SEM_MUNICIPIO' | 'SEM_CNPJ' | 'SEM_IE' | 'INATIVOS';
+type Filtro = 'TODOS' | 'SEM_CEP' | 'SEM_ENDERECO' | 'SEM_MUNICIPIO' | 'SEM_CNPJ' | 'SEM_IE' | 'INATIVOS' | 'CEP_SEM_ENDERECO';
 
 const TOKEN_KEY = 'dm_notas_admin_token';
 const NOME_KEY = 'dm_notas_admin_nome';
@@ -209,6 +228,8 @@ export default function PortalClientesFiscaisPage() {
   // Salvar tudo
   const [salvandoTudo, setSalvandoTudo] = useState(false);
   const [conf, setConf] = useState<ConfModal | null>(null);
+  // BLOCO 179: progresso do preenchimento em LOTE pelo CEP (feito de total).
+  const [lote, setLote] = useState<{ done: number; total: number } | null>(null);
 
   // Toast
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
@@ -548,6 +569,9 @@ export default function PortalClientesFiscaisPage() {
     const digitos = q.replace(/\D/g, '');
     return clientes.filter(c => {
       if (filtro === 'SEM_CEP' && c.cep) return false;
+      // BLOCO 179: "CEP sem endereço" — JÁ tem CEP (8 dígitos) e está com
+      // rua, bairro, cidade ou UF vazia (são os alvos do botão PREENCHER).
+      if (filtro === 'CEP_SEM_ENDERECO' && !(c.cep.replace(/\D/g, '').length === 8 && (!c.endereco || !c.bairro || !c.municipio || !c.uf))) return false;
       if (filtro === 'SEM_ENDERECO' && c.endereco) return false;
       if (filtro === 'SEM_MUNICIPIO' && c.municipio) return false;
       if (filtro === 'SEM_CNPJ' && c.cnpj) return false;
@@ -613,6 +637,60 @@ export default function PortalClientesFiscaisPage() {
     };
   }, [clientes]);
 
+  // -----------------------------------------------------------------
+  // BLOCO 179 — LOTE "PREENCHER" (dono: "veja quem ja esta com o cep e ja
+  // preencha"): quem JÁ TEM CEP (8 dígitos) mas está com rua, bairro, cidade
+  // ou UF vazia é completado pelos CORREIOS de uma vez. Preenche SÓ os campos
+  // VAZIOS (nunca sobrescreve o que o dono digitou) e grava DIRETO no cadastro
+  // (PATCH por cliente, só os campos que faltam), com progresso x/y.
+  // -----------------------------------------------------------------
+  const alvosLote = useMemo(
+    () => clientes.filter(c => c.cep.replace(/\D/g, '').length === 8 && (!c.endereco || !c.bairro || !c.municipio || !c.uf)),
+    [clientes],
+  );
+
+  const preencherLotePeloCep = () => {
+    if (!token || alvosLote.length === 0 || lote) return;
+    setConf({
+      titulo: 'Completar endereço pelo CEP?',
+      texto: `${alvosLote.length} cliente(s) JÁ têm CEP e estão com rua, bairro, cidade ou UF vazios.`,
+      detalhe: 'Os CORREIOS são consultados pelo CEP gravado e preenchem SÓ os campos VAZIOS — nada que já esteja digitado é sobrescrito. Cada linha já é gravada no cadastro na hora.',
+      icone: 'fa-wand-magic-sparkles',
+      botao: `Preencher ${alvosLote.length} cliente(s)`,
+      run: async () => {
+        setLote({ done: 0, total: alvosLote.length });
+        let ok = 0; let nada = 0; let falha = 0;
+        for (let i = 0; i < alvosLote.length; i++) {
+          const c = alvosLote[i];
+          const r = await buscarCep(c.cep);
+          if (!r.ok) { falha += 1; }
+          else {
+            const patch: Record<string, string> = {};
+            if (!c.endereco && r.logradouro) patch.endereco = r.logradouro.replace(/\s+/g, ' ').slice(0, 60);
+            if (!c.bairro && r.bairro) patch.bairro = r.bairro.replace(/\s+/g, ' ').slice(0, 60);
+            if (!c.municipio && r.cidade) patch.municipio = r.cidade.replace(/\s+/g, ' ').slice(0, 60);
+            if (!c.uf && r.uf) patch.uf = r.uf.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 2);
+            if (Object.keys(patch).length === 0) { nada += 1; }
+            else {
+              try {
+                const res = await fetch('/api/clientes-fiscal', { method: 'PATCH', headers: headers(token), body: JSON.stringify({ id: c.id, ...patch }) });
+                const dj = await res.json().catch(() => null) as Record<string, unknown> | null;
+                if (res.ok && dj?.ok) {
+                  setClientes(prev => prev.map(x => (x.id === c.id ? (dj.cliente as ClienteFiscal) : x)));
+                  ok += 1;
+                } else falha += 1;
+              } catch { falha += 1; }
+            }
+          }
+          setLote({ done: i + 1, total: alvosLote.length });
+        }
+        setLote(null);
+        const partes = [`${ok} preenchido(s)`, nada ? `${nada} sem dados nos Correios` : '', falha ? `${falha} falha(s)` : ''].filter(Boolean).join(' · ');
+        showToast(`Lote concluído: ${partes}.`, falha === 0);
+      },
+    });
+  };
+
   // ================= TELA: PIN =================
   if (booting) {
     return (
@@ -630,7 +708,7 @@ export default function PortalClientesFiscaisPage() {
             <i className="fa-solid fa-address-card text-teal-600 text-3xl"></i>
           </div>
           <h1 className="text-xl font-black text-gray-800 mb-1">Clientes Fiscais</h1>
-          <p className="text-gray-400 text-sm mb-8 font-medium">Nome · CPF/CNPJ · CEP · Endereço — CEP e CNPJ preenchem sozinhos</p>
+          <p className="text-gray-400 text-sm mb-8 font-medium">Nome · CPF/CNPJ · CEP · Endereço — preenche sozinho e tem lote pelo CEP</p>
           <div className="flex justify-center gap-3 mb-6" aria-label="PIN digitado">
             {[0, 1, 2, 3, 4, 5].map(i => (
               <div key={i} className={`w-4 h-4 rounded-full border-2 transition-colors ${pin.length > i ? 'bg-teal-600 border-teal-600' : 'border-gray-200'}`} />
@@ -711,7 +789,7 @@ export default function PortalClientesFiscaisPage() {
               <h1 className="text-[15px] font-black uppercase tracking-tight leading-none whitespace-nowrap">Clientes Fiscais <span className="text-teal-200">Nome · CPF/CNPJ · CEP · Endereço do destinatário</span></h1>
               <p className="text-[10px] text-teal-100/70 font-semibold mt-1 leading-none truncate">
                 {nomeAdmin ? <><i className="fa-solid fa-user-shield mr-1 text-[8px]"></i>{nomeAdmin} · </> : null}
-                <span className="uppercase tracking-wide">digite o CEP (Correios) ou o CNPJ (Receita) e o sistema preenche o resto · tudo editável</span>
+                <span className="uppercase tracking-wide">CEP (Correios) e CNPJ (Receita) preenchem o resto · botão PREENCHER completa quem já tem CEP · tudo editável</span>
               </p>
             </div>
             <div className="flex-1" />
@@ -725,7 +803,7 @@ export default function PortalClientesFiscaisPage() {
               </button>
               <button
                 onClick={() => void carregar(token)}
-                disabled={carregando || salvandoTudo}
+                disabled={carregando || salvandoTudo || !!lote}
                 className="bg-white/15 hover:bg-white/25 disabled:opacity-60 text-white rounded-xl px-3.5 h-9 text-[10px] font-black uppercase tracking-wider active:scale-95 transition-all flex items-center gap-1.5"
                 title="Recarregar a lista (descarta alterações não salvas)"
               >
@@ -749,7 +827,7 @@ export default function PortalClientesFiscaisPage() {
             <span className={kpis.semCep > 0 ? 'text-amber-300' : 'text-emerald-300'}><b>{kpis.comCep}</b> com CEP</span>
             <span className={kpis.semCep > 0 ? 'text-amber-300' : 'text-emerald-300'}><b>{kpis.semCep}</b> sem CEP</span>
             <span className={kpis.semEndereco > 0 ? 'text-amber-300' : 'text-emerald-300'}><b>{kpis.semEndereco}</b> sem logradouro</span>
-            <span className={kpis.semMunicipio > 0 ? 'text-amber-300' : 'text-emerald-300'}><b>{kpis.semMunicipio}</b> sem município</span>
+            <span className={kpis.semMunicipio > 0 ? 'text-amber-300' : 'text-emerald-300'}><b>{kpis.semMunicipio}</b> sem cidade</span>
             <span className={kpis.semCnpj > 0 ? 'text-amber-300' : 'text-emerald-300'}><b>{kpis.comCnpj}</b> com CPF/CNPJ</span>
             <span className={kpis.semCnpj > 0 ? 'text-amber-300' : ''}><b>{kpis.semCnpj}</b> sem CPF/CNPJ</span>
             <span className="text-cyan-300/70"><b>{kpis.comIe}</b> com IE</span>
@@ -771,7 +849,7 @@ export default function PortalClientesFiscaisPage() {
           <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5 flex items-center gap-2.5">
             <i className="fa-solid fa-triangle-exclamation text-amber-600"></i>
             <p className="text-[11px] font-bold text-amber-800">
-              {kpis.semMunicipio} cliente(s) SEM MUNICÍPIO — o endereço completo (município + UF) também é exigido na NF-e identificada. Complete pelo filtro <b>sem município</b>.
+              {kpis.semMunicipio} cliente(s) SEM CIDADE — o endereço completo (cidade + UF) também é exigido na NF-e identificada. Complete pelo filtro <b>sem cidade</b> ou pelo botão <b>Preencher</b> (para quem já tem CEP).
             </p>
           </div>
         )}
@@ -792,6 +870,23 @@ export default function PortalClientesFiscaisPage() {
           </div>
         )}
 
+        {/* ================= BLOCO 179: LOTE — quem JÁ TEM CEP fica completo pelos Correios ================= */}
+        {alvosLote.length > 0 && (
+          <div className="bg-teal-50 border border-teal-200 rounded-xl px-4 py-2.5 flex items-center gap-2.5 flex-wrap">
+            <i className="fa-solid fa-wand-magic-sparkles text-teal-600"></i>
+            <p className="text-[11px] font-bold text-teal-900 flex-1 min-w-[220px]">
+              {alvosLote.length} cliente(s) JÁ TÊM CEP e estão com rua, bairro, cidade ou UF vazios — os Correios completam SÓ o que falta, de uma vez.
+            </p>
+            <button
+              onClick={preencherLotePeloCep}
+              disabled={!!lote || salvandoTudo}
+              className="h-9 px-4 rounded-xl bg-teal-600 text-white text-[10px] font-black uppercase tracking-wider active:scale-95 transition-all disabled:opacity-60 flex items-center gap-1.5"
+            >
+              {lote ? <><i className="fa-solid fa-spinner fa-spin"></i>{lote.done}/{lote.total}…</> : <><i className="fa-solid fa-wand-magic-sparkles"></i>Preencher ({alvosLote.length})</>}
+            </button>
+          </div>
+        )}
+
         {/* ================= FILTROS ================= */}
         <div className="flex items-center gap-2 flex-wrap">
           <div className="relative flex-1 min-w-[220px] max-w-sm">
@@ -806,8 +901,9 @@ export default function PortalClientesFiscaisPage() {
           </div>
           {chipFiltro('TODOS', 'Todos', kpis.total, 'bg-gray-900 text-white')}
           {chipFiltro('SEM_ENDERECO', 'Sem logradouro', kpis.semEndereco, 'bg-rose-600 text-white')}
-          {chipFiltro('SEM_MUNICIPIO', 'Sem município', kpis.semMunicipio, 'bg-orange-600 text-white')}
+          {chipFiltro('SEM_MUNICIPIO', 'Sem cidade', kpis.semMunicipio, 'bg-orange-600 text-white')}
           {chipFiltro('SEM_CEP', 'Sem CEP', kpis.semCep, 'bg-amber-600 text-white')}
+          {chipFiltro('CEP_SEM_ENDERECO', 'CEP sem endereço', alvosLote.length, 'bg-teal-700 text-white')}
           {chipFiltro('SEM_CNPJ', 'Sem CPF/CNPJ', kpis.semCnpj, 'bg-stone-700 text-white')}
           {chipFiltro('SEM_IE', 'Sem IE', kpis.total - kpis.comIe, 'bg-teal-700 text-white')}
           {chipFiltro('INATIVOS', 'Inativos', kpis.total - kpis.ativos, 'bg-gray-500 text-white')}
@@ -834,7 +930,7 @@ export default function PortalClientesFiscaisPage() {
             </button>
             <button
               onClick={salvarTudo}
-              disabled={salvandoTudo}
+              disabled={salvandoTudo || !!lote}
               className="h-8 px-4 rounded-lg bg-teal-600 text-white text-[10px] font-black uppercase tracking-wider active:scale-95 disabled:opacity-60 flex items-center gap-1.5"
             >
               {salvandoTudo ? <i className="fa-solid fa-spinner fa-spin"></i> : <i className="fa-solid fa-floppy-disk"></i>}
@@ -855,21 +951,21 @@ export default function PortalClientesFiscaisPage() {
         {/* ================= TABELA PLANILHA ================= */}
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[2400px] text-left">
+            <table className="w-full min-w-[1295px] text-left">
               <thead>
                 <tr className="bg-gray-900 text-white text-[9px] font-black uppercase tracking-wider">
-                  <th className="px-3 py-2.5 w-14">#</th>
-                  <th className="px-3 py-2.5 min-w-[200px]">Nome <span className="text-gray-400 normal-case font-semibold">(editável)</span></th>
-                  <th className="px-3 py-2.5 w-44">CPF / CNPJ <span className="text-gray-400 normal-case font-semibold">(editável · CNPJ puxa a Receita)</span></th>
-                  <th className="px-3 py-2.5 w-32">CEP <span className="text-gray-400 normal-case font-semibold">(editável · puxa os Correios)</span></th>
-                  <th className="px-3 py-2.5 min-w-[190px]">Razão Social <span className="text-gray-400 normal-case font-semibold">(editável)</span></th>
-                  <th className="px-3 py-2.5 w-28">IE <span className="text-gray-400 normal-case font-semibold">(editável)</span></th>
-                  <th className="px-3 py-2.5 min-w-[150px]">Município <span className="text-gray-400 normal-case font-semibold">(editável)</span></th>
-                  <th className="px-3 py-2.5 w-16">UF <span className="text-gray-400 normal-case font-semibold">(editável)</span></th>
-                  <th className="px-3 py-2.5 min-w-[180px]">Logradouro <span className="text-gray-400 normal-case font-semibold">(editável)</span></th>
-                  <th className="px-3 py-2.5 w-24">Nº <span className="text-gray-400 normal-case font-semibold">(editável)</span></th>
-                  <th className="px-3 py-2.5 min-w-[150px]">Bairro <span className="text-gray-400 normal-case font-semibold">(editável)</span></th>
-                  <th className="px-3 py-2.5 w-28 text-right">Situação</th>
+                  <th className="px-2.5 py-2.5 w-12">#</th>
+                  <th className="px-2.5 py-2.5 min-w-[150px]">Nome</th>
+                  <th className="px-2.5 py-2.5 w-[166px]">CPF/CNPJ <span className="text-gray-400 normal-case font-semibold">(Receita)</span></th>
+                  <th className="px-2.5 py-2.5 min-w-[130px]">Razão Social</th>
+                  <th className="px-2.5 py-2.5 w-[84px]">IE</th>
+                  <th className="px-2.5 py-2.5 w-[104px]">CEP <span className="text-gray-400 normal-case font-semibold">(Correios)</span></th>
+                  <th className="px-2.5 py-2.5 min-w-[150px]">Logradouro</th>
+                  <th className="px-2.5 py-2.5 w-[70px]">Nº</th>
+                  <th className="px-2.5 py-2.5 min-w-[130px]">Bairro</th>
+                  <th className="px-2.5 py-2.5 w-[105px]">Cidade</th>
+                  <th className="px-2.5 py-2.5 w-12">UF</th>
+                  <th className="px-2.5 py-2.5 w-[110px] text-right">Situação</th>
                 </tr>
               </thead>
               <tbody>
@@ -887,9 +983,9 @@ export default function PortalClientesFiscaisPage() {
                   const pend = CAMPOS_EDIT.some(k => alteradoDe(c, k));
                   return (
                     <tr key={c.id} className={`${est.fundo} ${est.borda} border-b border-gray-100 hover:bg-gray-50/60 transition-colors`}>
-                      <td className="px-3 py-1.5 text-[10px] font-bold text-gray-300">{idx + 1}</td>
+                      <td className="px-2.5 py-1.5 text-[10px] font-bold text-gray-300">{idx + 1}</td>
                       {/* BLOCO 174: NOME editável — obrigatório (catálogo, PDV, NF) */}
-                      <td className="px-3 py-1.5">
+                      <td className="px-2.5 py-1.5">
                         <input
                           value={valorDe(c, 'nome')}
                           onChange={e => setValor(c, 'nome', e.target.value)}
@@ -905,27 +1001,10 @@ export default function PortalClientesFiscaisPage() {
                           ) : null}
                         </div>
                       </td>
-                      {/* BLOCO 174/178: CEP editável — ao completar 8 dígitos o ViaCEP
-                          (Correios) preenche logradouro/bairro/município/UF sozinho */}
-                      <td className="px-3 py-1.5">
-                        <input
-                          value={valorDe(c, 'cep')}
-                          onChange={e => aoDigitarCep(c, e.target.value)}
-                          onKeyDown={e => { if (e.key === 'Enter') void salvarLinha(c); }}
-                          inputMode="numeric"
-                          placeholder="00000-000"
-                          className={inputCls(c, 'cep')}
-                          aria-label={`CEP de ${c.nome}`}
-                        />
-                        {msgBuscaCelula(c, 'cep', 'max-w-[128px]')}
-                        {alteradoDe(c, 'cep') && erroDeCampo('cep', valorDe(c, 'cep')) ? (
-                          <p className="text-[8px] font-black text-rose-500 mt-0.5">CEP: {erroDeCampo('cep', valorDe(c, 'cep'))}</p>
-                        ) : null}
-                      </td>
-                      {/* BLOCO 177/178: CPF/CNPJ EDITÁVEL — ao completar 14 dígitos com
+                      {/* BLOCO 177/179: CPF/CNPJ EDITÁVEL — ao completar 14 dígitos com
                           DV válido, a RECEITA preenche razão social + endereço sozinhos
                           (CPF 11 não tem consulta pública — feedback orienta pelo CEP). */}
-                      <td className="px-3 py-1.5">
+                      <td className="px-2.5 py-1.5">
                         <input
                           value={valorDe(c, 'doc')}
                           onChange={e => aoDigitarDoc(c, e.target.value, token || '')}
@@ -935,13 +1014,13 @@ export default function PortalClientesFiscaisPage() {
                           className={inputCls(c, 'doc')}
                           aria-label={`CPF/CNPJ de ${c.nome}`}
                         />
-                        {msgBuscaCelula(c, 'doc', 'max-w-[176px]')}
+                        {msgBuscaCelula(c, 'doc', 'max-w-[146px]')}
                         {alteradoDe(c, 'doc') && erroDeCampo('doc', valorDe(c, 'doc')) ? (
                           <p className="text-[8px] font-black text-rose-500 mt-0.5">CPF/CNPJ: {erroDeCampo('doc', valorDe(c, 'doc'))}</p>
                         ) : null}
                       </td>
                       {/* BLOCO 178: RAZÃO SOCIAL editável — a Receita puxa no CNPJ e o dono ajusta por cima */}
-                      <td className="px-3 py-1.5">
+                      <td className="px-2.5 py-1.5">
                         <input
                           value={valorDe(c, 'razaoSocial')}
                           onChange={e => setValor(c, 'razaoSocial', e.target.value)}
@@ -955,7 +1034,7 @@ export default function PortalClientesFiscaisPage() {
                         ) : null}
                       </td>
                       {/* BLOCO 178: IE editável (aceita ISENTO) */}
-                      <td className="px-3 py-1.5">
+                      <td className="px-2.5 py-1.5">
                         <input
                           value={valorDe(c, 'ie')}
                           onChange={e => setValor(c, 'ie', e.target.value)}
@@ -968,36 +1047,27 @@ export default function PortalClientesFiscaisPage() {
                           <p className="text-[8px] font-black text-rose-500 mt-0.5">IE: {erroDeCampo('ie', valorDe(c, 'ie'))}</p>
                         ) : null}
                       </td>
-                      {/* BLOCO 176: MUNICÍPIO editável — o xMun do enderDest da NF-e */}
-                      <td className="px-3 py-1.5">
+                      {/* BLOCO 174/179: CEP editável — ao completar 8 dígitos o ViaCEP
+                          (Correios) preenche logradouro/bairro/cidade/UF SOZINHOS e
+                          VISÍVEIS — são as colunas seguintes, junto do CEP */}
+                      <td className="px-2.5 py-1.5">
                         <input
-                          value={valorDe(c, 'municipio')}
-                          onChange={e => setValor(c, 'municipio', e.target.value)}
+                          value={valorDe(c, 'cep')}
+                          onChange={e => aoDigitarCep(c, e.target.value)}
                           onKeyDown={e => { if (e.key === 'Enter') void salvarLinha(c); }}
-                          placeholder="Município"
-                          className={inputCls(c, 'municipio')}
-                          aria-label={`Município de ${c.nome}`}
+                          inputMode="numeric"
+                          placeholder="00000-000"
+                          className={inputCls(c, 'cep')}
+                          aria-label={`CEP de ${c.nome}`}
                         />
-                        {alteradoDe(c, 'municipio') && erroDeCampo('municipio', valorDe(c, 'municipio')) ? (
-                          <p className="text-[8px] font-black text-rose-500 mt-0.5">Município: {erroDeCampo('municipio', valorDe(c, 'municipio'))}</p>
+                        {msgBuscaCelula(c, 'cep', 'max-w-[84px]')}
+                        {alteradoDe(c, 'cep') && erroDeCampo('cep', valorDe(c, 'cep')) ? (
+                          <p className="text-[8px] font-black text-rose-500 mt-0.5">CEP: {erroDeCampo('cep', valorDe(c, 'cep'))}</p>
                         ) : null}
                       </td>
-                      {/* BLOCO 176: UF editável — 2 letras */}
-                      <td className="px-3 py-1.5">
-                        <input
-                          value={valorDe(c, 'uf')}
-                          onChange={e => setValor(c, 'uf', e.target.value)}
-                          onKeyDown={e => { if (e.key === 'Enter') void salvarLinha(c); }}
-                          placeholder="RS"
-                          className={inputCls(c, 'uf')}
-                          aria-label={`UF de ${c.nome}`}
-                        />
-                        {alteradoDe(c, 'uf') && erroDeCampo('uf', valorDe(c, 'uf')) ? (
-                          <p className="text-[8px] font-black text-rose-500 mt-0.5">UF: {erroDeCampo('uf', valorDe(c, 'uf'))}</p>
-                        ) : null}
-                      </td>
-                      {/* BLOCO 176: LOGRADOURO editável — o xLgr que faltava e derrubava a NF-e */}
-                      <td className="px-3 py-1.5">
+                      {/* BLOCO 176/179: LOGRADOURO editável — o xLgr que faltava e derrubava a NF-e
+                          (agora É A COLUNA SEGUINTE ao CEP — o que os Correios preenchem aparece na hora) */}
+                      <td className="px-2.5 py-1.5">
                         <input
                           value={valorDe(c, 'endereco')}
                           onChange={e => setValor(c, 'endereco', e.target.value)}
@@ -1011,7 +1081,7 @@ export default function PortalClientesFiscaisPage() {
                         ) : null}
                       </td>
                       {/* BLOCO 176: NÚMERO editável — aceita S/N */}
-                      <td className="px-3 py-1.5">
+                      <td className="px-2.5 py-1.5">
                         <input
                           value={valorDe(c, 'numero')}
                           onChange={e => setValor(c, 'numero', e.target.value)}
@@ -1025,7 +1095,7 @@ export default function PortalClientesFiscaisPage() {
                         ) : null}
                       </td>
                       {/* BLOCO 176: BAIRRO editável — o xBairro do enderDest */}
-                      <td className="px-3 py-1.5">
+                      <td className="px-2.5 py-1.5">
                         <input
                           value={valorDe(c, 'bairro')}
                           onChange={e => setValor(c, 'bairro', e.target.value)}
@@ -1038,7 +1108,37 @@ export default function PortalClientesFiscaisPage() {
                           <p className="text-[8px] font-black text-rose-500 mt-0.5">Bairro: {erroDeCampo('bairro', valorDe(c, 'bairro'))}</p>
                         ) : null}
                       </td>
-                      <td className="px-3 py-1.5 text-right">
+                      {/* BLOCO 176/179: CIDADE editável — o xMun do enderDest da NF-e
+                          (coluna ESTREITA, pedido do dono: "diminua o espaço para nome
+                          da cidade" — nome longo rola dentro do input) */}
+                      <td className="px-2.5 py-1.5">
+                        <input
+                          value={valorDe(c, 'municipio')}
+                          onChange={e => setValor(c, 'municipio', e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') void salvarLinha(c); }}
+                          placeholder="Cidade"
+                          className={inputCls(c, 'municipio')}
+                          aria-label={`Cidade de ${c.nome}`}
+                        />
+                        {alteradoDe(c, 'municipio') && erroDeCampo('municipio', valorDe(c, 'municipio')) ? (
+                          <p className="text-[8px] font-black text-rose-500 mt-0.5">Cidade: {erroDeCampo('municipio', valorDe(c, 'municipio'))}</p>
+                        ) : null}
+                      </td>
+                      {/* BLOCO 176: UF editável — 2 letras */}
+                      <td className="px-2.5 py-1.5">
+                        <input
+                          value={valorDe(c, 'uf')}
+                          onChange={e => setValor(c, 'uf', e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') void salvarLinha(c); }}
+                          placeholder="RS"
+                          className={inputCls(c, 'uf')}
+                          aria-label={`UF de ${c.nome}`}
+                        />
+                        {alteradoDe(c, 'uf') && erroDeCampo('uf', valorDe(c, 'uf')) ? (
+                          <p className="text-[8px] font-black text-rose-500 mt-0.5">UF: {erroDeCampo('uf', valorDe(c, 'uf'))}</p>
+                        ) : null}
+                      </td>
+                      <td className="px-2.5 py-1.5 text-right">
                         {st?.erro ? (
                           <span className="text-[9px] font-black text-rose-600 leading-tight block max-w-[120px] inline-block" title={st.erro}>{st.erro}</span>
                         ) : st?.salvando || salvandoTudo ? (
@@ -1069,7 +1169,7 @@ export default function PortalClientesFiscaisPage() {
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm px-4 py-3">
           <p className="text-[10px] font-bold text-gray-500 leading-relaxed">
             <i className="fa-solid fa-circle-info text-teal-600 mr-1.5"></i>
-            <b>PREENCHIMENTO AUTOMÁTICO:</b> digite o CEP (8 dígitos) e os CORREIOS preenchem rua, bairro, município e UF da linha na hora; digite o CNPJ (14 dígitos) e a RECEITA preenche razão social, endereço completo e CEP — a linha fica âmbar, ENTER grava. CPF (11) não tem consulta pública: a Receita não abre CPF, então o endereço completa pelo CEP. <b>Tudo editável:</b> Nome (obrigatório até 120) · CPF/CNPJ (11 ou 14 com dígito verificador — documento do PAGADOR do boleto a prazo: NFe = CNPJ, cliente PF = CPF) · CEP · Razão Social · IE (aceita ISENTO) · Logradouro (rua, SEM o número) · Nº (aceita S/N) · Bairro · Município · UF — limite SEFAZ de 60 caracteres por campo. A NF-e IDENTIFICADA só sobe com o endereço COMPLETO (rua + nº + bairro + município + UF + CEP); a NFC-e identificada com cadastro incompleto sai SEM endereço em vez de ser recusada. ENTER na linha salva só aquela linha.
+            <b>PREENCHIMENTO AUTOMÁTICO:</b> digite o CEP (8 dígitos) e os CORREIOS preenchem rua, bairro, cidade e UF DA LINHA NA HORA — agora colados no CEP, visíveis sem rolar a tela; digite o CNPJ (14 dígitos) e a RECEITA preenche razão social, endereço completo e CEP. CPF (11) não tem consulta pública: o endereço completa pelo CEP. <b>LOTE:</b> o botão PREENCHER (barra verde acima) completa TODOS que já têm CEP e estão com o endereço incompleto — preenche só o que falta e grava na hora. <b>Tudo editável:</b> Nome (obrigatório até 120) · CPF/CNPJ (11 ou 14 com dígito verificador — documento do PAGADOR do boleto a prazo: NFe = CNPJ, cliente PF = CPF) · CEP · Razão Social · IE (aceita ISENTO) · Logradouro (rua, SEM o número) · Nº (aceita S/N) · Bairro · Cidade · UF — limite SEFAZ de 60 caracteres por campo. A NF-e IDENTIFICADA só sobe com o endereço COMPLETO (rua + nº + bairro + cidade + UF + CEP); a NFC-e identificada com cadastro incompleto sai SEM endereço em vez de ser recusada. ENTER na linha salva só aquela linha.
           </p>
         </div>
       </main>
@@ -1079,7 +1179,7 @@ export default function PortalClientesFiscaisPage() {
         <div className="max-w-[1600px] mx-auto px-4 py-2.5 flex items-center gap-2 text-[9px] font-bold text-gray-400 uppercase tracking-wider">
           <i className="fa-solid fa-address-card text-teal-600"></i>
           DOCE MANIA · Clientes Fiscais — tudo editável · CEP e CNPJ preenchem o endereço automaticamente
-          <span className="ml-auto">{kpis.total} clientes · {kpis.semEndereco} sem logradouro · {kpis.semMunicipio} sem município · {kpis.semCep} sem CEP</span>
+          <span className="ml-auto">{kpis.total} clientes · {kpis.semEndereco} sem logradouro · {kpis.semMunicipio} sem cidade · {kpis.semCep} sem CEP · {alvosLote.length} CEP sem endereço</span>
         </div>
       </footer>
 

@@ -54,7 +54,7 @@ interface FilaItem {
   carregadoEm?: string | null;
   entregadorId?: string | null;
   entregadorNome?: string | null;
-  cliente: { id: string; nome: string; endereco: string; bairro: string; telefone: string; cnpj?: string | null; email?: string | null; portalCodigo?: string | null };
+  cliente: { id: string; nome: string; endereco: string; numero?: string | null; bairro: string; telefone: string; cnpj?: string | null; email?: string | null; portalCodigo?: string | null; cep?: string | null; razaoSocial?: string | null; inscricaoEstadual?: string | null; municipio?: string | null; uf?: string | null };
   itens: { nome: string; produtoId: string; quantidade: number; precoVenda: number }[];
 }
 
@@ -215,16 +215,28 @@ const SecretarioView: React.FC<{ user: User; showToast: (m: string, t?: 'success
     tipoVenda: 'PRE_VENDA',
     entregaStatus: p.entregaStatus,
   });
+  // BLOCO 174: clientOf agora leva os FISCAIS do cadastro (CEP, razão social,
+  // IE, número, município, UF) — o boleto do Inter EXIGE o CEP do pagador e
+  // antes o cupom aberto pela fila não puxava o CEP que já existia no cadastro.
   const clientOf = (p: FilaItem): any => ({
     id: p.cliente.id,
     nomeFantasia: p.cliente.nome,
     telefone: p.cliente.telefone || '',
     endereco: p.cliente.endereco || '',
     bairro: p.cliente.bairro || '',
+    // BLOCO 40: CNPJ do cliente — rodape do cupom NF-e ("NF-e: <cnpj>")
+    cnpj: p.cliente.cnpj || '',
     // BLOCO 46: e-mail do cliente — rodape do cupom (envio do XML)
     email: p.cliente.email || '',
     // BLOCO 125: portal_code do cliente — QR do catalogo no cupom
     portalCodigo: p.cliente.portalCodigo || '',
+    // BLOCO 174: fiscais do cadastro (CEP do boleto + NF-e da fila)
+    enderecoCep: p.cliente.cep || '',
+    enderecoNumero: (p.cliente as { numero?: string | null }).numero || '',
+    razaoSocial: p.cliente.razaoSocial || undefined,
+    inscricaoEstadual: p.cliente.inscricaoEstadual || undefined,
+    enderecoMunicipio: p.cliente.municipio || undefined,
+    enderecoUf: p.cliente.uf || undefined,
   });
 
   if (loading && !data) {

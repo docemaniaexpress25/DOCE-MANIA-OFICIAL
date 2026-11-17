@@ -81,6 +81,12 @@ const CLIENT_COLS_NUM = `${CLIENT_COLS_GPS}, endereco_numero`;
 // BLOCO 125: portal_code — QR do catálogo do cliente no cupom (fila do
 // admin/entregador/secretario). Tier próprio: banco SEM a coluna degrada.
 const CLIENT_COLS_PORTAL = `${CLIENT_COLS_NUM}, portal_code`;
+// BLOCO 174 (dono: "ao gerar boleto nao esta puxando o cep do cadastro"): o
+// cupom aberto pela FILA não tinha o CEP (nem razão social/IE/município/UF)
+// e o boleto do Inter — que EXIGE CEP do pagador — ficava sem o dado que já
+// existia no cadastro. Tier fiscal no topo: CEP + fiscais da NF-e. Bancos
+// antigos sem as colunas degradam para o portal (comportamento de antes).
+const CLIENT_COLS_FISCAL = `${CLIENT_COLS_PORTAL}, endereco_cep, razao_social, inscricao_estadual, endereco_municipio, endereco_uf`;
 
 /**
  * clients com colunas de GPS flexíveis. Bancos SEM clients.localizacao
@@ -93,7 +99,9 @@ async function fetchClientsFlex(supabase: any, ids: string[]) {
   // BLOCO 46: tiers COM email primeiro; sem email só no último (banco antigo)
   // BLOCO 64: primeiro tier busca tambem o endereco_numero (numero/sala)
   // BLOCO 125: primeiro tier busca tambem o portal_code (QR do cupom)
-  for (const cols of [CLIENT_COLS_PORTAL, CLIENT_COLS_NUM, CLIENT_COLS_GPS, `${CLIENT_COLS_EMAIL}, pin_localizacao`, CLIENT_COLS_EMAIL, CLIENT_COLS_BASE]) {
+  // BLOCO 174: primeiro tier busca tambem CEP + fiscais (razão social, IE,
+  // município, UF) — o boleto do Inter precisa do CEP do cadastro na fila.
+  for (const cols of [CLIENT_COLS_FISCAL, CLIENT_COLS_PORTAL, CLIENT_COLS_NUM, CLIENT_COLS_GPS, `${CLIENT_COLS_EMAIL}, pin_localizacao`, CLIENT_COLS_EMAIL, CLIENT_COLS_BASE]) {
     const r = await supabase.from('clients').select(cols).in('id', ids);
     if (!r.error) return r;
   }
@@ -410,6 +418,12 @@ async function enrichParadas(supabase: any, salesRows: any[]) {
         email: c.email || null,
         // BLOCO 125: portal_code — QR do catalogo do cliente no cupom
         portalCodigo: c.portal_code || null,
+        // BLOCO 174: CEP + fiscais — boleto do Inter puxa o CEP do cadastro
+        cep: c.endereco_cep || null,
+        razaoSocial: c.razao_social || null,
+        inscricaoEstadual: c.inscricao_estadual || null,
+        municipio: c.endereco_municipio || null,
+        uf: c.endereco_uf || null,
         lat, lng,
       },
       itens: itemsBySale[s.id] || [],
@@ -687,6 +701,12 @@ async function enrichFila(supabase: any, salesRows: any[], donoRecebimento?: str
         email: c.email || null,
         // BLOCO 125: portal_code — QR do catalogo do cliente no cupom
         portalCodigo: c.portal_code || null,
+        // BLOCO 174: CEP + fiscais — boleto do Inter puxa o CEP do cadastro
+        cep: c.endereco_cep || null,
+        razaoSocial: c.razao_social || null,
+        inscricaoEstadual: c.inscricao_estadual || null,
+        municipio: c.endereco_municipio || null,
+        uf: c.endereco_uf || null,
         lat, lng,
       },
       itens: itemsBySale[s.id] || [],

@@ -100,7 +100,7 @@ interface FilaItem {
   vendedorId: string;
   vendedorNome: string;
   // BLOCO 64: numero/sala do endereco — impressao da ordem mostra "Rua X, 123"
-  cliente: { id: string; nome: string; endereco: string; numero?: string | null; bairro: string; telefone: string; cnpj?: string | null; email?: string | null; portalCodigo?: string | null; lat: number | null; lng: number | null };
+  cliente: { id: string; nome: string; endereco: string; numero?: string | null; bairro: string; telefone: string; cnpj?: string | null; email?: string | null; portalCodigo?: string | null; lat: number | null; lng: number | null; cep?: string | null; razaoSocial?: string | null; inscricaoEstadual?: string | null; municipio?: string | null; uf?: string | null };
   itens: { nome: string; produtoId: string; quantidade: number; precoVenda: number }[];
 }
 
@@ -955,6 +955,9 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
     trocas: p.trocas || undefined,
     trocasValor: p.trocasValor ?? undefined,
   });
+  // BLOCO 174: clientOf agora leva os FISCAIS do cadastro (CEP, razão social,
+  // IE, número, município, UF) — o boleto do Inter EXIGE o CEP do pagador e
+  // antes o cupom aberto pela fila não puxava o CEP que já existia no cadastro.
   const clientOf = (p: FilaItem): any => ({
     id: p.cliente.id,
     nomeFantasia: p.cliente.nome,
@@ -967,6 +970,13 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
     email: p.cliente.email || '',
     // BLOCO 125: portal_code do cliente — QR do catalogo no cupom
     portalCodigo: p.cliente.portalCodigo || '',
+    // BLOCO 174: fiscais do cadastro (CEP do boleto + NF-e da fila)
+    enderecoCep: p.cliente.cep || '',
+    enderecoNumero: p.cliente.numero || '',
+    razaoSocial: p.cliente.razaoSocial || undefined,
+    inscricaoEstadual: p.cliente.inscricaoEstadual || undefined,
+    enderecoMunicipio: p.cliente.municipio || undefined,
+    enderecoUf: p.cliente.uf || undefined,
   });
 
   /** Lista imprimivel (ordem de entrega) — imprime via navegador.

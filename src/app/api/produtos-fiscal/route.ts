@@ -16,6 +16,10 @@ import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/s
  * ÚNICO no banco (products_codigo_uidx, Bloco 145): duplicado é recusado com
  * mensagem amigável.
  *
+ * BLOCO 174 (pedido do dono: "libere tbm a ediçao dos nomes do produtos"): o
+ * PATCH aceita também o NOME do produto (texto até 120, vazio é RECUSADO —
+ * nome é obrigatório no catálogo e na NF).
+ *
  * Regra do dono: "me traga uma lista editavel de todos os produtos com NCM
  * CEST e CFOP, lista editavel". O portal /fiscal-produtos mostra o catálogo
  * INTEIRO em formato planilha e permite editar os códigos na linha
@@ -24,8 +28,8 @@ import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/s
  * certa. Produto sem NCM hoje sai com o código genérico 21069090.
  *
  * GET   /api/produtos-fiscal              -> todos os produtos + contagens
- * PATCH /api/produtos-fiscal { id, codigo?, codigo_especial_gb?, ncm?, cest?,
- *                              cfop?, ean?, unidade?, origem? }
+ * PATCH /api/produtos-fiscal { id, nome?, codigo?, codigo_especial_gb?, ncm?,
+ *                              cest?, cfop?, ean?, unidade?, origem? }
  *                                        -> grava e devolve o produto atualizado
  *
  * Auth: MESMA SESSÃO do portal fiscal (/notas) — POST /api/notas-admin
@@ -49,6 +53,7 @@ const COLS = 'id, codigo, codigo_especial_gb, nome, ativo, preco_venda, ncm, ces
 const soDigitos = (v: unknown) => String(v ?? '').replace(/\D/g, '');
 
 interface FiscalPatch {
+  nome?: unknown;
   codigo?: unknown;
   codigo_especial_gb?: unknown;
   ncm?: unknown;
@@ -63,6 +68,13 @@ interface FiscalPatch {
 function validaFiscal(patch: FiscalPatch): { dados: Record<string, string | null>; erro?: string } {
   const dados: Record<string, string | null> = {};
 
+  if (patch.nome !== undefined) {
+    // BLOCO 174: NOME do produto — texto até 120; vazio é RECUSADO (o nome
+    // obrigatório aparece no catálogo, no PDV e na NF — não pode sumir).
+    const n = String(patch.nome ?? '').trim().replace(/\s+/g, ' ').slice(0, 120);
+    if (!n) return { dados, erro: 'O nome do produto não pode ficar vazio.' };
+    dados.nome = n;
+  }
   if (patch.codigo !== undefined) {
     // BLOCO 170: código INTERNO (Bloco 145) — texto livre até 60 (limite SEFAZ cProd)
     const c = String(patch.codigo ?? '').trim().slice(0, 60);

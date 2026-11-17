@@ -2318,3 +2318,23 @@ FEITO:
 QA: lint 0 erros/8 warnings (baseline exata). Sem SQL novo.
 
 Teste do dono: no card do boleto (venda finalizada ou cupom reaberto) só há os 3 botões pedidos; ao tocar MINI BOLETO (80mm) o papel aparece INTEIRO no preview (cabeçalho → valor → código de barras → linha digitável → QR do PIX → pagador → situação → corte), sem bug de corte; Bluetooth/USB continuam imprimindo igual.
+
+## bloco174 — NOME EDITÁVEL no portal de produtos + PORTAL DE CLIENTES FISCAIS (nome/CEP editáveis) + CAUSA RAIZ do boleto não puxar o CEP do cadastro (2026-11-17)
+
+PEDIDO DO DONO (17/11): "ok! no portal de produtos fiscais libere tbm a ediçao dos nomes do produtos quero arrumar isso! crie um portal identido ao de produtos porem de clientes para eu poder editar dados dos clientes! coloque somente informaçoes relevantes ao fiscal tbm o nome e cep editaveis! outro ponto é porque ao tentar gerar boleto nao esta puxando o cep no cadastro desse cliente! faça isso agora"
+
+DIAGNÓSTICO DO CEP (dados reais — REST anon em produção):
+- O Sacolão Zimermann TEM CEP no cadastro (95034-240, Caxias do Sul/RS) e é cadastro ÚNICO (sem duplicado). 201 de 330 clientes estão SEM CEP (61%) — o portal de clientes serve exatamente para arrumar isso.
+- CAUSA RAIZ NO CÓDIGO: o cupom aberto pela FILA DE ENTREGAS (e pela fila do secretário) montava o cliente com uma função clientOf que NÃO levava o CEP (nem razão social, IE, número, município, UF) — e a API da fila (/api/pre-venda) NÃO BUSCAVA endereco_cep nos tiers de clientes. Resultado: no PDV a venda puxa o CEP (lista completa), mas pelo cupom da ENTREGA o BoletoCard recebia clienteCep=undefined e o boleto do Inter — que EXIGE CEP do pagador — pedia o CEP na mão, mesmo com CEP no cadastro. Exatamente a queixa do dono (ele gerou o boleto pela entrega).
+
+FEITO:
+1. src/app/api/pre-venda/route.ts — novo tier fiscal CLIENT_COLS_FISCAL (endereco_cep, razao_social, inscricao_estadual, endereco_municipio, endereco_uf) no TOPO dos tiers de clientes (bancos antigos degradam como antes); os 2 payloads "cliente" da fila devolvem cep/razaoSocial/inscricaoEstadual/municipio/uf.
+2. src/components/doce/FilaEntregas.tsx + SecretarioView.tsx — clientOf leva os fiscais do cadastro (enderecoCep, razaoSocial, IE, numero, municipio, uf; secretário também recebeu o CNPJ que faltava); tipo FilaItem.cliente atualizado. Com isso o CEP puxa em TODOS os pontos que abrem boleto (PDV, cupom reaberto, fila do admin, fila do secretário).
+3. src/app/api/produtos-fiscal/route.ts — PATCH aceita NOME do produto (texto até 120; vazio é RECUSADO — nome obrigatório no catálogo/PDV/NF).
+4. src/app/fiscal-produtos/page.tsx — coluna PRODUTO agora é INPUT editável (mesma mecânica dos códigos: âmbar na alteração, ENTER salva a linha, SALVAR TUDO grava tudo, erro inline "Nome: obrigatório/máx. 120"); sem font-mono no nome; header/rodapé de ajuda atualizados; busca/CSV continuam refletindo o valor salvo.
+5. src/app/api/clientes-fiscal/route.ts (NOVA) — GET lista TODO o cadastro com SÓ os dados fiscais do destinatário (nome, razão social, CNPJ, IE, CEP, município, UF, endereço/numero/bairro, ativo) + stats; PATCH aceita nome (nome_fantasia, obrigatório até 120) e CEP (8 dígitos, gravado mascarado 00000-000, vazio = limpa); MESMA sessão admin do portal fiscal (isAdminSession).
+6. src/app/fiscal-clientes/page.tsx (NOVO) — portal gêmeo do de produtos: PIN admin, planilha com nome e CEP EDITÁVEIS (CEP com máscara progressiva 00000-000), razão social/CNPJ/IE/município/UF/endereço somente leitura para conferir; filtros (Sem CEP, Sem CNPJ, Sem IE, Inativos), busca por nome/razão/CNPJ/município/CEP, KPIs que atualizam NA HORA, alerta "X cliente(s) SEM CEP", barra Salvar tudo/descartar, CSV. Tema teal (diferencia do âmbar de produtos).
+7. src/components/doce/AdminDashboard.tsx — NOVO MenuCard "Clientes Fiscais" (aba FISCAL_CLIENTES) ao lado de Produtos Fiscais, MESMA proteção: o menu só existe no AdminDashboard (role ADMIN) e o portal exige PIN admin — vendedor/secretário não têm o card nem a aba.
+QA: lint 0 erros/8 warnings (baseline exata); tsc 103 (baseline do bloco 173 — nenhum erro novo; nenhum erro nos arquivos alterados). Sem SQL novo (todas as colunas já existem).
+
+Teste do dono: (a) Admin → Produtos Fiscais → editar o NOME na planilha (ENTER salva a linha); (b) Admin → Clientes Fiscais → editar Nome e CEP (o KPI "sem CEP" cai na hora); (c) gerar boleto pela ENTREGA de um cliente com CEP no cadastro — o CEP agora puxa e não pede mais na mão (o Sacolão Zimermann 95034-240 é o caso).

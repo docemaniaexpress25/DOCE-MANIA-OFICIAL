@@ -11,6 +11,11 @@
  * CÓDIGO ESPECIAL GB que sobe na NF do cliente ESPECIAL GB (Bloco 157).
  * Duplicado de código interno é recusado (índice único do Bloco 145).
  *
+ * BLOCO 174 (pedido do dono: "libere tbm a ediçao dos nomes do produtos"):
+ * a coluna PRODUTO agora é editável na linha (mesma mecânica dos códigos —
+ * âmbar na alteração, ENTER salva a linha, SALVAR TUDO grava tudo). Nome
+ * vazio é recusado (obrigatório no catálogo/PDV/NF), máx. 120 caracteres.
+ *
  * MESMA linguagem do PORTAL FISCAL (/notas) e do PORTAL DE ENTRADAS (/entradas):
  *  - PIN do admin (6 dígitos) — MESMA SESSÃO do portal fiscal (token /notas);
  *  - TABELA PLANILHA: TODO o catálogo, uma linha por produto, campos editáveis
@@ -47,11 +52,11 @@ interface ProdutoFiscal {
   origem: string;
 }
 
-type FKey = 'codigo' | 'codigoEspecialGb' | 'ncm' | 'cest' | 'cfop' | 'ean' | 'unidade' | 'origem';
+type FKey = 'nome' | 'codigo' | 'codigoEspecialGb' | 'ncm' | 'cest' | 'cfop' | 'ean' | 'unidade' | 'origem';
 
-// BLOCO 170: os códigos entram na mesma lista — a linha "alterada" passa a
-// considerar os dois códigos junto dos fiscais (SALVAR TUDO grava tudo).
-const CAMPOS_FISCAIS: FKey[] = ['codigo', 'codigoEspecialGb', 'ncm', 'cest', 'cfop', 'ean', 'unidade', 'origem'];
+// BLOCO 174: o NOME entra na mesma lista — a linha "alterada" passa a
+// considerar nome + os dois códigos junto dos fiscais (SALVAR TUDO grava tudo).
+const CAMPOS_FISCAIS: FKey[] = ['nome', 'codigo', 'codigoEspecialGb', 'ncm', 'cest', 'cfop', 'ean', 'unidade', 'origem'];
 
 interface Stats {
   total: number;
@@ -89,13 +94,16 @@ const fmtBRL = (v: number) => new Intl.NumberFormat('pt-BR', { style: 'currency'
 
 const soDigitos = (v: string) => String(v || '').replace(/\D/g, '');
 
-/** Validação espelhada da API — devolve erro por campo (vazio = ok, limpa). */
+/** Validação espelhada da API — devolve erro por campo (vazio = ok, limpa;
+ *  exceção do BLOCO 174: NOME alterado para vazio é obrigatório). */
 function erroDeCampo(campo: FKey, valor: string): string {
-  const v = campo === 'unidade' || campo === 'codigo' || campo === 'codigoEspecialGb'
+  const v = campo === 'unidade' || campo === 'codigo' || campo === 'codigoEspecialGb' || campo === 'nome'
     ? valor.trim()
     : soDigitos(valor);
-  if (!v) return '';
+  if (!v) return campo === 'nome' ? 'obrigatório' : '';
   switch (campo) {
+    case 'nome':
+      return v.length > 120 ? 'máx. 120 caracteres' : '';
     case 'codigo':
     case 'codigoEspecialGb':
       return v.length > 60 ? 'máx. 60 caracteres' : '';
@@ -275,7 +283,8 @@ export default function PortalProdutosFiscaisPage() {
     // máscara na digitação: códigos são texto livre (60), unidade letras,
     // numéricos só dígitos — limites reais da NF-e: NCM 8 · CEST 7 · CFOP 4 · EAN 14 · origem 1
     let v = bruto;
-    if (campo === 'unidade') v = bruto.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+    if (campo === 'nome') v = bruto.replace(/\s+/g, ' ').slice(0, 120);
+    else if (campo === 'unidade') v = bruto.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
     else if (campo === 'origem') v = soDigitos(bruto).slice(0, 1);
     else if (campo === 'codigo' || campo === 'codigoEspecialGb') v = bruto.replace(/\s+/g, ' ').slice(0, 60);
     else {
@@ -341,7 +350,7 @@ export default function PortalProdutosFiscaisPage() {
     setConf({
       titulo: 'Salvar tudo?',
       texto: `${alvos.length} produto(s) com alterações serão gravados no catálogo.`,
-      detalhe: 'Os códigos (interno, cód. GB e fiscais) entram na NF-e/NFC-e na próxima emissão. Linhas com erro de digitação não são gravadas.',
+      detalhe: 'O nome, os códigos (interno, cód. GB e fiscais) entram na NF-e/NFC-e na próxima emissão. Linhas com erro de digitação não são gravadas.',
       icone: 'fa-floppy-disk',
       botao: `Salvar ${alvos.length} produto(s)`,
       run: async () => {
@@ -503,7 +512,7 @@ export default function PortalProdutosFiscaisPage() {
 
   const inputCls = (p: ProdutoFiscal, c: FKey) => {
     const err = alteradoDe(p, c) && erroDeCampo(c, valorDe(p, c));
-    const base = 'h-8 w-full rounded-lg border text-[12px] font-bold text-gray-800 px-2 font-mono tracking-wide transition-colors focus:outline-none focus:ring-2';
+    const base = `h-8 w-full rounded-lg border text-[12px] font-bold text-gray-800 px-2 transition-colors focus:outline-none focus:ring-2 ${c === 'nome' ? '' : 'font-mono tracking-wide'}`;
     if (err) return `${base} border-rose-300 bg-rose-50 focus:ring-rose-200`;
     if (alteradoDe(p, c)) return `${base} border-amber-300 bg-amber-50 focus:ring-amber-200`;
     if (valorDe(p, c)) return `${base} border-gray-200 bg-white focus:ring-gray-200`;
@@ -520,10 +529,10 @@ export default function PortalProdutosFiscaisPage() {
               <i className="fa-solid fa-clipboard-list text-amber-100"></i>
             </div>
             <div className="min-w-0">
-              <h1 className="text-[15px] font-black uppercase tracking-tight leading-none whitespace-nowrap">Produtos Fiscais <span className="text-amber-200">Código · GB · NCM · CEST · CFOP</span></h1>
+              <h1 className="text-[15px] font-black uppercase tracking-tight leading-none whitespace-nowrap">Produtos Fiscais <span className="text-amber-200">Nome · Código · GB · NCM · CEST · CFOP</span></h1>
               <p className="text-[10px] text-amber-100/70 font-semibold mt-1 leading-none truncate">
                 {nomeAdmin ? <><i className="fa-solid fa-user-shield mr-1 text-[8px]"></i>{nomeAdmin} · </> : null}
-                <span className="uppercase tracking-wide">catálogo editável · códigos que saem na NF</span>
+                <span className="uppercase tracking-wide">catálogo editável · nome e códigos que saem na NF</span>
               </p>
             </div>
             <div className="flex-1" />
@@ -649,7 +658,7 @@ export default function PortalProdutosFiscaisPage() {
                   <th className="px-3 py-2.5 w-14">#</th>
                   <th className="px-3 py-2.5 w-28">Código <span className="text-gray-400 normal-case font-semibold">(NF)</span></th>
                   <th className="px-3 py-2.5 w-28">Cód. GB <span className="text-gray-400 normal-case font-semibold">(especial)</span></th>
-                  <th className="px-3 py-2.5 min-w-[260px]">Produto</th>
+                  <th className="px-3 py-2.5 min-w-[260px]">Produto <span className="text-gray-400 normal-case font-semibold">(nome editável)</span></th>
                   <th className="px-3 py-2.5 w-32">NCM <span className="text-gray-400 normal-case font-semibold">(8)</span></th>
                   <th className="px-3 py-2.5 w-32">CEST <span className="text-gray-400 normal-case font-semibold">(7)</span></th>
                   <th className="px-3 py-2.5 w-28">CFOP <span className="text-gray-400 normal-case font-semibold">(4)</span></th>
@@ -704,11 +713,22 @@ export default function PortalProdutosFiscaisPage() {
                         )}
                       </td>
                       <td className="px-3 py-1.5">
-                        <div className="flex items-center gap-2">
-                          <span className="text-[12px] font-bold text-gray-800 truncate max-w-[320px]" title={p.nome}>{p.nome}</span>
+                        {/* BLOCO 174: NOME editável na linha (mesma mecânica dos códigos) */}
+                        <input
+                          value={valorDe(p, 'nome')}
+                          onChange={e => setValor(p, 'nome', e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') void salvarLinha(p); }}
+                          placeholder="Nome do produto"
+                          className={inputCls(p, 'nome')}
+                          aria-label={`Nome de ${p.nome}`}
+                        />
+                        <div className="flex items-center gap-2 mt-0.5">
                           {!p.ativo && <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded-full bg-gray-200 text-gray-500 shrink-0">inativo</span>}
+                          {alteradoDe(p, 'nome') && erroDeCampo('nome', valorDe(p, 'nome')) ? (
+                            <p className="text-[8px] font-black text-rose-500">Nome: {erroDeCampo('nome', valorDe(p, 'nome'))}</p>
+                          ) : null}
+                          <p className="text-[9px] text-gray-400 font-semibold">{fmtBRL(p.precoVenda)}</p>
                         </div>
-                        <p className="text-[9px] text-gray-400 font-semibold">{fmtBRL(p.precoVenda)}</p>
                       </td>
                       {(['ncm', 'cest', 'cfop', 'ean'] as FKey[]).map(c => (
                         <td key={c} className="px-3 py-1.5">
@@ -777,7 +797,7 @@ export default function PortalProdutosFiscaisPage() {
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm px-4 py-3">
           <p className="text-[10px] font-bold text-gray-500 leading-relaxed">
             <i className="fa-solid fa-circle-info text-amber-600 mr-1.5"></i>
-            Os códigos gravados aqui são os que saem na NF-e/NFC-e. <b>Código</b> interno do produto (texto livre, único — aparece na NF como codigo_produto) · <b>Cód. GB</b> sobe na NF do cliente ESPECIAL GB (vazio = usa o código interno) · <b>NCM</b> 8 dígitos (sem NCM a nota sai 21069090) · <b>CEST</b> 7 dígitos (só para produtos com ST) · <b>CFOP</b> 4 dígitos de saída (5102 venda dentro do estado / 6102 fora) · <b>EAN</b> código de barras 8-14 · <b>Un</b> unidade comercial (UN, KG, PC, CX) · <b>Origem</b> 0 nacional / 1-2 estrangeira. ENTER na linha salva só aquela linha.
+            Os dados gravados aqui são os que saem na NF-e/NFC-e. <b>Nome</b> do produto editável (obrigatório, até 120) · <b>Código</b> interno do produto (texto livre, único — aparece na NF como codigo_produto) · <b>Cód. GB</b> sobe na NF do cliente ESPECIAL GB (vazio = usa o código interno) · <b>NCM</b> 8 dígitos (sem NCM a nota sai 21069090) · <b>CEST</b> 7 dígitos (só para produtos com ST) · <b>CFOP</b> 4 dígitos de saída (5102 venda dentro do estado / 6102 fora) · <b>EAN</b> código de barras 8-14 · <b>Un</b> unidade comercial (UN, KG, PC, CX) · <b>Origem</b> 0 nacional / 1-2 estrangeira. ENTER na linha salva só aquela linha.
           </p>
         </div>
       </main>

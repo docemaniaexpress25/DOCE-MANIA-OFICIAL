@@ -2170,3 +2170,21 @@ INSTRUÇÃO AO DONO: (1) rode o SQL acima; (2) atualize o app (deploy) e abra Fe
 
 DEPLOY: commit 71b3226 = SUCCESS na Vercel (doce-mania-oficial / oficial2). LINT: 0 erros / 8 warnings (baseline). TSC: 104 = 104 (nenhum erro novo; o TS2322 do doce-app 1106 é pré-existente na baseline).
 LIMITAÇÃO HONESTA DE QA: (a) o SQL do bloco 165 NÃO foi rodado no Supabase de produção pelo sandbox (não há service key nem acesso ao SQL Editor — é o dono que roda; sem ele o caixa segue zerado e o backfill não entra); (b) o agent-browser não passou do PIN na produção (PIN admin 635241 recusado — dono trocou?; PIN de vendedor desconhecido), então a TELA do caixa não foi vista com os valores — garantia = código (lint/tsc) + build SUCCESS + valores conferidos direto no banco via REST.
+
+## bloco166 — CAIXA DO DAVID/DEIVID AINDA ZERADO: CAUSA REAL = RENOME P/ "DEIVID" (regex /^david/i não casa) + SQL 165 NÃO RODADO; FIX = SQL 166 (trigger por ID + david|deivid) + isDavidNome aceita David/Deivid (2026-11-16)
+
+O dono: "Caixa do Deivid ainda aparece zerado, resolva isso agora mesmo." — pista "Deivid" (vs "David" usado até o 165) quebrou o caso.
+
+CAUSA REAL (2 juntas, confirmadas por REST em produção):
+1. O SQL do bloco 165 é manual (dono roda no SQL Editor; sandbox sem service key) — se não rodou, nada entra.
+2. RENOME: o vendedor da Rota 5 (id 7c989927-a148-479c-bf00-11f35bfa66b0) passou a se chamar "Deivid". O SQL 165 casava '^\s*david' e o guard isDavidNome casava /^david/i — "Deivid" NÃO casa (d-e-i-v-i-d != d-a-v-i-d). Consequências se o 165 rodasse: backfill inseria 0 linhas, trigger nunca disparava, POST /api/caixa REGISTRAR dava 403 em silêncio. A aba CAIXA do app dele até aparecia (isDavidVendedor casa por ID), mas o ledger nunca enchia.
+DADOS CONFIRMADOS (REST, vendas do 7c989927 desde 13/11 -03): 11 vendas = 5 DINHEIRO PAGO (3207.40) + 2 PIX PAGO (2690.46) + 4 A_PRAZO PENDENTE (2898.37, sem MISTO, sem status exótico). caixa_pagamentos segue vazio para o anon (RLS fechada — inconclusivo por REST; a leitura da tela é service_role e mostra o que existe).
+
+FEITO:
+1. sql/bloco166_caixa_deivid_fix.sql (NOVO, dono roda no SQL Editor — entregue NO CHAT a pedido do dono): A) SELECT do nome real do vendedor (conferência); B) TRIGGER v2 trg_caixa_david_sales — casa por ID FIXO 7c989927... OU nome ~* '^\s*(david|deivid)', mesma lógica do 165 (à vista DINHEIRO/PIX PAGO + A_PRAZO=BOLETO, idempotente, SECURITY DEFINER); C) BACKFILL v2 — casa por s.vendedor_id::text = 7c989927... (não depende nem do nome nem do app_users) OU nome david|deivid; idempotente; EXCETO POSTO MODELO II (d6485c79, apagada pelo dono no 124); D) conferência por método (esperado BOLETO 4/2898.37, DINHEIRO 5/3207.40, PIX 2/2690.46 = 8796.23).
+2. src/lib/equipe.ts — isDavidNome: /^(david|deivid)/i (aceita as duas grafias); comentários 166; DAVID_USER_ID continua o casamento principal.
+3. src/app/api/pre-venda/route.ts (registrarComissaoPreVenda): casamento por ID primeiro (String(sale.vendedor_id) === DAVID_USER_ID → return) + fallback isDavidNome — o regex inline /^david/i deixava de bloquear comissão do "Deivid".
+
+REGRAS INTACTAS: caixa = dinheiro/pix à vista PAGO + boletos a prazo DELE (por ID); recebimento manual/pix do portal fora; outros vendedores fora.
+
+QA: lint 0 erros/8 warnings (baseline). SQL NÃO rodado pelo sandbox (sem service key — é o dono que roda; SQL entregue no chat). Deploy: push main → Vercel.

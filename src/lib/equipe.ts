@@ -11,12 +11,15 @@
  *   - SQL 118 descarta no banco qualquer comissão nova dele (trigger).
  *   - O CAIXA (Fechamento de Caixa) vale para TODOS, inclusive ele.
  *
- * Casamento por id (à prova de renome) + fallback pelo nome (se o dono
- * recriar o usuário, o nome dele sempre começa com "David").
+ * Casamento por id (à prova de renome) + fallback pelo nome.
+ * BLOCO 166: o fallback agora aceita "David" E "Deivid" — o dono renomeou o
+ * vendedor para "Deivid" e o regex antigo (/^david/i) deixou de casar: o guard
+ * do caixa (/api/caixa REGISTRAR) passava a dar 403 em silêncio e a comissão
+ * desativada voltava a calcular para ele. O ID continua o casamento principal.
  * Lib sem dependências — funciona em componente client e em rota de API.
  */
 
-export const DAVID_USER_ID = '7c989927-a148-479c-bf00-11f35bfa66b0'; // David - R5 (produção)
+export const DAVID_USER_ID = '7c989927-a148-479c-bf00-11f35bfa66b0'; // David/Deivid - R5 (produção)
 
 /** True quando o registro (id/nome) aponta para o vendedor David (rota 5). */
 export function isDavidVendedor(
@@ -27,7 +30,8 @@ export function isDavidVendedor(
   return isDavidNome(u.nome);
 }
 
-/** True quando o NOME pertence ao David (usado quando só há o nome no servidor). */
+/** True quando o NOME pertence ao David (usado quando só há o nome no servidor).
+ *  BLOCO 166: aceita "David" e "Deivid" (david|deivid) — à prova de grafia. */
 export function isDavidNome(nome: string | null | undefined): boolean {
-  return /^david/i.test(String(nome || '').trim());
+  return /^(david|deivid)/i.test(String(nome || '').trim());
 }

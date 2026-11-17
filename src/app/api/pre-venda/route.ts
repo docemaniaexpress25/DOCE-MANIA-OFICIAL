@@ -12,7 +12,8 @@ import { comissaoPvDeItens, comissaoPeDeItens, COMISSAO_PV_DEFAULT, round2 } fro
 import { registrarPagamentoCaixa } from '@/lib/caixaLedger';
 // BLOCO 118.3 (regra do dono): o CAIXA é EXCLUSIVO do David (Rota 5) — os
 // demais vendedores ganham comissão e NÃO têm caixa.
-import { isDavidNome } from '@/lib/equipe';
+// BLOCO 166: DAVID_USER_ID para casamento por id (à prova de renome p/ "Deivid").
+import { DAVID_USER_ID, isDavidNome } from '@/lib/equipe';
 // BLOCO 123: regras fiscais ARMADAS porém DESLIGADAS (FISCAL_OBRIGATORIO=false
 // até o dono implantar a API fiscal) — bloqueio de carga sem nota batida.
 import { FISCAL_OBRIGATORIO, cargaBloqueadaPorNota } from '@/lib/regras-fiscais';
@@ -220,10 +221,14 @@ async function registrarComissaoPreVenda(supabase: any, sale: any, quitada: bool
   try {
     // BLOCO 118 (regra do dono): comissao desativada para o David (R5) —
     // nao calcula nem grava (o trigger do SQL 118 no banco tambem descarta).
+    // BLOCO 166: casamento por ID primeiro (à prova de renome — o dono passou
+    // a chamar o vendedor de "Deivid" e o regex antigo /^david/i deixou de
+    // casar, o que recriaria comissão dele) + fallback pelo nome david|deivid.
     if (sale.vendedor_id) {
+      if (String(sale.vendedor_id) === DAVID_USER_ID) return;
       const { data: vd118 } = await supabase
         .from('app_users').select('nome').eq('id', sale.vendedor_id).limit(1).maybeSingle();
-      if (vd118 && /^david/i.test(String(vd118.nome || '').trim())) return;
+      if (vd118 && isDavidNome(String(vd118.nome || '').trim())) return;
     }
 
     const { data: items } = await supabase

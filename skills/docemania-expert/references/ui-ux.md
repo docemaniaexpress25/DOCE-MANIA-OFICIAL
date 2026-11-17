@@ -51,7 +51,7 @@ Nada foi removido na reorganização (167) — apenas agrupado. Novas configura�
 - **shadcn/ui existe** (44 componentes em `src/components/ui`) mas o app doce usa quase só o Toaster — telas doce são Tailwind artesanal; não depender de primitivas shadcn ao editar o app, mas PODE usá-las em telas novas fora do fluxo doce se combinar.
 - Tema: **apenas light** (sem dark mode). Fonte Inter + Font Awesome 6 (`fa-solid/fa-brands`).
 - Footer: se houver footer, fixo no fim (mt-auto) e sem cobrir conteúdo.
-- Portais de PC (/notas, /fiscal-produtos, /entradas): tabela larga com sticky header, filtros-chip, KPIs clicáveis, mesma sessão PIN entre eles.
+- Portais de PC (/notas, /fiscal-produtos, /entradas): tabela larga com sticky header, filtros-chip, KPIs clicáveis, mesma sessão PIN entre eles. **PADRÃO BLOCO 170 de ações** (nascido no /notas): 1 botão "Ações" (h-11 44px) por linha abre painel flutuante `createPortal(document.body)` `position:fixed` ancorado por `getBoundingClientRect` (abre ACIMA perto do fim da tela; pela RIGHT na borda), overlay z-40 + ESC/scroll/resize fecham, `max-h-[60vh]` scroll interno, grupos Documentos/Compartilhar/SEFAZ/Registro, itens = ícone (cor original) + label + sub dica, ação fora do prazo fica VISÍVEL DESABILITADA com o motivo (nunca "sumir"). Motivo: `overflow-x-auto` da tabela CORTA dropdown absoluto — só fixed+portal resolve. Filtros do portal: busca/selects/chips todos h-9 (mesma altura).
 
 ## 6. Regras de "botões nos lugares certos" (aprendidas com o dono)
 

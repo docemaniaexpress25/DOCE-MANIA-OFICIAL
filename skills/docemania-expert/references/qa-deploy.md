@@ -89,6 +89,7 @@
 | 33 | Entregador fixo id "ENTREGADOR" nunca batia UUID | 119.2 | Permissão calculada no SERVIDOR |
 | 34 | 4 projetos Vercel / deploy não sai | 38/82 | Conferir commit status; app real = sistema-doce-mania1 |
 | 35 | PIN admin 635241 recusado | 164/165 | Confirmar PIN com o dono antes de QA |
+| 36 | `getServiceClient` usado sem import em route.ts → ReferenceError em RUNTIME (500) em TODO download de PDF/XML de venda | 170 | `ignoreBuildErrors:true` engole o TS2304 — a BASELINE do tsc esconde erro novo: comparar CONTAGEM (104→103) e sempre procurar o nome do arquivo no `tsc --noEmit` antes de commit |
 
 ## 7. Pendências — resolvidas e vivas
 

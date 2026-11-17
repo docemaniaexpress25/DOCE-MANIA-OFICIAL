@@ -23,9 +23,20 @@ import { salvarFotoSupabase } from '@/lib/fotoStorage';
  * boletos! desde sexta dia 13". Contas a RECEBER manual/portal continuam fora
  * (boletos que caem na conta da empresa via recebimento manual do admin).
  *
- * O admin fecha o caixa a qualquer instante: a API /api/caixa acao FECHAR
- * cria o snapshot em caixa_fechamentos_geral e "prende" os pagamentos abertos
- * (fechamento_id = id do fechamento). Log de pagamentos = rastreio total.
+ * BLOCO 167 (regra do dono): "quando fechar caixa zera e começa tudo denovo.
+ * As vendas a prazo só zera quando o pagamento a prazo ocorrer."
+ *   - FECHAR trava SOMENTE o À VISTA (dinheiro/pix/depósito) — api/caixa.
+ *   - BOLETO pendente SOBREVIVE ao fechamento (fica no caixa aberto até o
+ *     pagamento). A baixa é feita pela TRIGGER SQL trg_baixa_boleto_caixa
+ *     (sql/bloco167): quando a venda vira PAGO (webhook Inter / boletos-sync /
+ *     recebimento manual / comprovante do portal — qualquer caminho), a linha
+ *     BOLETO ganha pago_em=now() e some da conferência. Boleto CANCELADO no
+ *     Inter também sai do caixa (não pagou).
+ *
+ * O admin fecha o caixa a qualquer instante (FECHAR é exclusivo do admin):
+ * a API /api/caixa acao FECHAR cria o snapshot em caixa_fechamentos_geral e
+ * "prende" os pagamentos À VISTA abertos (fechamento_id = id do fechamento).
+ * Log de pagamentos = rastreio total (ledger + webhook_logs do SQL 167).
  */
 
 export type CaixaMetodo = 'DINHEIRO' | 'PIX' | 'DEPOSITO' | 'BOLETO';

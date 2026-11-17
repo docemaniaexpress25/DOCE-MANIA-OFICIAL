@@ -26,6 +26,15 @@ import { isDavidNome } from '@/lib/equipe';
  *   "todos os recebidos em dinheiro, pix e boletos". total = soma de TUDO.
  *   Pagamentos NÃO trazem a foto inline — o <img> busca por GET /api/caixa/foto?id=.
  *
+ *   BLOCO 167 (regra do dono): "quando fechar caixa zera e começa tudo denovo.
+ *   As vendas a prazo só zera quando o pagamento a prazo ocorrer."
+ *   - O FECHAR trava SOMENTE o À VISTA (dinheiro/pix/depósito). Os BOLETOS
+ *     PENDENTES continuam no caixa aberto e só "zeram" (pago_em) quando o
+ *     pagamento a prazo ocorrer de verdade (webhook do Inter / boletos-sync /
+ *     recebimento manual — trigger trg_baixa_boleto_caixa do SQL 167).
+ *   - FECHAR continua EXCLUSIVO do ADMIN (isAdminSession) a qualquer momento.
+ *   - O caixa "sempre atualiza": polling de 20s no front (CaixaFechamento).
+ *
  * POST /api/caixa                      body { acao: 'REGISTRAR' | 'FECHAR' | 'EXCLUIR' }
  *   REGISTRAR [ADMIN | SECRETARIO | VENDEDOR]:
  *     { origem VENDA|ENTREGA|AJUSTE, metodo, valor, saleId?, cliente?, vendedor?, comprovante?, detalhe? }
@@ -51,6 +60,31 @@ import { isDavidNome } from '@/lib/equipe';
 
 const round2 = (v: number) => Math.round(v * 100) / 100;
 
+// ---------------------------------------------------------------------------
+// BLOCO 167: coluna pago_em (SQL 167) pode ainda não existir no banco — o
+// filtro "boleto pendente" só entra quando a coluna existe (cache por instância
+// com fallback automático no primeiro erro 42703).
+// ---------------------------------------------------------------------------
+let pagoEmOkCache: boolean | null = null;
+
+function erroColunaFaltando(e: any): boolean {
+  const code = String(e?.code || e?.details?.code || '');
+  return code === '42703' || /pago_em|does not exist|schema cache/i.test(String(e?.message || ''));
+}
+
+/** Query do LEDGER ABERTO do caixa: à vista aberto + boletos PENDENTES (167). */
+function openLedgerQuery(supabase: any, campos: string) {
+  const q = supabase
+    .from('caixa_pagamentos')
+    .select(campos)
+    .is('fechamento_id', null)
+    .order('criado_em', { ascending: true })
+    .limit(600);
+  // pago_em IS NULL = boleto pendente (não pago). Com a coluna:
+  // "metodo != BOLETO OU pago_em IS NULL" = à vista aberto + boletos pendentes.
+  return pagoEmOkCache === false ? q : q.or('metodo.neq.BOLETO,pago_em.is.null');
+}
+
 /** 503 amigável quando o SQL do bloco 118 ainda não rodou. */
 function sqlFaltando(e: any) {
   const msg = String(e?.message || '');
@@ -72,13 +106,22 @@ export async function GET(req: NextRequest) {
 
   const supabase = getServiceClient();
   try {
-    // Ledger do caixa ABERTO (fechamento_id null)
-    const { data: rows, error: rowsErr } = await supabase
-      .from('caixa_pagamentos')
-      .select('id, criado_em, origem, sale_id, cliente, vendedor, metodo, valor, comprovante, detalhe, usuario_nome')
-      .is('fechamento_id', null)
-      .order('criado_em', { ascending: true })
-      .limit(600);
+    // Ledger do caixa ABERTO (fechamento_id null): à vista aberto + boletos
+    // pendentes — boleto JÁ PAGO (pago_em preenchido) some da conferência (167).
+    let { data: rows, error: rowsErr } = await openLedgerQuery(
+      supabase,
+      'id, criado_em, origem, sale_id, cliente, vendedor, metodo, valor, comprovante, detalhe, usuario_nome'
+    );
+    // SQL 167 ainda não rodou (coluna pago_em não existe): cai no filtro antigo.
+    if (rowsErr && erroColunaFaltando(rowsErr) && pagoEmOkCache !== false) {
+      pagoEmOkCache = false;
+      ({ data: rows, error: rowsErr } = await openLedgerQuery(
+        supabase,
+        'id, criado_em, origem, sale_id, cliente, vendedor, metodo, valor, comprovante, detalhe, usuario_nome'
+      ));
+    } else if (!rowsErr && pagoEmOkCache === null) {
+      pagoEmOkCache = true;
+    }
     if (rowsErr && sqlFaltando(rowsErr)) {
       return NextResponse.json({ ok: false, error: 'Banco desatualizado: rode o SQL do Bloco 118 (fechamento de caixa).' }, { status: 503 });
     }
@@ -283,40 +326,56 @@ export async function POST(req: NextRequest) {
     }
 
     // ---------------- FECHAR (snapshot) — ADMIN ----------------
+    // BLOCO 167 (regra do dono): "quando fechar caixa zera e começa tudo
+    // denovo. As vendas a prazo só zera quando o pagamento a prazo ocorrer."
+    // Fecha SOMENTE o À VISTA (dinheiro/pix/depósito) — os BOLETOS PENDENTES
+    // continuam no caixa aberto (só saem com pago_em — trigger SQL 167).
     if (acao === 'FECHAR') {
       if (!isAdminSession(req)) {
         return NextResponse.json({ ok: false, error: 'Somente o admin fecha o caixa.' }, { status: 403 });
       }
 
-      const { data: rows, error: rowsErr } = await supabase
-        .from('caixa_pagamentos')
-        .select('id, criado_em, origem, sale_id, cliente, vendedor, metodo, valor, detalhe, usuario_nome')
-        .is('fechamento_id', null)
-        .order('criado_em', { ascending: true });
+      // Leitura com o MESMO filtro do GET (boleto pendente não entra no
+      // fechamento; boleto pago não aparece mais na conferência).
+      let { data: rows, error: rowsErr } = await openLedgerQuery(
+        supabase,
+        'id, criado_em, origem, sale_id, cliente, vendedor, metodo, valor, detalhe, usuario_nome'
+      );
+      if (rowsErr && erroColunaFaltando(rowsErr) && pagoEmOkCache !== false) {
+        pagoEmOkCache = false;
+        ({ data: rows, error: rowsErr } = await openLedgerQuery(
+          supabase,
+          'id, criado_em, origem, sale_id, cliente, vendedor, metodo, valor, detalhe, usuario_nome'
+        ));
+      } else if (!rowsErr && pagoEmOkCache === null) {
+        pagoEmOkCache = true;
+      }
       if (rowsErr && sqlFaltando(rowsErr)) {
         return NextResponse.json({ ok: false, error: 'Banco desatualizado: rode o SQL do Bloco 118 (fechamento de caixa).' }, { status: 503 });
       }
       if (rowsErr) throw rowsErr;
 
-      const pags = (rows || []) as any[];
+      // TRAVA = só o à vista (dinheiro/pix/depósito). Boletos pendentes ficam.
+      const trava = ((rows || []) as any[]).filter(
+        (p) => String(p.metodo || '').toUpperCase() !== 'BOLETO'
+      );
       const totais = { dinheiro: 0, pix: 0, deposito: 0, boleto: 0, total: 0 };
-      for (const p of pags) {
+      for (const p of trava) {
         const v = Number(p.valor || 0);
         const m = String(p.metodo || '').toUpperCase();
         if (m === 'DINHEIRO') totais.dinheiro += v;
         else if (m === 'PIX') totais.pix += v;
         else if (m === 'DEPOSITO') totais.deposito += v;
-        else if (m === 'BOLETO') totais.boleto += v;
+        else if (m === 'BOLETO') totais.boleto += v; // não ocorre (trava sem boleto)
         totais.total += v;
       }
       totais.dinheiro = round2(totais.dinheiro);
       totais.pix = round2(totais.pix);
       totais.deposito = round2(totais.deposito);
       totais.boleto = round2(totais.boleto);
-      totais.total = round2(totais.total);
-      // BLOCO 165: total_geral soma TUDO (dinheiro + pix + deposito + boleto).
-      // Sem coluna total_boleto no snapshot (sem ALTER TABLE): os boletos ficam
-      // no jsonb "pagamentos" e o detalhe do fechamento os mostra.
+      // BLOCO 167: total_geral = DINHEIRO QUE ENTROU (à vista). Boletos
+      // pendentes NÃO são dinheiro no caixa — continuam abertos até o
+      // pagamento; o recebido via boleto cai na conta da empresa.
       totais.total = round2(totais.dinheiro + totais.pix + totais.deposito + totais.boleto);
 
       // Nome do admin que fecha
@@ -327,7 +386,7 @@ export async function POST(req: NextRequest) {
       }
 
       const observacao = String(body.observacao || '').slice(0, 300) || null;
-      const janelaInicio = pags.length > 0 ? pags[0].criado_em : null;
+      const janelaInicio = trava.length > 0 ? trava[0].criado_em : null;
 
       const { data: fech, error: fErr } = await supabase
         .from('caixa_fechamentos_geral')
@@ -339,10 +398,10 @@ export async function POST(req: NextRequest) {
           total_pix: totais.pix,
           total_deposito: totais.deposito,
           total_geral: totais.total,
-          qtde_pagamentos: pags.length,
+          qtde_pagamentos: trava.length,
           observacao,
-          // Snapshot de rastreio (sem foto — a foto real fica no ledger; o pid liga os dois)
-          pagamentos: pags.map((p) => ({
+          // Snapshot de rastreio — SOMENTE os pagamentos À VISTA travados (167).
+          pagamentos: trava.map((p) => ({
             pid: p.id,
             criado_em: p.criado_em,
             origem: p.origem,
@@ -362,12 +421,41 @@ export async function POST(req: NextRequest) {
       }
       if (fErr) throw fErr;
 
-      // Prende os pagamentos abertos neste fechamento (rastreio imutável)
+      // Prende SOMENTE os pagamentos À VISTA (167): os boletos pendentes
+      // continuam com fechamento_id null — sobrevivem ao fechamento até o
+      // pagamento a prazo ocorrer.
       const { error: upErr } = await supabase
         .from('caixa_pagamentos')
         .update({ fechamento_id: fech.id })
-        .is('fechamento_id', null);
+        .is('fechamento_id', null)
+        .neq('metodo', 'BOLETO');
       if (upErr) throw upErr;
+
+      // Boletos pendentes que ficaram abertos (aviso na resposta/UI).
+      // Resiliente: se pago_em ainda não existe (SQL 167 pendente), conta todos.
+      let pendentesRows: any[] = [];
+      let bq = supabase
+        .from('caixa_pagamentos')
+        .select('valor')
+        .is('fechamento_id', null)
+        .eq('metodo', 'BOLETO');
+      if (pagoEmOkCache !== false) bq = bq.is('pago_em', null);
+      const { data: bqData, error: bqErr } = await bq;
+      if (bqErr && erroColunaFaltando(bqErr) && pagoEmOkCache !== false) {
+        pagoEmOkCache = false;
+        const alt = await supabase
+          .from('caixa_pagamentos')
+          .select('valor')
+          .is('fechamento_id', null)
+          .eq('metodo', 'BOLETO');
+        pendentesRows = alt.data || [];
+      } else if (!bqErr) {
+        pendentesRows = bqData || [];
+      }
+      const boletosPendentes = {
+        qtde: pendentesRows.length,
+        valor: round2(pendentesRows.reduce((a, b) => a + Number(b.valor || 0), 0)),
+      };
 
       return NextResponse.json({
         ok: true,
@@ -375,8 +463,9 @@ export async function POST(req: NextRequest) {
           id: fech.id,
           fechadoEm: fech.fechado_em,
           totalGeral: Number(fech.total_geral || 0),
-          qtde: pags.length,
+          qtde: trava.length,
         },
+        boletosPendentes,
       });
     }
 

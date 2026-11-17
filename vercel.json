@@ -3,6 +3,10 @@
     {
       "path": "/api/notas-sync",
       "schedule": "0 12 * * *"
+    },
+    {
+      "path": "/api/boletos-sync",
+      "schedule": "0 10 * * *"
     }
   ],
   "headers": [

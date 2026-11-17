@@ -36,6 +36,17 @@ interface BoletoConfig {
   mensagemPadrao: string;
 }
 
+// BLOCO 167 — evento do webhook do Inter (tabela webhook_logs, SQL 167)
+interface WebhookLogEvento {
+  id: string;
+  criadoEm: string;
+  codigo?: string | null;
+  seuNumero?: string | null;
+  saleId?: string | null;
+  resultado: string;
+  processado: boolean;
+}
+
 // BLOCO 116/117 — webhook da Focus (status em tempo real via API /v2/hooks)
 // eventos: nfe (NF-e autorizada), nfce (NFC-e autorizada), nfce_contingencia
 // (desfecho da NFC-e offline) — doc docs/webhooks, cada gatilho monitora UM evento.
@@ -126,6 +137,12 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
   // BLOCO 152 — texto padrao do boleto (mensagem do beneficiário no PDF do Inter)
   const [msgPadraoInput, setMsgPadraoInput] = useState('');
   const [salvandoMsgPadrao, setSalvandoMsgPadrao] = useState(false);
+
+  // BLOCO 167 — log de eventos do webhook do Inter (pagamentos/recebimentos)
+  const [logAberto, setLogAberto] = useState(false);
+  const [logHook, setLogHook] = useState<WebhookLogEvento[] | null>(null);
+  const [logHookErro, setLogHookErro] = useState('');
+  const [logHookCarregando, setLogHookCarregando] = useState(false);
 
   const [toast, setToast] = useState<{ msg: string; tipo: 'success' | 'error' } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -274,6 +291,31 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
     } catch {
       mostrarToast('Não foi possível copiar — copie manualmente.', 'error');
     }
+  };
+
+  /* ===== BLOCO 167 — log de eventos do webhook (GET /api/webhooks/inter-log) ===== */
+  const carregarLogWebhook = useCallback(async () => {
+    setLogHookCarregando(true);
+    try {
+      const res = await fetch('/api/webhooks/inter-log', { headers: { ...authHeaders() } });
+      const d = await res.json().catch(() => null);
+      if (!res.ok || !d?.ok) {
+        setLogHookErro(String(d?.error || 'Falha ao carregar o log do webhook.'));
+        return;
+      }
+      setLogHook(Array.isArray(d.eventos) ? d.eventos : []);
+      setLogHookErro('');
+    } catch {
+      setLogHookErro('Sem conexão para carregar o log do webhook.');
+    } finally {
+      setLogHookCarregando(false);
+    }
+  }, []);
+
+  const alternarLogWebhook = () => {
+    const novo = !logAberto;
+    setLogAberto(novo);
+    if (novo && logHook === null) void carregarLogWebhook();
   };
 
   /* ===== BLOCO 116 — webhook da Focus (instalar/remover via API da Focus) ===== */
@@ -494,14 +536,72 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
           </div>
 
           <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4 space-y-2">
-            <p className="text-[9px] font-black text-slate-500 uppercase flex items-center gap-1.5"><i className="fa-solid fa-webhook text-teal-600"></i>Webhook a cadastrar no Internet Banking do Inter</p>
+            <p className="text-[9px] font-black text-slate-500 uppercase flex items-center gap-1.5"><i className="fa-solid fa-webhook text-teal-600"></i>Webhook de cobrança (baixa automática do boleto pago)</p>
             <div className="flex items-center gap-2">
               <code className="flex-1 min-w-0 bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-[10px] font-bold text-slate-700 truncate">{webhookUrl}</code>
               <button onClick={copiarWebhook} className="shrink-0 bg-teal-600 text-white h-10 px-4 rounded-xl text-[9px] font-black uppercase active:scale-95 flex items-center gap-1.5">
                 <i className="fa-solid fa-copy"></i>Copiar
               </button>
             </div>
-            <p className="text-[9px] font-semibold text-slate-400 leading-snug">Cole essa URL em Inter API → Webhooks (cobrança) para o sistema receber a baixa automática dos boletos.</p>
+            {/* BLOCO 167: passo a passo do cadastro no Internet Banking do Inter */}
+            <div className="bg-white border border-slate-200 rounded-xl p-3 mt-1">
+              <p className="text-[9px] font-black text-slate-600 uppercase mb-1.5">Como ativar (uma vez só)</p>
+              <ol className="text-[9px] font-semibold text-gray-500 leading-relaxed space-y-1 list-decimal list-inside">
+                <li>Internet Banking PJ do Inter <strong className="text-gray-600">&gt; API Inter &gt; Webhooks</strong> (ou peça ao gerente da conta).</li>
+                <li>Tipo do webhook: <strong className="text-gray-600">Cobrança (boletos)</strong> — evento de pagamento/baixa.</li>
+                <li>Cole a URL acima (copiar) e salve.</li>
+                <li>Pronto: quando um boleto cair, o Inter avisa o app, que re-consulta o Inter e dá a baixa automática (contas a receber + caixa) com log.</li>
+              </ol>
+              <p className="text-[8px] font-bold text-slate-400 leading-snug mt-1.5">Segurança: o payload do Inter não move nada sozinho — o app SEMPRE re-consulta a cobrança direto no banco (mTLS) antes de baixar. Se o webhook não chegar, o <strong className="text-gray-500">boletos-sync</strong> (cron diário) faz a mesma baixa como rede de segurança.</p>
+            </div>
+          </div>
+
+          {/* BLOCO 167 — LOG DE EVENTOS DO WEBHOOK (pagamentos e recebimentos registrados) */}
+          <div className="border-t border-gray-50 pt-3 space-y-2">
+            <button onClick={alternarLogWebhook} className="w-full flex items-center justify-between gap-2 text-left" aria-expanded={logAberto}>
+              <div className="flex items-start gap-3">
+                <i className="fa-solid fa-clipboard-list text-teal-500 mt-1"></i>
+                <div>
+                  <p className="text-[11px] font-bold text-gray-600 uppercase">Log de eventos do webhook (pagamentos)</p>
+                  <p className="text-[9px] text-gray-400 font-semibold leading-snug mt-0.5">Todo aviso do Inter fica registrado: boleto pago, baixa automática, avisos e erros — com data/hora.</p>
+                </div>
+              </div>
+              <i className={`fa-solid fa-chevron-${logAberto ? 'up' : 'down'} text-gray-300 text-xs flex-shrink-0`}></i>
+            </button>
+            {logAberto && (
+              <div className="bg-slate-50 border border-slate-100 rounded-2xl p-3">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-[8px] font-black text-slate-400 uppercase">Últimos 60 eventos</p>
+                  <button onClick={() => void carregarLogWebhook()} disabled={logHookCarregando} className="text-[9px] font-black uppercase text-teal-600 underline disabled:opacity-50 px-2 py-1">
+                    <i className={`fa-solid ${logHookCarregando ? 'fa-spinner fa-spin' : 'fa-rotate-right'} mr-1`}></i>Atualizar
+                  </button>
+                </div>
+                {logHookErro && <p className="text-[9px] font-bold text-rose-500 uppercase leading-snug">{logHookErro}</p>}
+                {!logHookErro && logHookCarregando && <p className="text-[9px] font-black text-gray-300 uppercase py-3 text-center"><i className="fa-solid fa-spinner fa-spin mr-1"></i>Carregando log...</p>}
+                {!logHookErro && !logHookCarregando && (logHook || []).length === 0 && (
+                  <p className="text-[9px] font-bold text-gray-400 uppercase leading-snug">Nenhum evento ainda. O Inter manda o primeiro aviso quando o primeiro boleto pagar (ou quando você testar o webhook).</p>
+                )}
+                {!logHookErro && !logHookCarregando && logHook !== null && logHook.length > 0 && (
+                  <div className="space-y-1.5 max-h-72 overflow-y-auto">
+                    {logHook.map((e) => (
+                      <div key={e.id} className="bg-white border border-slate-100 rounded-xl px-3 py-2">
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded-md ${e.processado ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600'}`}>
+                            {e.processado ? 'processado' : 'aviso/erro'}
+                          </span>
+                          <span className="text-[8px] font-bold text-gray-400">{new Date(e.criadoEm).toLocaleDateString('pt-BR')} {new Date(e.criadoEm).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
+                        </div>
+                        <p className="text-[9px] font-bold text-gray-600 leading-snug mt-1 break-words">{e.resultado}</p>
+                        {(e.saleId || e.codigo) && (
+                          <p className="text-[8px] font-semibold text-gray-400 mt-0.5 break-all">venda {e.saleId ? e.saleId.slice(0, 8).toUpperCase() : '—'}{e.codigo ? ` · cobrança ${String(e.codigo).slice(0, 18)}…` : ''}</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <p className="text-[8px] font-semibold text-gray-400 leading-snug mt-2">O recebimento de cada boleto também fica gravado no histórico da venda (detalhe do pagamento) e no Contas a Receber.</p>
+              </div>
+            )}
           </div>
 
           <div className="flex items-center justify-between gap-3 border-t border-gray-50 pt-3">

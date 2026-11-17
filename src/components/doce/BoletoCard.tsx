@@ -5,6 +5,8 @@ import { boletoService, BoletoInfo } from '@/services/boletoService';
 import { comprovanteBoletoTexto } from '@/lib/danfeTexto';
 import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
 import { validaCpfCnpj } from '@/lib/validaDoc';
+import MiniBoletoImpressao from '@/components/doce/MiniBoletoImpressao';
+import type { MiniBoletoDados } from '@/lib/miniBoleto80Html';
 
 /**
  * BLOCO 25 (ajuste "o dono nao achou o botao"): card do BOLETO BANCARIO INTER
@@ -21,9 +23,16 @@ import { validaCpfCnpj } from '@/lib/validaDoc';
  * 25 / credenciais do Inter nao estao configurados (API responde 503).
  *
  * BLOCO 152: mini boleto 80mm (canvas paisagem) EXCLUIDO pelo dono — o
- * boleto do app e o PDF ORIGINAL do Inter (botao PDF) enviado ao cliente.
- * O texto padrao do beneficiario agora e configurado no hub ERP Fiscal
+ * boleto do app era o PDF ORIGINAL do Inter (botao PDF) enviado ao cliente.
+ * O texto padrao do beneficiario e configurado no hub ERP Fiscal
  * (linha 2 da mensagem da cobranca) e sai no PDF do Inter.
+ *
+ * BLOCO 167 (pedido do dono): MINI BOLETO 80mm VOLTou — "busque um boleto no
+ * sistema que está em a4 e transforme em um mini boleto completo e com layout
+ * parecido com o da mini danfe". Novo gerador HTML miniBoleto80Html.ts (mesmo
+ * padrão visual da mini DANFE: @page 70mm, mono, Code 128, QR do PIX) + modal
+ * MiniBoletoImpressao (preview/USB/BT). O boleto OFICIAL segue sendo o PDF do
+ * Inter — o papel térmico é cópia de conferência/trabalho (não fiscal).
  */
 
 interface BoletoCardProps {
@@ -74,6 +83,8 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
   const [doc, setDoc] = useState('');
   const [cep, setCep] = useState('');
   const [erroLocal, setErroLocal] = useState('');
+  // BLOCO 167: mini boleto 80mm (layout da mini DANFE)
+  const [miniAbrir, setMiniAbrir] = useState(false);
 
   useEffect(() => {
     if (!saleId) return;
@@ -265,6 +276,20 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
     }
   };
 
+  // BLOCO 167: dados do MINI BOLETO 80mm (papel térmico, layout mini DANFE)
+  const miniDados: MiniBoletoDados | null = boleto ? {
+    pagadorNome: clienteNome,
+    pagadorDoc: clienteDoc,
+    valor: boleto.valor,
+    vencimento: boleto.vencimento,
+    status: boleto.status,
+    linhaDigitavel: boleto.linhaDigitavel,
+    codigoBarras: boleto.codigoBarras,
+    pixCopiaECola: boleto.pixCopiaECola,
+    vendaRef: saleId.slice(0, 8).toUpperCase(),
+    seuNumero: boleto.seuNumero,
+  } : null;
+
   if (indisponivel || !boleto) return null;
   const bb = badge();
   const clienteTemDoc = !!(clienteDoc || '').replace(/\D/g, '');
@@ -335,8 +360,16 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
               </button>
             </div>
           )}
-          {/* BLOCO 82: comprovante na térmica 80mm (linha digitável + código de barras + QR PIX).
-              BLOCO 152: mini boleto EXCLUÍDO — o documento do boleto é o PDF ORIGINAL do Inter. */}
+          {/* BLOCO 167: MINI BOLETO 80mm — papel térmico com o MESMO layout da
+              mini DANFE (código de barras + linha digitável + QR do PIX).
+              BLOCO 152: o boleto OFICIAL segue sendo o PDF ORIGINAL do Inter. */}
+          {(boleto.linhaDigitavel || boleto.codigoBarras || boleto.pixCopiaECola) && miniDados && (
+            <button onClick={() => setMiniAbrir(true)}
+              className="w-full bg-teal-600 text-white font-black py-2.5 rounded-xl text-[9px] uppercase tracking-widest active:scale-95">
+              <i className="fa-solid fa-receipt mr-1"></i>
+              Mini Boleto (80mm)
+            </button>
+          )}
           {['A_RECEBER', 'ATRASADO', 'RECEBIDO', 'MARCADO_RECEBIDO'].includes(boleto.status) && (boleto.linhaDigitavel || boleto.pixCopiaECola) && (
             <button onClick={handleImprimirComprovante} disabled={busy}
               className="w-full bg-blue-600 text-white font-black py-2.5 rounded-xl text-[9px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
@@ -390,6 +423,8 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
           )}
         </div>
       )}
+      {/* BLOCO 167: preview/impressão do MINI BOLETO 80mm (USB = papel real / BT = texto) */}
+      <MiniBoletoImpressao abrir={miniAbrir} onClose={() => setMiniAbrir(false)} dados={miniDados} showToast={showToast} />
     </div>
   );
 };

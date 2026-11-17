@@ -23,6 +23,15 @@ import ConfirmModal from '@/components/doce/ConfirmModal';
  *   caixa_fechamentos_geral + pagamentos "presos" no fechamento (rastreio imutavel).
  * - Historico de fechamentos passados com detalhe expandivel.
  * - No app do David (R5) fica o caixa DELE; o admin usa esta tela para fechar.
+ *
+ * BLOCO 167 (regra do dono): "o caixa deve sempre atualizar", "fechado
+ * somente pelo admin a qualquer momento", "quando fechar caixa zera e começa
+ * tudo denovo. As vendas a prazo só zera quando o pagamento a prazo ocorrer."
+ *   - SEMPRE ATUALIZA: polling silencioso a cada 20s + refresh ao voltar p/ a aba.
+ *   - FECHAR (só admin — botão escondido p/ vendedor e guard server-side)
+ *     trava SOMENTE o à vista; os BOLETOS PENDENTES continuam no caixa aberto
+ *     e só saem quando o pagamento a prazo ocorrer (webhook Inter / sync /
+ *     recebimento — trigger SQL 167 marca pago_em e o boleto "zera").
  */
 
 interface PagamentoCaixa {
@@ -94,11 +103,18 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
   const [obs, setObs] = useState('');
   const [fechando, setFechando] = useState(false);
 
+  // BLOCO 167: total FECHÁVEL = só o À VISTA (dinheiro/pix/depósito) — boletos
+  // pendentes não fecham o caixa (só "zeram" quando o pagamento ocorrer).
+  const totalFechavel = Math.round((totais.dinheiro + totais.pix + totais.deposito) * 100) / 100;
+  const qtdeBoletosPendentes = pagamentos.filter((p) => p.metodo === 'BOLETO').length;
+
   const [detalhe, setDetalhe] = useState<Record<string, FechamentoDetalhe>>({});
   const [carregandoDetalhe, setCarregandoDetalhe] = useState<string | null>(null);
 
   const [modalFoto, setModalFoto] = useState<{ foto: string } | null>(null);
   const [carregandoFoto, setCarregandoFoto] = useState(false);
+  // BLOCO 167: caixa "sempre atualiza" — momento do último refresh (hint na tela)
+  const [atualizadoEm, setAtualizadoEm] = useState<Date | null>(null);
 
   // BLOCO 124: correção do caixa — o ADMIN/SECRETARIO apaga registro ERRADO do
   // ledger aberto (a venda NÃO é tocada). Ex.: recebimento a prazo que poluiu
@@ -106,30 +122,42 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
   const [excluirAlvo, setExcluirAlvo] = useState<PagamentoCaixa | null>(null);
   const [excluindo, setExcluindo] = useState(false);
 
-  const carregar = useCallback(async () => {
-    setLoading(true);
+  const carregar = useCallback(async (silencioso = false) => {
+    if (!silencioso) setLoading(true);
     setErro(null);
     try {
       const res = await fetch('/api/caixa', { headers: { ...authHeaders() } });
       const d = await res.json().catch(() => null);
       if (!res.ok || !d?.ok) {
         setErro(String(d?.error || 'Nao foi possivel carregar o caixa.'));
-        setPagamentos([]);
-        setHistorico([]);
+        if (!silencioso) {
+          setPagamentos([]);
+          setHistorico([]);
+        }
         return;
       }
       setPagamentos(d.aberto?.pagamentos || []);
       setTotais(d.aberto?.totais || { dinheiro: 0, pix: 0, deposito: 0, boleto: 0, total: 0 });
       setDesde(d.aberto?.desde || null);
       setHistorico(d.historico || []);
+      setAtualizadoEm(new Date());
     } catch {
-      setErro('Sem conexao para carregar o caixa.');
+      if (!silencioso) setErro('Sem conexao para carregar o caixa.');
     } finally {
-      setLoading(false);
+      if (!silencioso) setLoading(false);
     }
   }, []);
 
   useEffect(() => { carregar(); }, [carregar]);
+
+  // BLOCO 167 ("o caixa deve sempre atualizar"): polling silencioso a cada 20s
+  // + refresh imediato quando o usuário volta para a aba/tela.
+  useEffect(() => {
+    const id = setInterval(() => { void carregar(true); }, 20_000);
+    const aoVoltar = () => { if (document.visibilityState === 'visible') void carregar(true); };
+    document.addEventListener('visibilitychange', aoVoltar);
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', aoVoltar); };
+  }, [carregar]);
 
   const fecharCaixa = async () => {
     setFechando(true);
@@ -144,7 +172,12 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
         showToast?.(String(d?.error || 'Nao foi possivel fechar o caixa.'), 'error');
         return;
       }
-      showToast?.(`Caixa fechado — ${fmt(d.fechamento?.totalGeral || 0)} em ${d.fechamento?.qtde ?? 0} pagamento(s)`, 'success');
+      const bp = d.boletosPendentes as { qtde: number; valor: number } | undefined;
+      showToast?.(
+        `Caixa fechado — ${fmt(d.fechamento?.totalGeral || 0)} em ${d.fechamento?.qtde ?? 0} pagamento(s) à vista`
+        + (bp && bp.qtde > 0 ? ` · ${bp.qtde} boleto(s) pendente(s) (${fmt(bp.valor)}) continuam no caixa até o pagamento` : ''),
+        'success'
+      );
       setModalFechar(false);
       setObs('');
       setDetalhe({});
@@ -293,13 +326,17 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
           Caixa do vendedor David (Rota 5) · {desde ? `aberto desde ${new Date(desde).toLocaleDateString('pt-BR')} ${new Date(desde).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}` : 'caixa aberto — primeiro período'}
           {!isAdmin && ' · fechamento pelo admin'}
         </p>
+        {/* BLOCO 167: "o caixa deve sempre atualizar" — refresh a cada 20s automático */}
+        <p className="text-[8px] text-gray-300 font-bold uppercase mt-0.5">
+          <i className="fa-solid fa-rotate mr-1"></i>Atualiza sozinho a cada 20s{atualizadoEm ? ` · última atualização ${atualizadoEm.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : ''}
+        </p>
       </div>
 
-      {/* BLOCO 118.3 (regra do dono): o que entra e o que NAO entra no caixa */}
+      {/* BLOCO 118.3 + 167 (regras do dono): o que entra, quando zera */}
       <div className="bg-gray-50 border border-gray-100 rounded-2xl p-3 mx-1">
         <p className="text-[8px] font-black text-gray-500 uppercase leading-relaxed">
           <i className="fa-solid fa-circle-info text-gray-400 mr-1"></i>
-          Mostra TUDO que o David recebe/gera: dinheiro e Pix À VISTA (com comprovante) + os BOLETOS das vendas a prazo dele (conferir com os prazos). Recebimentos manuais e pix do portal (conta da empresa) NÃO entram nesta tela.
+          Mostra TUDO que o David recebe/gera: dinheiro e Pix À VISTA (com comprovante) + os BOLETOS das vendas a prazo dele. Ao FECHAR, só o dinheiro à vista trava e o caixa começa de novo — o BOLETO PENDENTE não sai da conferência: só "zera" quando o pagamento cair (webhook do Inter / recebimento). Boletos pagos somem automaticamente.
         </p>
       </div>
 
@@ -315,7 +352,7 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
           <p className="text-[9px] font-bold text-rose-600 leading-relaxed uppercase">
             <i className="fa-solid fa-triangle-exclamation mr-1"></i>{erro}
           </p>
-          <button onClick={carregar} className="mt-2 bg-rose-600 text-white px-4 py-2 rounded-xl text-[9px] font-black uppercase active:scale-95">Tentar de novo</button>
+          <button onClick={() => void carregar()} className="mt-2 bg-rose-600 text-white px-4 py-2 rounded-xl text-[9px] font-black uppercase active:scale-95">Tentar de novo</button>
         </div>
       )}
 
@@ -324,7 +361,7 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
           {/* BLOCO 119: CARD HERÓI — total + as 3 contas com CONTAGEM de pagamentos.
               A conferência é direta: quanto tem, de onde veio, quantos comprovantes. */}
           <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-md mx-1">
-            <p className="text-[8px] font-black text-gray-400 uppercase mb-3">Caixa aberto — dinheiro + pix à vista + boletos do David</p>
+            <p className="text-[8px] font-black text-gray-400 uppercase mb-3">Caixa aberto — dinheiro + pix à vista + boletos pendentes do David</p>
             <div className="bg-gray-900 rounded-2xl p-4">
               <div className="flex items-center justify-between">
                 <div>
@@ -368,7 +405,10 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
               <div className="bg-amber-50 p-3 rounded-2xl mt-2 flex items-center justify-between">
                 <div className="flex items-center gap-1.5">
                   <i className="fa-solid fa-barcode text-amber-500 text-sm"></i>
-                  <p className="text-[9px] font-black text-amber-600 uppercase">Boletos gerados (a prazo)</p>
+                  <div>
+                    <p className="text-[9px] font-black text-amber-600 uppercase">Boletos pendentes (a prazo)</p>
+                    <p className="text-[8px] font-bold text-amber-500/80 uppercase">não fecham o caixa — só saem quando o pagamento ocorrer</p>
+                  </div>
                 </div>
                 <p className="text-[13px] font-black text-amber-700">{fmt(totais.boleto)}</p>
               </div>
@@ -387,7 +427,7 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
                 onClick={() => setModalFechar(true)}
                 className="w-full mt-3 bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 transition-all uppercase text-xs tracking-widest"
               >
-                <i className="fa-solid fa-lock mr-2"></i>Fechar caixa agora — R$ {Number(totais.total || 0).toFixed(2)}
+                <i className="fa-solid fa-lock mr-2"></i>Fechar caixa agora — R$ {Number(totalFechavel || 0).toFixed(2)} à vista
               </button>
             ) : (
               <div className="w-full mt-3 bg-gray-100 text-gray-500 font-bold py-3 rounded-2xl uppercase text-[9px] tracking-widest text-center">
@@ -420,7 +460,7 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
             <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-8 text-center mx-1">
               <i className="fa-solid fa-inbox text-3xl text-gray-200"></i>
               <p className="text-[9px] font-black uppercase text-gray-400 mt-2 tracking-widest">Nenhum pagamento no caixa aberto</p>
-              <p className="text-[8px] font-bold text-gray-300 uppercase mt-1">Entra à vista (venda/entrega cobrada em dinheiro/pix) e os BOLETOS gerados nas vendas a prazo do David</p>
+              <p className="text-[8px] font-bold text-gray-300 uppercase mt-1">Entra à vista (venda/entrega cobrada em dinheiro/pix) e os BOLETOS gerados nas vendas a prazo do David — boleto pago sai sozinho quando o pagamento cair</p>
             </div>
           )}
 
@@ -469,7 +509,7 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
             <h3 className="text-sm font-black text-gray-800 uppercase tracking-widest flex items-center gap-2">
               <i className="fa-solid fa-lock text-emerald-600"></i>Fechar o caixa agora
             </h3>
-            <p className="text-[9px] font-bold text-gray-400 uppercase mt-1">O caixa atual fica PERSISTIDO para rastreio e um novo período começa vazio.</p>
+            <p className="text-[9px] font-bold text-gray-400 uppercase mt-1">Fecha o À VISTA (dinheiro + pix). O caixa zera e um novo período começa. Boletos pendentes continuam abertos até o pagamento.</p>
 
             {/* PASSO 1 — conferir o dinheiro físico */}
             <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-3.5 mt-4 flex gap-2.5">
@@ -502,10 +542,15 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
               <div className="pt-1">
                 <div className="flex justify-between text-[10px] font-black uppercase"><span className="text-emerald-600">Dinheiro</span><span className="text-gray-700">{fmt(totais.dinheiro)}</span></div>
                 <div className="flex justify-between text-[10px] font-black uppercase"><span className="text-violet-600">Pix</span><span className="text-gray-700">{fmt(totais.pix)}</span></div>
-                {totais.boleto > 0 && <div className="flex justify-between text-[10px] font-black uppercase"><span className="text-amber-600">Boletos (a prazo)</span><span className="text-gray-700">{fmt(totais.boleto)}</span></div>}
                 {totais.deposito > 0 && <div className="flex justify-between text-[10px] font-black uppercase"><span className="text-slate-600">Depósito</span><span className="text-gray-700">{fmt(totais.deposito)}</span></div>}
-                <div className="flex justify-between text-sm font-black uppercase pt-1 border-t border-gray-200"><span className="text-gray-800">Total</span><span className="text-emerald-600">{fmt(totais.total)}</span></div>
-                <p className="text-[8px] font-bold text-gray-400 uppercase">{pagamentos.length} pagamento(s) no log</p>
+                <div className="flex justify-between text-sm font-black uppercase pt-1 border-t border-gray-200"><span className="text-gray-800">Total a fechar (à vista)</span><span className="text-emerald-600">{fmt(totalFechavel)}</span></div>
+                <p className="text-[8px] font-bold text-gray-400 uppercase">{pagamentos.filter(p => p.metodo !== 'BOLETO').length} pagamento(s) à vista no log</p>
+                {qtdeBoletosPendentes > 0 && (
+                  <div className="mt-2 bg-amber-50 border border-amber-100 rounded-xl p-2.5">
+                    <p className="text-[9px] font-black text-amber-700 uppercase"><i className="fa-solid fa-barcode mr-1"></i>Boletos pendentes: {qtdeBoletosPendentes} · {fmt(totais.boleto)}</p>
+                    <p className="text-[8px] font-bold text-amber-600/80 uppercase mt-0.5">NÃO fecham com o caixa — continuam na conferência até o pagamento a prazo ocorrer (cai no webhook/recebimento, o boleto sai sozinho).</p>
+                  </div>
+                )}
               </div>
             </div>
 

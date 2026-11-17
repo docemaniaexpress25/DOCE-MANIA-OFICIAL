@@ -144,6 +144,15 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [activeTab, setActiveTab] = useState<TabType>(() => loadLocalState('admin_activeTab', 'HOME'));
   const [selectedSale, setSelectedSale] = useState<Sale | null>(() => loadLocalState('admin_selectedSale', null));
 
+  // BLOCO 167 — Configurações organizadas em SUB-ABAS (o dono: "dentro de
+  // configurações temos elas todas desorganizadas, arrume isso cada um dentro
+  // da sua aba correspondente"). Cada grupo tem sua sub-aba:
+  //   GERAL      = dados da empresa + logo/marca + margens de preço
+  //   PAGAMENTOS = Pix/QR codes + chave do recebimento
+  //   SISTEMA    = melhorias liga/desliga (push, whatsapp, foto...)
+  //   INTEGRACOES= atalhos (catálogo do portal, ERP fiscal/automacões, estoque)
+  const [settingsTab, setSettingsTab] = useState<'GERAL' | 'PAGAMENTOS' | 'SISTEMA' | 'INTEGRACOES'>('GERAL');
+
   // ====================================================================
   // BLOCO 145 — PORTAL FISCAL (antes "NOTAS PENDENTES"): as notas de
   // saída que estavam em outros sistemas JÁ FORAM BATIDAS lá — não
@@ -3123,24 +3132,27 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         <div className="space-y-4">
           <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Configuracoes</h2></div>
 
-          <div className="bg-white rounded-3xl p-6 border border-emerald-100 shadow-sm mx-2 space-y-3">
-            <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider"><i className="fa-solid fa-store text-emerald-600 mr-2"></i>Catalogo do Portal do Cliente</h3>
-            <p className="text-[10px] text-gray-400 font-semibold leading-snug">Ordem, nomes, fotos e caixas do catalogo que o cliente ve no portal — tudo linkado ao estoque central.</p>
-            <button onClick={() => setActiveTab('CATALOGO_PORTAL')} className="w-full py-3 rounded-xl text-[10px] font-black uppercase bg-emerald-600 text-white active:scale-95 shadow-sm flex items-center justify-center gap-2"><i className="fa-solid fa-sliders"></i>Abrir Gestao de Catalogo</button>
+          {/* BLOCO 167 (dono: "arrume isso cada um dentro da sua aba correspondente"):
+              SUB-ABAS — Geral (empresa/marca) · Pix/Pagamentos · Sistema & Preços · Integrações */}
+          <div className="px-2">
+            <div className="grid grid-cols-4 gap-1 bg-white rounded-2xl border border-gray-100 shadow-sm p-1.5">
+              {([
+                { k: 'GERAL', icon: 'fa-building', label: 'Geral' },
+                { k: 'PAGAMENTOS', icon: 'fa-qrcode', label: 'Pix/Pagto' },
+                { k: 'SISTEMA', icon: 'fa-wand-magic-sparkles', label: 'Sistema' },
+                { k: 'INTEGRACOES', icon: 'fa-plug', label: 'Integracoes' },
+              ] as const).map(t => (
+                <button key={t.k} onClick={() => setSettingsTab(t.k)} aria-pressed={settingsTab === t.k}
+                  className={`py-2.5 rounded-xl text-[8px] font-black uppercase tracking-wide flex flex-col items-center gap-1 active:scale-95 transition-colors ${settingsTab === t.k ? 'bg-emerald-600 text-white shadow-sm' : 'text-gray-400 bg-gray-50'}`}>
+                  <i className={`fa-solid ${t.icon} text-xs`}></i>{t.label}
+                </button>
+              ))}
+            </div>
           </div>
 
-          {/* BLOCO 108: ERP organizado — cada config em seu card, nada numa tela só */}
-          <div className="bg-white rounded-3xl p-6 border border-violet-100 shadow-sm mx-2 space-y-3">
-            <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider"><i className="fa-solid fa-file-invoice text-violet-600 mr-2"></i>ERP Fiscal & Automacões</h3>
-            <p className="text-[10px] text-gray-400 font-semibold leading-snug">Dados do emitente (CNPJ), NFC-e automática, modo cupom e webhook do Inter — tudo liga/desliga em um lugar.</p>
-            <button onClick={() => setActiveTab('CONFIG_ERP')} className="w-full py-3 rounded-xl text-[10px] font-black uppercase bg-violet-600 text-white active:scale-95 shadow-sm flex items-center justify-center gap-2"><i className="fa-solid fa-gears"></i>Abrir Configuracoes ERP</button>
-          </div>
-          <div className="bg-white rounded-3xl p-6 border border-blue-100 shadow-sm mx-2 space-y-3">
-            <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider"><i className="fa-solid fa-boxes-stacked text-blue-600 mr-2"></i>Movimentações de Estoque</h3>
-            <p className="text-[10px] text-gray-400 font-semibold leading-snug">Kardex completo: TODAS as entradas (XML/manual) e saídas (venda) com custo, saldo e quem fez.</p>
-            <button onClick={() => setActiveTab('ESTOQUE_MOV')} className="w-full py-3 rounded-xl text-[10px] font-black uppercase bg-blue-600 text-white active:scale-95 shadow-sm flex items-center justify-center gap-2"><i className="fa-solid fa-arrow-right-arrow-left"></i>Abrir Kardex de Estoque</button>
-          </div>
-
+          {/* ===== SUB-ABA GERAL — dados da empresa, logo e marca ===== */}
+          {settingsTab === 'GERAL' && (
+            <>
           <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm mx-2 space-y-4">
             <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider"><i className="fa-solid fa-building text-blue-600 mr-2"></i>Dados da Empresa</h3>
             <div className="space-y-3">
@@ -3160,7 +3172,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             </div>
             <input ref={logoInputRef} type="file" accept="image/*" className="hidden" onChange={handleLogoUpload} />
           </div>
+            </>
+          )}
 
+          {/* ===== SUB-ABA PAGAMENTOS — Pix / QR codes / chave do recebimento ===== */}
+          {settingsTab === 'PAGAMENTOS' && (
+            <>
           <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm mx-2 space-y-4">
             <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider"><i className="fa-solid fa-qrcode text-teal-600 mr-2"></i>Pix / QR Code</h3>
             <div className="grid grid-cols-2 gap-3">
@@ -3202,7 +3219,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
               <p className="text-[8px] text-gray-400 font-semibold leading-snug">Chave que RECEBE nas duas telas: no PDV da pronta entrega (QR gerado com o valor da venda, ao escolher Pix) e na entrega da pré-venda. Aceita CPF, CNPJ, telefone (com DDD), e-mail ou chave aleatória. Vazio = usa o padrão (CPF 017.357.120-43).</p>
             </div>
           </div>
+            </>
+          )}
 
+          {/* ===== SUB-ABA SISTEMA — margens de preço + melhorias liga/desliga ===== */}
+          {settingsTab === 'SISTEMA' && (
+            <>
           <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm mx-2 space-y-4">
             <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider"><i className="fa-solid fa-percent text-amber-600 mr-2"></i>Margem de Lucro Global</h3>
             <div className="flex items-center justify-between">
@@ -3246,6 +3268,31 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
               );
             })()}
           </div>
+            </>
+          )}
+
+          {/* ===== SUB-ABA INTEGRAÇÕES — catálogo do portal, ERP fiscal, estoque ===== */}
+          {settingsTab === 'INTEGRACOES' && (
+            <>
+          <div className="bg-white rounded-3xl p-6 border border-emerald-100 shadow-sm mx-2 space-y-3">
+            <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider"><i className="fa-solid fa-store text-emerald-600 mr-2"></i>Catalogo do Portal do Cliente</h3>
+            <p className="text-[10px] text-gray-400 font-semibold leading-snug">Ordem, nomes, fotos e caixas do catalogo que o cliente ve no portal — tudo linkado ao estoque central.</p>
+            <button onClick={() => setActiveTab('CATALOGO_PORTAL')} className="w-full py-3 rounded-xl text-[10px] font-black uppercase bg-emerald-600 text-white active:scale-95 shadow-sm flex items-center justify-center gap-2"><i className="fa-solid fa-sliders"></i>Abrir Gestao de Catalogo</button>
+          </div>
+
+          {/* BLOCO 108: ERP organizado — cada config em seu card, nada numa tela só */}
+          <div className="bg-white rounded-3xl p-6 border border-violet-100 shadow-sm mx-2 space-y-3">
+            <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider"><i className="fa-solid fa-file-invoice text-violet-600 mr-2"></i>ERP Fiscal & Automacões</h3>
+            <p className="text-[10px] text-gray-400 font-semibold leading-snug">Dados do emitente (CNPJ), NFC-e automática, modo cupom, webhook do Inter (baixa automática do boleto pago + log de eventos) — tudo liga/desliga em um lugar.</p>
+            <button onClick={() => setActiveTab('CONFIG_ERP')} className="w-full py-3 rounded-xl text-[10px] font-black uppercase bg-violet-600 text-white active:scale-95 shadow-sm flex items-center justify-center gap-2"><i className="fa-solid fa-gears"></i>Abrir Configuracoes ERP</button>
+          </div>
+          <div className="bg-white rounded-3xl p-6 border border-blue-100 shadow-sm mx-2 space-y-3">
+            <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider"><i className="fa-solid fa-boxes-stacked text-blue-600 mr-2"></i>Movimentações de Estoque</h3>
+            <p className="text-[10px] text-gray-400 font-semibold leading-snug">Kardex completo: TODAS as entradas (XML/manual) e saídas (venda) com custo, saldo e quem fez.</p>
+            <button onClick={() => setActiveTab('ESTOQUE_MOV')} className="w-full py-3 rounded-xl text-[10px] font-black uppercase bg-blue-600 text-white active:scale-95 shadow-sm flex items-center justify-center gap-2"><i className="fa-solid fa-arrow-right-arrow-left"></i>Abrir Kardex de Estoque</button>
+          </div>
+            </>
+          )}
 
         </div>
       )}

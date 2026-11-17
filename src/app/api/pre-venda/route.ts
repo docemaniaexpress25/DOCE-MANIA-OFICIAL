@@ -650,6 +650,13 @@ async function enrichFila(supabase: any, salesRows: any[], donoRecebimento?: str
       notaStatus: s.nota_status || null,
       // BLOCO 135: tipo real do documento (NFE|NFCE) — badge diz NFC/NF-e, nunca "NF" genérico
       notaTipo: s.nota_tipo || null,
+      // BLOCO 175: número da nota autorizada — o chip do card mostra "NF-e ·
+      // Autorizada nº 1042" SEM precisar clicar em Consultar.
+      notaNumero: s.nota_numero || null,
+      // BLOCO 175: situação do boleto no Inter (NAO_GERADO/EM_PROCESSAMENTO/
+      // A_RECEBER/ATRASADO/RECEBIDO/CANCELADO/EXPIRADO/FALHA_EMISSAO) — o dono
+      // quer VER no card se o boleto já foi gerado (ou não) nas vendas BOLETO.
+      boletoStatus: s.inter_boleto_status || null,
       trocas: s.trocas ?? null,
       prioridade: typeof s.prioridade === 'number' ? s.prioridade : 0,
       // BLOCO 31: posicao manual da rota (definida pelo admin com setas)
@@ -743,7 +750,10 @@ async function getFila(supabase: any, userId: string, perfil: string) {
   const temTrocasValor = await hasTrocasValorColumn();
   // BLOCO 109: situacao fiscal da venda (badge NF no card + emitir nota 1 clique)
   const temNota = await hasNotaColumns();
-  const filaCols = `${FILA_COLS_13}${temOrdem ? ', ordem_entrega' : ''}${modoCol ? `, ${modoCol}` : ''}${temCarga ? ', carga_confirmada_em' : ''}${temTrocasValor ? ', trocas_valor' : ''}${temNota ? ', nota_status, nota_tipo' : ''}`;
+  // BLOCO 175: status do boleto do Inter — entra SO quando as colunas existem
+  // (sonda em cache; bancos antigos seguem sem o chip e sem quebrar a fila)
+  const temBoleto = await hasBoletoColumns();
+  const filaCols = `${FILA_COLS_13}${temOrdem ? ', ordem_entrega' : ''}${modoCol ? `, ${modoCol}` : ''}${temCarga ? ', carga_confirmada_em' : ''}${temTrocasValor ? ', trocas_valor' : ''}${temNota ? ', nota_status, nota_tipo, nota_numero' : ''}${temBoleto ? ', inter_boleto_status' : ''}`;
 
   // ---- Fila ativa: PENDENTE/EM_ROTA (inclui legado) — qualquer dia (fila viva) ----
   let qAtiva = supabase

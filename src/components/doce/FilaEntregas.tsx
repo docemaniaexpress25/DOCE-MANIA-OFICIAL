@@ -97,6 +97,10 @@ interface FilaItem {
   notaStatus?: string | null;
   // BLOCO 135: tipo real do documento (NFE|NFCE) — badge diz NFC/NF-e, nunca "NF" genérico
   notaTipo?: string | null;
+  // BLOCO 175: número da nota autorizada (chip mostra "NF-e · Autorizada nº X")
+  notaNumero?: string | null;
+  // BLOCO 175: situação do boleto do Inter (A_RECEBER = gerado; null = não gerado)
+  boletoStatus?: string | null;
   vendedorId: string;
   vendedorNome: string;
   // BLOCO 64: numero/sala do endereco — impressao da ordem mostra "Rua X, 123"
@@ -140,6 +144,13 @@ interface CaixaEnt {
 
 const fmt = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const hora = (iso: string) => new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+// BLOCO 175: vencimento sem shift de fuso — date-only ("2026-11-25") no new
+// Date() parseia como UTC e em São Paulo (UTC-3) viraria 24/11 (mesmo padrão
+// do dataBR do BoletoCard).
+const dataBRSegura = (iso: string) => {
+  const p = String(iso).slice(0, 10).split('-');
+  return p.length === 3 ? `${p[2]}/${p[1]}/${p[0]}` : String(iso);
+};
 
 const PGTO_META: Record<string, { label: string; icon: string; chip: string }> = {
   DINHEIRO: { label: 'Dinheiro', icon: 'fa-solid fa-money-bill-wave', chip: 'bg-emerald-50 text-emerald-700' },
@@ -150,6 +161,19 @@ const PGTO_META: Record<string, { label: string; icon: string; chip: string }> =
   PAGO_VISITA: { label: 'Já pago na visita', icon: 'fa-solid fa-circle-check', chip: 'bg-emerald-100 text-emerald-800' },
 };
 const pgtoMeta = (m: string) => PGTO_META[m] || PGTO_META.DINHEIRO;
+
+// BLOCO 175 (pedido do dono): "fale tbm se for boleto se ele ja foi gerado" —
+// chip de SITUAÇÃO do boleto do Inter no card da entrega. Os valores são os
+// mesmos gravados em sales.inter_boleto_status pela emissão e pelo sync.
+const BOLETO_SITUACAO: Record<string, { txt: string; chip: string }> = {
+  EM_PROCESSAMENTO: { txt: 'Boleto processando', chip: 'bg-amber-50 text-amber-700' },
+  A_RECEBER: { txt: 'Boleto gerado', chip: 'bg-emerald-50 text-emerald-700' },
+  ATRASADO: { txt: 'Boleto gerado (atrasado)', chip: 'bg-amber-100 text-amber-800' },
+  RECEBIDO: { txt: 'Boleto pago', chip: 'bg-emerald-100 text-emerald-800' },
+  CANCELADO: { txt: 'Boleto cancelado', chip: 'bg-gray-200 text-gray-600' },
+  EXPIRADO: { txt: 'Boleto expirado', chip: 'bg-gray-200 text-gray-600' },
+  FALHA_EMISSAO: { txt: 'Boleto falhou', chip: 'bg-rose-100 text-rose-700' },
+};
 
 const MOTIVOS_FALHA = ['Cliente ausente', 'Recusou o pedido', 'Endereco errado', 'Loja fechada', 'Outro motivo'];
 
@@ -233,17 +257,17 @@ function compararOrdemEntrega(a: FilaItem, b: FilaItem): number {
 // "o vendedor so define a venda e o que vai ser vendido... quem gera a nota
 // com 1 clique e o admin na fila de entregas" + "liberdade de imprimir NF-e
 // NFC em 80mm ou A4". Acoes por card, SEM abrir outra tela:
-//   [Emitir NF]  1 clique -> /api/notas (CNPJ do cliente -> NF-e 55; sem doc
-//                -> NFC-e 65 de consumidor)
-//   EMITINDO  -> badge ambar + [Consultar] (sincroniza com a SEFAZ)
-//   AUTORIZADA -> badge verde NFC/NF-e + [80mm] (DANFE simplificado na termica)
-//                + [PDF A4] (DANFE oficial da Focus em nova aba)
-//   REJEITADA -> badge vermelho + [Tentar de novo] (reemissao -r2/-r3)
+//   BLOCO 175: o card MOSTRA o documento e a situacao (chip "NF-e · Autorizada
+//   nº 17", "Cupom · Sem nota"...) e a situacao do BOLETO nas vendas BOLETO.
+//   Os botões [Emitir NF] e [Documento] SAÍRAM — a nota se bate pelo botão
+//   "Cupom/NF-e e NFC" (Janela Fiscal); DANFE sai em 80mm ou A4/PDF aqui.
+//   EMITINDO  -> [Consultar] (sincroniza com a SEFAZ)
+//   REJEITADA -> [Tentar de novo] (reemissao -r2/-r3) + [Documento]
 // VENDEDOR/ENTREGADOR: nada fiscal aqui (so o admin mexe na nota da pre-venda).
 // ============================================================================
 interface NotaLocal { status: string; numero?: string; pdfUrl?: string; chave?: string; erro?: string; /** BLOCO 135: NFE|NFCE — badge certo no card */ tipo?: string }
 const AcaoFiscalAdmin: React.FC<{ p: FilaItem; showToast: (m: string, t?: 'success' | 'error') => void; recarregar?: () => void }> = ({ p, showToast, recarregar }) => {
-  const [nota, setNota] = useState<NotaLocal>({ status: (p.notaStatus || 'NAO_EMITIDA').toUpperCase(), tipo: String(p.notaTipo || '').toUpperCase() || undefined });
+  const [nota, setNota] = useState<NotaLocal>({ status: (p.notaStatus || 'NAO_EMITIDA').toUpperCase(), numero: p.notaNumero || undefined, tipo: String(p.notaTipo || '').toUpperCase() || undefined });
   const [busy, setBusy] = useState(false);
   // BLOCO 123 (regra do dono): o ADMIN manda no documento — mesmo que o
   // vendedor tenha pedido NF-e, pode optar por NFC-e (COM ou SEM CPF) e
@@ -413,15 +437,45 @@ const AcaoFiscalAdmin: React.FC<{ p: FilaItem; showToast: (m: string, t?: 'succe
   };
 
   const st = nota.status;
+  // BLOCO 175 (regra do dono): o card agora MOSTRA a situação fiscal. Os botões
+  // "Emitir NF" e "Documento" que ficavam aqui SAÍRAM — a nota se bate pelo
+  // botão "Cupom/NF-e e NFC" (Janela Fiscal). Onde havia botão, hoje há
+  // INFORMAÇÃO: o documento do pedido + o status da nota na SEFAZ.
+  const temNotaBatida = st === 'AUTORIZADA' || st === 'EMITINDO' || st === 'REJEITADA' || st === 'CANCELADA';
+  const tipoDocTxt = nota.tipo
+    ? rotuloDocumentoNota(nota.tipo, 'NF')
+    : temNotaBatida ? 'NF'
+      : docAtual === 'NFE' ? 'NF-e'
+        : docAtual === 'NFCE' ? 'NFC'
+          : 'Cupom';
+  const stTxt = st === 'AUTORIZADA' ? 'Autorizada'
+    : st === 'EMITINDO' ? 'Processando na SEFAZ'
+      : st === 'REJEITADA' ? 'Rejeitada'
+        : st === 'CANCELADA' ? 'Cancelada'
+          : 'Sem nota';
+  const stChip = st === 'AUTORIZADA' ? 'bg-emerald-50 text-emerald-700'
+    : st === 'EMITINDO' ? 'bg-amber-50 text-amber-700'
+      : st === 'REJEITADA' ? 'bg-rose-100 text-rose-700'
+        : st === 'CANCELADA' ? 'bg-gray-200 text-gray-600'
+          : 'bg-gray-100 text-gray-500';
+  // BLOCO 175: situação do boleto do Inter — só para venda BOLETO ("fale tbm
+  // se for boleto se ele ja foi gerado"). Sem registro no Inter = não gerado.
+  const bolKey = String(p.boletoStatus || '').toUpperCase();
+  const bol = BOLETO_SITUACAO[bolKey] || { txt: 'Boleto não gerado', chip: 'bg-rose-50 text-rose-600' };
+  const bolVenc = (bolKey === 'A_RECEBER' || bolKey === 'ATRASADO') && p.dataVencimento
+    ? ` · venc ${dataBRSegura(p.dataVencimento)}` : '';
   const docOptionCls = (on: boolean) =>
     `w-full py-3.5 px-3 rounded-2xl text-[11px] font-black uppercase text-left border-2 transition-colors flex items-center ${on ? 'bg-violet-600 border-violet-600 text-white shadow' : 'bg-white border-gray-200 text-gray-600'}`;
   return (
     <>
     <div className="flex flex-wrap items-center gap-2 mt-2 pt-2 border-t border-gray-50" data-bloco="109-fiscal">
+      {/* BLOCO 175: TIPO do documento + STATUS da nota — sempre visível, exatamente
+          onde estavam os botões Emitir NF/Documento removidos pelo dono. */}
+      <span className={`text-[8px] font-black uppercase px-2 py-1 rounded-md shrink-0 ${stChip}`} title={`Documento fiscal: ${tipoDocTxt} — ${stTxt}`}>
+        <i className="fa-solid fa-file-invoice mr-1"></i>{tipoDocTxt} · {stTxt}{st === 'AUTORIZADA' && nota.numero ? ` nº ${nota.numero}` : ''}
+      </span>
       {st === 'AUTORIZADA' && (
         <>
-          {/* BLOCO 135 (regra do dono): badge diz o documento CERTO — "NFC 17" quando é NFC-e, "NF-e 17" quando é NF-e. Nunca um "NF" genérico que engana. */}
-          <span className="text-[8px] font-black uppercase px-2 py-1 rounded-md bg-emerald-50 text-emerald-700 shrink-0" title="Nota autorizada na SEFAZ"><i className="fa-solid fa-circle-check mr-1"></i>{rotuloDocumentoNota(nota.tipo)} {nota.numero || 'OK'}</span>
           <button onClick={imprimir80} disabled={busy} title="Cupom fiscal completo (DANFE NFC-e oficial) na térmica 80mm"
             className="flex-1 min-w-[64px] py-3 rounded-xl bg-blue-50 text-blue-600 text-[9px] font-black uppercase text-center active:scale-95 transition-transform disabled:opacity-60">
             <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-print'} mr-1`}></i>80mm
@@ -433,16 +487,12 @@ const AcaoFiscalAdmin: React.FC<{ p: FilaItem; showToast: (m: string, t?: 'succe
         </>
       )}
       {st === 'EMITINDO' && (
-        <>
-          <span className="text-[8px] font-black uppercase px-2 py-1 rounded-md bg-amber-50 text-amber-700 shrink-0"><i className="fa-solid fa-hourglass-half mr-1"></i>Processando na SEFAZ</span>
-          <button onClick={consultar} disabled={busy} className="flex-1 min-w-[64px] py-3 rounded-xl bg-amber-500 text-white text-[9px] font-black uppercase text-center active:scale-95 transition-transform disabled:opacity-60">
-            <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-arrows-rotate'} mr-1`}></i>Consultar
-          </button>
-        </>
+        <button onClick={consultar} disabled={busy} className="flex-1 min-w-[64px] py-3 rounded-xl bg-amber-500 text-white text-[9px] font-black uppercase text-center active:scale-95 transition-transform disabled:opacity-60">
+          <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-arrows-rotate'} mr-1`}></i>Consultar
+        </button>
       )}
       {st === 'REJEITADA' && (
         <>
-          <span className="text-[8px] font-black uppercase px-2 py-1 rounded-md bg-rose-100 text-rose-700 shrink-0" title={nota.erro || 'Rejeitada'}><i className="fa-solid fa-circle-xmark mr-1"></i>Rejeitada</span>
           <button onClick={() => emitir()} disabled={busy} className="flex-1 min-w-[64px] py-3 rounded-xl bg-slate-800 text-white text-[9px] font-black uppercase text-center active:scale-95 transition-transform disabled:opacity-60">
             <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-file-invoice-dollar'} mr-1`}></i>Tentar de novo
           </button>
@@ -452,20 +502,11 @@ const AcaoFiscalAdmin: React.FC<{ p: FilaItem; showToast: (m: string, t?: 'succe
           </button>
         </>
       )}
-      {(st === 'NAO_EMITIDA' || st === 'CANCELADA' || !st) && (
-        <>
-          <button onClick={() => emitir()} disabled={busy} title="Emite agora: cliente com CNPJ -> NF-e; sem documento -> NFC-e de consumidor"
-            className="flex-1 min-w-[80px] py-3 rounded-xl bg-slate-100 text-slate-700 text-[9px] font-black uppercase text-center active:scale-95 transition-transform disabled:opacity-60 hover:bg-slate-200">
-            <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-file-invoice-dollar'} mr-1`}></i>Emitir NF
-          </button>
-          {/* BLOCO 123 (regra do dono): o admin decide o documento FINAL do
-              pedido — NF-e, NFC-e com/sem CPF ou só cupom, independente do que
-              o vendedor escolheu na tela 4. */}
-          <button onClick={abrirDoc} disabled={busyDoc} title="Escolher o documento final do pedido (admin)"
-            className="flex-1 min-w-[80px] py-3 rounded-xl bg-violet-50 text-violet-600 text-[9px] font-black uppercase text-center active:scale-95 transition-transform disabled:opacity-60 hover:bg-violet-100">
-            <i className={`fa-solid ${busyDoc ? 'fa-spinner fa-spin' : 'fa-file-pen'} mr-1`}></i>Documento
-          </button>
-        </>
+      {/* BLOCO 175: venda BOLETO — o card diz se o boleto já foi gerado no Inter */}
+      {p.formaPgto === 'BOLETO' && (
+        <span className={`text-[8px] font-black uppercase px-2 py-1 rounded-md shrink-0 ${bol.chip}`} title="Situação do boleto no Inter">
+          <i className="fa-solid fa-barcode mr-1"></i>{bol.txt}{bolVenc}
+        </span>
       )}
     </div>
 
@@ -1271,8 +1312,9 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                 <i className="fa-brands fa-whatsapp mr-1"></i>Zap
               </a>
             )}
-            <button onClick={() => setCupom(p)} className="flex-1 min-w-[58px] py-3 rounded-xl bg-amber-50 text-amber-700 text-[9px] font-black uppercase text-center active:scale-95 transition-transform">
-              <i className="fa-solid fa-receipt mr-1"></i>Cupom
+            <button onClick={() => setCupom(p)} title="Cupom 80mm e documento fiscal — NF-e / NFC-e pela Janela Fiscal"
+              className="flex-1 min-w-[80px] py-3 rounded-xl bg-amber-50 text-amber-700 text-[9px] font-black uppercase text-center active:scale-95 transition-transform">
+              <i className="fa-solid fa-receipt mr-1"></i>Cupom/NF-e e NFC
             </button>
             {podePrioridade && pend && (
               <>
@@ -1307,9 +1349,9 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
             )}
           </div>
 
-          {/* BLOCO 109 (regra do dono): fiscal SOMENTE do admin na fila — emitir
-              NF-e/NFC-e com 1 clique, DANFE 80mm ou PDF A4. Vendedor/entregador
-              nao ve (na pre-venda quem emite a nota e o admin). */}
+          {/* BLOCO 109/175 (regra do dono): fiscal SOMENTE do admin na fila —
+              o card mostra documento + situação e a nota se bate pelo botão
+              Cupom/NF-e e NFC (Janela Fiscal). Vendedor/entregador nao ve. */}
           {modo === 'ADMIN' && p.saleId && (
             <AcaoFiscalAdmin p={p} showToast={showToast} recarregar={() => { void load(true); }} />
           )}
@@ -2344,7 +2386,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
             {cargaBloqueadaPorNota(sheetCarga.modoNota, sheetCarga.notaStatus) && (
               <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 mt-2">
                 <p className="text-[9px] font-black text-rose-700 uppercase leading-snug"><i className="fa-solid fa-lock mr-1"></i>{cargaBloqueadaPorNota(sheetCarga.modoNota, sheetCarga.notaStatus)}</p>
-                <p className="text-[8px] font-bold text-rose-500 mt-0.5 leading-snug">Bata a nota no card (Documento / Emitir NF) e volte aqui.</p>
+                <p className="text-[8px] font-bold text-rose-500 mt-0.5 leading-snug">Bata a nota pelo botão Cupom/NF-e e NFC (Janela Fiscal) e volte aqui.</p>
               </div>
             )}
             <p className="text-[9px] font-black text-gray-400 uppercase text-center mt-3 leading-snug">Quem CARREGOU esta entrega? <span className="text-gray-300">(entregador da venda)</span></p>

@@ -2338,3 +2338,22 @@ FEITO:
 QA: lint 0 erros/8 warnings (baseline exata); tsc 103 (baseline do bloco 173 — nenhum erro novo; nenhum erro nos arquivos alterados). Sem SQL novo (todas as colunas já existem).
 
 Teste do dono: (a) Admin → Produtos Fiscais → editar o NOME na planilha (ENTER salva a linha); (b) Admin → Clientes Fiscais → editar Nome e CEP (o KPI "sem CEP" cai na hora); (c) gerar boleto pela ENTREGA de um cliente com CEP no cadastro — o CEP agora puxa e não pede mais na mão (o Sacolão Zimermann 95034-240 é o caso).
+
+## bloco175 — CARD DA FILA DE ENTREGAS: botões EMITIR NF/DOCUMENTO removidos → o card agora MOSTRA o documento e a situação da nota + situação do BOLETO (gerado ou não); botão CUPOM virou CUPOM/NF-E E NFC (2026-11-17)
+
+PEDIDO DO DONO (17/11, com screenshot): "exclua os botoes em vermelho na imagem! mude o nome do botao cupom para cupom/nfe e nfc, exiba o tipo de nota batida e o status dela onde hoje existem os botoes circulados de vermelho, fale tbm se for boleto se ele ja foi gerado."
+
+FEITO:
+1. src/components/doce/FilaEntregas.tsx (AcaoFiscalAdmin, só o card do ADMIN):
+   - Botões EMITIR NF e DOCUMENTO (estado sem nota/cancelada) REMOVIDOS — a nota agora se bate pelo botão renomeado "Cupom/NF-e e NFC", que abre o Cupom → Janela Fiscal (NF-e · NFC-e · NFC anônima). REJEITADA mantém Tentar de novo + Documento (recuperação); AUTORIZADA mantém 80mm + A4/PDF; EMITINDO mantém Consultar.
+   - NO LUGAR dos botões: chip informativo SEMPRE visível com o TIPO do documento + STATUS — "Cupom · Sem nota" (cinza), "NF-e · Sem nota", "NFC · Sem nota", "NFC · Autorizada nº 17" (verde), "NF-e · Processando na SEFAZ" (âmbar), "NF-e · Rejeitada" (vermelho), "NF-e · Cancelada" (cinza). O TIPO vem da nota real (nota_tipo) quando existe; sem nota, do documento pedido (modo_nota | texto "COM NOTA" | cupom).
+   - NOVO chip do BOLETO (só quando a venda é BOLETO, em todos os estados): "Boleto não gerado" (rosa = falta fazer), "Boleto processando", "Boleto gerado · venc 25/11/2026" (verde, com vencimento), "Boleto gerado (atrasado)", "Boleto pago", "Boleto cancelado", "Boleto expirado", "Boleto falhou". Vencimento formatado sem shift de fuso (dataBRSegura, mesmo padrão do dataBR do BoletoCard — date-only em UTC viraria 24/11 em São Paulo).
+   - Chip de AUTORIZADA agora mostra o NÚMERO da nota direto da fila (notaNumero) — antes só aparecia depois de clicar Consultar.
+   - Botão da linha de ações renomeado: CUPOM → CUPOM/NF-E E NFC (title "Cupom 80mm e documento fiscal — NF-e / NFC-e pela Janela Fiscal").
+   - Mensagem da carga bloqueada por nota atualizada ("Bata a nota pelo botão Cupom/NF-e e NFC (Janela Fiscal)") — a antiga citava os botões removidos.
+2. src/app/api/pre-venda/route.ts (GET ?fila=1):
+   - filaCols passa a incluir nota_numero (junto de nota_status/nota_tipo — criadas no MESMO bloco do SQL setup, zero risco de 42703) e inter_boleto_status (sonda hasBoletoColumns já existente, cache; banco antigo segue sem o chip e sem quebrar).
+   - Payload da fila devolve notaNumero + boletoStatus (FilaItem com os dois campos novos).
+QA: página temporária /qa-fila-fiscal renderizou o COMPONENTE REAL com 9 estados (sem nota cupom/nfe/nfce, autorizada NFC nº 17/NF-e nº 1042, emitindo, rejeitada, cancelada) + linha de ações com o botão renomeado — desktop 520px e mobile 430px, console limpo, removida após validação. Fila real via ponte (SECRETARIO PIN 1234): GET ?fila=1 responde 200 com 13 pendências; REST anon em produção confirma que nota_numero e inter_boleto_status EXISTEM e têm dados reais (5 boletos A_RECEBER com vencimento, notas NF-e nº 162-165) — os chips populam no deploy. Login + tela do secretário renderizam sem erro (regressão ok). Lint 0 erros/8 warnings (baseline exata); tsc 104 = 104 sem as mudanças (nenhum erro novo). Sem SQL novo.
+
+Teste do dono (após deploy): na fila de entregas (admin), o card SEM nota mostra "CUPOM · SEM NOTA" (ou NF-e/NFC) em vez dos botões; venda BOLETO mostra "BOLETO NÃO GERADO" ou "BOLETO GERADO · venc dd/mm/aaaa"; nota batida mostra "NFC · AUTORIZADA Nº 17" direto no card; para bater a nota, tocar CUPOM/NF-E E NFC → Janela Fiscal.

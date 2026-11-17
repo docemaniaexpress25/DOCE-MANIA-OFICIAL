@@ -6,15 +6,26 @@ import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/s
  * BLOCO 156 — PRODUTOS FISCAIS (portal, fora do app) — LISTA EDITÁVEL de
  * TODOS os produtos com NCM, CEST, CFOP, EAN, unidade e origem.
  *
+ * BLOCO 170 (pedido do dono): além dos fiscais, a planilha agora EDITA os
+ * CÓDIGOS DO PRODUTO na mesma linha:
+ *   - codigo            = código INTERNO que sobe na NF (Bloco 145, cProd);
+ *   - codigo_especial_gb = código que sobe na NF do cliente ESPECIAL GB
+ *     (Bloco 157 — substitui o interno nessas notas).
+ * Ambos são texto livre (até 60 chars, limite SEFAZ do cProd), vazio = limpa
+ * (a NF volta para o prefixo do id / código interno). O `codigo` tem índice
+ * ÚNICO no banco (products_codigo_uidx, Bloco 145): duplicado é recusado com
+ * mensagem amigável.
+ *
  * Regra do dono: "me traga uma lista editavel de todos os produtos com NCM
  * CEST e CFOP, lista editavel". O portal /fiscal-produtos mostra o catálogo
- * INTEIRO em formato planilha e permite editar os códigos fiscais na linha
+ * INTEIRO em formato planilha e permite editar os códigos na linha
  * (1 clique ou SALVAR TUDO). Estes códigos são EXATAMENTE os que a emissão
  * da NF-e/NFC-e usa (/api/notas → focusNfe) — completar aqui faz a nota sair
  * certa. Produto sem NCM hoje sai com o código genérico 21069090.
  *
  * GET   /api/produtos-fiscal              -> todos os produtos + contagens
- * PATCH /api/produtos-fiscal { id, ncm?, cest?, cfop?, ean?, unidade?, origem? }
+ * PATCH /api/produtos-fiscal { id, codigo?, codigo_especial_gb?, ncm?, cest?,
+ *                              cfop?, ean?, unidade?, origem? }
  *                                        -> grava e devolve o produto atualizado
  *
  * Auth: MESMA SESSÃO do portal fiscal (/notas) — POST /api/notas-admin
@@ -33,11 +44,13 @@ import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/s
 const BAD = (status: number, erro: string) =>
   NextResponse.json({ ok: false, erro }, { status });
 
-const COLS = 'id, codigo, nome, ativo, preco_venda, ncm, cest, cfop, ean, unidade, origem';
+const COLS = 'id, codigo, codigo_especial_gb, nome, ativo, preco_venda, ncm, cest, cfop, ean, unidade, origem';
 
 const soDigitos = (v: unknown) => String(v ?? '').replace(/\D/g, '');
 
 interface FiscalPatch {
+  codigo?: unknown;
+  codigo_especial_gb?: unknown;
   ncm?: unknown;
   cest?: unknown;
   cfop?: unknown;
@@ -50,6 +63,16 @@ interface FiscalPatch {
 function validaFiscal(patch: FiscalPatch): { dados: Record<string, string | null>; erro?: string } {
   const dados: Record<string, string | null> = {};
 
+  if (patch.codigo !== undefined) {
+    // BLOCO 170: código INTERNO (Bloco 145) — texto livre até 60 (limite SEFAZ cProd)
+    const c = String(patch.codigo ?? '').trim().slice(0, 60);
+    dados.codigo = c || null;
+  }
+  if (patch.codigo_especial_gb !== undefined) {
+    // BLOCO 170: código do cliente ESPECIAL GB (Bloco 157) — mesmas regras
+    const c = String(patch.codigo_especial_gb ?? '').trim().slice(0, 60);
+    dados.codigo_especial_gb = c || null;
+  }
   if (patch.ncm !== undefined) {
     const n = soDigitos(patch.ncm);
     if (n && n.length !== 8) return { dados, erro: 'NCM deve ter 8 dígitos (ex: 21069090). Vazio = limpa.' };
@@ -87,6 +110,7 @@ function produtoLinha(p: Record<string, unknown>) {
   return {
     id: String(p.id),
     codigo: p.codigo ? String(p.codigo) : '',
+    codigoEspecialGb: p.codigo_especial_gb ? String(p.codigo_especial_gb) : '',
     nome: String(p.nome ?? ''),
     ativo: !!p.ativo,
     precoVenda: Number(p.preco_venda) || 0,
@@ -119,6 +143,9 @@ export async function GET(req: NextRequest) {
   const comCfop = produtos.filter(p => p.cfop).length;
   const comCest = produtos.filter(p => p.cest).length;
   const comEan = produtos.filter(p => p.ean).length;
+  // BLOCO 170: contagens dos códigos internos / código GB (KPIs do portal)
+  const comCodigo = produtos.filter(p => p.codigo).length;
+  const comCodigoGb = produtos.filter(p => p.codigoEspecialGb).length;
   return NextResponse.json({
     ok: true,
     produtos,
@@ -132,6 +159,9 @@ export async function GET(req: NextRequest) {
       comCest,
       semCest: total - comCest,
       comEan,
+      comCodigo,
+      semCodigo: total - comCodigo,
+      comCodigoGb,
     },
   });
 }
@@ -158,6 +188,17 @@ export async function PATCH(req: NextRequest) {
   const db = getServiceClient();
   let { data, error } = await db.from('products').update(dados).eq('id', id).select(COLS).single();
 
+  // BLOCO 170: código INTERNO duplicado (products_codigo_uidx — Bloco 145)
+  if (error && (error.code === '23505' || /duplicate|unique|codigo_uidx/i.test(error.message || ''))) {
+    return BAD(400, `O código "${String(dados.codigo ?? '')}" JÁ EXISTE em outro produto! O código interno é único — escolha outro.`);
+  }
+  // coluna ausente (SQL 12/145/157 não rodou) — mensagem honesta
+  if (error && /codigo_especial_gb/i.test(error.message || '')) {
+    return BAD(500, `O banco recusou o CÓDIGO GB (${error.message}). Rode o SQL do Bloco 157 no Supabase.`);
+  }
+  if (error && /\bcodigo\b/i.test(error.message || '')) {
+    return BAD(500, `O banco recusou o CÓDIGO interno (${error.message}). Rode o SQL do Bloco 145 no Supabase.`);
+  }
   // coluna fiscal ausente (SQL do Bloco 12 não rodou) — mensagem honesta
   if (error && /ncm|cest|cfop|\bean\b|unidade|origem/i.test(error.message || '')) {
     return BAD(500, `O banco recusou o campo fiscal (${error.message}). Rode o SQL do Bloco 12 no Supabase.`);

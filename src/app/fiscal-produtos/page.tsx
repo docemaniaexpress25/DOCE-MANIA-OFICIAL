@@ -6,16 +6,21 @@
  * Regra do dono: "me traga uma lista editavel de todos os produtos com NCM
  * CEST e CFOP, lista editavel".
  *
+ * BLOCO 170 (pedido do dono): a planilha agora também EDITA os CÓDIGOS do
+ * produto na mesma linha — o CÓDIGO INTERNO que sobe na NF (Bloco 145) e o
+ * CÓDIGO ESPECIAL GB que sobe na NF do cliente ESPECIAL GB (Bloco 157).
+ * Duplicado de código interno é recusado (índice único do Bloco 145).
+ *
  * MESMA linguagem do PORTAL FISCAL (/notas) e do PORTAL DE ENTRADAS (/entradas):
  *  - PIN do admin (6 dígitos) — MESMA SESSÃO do portal fiscal (token /notas);
  *  - TABELA PLANILHA: TODO o catálogo, uma linha por produto, campos editáveis
- *    na linha (NCM, CEST, CFOP, EAN, unidade, origem);
+ *    na linha (código, cód. GB, NCM, CEST, CFOP, EAN, unidade, origem);
  *  - EDIÇÃO DIRETA: digita, o campo marca a linha como alterada (âmbar);
  *    ENTER salva a linha; SALVAR TUDO grava todas as alteradas de uma vez;
- *  - VALIDAÇÃO SEFAZ na digitação: NCM 8 dígitos, CEST 7, CFOP 4 de saída
- *    (5/6), EAN 8-14 — igual a NF-e aceita;
- *  - FILTROS: busca por nome/código/EAN + chips (sem NCM, sem CFOP, sem CEST,
- *    inativos); KPIs clicáveis;
+ *  - VALIDAÇÃO na digitação: NCM 8 dígitos, CEST 7, CFOP 4 de saída (5/6),
+ *    EAN 8-14 — igual a NF-e aceita; códigos até 60 caracteres (limite SEFAZ);
+ *  - FILTROS: busca por nome/código/EAN + chips (sem código, sem cód. GB,
+ *    sem NCM, sem CFOP, sem CEST, inativos); KPIs clicáveis;
  *  - ALERTA honesto: produto SEM NCM sai na nota com o código genérico
  *    21069090 (é o fallback real da emissão);
  *  - EXPORTAR CSV da lista filtrada (Excel).
@@ -30,6 +35,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 interface ProdutoFiscal {
   id: string;
   codigo: string;
+  codigoEspecialGb: string;
   nome: string;
   ativo: boolean;
   precoVenda: number;
@@ -41,13 +47,18 @@ interface ProdutoFiscal {
   origem: string;
 }
 
-type FKey = 'ncm' | 'cest' | 'cfop' | 'ean' | 'unidade' | 'origem';
+type FKey = 'codigo' | 'codigoEspecialGb' | 'ncm' | 'cest' | 'cfop' | 'ean' | 'unidade' | 'origem';
 
-const CAMPOS_FISCAIS: FKey[] = ['ncm', 'cest', 'cfop', 'ean', 'unidade', 'origem'];
+// BLOCO 170: os códigos entram na mesma lista — a linha "alterada" passa a
+// considerar os dois códigos junto dos fiscais (SALVAR TUDO grava tudo).
+const CAMPOS_FISCAIS: FKey[] = ['codigo', 'codigoEspecialGb', 'ncm', 'cest', 'cfop', 'ean', 'unidade', 'origem'];
 
 interface Stats {
   total: number;
   ativos: number;
+  comCodigo: number;
+  semCodigo: number;
+  comCodigoGb: number;
   comNcm: number;
   semNcm: number;
   comCfop: number;
@@ -57,7 +68,7 @@ interface Stats {
   comEan: number;
 }
 
-type Filtro = 'TODOS' | 'SEM_NCM' | 'SEM_CFOP' | 'SEM_CEST' | 'INATIVOS';
+type Filtro = 'TODOS' | 'SEM_CODIGO' | 'SEM_CODIGO_GB' | 'SEM_NCM' | 'SEM_CFOP' | 'SEM_CEST' | 'INATIVOS';
 
 const TOKEN_KEY = 'dm_notas_admin_token';
 const NOME_KEY = 'dm_notas_admin_nome';
@@ -80,9 +91,14 @@ const soDigitos = (v: string) => String(v || '').replace(/\D/g, '');
 
 /** Validação espelhada da API — devolve erro por campo (vazio = ok, limpa). */
 function erroDeCampo(campo: FKey, valor: string): string {
-  const v = campo === 'unidade' ? valor.trim().toUpperCase() : soDigitos(valor);
+  const v = campo === 'unidade' || campo === 'codigo' || campo === 'codigoEspecialGb'
+    ? valor.trim()
+    : soDigitos(valor);
   if (!v) return '';
   switch (campo) {
+    case 'codigo':
+    case 'codigoEspecialGb':
+      return v.length > 60 ? 'máx. 60 caracteres' : '';
     case 'ncm':
       return v.length !== 8 ? '8 dígitos' : '';
     case 'cest':
@@ -256,11 +272,12 @@ export default function PortalProdutosFiscaisPage() {
   }, [edits]);
 
   const setValor = (p: ProdutoFiscal, campo: FKey, bruto: string) => {
-    // máscara na digitação: só dígitos nos campos numéricos, letras na unidade
-    // limites reais da NF-e: NCM 8 · CEST 7 · CFOP 4 · EAN 14 · origem 1
+    // máscara na digitação: códigos são texto livre (60), unidade letras,
+    // numéricos só dígitos — limites reais da NF-e: NCM 8 · CEST 7 · CFOP 4 · EAN 14 · origem 1
     let v = bruto;
     if (campo === 'unidade') v = bruto.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
     else if (campo === 'origem') v = soDigitos(bruto).slice(0, 1);
+    else if (campo === 'codigo' || campo === 'codigoEspecialGb') v = bruto.replace(/\s+/g, ' ').slice(0, 60);
     else {
       const limite = campo === 'ncm' ? 8 : campo === 'cest' ? 7 : campo === 'cfop' ? 4 : 14;
       v = soDigitos(bruto).slice(0, limite);
@@ -323,8 +340,8 @@ export default function PortalProdutosFiscaisPage() {
     }
     setConf({
       titulo: 'Salvar tudo?',
-      texto: `${alvos.length} produto(s) com alterações fiscais serão gravados no catálogo.`,
-      detalhe: 'Os códigos entram na NF-e/NFC-e na próxima emissão. Linhas com erro de digitação não são gravadas.',
+      texto: `${alvos.length} produto(s) com alterações serão gravados no catálogo.`,
+      detalhe: 'Os códigos (interno, cód. GB e fiscais) entram na NF-e/NFC-e na próxima emissão. Linhas com erro de digitação não são gravadas.',
       icone: 'fa-floppy-disk',
       botao: `Salvar ${alvos.length} produto(s)`,
       run: async () => {
@@ -356,6 +373,8 @@ export default function PortalProdutosFiscaisPage() {
   const filtrados = useMemo(() => {
     const q = busca.trim().toLowerCase();
     return produtos.filter(p => {
+      if (filtro === 'SEM_CODIGO' && p.codigo) return false;
+      if (filtro === 'SEM_CODIGO_GB' && p.codigoEspecialGb) return false;
       if (filtro === 'SEM_NCM' && p.ncm) return false;
       if (filtro === 'SEM_CFOP' && p.cfop) return false;
       if (filtro === 'SEM_CEST' && p.cest) return false;
@@ -364,6 +383,7 @@ export default function PortalProdutosFiscaisPage() {
       return (
         p.nome.toLowerCase().includes(q) ||
         p.codigo.toLowerCase().includes(q) ||
+        p.codigoEspecialGb.toLowerCase().includes(q) ||
         p.ean.includes(q)
       );
     });
@@ -381,9 +401,9 @@ export default function PortalProdutosFiscaisPage() {
   // ---------- CSV ----------
   const exportarCsv = () => {
     const linhasCsv = [
-      ['codigo', 'produto', 'ncm', 'cest', 'cfop', 'ean', 'unidade', 'origem', 'ativo', 'preco_venda'].join(';'),
+      ['codigo', 'codigo_especial_gb', 'produto', 'ncm', 'cest', 'cfop', 'ean', 'unidade', 'origem', 'ativo', 'preco_venda'].join(';'),
       ...filtrados.map(p => [
-        p.codigo, p.nome.replace(/;/g, ','), p.ncm, p.cest, p.cfop, p.ean,
+        p.codigo, p.codigoEspecialGb, p.nome.replace(/;/g, ','), p.ncm, p.cest, p.cfop, p.ean,
         p.unidade, p.origem, p.ativo ? 'SIM' : 'NAO', p.precoVenda.toFixed(2).replace('.', ','),
       ].join(';')),
     ];
@@ -407,9 +427,15 @@ export default function PortalProdutosFiscaisPage() {
     const comCfop = produtos.filter(p => p.cfop).length;
     const comCest = produtos.filter(p => p.cest).length;
     const comEan = produtos.filter(p => p.ean).length;
+    // BLOCO 170: contadores dos códigos (atualizam NA HORA ao salvar)
+    const comCodigo = produtos.filter(p => p.codigo).length;
+    const comCodigoGb = produtos.filter(p => p.codigoEspecialGb).length;
     return {
       total,
       ativos: produtos.filter(p => p.ativo).length,
+      comCodigo,
+      semCodigo: total - comCodigo,
+      comCodigoGb,
       comNcm,
       semNcm: total - comNcm,
       comCfop,
@@ -437,7 +463,7 @@ export default function PortalProdutosFiscaisPage() {
             <i className="fa-solid fa-clipboard-list text-amber-600 text-3xl"></i>
           </div>
           <h1 className="text-xl font-black text-gray-800 mb-1">Produtos Fiscais</h1>
-          <p className="text-gray-400 text-sm mb-8 font-medium">NCM · CEST · CFOP · lista editável</p>
+          <p className="text-gray-400 text-sm mb-8 font-medium">Códigos · NCM · CEST · CFOP · lista editável</p>
           <div className="flex justify-center gap-3 mb-6" aria-label="PIN digitado">
             {[0, 1, 2, 3, 4, 5].map(i => (
               <div key={i} className={`w-4 h-4 rounded-full border-2 transition-colors ${pin.length > i ? 'bg-amber-600 border-amber-600' : 'border-gray-200'}`} />
@@ -494,10 +520,10 @@ export default function PortalProdutosFiscaisPage() {
               <i className="fa-solid fa-clipboard-list text-amber-100"></i>
             </div>
             <div className="min-w-0">
-              <h1 className="text-[15px] font-black uppercase tracking-tight leading-none whitespace-nowrap">Produtos Fiscais <span className="text-amber-200">NCM · CEST · CFOP</span></h1>
+              <h1 className="text-[15px] font-black uppercase tracking-tight leading-none whitespace-nowrap">Produtos Fiscais <span className="text-amber-200">Código · GB · NCM · CEST · CFOP</span></h1>
               <p className="text-[10px] text-amber-100/70 font-semibold mt-1 leading-none truncate">
                 {nomeAdmin ? <><i className="fa-solid fa-user-shield mr-1 text-[8px]"></i>{nomeAdmin} · </> : null}
-                <span className="uppercase tracking-wide">lista editável do catálogo</span>
+                <span className="uppercase tracking-wide">catálogo editável · códigos que saem na NF</span>
               </p>
             </div>
             <div className="flex-1" />
@@ -532,6 +558,8 @@ export default function PortalProdutosFiscaisPage() {
           <div className="max-w-[1600px] mx-auto px-4 py-1.5 flex items-center gap-4 text-[10px] font-bold whitespace-nowrap overflow-x-auto" role="status">
             <span><b className="text-white">{kpis.total}</b> produtos</span>
             <span><b className="text-white">{kpis.ativos}</b> ativos</span>
+            <span className={kpis.semCodigo > 0 ? 'text-amber-300' : ''}><b>{kpis.comCodigo}</b> com código</span>
+            <span className="text-orange-300/70"><b>{kpis.comCodigoGb}</b> com cód. GB</span>
             <span className="text-emerald-300"><b>{kpis.comNcm}</b> com NCM</span>
             <span className={kpis.semNcm > 0 ? 'text-amber-300' : ''}><b>{kpis.semNcm}</b> sem NCM</span>
             <span className={kpis.semCfop > 0 ? 'text-amber-300' : ''}><b>{kpis.semCfop}</b> sem CFOP</span>
@@ -565,6 +593,8 @@ export default function PortalProdutosFiscaisPage() {
             />
           </div>
           {chipFiltro('TODOS', 'Todos', kpis.total, 'bg-gray-900 text-white')}
+          {chipFiltro('SEM_CODIGO', 'Sem código', kpis.semCodigo, 'bg-stone-700 text-white')}
+          {chipFiltro('SEM_CODIGO_GB', 'Sem cód. GB', kpis.total - kpis.comCodigoGb, 'bg-amber-700 text-white')}
           {chipFiltro('SEM_NCM', 'Sem NCM', kpis.semNcm, 'bg-amber-600 text-white')}
           {chipFiltro('SEM_CFOP', 'Sem CFOP', kpis.semCfop, 'bg-orange-600 text-white')}
           {chipFiltro('SEM_CEST', 'Sem CEST', kpis.semCest, 'bg-rose-600 text-white')}
@@ -613,11 +643,12 @@ export default function PortalProdutosFiscaisPage() {
         {/* ================= TABELA PLANILHA ================= */}
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1480px] text-left">
+            <table className="w-full min-w-[1740px] text-left">
               <thead>
                 <tr className="bg-gray-900 text-white text-[9px] font-black uppercase tracking-wider">
                   <th className="px-3 py-2.5 w-14">#</th>
-                  <th className="px-3 py-2.5 w-24">Código</th>
+                  <th className="px-3 py-2.5 w-28">Código <span className="text-gray-400 normal-case font-semibold">(NF)</span></th>
+                  <th className="px-3 py-2.5 w-28">Cód. GB <span className="text-gray-400 normal-case font-semibold">(especial)</span></th>
                   <th className="px-3 py-2.5 min-w-[260px]">Produto</th>
                   <th className="px-3 py-2.5 w-32">NCM <span className="text-gray-400 normal-case font-semibold">(8)</span></th>
                   <th className="px-3 py-2.5 w-32">CEST <span className="text-gray-400 normal-case font-semibold">(7)</span></th>
@@ -630,10 +661,10 @@ export default function PortalProdutosFiscaisPage() {
               </thead>
               <tbody>
                 {carregando && (
-                  <tr><td colSpan={10} className="px-4 py-16 text-center"><div className="w-8 h-8 border-4 border-amber-100 border-t-amber-600 rounded-full animate-spin mx-auto" /></td></tr>
+                  <tr><td colSpan={11} className="px-4 py-16 text-center"><div className="w-8 h-8 border-4 border-amber-100 border-t-amber-600 rounded-full animate-spin mx-auto" /></td></tr>
                 )}
                 {!carregando && filtrados.length === 0 && (
-                  <tr><td colSpan={10} className="px-4 py-16 text-center text-gray-400 text-sm font-semibold">
+                  <tr><td colSpan={11} className="px-4 py-16 text-center text-gray-400 text-sm font-semibold">
                     {produtos.length === 0 ? 'Nenhum produto no catálogo.' : 'Nenhum produto com este filtro.'}
                   </td></tr>
                 )}
@@ -644,7 +675,34 @@ export default function PortalProdutosFiscaisPage() {
                   return (
                     <tr key={p.id} className={`${est.fundo} ${est.borda} border-b border-gray-100 hover:bg-gray-50/60 transition-colors`}>
                       <td className="px-3 py-1.5 text-[10px] font-bold text-gray-300">{idx + 1}</td>
-                      <td className="px-3 py-1.5 text-[11px] font-black text-gray-500 font-mono">{p.codigo || '—'}</td>
+                      {/* BLOCO 170: CÓDIGO INTERNO editável — o que sobe como cProd na NF */}
+                      <td className="px-3 py-1.5">
+                        <input
+                          value={valorDe(p, 'codigo')}
+                          onChange={e => setValor(p, 'codigo', e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') void salvarLinha(p); }}
+                          placeholder="ex: 001, DM-125"
+                          className={`${inputCls(p, 'codigo')} font-mono`}
+                          aria-label={`Código interno de ${p.nome}`}
+                        />
+                        {alteradoDe(p, 'codigo') && erroDeCampo('codigo', valorDe(p, 'codigo')) && (
+                          <p className="text-[8px] font-black text-rose-500 mt-0.5">{erroDeCampo('codigo', valorDe(p, 'codigo'))}</p>
+                        )}
+                      </td>
+                      {/* BLOCO 170: CÓD. ESPECIAL GB editável — sobe na NF do cliente ESPECIAL GB */}
+                      <td className="px-3 py-1.5">
+                        <input
+                          value={valorDe(p, 'codigoEspecialGb')}
+                          onChange={e => setValor(p, 'codigoEspecialGb', e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') void salvarLinha(p); }}
+                          placeholder="vazio = usa o código"
+                          className={`${inputCls(p, 'codigoEspecialGb')} font-mono`}
+                          aria-label={`Código especial GB de ${p.nome}`}
+                        />
+                        {alteradoDe(p, 'codigoEspecialGb') && erroDeCampo('codigoEspecialGb', valorDe(p, 'codigoEspecialGb')) && (
+                          <p className="text-[8px] font-black text-rose-500 mt-0.5">{erroDeCampo('codigoEspecialGb', valorDe(p, 'codigoEspecialGb'))}</p>
+                        )}
+                      </td>
                       <td className="px-3 py-1.5">
                         <div className="flex items-center gap-2">
                           <span className="text-[12px] font-bold text-gray-800 truncate max-w-[320px]" title={p.nome}>{p.nome}</span>
@@ -719,7 +777,7 @@ export default function PortalProdutosFiscaisPage() {
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm px-4 py-3">
           <p className="text-[10px] font-bold text-gray-500 leading-relaxed">
             <i className="fa-solid fa-circle-info text-amber-600 mr-1.5"></i>
-            Os códigos gravados aqui são os que saem na NF-e/NFC-e. <b>NCM</b> 8 dígitos (sem NCM a nota sai 21069090) · <b>CEST</b> 7 dígitos (só para produtos com ST) · <b>CFOP</b> 4 dígitos de saída (5102 venda dentro do estado / 6102 fora) · <b>EAN</b> código de barras 8-14 · <b>Un</b> unidade comercial (UN, KG, PC, CX) · <b>Origem</b> 0 nacional / 1-2 estrangeira. ENTER na linha salva só aquela linha.
+            Os códigos gravados aqui são os que saem na NF-e/NFC-e. <b>Código</b> interno do produto (texto livre, único — aparece na NF como codigo_produto) · <b>Cód. GB</b> sobe na NF do cliente ESPECIAL GB (vazio = usa o código interno) · <b>NCM</b> 8 dígitos (sem NCM a nota sai 21069090) · <b>CEST</b> 7 dígitos (só para produtos com ST) · <b>CFOP</b> 4 dígitos de saída (5102 venda dentro do estado / 6102 fora) · <b>EAN</b> código de barras 8-14 · <b>Un</b> unidade comercial (UN, KG, PC, CX) · <b>Origem</b> 0 nacional / 1-2 estrangeira. ENTER na linha salva só aquela linha.
           </p>
         </div>
       </main>
@@ -728,8 +786,8 @@ export default function PortalProdutosFiscaisPage() {
       <footer className="mt-auto bg-white border-t border-gray-200">
         <div className="max-w-[1600px] mx-auto px-4 py-2.5 flex items-center gap-2 text-[9px] font-bold text-gray-400 uppercase tracking-wider">
           <i className="fa-solid fa-clipboard-list text-amber-600"></i>
-          DOCE MANIA · Produtos Fiscais — lista editável de NCM / CEST / CFOP
-          <span className="ml-auto">{kpis.total} produtos · {kpis.comNcm} com NCM</span>
+          DOCE MANIA · Produtos Fiscais — códigos e fiscais editáveis
+          <span className="ml-auto">{kpis.total} produtos · {kpis.comCodigo} com código · {kpis.comCodigoGb} com cód. GB</span>
         </div>
       </footer>
 

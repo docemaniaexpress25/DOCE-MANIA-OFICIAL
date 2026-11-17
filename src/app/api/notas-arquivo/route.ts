@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { isServerSupabaseConfigured, devBridge } from '@/lib/serverSupabase';
+import { isServerSupabaseConfigured, devBridge, getServiceClient } from '@/lib/serverSupabase';
+// BLOCO 170: getServiceClient faltava no import — ReferenceError em RUNTIME
+// (build passa por ignoreBuildErrors) e TODO clique no PDF/XML de nota de
+// VENDA (caminho saleId) dava erro 500 no portal /notas. Notas avulsas não
+// quebravam porque respostaArquivoNota cria o client dentro do próprio lib.
 import { sessionFromRequest, verifySessionToken } from '@/lib/session';
 import { hasNotaColumns } from '@/lib/serverSchema';
 import { respostaArquivoNota, TipoServe } from '@/lib/notasArquivo';

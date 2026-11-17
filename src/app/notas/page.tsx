@@ -45,6 +45,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { unzipSync } from 'fflate';
 // BLOCO 142: prazo SEFAZ de cancelamento (NFC-e 30min / NF-e 24h) — fonte única com o servidor
 import { prazoCancelamentoNota } from '@/lib/regras-fiscais';
@@ -462,6 +463,56 @@ export default function PortalNotasPage() {
     const batida = (n: NotaRow): string => String(n.emitidaEm || n.dataVenda || '');
     return [...base].sort((a, b) => batida(b).localeCompare(batida(a)));
   }, [notas, busca, filtro, filtroTipo, filtroOrigem, periodo]);
+
+  // ---------- BLOCO 170: painel flutuante de AÇÕES (um por vez) ----------
+  // O dono pediu: "temos as ações que são ícones que nos levam aos arquivos,
+  // notei que tá tudo jogado e desalinhado — vamos criar um botão que abre
+  // uma aba com ações, e aí ícones dentro com cada ação". Estado novo é só de
+  // apresentação: id do painel aberto + âncora {x,y} capturada no clique.
+  const [acoesMenuId, setAcoesMenuId] = useState<string | null>(null);
+  const [acoesMenuPos, setAcoesMenuPos] = useState<{ x: number; y: number; acima: boolean; direita: boolean } | null>(null);
+  const acoesPainelRef = useRef<HTMLDivElement | null>(null);
+  const fecharAcoes = useCallback(() => { setAcoesMenuId(null); setAcoesMenuPos(null); }, []);
+
+  /** BLOCO 170: abre (ou fecha) o painel ancorado no botão da linha — coordenadas fixed via getBoundingClientRect no momento do clique. */
+  const abrirAcoes = (id: string, el: HTMLElement) => {
+    const rect = el.getBoundingClientRect();
+    const larguraPainel = 224; // w-56
+    const alturaPainel = Math.min(window.innerHeight * 0.6, 520); // estimativa p/ escolher o lado
+    const espacoAbaixo = window.innerHeight - rect.bottom;
+    const acima = espacoAbaixo < alturaPainel + 12 && rect.top > espacoAbaixo;
+    const direita = rect.left + larguraPainel + 12 > window.innerWidth;
+    setAcoesMenuPos({
+      x: direita ? window.innerWidth - rect.right : rect.left,
+      y: acima ? rect.top - 8 : rect.bottom + 8,
+      acima,
+      direita,
+    });
+    setAcoesMenuId(prev => (prev === id ? null : id));
+  };
+
+  // BLOCO 170: fecha o painel com ESC, clique fora (overlay), scroll da página
+  // e resize — menos o scroll DENTRO do próprio painel (overflow-y-auto).
+  useEffect(() => {
+    if (!acoesMenuId) return;
+    const fechar = () => { setAcoesMenuId(null); setAcoesMenuPos(null); };
+    const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') fechar(); };
+    const onScroll = (ev: Event) => {
+      if (acoesPainelRef.current && ev.target instanceof Node && acoesPainelRef.current.contains(ev.target)) return;
+      fechar();
+    };
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', fechar);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', fechar);
+    };
+  }, [acoesMenuId]);
+
+  // nota aberta no painel (procura na lista filtrada — se sumir, o painel fecha)
+  const notaAcoes = acoesMenuId ? listaFiltrada.find(x => x.id === acoesMenuId) ?? null : null;
 
   const kpis = useMemo(() => {
     const visiveis = notas.filter(n => dentroPeriodo(n.dataVenda, periodo));
@@ -1158,21 +1209,21 @@ export default function PortalNotasPage() {
       </header>
 
       {/* ================= FILTROS — uma linha (busca + período + chips) ================= */}
-      <div className="max-w-[1600px] w-full mx-auto px-4 mt-3 flex items-center gap-2 flex-wrap lg:flex-nowrap">
+      <div className="max-w-[1600px] w-full mx-auto px-4 mt-3 flex items-center gap-2.5 flex-wrap lg:flex-nowrap">
         <div className="relative flex-1 min-w-[220px]">
           <i className="fa-solid fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-300 text-xs"></i>
           <input
             value={busca}
             onChange={e => setBusca(e.target.value)}
             placeholder="Buscar por número, cliente, CNPJ, chave, ref ou vendedor..."
-            className="w-full pl-9 pr-3 py-2.5 bg-white border border-gray-200 rounded-xl shadow-sm text-xs font-semibold outline-none focus:ring-2 focus:ring-blue-100"
+            className="w-full pl-9 pr-3 h-9 py-0 bg-white border border-gray-200 rounded-xl shadow-sm text-xs font-semibold outline-none focus:ring-2 focus:ring-blue-100"
             aria-label="Buscar nota"
           />
         </div>
         <select
           value={periodo}
           onChange={e => setPeriodo(e.target.value as FiltroPeriodo)}
-          className="bg-white border border-gray-200 rounded-xl shadow-sm px-3 py-2.5 text-[10px] font-black uppercase text-gray-600 outline-none"
+          className="bg-white border border-gray-200 rounded-xl shadow-sm px-3 h-9 py-0 text-[10px] font-black uppercase text-gray-600 outline-none"
           aria-label="Período"
         >
           {PERIODO_META.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
@@ -1181,7 +1232,7 @@ export default function PortalNotasPage() {
         <select
           value={filtroTipo}
           onChange={e => setFiltroTipo(e.target.value as FiltroTipo)}
-          className="bg-white border border-gray-200 rounded-xl shadow-sm px-3 py-2.5 text-[10px] font-black uppercase text-gray-600 outline-none"
+          className="bg-white border border-gray-200 rounded-xl shadow-sm px-3 h-9 py-0 text-[10px] font-black uppercase text-gray-600 outline-none"
           aria-label="Tipo de documento"
         >
           <option value="TODOS">NF-e + NFC-e</option>
@@ -1192,7 +1243,7 @@ export default function PortalNotasPage() {
         <select
           value={filtroOrigem}
           onChange={e => setFiltroOrigem(e.target.value as FiltroOrigem)}
-          className="bg-white border border-gray-200 rounded-xl shadow-sm px-3 py-2.5 text-[10px] font-black uppercase text-gray-600 outline-none"
+          className="bg-white border border-gray-200 rounded-xl shadow-sm px-3 h-9 py-0 text-[10px] font-black uppercase text-gray-600 outline-none"
           aria-label="Origem do documento"
         >
           <option value="TODAS">Toda origem</option>
@@ -1200,7 +1251,7 @@ export default function PortalNotasPage() {
           <option value="FOCUS">Painel da Focus</option>
           <option value="XML">XML terceiros</option>
         </select>
-        <div className="flex gap-1.5 overflow-x-auto">
+        <div className="flex gap-2.5 overflow-x-auto">
           {(['TODAS', 'AUTORIZADA', 'PENDENTE', 'EMITINDO', 'REJEITADA', 'CANCELADA'] as FiltroStatus[]).map(f => {
             const meta = metaStatus(f);
             const ativo = filtro === f;
@@ -1208,7 +1259,7 @@ export default function PortalNotasPage() {
               <button
                 key={f}
                 onClick={() => setFiltro(f)}
-                className={`shrink-0 rounded-xl px-3 py-2 text-[9px] font-black uppercase tracking-wider border transition-all active:scale-95 ${ativo ? 'bg-blue-600 text-white border-blue-600 shadow-sm' : `bg-white ${meta.cls} border-gray-200`}`}
+                className={`shrink-0 whitespace-nowrap rounded-xl px-3 h-9 py-0 text-[9px] font-black uppercase tracking-wider border transition-all active:scale-95 ${ativo ? 'bg-blue-600 text-white border-blue-600 shadow-sm' : `bg-white ${meta.cls} border-gray-200 shadow-none`}`}
               >
                 {f === 'TODAS' ? 'Todas' : f === 'PENDENTE' ? 'Pendente' : meta.label} ({contagem(f)})
               </button>
@@ -1294,22 +1345,14 @@ export default function PortalNotasPage() {
                 <tbody>
                   {listaFiltrada.map(n => {
                     const meta = metaStatus(n.status);
-                    const podeEmitir = n.status === 'REJEITADA' || n.status === 'CANCELADA' || n.status === 'NAO_EMITIDA';
                     const ocupado = busyId === n.id;
-                    const prazo = prazoCancelDe(n);
-                    // BLOCO 155: a avulsa FOCUS (nota batida no painel da Focus /
-                    // congelada de venda excluída) TAMBÉM cancela pela ref —
-                    // XML de TERCEIRO não (emissor é outro CNPJ). Era aqui que o
-                    // botão de cancelar “sumia” na NF 154: a condição exigia
-                    // !n.avulsa e a linha “fora do app” nunca ganha o ícone.
-                    const podeCancelar = (n.status === 'AUTORIZADA' || n.status === 'EMITINDO') && prazo.dentroDoPrazo
-                      && (n.avulsa ? String(n.origem || 'FOCUS').toUpperCase() === 'FOCUS' && !!n.ref : !!n.ref);
-                    const temBoletoVivo = !n.avulsa && !!n.boletoStatus && BOLETO_VIVO.includes(String(n.boletoStatus).toUpperCase());
-                    const bm = temBoletoVivo ? metaBoleto(n.boletoStatus as string) : null;
+                    // BLOCO 170: os derivados de AÇÕES (podeEmitir / prazo /
+                    // podeCancelar / boleto vivo) mudaram para o PAINEL FLUTUANTE
+                    // no fim do arquivo — mesmas condições, agora como itens.
                     return (
                       <tr key={n.id} className="border-b border-gray-100 last:border-0 hover:bg-blue-50/40 transition-colors group">
                         {/* Documento */}
-                        <td className="px-3 py-1.5 whitespace-nowrap">
+                        <td className="px-3 py-2 whitespace-nowrap">
                           <span className="text-xs font-black text-gray-800 tabular-nums">{n.numero ? `Nº ${n.numero}` : '—'}</span>
                           <span className="ml-1.5 inline-block align-middle text-[8px] font-black uppercase px-1.5 py-0.5 rounded bg-violet-50 text-violet-600">{rotuloTipo(n.tipo, n.modoNota)}</span>
                           {n.avulsa && (
@@ -1319,150 +1362,50 @@ export default function PortalNotasPage() {
                           )}
                         </td>
                         {/* Cliente */}
-                        <td className="px-3 py-1.5 max-w-[230px]">
+                        <td className="px-3 py-2 max-w-[230px]">
                           <p className="text-[11px] font-bold text-gray-700 truncate" title={`${n.cliente}${n.clienteDoc ? ` · ${n.clienteDoc}` : ''}`}>{n.cliente}</p>
                         </td>
                         {/* Emissão */}
-                        <td className="px-3 py-1.5 whitespace-nowrap text-[11px] font-semibold text-gray-600 tabular-nums" title={`venda: ${fmtData(n.dataVenda)}`}>
+                        <td className="px-3 py-2 whitespace-nowrap text-[11px] font-semibold text-gray-600 tabular-nums" title={`venda: ${fmtData(n.dataVenda)}`}>
                           {fmtData(n.emitidaEm || n.dataVenda)}
                         </td>
                         {/* Valor */}
-                        <td className="px-3 py-1.5 whitespace-nowrap">
+                        <td className="px-3 py-2 whitespace-nowrap">
                           <span className="text-[11px] font-black text-gray-800 tabular-nums">{fmtBRL(n.valor)}</span>
                           <span className={`ml-1.5 text-[8px] font-black uppercase ${n.statusPagamento === 'PAGO' ? 'text-emerald-500' : 'text-amber-500'}`}>{n.statusPagamento === 'PAGO' ? 'pago' : n.avulsa ? '' : 'em aberto'}</span>
                         </td>
                         {/* Pagamento */}
-                        <td className="px-3 py-1.5 whitespace-nowrap max-w-[150px]">
+                        <td className="px-3 py-2 whitespace-nowrap max-w-[150px]">
                           <p className="text-[10px] font-bold text-gray-600 uppercase truncate" title={n.detalhe}>{(n.metodo || '—').replace('_', ' ')}</p>
                         </td>
                         {/* Vendedor */}
-                        <td className="px-3 py-1.5 whitespace-nowrap max-w-[120px]">
+                        <td className="px-3 py-2 whitespace-nowrap max-w-[120px]">
                           <p className="text-[10px] font-semibold text-gray-500 truncate">{n.vendedor || '—'}</p>
                         </td>
                         {/* Situação */}
-                        <td className="px-3 py-1.5 whitespace-nowrap">
+                        <td className="px-3 py-2 whitespace-nowrap">
                           <span className={`inline-flex items-center gap-1.5 text-[9px] font-black uppercase px-2 py-0.5 rounded-lg border ${meta.cls}`}>
                             <span className={`w-1.5 h-1.5 rounded-full ${meta.dot}`}></span>{meta.label}
                           </span>
                           {n.erro && <i className="fa-solid fa-triangle-exclamation text-rose-400 text-[9px] ml-1" title={`SEFAZ: ${n.erro}`}></i>}
                         </td>
-                        {/* Ações — tudo em UMA linha */}
-                        <td className="px-3 py-1.5">
-                          <div className="flex items-center justify-center gap-1">
-                            {!n.avulsa && (
-                              <button onClick={() => void abrirDetalhe(n)} disabled={ocupado} className="w-7 h-7 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center hover:bg-blue-100 active:scale-90 transition-transform" title="Ver o que foi pedido (itens, cliente, pagamento)">
-                                {busyId === `det:${n.id}` ? <i className="fa-solid fa-spinner fa-spin text-[10px]"></i> : <i className="fa-solid fa-eye text-[10px]"></i>}
-                              </button>
-                            )}
-                            {n.ref && (
-                              <a href={linkArquivo(n, 'pdf')} target="_blank" rel="noopener noreferrer" className={`w-7 h-7 rounded-lg flex items-center justify-center hover:brightness-95 active:scale-90 transition-transform ${n.pdfLocal ? 'bg-rose-100 text-rose-600 shadow-sm' : 'bg-rose-50 text-rose-400'}`} title={n.pdfLocal ? 'Abrir/baixar DANFE — arquivo salvo NO NOSSO sistema' : 'Abrir/baixar DANFE (busca na Focus ou usa o DANFE gerado do XML)'}>
-                                <i className="fa-solid fa-file-pdf text-[10px]"></i>
-                              </a>
-                            )}
-                            {n.ref && (
-                              <a href={linkArquivo(n, 'xml')} target="_blank" rel="noopener noreferrer" className={`w-7 h-7 rounded-lg flex items-center justify-center hover:brightness-95 active:scale-90 transition-transform ${n.xmlLocal ? 'bg-gray-800 text-white shadow-sm' : 'bg-gray-100 text-gray-400'}`} title={n.xmlLocal ? 'Abrir/baixar XML — arquivo salvo NO NOSSO sistema' : 'Abrir/baixar XML (busca na Focus e arquiva no sistema)'}>
-                                <i className="fa-solid fa-code text-[10px]"></i>
-                              </a>
-                            )}
-                            {temBoletoVivo && (
-                              <button onClick={() => void abrirBoleto(n)} disabled={ocupado} className={`w-7 h-7 rounded-lg flex items-center justify-center hover:brightness-95 active:scale-90 transition-transform border ${bm?.cls}`} title={`Boleto bancário (${bm?.label}${n.boletoVencimento ? ` · venc. ${fmtDia(n.boletoVencimento)}` : ''}) — PDF, linha digitável, consultar e cancelar`}>
-                                <i className="fa-solid fa-barcode text-[10px]"></i>
-                              </button>
-                            )}
-                            {n.ref && (
-                              <button onClick={() => void abrirWhatsApp(n)} disabled={ocupado || waBusy} className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center hover:bg-emerald-100 active:scale-90 transition-transform" title="Compartilhar documentos com o cliente por WhatsApp — DANFE + XML por link seguro que expira em 7 dias">
-                                <i className="fa-brands fa-whatsapp text-[11px]"></i>
-                              </button>
-                            )}
-                            {!n.avulsa && n.ref && (
-                              <button
-                                onClick={() => setConf({
-                                  titulo: 'Consultar na SEFAZ?',
-                                  texto: `Consulta a situação atual do documento ${n.numero ? `Nº ${n.numero}` : ''} na SEFAZ e sincroniza o status aqui no portal.`,
-                                  icone: 'fa-rotate',
-                                  botao: 'Consultar',
-                                  run: async () => {
-                                    if (!token) return;
-                                    setBusyId(n.id);
-                                    try {
-                                      const res = await fetch('/api/notas', { method: 'POST', headers: headers(token), body: JSON.stringify({ acao: 'CONSULTAR', saleId: n.id }) });
-                                      const data = await res.json().catch(() => ({}));
-                                      showToast(data.ok ? 'Consultado na SEFAZ — situação sincronizada.' : data.erro || 'Falha ao consultar.', !!data.ok);
-                                      void carregar(token);
-                                    } catch { showToast('Falha de conexão ao consultar.', false); }
-                                    finally { setBusyId(null); }
-                                  },
-                                })}
-                                disabled={ocupado}
-                                className="w-7 h-7 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center hover:bg-amber-100 active:scale-90 transition-transform"
-                                title="Consultar situação na SEFAZ"
-                              >
-                                {ocupado ? <i className="fa-solid fa-spinner fa-spin text-[10px]"></i> : <i className="fa-solid fa-rotate text-[10px]"></i>}
-                              </button>
-                            )}
-                            {n.avulsa && (
-                              <button
-                                onClick={() => setConf({
-                                  titulo: 'Re-consultar na SEFAZ?',
-                                  texto: `Re-consulta a nota ${n.numero ? `Nº ${n.numero}` : 'avulsa'} na SEFAZ e atualiza os arquivos arquivados.`,
-                                  icone: 'fa-rotate',
-                                  botao: 'Re-consultar',
-                                  run: () => atualizarAvulsa(n),
-                                })}
-                                disabled={ocupado}
-                                className="w-7 h-7 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center hover:bg-amber-100 active:scale-90 transition-transform"
-                                title="Re-consultar na SEFAZ e atualizar arquivos"
-                              >
-                                {ocupado ? <i className="fa-solid fa-spinner fa-spin text-[10px]"></i> : <i className="fa-solid fa-rotate text-[10px]"></i>}
-                              </button>
-                            )}
-                            {!n.avulsa && podeEmitir && (
-                              <button
-                                onClick={() => { setEmitModal(n); setEmitTipo(''); }}
-                                disabled={ocupado}
-                                className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center hover:bg-emerald-100 active:scale-90 transition-transform"
-                                title="Emitir documento fiscal (NF-e/NFC-e)"
-                              >
-                                <i className="fa-solid fa-bolt text-[10px]"></i>
-                              </button>
-                            )}
-                            {/* BLOCO 150: EDITAR também na AVULSA (nota cancelada arquivada / XML de terceiro) —
-                                a API atualiza o registro arquivado (JSON) quando o id começa com AVULSA- */}
-                            <button
-                              onClick={() => { setEditModal(n); setEditMetodo(n.metodo || ''); setEditDetalhe(n.detalhe || ''); }}
-                              disabled={ocupado}
-                              className="w-7 h-7 rounded-lg bg-sky-50 text-sky-600 flex items-center justify-center hover:bg-sky-100 active:scale-90 transition-transform"
-                              title={n.avulsa ? 'Editar registro arquivado (pagamento/observação)' : 'Editar registro (pagamento/observação)'}
-                            >
-                              <i className="fa-solid fa-pen text-[10px]"></i>
-                            </button>
-                            {!n.avulsa && <button onClick={() => setCloneModal(n)} disabled={ocupado} className="w-7 h-7 rounded-lg bg-violet-50 text-violet-600 flex items-center justify-center hover:bg-violet-100 active:scale-90 transition-transform" title="Clonar pedido (emite documento de novo)">
-                              <i className="fa-solid fa-clone text-[10px]"></i>
-                            </button>}
-                            {podeCancelar && (
-                              <button onClick={() => { setCancelModal(n); setJustificativa(''); }} disabled={ocupado} className="w-7 h-7 rounded-lg bg-rose-50 text-rose-500 flex items-center justify-center hover:bg-rose-100 active:scale-90 transition-transform" title={`Cancelar na SEFAZ — restam ${prazo.textoRestante} (prazo: ${prazo.prazoLabel})`}>
-                                <i className="fa-solid fa-ban text-[10px]"></i>
-                              </button>
-                            )}
-                            {n.avulsa && (
-                              <button
-                                onClick={() => setConf({
-                                  titulo: 'Apagar a cópia interna?',
-                                  texto: `A cópia interna da nota ${n.numero || n.ref} será apagada DO NOSSO SISTEMA (arquivos e registro). A nota continua existindo na Focus/SEFAZ.`,
-                                  detalhe: 'Se ela veio por XML, pode ser importada de novo com o mesmo arquivo.',
-                                  icone: 'fa-trash',
-                                  perigo: true,
-                                  botao: 'Apagar',
-                                  run: () => excluirAvulsa(n),
-                                })}
-                                disabled={ocupado}
-                                className="w-7 h-7 rounded-lg bg-gray-50 text-gray-500 flex items-center justify-center hover:bg-gray-100 active:scale-90 transition-transform"
-                                title="Apagar a cópia interna (a nota continua na Focus/SEFAZ)"
-                              >
-                                <i className="fa-solid fa-trash text-[10px]"></i>
-                              </button>
-                            )}
-                          </div>
+                        {/* Ações — BLOCO 170: UM botão que abre o PAINEL de ações (antes eram
+                            até 10 ícones 28px jogados num flex gap-1 — reclamação do dono:
+                            "tá tudo jogado e desalinhado"). Os ícones/condições/handlers de
+                            cada ação viraram ITENS do painel flutuante (createPortal no
+                            document.body) logo após o Toast — nada de lógica mudou. */}
+                        <td className="px-3 py-2 text-center">
+                          <button
+                            type="button"
+                            onClick={e => abrirAcoes(n.id, e.currentTarget)}
+                            aria-haspopup="true"
+                            aria-expanded={acoesMenuId === n.id}
+                            className={`inline-flex items-center justify-center gap-1.5 h-11 min-w-[44px] px-3.5 rounded-xl border shadow-sm transition-all active:scale-95 text-[10px] font-black uppercase tracking-wider ${acoesMenuId === n.id ? 'bg-blue-50 border-blue-300 text-blue-700' : 'bg-white border-gray-200 text-gray-600 hover:border-blue-300 hover:bg-blue-50/60'}`}
+                            title="Todas as ações desta nota"
+                          >
+                            {ocupado ? <i className="fa-solid fa-spinner fa-spin text-[11px]"></i> : <i className={`fa-solid ${acoesMenuId === n.id ? 'fa-list-check' : 'fa-sliders'} text-[11px]`}></i>}
+                            Ações
+                          </button>
                         </td>
                       </tr>
                     );
@@ -1501,6 +1444,238 @@ export default function PortalNotasPage() {
           {toast.msg}
         </div>
       )}
+
+      {/* ===== BLOCO 170: PAINEL FLUTUANTE DE AÇÕES (itens com ícone + label) ===== */}
+      {/* Renderizado com createPortal(document.body) em position:fixed, ancorado nas
+          coordenadas do botão capturadas no clique — o overflow-x-auto da tabela NUNCA
+          corta o painel (perto do fim da tela ele abre ACIMA; colado na borda direita,
+          ancora pela RIGHT). Overlay transparente z-40 fecha no clique-fora; o painel
+          fica z-50 por cima. ESC/scroll/resize também fecham (effect junto do estado).
+          Toda ação fecha o painel antes de abrir modal/spinner — handlers preservados. */}
+      {notaAcoes && acoesMenuPos && ((n: NotaRow, pos: { x: number; y: number; acima: boolean; direita: boolean }) => {
+        const prazo = prazoCancelDe(n);
+        const ocupado = busyId === n.id;
+        const podeEmitir = n.status === 'REJEITADA' || n.status === 'CANCELADA' || n.status === 'NAO_EMITIDA';
+        // BLOCO 155: a avulsa FOCUS (nota batida no painel da Focus /
+        // congelada de venda excluída) TAMBÉM cancela pela ref —
+        // XML de TERCEIRO não (emissor é outro CNPJ). Era aqui que o
+        // botão de cancelar “sumia” na NF 154: a condição exigia
+        // !n.avulsa e a linha “fora do app” nunca ganha o ícone.
+        const podeCancelar = (n.status === 'AUTORIZADA' || n.status === 'EMITINDO') && prazo.dentroDoPrazo
+          && (n.avulsa ? String(n.origem || 'FOCUS').toUpperCase() === 'FOCUS' && !!n.ref : !!n.ref);
+        // BLOCO 170 (UX autorizada pelo dono): FORA do prazo o item de cancelar fica
+        // VISÍVEL porém DESABILITADO (antes ele simplesmente sumia da linha) — a regra
+        // do servidor continua intacta; só o estado passa a ser mostrado ao usuário.
+        const cancelarSemPrazo = (n.status === 'AUTORIZADA' || n.status === 'EMITINDO') && !prazo.dentroDoPrazo
+          && (n.avulsa ? String(n.origem || 'FOCUS').toUpperCase() === 'FOCUS' && !!n.ref : !!n.ref);
+        const temBoletoVivo = !n.avulsa && !!n.boletoStatus && BOLETO_VIVO.includes(String(n.boletoStatus).toUpperCase());
+        const bm = temBoletoVivo ? metaBoleto(n.boletoStatus as string) : null;
+        const docsVisivel = !n.avulsa || !!n.ref || temBoletoVivo;
+        const sefazVisivel = !!n.avulsa || !!n.ref || (!n.avulsa && podeEmitir);
+        const itemAcao = (o: { icone: string; cor: string; label: string; sub?: string | null; title?: string; onClick?: () => void; disabled?: boolean }) => (
+          <button
+            type="button"
+            onClick={o.onClick}
+            disabled={o.disabled}
+            title={o.title}
+            className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-left transition-colors hover:bg-blue-50 active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+          >
+            <span className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${o.cor}`}>
+              <i className={o.icone}></i>
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-[11px] font-bold text-gray-700 truncate">{o.label}</span>
+              {o.sub && <span className="block text-[9px] font-semibold text-gray-400 truncate">{o.sub}</span>}
+            </span>
+          </button>
+        );
+        return (
+          <>
+            {/* clique-fora: overlay transparente sob o painel (z-40 < z-50) */}
+            <div className="fixed inset-0 z-40" onClick={fecharAcoes}></div>
+            {createPortal(
+              <div
+                ref={acoesPainelRef}
+                className="fixed z-50 w-56 max-w-[85vw] bg-white rounded-2xl border border-gray-200 shadow-xl shadow-gray-300/40 p-1.5 max-h-[60vh] overflow-y-auto dm-thin-scroll"
+                style={{
+                  ...(pos.direita ? { right: pos.x } : { left: pos.x }),
+                  ...(pos.acima ? { bottom: window.innerHeight - pos.y } : { top: pos.y }),
+                }}
+              >
+                <p className="text-[8px] font-black uppercase text-gray-400 tracking-widest px-2.5 pt-2 pb-1 truncate">{n.numero ? `Nº ${n.numero}` : 'Avulsa'} · {rotuloTipo(n.tipo, n.modoNota)}</p>
+
+                {docsVisivel && (
+                  <div>
+                    <p className="text-[8px] font-black uppercase text-gray-400 tracking-widest px-2.5 pt-1 pb-0.5">Documentos</p>
+                    {!n.avulsa && itemAcao({
+                      icone: busyId === `det:${n.id}` ? 'fa-solid fa-spinner fa-spin text-[10px]' : 'fa-solid fa-eye text-[10px]',
+                      cor: 'bg-blue-50 text-blue-600',
+                      label: 'Ver o que foi pedido',
+                      sub: 'itens, cliente e pagamento',
+                      title: 'Ver o que foi pedido (itens, cliente, pagamento)',
+                      onClick: () => { fecharAcoes(); void abrirDetalhe(n); },
+                      disabled: ocupado,
+                    })}
+                    {n.ref && itemAcao({
+                      icone: 'fa-solid fa-file-pdf text-[10px]',
+                      cor: n.pdfLocal ? 'bg-rose-100 text-rose-600 shadow-sm' : 'bg-rose-50 text-rose-400',
+                      label: 'DANFE (PDF)',
+                      sub: n.pdfLocal ? 'arquivo no sistema' : 'busca na Focus',
+                      title: n.pdfLocal ? 'Abrir/baixar DANFE — arquivo salvo NO NOSSO sistema' : 'Abrir/baixar DANFE (busca na Focus ou usa o DANFE gerado do XML)',
+                      onClick: () => { fecharAcoes(); window.open(linkArquivo(n, 'pdf'), '_blank', 'noopener,noreferrer'); },
+                    })}
+                    {n.ref && itemAcao({
+                      icone: 'fa-solid fa-code text-[10px]',
+                      cor: n.xmlLocal ? 'bg-gray-800 text-white shadow-sm' : 'bg-gray-100 text-gray-400',
+                      label: 'XML',
+                      sub: n.xmlLocal ? 'arquivo no sistema' : 'busca na Focus',
+                      title: n.xmlLocal ? 'Abrir/baixar XML — arquivo salvo NO NOSSO sistema' : 'Abrir/baixar XML (busca na Focus e arquiva no sistema)',
+                      onClick: () => { fecharAcoes(); window.open(linkArquivo(n, 'xml'), '_blank', 'noopener,noreferrer'); },
+                    })}
+                    {temBoletoVivo && itemAcao({
+                      icone: 'fa-solid fa-barcode text-[10px]',
+                      cor: `border ${bm?.cls || ''}`,
+                      label: 'Boleto bancário',
+                      sub: `${bm?.label || ''}${n.boletoVencimento ? ` · venc. ${fmtDia(n.boletoVencimento)}` : ''}`,
+                      title: `Boleto bancário (${bm?.label}${n.boletoVencimento ? ` · venc. ${fmtDia(n.boletoVencimento)}` : ''}) — PDF, linha digitável, consultar e cancelar`,
+                      onClick: () => { fecharAcoes(); void abrirBoleto(n); },
+                      disabled: ocupado,
+                    })}
+                  </div>
+                )}
+
+                {!!n.ref && (
+                  <>
+                    <div className="border-t border-gray-100 my-1"></div>
+                    <div>
+                      <p className="text-[8px] font-black uppercase text-gray-400 tracking-widest px-2.5 pt-1 pb-0.5">Compartilhar</p>
+                      {n.ref && itemAcao({
+                        icone: 'fa-brands fa-whatsapp text-[11px]',
+                        cor: 'bg-emerald-50 text-emerald-600',
+                        label: 'WhatsApp',
+                        sub: 'DANFE + XML · link de 7 dias',
+                        title: 'Compartilhar documentos com o cliente por WhatsApp — DANFE + XML por link seguro que expira em 7 dias',
+                        onClick: () => { fecharAcoes(); void abrirWhatsApp(n); },
+                        disabled: ocupado || waBusy,
+                      })}
+                    </div>
+                  </>
+                )}
+
+                {sefazVisivel && (
+                  <>
+                    <div className="border-t border-gray-100 my-1"></div>
+                    <div>
+                      <p className="text-[8px] font-black uppercase text-gray-400 tracking-widest px-2.5 pt-1 pb-0.5">SEFAZ</p>
+                      {!n.avulsa && n.ref && itemAcao({
+                        icone: ocupado ? 'fa-solid fa-spinner fa-spin text-[10px]' : 'fa-solid fa-rotate text-[10px]',
+                        cor: 'bg-amber-50 text-amber-600',
+                        label: 'Consultar SEFAZ',
+                        sub: 'sincroniza a situação',
+                        title: 'Consultar situação na SEFAZ',
+                        onClick: () => { fecharAcoes(); setConf({
+                          titulo: 'Consultar na SEFAZ?',
+                          texto: `Consulta a situação atual do documento ${n.numero ? `Nº ${n.numero}` : ''} na SEFAZ e sincroniza o status aqui no portal.`,
+                          icone: 'fa-rotate',
+                          botao: 'Consultar',
+                          run: async () => {
+                            if (!token) return;
+                            setBusyId(n.id);
+                            try {
+                              const res = await fetch('/api/notas', { method: 'POST', headers: headers(token), body: JSON.stringify({ acao: 'CONSULTAR', saleId: n.id }) });
+                              const data = await res.json().catch(() => ({}));
+                              showToast(data.ok ? 'Consultado na SEFAZ — situação sincronizada.' : data.erro || 'Falha ao consultar.', !!data.ok);
+                              void carregar(token);
+                            } catch { showToast('Falha de conexão ao consultar.', false); }
+                            finally { setBusyId(null); }
+                          },
+                        }); },
+                        disabled: ocupado,
+                      })}
+                      {n.avulsa && itemAcao({
+                        icone: ocupado ? 'fa-solid fa-spinner fa-spin text-[10px]' : 'fa-solid fa-rotate text-[10px]',
+                        cor: 'bg-amber-50 text-amber-600',
+                        label: 'Re-consultar',
+                        sub: 'atualiza os arquivos',
+                        title: 'Re-consultar na SEFAZ e atualizar arquivos',
+                        onClick: () => { fecharAcoes(); setConf({
+                          titulo: 'Re-consultar na SEFAZ?',
+                          texto: `Re-consulta a nota ${n.numero ? `Nº ${n.numero}` : 'avulsa'} na SEFAZ e atualiza os arquivos arquivados.`,
+                          icone: 'fa-rotate',
+                          botao: 'Re-consultar',
+                          run: () => atualizarAvulsa(n),
+                        }); },
+                        disabled: ocupado,
+                      })}
+                      {!n.avulsa && podeEmitir && itemAcao({
+                        icone: 'fa-solid fa-bolt text-[10px]',
+                        cor: 'bg-emerald-50 text-emerald-600',
+                        label: 'Emitir documento',
+                        sub: 'NF-e ou NFC-e',
+                        title: 'Emitir documento fiscal (NF-e/NFC-e)',
+                        onClick: () => { fecharAcoes(); setEmitModal(n); setEmitTipo(''); },
+                        disabled: ocupado,
+                      })}
+                    </div>
+                  </>
+                )}
+
+                <div className="border-t border-gray-100 my-1"></div>
+                <div>
+                  <p className="text-[8px] font-black uppercase text-gray-400 tracking-widest px-2.5 pt-1 pb-0.5">Registro</p>
+                  {/* BLOCO 150: EDITAR também na AVULSA (nota cancelada arquivada / XML de terceiro) —
+                      a API atualiza o registro arquivado (JSON) quando o id começa com AVULSA- */}
+                  {itemAcao({
+                    icone: 'fa-solid fa-pen text-[10px]',
+                    cor: 'bg-sky-50 text-sky-600',
+                    label: 'Editar registro',
+                    sub: 'pagamento / observação',
+                    title: n.avulsa ? 'Editar registro arquivado (pagamento/observação)' : 'Editar registro (pagamento/observação)',
+                    onClick: () => { fecharAcoes(); setEditModal(n); setEditMetodo(n.metodo || ''); setEditDetalhe(n.detalhe || ''); },
+                    disabled: ocupado,
+                  })}
+                  {!n.avulsa && itemAcao({
+                    icone: 'fa-solid fa-clone text-[10px]',
+                    cor: 'bg-violet-50 text-violet-600',
+                    label: 'Clonar pedido',
+                    sub: 'emite documento de novo',
+                    title: 'Clonar pedido (emite documento de novo)',
+                    onClick: () => { fecharAcoes(); setCloneModal(n); },
+                    disabled: ocupado,
+                  })}
+                  {(podeCancelar || cancelarSemPrazo) && itemAcao({
+                    icone: 'fa-solid fa-ban text-[10px]',
+                    cor: 'bg-rose-50 text-rose-500',
+                    label: 'Cancelar na SEFAZ',
+                    sub: podeCancelar ? `restam ${prazo.textoRestante}` : `prazo SEFAZ esgotado (${prazo.prazoLabel})`,
+                    title: podeCancelar ? `Cancelar na SEFAZ — restam ${prazo.textoRestante} (prazo: ${prazo.prazoLabel})` : 'Fora do prazo de cancelamento da SEFAZ (NFC-e 30min / NF-e 24h)',
+                    onClick: podeCancelar ? () => { fecharAcoes(); setCancelModal(n); setJustificativa(''); } : undefined,
+                    disabled: ocupado || !podeCancelar,
+                  })}
+                  {n.avulsa && itemAcao({
+                    icone: 'fa-solid fa-trash text-[10px]',
+                    cor: 'bg-gray-50 text-gray-500',
+                    label: 'Apagar cópia',
+                    sub: 'só a cópia interna',
+                    title: 'Apagar a cópia interna (a nota continua na Focus/SEFAZ)',
+                    onClick: () => { fecharAcoes(); setConf({
+                      titulo: 'Apagar a cópia interna?',
+                      texto: `A cópia interna da nota ${n.numero || n.ref} será apagada DO NOSSO SISTEMA (arquivos e registro). A nota continua existindo na Focus/SEFAZ.`,
+                      detalhe: 'Se ela veio por XML, pode ser importada de novo com o mesmo arquivo.',
+                      icone: 'fa-trash',
+                      perigo: true,
+                      botao: 'Apagar',
+                      run: () => excluirAvulsa(n),
+                    }); },
+                    disabled: ocupado,
+                  })}
+                </div>
+              </div>,
+              document.body,
+            )}
+          </>
+        );
+      })(notaAcoes, acoesMenuPos)}
 
       {/* Progresso da importação Focus */}
       {importBusy && importProg && (

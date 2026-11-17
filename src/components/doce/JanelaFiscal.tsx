@@ -13,7 +13,9 @@ import { danfeFiscal80 } from '@/lib/danfe80';
 import { danfeFiscal80Html } from '@/lib/danfe80Html';
 import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
 // BLOCO 111: canal USB do PC — o cupom fiscal também sai na térmica USB
-import { imprimirHtmlViaUsb, lerCanalImpressao } from '@/lib/usbPrint';
+// BLOCO 177: a Janela Fiscal agora tem os DOIS canais de impressão ao alcance
+// do toque (Bluetooth x USB do PC) — igual à impressão do cupom.
+import { imprimirHtmlViaUsb, temBluetoothNavegador } from '@/lib/usbPrint';
 // BLOCO 132: regras de documento do cadastro (CPF/CNPJ no mesmo campo)
 import { tipoDocDigitos, validaCpfOuCnpj } from '@/lib/cnpjAutocomplete';
 // BLOCO 134 (regra do dono): preço anônimo SÓ na NFC-e anônima; o cupom
@@ -56,6 +58,14 @@ type OpcaoFiscal = 'NFE' | 'NFCE_IDENTIFICADA' | 'NFCE_ANONIMA';
  */
 const JanelaFiscal: React.FC<JanelaFiscalProps> = ({ sale, client, nota, focus, showToast, onNotaChange, onClose, podeCancelar, onNotaCancelada }) => {
   const [busy, setBusy] = useState(false);
+  // BLOCO 177 (dono: "no botao de imprimir mini-danfe esta puxando somente o
+  // usb do pc, preciso que o sistema de impressao tbm funcione por bluetooth
+  // igual a impressão do cupom"): o canal deixou de depender do localStorage
+  // global do aparelho — a vendedora ESCOLHE NO TOQUE (Bluetooth x USB do PC).
+  // Na rua (Android) o toque sai por Bluetooth; no PC (ou iPhone/Firefox, sem
+  // Web Bluetooth) só aparece o botão USB.
+  const [ocupado, setOcupado] = useState<'bt' | 'usb' | ''>('');
+  const [temBt] = useState(() => temBluetoothNavegador());
   const [aberta, setAberta] = useState<OpcaoFiscal | null>(null);
   const [erro, setErro] = useState<string>('');
   const [info, setInfo] = useState<string>('');
@@ -219,32 +229,40 @@ const JanelaFiscal: React.FC<JanelaFiscalProps> = ({ sale, client, nota, focus, 
     }
   };
 
-  // ---------- IMPRIMIR CUPOM FISCAL 80mm ----------
+  // ---------- IMPRIMIR CUPOM FISCAL 80mm (MINI-DANFE) ----------
   // BLOCO 150 (dono: "os valores nao fecham" / "ta gerando nota nova"):
   // o cupom 80mm só sai do DOCUMENTO AUTORIZADO (XML da nota já emitida —
   // mesmos valores do PDF A4). NUNCA com os dados da venda: a NFC-e anônima
   // sai no preço cupom (menor que X) e o cupom com valores da venda parecia
   // uma "nota nova". XML indisponível = aviso e tentar de novo.
-  const imprimirCupomFiscal = async () => {
+  type Cupom80Data = NonNullable<Awaited<ReturnType<typeof notaService.cupom80>>['cupom']>;
+
+  const obterCupomFiscal = async (): Promise<Cupom80Data | null> => {
+    const c = await notaService.cupom80(String(sale.id));
+    const cup = c.cupom;
+    if (c.ok && cup?.cancelada) {
+      setErro('Nota CANCELADA na SEFAZ — não pode ser impressa.');
+      return null;
+    }
+    if (!(c.ok && cup?.autorizada && cup.chave)) {
+      setErro(c.erro || 'Cupom fiscal ainda não disponível — confirme a autorização da SEFAZ (Atualizar situação).');
+      return null;
+    }
+    if (cup.fonte !== 'XML') {
+      setErro('O XML da nota ainda não baixou da SEFAZ — o cupom 80mm é fiel ao documento autorizado (mesmos valores do PDF). Aguarde uns instantes e toque de novo.');
+      return null;
+    }
+    return cup;
+  };
+
+  const imprimirCupomFiscal = async (canal: 'bt' | 'usb') => {
     if (busy || !sale.id) return;
     setBusy(true);
+    setOcupado(canal);
     try {
-      const c = await notaService.cupom80(String(sale.id));
-      const cup = c.cupom;
-      if (c.ok && cup?.cancelada) {
-        setErro('Nota CANCELADA na SEFAZ — não pode ser impressa.');
-        return;
-      }
-      if (!(c.ok && cup?.autorizada && cup.chave)) {
-        setErro(c.erro || 'Cupom fiscal ainda não disponível — confirme a autorização da SEFAZ (Atualizar situação).');
-        return;
-      }
-      if (cup.fonte !== 'XML') {
-        setErro('O XML da nota ainda não baixou da SEFAZ — o cupom 80mm é fiel ao documento autorizado (mesmos valores do PDF). Aguarde uns instantes e toque de novo.');
-        return;
-      }
-      const texto = danfeFiscal80(cup);
-      if (lerCanalImpressao() === 'USB') {
+      const cup = await obterCupomFiscal();
+      if (!cup) return;
+      if (canal === 'usb') {
         // BLOCO 158: canal USB sai com o LAYOUT DE REFERENCIA do dono (HTML
         // 80mm com grade, codigo de barras e fonte de melhor definicao).
         const html = await danfeFiscal80Html(cup);
@@ -252,16 +270,19 @@ const JanelaFiscal: React.FC<JanelaFiscalProps> = ({ sale, client, nota, focus, 
         setInfo('Janela de impressão aberta — escolha a térmica USB do computador.');
         return;
       }
-      const ok = await bluetoothPrinter.print(texto, '80MM', { skipConfirm: true });
-      if (ok) { setInfo('Cupom fiscal enviado à impressora!'); avisar('Cupom fiscal enviado!', 'success'); }
+      // BLOCO 177: Bluetooth — MESMO canal da impressão do cupom (ESC/POS 48
+      // colunas). Sem preview: toque e sai o papel.
+      const ok = await bluetoothPrinter.print(danfeFiscal80(cup), '80MM', { skipConfirm: true });
+      if (ok) { setInfo('Cupom fiscal enviado à impressora Bluetooth!'); avisar('Mini-DANFE enviado!', 'success'); }
       else setErro('Impressão não realizada — conecte a impressora Bluetooth.');
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       setErro(msg === 'BLUETOOTH_NAO_SUPORTADO'
-        ? 'Bluetooth indisponível neste aparelho — troque o canal para "USB do PC" no passo 1 ou use o Chrome do Android.'
+        ? 'Bluetooth indisponível neste aparelho — use o botão "USB do PC" ou o Chrome do Android.'
         : `Erro na impressão do cupom fiscal: ${msg}`);
     } finally {
       setBusy(false);
+      setOcupado('');
     }
   };
 
@@ -378,10 +399,24 @@ const JanelaFiscal: React.FC<JanelaFiscalProps> = ({ sale, client, nota, focus, 
               )}
               {nota.status === 'AUTORIZADA' && (
                 <>
-                  <button onClick={imprimirCupomFiscal} disabled={busy}
-                    className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl text-[10px] uppercase tracking-widest active:scale-95 disabled:opacity-60 flex items-center justify-center gap-2">
-                    <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-print'}`}></i> Imprimir Mini-DANFE
-                  </button>
+                  {/* BLOCO 177: Mini-DANFE com os DOIS canais — a vendedora na rua
+                      imprime por BLUETOOTH (mesmo caminho do cupom) sem depender
+                      do canal global do aparelho; no PC sai pela janela USB. */}
+                  <div className="space-y-1.5">
+                    <p className="text-[8px] font-black text-gray-400 uppercase tracking-wide px-1">Mini-DANFE 80mm — toque no canal</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      {temBt && (
+                        <button onClick={() => void imprimirCupomFiscal('bt')} disabled={busy}
+                          className="bg-blue-600 text-white font-black py-4 rounded-2xl text-[10px] uppercase tracking-widest active:scale-95 disabled:opacity-60 flex items-center justify-center gap-2">
+                          <i className={`fa-solid ${ocupado === 'bt' ? 'fa-spinner fa-spin' : 'fa-bluetooth-b'}`}></i> Bluetooth
+                        </button>
+                      )}
+                      <button onClick={() => void imprimirCupomFiscal('usb')} disabled={busy}
+                        className={`${temBt ? '' : 'col-span-2 '}bg-emerald-600 text-white font-black py-4 rounded-2xl text-[10px] uppercase tracking-widest active:scale-95 disabled:opacity-60 flex items-center justify-center gap-2`}>
+                        <i className={`fa-solid ${ocupado === 'usb' ? 'fa-spinner fa-spin' : 'fa-print'}`}></i> USB do PC
+                      </button>
+                    </div>
+                  </div>
                   {nota.pdfUrl && (
                     <a href={nota.pdfUrl} target="_blank" rel="noopener noreferrer"
                       className="block w-full bg-emerald-600 text-white font-black py-3.5 rounded-2xl text-center text-[10px] uppercase tracking-widest active:scale-95">

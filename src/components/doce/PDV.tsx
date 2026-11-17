@@ -293,7 +293,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   // O vendedor ESCOLHE a forma: NF-e (cliente CNPJ apto), NFC-e
   // (com ou sem CPF) ou cupom nao fiscal (botao OK, fluxo comum).
   // ============================================================
-  const [notaResult, setNotaResult] = useState<{ status: string; numero?: string; pdfUrl?: string; erro?: string; chave?: string; serie?: string; protocolo?: string; dataAutorizacao?: string; qrCode?: string; emitente?: { nome?: string; cnpj?: string; ie?: string } } | null>(null);
+  const [notaResult, setNotaResult] = useState<{ status: string; numero?: string; tipo?: string; pdfUrl?: string; erro?: string; chave?: string; serie?: string; protocolo?: string; dataAutorizacao?: string; qrCode?: string; emitente?: { nome?: string; cnpj?: string; ie?: string } } | null>(null);
   const [notaEmitindo, setNotaEmitindo] = useState(false);
   // BLOCO 123: status do BOLETO reportado pelo BoletoCard (gate fiscal da
   // pronta entrega a prazo). 'INDISPONIVEL' = Inter sem credenciais (não bloqueia).
@@ -381,12 +381,15 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     const r = await notaService.emitir(sale.id, tipo, cpfNaNota || undefined);
     setNotaEmitindo(false);
     if (!r.ok) {
-      setNotaResult({ status: r.nota?.status || 'REJEITADA', erro: r.nota?.erro || r.erro });
+      setNotaResult({ status: r.nota?.status || 'REJEITADA', tipo, erro: r.nota?.erro || r.erro });
       return;
     }
     // BLOCO 82: guarda chave/serie/protocolo/emitente p/ imprimir o mini DANFE na hora
+    // BLOCO 177: TIPO da nota (NFE/NFCE) — o BoletoCard usa para só oferecer
+    // atrelamento na NF-e (modelo 55).
     setNotaResult({
       status: r.nota?.status || 'EMITINDO',
+      tipo,
       numero: r.nota?.numero,
       pdfUrl: r.nota?.pdfUrl,
       erro: r.nota?.erro,
@@ -2294,6 +2297,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               valorPago={Number(sucessoData.sale.valorPago) || 0}
               notaStatus={notaResult?.status}
               notaNumero={notaResult?.numero}
+              notaTipo={notaResult?.tipo}
               clienteDoc={client.cnpj}
               clienteCep={client.enderecoCep}
               clienteTelefone={client.telefone}

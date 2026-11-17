@@ -1,10 +1,15 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { boletoService, BoletoInfo } from '@/services/boletoService';
+import { useState, useEffect, useMemo } from 'react';
+import { boletoService, BoletoInfo, BoletoConfigInfo, NotaDaVendaInfo } from '@/services/boletoService';
 import { validaCpfCnpj } from '@/lib/validaDoc';
-import MiniBoletoImpressao from '@/components/doce/MiniBoletoImpressao';
-import type { MiniBoletoDados } from '@/lib/miniBoleto80Html';
+// BLOCO 177: MINI BOLETO imprime DIRETO (sem preview) nos DOIS canais:
+// USB do PC = papel HTML 80mm (miniBoleto80Html); Bluetooth = texto ESC/POS
+// 48 colunas (comprovanteBoletoTexto) — MESMO caminho do cupom, toque e sai.
+import { miniBoleto80Html, type MiniBoletoDados } from '@/lib/miniBoleto80Html';
+import { comprovanteBoletoTexto } from '@/lib/danfeTexto';
+import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
+import { imprimirHtmlViaUsb, temBluetoothNavegador } from '@/lib/usbPrint';
 
 /**
  * BLOCO 25 (ajuste "o dono nao achou o botao"): card do BOLETO BANCARIO INTER
@@ -28,13 +33,24 @@ import type { MiniBoletoDados } from '@/lib/miniBoleto80Html';
  * BLOCO 167 (pedido do dono): MINI BOLETO 80mm VOLTou — "busque um boleto no
  * sistema que está em a4 e transforme em um mini boleto completo e com layout
  * parecido com o da mini danfe". Novo gerador HTML miniBoleto80Html.ts (mesmo
- * padrão visual da mini DANFE: @page 70mm, mono, Code 128, QR do PIX) + modal
- * MiniBoletoImpressao (preview/USB/BT). O boleto OFICIAL segue sendo o PDF do
- * Inter — o papel térmico é cópia de conferência/trabalho (não fiscal).
+ * padrão visual da mini DANFE: @page 70mm, mono, Code 128, QR do PIX).
+ * O boleto OFICIAL segue sendo o PDF do Inter — o papel térmico é cópia de
+ * conferência/trabalho (não fiscal).
  *
  * BLOCO 170 (pedido do dono): botão azul COMPROVANTE (80mm) REMOVIDO — ficou
  * apenas: Mini Boleto, PDF do Inter e Enviar (WhatsApp). O comprovante de
  * linha digitável da tela de entrega (EntregasView) continua intacto.
+ *
+ * BLOCO 177 (pedido do dono):
+ *  - Mini Boleto imprime DIRETO SEM PREVIEW, com os DOIS canais ao alcance do
+ *    toque: BLUETOOTH (mesmo caminho do cupom — a vendedora na rua imprime na
+ *    térmica do aparelho) e USB DO PC. O modal de preview (MiniBoletoImpressao)
+ *    foi removido.
+ *  - Papel/comprovante MAIS COMPLETOS: beneficiário real (emitente do ERP),
+ *    texto configurado no hub ERP Fiscal (Configurações → mensagem padrão do
+ *    boleto) e a linha "ATRELADO A NF-e nº X" quando a venda tem NF-e (modelo
+ *    55) autorizada — boleto NÃO atrela NFC-e.
+ *  - Checkbox "Atrelar" só aparece quando a nota é NF-e (não mais NFC-e).
  */
 
 interface BoletoCardProps {
@@ -43,6 +59,9 @@ interface BoletoCardProps {
   valorPago: number;
   notaStatus?: string;        // 'AUTORIZADA' habilita o "Atrelar NF-e"
   notaNumero?: number | string;
+  /** BLOCO 177: tipo da nota ('NFE' | 'NFCE') — o atrelamento e a linha
+   *  "ATRELADO A NF-e" só valem no modelo 55; NFC-e NUNCA atrela. */
+  notaTipo?: string;
   clienteDoc?: string;        // CPF/CNPJ do cliente no cadastro
   clienteCep?: string;        // CEP do cliente no cadastro (Inter exige)
   clienteTelefone?: string;   // para o WhatsApp
@@ -70,7 +89,7 @@ const dataBR = (iso?: string) => {
   return `${d}/${m}/${a}`;
 };
 
-const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, notaStatus, notaNumero, clienteDoc, clienteCep, clienteTelefone, clienteNome, showToast, abertoInicial, onStatusChange, vencimentoVenda }) => {
+const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, notaStatus, notaNumero, notaTipo, clienteDoc, clienteCep, clienteTelefone, clienteNome, showToast, abertoInicial, onStatusChange, vencimentoVenda }) => {
   const [boleto, setBoleto] = useState<BoletoInfo | null>(null);
   const [indisponivel, setIndisponivel] = useState(false);
   const [inter, setInter] = useState<InterStatus | null>(null); // BLOCO 85: env do Inter visivel
@@ -85,8 +104,12 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
   const [doc, setDoc] = useState('');
   const [cep, setCep] = useState('');
   const [erroLocal, setErroLocal] = useState('');
-  // BLOCO 167: mini boleto 80mm (layout da mini DANFE)
-  const [miniAbrir, setMiniAbrir] = useState(false);
+  // BLOCO 177: impressão DIRETA do mini boleto (sem preview) — estado dos
+  // canais + config/nota que chegam do servidor (GET /api/boletos).
+  const [ocupadoMini, setOcupadoMini] = useState<'bt' | 'usb' | ''>('');
+  const [temBt] = useState(() => temBluetoothNavegador());
+  const [notaApi, setNotaApi] = useState<NotaDaVendaInfo | null>(null);
+  const [cfgApi, setCfgApi] = useState<BoletoConfigInfo | null>(null);
 
   useEffect(() => {
     if (!saleId) return;
@@ -97,6 +120,8 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
       if (!r.ok) { setIndisponivel(true); return; } // SQL/Inter nao configurado: esconde a secao
       setBoleto(r.boleto || null);
       setInter(r.inter || null);
+      setNotaApi(r.nota || null);
+      setCfgApi(r.config || null);
       if (r.boleto?.status === 'NAO_GERADO') {
         // BLOCO 153: prazo correto = vencimento COMBINADO na venda (tela 6 do
         // PDV — sales.data_vencimento); sem prazo gravado, mantém o padrão +7d
@@ -205,8 +230,8 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
   };
 
   // BLOCO 170: COMPROVANTE 80mm removido deste card (pedido do dono) — o mini
-  // boleto completo (MiniBoletoImpressao) cobre a térmica com linha digitável
-  // + código de barras + QR do PIX.
+  // boleto completo (impressão DIRETA, BLOCO 177) cobre a térmica com linha
+  // digitável + código de barras + QR do PIX.
 
   const handleCopiarTexto = async (txt: string, rotulo: string) => {
     try {
@@ -250,8 +275,18 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
     }
   };
 
-  // BLOCO 167: dados do MINI BOLETO 80mm (papel térmico, layout mini DANFE)
+  // BLOCO 177: tipo/número da nota — props do pai primeiro (imediato),
+  // senão o que o servidor devolveu no GET.
+  const tipoNotaFinal = (notaTipo || notaApi?.tipo || '').toUpperCase();
+  const numeroNotaFinal = notaNumero || notaApi?.numero || '';
+  const podeAtrelarNfe = notaStatus === 'AUTORIZADA' && tipoNotaFinal === 'NFE';
+
+  // BLOCO 177: dados do MINI BOLETO 80mm — MAIS COMPLETO: beneficiário real
+  // (emitente do ERP), texto configurado em Configurações (ERP Fiscal) e a
+  // NF-e atrelada (só modelo 55).
   const miniDados: MiniBoletoDados | null = boleto ? {
+    beneficiarioNome: cfgApi?.beneficiarioNome,
+    beneficiarioDoc: cfgApi?.beneficiarioDoc,
     pagadorNome: clienteNome,
     pagadorDoc: clienteDoc,
     valor: boleto.valor,
@@ -262,7 +297,62 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
     pixCopiaECola: boleto.pixCopiaECola,
     vendaRef: saleId.slice(0, 8).toUpperCase(),
     seuNumero: boleto.seuNumero,
+    mensagemPadrao: cfgApi?.mensagemPadrao,
+    nfeTipo: tipoNotaFinal,
+    nfeNumero: podeAtrelarNfe || (tipoNotaFinal === 'NFE' && notaStatus === 'AUTORIZADA') ? numeroNotaFinal : '',
   } : null;
+
+  // Texto 48 colunas da térmica Bluetooth (mesmo gerador do papel, canal BT)
+  const textoMiniBt = useMemo(() => {
+    if (!miniDados) return '';
+    try {
+      return comprovanteBoletoTexto({
+        empresaNome: miniDados.beneficiarioNome || 'DOCE MANIA',
+        empresaDoc: miniDados.beneficiarioDoc,
+        vendaRef: miniDados.vendaRef,
+        seuNumero: miniDados.seuNumero,
+        pagadorNome: miniDados.pagadorNome,
+        pagadorDoc: miniDados.pagadorDoc,
+        valor: miniDados.valor,
+        vencimento: miniDados.vencimento,
+        status: miniDados.status,
+        linhaDigitavel: miniDados.linhaDigitavel,
+        codigoBarras: miniDados.codigoBarras,
+        pixCopiaECola: miniDados.pixCopiaECola,
+        mensagemPadrao: miniDados.mensagemPadrao,
+        nfeTipo: miniDados.nfeTipo,
+        nfeNumero: miniDados.nfeNumero,
+      });
+    } catch { return ''; }
+  }, [miniDados]);
+
+  // BLOCO 177: imprime o MINI BOLETO DIRETO (sem preview).
+  // BT = ESC/POS 48 colunas (mesmo caminho do cupom); USB = papel HTML 80mm
+  // completo (barras + QR do PIX) na janela de impressão do PC.
+  const imprimirMiniBoleto = async (canal: 'bt' | 'usb') => {
+    if (ocupadoMini || !boleto) return;
+    setOcupadoMini(canal);
+    try {
+      if (canal === 'usb') {
+        if (!miniDados) return;
+        const html = await miniBoleto80Html(miniDados);
+        imprimirHtmlViaUsb(html, (m) => showToast?.(`Falha na janela USB: ${m}`, 'error'));
+        showToast?.('Janela de impressão aberta — escolha a térmica USB.', 'success');
+        return;
+      }
+      if (!textoMiniBt) { showToast?.('Dados do boleto incompletos para a térmica.', 'error'); return; }
+      const ok = await bluetoothPrinter.print(textoMiniBt, '80MM', { skipConfirm: true });
+      if (ok) showToast?.('Mini Boleto enviado à impressora Bluetooth!', 'success');
+      else showToast?.('Impressão não realizada — conecte a impressora.', 'error');
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      showToast?.(msg === 'BLUETOOTH_NAO_SUPORTADO'
+        ? 'Bluetooth indisponível aqui — use o botão USB do PC.'
+        : `Erro: ${msg}`, 'error');
+    } finally {
+      setOcupadoMini('');
+    }
+  };
 
   if (indisponivel || !boleto) return null;
   const bb = badge();
@@ -334,17 +424,23 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
               </button>
             </div>
           )}
-          {/* BLOCO 167: MINI BOLETO 80mm — papel térmico com o MESMO layout da
-              mini DANFE (código de barras + linha digitável + QR do PIX).
-              BLOCO 152: o boleto OFICIAL segue sendo o PDF ORIGINAL do Inter. */}
-          {/* BLOCO 170: único botão de térmica deste card — o botão azul
-              COMPROVANTE (80mm) foi removido pelo dono. */}
+          {/* BLOCO 167/177: MINI BOLETO 80mm — imprime DIRETO (sem preview) nos
+              dois canais: BLUETOOTH (mesmo caminho do cupom) e USB DO PC (papel
+              completo com barras + QR). BLOCO 152: o boleto OFICIAL segue sendo
+              o PDF ORIGINAL do Inter. */}
           {(boleto.linhaDigitavel || boleto.codigoBarras || boleto.pixCopiaECola) && miniDados && (
-            <button onClick={() => setMiniAbrir(true)}
-              className="w-full bg-teal-600 text-white font-black py-2.5 rounded-xl text-[9px] uppercase tracking-widest active:scale-95">
-              <i className="fa-solid fa-receipt mr-1"></i>
-              Mini Boleto (80mm)
-            </button>
+            <div className="grid grid-cols-2 gap-2">
+              {temBt && (
+                <button onClick={() => void imprimirMiniBoleto('bt')} disabled={ocupadoMini !== ''}
+                  className="bg-teal-600 text-white font-black py-2.5 rounded-xl text-[9px] uppercase tracking-widest active:scale-95 disabled:opacity-60 flex items-center justify-center gap-1">
+                  <i className={`fa-solid ${ocupadoMini === 'bt' ? 'fa-spinner fa-spin' : 'fa-bluetooth-b'}`}></i> Mini Boleto BT
+                </button>
+              )}
+              <button onClick={() => void imprimirMiniBoleto('usb')} disabled={ocupadoMini !== ''}
+                className={`${temBt ? '' : 'col-span-2 '}bg-emerald-700 text-white font-black py-2.5 rounded-xl text-[9px] uppercase tracking-widest active:scale-95 disabled:opacity-60 flex items-center justify-center gap-1`}>
+                <i className={`fa-solid ${ocupadoMini === 'usb' ? 'fa-spinner fa-spin' : 'fa-print'}`}></i> Mini Boleto USB
+              </button>
+            </div>
           )}
           {form && (
             <div className="space-y-2 bg-white/70 rounded-xl p-2.5">
@@ -377,10 +473,13 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
                     className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-[11px] font-bold text-gray-800 focus:outline-none focus:border-gray-400" />
                 </label>
               )}
-              {notaStatus === 'AUTORIZADA' && (
+              {/* BLOCO 177 (regra do dono): só NF-e (modelo 55) se atrela ao
+                  boleto — NFC-e NUNCA (boleto de cliente PF com CPF não tem
+                  nota para atrelar). */}
+              {podeAtrelarNfe && (
                 <label className="flex items-center gap-2">
                   <input type="checkbox" checked={atrelar} onChange={e => setAtrelar(e.target.checked)} className="w-4 h-4 accent-emerald-600" />
-                  <span className="text-[9px] font-black uppercase text-gray-600">Atrelar NF-e/NFC-e {notaNumero || ''} ao boleto</span>
+                  <span className="text-[9px] font-black uppercase text-gray-600">Atrelar NF-e {numeroNotaFinal || ''} ao boleto</span>
                 </label>
               )}
               <button onClick={handleGerar} disabled={busy || !venc}
@@ -392,8 +491,8 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
           )}
         </div>
       )}
-      {/* BLOCO 167: preview/impressão do MINI BOLETO 80mm (USB = papel real / BT = texto) */}
-      <MiniBoletoImpressao abrir={miniAbrir} onClose={() => setMiniAbrir(false)} dados={miniDados} showToast={showToast} />
+      {/* BLOCO 177: o modal de PREVIEW do mini boleto (MiniBoletoImpressao) foi
+          REMOVIDO pelo dono — os botões acima imprimem DIRETO no canal escolhido. */}
     </div>
   );
 };

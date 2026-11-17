@@ -27,6 +27,17 @@ export interface NotaDaVendaInfo {
   status?: string;
   numero?: string;
   chave?: string;
+  /** BLOCO 177: tipo da nota da venda ('NFE' | 'NFCE') — só NF-e (modelo 55)
+   *  é atrelada ao boleto; NFC-e nunca (regra do dono). */
+  tipo?: string;
+}
+
+/** BLOCO 177: configuração que enriquece o MINI BOLETO (papel + térmica BT):
+ *  texto configurado no hub ERP Fiscal + beneficiário (emitente do ERP). */
+export interface BoletoConfigInfo {
+  mensagemPadrao?: string;
+  beneficiarioNome?: string;
+  beneficiarioDoc?: string;
 }
 
 export interface GerarBoletoParams {
@@ -45,7 +56,7 @@ export interface InterStatusInfo {
 
 export const boletoService = {
   /** Estado atual do boleto da venda (leitura barata). */
-  async status(saleId: string): Promise<{ ok: boolean; boleto?: BoletoInfo; inter?: InterStatusInfo; nota?: NotaDaVendaInfo; erro?: string }> {
+  async status(saleId: string): Promise<{ ok: boolean; boleto?: BoletoInfo; inter?: InterStatusInfo; nota?: NotaDaVendaInfo; config?: BoletoConfigInfo; erro?: string }> {
     try {
       const res = await fetch(`/api/boletos?saleId=${encodeURIComponent(saleId)}`, {
         method: 'GET',
@@ -53,7 +64,7 @@ export const boletoService = {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}` };
-      return { ok: true, boleto: data.boleto, inter: data.inter, nota: data.nota };
+      return { ok: true, boleto: data.boleto, inter: data.inter, nota: data.nota, config: data.config };
     } catch (e: unknown) {
       return { ok: false, erro: e instanceof Error ? e.message : 'Falha de conexao' };
     }

@@ -30,6 +30,9 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+// BLOCO 177: o CPF/CNPJ virou EDITÁVEL no portal — boleto a prazo do cliente
+// PF precisa do CPF (nfe = cnpj, nfc > cpf — regra do dono).
+import { validaCpfCnpj } from '@/lib/validaDoc';
 
 // ---------------- tipos ----------------
 interface ClienteFiscal {
@@ -47,9 +50,14 @@ interface ClienteFiscal {
   ativo: boolean;
 }
 
-type CKey = 'nome' | 'cep' | 'endereco' | 'numero' | 'bairro' | 'municipio' | 'uf';
+type CKey = 'nome' | 'doc' | 'cep' | 'endereco' | 'numero' | 'bairro' | 'municipio' | 'uf';
 
-const CAMPOS_EDIT: CKey[] = ['nome', 'cep', 'endereco', 'numero', 'bairro', 'municipio', 'uf'];
+const CAMPOS_EDIT: CKey[] = ['nome', 'doc', 'cep', 'endereco', 'numero', 'bairro', 'municipio', 'uf'];
+
+/** Campo do cliente que cada CKey edita (doc = CPF/CNPJ no MESMO campo cnpj). */
+const CAMPO_CLIENTE: Record<CKey, 'nome' | 'cnpj' | 'cep' | 'endereco' | 'numero' | 'bairro' | 'municipio' | 'uf'> = {
+  nome: 'nome', doc: 'cnpj', cep: 'cep', endereco: 'endereco', numero: 'numero', bairro: 'bairro', municipio: 'municipio', uf: 'uf',
+};
 
 interface Stats {
   total: number;
@@ -77,12 +85,39 @@ function mascararCep(v: string): string {
 }
 
 /**
+ * BLOCO 177: máscara progressiva do CPF/CNPJ (mesmo campo):
+ * 000.000.000-00 (11) ou 00.000.000/0000-00 (14).
+ */
+function mascararDoc(v: string): string {
+  const d = v.replace(/\D/g, '').slice(0, 14);
+  if (d.length <= 11) {
+    return d
+      .replace(/^(\d{3})(\d)/, '$1.$2')
+      .replace(/^(\d{3})\.(\d{3})(\d)/, '$1.$2.$3')
+      .replace(/^(\d{3})\.(\d{3})\.(\d{3})(\d{1,2})$/, '$1.$2.$3-$4');
+  }
+  return d
+    .replace(/^(\d{2})(\d)/, '$1.$2')
+    .replace(/^(\d{2})\.(\d{3})(\d)/, '$1.$2.$3')
+    .replace(/^(\d{2})\.(\d{3})\.(\d{3})(\d)/, '$1.$2.$3/$4')
+    .replace(/^(\d{2})\.(\d{3})\.(\d{3})\/(\d{4})(\d{1,2})$/, '$1.$2.$3/$4-$5');
+}
+
+/**
  * Validação espelhada da API — devolve erro por campo (vazio = limpa o campo,
  * menos o NOME que é obrigatório). Limites do schema SEFAZ: 60 caracteres.
  */
 function erroDeCampo(campo: CKey, valor: string): string {
   const v = valor.trim().replace(/\s+/g, ' ');
   if (campo === 'nome') return !v ? 'obrigatório' : (v.length > 120 ? 'máx. 120 caracteres' : '');
+  // BLOCO 177: CPF (11) ou CNPJ (14) com dígito verificador válido — o que
+  // o BOLETO do Inter usa como pagador (o Inter recusa documento inválido).
+  if (campo === 'doc') {
+    const d = v.replace(/\D/g, '');
+    if (!d) return '';
+    if (d.length !== 11 && d.length !== 14) return 'CPF 11 ou CNPJ 14 dígitos';
+    return validaCpfCnpj(d) ? '' : 'dígito verificador inválido';
+  }
   if (campo === 'cep') {
     const d = v.replace(/\D/g, '');
     return d && d.length !== 8 ? '8 dígitos' : '';
@@ -240,21 +275,22 @@ export default function PortalClientesFiscaisPage() {
   const valorDe = useCallback((c: ClienteFiscal, campo: CKey): string => {
     const e = edits[c.id];
     if (e && e[campo] !== undefined) return String(e[campo]);
-    return String(c[campo] ?? '');
+    return String(c[CAMPO_CLIENTE[campo]] ?? '');
   }, [edits]);
 
   const alteradoDe = useCallback((c: ClienteFiscal, campo: CKey): boolean => {
     const e = edits[c.id];
     if (!e || e[campo] === undefined) return false;
-    return String(e[campo]) !== String(c[campo] ?? '');
+    return String(e[campo]) !== String(c[CAMPO_CLIENTE[campo]] ?? '');
   }, [edits]);
 
   const setValor = (c: ClienteFiscal, campo: CKey, bruto: string) => {
-    // máscara na digitação: nome 120 colapsado; CEP 00000-000; UF 2 letras
-    // uppercase; demais textos até 60 (limite SEFAZ do xLgr/nro/xMun)
+    // máscara na digitação: nome 120 colapsado; CEP 00000-000; CPF/CNPJ com
+    // pontuação; UF 2 letras uppercase; demais textos até 60 (limite SEFAZ)
     let v: string;
     if (campo === 'nome') v = bruto.replace(/\s+/g, ' ').slice(0, 120);
     else if (campo === 'cep') v = mascararCep(bruto);
+    else if (campo === 'doc') v = mascararDoc(bruto);
     else if (campo === 'uf') v = bruto.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 2);
     else v = bruto.replace(/\s+/g, ' ').slice(0, 60);
     setEdits(prev => ({ ...prev, [c.id]: { ...(prev[c.id] || {}), [campo]: v } }));
@@ -283,7 +319,8 @@ export default function PortalClientesFiscaisPage() {
       if (alteradoDe(c, k)) {
         const err = erroDeCampo(k, valorDe(c, k));
         if (err) { setLinha(prev => ({ ...prev, [c.id]: { erro: `${k.toUpperCase()}: ${err}` } })); return false; }
-        patch[k] = valorDe(c, k);
+        // BLOCO 177: o campo do documento vai como 'documento' na API
+        patch[k === 'doc' ? 'documento' : k] = valorDe(c, k);
       }
     }
     if (Object.keys(patch).length === 0) return true;
@@ -316,7 +353,7 @@ export default function PortalClientesFiscaisPage() {
     setConf({
       titulo: 'Salvar tudo?',
       texto: `${alvos.length} cliente(s) com alterações serão gravados no cadastro.`,
-      detalhe: 'Nome, CEP e ENDEREÇO FISCAL gravados aqui são o que a NF-e usa no destinatário e o que o BOLETO do Inter puxa. Linhas com erro de digitação não são gravadas.',
+      detalhe: 'Nome, CPF/CNPJ, CEP e ENDEREÇO FISCAL gravados aqui são o que a NF-e usa no destinatário e o que o BOLETO do Inter puxa (CPF do pagador a prazo). Linhas com erro de digitação não são gravadas.',
       icone: 'fa-floppy-disk',
       botao: `Salvar ${alvos.length} cliente(s)`,
       run: async () => {
@@ -360,6 +397,7 @@ export default function PortalClientesFiscaisPage() {
         c.nome.toLowerCase().includes(q) ||
         c.razaoSocial.toLowerCase().includes(q) ||
         (c.cnpj && c.cnpj.toLowerCase().includes(q)) ||
+        (c.cnpj && digitos.length >= 3 && c.cnpj.replace(/\D/g, '').includes(digitos)) ||
         (c.municipio && c.municipio.toLowerCase().includes(q)) ||
         (c.endereco && c.endereco.toLowerCase().includes(q)) ||
         (digitos.length >= 3 && c.cep.replace(/\D/g, '').includes(digitos))
@@ -431,7 +469,7 @@ export default function PortalClientesFiscaisPage() {
             <i className="fa-solid fa-address-card text-teal-600 text-3xl"></i>
           </div>
           <h1 className="text-xl font-black text-gray-800 mb-1">Clientes Fiscais</h1>
-          <p className="text-gray-400 text-sm mb-8 font-medium">Nome · CEP · Endereço — destinatário da NF e do boleto</p>
+          <p className="text-gray-400 text-sm mb-8 font-medium">Nome · CPF/CNPJ · CEP · Endereço — destinatário da NF e do boleto</p>
           <div className="flex justify-center gap-3 mb-6" aria-label="PIN digitado">
             {[0, 1, 2, 3, 4, 5].map(i => (
               <div key={i} className={`w-4 h-4 rounded-full border-2 transition-colors ${pin.length > i ? 'bg-teal-600 border-teal-600' : 'border-gray-200'}`} />
@@ -471,7 +509,7 @@ export default function PortalClientesFiscaisPage() {
 
   const inputCls = (c: ClienteFiscal, k: CKey) => {
     const err = alteradoDe(c, k) && erroDeCampo(k, valorDe(c, k));
-    const base = `h-8 w-full rounded-lg border text-[12px] font-bold text-gray-800 px-2 transition-colors focus:outline-none focus:ring-2 ${k === 'cep' ? 'font-mono tracking-wide' : ''}`;
+    const base = `h-8 w-full rounded-lg border text-[12px] font-bold text-gray-800 px-2 transition-colors focus:outline-none focus:ring-2 ${(k === 'cep' || k === 'doc') ? 'font-mono tracking-wide' : ''}`;
     if (err) return `${base} border-rose-300 bg-rose-50 focus:ring-rose-200`;
     if (alteradoDe(c, k)) return `${base} border-amber-300 bg-amber-50 focus:ring-amber-200`;
     if (valorDe(c, k)) return `${base} border-gray-200 bg-white focus:ring-gray-200`;
@@ -488,10 +526,10 @@ export default function PortalClientesFiscaisPage() {
               <i className="fa-solid fa-address-card text-teal-100"></i>
             </div>
             <div className="min-w-0">
-              <h1 className="text-[15px] font-black uppercase tracking-tight leading-none whitespace-nowrap">Clientes Fiscais <span className="text-teal-200">Nome · CEP · Endereço completo do destinatário</span></h1>
+              <h1 className="text-[15px] font-black uppercase tracking-tight leading-none whitespace-nowrap">Clientes Fiscais <span className="text-teal-200">Nome · CPF/CNPJ · CEP · Endereço do destinatário</span></h1>
               <p className="text-[10px] text-teal-100/70 font-semibold mt-1 leading-none truncate">
                 {nomeAdmin ? <><i className="fa-solid fa-user-shield mr-1 text-[8px]"></i>{nomeAdmin} · </> : null}
-                <span className="uppercase tracking-wide">NF-e exige endereço completo · CEP que o boleto do Inter puxa</span>
+                <span className="uppercase tracking-wide">NF-e exige endereço completo · CPF/CNPJ e CEP são o que o boleto do Inter puxa</span>
               </p>
             </div>
             <div className="flex-1" />
@@ -530,7 +568,8 @@ export default function PortalClientesFiscaisPage() {
             <span className={kpis.semCep > 0 ? 'text-amber-300' : 'text-emerald-300'}><b>{kpis.semCep}</b> sem CEP</span>
             <span className={kpis.semEndereco > 0 ? 'text-amber-300' : 'text-emerald-300'}><b>{kpis.semEndereco}</b> sem logradouro</span>
             <span className={kpis.semMunicipio > 0 ? 'text-amber-300' : 'text-emerald-300'}><b>{kpis.semMunicipio}</b> sem município</span>
-            <span className={kpis.semCnpj > 0 ? 'text-amber-300' : ''}><b>{kpis.comCnpj}</b> com CNPJ</span>
+            <span className={kpis.semCnpj > 0 ? 'text-amber-300' : 'text-emerald-300'}><b>{kpis.comCnpj}</b> com CPF/CNPJ</span>
+            <span className={kpis.semCnpj > 0 ? 'text-amber-300' : ''}><b>{kpis.semCnpj}</b> sem CPF/CNPJ</span>
             <span className="text-cyan-300/70"><b>{kpis.comIe}</b> com IE</span>
           </div>
         </div>
@@ -554,6 +593,14 @@ export default function PortalClientesFiscaisPage() {
             </p>
           </div>
         )}
+        {kpis.semCnpj > 0 && (
+          <div className="bg-stone-50 border border-stone-200 rounded-xl px-4 py-2.5 flex items-center gap-2.5">
+            <i className="fa-solid fa-id-card text-stone-500"></i>
+            <p className="text-[11px] font-bold text-stone-700">
+              {kpis.semCnpj} cliente(s) SEM CPF/CNPJ — o boleto A PRAZO não sai sem o documento do pagador (NFe = CNPJ · NFC/boleto PF = CPF). Use o filtro <b>sem CPF/CNPJ</b> e complete o cadastro.
+            </p>
+          </div>
+        )}
         {kpis.semCep > 0 && (
           <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5 flex items-center gap-2.5">
             <i className="fa-solid fa-triangle-exclamation text-amber-600"></i>
@@ -570,7 +617,7 @@ export default function PortalClientesFiscaisPage() {
             <input
               value={busca}
               onChange={e => setBusca(e.target.value)}
-              placeholder="Buscar por nome, razão social, CNPJ, município ou CEP..."
+              placeholder="Buscar por nome, razão social, CPF/CNPJ, município ou CEP..."
               className="w-full h-9 pl-8 pr-3 rounded-xl border border-gray-200 bg-white text-[12px] font-semibold text-gray-700 placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-teal-200"
               aria-label="Buscar cliente"
             />
@@ -579,7 +626,7 @@ export default function PortalClientesFiscaisPage() {
           {chipFiltro('SEM_ENDERECO', 'Sem logradouro', kpis.semEndereco, 'bg-rose-600 text-white')}
           {chipFiltro('SEM_MUNICIPIO', 'Sem município', kpis.semMunicipio, 'bg-orange-600 text-white')}
           {chipFiltro('SEM_CEP', 'Sem CEP', kpis.semCep, 'bg-amber-600 text-white')}
-          {chipFiltro('SEM_CNPJ', 'Sem CNPJ', kpis.semCnpj, 'bg-stone-700 text-white')}
+          {chipFiltro('SEM_CNPJ', 'Sem CPF/CNPJ', kpis.semCnpj, 'bg-stone-700 text-white')}
           {chipFiltro('SEM_IE', 'Sem IE', kpis.total - kpis.comIe, 'bg-teal-700 text-white')}
           {chipFiltro('INATIVOS', 'Inativos', kpis.total - kpis.ativos, 'bg-gray-500 text-white')}
           <button
@@ -626,13 +673,13 @@ export default function PortalClientesFiscaisPage() {
         {/* ================= TABELA PLANILHA ================= */}
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[2140px] text-left">
+            <table className="w-full min-w-[2260px] text-left">
               <thead>
                 <tr className="bg-gray-900 text-white text-[9px] font-black uppercase tracking-wider">
                   <th className="px-3 py-2.5 w-14">#</th>
                   <th className="px-3 py-2.5 min-w-[200px]">Nome <span className="text-gray-400 normal-case font-semibold">(editável)</span></th>
+                  <th className="px-3 py-2.5 w-44">CPF / CNPJ <span className="text-gray-400 normal-case font-semibold">(editável)</span></th>
                   <th className="px-3 py-2.5 w-32">CEP <span className="text-gray-400 normal-case font-semibold">(editável)</span></th>
-                  <th className="px-3 py-2.5 w-40">CNPJ</th>
                   <th className="px-3 py-2.5 min-w-[190px]">Razão Social</th>
                   <th className="px-3 py-2.5 w-28">IE</th>
                   <th className="px-3 py-2.5 min-w-[150px]">Município <span className="text-gray-400 normal-case font-semibold">(editável)</span></th>
@@ -691,8 +738,22 @@ export default function PortalClientesFiscaisPage() {
                           <p className="text-[8px] font-black text-rose-500 mt-0.5">CEP: {erroDeCampo('cep', valorDe(c, 'cep'))}</p>
                         ) : null}
                       </td>
+                      {/* BLOCO 177: CPF/CNPJ EDITÁVEL — o documento do PAGADOR do
+                          boleto a prazo (NFe = CNPJ · NFC/boleto PF = CPF). Mesmo
+                          campo do cadastro, validação do dígito verificador. */}
                       <td className="px-3 py-1.5">
-                        <span className={`text-[11px] font-bold font-mono ${c.cnpj ? 'text-gray-700' : 'text-gray-300'}`}>{c.cnpj || '—'}</span>
+                        <input
+                          value={valorDe(c, 'doc')}
+                          onChange={e => setValor(c, 'doc', e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') void salvarLinha(c); }}
+                          inputMode="numeric"
+                          placeholder="CPF ou CNPJ"
+                          className={inputCls(c, 'doc')}
+                          aria-label={`CPF/CNPJ de ${c.nome}`}
+                        />
+                        {alteradoDe(c, 'doc') && erroDeCampo('doc', valorDe(c, 'doc')) ? (
+                          <p className="text-[8px] font-black text-rose-500 mt-0.5">CPF/CNPJ: {erroDeCampo('doc', valorDe(c, 'doc'))}</p>
+                        ) : null}
                       </td>
                       <td className="px-3 py-1.5">
                         <span className={`text-[11px] font-bold truncate block max-w-[240px] ${c.razaoSocial ? 'text-gray-600' : 'text-gray-300'}`} title={c.razaoSocial}>{c.razaoSocial || '—'}</span>
@@ -801,7 +862,7 @@ export default function PortalClientesFiscaisPage() {
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm px-4 py-3">
           <p className="text-[10px] font-bold text-gray-500 leading-relaxed">
             <i className="fa-solid fa-circle-info text-teal-600 mr-1.5"></i>
-            <b>Tudo editável:</b> Nome (obrigatório até 120) · CEP (8 dígitos, é o CEP do pagador do boleto) · Logradouro (rua, SEM o número) · Nº (aceita S/N) · Bairro · Município · UF (2 letras) — limite SEFAZ de 60 caracteres por campo. <b>Somente leitura:</b> CNPJ / IE / Razão Social. A NF-e IDENTIFICADA só sobe com o endereço COMPLETO (rua + nº + bairro + município + UF + CEP); a NFC-e identificada com cadastro incompleto sai SEM endereço em vez de ser recusada. ENTER na linha salva só aquela linha.
+            <b>Tudo editável:</b> Nome (obrigatório até 120) · CPF/CNPJ (11 ou 14 dígitos com dígito verificador — é o documento do PAGADOR do boleto a prazo: NFe = CNPJ, cliente PF = CPF) · CEP (8 dígitos, o CEP que o boleto do Inter puxa) · Logradouro (rua, SEM o número) · Nº (aceita S/N) · Bairro · Município · UF (2 letras) — limite SEFAZ de 60 caracteres por campo. <b>Somente leitura:</b> IE / Razão Social. A NF-e IDENTIFICADA só sobe com o endereço COMPLETO (rua + nº + bairro + município + UF + CEP); a NFC-e identificada com cadastro incompleto sai SEM endereço em vez de ser recusada. ENTER na linha salva só aquela linha.
           </p>
         </div>
       </main>
@@ -810,7 +871,7 @@ export default function PortalClientesFiscaisPage() {
       <footer className="mt-auto bg-white border-t border-gray-200">
         <div className="max-w-[1600px] mx-auto px-4 py-2.5 flex items-center gap-2 text-[9px] font-bold text-gray-400 uppercase tracking-wider">
           <i className="fa-solid fa-address-card text-teal-600"></i>
-          DOCE MANIA · Clientes Fiscais — nome, CEP e endereço fiscal editáveis
+          DOCE MANIA · Clientes Fiscais — nome, CPF/CNPJ, CEP e endereço fiscal editáveis
           <span className="ml-auto">{kpis.total} clientes · {kpis.semEndereco} sem logradouro · {kpis.semMunicipio} sem município · {kpis.semCep} sem CEP</span>
         </div>
       </footer>

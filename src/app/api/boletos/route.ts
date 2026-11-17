@@ -128,6 +128,11 @@ export async function GET(req: NextRequest) {
   // adivinhar "pode ser o env na vercel": o card AVISA quando falta env.
   // FIX atrelamento: devolve o estado da NOTA da venda para o portal/card
   // mostrar se a NF-e/NFC-e está atrelada ao boleto (ou deveria estar).
+  // BLOCO 177: nota ganha TIPO ('NFE' | 'NFCE') — o card só oferece
+  // atrelamento (e o papel só escreve "ATRELADO A NF-e") no modelo 55; e o
+  // config leva o TEXTO configurado no ERP Fiscal + o beneficiário real
+  // (emitente do ERP) para o MINI BOLETO sair completo.
+  const erpCfgGet = await lerErpConfig();
   return NextResponse.json({
     ok: true,
     boleto: cobrancaPublica(sale as Record<string, unknown>),
@@ -136,6 +141,12 @@ export async function GET(req: NextRequest) {
       status: String(sale.nota_status || ''),
       numero: String(sale.nota_numero || ''),
       chave: String(sale.nota_chave || ''),
+      tipo: String(sale.nota_tipo || ''),
+    },
+    config: {
+      mensagemPadrao: erpCfgGet.boletoMensagemPadrao || '',
+      beneficiarioNome: erpCfgGet.emitente.fantasia || erpCfgGet.emitente.razao || 'DOCE MANIA',
+      beneficiarioDoc: erpCfgGet.emitente.cnpj || '',
     },
   });
 }
@@ -275,11 +286,18 @@ export async function POST(req: NextRequest) {
   const venc = String(body.vencimento || '').trim();
   if (!validaVencimento(venc)) return BAD(422, 'Data de vencimento invalida (formato AAAA-MM-DD).');
 
-  // Nota fiscal atrelada (opcional): chave de 44 digitos
+  // Nota fiscal atrelada (opcional): chave de 44 digitos.
+  // BLOCO 177 (regra do dono: "nfe seria cnpj, nfc > cpf... nesse boleto nao
+  // precisa atrelar a nfc, somente atrelar a nfe o boleto"): o vinculo
+  // formal notaFiscal agora so acontece na NF-e (modelo 55). NFC-e AUTORIZADA
+  // NUNCA atrela (nem aviso, nem linha "nao atrelada" no PDF) — o boleto do
+  // cliente PF (CPF) simplesmente NAO tem nota para atrelar.
   let notaFiscal: Record<string, unknown> | undefined;
   let avisoAtrelamento = '';
-  const atrelar = body.atrelarNFe !== false && sale.nota_status === 'AUTORIZADA';
-  if (sale.nota_status === 'AUTORIZADA') {
+  const tipoNota = String(sale.nota_tipo || '').toUpperCase();
+  const podeAtrelar = sale.nota_status === 'AUTORIZADA' && tipoNota === 'NFE';
+  const atrelar = body.atrelarNFe !== false && podeAtrelar;
+  if (podeAtrelar) {
     const chave = await chaveDaNota(sale as Record<string, unknown>);
     if (chave) {
       if (atrelar) {
@@ -291,10 +309,10 @@ export async function POST(req: NextRequest) {
           naturezaOperacao: 'Venda de mercadoria',
         };
       } else {
-        avisoAtrelamento = 'A venda tem nota autorizada — ative "Atrelar NF-e/NFC-e" para vinculá-la ao boleto.';
+        avisoAtrelamento = 'A venda tem NF-e autorizada — ative "Atrelar NF-e" para vinculá-la ao boleto.';
       }
     } else {
-      avisoAtrelamento = 'Nota autorizada, mas a chave de acesso ainda não chegou (SEFAZ/Focus). O boleto sai sem nota atrelada — consulte o boleto depois para conferir.';
+      avisoAtrelamento = 'NF-e autorizada, mas a chave de acesso ainda não chegou (SEFAZ/Focus). O boleto sai sem nota atrelada — consulte o boleto depois para conferir.';
     }
   }
 
@@ -322,7 +340,7 @@ export async function POST(req: NextRequest) {
       linha1: `Venda ${vendaCurta} - Doce Mania`,
       ...(msgPadrao ? { linha2: msgPadrao } : {}),
       ...(body.mensagem ? { linha3: String(body.mensagem).slice(0, 78) } : {}),
-      ...(notaFiscal ? {} : sale.nota_status === 'AUTORIZADA' ? { linha4: `NF ${String(sale.nota_numero)} (nao atrelada)` } : {}),
+      ...(notaFiscal ? {} : podeAtrelar ? { linha4: `NF-e ${String(sale.nota_numero)} (nao atrelada)` } : {}),
     },
     formasRecebimento: ['BOLETO', 'PIX'],
     notaFiscal,

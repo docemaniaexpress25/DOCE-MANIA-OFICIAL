@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isAdminSession } from '@/lib/session';
 import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/serverSupabase';
+import { validaCpfCnpj, mascaraCpfCnpj } from '@/lib/validaDoc';
 
 /**
  * BLOCO 174 — CLIENTES FISCAIS (portal, fora do app) — gêmeo do /fiscal-produtos.
@@ -9,12 +10,12 @@ import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/s
  * clientes para eu poder editar dados dos clientes! coloque somente
  * informaçoes relevantes ao fiscal tbm o nome e cep editaveis".
  *
- * BLOCO 176 (erro real ao bater a nota: "Element 'nro' not expected. Expected
- * is 'xLgr'" — cliente MERCADO DALAGE com nº 312 e SEM logradouro): o portal
- * agora também EDITA o ENDEREÇO FISCAL do destinatário — logradouro (rua),
- * número, bairro, município e UF — porque a NF-e identificada EXIGE o endereço
- * completo do cadastro e o dono precisa consertar o cadastro na mão. Continua
- * mostrando só o que a NF-e/NFC-e (destinatário) e o BOLETO do Inter usam:
+ * BLOCO 177 (dono: "criar na aba clientes a caixa onde vamos colocar o cpf do
+ * cliente para gerar boletos a prazo para o cliente que nao for nfe — nfe
+ * seria cnpj, nfc > cpf"): o CPF/CNPJ (campo cnpj — CPF e CNPJ vivem no MESMO
+ * campo do cadastro) também é EDITÁVEL:
+ *   - CPF/CNPJ (cnpj) — EDITÁVEL, 11 ou 14 dígitos COM dígito verificador
+ *     válido (o Inter recusa documento inválido); vazio = limpa;
  *   - NOME (nome_fantasia) — EDITÁVEL, obrigatório (catálogo, PDV, NF);
  *   - CEP (endereco_cep) — EDITÁVEL, 8 dígitos, gravado mascarado 00000-000;
  *   - LOGRADOURO (endereco) — EDITÁVEL até 60 (limite SEFAZ do xLgr);
@@ -22,10 +23,10 @@ import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/s
  *   - BAIRRO (bairro) — EDITÁVEL até 60;
  *   - MUNICÍPIO (endereco_municipio) — EDITÁVEL até 60;
  *   - UF (endereco_uf) — EDITÁVEL, 2 letras;
- *   - razão social, CNPJ, IE — somente leitura, para conferir.
+ *   - razão social e IE — somente leitura, para conferir.
  *
  * GET   /api/clientes-fiscal          -> todos os clientes + contagens
- * PATCH /api/clientes-fiscal { id, nome?, cep?, endereco?, numero?, bairro?, municipio?, uf? }
+ * PATCH /api/clientes-fiscal { id, nome?, documento?, cep?, endereco?, numero?, bairro?, municipio?, uf? }
  *                                     -> grava e devolve o cliente atualizado
  *
  * Auth: MESMA SESSÃO do portal fiscal (/notas) — POST /api/notas-admin
@@ -42,6 +43,7 @@ const soDigitos = (v: unknown) => String(v ?? '').replace(/\D/g, '');
 
 interface ClientePatch {
   nome?: unknown;
+  documento?: unknown;
   cep?: unknown;
   endereco?: unknown;
   numero?: unknown;
@@ -51,7 +53,7 @@ interface ClientePatch {
 }
 
 /**
- * BLOCO 176: limites do schema SEFAZ (xLgr/nro/xBairro/xMun = 60; UF = 2).
+ * BLOCO 176/177: limites do schema SEFAZ (xLgr/nro/xBairro/xMun = 60; UF = 2).
  * Texto vazio = LIMPA o campo (a emissão recusa NF-e e avisa o que falta).
  */
 const max60 = (v: unknown): string | null => {
@@ -67,6 +69,18 @@ function validaPatch(patch: ClientePatch): { dados: Record<string, string | null
     const n = String(patch.nome ?? '').trim().replace(/\s+/g, ' ').slice(0, 120);
     if (!n) return { dados, erro: 'O nome do cliente não pode ficar vazio.' };
     dados.nome_fantasia = n;
+  }
+  // BLOCO 177: CPF (11) ou CNPJ (14) com dígito verificador válido — o Inter
+  // recusa documento inválido e a NF-e identificada também. Vazio = limpa.
+  if (patch.documento !== undefined) {
+    const d = soDigitos(patch.documento);
+    if (d && d.length !== 11 && d.length !== 14) {
+      return { dados, erro: 'CPF deve ter 11 dígitos ou CNPJ 14 dígitos. Vazio = limpa.' };
+    }
+    if (d && !validaCpfCnpj(d)) {
+      return { dados, erro: 'Dígito verificador inválido — confira o CPF/CNPJ digitado.' };
+    }
+    dados.cnpj = d ? mascaraCpfCnpj(d) : null;
   }
   if (patch.cep !== undefined) {
     const d = soDigitos(patch.cep);
@@ -90,7 +104,9 @@ function clienteLinha(c: Record<string, unknown>) {
     id: String(c.id),
     nome: String(c.nome_fantasia ?? ''),
     razaoSocial: c.razao_social ? String(c.razao_social) : '',
-    cnpj: c.cnpj ? String(c.cnpj) : '',
+    // BLOCO 177: devolve MASCARADO (000.000.000-00 / 00.000.000/0000-00) —
+    // a planilha grava mascarado de volta (o PATCH tira os pontinhos).
+    cnpj: c.cnpj ? mascaraCpfCnpj(String(c.cnpj)) : '',
     ie: c.inscricao_estadual ? String(c.inscricao_estadual) : '',
     cep: c.endereco_cep ? String(c.endereco_cep) : '',
     municipio: c.endereco_municipio ? String(c.endereco_municipio) : '',

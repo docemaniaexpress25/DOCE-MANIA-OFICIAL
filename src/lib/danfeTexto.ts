@@ -225,6 +225,7 @@ export function danfeMiniTexto(o: DanfeMiniInput): string {
 // ---------------------------------------------------------------------------
 export interface BoletoComprovanteInput {
   empresaNome?: string;
+  empresaDoc?: string;
   vendaRef?: string;
   pagadorNome?: string;
   pagadorDoc?: string;
@@ -234,6 +235,11 @@ export interface BoletoComprovanteInput {
   linhaDigitavel?: string;
   codigoBarras?: string;
   pixCopiaECola?: string;
+  seuNumero?: string;
+  // ---- BLOCO 177 (dono: mini boleto mais completo) ----
+  mensagemPadrao?: string;  // texto configurado no hub ERP Fiscal (Configurações)
+  nfeTipo?: string;         // 'NFE' | 'NFCE' — só NF-e é citada como atrelada
+  nfeNumero?: string | number; // nº da NF-e AUTORIZADA (modelo 55)
 }
 
 const vencBR = (v?: string) => {
@@ -266,7 +272,10 @@ export function comprovanteBoletoTexto(o: BoletoComprovanteInput): string {
   push('*'.repeat(COLS));
   const emp = (o.empresaNome || 'DOCE MANIA DISTRIBUIDORA').toUpperCase();
   push(pR(emp, COLS));
+  const empDoc = (o.empresaDoc || '').replace(/\D/g, '');
+  if (empDoc) push(ctr(`CNPJ ${mascaraCnpjCpf(empDoc)}`));
   if (o.vendaRef) push(`Venda: ${o.vendaRef}`);
+  if (o.seuNumero) push(`Seu numero: ${o.seuNumero}`);
 
   const pagNome = (o.pagadorNome || '').trim();
   const pagDoc = (o.pagadorDoc || '').replace(/\D/g, '');
@@ -277,6 +286,12 @@ export function comprovanteBoletoTexto(o: BoletoComprovanteInput): string {
   if (o.valor !== null && o.valor !== undefined) push(`VALOR: ${fmtMoney(Number(o.valor))}`);
   if (o.vencimento) push(`VENCIMENTO: ${vencBR(o.vencimento)}`);
   if (o.status) push(`SITUACAO: ${STATUS_LABEL[o.status] || o.status}`);
+  // BLOCO 177: só NF-e (modelo 55) é citada como ATRELADA — boleto NÃO
+  // precisa atrelar NFC-e (regra do dono).
+  const nfeNum = String(o.nfeNumero || '').trim();
+  if (nfeNum && String(o.nfeTipo || '').toUpperCase() === 'NFE') push(`ATRELADO A NF-e ${nfeNum} (MODELO 55)`);
+  const msgPad = String(o.mensagemPadrao || '').trim();
+  if (msgPad) push(msgPad);
   push(LINHA);
 
   if (o.linhaDigitavel) {

@@ -34,6 +34,11 @@ export interface MiniBoletoDados {
   pixCopiaECola?: string;
   vendaRef?: string;           // referência curta da venda
   seuNumero?: string;          // DM<saleId> no Inter
+  // ---- BLOCO 177 (dono: "deixe mais completo, escreva aquele texto
+  // configurado em configuraçoes, quando nfe escreva que esta atrelado a nfe")
+  mensagemPadrao?: string;     // texto configurado no hub ERP Fiscal (Configurações)
+  nfeTipo?: string;            // 'NFE' | 'NFCE' — tipo da nota da venda
+  nfeNumero?: string | number; // nº da NF-e AUTORIZADA (modelo 55)
 }
 
 /** ascii-safe (mesma ideia do danfe80Html) — térmica não imprime emoji/acentos raros */
@@ -186,6 +191,11 @@ export async function miniBoleto80Html(o: MiniBoletoDados): Promise<string> {
   const benefDoc = docFmt(o.beneficiarioDoc);
   const pagNome = esc(o.pagadorNome || '—');
   const pagDoc = docFmt(o.pagadorDoc);
+  const msgPadrao = String(o.mensagemPadrao || '').trim();
+  // BLOCO 177: só NF-e (modelo 55) é citada como ATRELADA — boleto NÃO precisa
+  // atrelar NFC-e (regra do dono).
+  const atreladoNfe = String(o.nfeTipo || '').toUpperCase() === 'NFE' && String(o.nfeNumero || '').trim() !== '';
+  const nfeNum = String(o.nfeNumero || '').trim();
 
   return `<!DOCTYPE html>
 <html lang="pt-BR">
@@ -225,6 +235,10 @@ export async function miniBoleto80Html(o: MiniBoletoDados): Promise<string> {
   </div>
 
   <div class="sit">SITUACAO: ${esc(statusTxt(o.status))}</div>
+
+  ${atreladoNfe ? `<div class="sit" style="border-style:dashed;background:#000;color:#fff;">ATRELADO A NF-e ${esc(nfeNum)} — MODELO 55</div>` : ''}
+
+  ${msgPadrao ? `<div class="box"><span class="lbl">MENSAGEM DO EMITENTE</span><div class="val">${esc(msgPadrao)}</div></div>` : ''}
 
   <div class="aviso">
     PAGAVEL EM QUALQUER BANCO ATE O VENCIMENTO. Apos o vencimento, acrescimos

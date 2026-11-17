@@ -637,6 +637,7 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
               valorPago={Number(saleLocal.valorPago) || 0}
               notaStatus={nota.status}
               notaNumero={nota.numero}
+              notaTipo={nota.tipo}
               clienteDoc={clientLocal.cnpj}
               clienteCep={clientLocal.enderecoCep}
               clienteTelefone={clientLocal.telefone}

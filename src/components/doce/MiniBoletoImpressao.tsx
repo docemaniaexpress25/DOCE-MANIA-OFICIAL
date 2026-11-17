@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { miniBoleto80Html, type MiniBoletoDados } from '@/lib/miniBoleto80Html';
 import { comprovanteBoletoTexto } from '@/lib/danfeTexto';
 import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
@@ -12,6 +12,15 @@ import { imprimirHtmlViaUsb, lerCanalImpressao, dispositivoIOS } from '@/lib/usb
  * iframe (HTML de @page 70mm) e dois canais — USB do PC imprime EXATAMENTE o
  * papel; Bluetooth imprime a versão texto 48 colunas ESC/POS
  * (comprovanteBoletoTexto, com [[BARCODE]]/[[QR]] resolvidos na térmica).
+ *
+ * BLOCO 170 (dono: "a impressão está perfeita, porém a visualização está
+ * bugada"): o CSS do papel usava transform:scale(1.6) no @media screen —
+ * transform NÃO muda o layout, então o scrollHeight do iframe ficava com a
+ * altura sem escala e o papel visual (1.6x) transbordava/cortava o preview.
+ * Correção: no onLoad o preview desliga o transform e aplica ZOOM dinâmico
+ * (afeta o layout real) calculado pela largura disponível do iframe — papel
+ * inteiro visível, sem corte, em celular e PC. A impressão (@media print e
+ * janela USB) continua 100% inalterada.
  */
 
 interface MiniBoletoImpressaoProps {
@@ -26,6 +35,8 @@ const MiniBoletoImpressao: React.FC<MiniBoletoImpressaoProps> = ({ abrir, onClos
   const [montado, setMontado] = useState(false);
   const [canalAtual, setCanalAtual] = useState<'BT' | 'USB'>('BT');
   const [ios, setIos] = useState(false);
+  // BLOCO 170: ref do iframe do preview (recalcula zoom/altura em resize)
+  const frameRef = useRef<HTMLIFrameElement | null>(null);
   useEffect(() => {
     if (!abrir) return;
     setMontado(true);
@@ -62,6 +73,41 @@ const MiniBoletoImpressao: React.FC<MiniBoletoImpressaoProps> = ({ abrir, onClos
     } catch { return ''; }
   }, [dados]);
 
+  // BLOCO 170: ajuste do preview — ZOOM REAL (layout) no lugar do transform.
+  // O transform:scale do @media screen só redesenha: o scrollHeight continua
+  // na escala 1 e o iframe cortava o papel. Aqui: transform none + zoom que
+  // cabe na largura do iframe (máx 1.6) + altura = scrollHeight pós-zoom.
+  const recalcularPreview = () => {
+    const frame = frameRef.current;
+    if (!frame) return;
+    try {
+      const doc = frame.contentDocument;
+      if (!doc || !doc.body) return;
+      const larguraPapel = 264.6; // 70mm @ 96dpi (papel lógico do gerador)
+      const disp = frame.clientWidth || 430;
+      const zoom = Math.min(1.6, Math.max(1, Math.floor((disp / larguraPapel) * 100) / 100));
+      doc.body.style.transform = 'none';   // desliga o scale (não ajusta layout)
+      doc.body.style.zoom = String(zoom);  // zoom real — scrollHeight passa a refletir
+      requestAnimationFrame(() => {
+        try { frame.style.height = `${Math.ceil(doc.documentElement.scrollHeight)}px`; } catch { /* ignora */ }
+      });
+    } catch { /* cross-origin impossível com srcdoc — ignora */ }
+  };
+
+  // BLOCO 170: reajusta em resize (giro do celular) e pós-pintura do papel
+  useEffect(() => {
+    if (!abrir || !htmlBoleto) return;
+    const onResize = () => recalcularPreview();
+    window.addEventListener('resize', onResize);
+    const t1 = setTimeout(recalcularPreview, 200);
+    const t2 = setTimeout(recalcularPreview, 600);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, [abrir, htmlBoleto]);
+
   if (!abrir || !dados) return null;
 
   const imprimirBoleto = async (canal: 'bt' | 'usb') => {
@@ -85,13 +131,6 @@ const MiniBoletoImpressao: React.FC<MiniBoletoImpressaoProps> = ({ abrir, onClos
     } finally {
       setOcupado('');
     }
-  };
-
-  const ajustarAlturaIframe = (e: React.SyntheticEvent<HTMLIFrameElement>) => {
-    try {
-      const doc = e.currentTarget.contentDocument;
-      if (doc) e.currentTarget.style.height = `${Math.ceil(doc.documentElement.scrollHeight)}px`;
-    } catch { /* cross-origin impossivel com srcdoc — ignora */ }
   };
 
   return (
@@ -118,7 +157,8 @@ const MiniBoletoImpressao: React.FC<MiniBoletoImpressaoProps> = ({ abrir, onClos
             <iframe
               srcDoc={htmlBoleto}
               title="Mini Boleto 80mm"
-              onLoad={ajustarAlturaIframe}
+              ref={frameRef}
+              onLoad={recalcularPreview}
               className="w-[430px] max-w-full mx-auto block bg-white rounded shadow-lg border-0"
               style={{ minHeight: '320px' }}
             />

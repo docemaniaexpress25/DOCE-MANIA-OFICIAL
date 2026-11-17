@@ -2304,3 +2304,17 @@ FEITO:
 QA: lint 0 erros/8 warnings (baseline exata). Todos os updates de origem são SEPARADOS e best-effort — se o SQL 172 não rodou, NENHUM caminho de baixa quebra (mesmo padrão do logEvento do 167).
 
 Teste do dono: (a) rodar SQL 172 no Supabase e conferir query C (eventos do webhook — se vazio, o boleto pago era externo); (b) baixar o boleto do Sacolão Zimermann em Contas a Receber → Receber → método Boleto (aparecerá no log como MANUAL por <nome>); (c) Configurações → Boletos → Log de pagamentos e recebimentos.
+
+## bloco173 — CARD DO BOLETO: botão azul COMPROVANTE (80mm) removido (ficou Mini Boleto, PDF, Enviar no Zap) + PREVIEW DO MINI BOLETO corrigido (impressão perfeita, visualização bugada) (2026-11-17)
+
+PEDIDO DO DONO (17/11): "remova o botao azul do boleto comprovante 80mm deixe apenas mini boleto, pdf do boleto e enviar no zap! quando clicar em mini boleto ele ta gerando uma visualizaçao mais esta bugada! a impressao ta perfeita porem a visualizaçao esta bugada!"
+
+CAUSA RAIZ DO PREVIEW BUGADO (impressão ok, tela quebrada):
+- O CSS do papel (miniBoleto80Html, @media screen) usava transform:scale(1.6) no body do iframe. transform só REDesenha — não muda o layout. O ajuste de altura do preview lia documentElement.scrollHeight, que continua na escala 1 (altura lógica do papel), então o papel visual (1.6x, origin top center) desenhava ALEM da altura do iframe → conteúdo cortado/transbordando. A impressão era perfeita porque o @media print nunca teve transform (e a janela USB usa o HTML puro).
+
+FEITO:
+1. src/components/doce/BoletoCard.tsx — botão azul COMPROVANTE (80mm) REMOVIDO junto com handleImprimirComprovante e imports órfãos (comprovanteBoletoTexto/bluetoothPrinter); o card ficou exatamente com o que o dono pediu: PDF (Inter), ENVIAR (WhatsApp) e MINI BOLETO (80mm). O comprovante de linha digitável da tela de ENTREGAS (EntregasView) continua intacto (não é este botão).
+2. src/components/doce/MiniBoletoImpressao.tsx — novo recalcularPreview (BLOCO 170): desliga o transform do papel e aplica ZOOM REAL (CSS zoom, que afeta o layout → scrollHeight passa a refletir o tamanho visual) calculado pela largura disponível do iframe (máx 1.6, piso 1) → papel inteiro visível, sem corte, em PC e celular (no mobile o zoom reduz sozinho em vez de cortar as bordas); ajuste no onLoad do iframe + em resize (giro do aparelho) + re-ajustes 200/600ms após abrir. Altura do iframe = scrollHeight pós-zoom (hook movido para antes do early return — rules-of-hooks). O HTML de IMPRESSÃO (@page/@media print e janela USB) 100% inalterado: o zoom existe apenas no preview dentro do app.
+QA: lint 0 erros/8 warnings (baseline exata). Sem SQL novo.
+
+Teste do dono: no card do boleto (venda finalizada ou cupom reaberto) só há os 3 botões pedidos; ao tocar MINI BOLETO (80mm) o papel aparece INTEIRO no preview (cabeçalho → valor → código de barras → linha digitável → QR do PIX → pagador → situação → corte), sem bug de corte; Bluetooth/USB continuam imprimindo igual.

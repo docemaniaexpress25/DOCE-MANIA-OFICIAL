@@ -2,8 +2,6 @@
 
 import { useState, useEffect } from 'react';
 import { boletoService, BoletoInfo } from '@/services/boletoService';
-import { comprovanteBoletoTexto } from '@/lib/danfeTexto';
-import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
 import { validaCpfCnpj } from '@/lib/validaDoc';
 import MiniBoletoImpressao from '@/components/doce/MiniBoletoImpressao';
 import type { MiniBoletoDados } from '@/lib/miniBoleto80Html';
@@ -33,6 +31,10 @@ import type { MiniBoletoDados } from '@/lib/miniBoleto80Html';
  * padrão visual da mini DANFE: @page 70mm, mono, Code 128, QR do PIX) + modal
  * MiniBoletoImpressao (preview/USB/BT). O boleto OFICIAL segue sendo o PDF do
  * Inter — o papel térmico é cópia de conferência/trabalho (não fiscal).
+ *
+ * BLOCO 170 (pedido do dono): botão azul COMPROVANTE (80mm) REMOVIDO — ficou
+ * apenas: Mini Boleto, PDF do Inter e Enviar (WhatsApp). O comprovante de
+ * linha digitável da tela de entrega (EntregasView) continua intacto.
  */
 
 interface BoletoCardProps {
@@ -202,37 +204,9 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
     if (!r.ok && r.erro) showToast?.(r.erro, 'error');
   };
 
-  // ==================================================================
-  // BLOCO 82: COMPROVANTE 80mm — imprime na térmica a linha digitável
-  // com código de barras + QR do PIX (o boleto oficial continua sendo
-  // o PDF do Inter p/ WhatsApp). Fonte: dados já carregados no card.
-  // ==================================================================
-  const handleImprimirComprovante = async () => {
-    if (busy || !boleto) return;
-    setBusy(true);
-    try {
-      const texto = comprovanteBoletoTexto({
-        vendaRef: saleId.slice(0, 8).toUpperCase(),
-        pagadorNome: clienteNome,
-        pagadorDoc: clienteDoc,
-        valor: boleto.valor,
-        vencimento: boleto.vencimento,
-        status: boleto.status,
-        linhaDigitavel: boleto.linhaDigitavel,
-        codigoBarras: boleto.codigoBarras,
-        pixCopiaECola: boleto.pixCopiaECola,
-      });
-      const ok = await bluetoothPrinter.print(texto, '80MM', { skipConfirm: true });
-      if (ok) showToast?.('Comprovante enviado à impressora!', 'success');
-      else showToast?.('Impressão não realizada — conecte a impressora.', 'error');
-    } catch (e: any) {
-      const msg = e?.message || '';
-      if (msg === 'BLUETOOTH_NAO_SUPORTADO') showToast?.('Bluetooth não disponível neste aparelho (use o Chrome do Android).', 'error');
-      else showToast?.(`Erro na impressão: ${msg}`, 'error');
-    } finally {
-      setBusy(false);
-    }
-  };
+  // BLOCO 170: COMPROVANTE 80mm removido deste card (pedido do dono) — o mini
+  // boleto completo (MiniBoletoImpressao) cobre a térmica com linha digitável
+  // + código de barras + QR do PIX.
 
   const handleCopiarTexto = async (txt: string, rotulo: string) => {
     try {
@@ -363,18 +337,13 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
           {/* BLOCO 167: MINI BOLETO 80mm — papel térmico com o MESMO layout da
               mini DANFE (código de barras + linha digitável + QR do PIX).
               BLOCO 152: o boleto OFICIAL segue sendo o PDF ORIGINAL do Inter. */}
+          {/* BLOCO 170: único botão de térmica deste card — o botão azul
+              COMPROVANTE (80mm) foi removido pelo dono. */}
           {(boleto.linhaDigitavel || boleto.codigoBarras || boleto.pixCopiaECola) && miniDados && (
             <button onClick={() => setMiniAbrir(true)}
               className="w-full bg-teal-600 text-white font-black py-2.5 rounded-xl text-[9px] uppercase tracking-widest active:scale-95">
               <i className="fa-solid fa-receipt mr-1"></i>
               Mini Boleto (80mm)
-            </button>
-          )}
-          {['A_RECEBER', 'ATRASADO', 'RECEBIDO', 'MARCADO_RECEBIDO'].includes(boleto.status) && (boleto.linhaDigitavel || boleto.pixCopiaECola) && (
-            <button onClick={handleImprimirComprovante} disabled={busy}
-              className="w-full bg-blue-600 text-white font-black py-2.5 rounded-xl text-[9px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
-              <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-print'} mr-1`}></i>
-              Comprovante (80mm)
             </button>
           )}
           {form && (

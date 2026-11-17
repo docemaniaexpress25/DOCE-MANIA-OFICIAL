@@ -158,6 +158,7 @@ Esta skill vive em `skills/docemania-expert/` e é versionada no git (exceção 
 | `references/integracoes-webhooks.md` | Tarefa de Inter, Focus, Spedy, Pix, webhook, cron, baixa automática, tokens/secrets das APIs |
 | `references/qa-deploy.md` | Antes de commit/QA/deploy; tabela de bugs históricos e padrões de SQL/git/Vercel |
 | `references/ui-ux.md` | Tarefa de tela nova, botão, navegação, configurações, portais, padrões visuais |
+| `references/roadmap-otimizacoes.md` | Dono pedir otimizações/melhorias/consultoria (estoque, margens, automações, vender mais, portais, sync, segurança, telas) — lista aprovável do bloco 169 + limites do Supabase FREE |
 
 ## 13. Estado vivo — pendências em aberto (atualizar a cada bloco)
 

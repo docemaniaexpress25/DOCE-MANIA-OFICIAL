@@ -4,11 +4,12 @@ import { useState, useEffect, useMemo } from 'react';
 import { boletoService, BoletoInfo, BoletoConfigInfo, NotaDaVendaInfo } from '@/services/boletoService';
 import { validaCpfCnpj } from '@/lib/validaDoc';
 // BLOCO 177: MINI BOLETO imprime DIRETO (sem preview) nos DOIS canais:
-// USB do PC = papel HTML 80mm (miniBoleto80Html); Bluetooth = texto ESC/POS
-// 48 colunas (comprovanteBoletoTexto) — MESMO caminho do cupom, toque e sai.
+// USB do PC e Bluetooth = MESMO papel HTML 80mm (miniBoleto80Html; no BT o
+// HTML é rasterizado a 203dpi — BLOCO 185, igual ao USB). Fallback BT: texto
+// 48 colunas (comprovanteBoletoTexto).
 import { miniBoleto80Html, type MiniBoletoDados } from '@/lib/miniBoleto80Html';
 import { comprovanteBoletoTexto } from '@/lib/danfeTexto';
-import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
+import { imprimirHtmlViaBt } from '@/lib/impressaoHtml';
 import { imprimirHtmlViaUsb, temBluetoothNavegador } from '@/lib/usbPrint';
 
 /**
@@ -340,8 +341,13 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
         showToast?.('Janela de impressão aberta — escolha a térmica USB.', 'success');
         return;
       }
-      if (!textoMiniBt) { showToast?.('Dados do boleto incompletos para a térmica.', 'error'); return; }
-      const ok = await bluetoothPrinter.print(textoMiniBt, '80MM', { skipConfirm: true });
+      if (!miniDados || !textoMiniBt) { showToast?.('Dados do boleto incompletos para a térmica.', 'error'); return; }
+      // BLOCO 185: BT imprime o MESMO papel do USB (miniBoleto80Html rasterizado
+      // a 203dpi — barras, QR do PIX e grade idênticos). Fallback: texto 48 colunas.
+      const ok = await imprimirHtmlViaBt(
+        () => miniBoleto80Html(miniDados, { raster: true }),
+        () => textoMiniBt,
+      );
       if (ok) showToast?.('Mini Boleto enviado à impressora Bluetooth!', 'success');
       else showToast?.('Impressão não realizada — conecte a impressora.', 'error');
     } catch (e: unknown) {

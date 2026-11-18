@@ -19,6 +19,10 @@ import { code128Svg } from './code128';
  *
  * O boleto OFICIAL continua sendo o PDF do Inter (enviado ao cliente) — este
  * papel é a cópia de conferência/trabalho na térmica, NÃO é documento fiscal.
+ *
+ * BLOCO 185 — o canal Bluetooth saiu SEMPRE em texto 48 colunas (layout
+ * diferente do USB, queixa do dono). Agora o BT imprime o MESMO HTML (variante
+ * raster via btRaster) — o papel sai IGUAL ao USB nos dois canais.
  */
 
 export interface MiniBoletoDados {
@@ -110,8 +114,10 @@ const docFmt = (d?: string): string => {
   return ascii(String(d || ''));
 };
 
-/** CSS do MINI BOLETO — mesmo padrão da MINI DANFE (bloco 163: 70mm). */
-const CSS_BOLETO = `@page { size: 70mm auto; margin: 0; }
+/** CSS do MINI BOLETO — mesmo padrão da MINI DANFE (bloco 163: 70mm).
+ *  BLOCO 185: BASE (papel: USB e raster BT) + TELA (só @media screen, colada
+ *  depois no canal USB — o raster BT nao pode levar body transform/hint). */
+const CSS_BOLETO_BASE = `@page { size: 70mm auto; margin: 0; }
 html, body { margin: 0; padding: 0; background: #ffffff; }
 * { box-sizing: border-box; }
 body { font-family: 'Consolas', 'Liberation Mono', 'DejaVu Sans Mono', 'Courier New', monospace; color: #000;
@@ -119,13 +125,6 @@ body { font-family: 'Consolas', 'Liberation Mono', 'DejaVu Sans Mono', 'Courier 
   -webkit-text-stroke: 0.15px #000; text-rendering: optimizeLegibility; }
 .poster { width: 70mm; background: #fff; }
 .hint { display: none; }
-@media screen {
-  html { height: auto; display: flex; justify-content: center; background: #ffffff; }
-  body { transform: scale(1.6); transform-origin: top center; margin: 12px 0; }
-  .poster { box-shadow: 0 0 24px rgba(0,0,0,0.35); }
-  .hint { display: block; background: #0f172a; color: #fff; font-family: Arial, sans-serif;
-    font-size: 12px; line-height: 1.4; padding: 8px 10px; text-align: center; }
-}
 .poster { padding: 2mm 1.8mm 1.2mm 1.8mm; font-size: 8pt; line-height: 1.32; }
 .row { display: flex; flex-wrap: wrap; justify-content: space-between; max-width: 100%; }
 .hd { border: 1.2px solid #000; padding: 1mm 1.3mm; display: flex; justify-content: space-between; align-items: center; gap: 2mm; }
@@ -159,11 +158,30 @@ body { font-family: 'Consolas', 'Liberation Mono', 'DejaVu Sans Mono', 'Courier 
 .corte { border-top: 0.3mm dashed #000; margin-top: 1.5mm; padding-top: 1mm;
   text-align: center; font-size: 6.5pt; font-weight: bold; letter-spacing: 0.3px; }`;
 
+/** BLOCO 185 — @media screen: preview/tela e janela USB. NAO vai no raster BT. */
+const CSS_BOLETO_TELA = `\n@media screen {
+  html { height: auto; display: flex; justify-content: center; background: #ffffff; }
+  body { transform: scale(1.6); transform-origin: top center; margin: 12px 0; }
+  .poster { box-shadow: 0 0 24px rgba(0,0,0,0.35); }
+  .hint { display: block; background: #0f172a; color: #fff; font-family: Arial, sans-serif;
+    font-size: 12px; line-height: 1.4; padding: 8px 10px; text-align: center; }
+}`;
+
+/**
+ * Opcoes do gerador do MINI BOLETO.
+ */
+export interface MiniBoletoHtmlOpcoes {
+  /** BLOCO 185: variante para RASTERIZACAO no canal Bluetooth (sem @media
+   *  screen e sem .hint) — o papel sai IGUAL ao do canal USB. */
+  raster?: boolean;
+}
+
 /**
  * Gera o documento HTML completo do MINI BOLETO 80mm.
  * Async por causa do QR Code do PIX copia-e-cola (imagem data URL).
  */
-export async function miniBoleto80Html(o: MiniBoletoDados): Promise<string> {
+export async function miniBoleto80Html(o: MiniBoletoDados, opcoes?: MiniBoletoHtmlOpcoes): Promise<string> {
+  const raster = opcoes?.raster === true;
   const linha = linhaFormatada(o.linhaDigitavel);
   const barras = String(o.codigoBarras || '').replace(/\D/g, '');
   const pix = String(o.pixCopiaECola || '').trim();
@@ -202,10 +220,10 @@ export async function miniBoleto80Html(o: MiniBoletoDados): Promise<string> {
 <head>
 <meta charset="utf-8" />
 <title>Mini Boleto 80mm</title>
-<style>${CSS_BOLETO}</style>
+<style>${CSS_BOLETO_BASE}${raster ? '' : CSS_BOLETO_TELA}</style>
 </head>
 <body>
-<div class="hint">MINI BOLETO 80mm — imprima em 100% (sem ajuste de escala) na térmica.<br />O boleto OFICIAL do cliente continua sendo o PDF do Banco Inter.</div>
+${raster ? '' : '<div class="hint">MINI BOLETO 80mm — imprima em 100% (sem ajuste de escala) na térmica.<br />O boleto OFICIAL do cliente continua sendo o PDF do Banco Inter.</div>'}
 <div class="poster">
 
   <div class="hd">

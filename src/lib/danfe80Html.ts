@@ -62,10 +62,12 @@ import { DanfeFiscalData } from './danfe80';
  *                NF-e (modelo 55); NFC-e nao vai (venda de balcao)
  *
  * A saida e um DOCUMENTO HTML COMPLETO (@page 80mm auto) pronto para o
- * dialogo de impressao USB (usbPrint.imprimirHtmlViaUsb) e para o preview.
+ * dialogo de impressao USB (usbPrint.imprimirHtmlViaUsb), para o preview e —
+ * BLOCO 185 — para a RASTERIZACAO do canal Bluetooth (variante raster:
+ * mesmo papel sem @media screen/.hint -> btRaster.htmlParaEscposRaster), que
+ * imprime o LAYOUT IDENTICO ao USB na termica pareada do celular.
  * Fonte: Consolas/Liberation Mono (monoespacada nítida, melhor definicao na
- * termica) com print-color-adjust: exact. No canal Bluetooth o cupom continua
- * saindo pelo texto 48 colunas (danfeFiscal80) — ESC/POS nao desenha grade.
+ * termica) com print-color-adjust: exact.
  */
 
 const escapeHtml = (s: string): string =>
@@ -157,8 +159,11 @@ function tributosDoTexto(inf?: string): { federais?: string; estaduais?: string;
   };
 }
 
-/** CSS do modelo de referencia (do dono) — BLOCO 163: pagina 70mm (cabe SEM ajuste de escala) + fonte +1pt + traço grosso. */
-const CSS_DANFE = `@page { size: 70mm auto; margin: 0; }
+/** CSS do modelo de referencia (do dono) — BLOCO 163: pagina 70mm (cabe SEM ajuste de escala) + fonte +1pt + traço grosso.
+ *  BLOCO 185: BASE = CSS puro de papel (USB e raster BT); TELA = só @media screen, colada DEPOIS da base
+ *  no canal USB — no raster o CSS entra num SVG foreignObject sem contexto de midia e NAO pode levar
+ *  o body transform scale(1.6) nem a .hint visivel (medicao 1.6x maior e barra escura no papel). */
+const CSS_DANFE_BASE = `@page { size: 70mm auto; margin: 0; }
 html, body { margin: 0; padding: 0; background: #ffffff; }
 * { box-sizing: border-box; }
 body { font-family: 'Consolas', 'Liberation Mono', 'DejaVu Sans Mono', 'Courier New', monospace; color: #000;
@@ -167,15 +172,8 @@ body { font-family: 'Consolas', 'Liberation Mono', 'DejaVu Sans Mono', 'Courier 
      o stroke NAO muda a largura das colunas monoespacadas (nada desalinha). */
   -webkit-text-stroke: 0.15px #000; text-rendering: optimizeLegibility; }
 .poster { width: 70mm; background: #fff; }
-/* .hint: esconder no papel — a regra @media screen abaixo (depois desta) sobrepõe na tela */
+/* .hint: esconder no papel — visivel só no @media screen (CSS_DANFE_TELA, canal USB) */
 .hint { display: none; }
-@media screen {
-  html { height: auto; display: flex; justify-content: center; background: #ffffff; }
-  body { transform: scale(1.6); transform-origin: top center; margin: 12px 0; }
-  .poster { box-shadow: 0 0 24px rgba(0,0,0,0.35); }
-  .hint { display: block; background: #0f172a; color: #fff; font-family: Arial, sans-serif;
-    font-size: 12px; line-height: 1.4; padding: 8px 10px; text-align: center; }
-}
 .poster { padding: 2mm 1.8mm 1.2mm 1.8mm; font-size: 8pt; line-height: 1.32; }
 .row { display: flex; flex-wrap: wrap; justify-content: space-between; max-width: 100%; }
 .hd-left { font-size: 7.8pt; font-weight: bold; }
@@ -242,11 +240,32 @@ body { font-family: 'Consolas', 'Liberation Mono', 'DejaVu Sans Mono', 'Courier 
 .qr-wrap .qlbl { font-size: 6.8pt; font-weight: bold; margin-top: 0.6mm; }
 .alerta { border: 1.2px solid #000; padding: 1mm 1.2mm; margin-top: 1.2mm; font-size: 7.4pt; font-weight: bold; text-align: center; }`;
 
+/** BLOCO 185 — @media screen: preview na tela e janela USB (iframe/srcdoc imprimem em midia screen).
+ *  NAO vai no raster BT (htmlParaEscposRaster) — la nao existe midia screen e o bloco quebraria a medicao. */
+const CSS_DANFE_TELA = `\n@media screen {
+  html { height: auto; display: flex; justify-content: center; background: #ffffff; }
+  body { transform: scale(1.6); transform-origin: top center; margin: 12px 0; }
+  .poster { box-shadow: 0 0 24px rgba(0,0,0,0.35); }
+  .hint { display: block; background: #0f172a; color: #fff; font-family: Arial, sans-serif;
+    font-size: 12px; line-height: 1.4; padding: 8px 10px; text-align: center; }
+}`;
+
+/**
+ * Opcoes do gerador do MINI DANFE.
+ */
+export interface DanfeHtmlOpcoes {
+  /** BLOCO 185: variante para RASTERIZACAO no canal Bluetooth — mesmo papel,
+   *  sem @media screen (que escalaria a medicao) e sem a barra .hint (que e
+   *  instrução de tela e nunca pode sair no papel). O USB segue intocado. */
+  raster?: boolean;
+}
+
 /**
  * Gera o documento HTML completo do MINI DANFE 80mm (layout de referencia).
  * Async por causa do QR Code da NFC-e (gerado como imagem data URL).
  */
-export async function danfeFiscal80Html(d: DanfeFiscalData): Promise<string> {
+export async function danfeFiscal80Html(d: DanfeFiscalData, opcoes?: DanfeHtmlOpcoes): Promise<string> {
+  const raster = opcoes?.raster === true;
   const chave = (d.chave || '').replace(/\D/g, '');
   const info = extrairDaChave(chave);
   const isNfe = (d.modelo === 'NFE') || (info?.mod === '55');
@@ -394,11 +413,11 @@ export async function danfeFiscal80Html(d: DanfeFiscalData): Promise<string> {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Mini DANFE 80mm - ${isNfe ? 'NF-e' : 'NFC-e'} ${escapeHtml(nfNum)} Serie ${escapeHtml(serieNum)}</title>
 <style>
-${CSS_DANFE}
+${CSS_DANFE_BASE}${raster ? '' : CSS_DANFE_TELA}
 </style>
 </head>
 <body>
-<div class="hint">MINI DANFE 80mm — LARGURA 70mm (cabe na area imprimivel) • IMPRIMA EM ESCALA 100% E MARGENS “NENHUMA/MÍNIMA” • NAO PRECISA MAIS AJUSTAR ESCALA</div>
+${raster ? '' : '<div class="hint">MINI DANFE 80mm — LARGURA 70mm (cabe na area imprimivel) • IMPRIMA EM ESCALA 100% E MARGENS “NENHUMA/MÍNIMA” • NAO PRECISA MAIS AJUSTAR ESCALA</div>'}
 <div class="poster">
 
   <div class="row">

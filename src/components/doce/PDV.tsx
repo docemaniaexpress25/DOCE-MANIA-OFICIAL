@@ -7,6 +7,7 @@ import ConfirmModal from '@/components/doce/ConfirmModal';
 import PrinterSelector from '@/components/doce/PrinterSelector';
 import { loadLocalState, saveLocalState } from '@/utils/persistence';
 import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
+import { imprimirHtmlViaBt } from '@/lib/impressaoHtml';
 import { wakeLockManager } from '@/utils/wakeLock';
 // BLOCO 82: impressão no iPhone — instruções do Bluefy quando a Apple bloqueia o Bluetooth
 import { isIOSDevice, TEXTO_IMPRESSAO_IOS, TITULO_IMPRESSAO_IOS } from '@/lib/iosPrint';
@@ -450,7 +451,12 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         setAppModal({ title: 'Cupom Fiscal', message: 'Janela de impressão aberta — escolha a térmica USB do computador e confirme.', icon: 'fa-solid fa-desktop', iconColor: 'text-violet-500', type: 'success' });
         return;
       }
-      const ok = await bluetoothPrinter.print(texto, '80MM', { skipConfirm: true });
+      // BLOCO 185: BT sai com o MESMO LAYOUT do USB (raster do HTML de referência,
+      // grade/barras/forma de pagamento idênticas). Fallback: texto 48 colunas.
+      const ok = await imprimirHtmlViaBt(
+        () => danfeFiscal80Html(cup, { raster: true }),
+        () => texto,
+      );
       if (ok) setAppModal({ title: 'Cupom Fiscal', message: 'Cupom fiscal enviado a impressora!', icon: 'fa-solid fa-circle-check', iconColor: 'text-emerald-500', type: 'success' });
       else setAppModal({ title: 'Cupom Fiscal', message: 'Impressao nao realizada — conecte a impressora Bluetooth.', icon: 'fa-solid fa-bluetooth-b', iconColor: 'text-blue-500', type: 'info' });
     } catch (e: any) {

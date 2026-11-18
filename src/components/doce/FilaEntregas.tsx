@@ -13,7 +13,7 @@ import { notaService } from '@/services/notaService';
 import { danfeFiscal80 } from '@/lib/danfe80';
 // BLOCO 158: canal USB imprime o layout de REFERENCIA do dono (HTML 80mm)
 import { danfeFiscal80Html } from '@/lib/danfe80Html';
-import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
+import { imprimirHtmlViaBt } from '@/lib/impressaoHtml';
 // BLOCO 111: impressão térmica USB do PC — canal BT x USB persistente por dispositivo
 import { imprimirHtmlViaUsb, lerCanalImpressao, dispositivoIOS } from '@/lib/usbPrint';
 // BLOCO 123: regras fiscais ARMADAS porém DESLIGADAS (flag em
@@ -364,7 +364,11 @@ const AcaoFiscalAdmin: React.FC<{ p: FilaItem; showToast: (m: string, t?: 'succe
         setBusy(false);
         return;
       }
-      const ok = await bluetoothPrinter.print(texto, '80MM', { skipConfirm: true });
+      // BLOCO 185: BT sai com o MESMO LAYOUT do USB (raster do HTML de referência).
+      const ok = await imprimirHtmlViaBt(
+        () => danfeFiscal80Html(cup, { raster: true }),
+        () => texto,
+      );
       if (ok) showToast('Cupom fiscal enviado à impressora!', 'success');
       else showToast('Impressão não realizada — conecte a impressora.', 'error');
     } catch (e: any) {

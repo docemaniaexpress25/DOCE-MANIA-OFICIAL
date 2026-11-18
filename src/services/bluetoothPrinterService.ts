@@ -189,6 +189,14 @@ export interface BluetoothPrinter {
 
 export type PrinterWidth = '56MM' | '80MM';
 
+export interface PrintOptions {
+  skipConfirm?: boolean;
+  /** BLOCO 185: bytes por chunk — texto usa 100/40ms de sempre; raster usa 300/10ms. */
+  chunkSize?: number;
+  /** Intervalo entre chunks (ms) — raster usa 10ms. */
+  delayMs?: number;
+}
+
 export interface PrintJob {
   status: 'idle' | 'scanning' | 'connecting' | 'connected' | 'printing' | 'done' | 'error';
   printerName?: string;
@@ -638,13 +646,17 @@ class BluetoothPrinterService {
 
   /**
    * Send raw bytes to the printer in chunks
+   * BLOCO 185: chunkSize/delayMs configuráveis — o raster da DANFE/boleto
+   * (imagens de ~100-250KB) precisa de chunks maiores (300) e intervalo menor
+   * (10ms) para sair em segundos; o TEXTO continua 100/40ms (ritmo de campo
+   * comprovado, BLOCO 34).
    */
-  private async sendBytes(data: Uint8Array, onProgress?: (pct: number) => void): Promise<void> {
+  private async sendBytes(data: Uint8Array, onProgress?: (pct: number) => void, opts?: { chunkSize?: number; delayMs?: number }): Promise<void> {
     if (!this.printer) throw new Error('IMPRESSORA_NAO_CONECTADA');
 
     const device = this.printer.device;
-    const CHUNK = 100; // bytes per chunk
-    const DELAY = 40;  // BLOCO 34: 30 -> 40ms — buffer do modulo BLE dos
+    const CHUNK = opts?.chunkSize ?? 100; // bytes per chunk
+    const DELAY = opts?.delayMs ?? 40;    // BLOCO 34: 30 -> 40ms — buffer do modulo BLE dos
                        // chineses com write sem resposta estoura e o firmware
                        // se defende DERRUBANDO o GATT (causa da queda no meio
                        // do cupom). 40ms mantem o mesmo ritmo com folga.
@@ -808,13 +820,31 @@ class BluetoothPrinterService {
    * writes disputando o mesmo link) e a conexão é restaurada SILENCIOSAMENTE
    * antes do seletor nativo — o vendedor não precisa mais "reconectar" na mão.
    */
-  async print(rawText: string, width: PrinterWidth = '56MM', options?: { skipConfirm?: boolean }): Promise<boolean> {
-    const job = this.printQueue.then(() => this._print(rawText, width, options));
+  async print(rawText: string, width: PrinterWidth = '56MM', options?: PrintOptions): Promise<boolean> {
+    const job = this.printQueue.then(() => this._printText(rawText, width, options));
     this.printQueue = job.then(() => undefined, () => undefined);
     return job;
   }
 
-  private async _print(rawText: string, width: PrinterWidth = '56MM', options?: { skipConfirm?: boolean }): Promise<boolean> {
+  /**
+   * BLOCO 185 — IMPRESSÃO POR BYTES PRÉ-MONTADOS (raster GS v 0 do btRaster).
+   * Mesma fila, mesma reconexão silenciosa, mesmos confirm/status do print()
+   * de texto — só troca o buffer. Usado pelo canal BT da MINI DANFE e do
+   * MINI BOLETO para sair com o LAYOUT EXATO do canal USB.
+   */
+  async printBytes(data: Uint8Array, width: PrinterWidth = '80MM', options?: PrintOptions): Promise<boolean> {
+    if (!data?.length) return false;
+    const job = this.printQueue.then(() => this._printBuffer(data, width, options));
+    this.printQueue = job.then(() => undefined, () => undefined);
+    return job;
+  }
+
+  private async _printText(rawText: string, width: PrinterWidth = '56MM', options?: PrintOptions): Promise<boolean> {
+    const buffer = this.buildEscposBuffer(rawText, width);
+    return this._printBuffer(buffer, width, options);
+  }
+
+  private async _printBuffer(data: Uint8Array, width: PrinterWidth = '56MM', options?: PrintOptions): Promise<boolean> {
     if (!this.isAvailable()) {
       throw new Error('BLUETOOTH_NAO_SUPORTADO');
     }
@@ -881,10 +911,9 @@ class BluetoothPrinterService {
     // retry do sendBytes (que retoma do chunk atual).
     this.printing = true;
     try {
-      const buffer = this.buildEscposBuffer(rawText, width);
-      await this.sendBytes(buffer, (pct) => {
+      await this.sendBytes(data, (pct) => {
         this.emitStatus({ status: 'printing', printerName, progress: pct });
-      });
+      }, { chunkSize: options?.chunkSize, delayMs: options?.delayMs });
 
       this.emitStatus({ status: 'done', printerName, progress: 100 });
       return true;

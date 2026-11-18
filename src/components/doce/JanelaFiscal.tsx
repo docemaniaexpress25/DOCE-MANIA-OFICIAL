@@ -11,7 +11,7 @@ import {
 import { danfeFiscal80 } from '@/lib/danfe80';
 // BLOCO 158: canal USB imprime o layout de REFERENCIA do dono (HTML 80mm)
 import { danfeFiscal80Html } from '@/lib/danfe80Html';
-import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
+import { imprimirHtmlViaBt } from '@/lib/impressaoHtml';
 // BLOCO 111: canal USB do PC — o cupom fiscal também sai na térmica USB
 // BLOCO 177: a Janela Fiscal agora tem os DOIS canais de impressão ao alcance
 // do toque (Bluetooth x USB do PC) — igual à impressão do cupom.
@@ -270,9 +270,13 @@ const JanelaFiscal: React.FC<JanelaFiscalProps> = ({ sale, client, nota, focus, 
         setInfo('Janela de impressão aberta — escolha a térmica USB do computador.');
         return;
       }
-      // BLOCO 177: Bluetooth — MESMO canal da impressão do cupom (ESC/POS 48
-      // colunas). Sem preview: toque e sai o papel.
-      const ok = await bluetoothPrinter.print(danfeFiscal80(cup), '80MM', { skipConfirm: true });
+      // BLOCO 185: Bluetooth — imprime o MESMO LAYOUT do USB (HTML de referência
+      // rasterizado a 203dpi, grade/barras/fonte idênticas; forma de pagamento
+      // incluída — bloco 180). Fallback: texto 48 colunas se o navegador não rasterizar.
+      const ok = await imprimirHtmlViaBt(
+        () => danfeFiscal80Html(cup, { raster: true }),
+        () => danfeFiscal80(cup),
+      );
       if (ok) { setInfo('Cupom fiscal enviado à impressora Bluetooth!'); avisar('Mini-DANFE enviado!', 'success'); }
       else setErro('Impressão não realizada — conecte a impressora Bluetooth.');
     } catch (e: unknown) {

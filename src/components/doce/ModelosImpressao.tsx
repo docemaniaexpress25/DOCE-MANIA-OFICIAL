@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { DanfeFiscalData, danfeFiscal80 } from '@/lib/danfe80';
 import { danfeFiscal80Html } from '@/lib/danfe80Html';
 import { DEMO_DANFE_69 } from '@/lib/danfeDemo';
-import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
+import { imprimirHtmlViaBt } from '@/lib/impressaoHtml';
 import { imprimirHtmlViaUsb, lerCanalImpressao, dispositivoIOS } from '@/lib/usbPrint';
 
 /**
@@ -15,12 +15,15 @@ import { imprimirHtmlViaUsb, lerCanalImpressao, dispositivoIOS } from '@/lib/usb
  * DEFINICAO DE QUALIDADE DA FONTE"): o preview agora mostra o LAYOUT DE
  * REFERENCIA do dono (grade, caixa de valor total em destaque, codigo de
  * barras CODE 128 e fonte monoespacada de melhor definicao) — exatamente a
- * folha que sai no canal USB. Bluetooth segue no texto 48 colunas (ESC/POS
- * nao desenha grade/box).
+ * folha que sai no canal USB.
  *
- * Canais: Bluetooth (Web Bluetooth, texto ESC/POS) e USB do PC (papel
- * virtual do navegador com o HTML do layout novo). O canal padrao do
- * dispositivo e o mesmo do cupom.
+ * BLOCO 185 (dono: "faça a impressao por bt ser igual a de usb, pois a de usb
+ * esta muito boa"): o Bluetooth também imprime ESTA MESMA FOLHA (raster
+ * 203dpi do HTML — btRaster) e não mais o texto 48 colunas. Nos dois canais
+ * o papel sai idêntico, com forma de pagamento (bloco 180).
+ *
+ * Canais: Bluetooth (Web Bluetooth) e USB do PC (papel virtual do navegador).
+ * O canal padrao do dispositivo e o mesmo do cupom.
  */
 
 interface ModelosImpressaoProps {
@@ -84,7 +87,11 @@ const ModelosImpressao: React.FC<ModelosImpressaoProps> = ({ abrir, onClose, cup
         return;
       }
       if (!textoDanfe) return;
-      const ok = await bluetoothPrinter.print(textoDanfe, '80MM', { skipConfirm: true });
+      // BLOCO 185: BT imprime o MESMO layout do USB (HTML rasterizado a 203dpi).
+      const ok = await imprimirHtmlViaBt(
+        () => danfeFiscal80Html(cupomFinal, { raster: true }),
+        () => textoDanfe,
+      );
       if (ok) showToast?.('Mini DANFE enviado à impressora Bluetooth!', 'success');
       else showToast?.('Impressão não realizada — conecte a impressora.', 'error');
     } catch (e: unknown) {
@@ -143,7 +150,7 @@ const ModelosImpressao: React.FC<ModelosImpressaoProps> = ({ abrir, onClose, cup
           )}
           {!iosSel && (
             <p className="text-[8px] font-bold text-white/40 text-center leading-snug">
-              USB: sai EXATAMENTE esta folha (layout de referência). Bluetooth: sai a versão texto de 48 colunas (ESC/POS não desenha grade).
+              USB e Bluetooth: sai EXATAMENTE esta folha (BLOCO 185 — o BT rasteriza este mesmo papel a 203dpi; se o navegador não rasterizar, sai o texto de 48 colunas).
             </p>
           )}
         </div>

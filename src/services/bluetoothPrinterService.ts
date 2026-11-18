@@ -191,10 +191,17 @@ export type PrinterWidth = '56MM' | '80MM';
 
 export interface PrintOptions {
   skipConfirm?: boolean;
-  /** BLOCO 185: bytes por chunk — texto usa 100/40ms de sempre; raster usa 300/10ms. */
+  /** BLOCO 185: bytes por chunk — texto usa 100/40ms de sempre; raster usa 480/5ms. */
   chunkSize?: number;
-  /** Intervalo entre chunks (ms) — raster usa 10ms. */
+  /** Intervalo entre chunks (ms) — raster usa 5ms (o ACK já controla o fluxo). */
   delayMs?: number;
+  /** BLOCO 186 (MTP-3): escrever COM resposta (writeValueWithResponse) — o ATT
+   *  ack dá controle de fluxo REAL e o Long Write fecha qualquer MTU (o Write
+   *  Command do writeValueWithoutResponse NÃO fragmenta: acima de (MTU-3)
+   *  bytes o módulo barato trunca em silêncio e o raster sai embaralhado).
+   *  Se a característica não aceitar, degrada para sem-resposta 100/30ms
+   *  (ritmo de campo do texto, provado na MTP-3). */
+  comResposta?: boolean;
 }
 
 export interface PrintJob {
@@ -647,31 +654,85 @@ class BluetoothPrinterService {
   /**
    * Send raw bytes to the printer in chunks
    * BLOCO 185: chunkSize/delayMs configuráveis — o raster da DANFE/boleto
-   * (imagens de ~100-250KB) precisa de chunks maiores (300) e intervalo menor
-   * (10ms) para sair em segundos; o TEXTO continua 100/40ms (ritmo de campo
-   * comprovado, BLOCO 34).
+   * (imagens de ~100-250KB) vai em chunks maiores com COM RESPOSTA.
+   * BLOCO 186 (MTP-3 GOOJPRT 80mm): writeValueWithoutResponse usa Write
+   * Command BLE que NÃO fragmenta — chunk maior que (MTU-3) é TRUNCADO em
+   * silêncio pelo módulo barato (imagem deslocada/embaralhada = raster
+   * "bugado" enquanto o texto de 100 bytes saía sempre bom). O raster agora
+   * escreve COM resposta (o ack pega o fluxo; Long Write fecha qualquer MTU)
+   * e, se o módulo não aceitar write com resposta, degrada para o ritmo de
+   * campo do texto (100 bytes / 30ms sem resposta) — confiável > rápido.
    */
-  private async sendBytes(data: Uint8Array, onProgress?: (pct: number) => void, opts?: { chunkSize?: number; delayMs?: number }): Promise<void> {
+  private async sendBytes(data: Uint8Array, onProgress?: (pct: number) => void, opts?: { chunkSize?: number; delayMs?: number; comResposta?: boolean }): Promise<void> {
     if (!this.printer) throw new Error('IMPRESSORA_NAO_CONECTADA');
 
     const device = this.printer.device;
-    const CHUNK = opts?.chunkSize ?? 100; // bytes per chunk
-    const DELAY = opts?.delayMs ?? 40;    // BLOCO 34: 30 -> 40ms — buffer do modulo BLE dos
+    let CHUNK = opts?.chunkSize ?? 100; // bytes per chunk
+    let DELAY = opts?.delayMs ?? 40;    // BLOCO 34: 30 -> 40ms — buffer do modulo BLE dos
                        // chineses com write sem resposta estoura e o firmware
                        // se defende DERRUBANDO o GATT (causa da queda no meio
                        // do cupom). 40ms mantem o mesmo ritmo com folga.
+    // BLOCO 186: pedido de escrita COM resposta (raster).
+    let usarResposta = opts?.comResposta === true;
+    if (usarResposta && this.printer.characteristic.properties?.write !== true) {
+      // Característica sem write com resposta: degrada ANTES do 1º chunk para
+      // o pacing conservador sem resposta (prova de campo do texto).
+      usarResposta = false;
+      CHUNK = 100;
+      DELAY = 30;
+    }
 
-    for (let i = 0; i < data.length; i += CHUNK) {
+    /** Um write de verdade, no modo corrente. */
+    const escrever = async (chunk: Uint8Array): Promise<void> => {
+      const char = this.printer!.characteristic;
+      const c = char as unknown as {
+        writeValueWithResponse?: (v: BufferSource) => Promise<void>;
+      };
+      if (usarResposta) {
+        if (typeof c.writeValueWithResponse === 'function') {
+          await c.writeValueWithResponse(chunk);
+          return;
+        }
+        if (char.properties.write) {
+          await char.writeValue(chunk); // writeValue clássico = com resposta
+          return;
+        }
+      }
+      if (char.properties.writeWithoutResponse) {
+        await char.writeValueWithoutResponse(chunk);
+        return;
+      }
+      if (char.properties.write) {
+        // Sem writeWithoutResponse o único caminho é com resposta mesmo.
+        if (typeof c.writeValueWithResponse === 'function') await c.writeValueWithResponse(chunk);
+        else await char.writeValue(chunk);
+        return;
+      }
+      throw new Error('CARACTERISTICA_SEM_ESCRITA');
+    };
+
+    for (let i = 0; i < data.length;) {
+      // BLOCO 186: o chunk é re-fatiado do i corrente — se o modo degrada no
+      // meio (com resposta -> sem resposta), o trecho NÃO efetivado é
+      // re-sliceado no CHUNK novo, sem enviar trecho duplicado (que imprimiria
+      // banda repetida na folha) nem chunk gigante sem resposta (truncação).
       const chunk = data.slice(i, i + CHUNK);
       let ok = false;
+      let refazer = false; // modo degradou NESTE chunk: re-slicea do mesmo i
 
       // BLOCO 34: 3 tentativas por chunk. Na 2a/3a o app RECONECTA o GATT
       // (device em memoria) e CONTINUA do chunk atual — o cupom nao se perde
       // e nao recomeça do zero quando o BLE cai no meio da impressao.
+      // BLOCO 186: a reconexao so acontece se o link REALMENTE caiu — com o
+      // raster COM resposta, um NotSupportedError do modulo (Prepare Write
+      // ausente) degrada o MODO sem matar o link, e queimar tentativa de
+      // reconexao com o link vivo custava 2 tentativas inteiras (no fim
+      // ERRO_ENVIO_DADOS em modulo que so aceita write sem resposta).
       for (let t = 0; t < 3 && !ok; t++) {
-        // BLOCO 68: se o link morreu no meio do cupom (printer null), a 1ª
-        // tentativa JÁ reconecta — não desperdiça uma rodada de escrita.
-        if (!this.printer || t > 0) {
+        // BLOCO 68: se o link morreu no meio do cupom (printer null ou GATT
+        // fora), a tentativa JÁ reconecta — não desperdiça uma rodada de escrita.
+        const linkVivo = !!this.printer && this.printer.device.gatt?.connected === true;
+        if (!linkVivo) {
           try {
             const printer = await this.openDevice(device, 6000);
             this.installPrinter(printer);
@@ -681,26 +742,35 @@ class BluetoothPrinterService {
           }
         }
         try {
-          const char = this.printer!.characteristic;
-          if (char.properties.writeWithoutResponse) {
-            await char.writeValueWithoutResponse(chunk);
-          } else if (char.properties.write) {
-            await char.writeValue(chunk);
-          } else {
-            throw new Error('CARACTERISTICA_SEM_ESCRITA');
-          }
+          await escrever(chunk);
           ok = true;
         } catch {
+          // BLOCO 186: write COM resposta falhou (módulo não suporta Prepare
+          // Write / erro transiente) — degrada para SEM resposta com o ritmo
+          // conservador e REFAZ o mesmo trecho em chunks menores: a escrita
+          // falhou INTEIRA (nada foi impresso), então re-slicear do mesmo i é
+          // seguro e evita chunk gigante sem resposta (truncação no MTU).
+          if (usarResposta) {
+            usarResposta = false;
+            CHUNK = 100;
+            DELAY = 30;
+            refazer = true;
+            break;
+          }
           await new Promise(r => setTimeout(r, 300));
         }
       }
+      if (refazer) continue;
       if (!ok) throw new Error('ERRO_ENVIO_DADOS');
 
-      onProgress?.(Math.min(100, Math.round(((i + CHUNK) / data.length) * 100)));
+      onProgress?.(Math.min(100, Math.round(((i + chunk.length) / data.length) * 100)));
 
-      if (i + CHUNK < data.length) {
-        await new Promise(r => setTimeout(r, DELAY));
+      if (i + chunk.length < data.length) {
+        // COM resposta o ack já ritma o link — o DELAY aqui é só folga mínima;
+        // SEM resposta o DELAY é a única defesa contra o estouro do buffer.
+        await new Promise(r => setTimeout(r, usarResposta ? Math.min(DELAY, 5) : DELAY));
       }
+      i += chunk.length; // avança EXATAMENTE o trecho efetivado
     }
   }
 
@@ -831,6 +901,8 @@ class BluetoothPrinterService {
    * Mesma fila, mesma reconexão silenciosa, mesmos confirm/status do print()
    * de texto — só troca o buffer. Usado pelo canal BT da MINI DANFE e do
    * MINI BOLETO para sair com o LAYOUT EXATO do canal USB.
+   * BLOCO 186 (MTP-3): bandas de GS v 0 (btRaster) + escrita COM resposta —
+   * o papel sai igual ao USB e íntegro no módulo BLE barato.
    */
   async printBytes(data: Uint8Array, width: PrinterWidth = '80MM', options?: PrintOptions): Promise<boolean> {
     if (!data?.length) return false;
@@ -913,7 +985,7 @@ class BluetoothPrinterService {
     try {
       await this.sendBytes(data, (pct) => {
         this.emitStatus({ status: 'printing', printerName, progress: pct });
-      }, { chunkSize: options?.chunkSize, delayMs: options?.delayMs });
+      }, { chunkSize: options?.chunkSize, delayMs: options?.delayMs, comResposta: options?.comResposta });
 
       this.emitStatus({ status: 'done', printerName, progress: 100 });
       return true;

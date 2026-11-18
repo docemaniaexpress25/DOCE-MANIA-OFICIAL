@@ -25,18 +25,38 @@
  *   2. O poster e re-renderizado dentro de um SVG <foreignObject> NA
  *      RESOLUCAO DA CABECA TERMICA (560 dots = 70mm x 8 dots/mm, 203dpi):
  *      transform scale() amplia o layout do iframe para a largura de dots.
- *   3. O SVG vira Image -> canvas -> luminancia -> LIMIAR (1-bit: ponto
- *      queimado ou nao) -> bytes por linha (70 bytes/linha).
- *   4. Embala no comando GS v 0 (raster bit-image) + alimentacao + corte.
+ *   3. O SVG vira Image (data URL — Blob URL TINGE o canvas com
+ *      foreignObject no Chromium, provado no QA) -> canvas -> luminancia ->
+ *      LIMIAR (1-bit) -> bytes por linha (70 bytes/linha).
+ *   4. Embala em BANDAS de GS v 0 (128 linhas por comando, ~9KB cada) +
+ *      alimentacao + corte. BLOCO 186 (impressora MTP-3 GOOJPRT 80mm): o
+ *      firmware barato NAO consegue guardar uma imagem inteira de 100-250KB
+ *      em RAM — com UM comando gigante o papel saia rasgado/comecado no
+ *      meio. Em bandas a impressora imprime cada fatia conforme chega.
  *
  * O envio usa o MESMO bluetoothPrinterService (fila, reconnect, retry por
- * chunk) com chunk maior (300 bytes) e intervalo menor (10ms) — o texto
- * continua com o ritmo de sempre (100/40ms).
+ * chunk) — BLOCO 186: o raster vai COM RESPOSTA (ATT ack controla o fluxo,
+ * chunk 480/5ms) e degrada para 100/30ms sem resposta se o módulo não
+ * aceitar; o TEXTO continua com o ritmo de sempre (100/40ms sem resposta).
  *
  * FALLBACK: se a rasterizacao falhar num navegador (foreignObject/canvas
  * indisponivel), o chamador volta para o TEXTO 48 colunas de sempre — a
  * impressao nunca morre. (Chrome/Edge no Android/PC, que sao os aparelhos
  * com Web Bluetooth, suportam todo o caminho de raster.)
+ *
+ * BLOCO 186 — POR QUE SAIA "BUGADO" NA MTP-3 (GOOJPRT, 80mm, BT 4.2, 203dpi):
+ *   a) a imagem inteira ia num UNICO GS v 0 (100-250KB) — o firmware da
+ *      MTP-3 nao tem RAM para isso: papel rasgado/comecado no meio;
+ *   b) chunks de 300 bytes com writeValueWithoutResponse: o Write Command
+ *      BLE nao tem fragmentacao — acima de (MTU-3) bytes o modulo barato
+ *      TRUNCA em silencio, e cada chunk perdia pedaco (imagem deslocada/
+ *      embaralhada). O TEXTO de 100 bytes sempre funcionou — por isso o
+ *      cupom saia bom e o raster saia "bugado". Agora o envio do raster usa
+ *      writeValue COM resposta (ATT ack = controle de fluxo real, Long
+ *      Write fecha qualquer MTU) e degrada para 100/30ms sem resposta;
+ *   c) o MINI BOLETO (modal MiniBoletoImpressao) nem tinha migrado — o BT
+ *      dele ainda mandava TEXTO 48 colunas, layout totalmente diferente do
+ *      USB (corrigido no proprio componente).
  */
 
 export interface OpcoesRaster {
@@ -109,6 +129,40 @@ export function comandoEscposRaster(bits: BitsRaster): Uint8Array {
   cmd.set(bytes, o); o += bytes.length;
   cmd[o++] = ESC; cmd[o++] = 0x64; cmd[o++] = 4;         // ESC d 4 — alimenta 4 linhas
   cmd[o++] = GS; cmd[o++] = 0x56; cmd[o++] = 0x01;       // GS V 1 — corte parcial (mesmo do texto)
+  return cmd.subarray(0, o);
+}
+
+// ---------------------------------------------------------------------------
+// 3b) PURA — BLOCO 186: mesmo comando ESC/POS raster, em BANDAS de linhas.
+// A MTP-3 (e qualquer térmica BLE barata) imprime cada GS v 0 só quando o
+// comando INTEIRO chegou — uma imagem de 232KB num comando só estoura o
+// buffer do firmware (papel rasgado/comecado). Em bandas de 128 linhas
+// (128 x 70 bytes = 8.96KB por comando) cada fatia cabe no buffer e é
+// impressa conforme chega — o resultado na folha é idêntico (o raster
+// avança exatamente a altura da banda; nenhuma emenda aparece).
+// ---------------------------------------------------------------------------
+export const LINHAS_POR_BANDA = 128;
+
+export function comandoEscposRasterBandas(bits: BitsRaster, linhasPorBanda: number = LINHAS_POR_BANDA): Uint8Array {
+  const ESC = 0x1b;
+  const GS = 0x1d;
+  const { bytes, bytesPorLinha, altura } = bits;
+  const banda = Math.max(1, Math.min(1024, Math.floor(linhasPorBanda)));
+  const totalBandas = Math.ceil(altura / banda);
+  // ESC @ (2) + bandas [ GS v 0 0 xL xH yL yH (8) + dados ] + ESC d 4 (3) + GS V 1 (3)
+  const cmd = new Uint8Array(2 + totalBandas * 8 + bytes.length + 6);
+  let o = 0;
+  cmd[o++] = ESC; cmd[o++] = 0x40;                       // ESC @ — init (UMA vez)
+  for (let y = 0; y < altura; y += banda) {
+    const h = Math.min(banda, altura - y);
+    cmd[o++] = GS; cmd[o++] = 0x76; cmd[o++] = 0x30; cmd[o++] = 0x00; // GS v 0, modo 0
+    cmd[o++] = bytesPorLinha & 0xff; cmd[o++] = (bytesPorLinha >> 8) & 0xff; // xL xH
+    cmd[o++] = h & 0xff; cmd[o++] = (h >> 8) & 0xff;               // yL yH da banda
+    cmd.set(bytes.subarray(y * bytesPorLinha, (y + h) * bytesPorLinha), o);
+    o += h * bytesPorLinha;
+  }
+  cmd[o++] = ESC; cmd[o++] = 0x64; cmd[o++] = 4;         // ESC d 4 — alimenta 4 linhas
+  cmd[o++] = GS; cmd[o++] = 0x56; cmd[o++] = 0x01;       // GS V 1 — corte parcial
   return cmd.subarray(0, o);
 }
 
@@ -234,11 +288,18 @@ export async function htmlParaEscposRaster(html: string, opcoes?: OpcoesRaster):
   })();
   if (erroParse) throw new Error(`SVG_INVALIDO: ${erroParse}`);
 
+  // BLOCO 186/QA: o SVG TEM que ir como data URL — Blob URL TINGE o canvas
+  // (SecurityError no getImageData) quando o SVG tem <foreignObject>, regra
+  // do Chromium para SVG-as-image de origem igual. Data URL tem origem
+  // opaca e o <img> renderiza em "secure static mode" SEM tinta. O tamanho
+  // não é problema: até uma DANFE de 500 itens fica longe do limite de 2MB
+  // de URLs do Chrome (o HTML+CSS+QR real fica em ~100-200KB).
+  const url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
   const img = await new Promise<HTMLImageElement>((res, rej) => {
     const i = new Image();
     i.onload = () => res(i);
     i.onerror = () => rej(new Error('FALHA_RASTERIZACAO_SVG'));
-    i.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+    i.src = url;
   });
 
   const canvas = document.createElement('canvas');
@@ -255,7 +316,8 @@ export async function htmlParaEscposRaster(html: string, opcoes?: OpcoesRaster):
   const dados = ctx.getImageData(0, 0, larguraDots, alturaDots);
   const bits = cortarLinhasVazias(bitsDoCanvas(dados, limiar));
   if (bits.altura < 10) throw new Error('RASTER_VAZIO');
-  return comandoEscposRaster(bits);
+  // BLOCO 186: bandas de GS v 0 (firmware da MTP-3 nao segura imagem inteira)
+  return comandoEscposRasterBandas(bits);
 }
 
 // ---------------------------------------------------------------------------

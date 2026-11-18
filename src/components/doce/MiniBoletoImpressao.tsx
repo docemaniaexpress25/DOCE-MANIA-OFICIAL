@@ -3,15 +3,13 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { miniBoleto80Html, type MiniBoletoDados } from '@/lib/miniBoleto80Html';
 import { comprovanteBoletoTexto } from '@/lib/danfeTexto';
-import { bluetoothPrinter } from '@/services/bluetoothPrinterService';
 import { imprimirHtmlViaUsb, lerCanalImpressao, dispositivoIOS } from '@/lib/usbPrint';
+import { imprimirHtmlViaBt } from '@/lib/impressaoHtml';
 
 /**
  * BLOCO 167 — MINI BOLETO 80mm: PREVIEW + IMPRESSAO (pedido do dono).
  * Mesmo padrão do ModelosImpressao (mini DANFE): preview = papel real em
- * iframe (HTML de @page 70mm) e dois canais — USB do PC imprime EXATAMENTE o
- * papel; Bluetooth imprime a versão texto 48 colunas ESC/POS
- * (comprovanteBoletoTexto, com [[BARCODE]]/[[QR]] resolvidos na térmica).
+ * iframe (HTML de @page 70mm) e dois canais — USB do PC e Bluetooth.
  *
  * BLOCO 170 (dono: "a impressão está perfeita, porém a visualização está
  * bugada"): o CSS do papel usava transform:scale(1.6) no @media screen —
@@ -21,6 +19,17 @@ import { imprimirHtmlViaUsb, lerCanalImpressao, dispositivoIOS } from '@/lib/usb
  * (afeta o layout real) calculado pela largura disponível do iframe — papel
  * inteiro visível, sem corte, em celular e PC. A impressão (@media print e
  * janela USB) continua 100% inalterada.
+ *
+ * BLOCO 186 (dono: "a impressão da mini danfe e mini boleto no bluetooth
+ * ainda está tudo bugado — tem que ficar exatamente igual à impressão por
+ * USB, impressora térmica MTP3"): este modal foi o ÚNICO ponto que ficou
+ * para trás no bloco 185 — o Bluetooth daqui ainda mandava o TEXTO 48
+ * colunas (layout "bugado", diferente do USB). Agora o BT imprime o MESMO
+ * papel do USB (miniBoleto80Html rasterizado a 203dpi — grade, código de
+ * barras, QR do PIX e linhas digitáveis idênticos ao canal USB), com envio
+ * em bandas de GS v 0 e escrita COM resposta para o módulo BLE da MTP-3
+ * (ver btRaster/impressaoHtml). Fallback: texto 48 colunas se o navegador
+ * não rasterizar.
  */
 
 interface MiniBoletoImpressaoProps {
@@ -55,7 +64,7 @@ const MiniBoletoImpressao: React.FC<MiniBoletoImpressaoProps> = ({ abrir, onClos
     return () => { vivo = false; };
   }, [abrir, dados]);
 
-  // texto 48 colunas — canal Bluetooth (ESC/POS)
+  // texto 48 colunas — FALLBACK do canal Bluetooth (só se o navegador não rasterizar)
   const textoBoleto = useMemo(() => {
     if (!dados) return '';
     try {
@@ -119,8 +128,13 @@ const MiniBoletoImpressao: React.FC<MiniBoletoImpressaoProps> = ({ abrir, onClos
         showToast?.('Janela de impressão aberta — escolha a térmica USB.', 'success');
         return;
       }
-      if (!textoBoleto) return;
-      const ok = await bluetoothPrinter.print(textoBoleto, '80MM', { skipConfirm: true });
+      if (!dados) return;
+      // BLOCO 186: BT imprime o MESMO papel do USB (miniBoleto80Html rasterizado
+      // a 203dpi, bandas GS v 0 + write com resposta — modúlo BLE da MTP-3).
+      const ok = await imprimirHtmlViaBt(
+        () => miniBoleto80Html(dados, { raster: true }),
+        () => textoBoleto,
+      );
       if (ok) showToast?.('Mini Boleto enviado à impressora Bluetooth!', 'success');
       else showToast?.('Impressão não realizada — conecte a impressora.', 'error');
     } catch (e: unknown) {
@@ -167,7 +181,7 @@ const MiniBoletoImpressao: React.FC<MiniBoletoImpressaoProps> = ({ abrir, onClos
           )}
           {!montado || !ios ? (
             <p className="text-[8px] font-bold text-white/40 text-center leading-snug">
-              USB: sai EXATAMENTE esta folha (linha digitável + código de barras + QR do PIX). Bluetooth: sai a versão texto de 48 colunas.
+              USB e Bluetooth: sai EXATAMENTE esta folha (linha digitável + código de barras + QR do PIX — BLOCO 186: o BT rasteriza este mesmo papel a 203dpi).
             </p>
           ) : null}
         </div>

@@ -84,7 +84,11 @@ interface VendedorDashboardProps {
   setClientOrder: (ids: string[]) => void;
 }
 
-type TabType = 'HOME' | 'ROTEIRO' | 'CARGA' | 'HISTORY' | 'FINANCE' | 'CREDIT' | 'CLIENTES' | 'WEEKLY' | 'STOCK_VIEW' | 'AVISOS' | 'ENTREGAS' | 'LUCRO_ROTA' | 'CAIXA' | 'NOTAS_PENDENTES';
+// BLOCO 186 (regra do dono): 'NOTAS_PENDENTES' (Portal Fiscal) SAIU do
+// vendedor — o portal de notas é EXCLUSIVO do login ADMIN (Painel
+// Administrativo > Portal Fiscal e /notas com PIN de admin). O vendedor não
+// tem mais card, aba ou link para o portal.
+type TabType = 'HOME' | 'ROTEIRO' | 'CARGA' | 'HISTORY' | 'FINANCE' | 'CREDIT' | 'CLIENTES' | 'WEEKLY' | 'STOCK_VIEW' | 'AVISOS' | 'ENTREGAS' | 'LUCRO_ROTA' | 'CAIXA';
 
 // BLOCO 184: card da rota ORDENÁVEL (kanban). O corpo do card (Atender /
 // Pular / expandir / WhatsApp / Navegar) continua EXATAMENTE igual — o grip
@@ -182,7 +186,12 @@ const shareImage = async (base64: string, fileName: string) => {
 const VendedorDashboard: React.FC<VendedorDashboardProps> = ({ 
   user, products = [], clients = [], allClients = [], cargas = [], cargasPendentes = [], sales = [], commissions = [], payoutLogs = [], expenses = [], messages = [], categories = [], subcategories = [], markMessageAsRead, processSale, processPreVenda, addClient, updateClient, deleteClient, receivePayment, deleteSale, aceitarCarga, addExpense, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, dailyRouteState, updateDailyRoute, companyName, companyCnpj, clientOrder, setClientOrder
 }) => {
-  const [activeTab, setActiveTab] = useState<TabType>(() => loadLocalState('v_activeTab', 'HOME'));
+  // BLOCO 186: aparelho do vendedor com a aba antiga 'NOTAS_PENDENTES'
+  // persistida no localStorage cai de volta na HOME (sem tela vazia).
+  const [activeTab, setActiveTab] = useState<TabType>(() => {
+    const t = loadLocalState<string>('v_activeTab', 'HOME');
+    return (t === 'NOTAS_PENDENTES' ? 'HOME' : t) as TabType;
+  });
   // BLOCO 118: se o estado guardado apontava para FINANCE e o vendedor é o David (comissao desativada), volta pra HOME
   // BLOCO 118.3: idem para CAIXA (exclusivo do David) — vendedor sem caixa cai na HOME
   useEffect(() => {
@@ -203,12 +212,8 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   const [reabrirModoAposSalvar, setReabrirModoAposSalvar] = useState<Client | null>(null);
   const [viewingSale, setViewingSale] = useState<Sale | null>(() => loadLocalState('v_viewingSale', null));
 
-  // ====================================================================
-  // BLOCO 145 — PORTAL FISCAL (antes "NOTAS PENDENTES"): as notas de saída
-  // que estavam em outros sistemas JÁ FORAM BATIDAS lá — acabou a lista de
-  // pendências e os avisos vermelhos. A aba virou PORTAL FISCAL: só o botão
-  // de acesso ao portal (/notas).
-  // ====================================================================
+  // BLOCO 186: a aba PORTAL FISCAL (antes NOTAS PENDENTES) foi REMOVIDA do
+  // vendedor — acesso ao portal de notas é só do ADMIN.
   const [viewingClientHistory, setViewingClientHistory] = useState<Client | null>(null);
   const [filterOverdueOnly, setFilterOverdueOnly] = useState(false);
   const [creditTypeFilter, setCreditTypeFilter] = useState<'TODOS' | 'COMUM' | 'CHEQUE' | 'BOLETO'>('TODOS');
@@ -1461,11 +1466,8 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     return ( <Cupom sale={viewingSale} client={cupomClient} products={products} onClose={() => setViewingSale(null)} onDeleteSale={deleteSale} allowDelete={canDeleteSale} showToast={showToast} allowNota /> );
   }
 
-  // BLOCO 136: a lista de NOTAS PENDENTES virou ABA (NOTAS_PENDENTES) —
-  // renderizada no fluxo principal de abas (depois da HOME), com voltar para
-  // a HOME pelo botão padrão. Toque no card abre o cupom da venda; ao fechar,
-  // o vendedor volta pra MESMA aba (a pendência some quando a SEFAZ autoriza).
-
+  // BLOCO 186: a aba de notas pendentes/portal fiscal NÃO EXISTE mais no
+  // vendedor — o portal /notas é acessado apenas pelo login ADMIN.
 
   return (
     <div className="space-y-4 pb-20">
@@ -1490,8 +1492,9 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
           <MenuCard icon="fa-route" title="Rota do Dia" tab="ROTEIRO" color="bg-blue-50 text-blue-600" />
           {/* BLOCO 13: TODO vendedor acompanha a fila de entregas dos seus pedidos (leitura) */}
           <MenuCard icon="fa-truck" title="Entregas" tab="ENTREGAS" color="bg-emerald-50 text-emerald-600" />
-          {/* BLOCO 145 (regra do dono): "Notas Pendentes" virou PORTAL FISCAL — só o botão de acesso */}
-          <MenuCard icon="fa-file-invoice" title="Portal Fiscal" tab="NOTAS_PENDENTES" color="bg-emerald-50 text-emerald-600" />
+          {/* BLOCO 186 (regra do dono): PORTAL FISCAL saiu do vendedor — o
+              card não existe mais aqui. O portal de notas (/notas, PIN do
+              admin) fica EXCLUSIVO no Painel Administrativo. */}
           <MenuCard icon="fa-bell" title="Avisos" tab="AVISOS" color="bg-rose-50 text-rose-600" badge={atRiskClients.length > 0 ? atRiskClients.length : false} />
           <MenuCard icon="fa-truck-fast" title="Minha Carga" tab="CARGA" color="bg-purple-50 text-purple-600" badge={minhasPendentes.length > 0} />
           <MenuCard icon="fa-receipt" title="Vendas" tab="HISTORY" color="bg-blue-50 text-[#1E3A5F]" />
@@ -1510,27 +1513,11 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       )}
 
       {/* ====================================================================
-          BLOCO 145 (regra do dono): a aba virou PORTAL FISCAL — as notas que
-          estavam em outros sistemas JÁ FORAM BATIDAS lá. Fim da lista de
-          pendências e dos avisos. Aqui fica SOMENTE o botão de acesso.
+          BLOCO 186 (regra do dono): a aba PORTAL FISCAL foi REMOVIDA do
+          vendedor. Emissão/acompanhamento de notas é responsabilidade da
+          administração — o portal /notas continua protegido por PIN de admin
+          e o card de acesso só existe no Painel Administrativo.
           ==================================================================== */}
-      {activeTab === 'NOTAS_PENDENTES' && (
-        <div className="space-y-4">
-          <header className="px-1 flex flex-col gap-1">
-            <h2 className="text-xl font-black text-gray-800 tracking-tight leading-none">Portal Fiscal</h2>
-            <p className="text-[10px] font-black uppercase text-gray-400">Notas de saída — emissão, DANFE/XML e cancelamento</p>
-          </header>
-          <a href="/notas" target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 bg-blue-600 text-white rounded-3xl px-5 py-6 shadow-lg active:scale-[0.98] transition-transform">
-            <span className="w-12 h-12 rounded-2xl bg-white/15 flex items-center justify-center shrink-0"><i className="fa-solid fa-file-invoice text-xl"></i></span>
-            <span className="flex-1 flex flex-col items-start">
-              <span className="text-sm font-black uppercase tracking-widest">Acessar o Portal Fiscal</span>
-              <span className="text-[9px] font-bold opacity-80 leading-snug">Notas do app · avulsas · XML de terceiros — PDF, XML, emitir e cancelar</span>
-            </span>
-            <i className="fa-solid fa-up-right-from-square text-xs opacity-70"></i>
-          </a>
-          <p className="text-[9px] font-bold text-gray-400 leading-snug px-1">O acesso usa o PIN do administrador. As notas de saída que estavam em outros sistemas JÁ FORAM BATIDAS lá — não existe mais pendência de nota no app.</p>
-        </div>
-      )}
 
       {activeTab === 'AVISOS' && (
         <div className="space-y-4">

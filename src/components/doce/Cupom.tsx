@@ -171,8 +171,11 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
         const intencao = sale.modoNota === 'NFE' || String(sale.detalhePagamento || '').toUpperCase().includes('COM NOTA: NF-E')
           ? 'NFE'
           : sale.modoNota === 'NFCE' || String(sale.detalhePagamento || '').toUpperCase().includes('COM NOTA: NFC') ? 'NFCE' : null;
-        if (intencao === 'NFE') return { cls: 'bg-gray-50 text-gray-600 border-gray-200', icon: 'fa-file-invoice', txt: 'NF-e escolhida — acompanhamento no Portal Fiscal' };
-        if (intencao === 'NFCE') return { cls: 'bg-gray-50 text-gray-600 border-gray-200', icon: 'fa-file-invoice', txt: 'NFC-e escolhida — acompanhamento no Portal Fiscal' };
+        // BLOCO 186: o Portal Fiscal é EXCLUSIVO do admin — o badge do cupom
+        // não manda mais o vendedor para lá; a emissão é acompanhada pela
+        // administração (mesma mensagem neutra para os dois perfis).
+        if (intencao === 'NFE') return { cls: 'bg-gray-50 text-gray-600 border-gray-200', icon: 'fa-file-invoice', txt: 'NF-e escolhida — emissão acompanhada pela administração' };
+        if (intencao === 'NFCE') return { cls: 'bg-gray-50 text-gray-600 border-gray-200', icon: 'fa-file-invoice', txt: 'NFC-e escolhida — emissão acompanhada pela administração' };
         return { cls: 'bg-gray-50 text-gray-500 border-gray-200', icon: 'fa-file-invoice', txt: 'Cupom simples — sem nota fiscal' };
       }
     }

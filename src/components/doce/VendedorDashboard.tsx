@@ -32,9 +32,10 @@ import { isIOSDevice, TEXTO_IMPRESSAO_IOS, TITULO_IMPRESSAO_IOS } from '@/lib/io
 import { imprimirViaUsb, lerCanalImpressao } from '@/lib/usbPrint';
 import FilaEntregas from '@/components/doce/FilaEntregas';
 
-// BLOCO 184: kanban de ORDENAÇÃO DA ROTA — arrastar-e-soltar no card da rota
-// do dia (dnd-kit, mesmo padrão do BLOCO 63/61): a ordem arrastada grava no
-// client_order (Supabase) e vale pra rota, pro admin e pro relatório.
+// BLOCO 188 (regra do dono): kanban de ORDENAÇÃO mora SOMENTE no ROTEIRO
+// SEMANAL — arrastar-e-soltar (dnd-kit, mesmo padrão do BLOCO 63/61) grava no
+// client_order (Supabase) e vale pra Rota do Dia, pro admin e pro relatório.
+// A Rota do Dia NÃO tem mais ordenador: só exibe a ordem que ficou gravada.
 import { DndContext, closestCenter, PointerSensor, KeyboardSensor, useSensor, useSensors, MeasuringStrategy, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, useSortable, sortableKeyboardCoordinates, arrayMove } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -90,15 +91,12 @@ interface VendedorDashboardProps {
 // tem mais card, aba ou link para o portal.
 type TabType = 'HOME' | 'ROTEIRO' | 'CARGA' | 'HISTORY' | 'FINANCE' | 'CREDIT' | 'CLIENTES' | 'WEEKLY' | 'STOCK_VIEW' | 'AVISOS' | 'ENTREGAS' | 'LUCRO_ROTA' | 'CAIXA';
 
-// BLOCO 184: card da rota ORDENÁVEL (kanban). O corpo do card (Atender /
-// Pular / expandir / WhatsApp / Navegar) continua EXATAMENTE igual — o grip
-// lateral (≡) arrasta e as setas ↑↓ ajustam com precisão no celular.
-function SortableRotaCard({ id, posicao, primeiro, ultimo, onMover, children }: {
+// BLOCO 188: card ORDENÁVEL do ROTEIRO SEMANAL (kanban). O grip (≡) arrasta;
+// as setas ↑↓ continuam DENTRO do item (funcionam até na busca, onde o
+// arrasto desliga). O corpo do item (nome/bairro/puxar/editar) não muda.
+function SortableSemanalCard({ id, posicao, children }: {
   id: string;
   posicao: number;
-  primeiro: boolean;
-  ultimo: boolean;
-  onMover: (id: string, dir: 'UP' | 'DOWN') => void;
   children: React.ReactNode;
 }) {
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id });
@@ -109,23 +107,17 @@ function SortableRotaCard({ id, posicao, primeiro, ultimo, onMover, children }: 
       className={`flex items-stretch ${isDragging ? 'relative z-10' : ''}`}
     >
       <div className="flex flex-col items-center justify-center gap-0.5 pr-2 shrink-0">
-        <span className="text-[8px] font-black text-blue-600 bg-blue-50 border border-blue-100 rounded-md px-1.5 py-0.5 tabular-nums" aria-label={`Posição ${posicao} na rota`}>{posicao}</span>
+        <span className="text-[8px] font-black text-indigo-600 bg-indigo-50 border border-indigo-100 rounded-md px-1.5 py-0.5 tabular-nums" aria-label={`Posição ${posicao} do dia`}>{posicao}</span>
         <button
           ref={setActivatorNodeRef}
           {...attributes}
           {...listeners}
           type="button"
-          className="w-9 h-11 rounded-xl text-gray-300 hover:text-blue-600 hover:bg-blue-50 flex items-center justify-center touch-none cursor-grab active:cursor-grabbing"
-          aria-label={`Arrastar cliente ${posicao} da rota para reordenar`}
-          title="Arraste para mudar a ordem da rota"
+          className="w-9 h-11 rounded-xl text-gray-300 hover:text-indigo-600 hover:bg-indigo-50 flex items-center justify-center touch-none cursor-grab active:cursor-grabbing"
+          aria-label={`Arrastar cliente ${posicao} para reordenar o dia`}
+          title="Arraste para mudar a ordem do dia"
         >
           <i className="fa-solid fa-grip-vertical text-[12px]"></i>
-        </button>
-        <button onClick={() => onMover(id, 'UP')} disabled={primeiro} type="button" className="w-9 h-6 rounded-lg text-gray-300 hover:text-blue-600 hover:bg-blue-50 flex items-center justify-center disabled:opacity-20 disabled:hover:bg-transparent" aria-label="Subir uma posição na rota" title="Subir">
-          <i className="fa-solid fa-chevron-up text-[10px]"></i>
-        </button>
-        <button onClick={() => onMover(id, 'DOWN')} disabled={ultimo} type="button" className="w-9 h-6 rounded-lg text-gray-300 hover:text-blue-600 hover:bg-blue-50 flex items-center justify-center disabled:opacity-20 disabled:hover:bg-transparent" aria-label="Descer uma posição na rota" title="Descer">
-          <i className="fa-solid fa-chevron-down text-[10px]"></i>
         </button>
       </div>
       <div className="flex-1 min-w-0">{children}</div>
@@ -701,7 +693,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
   const rotaDeHoje = useMemo(() => {
     const clientMap = new Map((clients || []).map(c => [c.id, c]));
-    const clientIds = dailyRouteState?.clientIds || [];
 
     // BLOCO 86 (bug do dono): "clientes nao aparecem no dia de hoje".
     // A rota do dia era um SNAPSHOT congelado (clientIds gravados quando a
@@ -709,10 +700,12 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     // disso (novo cliente ja nasce com diaRoteiro = hoje) ou cliente com
     // diaRoteiro alterado para hoje NUNCA entrava — so no dia seguinte,
     // quando a rota era remontada.
-    // FIX: a rota do dia = snapshot + TODOS os clientes ativos da rota do
-    // vendedor com diaRoteiro === hoje (novos entram no fim, na ordem
-    // global). Recalcula a cada mudanca de clients (cadastro, edicao,
-    // reload) — a aba Rota do Dia passa a ser sempre completa, ao vivo.
+    // BLOCO 188 (regra do dono): a ORDEM dos clientes é arrumada SOMENTE no
+    // Roteiro Semanal (kanban/setas gravam no client_order global). A Rota
+    // do Dia NAO tem mais ordenador: membros de hoje = snapshot (inclui
+    // clientes puxados de outros dias pelo "+") + TODOS os ativos da rota
+    // com diaRoteiro = hoje — TODOS JUNTOS na MESMA ordem global. O que o
+    // vendedor arruma no semanal chega gravado e IGUAL aqui.
     const orderMap = new Map(clientOrder.map((id, idx) => [id, idx]));
     const sortFn = (a: Client, b: Client) => {
       const idxA = orderMap.get(a.id) ?? (a.ordem || 0);
@@ -720,24 +713,17 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       return idxA - idxB;
     };
 
-    // 1. Snapshot da rota (ordem montada + clientes puxados na mao) — preservado.
-    const snapshot = clientIds
+    const idsMembros = new Set<string>([
+      ...(dailyRouteState?.clientIds || []),
+      ...(clients || [])
+        .filter(c => (c.ativo ?? false) && c.rota === (user.rota || 'ROTA_01') && c.diaRoteiro === diaAtual)
+        .map(c => c.id),
+    ]);
+
+    return [...idsMembros]
       .map(id => clientMap.get(id))
       .filter((c): c is Client => !!c && (c.ativo ?? false))
       .sort(sortFn);
-
-    // 2. Clientes do dia que NAO estao no snapshot — entram automaticamente.
-    const snapshotIds = new Set(clientIds);
-    const doDia = (clients || [])
-      .filter(c =>
-        (c.ativo ?? false) &&
-        c.rota === (user.rota || 'ROTA_01') &&
-        c.diaRoteiro === diaAtual &&
-        !snapshotIds.has(c.id)
-      )
-      .sort(sortFn);
-
-    return [...snapshot, ...doDia];
   }, [clients, dailyRouteState, clientOrder, user.rota, diaAtual]);
 
   // NOVO: Clientes filtrados pela busca
@@ -1077,117 +1063,60 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     }
   };
 
-  // NOVO: Mover cliente DENTRO DO DIA (para aba ROTEIRO SEMANAL) - PERSISTE NO SUPABASE
-  const moveClientInDay = (clientId: string, dir: 'UP' | 'DOWN', day: number) => {
-    // 1. Pega todos os clientes ativos da rota do vendedor, ordenados pela ordem global atual (clientOrder)
-    const allClientsSorted = [...clients]
-      .filter(c => c.ativo && c.rota === (user.rota || 'ROTA_01'))
-      .sort((a, b) => {
-        const orderMap = new Map(clientOrder.map((id, idx) => [id, idx]));
-        const idxA = orderMap.get(a.id) ?? (a.ordem || 0);
-        const idxB = orderMap.get(b.id) ?? (b.ordem || 0);
-        return idxA - idxB;
-      });
-
-    // 2. Separa os clientes do dia alvo e dos outros dias
-    const dayClients = allClientsSorted.filter(c => c.diaRoteiro === day);
-    const otherDayClients = allClientsSorted.filter(c => c.diaRoteiro !== day);
-    
-    const dayClientIds = dayClients.map(c => c.id);
-    const idx = dayClientIds.indexOf(clientId);
-    if (idx === -1) return;
-
-    // 3. Reordena apenas dentro do dia
-    const newDayOrder = [...dayClientIds];
-    if (dir === 'UP' && idx > 0) {
-      [newDayOrder[idx], newDayOrder[idx-1]] = [newDayOrder[idx-1], newDayOrder[idx]];
-    } else if (dir === 'DOWN' && idx < newDayOrder.length - 1) {
-      [newDayOrder[idx], newDayOrder[idx+1]] = [newDayOrder[idx+1], newDayOrder[idx]];
-    }
-
-    // 4. Reconstrói a ordem global mantendo a ordem relativa dos outros dias
-    const otherDayIds = otherDayClients.map(c => c.id);
-    
-    // Encontra onde o primeiro cliente desse dia estava na ordem global original
-    const firstDayClientGlobalIdx = allClientsSorted.findIndex(c => c.diaRoteiro === day);
-    
-    let newGlobalOrder: string[];
-    if (firstDayClientGlobalIdx === -1) {
-      // Se não tinha clientes nesse dia, adiciona no final
-      newGlobalOrder = [...otherDayIds, ...newDayOrder];
-    } else {
-      // Insere o dia reordenado na posição correta
-      newGlobalOrder = [
-        ...otherDayIds.slice(0, firstDayClientGlobalIdx),
-        ...newDayOrder,
-        ...otherDayIds.slice(firstDayClientGlobalIdx)
-      ];
-    }
-
-    // 5. Salva no Supabase via App.tsx -> appSettingsService
-    setClientOrder(newGlobalOrder);
-    showToast("Ordem do dia atualizada e salva!");
-  };
-
-  // NOVO: Mover cliente para outro dia
-  const moveClientToDay = (clientId: string, newDay: number) => {
-    updateClient(clientId, { diaRoteiro: newDay });
-    showToast(`Cliente movido para ${DIAS_SEMANA[newDay]}`);
-  };
-
   // ------------------------------------------------------------------
-  // BLOCO 184 — KANBAN DA ROTA DO DIA: arrastar-e-soltar no card define a
-  // ordem de visita. A ordem grava no client_order GLOBAL (Supabase, via
-  // setClientOrder → updateSetting('clientOrder')) usando o truque dos
-  // SLOTS: os clientes de hoje trocam de posição entre SI, cada um cai no
-  // slot que já ocupava na ordem global — cliente de outro dia/outro
-  // vendedor NUNCA sai do lugar. Clientes do dia que ainda não estão no
-  // snapshot da rota entram nele (updateDailyRoute é otimista + persiste).
+  // BLOCO 188 — ORDEM DOS CLIENTES: grava SOMENTE no ROTEIRO SEMANAL
+  // (kanban de arrastar + setas ↑↓) e VALE PARA A ROTA DO DIA. Regra do
+  // dono: "arrumar a ordem ali no Roteiro Semanal grava no Roteiro do Dia
+  // também" — os dois lugares leem a MESMA ordem global (client_order no
+  // Supabase, via setClientOrder → appSettingsService). Motor de SLOTS
+  // (lib ordemManual, BLOCO 184): os clientes DO DIA trocam de posição
+  // entre SI, cada um cai no slot que já ocupava na ordem global —
+  // cliente de outro dia/outro vendedor NUNCA sai do lugar.
   // ------------------------------------------------------------------
-  const sensorsRota = useSensors(
+  const sensorsSemanal = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 10 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
-  const aplicarOrdemRota = useCallback((novaVisivel: Client[]) => {
-    if (novaVisivel.length === 0) return;
+  const aplicarOrdemSemanal = useCallback((diaClientes: Client[], novaVisivel: Client[]) => {
+    if (diaClientes.length === 0) return;
     // ordem global atual: clientOrder salvo ou, na 1ª vez, a lista completa
     // (allClients = todas as rotas — nunca encolhe a ordem dos outros)
     const base = clientOrder.length > 0
       ? [...clientOrder]
       : (allClients.length > 0 ? allClients : clients).map(c => c.id);
     // clientes novos (ainda fora do array global) entram no fim
-    const faltantes = rotaDeHoje.map(c => c.id).filter(id => !base.includes(id));
+    const faltantes = diaClientes.map(c => c.id).filter(id => !base.includes(id));
     const ordemBase = [...base, ...faltantes];
-    // BLOCO 184: motor PURO (slots) — os visíveis trocam de posição entre SI
-    // e cada um cai no slot que já ocupava; ninguém fora da rota de hoje anda.
-    const novaOrdem = reordenarSlots(ordemBase, rotaDeHoje.map(c => c.id), novaVisivel.map(c => c.id));
-    if (!novaOrdem) return; // lista mudou no meio do drag — não corrompe
-    setClientOrder(novaOrdem); // estado + Supabase (setClientOrderWithPersistence)
-    // membros da rota de hoje: quem não estava no snapshot entra nele
-    // (sem isso, cliente novo arrastado pra cima volta pro fim no reload)
-    const atuais = dailyRouteState?.clientIds || [];
-    const faltantesSnapshot = rotaDeHoje.map(c => c.id).filter(id => !atuais.includes(id));
-    if (faltantesSnapshot.length > 0) {
-      updateDailyRoute([...atuais, ...faltantesSnapshot], dailyRouteState?.skippedClientIds || []);
-    }
-    showToast('Ordem da rota atualizada e salva!');
-  }, [rotaDeHoje, clientOrder, allClients, clients, dailyRouteState, setClientOrder, updateDailyRoute, showToast]);
+    // BLOCO 184/187: motor PURO (slots) — os clientes do dia trocam de
+    // posição entre SI; ninguém fora desse dia anda.
+    const novaOrdem = reordenarSlots(ordemBase, diaClientes.map(c => c.id), novaVisivel.map(c => c.id));
+    if (!novaOrdem) return; // lista mudou no meio do ajuste — não corrompe
+    setClientOrder(novaOrdem); // estado + Supabase
+    showToast('Ordem salva! Já vale para a Rota do Dia também.');
+  }, [clientOrder, allClients, clients, setClientOrder, showToast]);
 
-  const onDragEndRota = (ev: DragEndEvent) => {
-    const { active, over } = ev;
-    if (!over || active.id === over.id) return;
-    const from = rotaDeHoje.findIndex(c => c.id === String(active.id));
-    const to = rotaDeHoje.findIndex(c => c.id === String(over.id));
-    if (from < 0 || to < 0) return;
-    aplicarOrdemRota(arrayMove(rotaDeHoje, from, to));
+  // Setas ↑↓ do Roteiro Semanal (mesma gravação do kanban; funciona na busca)
+  const moveClientInDay = (clientId: string, dir: 'UP' | 'DOWN', diaClientes: Client[]) => {
+    const from = diaClientes.findIndex(c => c.id === clientId);
+    const to = dir === 'UP' ? from - 1 : from + 1;
+    if (from < 0 || to < 0 || to >= diaClientes.length) return;
+    aplicarOrdemSemanal(diaClientes, arrayMove(diaClientes, from, to));
   };
 
-  const moverClienteRota = (id: string, dir: 'UP' | 'DOWN') => {
-    const from = rotaDeHoje.findIndex(c => c.id === id);
-    const to = dir === 'UP' ? from - 1 : from + 1;
-    if (from < 0 || to < 0 || to >= rotaDeHoje.length) return;
-    aplicarOrdemRota(arrayMove(rotaDeHoje, from, to));
+  const onDragEndSemanal = (diaClientes: Client[]) => (ev: DragEndEvent) => {
+    const { active, over } = ev;
+    if (!over || active.id === over.id) return;
+    const from = diaClientes.findIndex(c => c.id === String(active.id));
+    const to = diaClientes.findIndex(c => c.id === String(over.id));
+    if (from < 0 || to < 0) return;
+    aplicarOrdemSemanal(diaClientes, arrayMove(diaClientes, from, to));
+  };
+
+  // NOVO: Mover cliente para outro dia
+  const moveClientToDay = (clientId: string, newDay: number) => {
+    updateClient(clientId, { diaRoteiro: newDay });
+    showToast(`Cliente movido para ${DIAS_SEMANA[newDay]}`);
   };
 
   const MenuCard = ({ icon, title, tab, color, badge }: any) => (
@@ -1618,32 +1547,17 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
             </div>
           </div>
 
-          {/* BLOCO 184: dica do kanban da rota */}
-          {rotaBusca.trim() === '' && rotaNaBusca.length > 1 && (
-            <p className="text-[9px] font-black uppercase tracking-wider text-gray-400 px-1 flex items-center gap-1.5">
-              <i className="fa-solid fa-grip-vertical text-blue-400"></i>
-              Arraste pelo ≡ (ou use as setas) para ordenar a rota de hoje — a ordem fica salva no sistema
-            </p>
-          )}
-
-          {/* BLOCO 184: DndContext sempre montado — os cards da rota viram kanban
-              ordenável quando NÃO há busca (buscando, os cards ficam simples). */}
-          <DndContext
-            sensors={sensorsRota}
-            collisionDetection={closestCenter}
-            measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
-            onDragEnd={onDragEndRota}
-          >
-            <SortableContext items={rotaNaBusca.map(c => c.id)} strategy={verticalListSortingStrategy}>
-              {rotaNaBusca.map((c, k) => {
+          {/* BLOCO 188 (regra do dono): a Rota do Dia NÃO tem mais ordenador —
+              sem grip, sem setas, sem kanban. Os cards saem na ordem que o
+              vendedor gravou no Roteiro Semanal (client_order global). */}
+          {rotaNaBusca.map((c) => {
             const isSold = (sales || []).some(s => s.clientId === c.id && isSameDay(s.data));
             const isSkipped = (dailyRouteState?.skippedClientIds || []).includes(c.id) || optimisticSkipped.includes(c.id);
             // BLOCO 35: atendidosHoje cobre PRE-VENDA (que nao entra em sales ate a entrega)
             const isVisited = (isSold || isSkipped || atendidosHoje.includes(c.id)) && !reopenedClientIds.includes(c.id);
             const lastSale = (sales || []).filter(s => s.clientId === c.id).sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime())[0];
             const isExpanded = expandedRouteClientId === c.id;
-            // BLOCO 184: card da rota — com busca ativa ele renderiza simples;
-            // sem busca, entra no kanban (SortableRotaCard com grip + setas).
+            // BLOCO 188: card simples da rota — só exibe a ordem gravada.
             const card = (
               <div className={`rounded-3xl border transition-all overflow-hidden ${isVisited ? 'bg-gray-100 border-gray-200 grayscale opacity-60' : 'bg-white border-gray-100 shadow-sm'}`}>
                 <div className={`p-4 flex items-center justify-between`}>
@@ -1681,15 +1595,8 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 )}
               </div>
             );
-            if (rotaBusca.trim() !== '') return <div key={c.id}>{card}</div>;
-            return (
-              <SortableRotaCard key={c.id} id={c.id} posicao={k + 1} primeiro={k === 0} ultimo={k === rotaNaBusca.length - 1} onMover={moverClienteRota}>
-                {card}
-              </SortableRotaCard>
-            );
+            return <div key={c.id}>{card}</div>;
           })}
-            </SortableContext>
-          </DndContext>
 
           {/* BLOCO 122: clientes FORA da rota de hoje — busca global completa.
               Tudo que casou e não é do dia aparece aqui, com Atender igual. */}
@@ -1819,26 +1726,60 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                     <div className="flex items-center gap-3"><div className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-[10px] ${isOpen ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-400'}`}>{dia}</div><span className="font-black uppercase text-xs tracking-tight">{DIAS_SEMANA[dia]}</span></div>
                     <div className="flex items-center gap-2"><span className="text-[9px] font-black uppercase opacity-40">{clientsInDay.length} clients</span><i className={`fa-solid ${isOpen ? 'fa-chevron-up' : 'fa-chevron-down'} text-[10px]`}></i></div>
                   </button>
-                  {isOpen && (
-                    <div className="p-4 bg-white space-y-2 border-t border-indigo-50">
-                      {clientsInDay.map(c => (
-                        <div key={c.id} className="p-3 bg-gray-50 rounded-2xl flex items-center justify-between group">
+                  {isOpen && (() => {
+                    // BLOCO 188 (regra do dono): AQUI fica o kanban de clientes.
+                    // Arrastar pelo ≡ (ou setas ↑↓) grava a ordem no client_order
+                    // global e a Rota do Dia abre NESSA MESMA ordem. Com busca
+                    // ativa o arrasto desliga (cards simples) e as setas seguem
+                    // funcionando — mesma gravação.
+                    const podeArrastar = weeklySearch.trim() === '';
+                    const corpo = clientsInDay.map((c, k) => {
+                      const item = (
+                        <div className="p-3 bg-gray-50 rounded-2xl flex items-center justify-between group">
                           <div className="flex flex-col gap-1 mr-3">
-                            <button onClick={(e)=>{e.stopPropagation(); moveClientInDay(c.id, 'UP', dia);}} className="w-9 h-9 bg-white border text-gray-400 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-chevron-up text-[10px]"></i></button>
-                            <button onClick={(e)=>{e.stopPropagation(); moveClientInDay(c.id, 'DOWN', dia);}} className="w-9 h-9 bg-white border text-gray-400 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-chevron-down text-[10px]"></i></button>
+                            <button onClick={(e)=>{e.stopPropagation(); moveClientInDay(c.id, 'UP', clientsInDay);}} disabled={k === 0} className="w-9 h-9 bg-white border text-gray-400 rounded-lg flex items-center justify-center active:scale-90 disabled:opacity-20" aria-label={`Subir ${c.nomeFantasia} uma posição`}><i className="fa-solid fa-chevron-up text-[10px]"></i></button>
+                            <button onClick={(e)=>{e.stopPropagation(); moveClientInDay(c.id, 'DOWN', clientsInDay);}} disabled={k === clientsInDay.length - 1} className="w-9 h-9 bg-white border text-gray-400 rounded-lg flex items-center justify-center active:scale-90 disabled:opacity-20" aria-label={`Descer ${c.nomeFantasia} uma posição`}><i className="fa-solid fa-chevron-down text-[10px]"></i></button>
                           </div>
                           <div className="flex-1 cursor-pointer min-w-0" onClick={() => setViewingClientHistory(c)}>
                             <p className="font-bold text-gray-800 text-xs uppercase break-words">{c.nomeFantasia}</p>
                             <p className="text-[9px] text-gray-400 font-bold mt-0.5">{c.bairro || 'Sem Bairro'}</p>
                           </div>
                           <div className="flex items-center gap-2">
-                            <button onClick={() => handleAddToTodayRoute(c.id)} className="w-9 h-9 bg-indigo-100 text-indigo-600 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-plus text-xs"></i></button>
-                            <button onClick={(e)=>{e.stopPropagation(); handleOpenEditClient(c);}} className="w-9 h-9 bg-blue-50 text-blue-600 rounded-lg flex items-center justify-center active:scale-90"><i className="fa-solid fa-pencil-alt text-xs"></i></button>
+                            <button onClick={() => handleAddToTodayRoute(c.id)} className="w-9 h-9 bg-indigo-100 text-indigo-600 rounded-lg flex items-center justify-center active:scale-90" title="Puxar p/ rota de hoje"><i className="fa-solid fa-plus text-xs"></i></button>
+                            <button onClick={(e)=>{e.stopPropagation(); handleOpenEditClient(c);}} className="w-9 h-9 bg-blue-50 text-blue-600 rounded-lg flex items-center justify-center active:scale-90" title="Editar cliente"><i className="fa-solid fa-pencil-alt text-xs"></i></button>
                           </div>
                         </div>
-                      ))}
-                    </div>
-                  )}
+                      );
+                      if (!podeArrastar) return <div key={c.id}>{item}</div>;
+                      return (
+                        <SortableSemanalCard key={c.id} id={c.id} posicao={k + 1}>
+                          {item}
+                        </SortableSemanalCard>
+                      );
+                    });
+                    return podeArrastar ? (
+                      <DndContext
+                        sensors={sensorsSemanal}
+                        collisionDetection={closestCenter}
+                        measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
+                        onDragEnd={onDragEndSemanal(clientsInDay)}
+                      >
+                        <SortableContext items={clientsInDay.map(c => c.id)} strategy={verticalListSortingStrategy}>
+                          <div className="p-4 bg-white space-y-2 border-t border-indigo-50">
+                            {clientsInDay.length > 1 && (
+                              <p className="text-[9px] font-black uppercase tracking-wider text-gray-400 flex items-center gap-1.5">
+                                <i className="fa-solid fa-grip-vertical text-indigo-400"></i>
+                                Arraste pelo ≡ (ou use as setas) para ordenar — grava também na Rota do Dia
+                              </p>
+                            )}
+                            {corpo}
+                          </div>
+                        </SortableContext>
+                      </DndContext>
+                    ) : (
+                      <div className="p-4 bg-white space-y-2 border-t border-indigo-50">{corpo}</div>
+                    );
+                  })()}
                 </div>
               );
             })}

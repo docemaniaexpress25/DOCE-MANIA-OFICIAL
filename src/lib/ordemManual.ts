@@ -1,8 +1,9 @@
 /**
  * BLOCO 184 — ORDEM MANUAL (kanban) — helpers PUROS compartilhados entre o
  * Portal de Notas (/notas: ordenar as notas quando os XML batidos fora do app
- * sobem fora de ordem) e a Rota do Dia do vendedor (VendedorDashboard:
- * ordenar a sequência de visitas). Sem React, sem rede — testável por QA
+ * sobem fora de ordem) e o ROTEIRO SEMANAL do vendedor (VendedorDashboard,
+ * BLOCO 188: ordenar a sequência de visitas do dia — grava no client_order e
+ * vale também para a Rota do Dia). Sem React, sem rede — testável por QA
  * (mesmo padrão do motor notaEspecial dos blocos 182/183).
  */
 

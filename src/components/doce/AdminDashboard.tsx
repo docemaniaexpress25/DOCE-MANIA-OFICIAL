@@ -132,7 +132,7 @@ interface AdminDashboardProps {
 
 // BLOCO 118: 'CAIXA' agora é o FECHAMENTO DE CAIXA — as comissões viram aba 'COMISSOES'
 // BLOCO 156: 'FISCAL_PRODUTOS' = portal /fiscal-produtos — lista editável NCM/CEST/CFOP
-type TabType = 'HOME' | 'CATALOGO' | 'CATALOGO_PORTAL' | 'FISCAL_XML' | 'ENTRADAS' | 'CATEGORIAS' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'COMISSOES' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'COMPROVANTES' | 'ENTREGAS' | 'LUCRO' | 'BACKUP' | 'SETTINGS' | 'CONFIG_ERP' | 'ESTOQUE_MOV' | 'NOTAS_PENDENTES' | 'FISCAL_PRODUTOS' | 'FISCAL_CLIENTES';
+type TabType = 'HOME' | 'CATALOGO' | 'CATALOGO_PORTAL' | 'FISCAL_XML' | 'ENTRADAS' | 'CATEGORIAS' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'COMISSOES' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'COMPROVANTES' | 'ENTREGAS' | 'LUCRO' | 'BACKUP' | 'SETTINGS' | 'CONFIG_ERP' | 'ESTOQUE_MOV' | 'NOTAS_PENDENTES' | 'FISCAL_PRODUTOS' | 'FISCAL_CLIENTES' | 'NOTAS_ESPECIAIS';
 
 type ReportType = 'RESUMO' | 'TOP_CLIENTES' | 'TOP_PRODUTOS' | 'CLIENTES_RISCO' | 'VENDAS_CATEGORIAS' | 'PRODUTOS_RENTAVEIS' | null;
 type ReportFilterType = 'RESUMO' | 'TOP_PRODUTOS' | 'TOP_CLIENTES' | 'CATEGORIAS' | 'VENDEDORES' | 'DIVIDAS' | 'PRODUTOS_RENTAVEIS';
@@ -1788,6 +1788,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             <MenuCard icon="fa-clipboard-list" title="Produtos Fiscais" tab="FISCAL_PRODUTOS" color="bg-amber-50 text-amber-600" />
             {/* BLOCO 174: Clientes Fiscais — nome/CEP editáveis (boleto do Inter precisa do CEP do cadastro) */}
             <MenuCard icon="fa-address-card" title="Clientes Fiscais" tab="FISCAL_CLIENTES" color="bg-teal-50 text-teal-600" />
+            {/* BLOCO 182: Notas Especiais — devolução/bonificação/nota manual (wizard mobile-first) */}
+            <MenuCard icon="fa-file-pen" title="Notas Especiais" tab="NOTAS_ESPECIAIS" color="bg-rose-50 text-rose-600" />
             <MenuCard icon="fa-store" title="Catalogo Portal" tab="CATALOGO_PORTAL" color="bg-emerald-50 text-emerald-600" />
             <MenuCard icon="fa-tags" title="Categorias" tab="CATEGORIAS" color="bg-indigo-50 text-indigo-600" />
             <MenuCard icon="fa-truck-ramp-box" title="Cargas" tab="CARGAS" color="bg-orange-50 text-orange-600" />
@@ -1905,6 +1907,31 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             <i className="fa-solid fa-up-right-from-square text-xs opacity-70"></i>
           </a>
           <p className="text-[9px] font-bold text-gray-400 leading-snug px-1">O CEP gravado aqui é o que o BOLETO do Inter usa ao gerar a cobrança — cliente sem CEP força a digitação no PDV. Use o filtro "sem CEP" do portal para completar os cadastros.</p>
+        </div>
+      )}
+
+      {/* ====================================================================
+          BLOCO 182 (pedido do dono): NOTAS ESPECIAIS — devolução, bonificação
+          e qualquer nota MANUAL. Wizard mobile-first (/fiscal-notas-especiais):
+          destinatário → produtos → CFOP 5202/6202 automático, CSOSN 900,
+          alíquota e tPag 90 SEM PAGAMENTO. A nota autorizada nasce como AVULSA
+          no Portal Fiscal com DANFE/XML e cancelamento dentro do prazo.
+          ==================================================================== */}
+      {activeTab === 'NOTAS_ESPECIAIS' && (
+        <div className="space-y-4">
+          <header className="px-1 flex flex-col gap-1">
+            <h2 className="text-xl font-black text-gray-800 tracking-tight leading-none">Notas Especiais</h2>
+            <p className="text-[10px] font-black uppercase text-gray-400">Devolução · Bonificação · Nota 100% manual</p>
+          </header>
+          <a href="/fiscal-notas-especiais" target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 bg-rose-600 text-white rounded-3xl px-5 py-6 shadow-lg active:scale-[0.98] transition-transform">
+            <span className="w-12 h-12 rounded-2xl bg-white/15 flex items-center justify-center shrink-0"><i className="fa-solid fa-file-pen text-xl"></i></span>
+            <span className="flex-1 flex flex-col items-start">
+              <span className="text-sm font-black uppercase tracking-widest">Emitir Nota Especial</span>
+              <span className="text-[9px] font-bold opacity-80 leading-snug">Devolução/fornecedor (CFOP 5202→6202 automático), bonificação (5910), CSOSN 900, alíquota editável e nota SEM PAGAMENTO — feita para o CELULAR, wizard de 4 passos</span>
+            </span>
+            <i className="fa-solid fa-up-right-from-square text-xs opacity-70"></i>
+          </a>
+          <p className="text-[9px] font-bold text-gray-400 leading-snug px-1">A nota autorizada entra como AVULSA no Portal Fiscal com DANFE/XML e cancelamento dentro do prazo SEFAZ (NF-e: 24h). PIN do admin abre a tela.</p>
         </div>
       )}
 

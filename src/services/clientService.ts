@@ -133,6 +133,8 @@ export function patchMescla(exist: Record<string, unknown>, client: Omit<Client,
   fill('observacoes', client.observacoes, exist.observacoes);
   // CNPJ: entra mascarado quando o existente não tem documento.
   fill('cnpj', client.cnpj, exist.cnpj);
+  // BLOCO 189: CPF preenche o cadastro antigo que não tinha documento pessoa.
+  fill('cpf', client.cpf, exist.cpf);
   if (client.ativarCnpj && !exist.ativar_cnpj) patch.ativar_cnpj = true;
   fill('pin_localizacao', client.pinLocalizacao, exist.pin_localizacao);
   fill('localizacao', client.localizacao, exist.localizacao);
@@ -168,6 +170,11 @@ function mapClient(c: any): Client {
     clienteEspecialGb: c.cliente_especial_gb === true,
     // BLOCO 108: modo cupom — undefined = SQL ainda nao rodado (trata como normal)
     modoCupom: c.modo_cupom === true,
+    // BLOCO 189: CPF do cliente (pagador do boleto) — ausente = SQL pendente
+    cpf: c.cpf || undefined,
+    // BLOCO 190: frequência — ausente/SQL pendente = SEMANAL (comportamento atual)
+    frequencia: c.frequencia || 'SEMANAL',
+    semanaReferencia: c.semana_referencia || 1,
   } as Client;
 }
 
@@ -176,7 +183,7 @@ export const clientService = {
     // BLOCO 20: paginado — mantem ordem por 'ordem' com desempate estavel por id
     // EGRESS: colunas explicitas (206 clientes x colunas fiscais em toda recarga).
     // Fallback progressivo ao '*' caso alguma coluna ainda nao exista (SQL pendente).
-    const COLS = 'id, nome_fantasia, nome, ativar_cnpj, cnpj, telefone, endereco, bairro, ativo, localizacao, dia_roteiro, ordem, observacoes, pin_localizacao, rota, portal_code, razao_social, inscricao_estadual, endereco_numero, endereco_cep, endereco_municipio, endereco_uf, email, cliente_especial_gb, modo_cupom';
+    const COLS = 'id, nome_fantasia, nome, ativar_cnpj, cnpj, cpf, telefone, endereco, bairro, ativo, localizacao, dia_roteiro, ordem, observacoes, pin_localizacao, rota, portal_code, razao_social, inscricao_estadual, endereco_numero, endereco_cep, endereco_municipio, endereco_uf, email, cliente_especial_gb, modo_cupom, frequencia, semana_referencia';
     let data: any[];
     try {
       data = await fetchAllPages<any>('clients', COLS, { orderCol: 'ordem', ascending: true, tiebreak: true });
@@ -252,6 +259,10 @@ export const clientService = {
       cliente_especial_gb: podeClienteEspecialGB(rota || 'ROTA_01') ? !!client.clienteEspecialGb : false,
       // BLOCO 108: cliente "somente cupom"
       modo_cupom: !!client.modoCupom,
+      // BLOCO 189: CPF do pagador do boleto + BLOCO 190: frequência
+      cpf: client.cpf || null,
+      frequencia: client.frequencia || 'SEMANAL',
+      semana_referencia: client.semanaReferencia || 1,
     };
     // Fiscais (Bloco 10): envia com checagem suave — se a coluna ainda nao
     // existir o Supabase rejeita o insert, entao refaz sem elas (fallback).
@@ -286,6 +297,12 @@ export const clientService = {
       console.warn('Coluna modo_cupom ausente (Bloco 108 nao rodado). Salvando sem ela.');
       const semCupom = { ...payload }; delete semCupom.modo_cupom;
       ({ data, error } = await supabase.from('clients').insert(semCupom).select().single());
+    }
+    // BLOCO 189/190: cpf/frequencia/semana_referencia podem nao existir ainda
+    if (error && /\bcpf\b|frequencia|semana_referencia/i.test(error.message || '')) {
+      console.warn('Colunas cpf/frequencia ausentes (Bloco 189/190 nao rodado). Salvando sem elas.');
+      const semNovos = { ...payload }; delete semNovos.cpf; delete semNovos.frequencia; delete semNovos.semana_referencia;
+      ({ data, error } = await supabase.from('clients').insert(semNovos).select().single());
     }
     if (error) {
       console.error('Erro ao inserir cliente:', error);
@@ -340,6 +357,10 @@ export const clientService = {
     }
     // BLOCO 108: cliente "somente cupom"
     if (updates.modoCupom !== undefined) payload.modo_cupom = !!updates.modoCupom;
+    // BLOCO 189/190: CPF do pagador + frequência de atendimento
+    if (updates.cpf !== undefined) payload.cpf = updates.cpf || null;
+    if (updates.frequencia !== undefined) payload.frequencia = updates.frequencia || 'SEMANAL';
+    if (updates.semanaReferencia !== undefined) payload.semana_referencia = updates.semanaReferencia || 1;
 
     let { data, error } = await supabase.from('clients').update(payload).eq('id', id).select().single();
     // BLOCO 76 (bug do dono): CNPJ/edicao do cliente nao salvava no app do
@@ -377,6 +398,12 @@ export const clientService = {
       console.warn('Coluna modo_cupom ausente (Bloco 108 nao rodado). Salvando sem ela.');
       const fallback4 = { ...payload }; delete fallback4.modo_cupom;
       ({ data, error } = await supabase.from('clients').update(fallback4).eq('id', id).select().single());
+    }
+    // BLOCO 189/190: cpf/frequencia/semana_referencia podem nao existir ainda
+    if (error && /\bcpf\b|frequencia|semana_referencia/i.test(error.message || '')) {
+      console.warn('Colunas cpf/frequencia ausentes (Bloco 189/190 nao rodado). Salvando sem elas.');
+      const fallback5 = { ...payload }; delete fallback5.cpf; delete fallback5.frequencia; delete fallback5.semana_referencia;
+      ({ data, error } = await supabase.from('clients').update(fallback5).eq('id', id).select().single());
     }
     if (error) {
       console.error('Erro ao atualizar cliente:', error);

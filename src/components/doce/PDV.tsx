@@ -766,7 +766,9 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   // - Cupom/NFC-e: o vendedor É OBRIGADO a pedir (boleto do Inter não
   //   existe sem documento do pagador) — sem CPF válido, não finaliza.
   // ============================================================
-  const docCadastroDig = ((client.cnpj as string) || '').replace(/\D/g, '');
+  // BLOCO 189: o cadastro agora tem CPF do cliente pessoa — o boleto usa
+  // nesta ordem: digitado na venda (tela) > CPF do cadastro > CNPJ do cadastro.
+  const docCadastroDig = ((client.cnpj as string) || (client.cpf as string) || '').replace(/\D/g, '');
   const docCadastroOk = !!docCadastroDig && validaCpfOuCnpj(docCadastroDig);
   const boletoDocDig = (boletoCpfDoc || (docCadastroOk ? docCadastroDig : '')).replace(/\D/g, '');
   const boletoDocOk = !!boletoDocDig && validaCpfOuCnpj(boletoDocDig);

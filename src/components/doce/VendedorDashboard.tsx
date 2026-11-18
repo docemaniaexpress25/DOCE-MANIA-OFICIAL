@@ -7,7 +7,7 @@ import { authHeaders } from '@/services/userService';
 import { locationService } from '@/services/locationService';
 import { DIAS_SEMANA } from '@/lib/constants';
 import { ehContaAReceber, saldoAberto, preVendaNaFila } from '@/lib/contaAReceber';
-import { buscarCnpjReceita, mensagemCnpj, clienteAptoNfe, mascararCnpj, validaCnpj, CnpjBusca } from '@/lib/cnpjAutocomplete';
+import { buscarCnpjReceita, mensagemCnpj, clienteAptoNfe, mascararCnpj, mascararCpf, validaCnpj, validaCpf, CnpjBusca } from '@/lib/cnpjAutocomplete';
 // BLOCO 129: CEP automatico (ViaCEP) + cidade/UF/CEP vindos do GPS (Nominatim)
 import { mascararCep, buscarCep, cidadeDeEstado, ufDeEstado, cepDeEstado } from '@/lib/endereco';
 // BLOCO 71: cliente ESPECIAL GB só existe nas rotas liberadas (Rota 03 Edipo Pena / Rota 04 Gil Pantoja)
@@ -16,6 +16,8 @@ import { podeClienteEspecialGB } from '@/lib/regraClienteGB';
 import type { InsercaoClienteResultado } from '@/services/clientService';
 // BLOCO 184: motor PURO da ordem manual (slots) — compartilhado com o portal de notas
 import { reordenarSlots } from '@/lib/ordemManual';
+// BLOCO 190: frequência de atendimento (semanal/quinzenal/mensal) — motor puro
+import { numeroSemanaISO, visitaEssaSemana, rotuloFrequencia, rotuloSemanaReferencia } from '@/lib/frequencia';
 // BLOCO 134: fluxo "não pode esquecer de bater a nota" — painel de vendas com nota pendente
 import { rotuloDocumentoNota } from '@/lib/regras-fiscais';
 import PDV from '@/components/doce/PDV';
@@ -713,10 +715,21 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       return idxA - idxB;
     };
 
+    // BLOCO 190 (regra do dono): FREQUÊNCIA — semanal aparece toda semana,
+    // quinzenal a cada 2 semanas e mensal a cada 4 (âncora semana_referencia).
+    // Cliente do dia só entra na rota de hoje NA SEMANA DO CICLO dele. Quem
+    // foi puxado na mão de outro dia (snapshot, diaRoteiro diferente) entra
+    // SEMPRE — foi decisão do vendedor.
+    const semanaISOHoje = numeroSemanaISO(new Date());
     const idsMembros = new Set<string>([
-      ...(dailyRouteState?.clientIds || []),
+      ...(dailyRouteState?.clientIds || []).filter((id) => {
+        const c = clientMap.get(id);
+        if (!c) return false;
+        if (c.diaRoteiro !== diaAtual) return true; // puxado de outro dia: mantém
+        return visitaEssaSemana(c.frequencia, c.semanaReferencia, semanaISOHoje);
+      }),
       ...(clients || [])
-        .filter(c => (c.ativo ?? false) && c.rota === (user.rota || 'ROTA_01') && c.diaRoteiro === diaAtual)
+        .filter(c => (c.ativo ?? false) && c.rota === (user.rota || 'ROTA_01') && c.diaRoteiro === diaAtual && visitaEssaSemana(c.frequencia, c.semanaReferencia, semanaISOHoje))
         .map(c => c.id),
     ]);
 
@@ -822,8 +835,8 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   };
 
   const handleOpenEditClient = (c: Client | 'NEW') => {
-    if (c === 'NEW') setCForm({ nomeFantasia: '', nome: '', telefone: '', endereco: '', bairro: '', diaRoteiro: diaAtual, ativo: true, ativarCnpj: false, cnpj: '', pinLocalizacao: '', ordem: 0, rota: user.rota, razaoSocial: '', inscricaoEstadual: '', enderecoNumero: '', enderecoCep: '', enderecoMunicipio: '', enderecoUf: '', clienteEspecialGb: false });
-    else setCForm({ ...c, endereco: (c.endereco && c.endereco !== '0') ? c.endereco : '', bairro: (c.bairro && c.bairro !== '0') ? c.bairro : '' });
+    if (c === 'NEW') setCForm({ nomeFantasia: '', nome: '', telefone: '', endereco: '', bairro: '', diaRoteiro: diaAtual, ativo: true, ativarCnpj: false, cnpj: '', cpf: '', pinLocalizacao: '', ordem: 0, rota: user.rota, razaoSocial: '', inscricaoEstadual: '', enderecoNumero: '', enderecoCep: '', enderecoMunicipio: '', enderecoUf: '', clienteEspecialGb: false });
+    else setCForm({ ...c, cpf: c.cpf || '', endereco: (c.endereco && c.endereco !== '0') ? c.endereco : '', bairro: (c.bairro && c.bairro !== '0') ? c.bairro : '' });
     setCnpjBusca({ loading: false, msg: '', ok: false });
     cnpjBuscadoRef.current = '';
     // BLOCO 138: NOVO = fiscal fechado (tela amigavel); EDITAR = fiscal aberto (dados ja cadastrados visiveis).
@@ -970,6 +983,10 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     // salvar sem documento para preencher depois em Editar Cliente).
     if (cnpjDigitos.length > 0 && cnpjDigitos.length !== 14) { showToast("CNPJ incompleto — complete os 14 dígitos ou apague o campo.", 'error'); return; }
     if (cnpjDigitos.length > 0 && !validaCnpj(cnpjDigitos)) { showToast("CNPJ inválido (dígitos verificadores não conferem).", 'error'); return; }
+    // BLOCO 189: CPF do pagador do boleto — quando preenchido, tem que ser válido
+    const cpfDigitos = (cForm.cpf || '').replace(/\D/g, '');
+    if (cpfDigitos.length > 0 && cpfDigitos.length !== 11) { showToast("CPF incompleto — complete os 11 dígitos ou apague o campo.", 'error'); return; }
+    if (cpfDigitos.length > 0 && !validaCpf(cpfDigitos)) { showToast("CPF inválido (dígitos verificadores não conferem).", 'error'); return; }
 
     const clientData: Omit<Client, 'id'> = {
       nomeFantasia: cForm.nomeFantasia!,
@@ -981,6 +998,8 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       ativo: cForm.ativo ?? true,
       ativarCnpj: cForm.ativarCnpj ?? false,
       cnpj: cForm.cnpj,
+      // BLOCO 189: CPF do pagador do boleto — cliente SEM CNPJ deve ter
+      cpf: cForm.cpf,
       pinLocalizacao: cForm.pinLocalizacao,
       nome: cForm.nome,
       observacoes: cForm.observacoes,
@@ -1720,11 +1739,14 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                   const idxB = orderMap.get(b.id) ?? (b.ordem || 0);
                   return idxA - idxB;
                 }); 
+              // BLOCO 190: quantos clientes do dia vêm ESSA semana (frequência)
+              const semanaISOAgora = numeroSemanaISO(new Date());
+              const vemSemana = clientsInDay.filter(c => visitaEssaSemana(c.frequencia, c.semanaReferencia, semanaISOAgora)).length;
               return (
                 <div key={dia} className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
                   <button onClick={() => setExpandedDay(isOpen ? null : dia)} className={`w-full flex items-center justify-between p-5 text-left ${isOpen ? 'bg-indigo-50 text-indigo-700' : 'bg-white text-gray-700'}`}>
                     <div className="flex items-center gap-3"><div className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-[10px] ${isOpen ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-400'}`}>{dia}</div><span className="font-black uppercase text-xs tracking-tight">{DIAS_SEMANA[dia]}</span></div>
-                    <div className="flex items-center gap-2"><span className="text-[9px] font-black uppercase opacity-40">{clientsInDay.length} clients</span><i className={`fa-solid ${isOpen ? 'fa-chevron-up' : 'fa-chevron-down'} text-[10px]`}></i></div>
+                    <div className="flex items-center gap-2"><span className="text-[9px] font-black uppercase opacity-40">{clientsInDay.length} clients</span>{clientsInDay.length > 0 && vemSemana < clientsInDay.length && <span className="text-[8px] font-black uppercase text-indigo-500 bg-indigo-50 px-1.5 py-0.5 rounded-md">{vemSemana} essa semana</span>}<i className={`fa-solid ${isOpen ? 'fa-chevron-up' : 'fa-chevron-down'} text-[10px]`}></i></div>
                   </button>
                   {isOpen && (() => {
                     // BLOCO 188 (regra do dono): AQUI fica o kanban de clientes.
@@ -1733,7 +1755,11 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                     // ativa o arrasto desliga (cards simples) e as setas seguem
                     // funcionando — mesma gravação.
                     const podeArrastar = weeklySearch.trim() === '';
+                    // BLOCO 190: quem é quinzenal/mensal nem sempre vem essa semana
+                    const semanaISOAgora = numeroSemanaISO(new Date());
                     const corpo = clientsInDay.map((c, k) => {
+                      const vem = visitaEssaSemana(c.frequencia, c.semanaReferencia, semanaISOAgora);
+                      const freqChip = c.frequencia && c.frequencia !== 'SEMANAL' ? `${rotuloFrequencia(c.frequencia)}${rotuloSemanaReferencia(c.frequencia, c.semanaReferencia) ? ` · ${rotuloSemanaReferencia(c.frequencia, c.semanaReferencia)}` : ''}` : '';
                       const item = (
                         <div className="p-3 bg-gray-50 rounded-2xl flex items-center justify-between group">
                           <div className="flex flex-col gap-1 mr-3">
@@ -1743,6 +1769,13 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                           <div className="flex-1 cursor-pointer min-w-0" onClick={() => setViewingClientHistory(c)}>
                             <p className="font-bold text-gray-800 text-xs uppercase break-words">{c.nomeFantasia}</p>
                             <p className="text-[9px] text-gray-400 font-bold mt-0.5">{c.bairro || 'Sem Bairro'}</p>
+                            {/* BLOCO 190: badge de frequência — quinzenal/mensal mostram o ciclo; fora da semana do ciclo fica âmbar */}
+                            {freqChip && (
+                              <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                                <span className="text-[8px] font-black uppercase bg-indigo-50 text-indigo-600 border border-indigo-100 px-1.5 py-0.5 rounded-md whitespace-nowrap"><i className="fa-solid fa-repeat mr-0.5"></i>{freqChip}</span>
+                                {!vem && <span className="text-[8px] font-black uppercase bg-amber-50 text-amber-600 border border-amber-200 px-1.5 py-0.5 rounded-md whitespace-nowrap">Não vem essa semana</span>}
+                              </div>
+                            )}
                           </div>
                           <div className="flex items-center gap-2">
                             <button onClick={() => handleAddToTodayRoute(c.id)} className="w-9 h-9 bg-indigo-100 text-indigo-600 rounded-lg flex items-center justify-center active:scale-90" title="Puxar p/ rota de hoje"><i className="fa-solid fa-plus text-xs"></i></button>
@@ -2302,7 +2335,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 ); })()}
                 <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Nome Fantasia (Estabelecimento)</label><input value={cForm.nomeFantasia || ''} onChange={e => setCForm({...cForm, nomeFantasia: e.target.value})} placeholder="Ex: Doce da Maria" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100 uppercase" /></div>
                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Nome do Cliente</label><input value={cForm.nome || ''} onChange={e => setCForm({...cForm, nome: e.target.value})} placeholder="Nome real para chamar o cliente" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100" /></div>
-                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Telefone / WhatsApp</label><input value={cForm.telefone || ''} onChange={e => setCForm({...cForm, telefone: e.target.value})} placeholder="Telefone" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100" /></div>
+                <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">Telefone / WhatsApp</label><input value={cForm.telefone || ''} onChange={e => setCForm({...cForm, telefone: e.target.value})} placeholder="Telefone" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100" /></div>{/* ===== BLOCO 189: CPF DO CLIENTE — pagador do boleto a prazo. Cliente SEM CNPJ deve ter CPF no cadastro (o PDV usa: digitado na venda > CPF do cadastro > CNPJ). ===== */}<div className="space-y-1"><label className="text-[10px] font-black text-gray-400 uppercase ml-1">CPF do cliente (boleto a prazo)</label><input value={cForm.cpf || ''} onChange={e => setCForm({...cForm, cpf: mascararCpf(e.target.value)})} placeholder="000.000.000-00" inputMode="numeric" className="w-full p-4 bg-gray-50 rounded-2xl font-semibold border-none outline-none focus:ring-2 focus:ring-blue-100" /><p className="text-[8px] font-bold text-gray-400 leading-snug px-1">Todo cliente SEM CNPJ deve ter o CPF no cadastro — é o documento do BOLETO. Com ele aqui, o vendedor não precisa pedir na venda.</p></div>
                 {/* BLOCO 71: TIPO DO CLIENTE — SÓ dentro da Rota 03 (Edipo Pena) e Rota 04 (Gil Pantoja). Outras rotas: a opção nem aparece e o cliente é sempre NORMAL. */}
                 {podeClienteEspecialGB(user.rota) ? (
                 <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 space-y-2"><p className="text-[9px] font-black text-amber-600 uppercase tracking-widest flex items-center gap-1"><i className="fa-solid fa-star"></i> Tipo do Cliente — Preços do PDV</p><div className="grid grid-cols-2 gap-2"><button type="button" onClick={() => setCForm({...cForm, clienteEspecialGb: false})} className={`py-3 rounded-2xl font-black text-[10px] uppercase tracking-wide border transition-all ${!cForm.clienteEspecialGb ? 'bg-white border-blue-500 text-blue-600 shadow-sm' : 'bg-white border-gray-200 text-gray-400'}`}>Normal</button><button type="button" onClick={() => setCForm({...cForm, clienteEspecialGb: true})} className={`py-3 rounded-2xl font-black text-[10px] uppercase tracking-wide border transition-all flex items-center justify-center gap-1 ${cForm.clienteEspecialGb ? 'bg-amber-500 border-amber-500 text-white shadow-md' : 'bg-white border-gray-200 text-gray-400'}`}><i className="fa-solid fa-star text-[9px]"></i> Especial GB</button></div><p className="text-[9px] font-bold text-amber-500 leading-snug">NORMAL: usa os preços de hoje do PDV. ESPECIAL GB: recebe o PREÇO ESPECIAL GB de cada produto do estoque principal — produto sem preço GB segue o preço normal. Opção disponível apenas nas rotas 03 (Edipo Pena) e 04 (Gil Pantoja).</p></div>

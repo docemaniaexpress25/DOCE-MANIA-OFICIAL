@@ -301,7 +301,7 @@ export function interpretarCobranca(data: Record<string, unknown>): CobrancaPubl
 export function montarPagador(client: Record<string, unknown>, docManual?: string, cepManual?: string): InterPagador | null {
   const dig = (v: unknown) => String(v || '').replace(/\D/g, '');
   const txt = (v: unknown) => String(v || '').trim();
-  const doc = dig(docManual) || dig(client.cnpj);
+  const doc = dig(docManual) || dig(client.cnpj) || dig(client.cpf); // BLOCO 189: CPF do cadastro entra como fallback do pagador
   if (doc.length !== 11 && doc.length !== 14) return null;
   const cep = dig(cepManual) || dig(client.endereco_cep) || undefined;
 

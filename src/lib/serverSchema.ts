@@ -158,6 +158,16 @@ export function hasNotasOrdem(): Promise<boolean> {
   return probeColumn('app_settings', 'notas_ordem', 'notasOrdem');
 }
 
+/** xml_importacoes.direcao existe? (Bloco 193 — ENTRADA de fornecedor x SAÍDA de terceiros) */
+export function hasXmlDirecaoColumn(): Promise<boolean> {
+  return probeColumn('xml_importacoes', 'direcao', 'xmlDirecao');
+}
+
+/** custos_empresa existe? (Bloco 191 — Portal Financeiro, custos lançados pelo admin) */
+export function hasCustosEmpresaTable(): Promise<boolean> {
+  return probeColumn('custos_empresa', 'id', 'custosEmpresa');
+}
+
 /** sales.boleto_cpf existe? (Bloco 187 — CPF/CNPJ do pagador capturado na venda a prazo) */
 export function hasBoletoCpfColumn(): Promise<boolean> {
   return probeColumn('sales', 'boleto_cpf', 'boletoCpf');

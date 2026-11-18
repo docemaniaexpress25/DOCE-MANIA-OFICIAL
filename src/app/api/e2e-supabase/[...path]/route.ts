@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { hashSync } from 'bcryptjs';
+// BLOCO 190: número da semana ISO (frequência quinzenal/mensal do seed)
+import { numeroSemanaISO } from '@/lib/frequencia';
 
 /**
  * MOCK DO SUPABASE (PostgREST) — SOMENTE PARA E2E LOCAL.
@@ -12,7 +14,7 @@ import { hashSync } from 'bcryptjs';
  * testar a fila de entrega do admin (setas de ordem + editor de pedido).
  */
 
-const CATCH_TABLES = ['app_users', 'clients', 'products', 'app_settings', 'product_categories', 'product_subcategories', 'cargas', 'cargas_pendentes', 'system_messages', 'commissions', 'commission_payment_logs', 'sales', 'seller_expenses', 'push_tokens', 'daily_routes', 'entrega_rotas', 'entrega_eventos', 'sale_items', 'payment_comprovantes', 'caixa_fechamentos', 'caixa_fechamentos_geral', 'caixa_pagamentos', 'pre_vendas', 'pedidos', 'xml_importacoes', 'xml_itens'];
+const CATCH_TABLES = ['app_users', 'clients', 'products', 'app_settings', 'product_categories', 'product_subcategories', 'cargas', 'cargas_pendentes', 'system_messages', 'commissions', 'commission_payment_logs', 'sales', 'seller_expenses', 'push_tokens', 'daily_routes', 'entrega_rotas', 'entrega_eventos', 'sale_items', 'payment_comprovantes', 'caixa_fechamentos', 'caixa_fechamentos_geral', 'caixa_pagamentos', 'pre_vendas', 'pedidos', 'xml_importacoes', 'xml_itens', 'custos_empresa'];
 
 const users = [{
   id: 'adminuser', nome: 'Admin Teste', email: '', perfil: 'ADMIN', ativo: true,
@@ -104,15 +106,21 @@ const clients = [{
 }, {
   // BLOCO 64: cliente da ROTA_01 (vendedor vend01, sem flag rota2) — cadastro
   // COMPLETO (pin >= 5 + telefone) para o modoSheet ir direto pra venda.
-  id: 'cli-6', nome_fantasia: 'Cliente Rota Um', nome: null, ativar_cnpj: false, cnpj: null,
+  // BLOCO 189: CPF no cadastro (11.444.777-35 é um CPF válido de teste)
+  id: 'cli-6', nome_fantasia: 'Cliente Rota Um', nome: null, ativar_cnpj: false, cnpj: null, cpf: '111.444.777-35',
   telefone: '(54) 95555-5555', endereco: 'Rua da Rota Um 10', bairro: 'Esplanada', ativo: true,
   localizacao: null, dia_roteiro: new Date().getDay(), ordem: 6, observacoes: null,
   pin_localizacao: '-29.170000, -51.210000',
   rota: 'ROTA_01', portal_code: 'TESTROTA1', razao_social: null, inscricao_estadual: null,
   endereco_numero: '10', endereco_cep: null, endereco_municipio: null, endereco_uf: null, email: null,
+  frequencia: 'SEMANAL', semana_referencia: 1,
 }, {
   // BLOCO 64: 2o cliente da ROTA_01 — pronta entrega (van SEM_NF = cupom direto)
-  id: 'cli-7', nome_fantasia: 'Mercado Rota Um', nome: null, ativar_cnpj: false, cnpj: null,
+  // BLOCO 189: CPF no cadastro (pagador do boleto sem pedir na venda)
+  id: 'cli-7', nome_fantasia: 'Mercado Rota Um', nome: null, ativar_cnpj: false, cnpj: null, cpf: null,
+  // BLOCO 190: QUINZENAL na semana OPOSTA à atual — some da Rota do Dia hoje
+  // e aparece no Roteiro Semanal com o badge "Não vem essa semana"
+  frequencia: 'QUINZENAL', semana_referencia: ((numeroSemanaISO(new Date()) - 1) % 2) + 1 === 1 ? 2 : 1,
   telefone: '(54) 94444-4444', endereco: 'Av da Rota Um 20', bairro: 'Kayser', ativo: true,
   localizacao: null, dia_roteiro: new Date().getDay(), ordem: 7, observacoes: null,
   pin_localizacao: '-29.171000, -51.211000',
@@ -247,6 +255,23 @@ const saleItemsSeed = [
   { id: 'si-6', sale_id: 'sale-fila-005', produto_id: 'prod-2', product_id: 'prod-2', quantidade: 10, preco_venda: 3.39 },
 ];
 
+// BLOCO 191: custos lançados pelo admin (Portal Financeiro) — 1 exemplo
+const custosEmpresaSeed = [
+  { id: 'custo-1', descricao: 'Frete de mercadoria do mês', categoria: 'FRETE', valor: 150.0, data: new Date().toISOString(), criado_por: 'adminuser', criado_em: new Date().toISOString() },
+];
+
+// BLOCO 193: XML de ENTRADA (fornecedor) + XML de SAÍDA (terceiros) para o
+// balanço do Portal de Produtos: prod-1 entrou 100un; prod-r1 SAIU 30un SEM
+// entrada nenhuma (case do ALERTA).
+const xmlImportacoesSeed = [
+  { id: 'imp-1', chave: '12345678901234567890123456789012345678901234', origem: 'UPLOAD', emit_cnpj: '12345678000195', emit_nome: 'Fornecedor Teste LTDA', emit_ie: '123456', numero: '100', serie: '1', data_emissao: new Date().toISOString(), valor_total: 100.0, qtd_itens: 1, xml_text: null, criado_em: new Date().toISOString(), direcao: 'ENTRADA' },
+  { id: 'imp-2', chave: '92345678901234567890123456789012345678901234', origem: 'UPLOAD', emit_cnpj: '63720443000177', emit_nome: 'DOCE MANIA (terceiros)', emit_ie: 'ISENTO', numero: '200', serie: '1', data_emissao: new Date().toISOString(), valor_total: 90.0, qtd_itens: 1, xml_text: null, criado_em: new Date().toISOString(), direcao: 'SAIDA' },
+];
+const xmlItensSeed = [
+  { id: 'xi-1', importacao_id: 'imp-1', c_prod: 'P1', c_ean: '7890000000011', x_prod: 'Palitinho Morango CX', ncm: '17049010', cfop: '2102', unidade: 'UN', quantidade: 100, valor_unitario: 1.0, valor_total: 100.0, cst_icms: '00', csosn_icms: null, produto_id: 'prod-1', status: 'VINCULADO', resolvido_em: new Date().toISOString(), entrada_estoque_em: new Date().toISOString(), criado_em: new Date().toISOString() },
+  { id: 'xi-2', importacao_id: 'imp-2', c_prod: 'P2', c_ean: '7890000000028', x_prod: 'ruffles 270g', ncm: '19059090', cfop: '5102', unidade: 'UN', quantidade: 30, valor_unitario: 3.0, valor_total: 90.0, cst_icms: null, csosn_icms: '101', produto_id: 'prod-r1', status: 'VINCULADO', resolvido_em: null, entrada_estoque_em: null, criado_em: new Date().toISOString() },
+];
+
 const tables: Record<string, any[]> = {
   app_users: users,
   clients,
@@ -260,7 +285,7 @@ const tables: Record<string, any[]> = {
   commissions: [],
   commission_payment_logs: [],
   sales: salesSeed,
-  seller_expenses: [],
+  seller_expenses: [{ id: 'exp-1', seller_id: 'vend01', descricao: 'Pedagio da rota', valor: 12.5, created_at: new Date().toISOString() }],
   push_tokens: [],
   daily_routes: [],
   entrega_rotas: [],
@@ -275,8 +300,11 @@ const tables: Record<string, any[]> = {
   pre_vendas: [],
   pedidos: [],
   // BLOCO 95: fila fiscal de produtos vindos da XML (aba XML → Produtos)
-  xml_importacoes: [],
-  xml_itens: [],
+  // BLOCO 193: seed do balanço (1 ENTRADA fornecedor + 1 SAÍDA terceiros)
+  xml_importacoes: xmlImportacoesSeed,
+  xml_itens: xmlItensSeed,
+  // BLOCO 191: custos da empresa (Portal Financeiro)
+  custos_empresa: custosEmpresaSeed,
 };
 
 function json(data: any, status = 200) {

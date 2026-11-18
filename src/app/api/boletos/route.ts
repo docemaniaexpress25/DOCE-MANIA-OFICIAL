@@ -245,11 +245,20 @@ export async function POST(req: NextRequest) {
   }
 
   // Cliente + pagador
-  const { data: client } = await db
+  // BLOCO 189: o CPF do cadastro entra no montarPagador — mas a coluna só
+  // existe depois do SQL. Sem o SQL: refaz o select sem cpf (degrada ok).
+  let { data: client, error: eClient } = await db
     .from('clients')
-    .select('nome_fantasia, nome, cnpj, telefone, endereco, bairro, razao_social, endereco_numero, endereco_cep, endereco_municipio, endereco_uf, email')
+    .select('nome_fantasia, nome, cnpj, cpf, telefone, endereco, bairro, razao_social, endereco_numero, endereco_cep, endereco_municipio, endereco_uf, email')
     .eq('id', sale.client_id)
     .single();
+  if (eClient && /column|cpf/i.test(eClient.message || '')) {
+    ({ data: client } = await db
+      .from('clients')
+      .select('nome_fantasia, nome, cnpj, telefone, endereco, bairro, razao_social, endereco_numero, endereco_cep, endereco_municipio, endereco_uf, email')
+      .eq('id', sale.client_id)
+      .single());
+  }
   if (!client) return BAD(422, 'Cliente da venda nao encontrado.');
 
   // -----------------------------------------------------------------

@@ -153,7 +153,7 @@ export async function POST(request: NextRequest) {
     return BAD(503, 'Banco desatualizado: rode sql/bloco95_xml_produtos.sql no Supabase (tabelas xml_importacoes/xml_itens).');
   }
 
-  let body: { arquivos?: ArquivoXml[]; origem?: string } = {};
+  let body: { arquivos?: ArquivoXml[]; origem?: string; direcao?: string } = {};
   try {
     body = await request.json();
   } catch {
@@ -165,6 +165,9 @@ export async function POST(request: NextRequest) {
     return BAD(400, 'Nenhum arquivo recebido (envie { arquivos: [{ nome, conteudo }] }).');
   }
   const origem = body.origem === 'SPEDY_INBOUND' ? 'SPEDY_INBOUND' : 'UPLOAD';
+  // BLOCO 193: ENTRADA = XML de fornecedor (padrão); SAIDA = nota de venda
+  // emitida fora do app (terceiros) — o balanço (/produtos-balanco) separa.
+  const direcao = body.direcao === 'SAIDA' ? 'SAIDA' : 'ENTRADA';
 
   try {
     const supabase = getServiceClient();
@@ -199,11 +202,15 @@ export async function POST(request: NextRequest) {
       chavesExistentes.add(nota.chave);
 
       // 2) Cabecalho da importacao (xml_text = backup integral da nota)
+      // BLOCO 193: direcao entra quando a coluna já existe (SQL 193 rodado);
+      // sem o SQL, sobe sem direcao (= ENTRADA, comportamento atual).
+      const comDirecao = await hasXmlDirecaoColumn();
       const { data: impRow, error: eImp } = await supabase
         .from('xml_importacoes')
         .insert({
           chave: nota.chave,
           origem,
+          ...(comDirecao ? { direcao } : {}),
           emit_cnpj: nota.emitCnpj,
           emit_nome: nota.emitNome,
           emit_ie: nota.emitIe,

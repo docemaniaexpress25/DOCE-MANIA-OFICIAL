@@ -147,6 +147,14 @@ export interface Client {
    *  sem NFC identificada). Na venda dele, além do cupom, sai uma NFC-e
    *  anônima com os produtos no preço cupom (ligável/desligável em Configurações). */
   modoCupom?: boolean;
+  /** BLOCO 189 — CPF do cliente pessoa (sem CNPJ): documento do PAGADOR do
+   *  boleto a prazo (Bloco 187 usa: digitado na venda > CPF do cadastro > CNPJ). */
+  cpf?: string;
+  /** BLOCO 190 — frequência de atendimento: SEMANAL (toda semana, padrão),
+   *  QUINZENAL (a cada 2 semanas) ou MENSAL (a cada 4 semanas). */
+  frequencia?: 'SEMANAL' | 'QUINZENAL' | 'MENSAL';
+  /** BLOCO 190 — âncora do ciclo (quinzenal 1|2, mensal 1-4). */
+  semanaReferencia?: number;
 }
 
 export type NotaStatus = 'NAO_EMITIDA' | 'EMITINDO' | 'AUTORIZADA' | 'REJEITADA' | 'CANCELADA';

@@ -47,8 +47,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { unzipSync } from 'fflate';
+// BLOCO 184: kanban de ORDENAÇÃO MANUAL das notas — o dono sobe XML batido
+// fora do app e eles entram fora de ordem; arrastar-e-soltar (dnd-kit, mesmo
+// padrão do BLOCO 63/61 do app) define a sequência que o portal respeita.
+import { DndContext, closestCenter, PointerSensor, KeyboardSensor, useSensor, useSensors, MeasuringStrategy, type DragEndEvent } from '@dnd-kit/core';
+import { SortableContext, verticalListSortingStrategy, useSortable, sortableKeyboardCoordinates, arrayMove } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 // BLOCO 142: prazo SEFAZ de cancelamento (NFC-e 30min / NF-e 24h) — fonte única com o servidor
 import { prazoCancelamentoNota } from '@/lib/regras-fiscais';
+// BLOCO 184: motor PURO da ordem manual (comparador + slots) — compartilhado com a rota do vendedor, testável por QA
+import { criarComparadorNotas, reordenarSlots } from '@/lib/ordemManual';
 // BLOCO 146: cupom não fiscal em IMAGEM + WhatsApp compartilhável
 import CupomNaoFiscal, { foneWhatsApp } from './CupomNaoFiscal';
 
@@ -215,6 +223,91 @@ function metaBoleto(st: string) {
 
 const BOLETO_VIVO = ['A_RECEBER', 'EM_PROCESSAMENTO', 'ATRASADO', 'RECEBIDO', 'MARCADO_RECEBIDO', 'FALHA_EMISSAO'];
 
+// ---------------- BLOCO 184: ordem manual (kanban) ----------------
+// O motor PURO (comparador por ordem manual + reordenação por slots) vive em
+// src/lib/ordemManual.ts — mesmo padrão do motor notaEspecial (182/183).
+
+/** BLOCO 184: card ordenável do kanban — arraste pelo grip (ícone ≡) ou use
+ *  as setas ↑↓ (alvo de toque 44px, decisivo no celular). */
+function CardNotaOrdenavel({ n, posicao, primeiro, ultimo, onMover, onAbrirAcoes }: {
+  n: NotaRow;
+  posicao: number;
+  primeiro: boolean;
+  ultimo: boolean;
+  onMover: (n: NotaRow, dir: 'UP' | 'DOWN') => void;
+  onAbrirAcoes: (id: string, el: HTMLElement) => void;
+}) {
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id: n.id });
+  const meta = metaStatus(n.status);
+  return (
+    <div
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      className={`flex items-stretch gap-1 bg-white rounded-xl border shadow-sm transition-shadow ${isDragging ? 'border-blue-400 shadow-xl ring-2 ring-blue-200 z-10 relative' : 'border-gray-200'}`}
+    >
+      {/* coluna de ordenação: grip (arraste) + setas (precisão no celular) */}
+      <div className="flex flex-col items-center justify-center gap-0.5 py-1.5 pl-1.5 pr-1 border-r border-gray-100 bg-gray-50/60 rounded-l-xl">
+        <span className="text-[9px] font-black text-blue-600 bg-blue-50 border border-blue-100 rounded-md px-1.5 py-0.5 tabular-nums" aria-label={`Posição ${posicao}`}>{posicao}</span>
+        <button
+          ref={setActivatorNodeRef}
+          {...attributes}
+          {...listeners}
+          className="w-9 h-9 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 flex items-center justify-center touch-none cursor-grab active:cursor-grabbing"
+          aria-label={`Arrastar nota ${n.numero || n.ref} para reordenar`}
+          title="Arraste para mudar a posição"
+          type="button"
+        >
+          <i className="fa-solid fa-grip-vertical text-[12px]"></i>
+        </button>
+        <div className="flex flex-col">
+          <button onClick={() => onMover(n, 'UP')} disabled={primeiro} className="w-9 h-6 rounded-md text-gray-400 hover:text-blue-600 hover:bg-blue-50 flex items-center justify-center disabled:opacity-30 disabled:hover:bg-transparent" aria-label="Subir uma posição" title="Subir" type="button">
+            <i className="fa-solid fa-chevron-up text-[10px]"></i>
+          </button>
+          <button onClick={() => onMover(n, 'DOWN')} disabled={ultimo} className="w-9 h-6 rounded-md text-gray-400 hover:text-blue-600 hover:bg-blue-50 flex items-center justify-center disabled:opacity-30 disabled:hover:bg-transparent" aria-label="Descer uma posição" title="Descer" type="button">
+            <i className="fa-solid fa-chevron-down text-[10px]"></i>
+          </button>
+        </div>
+      </div>
+      {/* conteúdo do card — compacto, 2 linhas */}
+      <div className="flex-1 min-w-0 px-3 py-2 flex items-center gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-xs font-black text-gray-800 tabular-nums">{n.numero ? `Nº ${n.numero}` : '—'}</span>
+            <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded bg-violet-50 text-violet-600">{rotuloTipo(n.tipo, n.modoNota)}</span>
+            {n.avulsa && (
+              <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded ${n.origem === 'XML' ? 'bg-teal-50 text-teal-600' : 'bg-amber-50 text-amber-600'}`}>
+                {n.origem === 'XML' ? 'XML' : 'Focus'}
+              </span>
+            )}
+            <span className={`inline-flex items-center gap-1 text-[8px] font-black uppercase px-1.5 py-0.5 rounded border ${meta.cls}`}>
+              <span className={`w-1 h-1 rounded-full ${meta.dot}`}></span>{meta.label}
+            </span>
+          </div>
+          <p className="text-[11px] font-bold text-gray-600 truncate mt-0.5" title={n.cliente}>
+            {n.cliente}
+            <span className="text-gray-300 font-semibold"> · {fmtData(n.emitidaEm || n.dataVenda)} · {n.vendedor || '—'}</span>
+          </p>
+        </div>
+        <div className="text-right shrink-0">
+          <p className="text-[12px] font-black text-gray-800 tabular-nums">{fmtBRL(n.valor)}</p>
+          <p className="text-[8px] font-bold text-gray-400 uppercase truncate max-w-[140px]" title={n.detalhe}>{(n.metodo || '—').replace('_', ' ')}</p>
+        </div>
+        {/* ações da nota continuam acessíveis no kanban (mesmo painel da tabela) */}
+        <button
+          type="button"
+          onClick={e => onAbrirAcoes(n.id, e.currentTarget)}
+          aria-haspopup="true"
+          aria-expanded={false}
+          className="hidden sm:inline-flex items-center justify-center w-10 h-10 rounded-xl border border-gray-200 bg-white text-gray-500 hover:border-blue-300 hover:bg-blue-50/60 active:scale-95 transition-all shrink-0"
+          title="Ações desta nota"
+        >
+          <i className="fa-solid fa-sliders text-[11px]"></i>
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /** ArrayBuffer -> base64 (chunks para não estourar a pilha com XMLs grandes). */
 function bytesToBase64(u8: Uint8Array): string {
   let bin = '';
@@ -249,6 +342,23 @@ export default function PortalNotasPage() {
   // BLOCO 154: sincronização de STATUS com a Focus (botão no cabeçalho)
   const [syncBusy, setSyncBusy] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+
+  // ------------------------------------------------------------------
+  // BLOCO 184 — KANBAN DE ORDENAÇÃO MANUAL: o dono sobe XMLs batidos
+  // fora do app e eles entram FORA DE ORDEM. Modo "Ordenar (kanban)":
+  // arrastar-e-soltar (ou setas ↑↓) define a sequência, salva em
+  // app_settings.notas_ordem (delta com debounce) e a LISTA INTEIRA
+  // (tabela incluída) passa a respeitar a ordem manual.
+  // ------------------------------------------------------------------
+  const [kanban, setKanban] = useState(false);
+  const [ordemNotas, setOrdemNotas] = useState<string[]>([]);
+  const [ordemBusy, setOrdemBusy] = useState(false);
+  const ordemTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sensorsKanban = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+  useEffect(() => () => { if (ordemTimer.current) clearTimeout(ordemTimer.current); }, []);
 
   // Importação da Focus (PDF/XML dentro do sistema)
   const [importBusy, setImportBusy] = useState(false);
@@ -375,6 +485,9 @@ export default function PortalNotasPage() {
       // pelo app — pendentes intencionais (NAO_EMITIDA) entram como PENDENTE
       // com botão EMITIR; nada criado pelo app pode sumir do portal.
       setNotas(((data.notas || []) as NotaRow[]));
+      // BLOCO 184: ordem manual salva (array de ids) — quando vazia, a régua
+      // continua sendo a última nota batida em primeiro lugar.
+      setOrdemNotas(Array.isArray(data.ordemNotas) ? (data.ordemNotas as string[]) : []);
     } catch {
       setErroLista('Falha de conexão. Toque em ATUALIZAR.');
     } finally {
@@ -460,9 +573,77 @@ export default function PortalNotasPage() {
         (n.vendedor || '').toLowerCase().includes(q)
       );
     });
-    const batida = (n: NotaRow): string => String(n.emitidaEm || n.dataVenda || '');
-    return [...base].sort((a, b) => batida(b).localeCompare(batida(a)));
-  }, [notas, busca, filtro, filtroTipo, filtroOrigem, periodo]);
+    // BLOCO 184: ORDEM MANUAL primeiro (kanban salvo) — sem ordem manual, a
+    // regra do dono BLOCO 146 segue intacta (última batida em primeiro lugar).
+    return [...base].sort(criarComparadorNotas(ordemNotas));
+  }, [notas, busca, filtro, filtroTipo, filtroOrigem, periodo, ordemNotas]);
+
+  // ---------- BLOCO 184: gravar a ordem manual (kanban) ----------
+  const salvarOrdemAgora = async (ids: string[]) => {
+    if (!token) return;
+    setOrdemBusy(true);
+    try {
+      const res = await fetch('/api/notas-admin', {
+        method: 'POST',
+        headers: headers(token),
+        body: JSON.stringify({ acao: 'ORDENAR_NOTAS', ordem: ids }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) { showToast(data.erro || 'Falha ao salvar a ordem manual.', false); return; }
+    } catch {
+      showToast('Falha de conexão ao salvar a ordem.', false);
+    } finally { setOrdemBusy(false); }
+  };
+
+  const agendarSalvarOrdem = (ids: string[]) => {
+    if (ordemTimer.current) clearTimeout(ordemTimer.current);
+    ordemTimer.current = setTimeout(() => { void salvarOrdemAgora(ids); }, 500);
+  };
+
+  /** Soltou o card: os visíveis ocupam os MESMOS slots que ocupavam na lista
+   *  completa — nada fora do filtro atual sai do lugar (ordem global coerente). */
+  const aplicarOrdemKanban = (novaVisivel: NotaRow[]) => {
+    const completa = [...notas].sort(criarComparadorNotas(ordemNotas));
+    const novaOrdem = reordenarSlots(completa.map(x => x.id), listaFiltrada.map(x => x.id), novaVisivel.map(x => x.id));
+    if (!novaOrdem) return; // filtro mudou no meio do arrasto — não corrompe
+    setOrdemNotas(novaOrdem);
+    agendarSalvarOrdem(novaOrdem);
+  };
+
+  const onDragEndKanban = (ev: DragEndEvent) => {
+    const { active, over } = ev;
+    if (!over || active.id === over.id) return;
+    const from = listaFiltrada.findIndex(x => x.id === String(active.id));
+    const to = listaFiltrada.findIndex(x => x.id === String(over.id));
+    if (from < 0 || to < 0) return;
+    aplicarOrdemKanban(arrayMove(listaFiltrada, from, to));
+  };
+
+  /** Setas ↑↓ do card — precisão no celular (44px de alvo não basta pra tudo). */
+  const moverCardKanban = (n: NotaRow, dir: 'UP' | 'DOWN') => {
+    const from = listaFiltrada.findIndex(x => x.id === n.id);
+    const to = dir === 'UP' ? from - 1 : from + 1;
+    if (from < 0 || to < 0 || to >= listaFiltrada.length) return;
+    aplicarOrdemKanban(arrayMove(listaFiltrada, from, to));
+  };
+
+  const limparOrdemManual = async () => {
+    if (!token) return;
+    setOrdemBusy(true);
+    try {
+      const res = await fetch('/api/notas-admin', {
+        method: 'POST',
+        headers: headers(token),
+        body: JSON.stringify({ acao: 'LIMPAR_ORDENACAO' }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) { showToast(data.erro || 'Falha ao limpar a ordem manual.', false); return; }
+      setOrdemNotas([]);
+      showToast('Ordem manual limpa — de volta à última batida em primeiro lugar.');
+    } catch {
+      showToast('Falha de conexão ao limpar a ordem.', false);
+    } finally { setOrdemBusy(false); }
+  };
 
   // ---------- BLOCO 170: painel flutuante de AÇÕES (um por vez) ----------
   // O dono pediu: "temos as ações que são ícones que nos levam aos arquivos,
@@ -1138,6 +1319,14 @@ export default function PortalNotasPage() {
             </div>
             <div className="flex-1" />
             <div className="flex items-center gap-2 shrink-0">
+              {/* BLOCO 184: modo kanban de ordenação manual das notas */}
+              <button
+                onClick={() => setKanban(k => !k)}
+                className={`rounded-xl px-3.5 h-9 text-[10px] font-black uppercase tracking-wider active:scale-95 transition-all shadow-lg shadow-amber-900/30 flex items-center gap-1.5 ${kanban ? 'bg-amber-200 text-amber-950 ring-2 ring-amber-300' : 'bg-amber-400 hover:bg-amber-300 text-amber-950'}`}
+                title="Modo KANBAN — arraste as notas para definir a ordem do portal (XMLs batidos fora do app entram fora de ordem)"
+              >
+                <i className={`fa-solid ${kanban ? 'fa-table-list' : 'fa-grip-vertical'}`}></i>{kanban ? 'Voltar à lista' : 'Ordenar (kanban)'}
+              </button>
               {/* BLOCO 154: sincronização de STATUS com a Focus sob demanda */}
               <button
                 onClick={() => void sincronizarStatus()}
@@ -1195,6 +1384,7 @@ export default function PortalNotasPage() {
             <span className="text-rose-300"><b>{kpis.rejeitadas}</b> rejeitadas</span>
             {kpis.pendentes > 0 && <span className="text-blue-200"><b>{kpis.pendentes}</b> pendentes</span>}
             <span className="text-amber-300"><b>{fmtBRL(kpis.valor)}</b> autorizado</span>
+            {ordemNotas.length > 0 && <span className="text-amber-200 border border-amber-300/40 rounded-lg px-2 py-0.5 bg-amber-300/10"><b>ORDEM MANUAL</b> · {ordemNotas.length} fixada(s)</span>}
             <span className="text-blue-300/60">|</span>
             <span className="text-emerald-200/80">{kpis.pdfLocal} DANFE · {kpis.xmlLocal} XML no sistema</span>
             {importBusy && importProg && (
@@ -1331,7 +1521,63 @@ export default function PortalNotasPage() {
           </div>
         )}
 
-        {!carregando && !erroLista && listaFiltrada.length > 0 && (
+        {!carregando && !erroLista && listaFiltrada.length > 0 && kanban && (
+          /* ================= BLOCO 184: KANBAN DE ORDENAÇÃO ================= */
+          <div className="space-y-2">
+            <div className="bg-white rounded-xl border border-amber-200 shadow-sm px-4 py-2.5 flex items-center justify-between flex-wrap gap-2">
+              <p className="text-[10px] font-black uppercase tracking-wider text-amber-600 leading-snug">
+                <i className="fa-solid fa-hand-pointer mr-2"></i>
+                Modo ordenar — arraste pelo ícone <i className="fa-solid fa-grip-vertical mx-0.5"></i> ou use as setas do card.
+                {ordemNotas.length > 0
+                  ? ' ORDEM MANUAL salva — o portal inteiro (tabela, busca e filtros) respeita ela.'
+                  : ' A ordem vale para o portal inteiro — os filtros continuam valendo aqui.'}
+                {ordemBusy && <span className="ml-2 text-gray-400"><i className="fa-solid fa-spinner fa-spin mr-1"></i>salvando...</span>}
+              </p>
+              {ordemNotas.length > 0 && (
+                <button
+                  onClick={() => setConf({
+                    titulo: 'Limpar ordem manual?',
+                    texto: 'A lista volta para a regra padrão: a última nota batida vem primeiro (de cima pra baixo). Sua ordem arrastada é apagada.',
+                    icone: 'fa-arrow-rotate-left',
+                    botao: 'Limpar ordem',
+                    run: limparOrdemManual,
+                  })}
+                  disabled={ordemBusy}
+                  className="bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-gray-600 rounded-xl px-3 py-2 text-[9px] font-black uppercase tracking-wider active:scale-95 transition-all"
+                >
+                  <i className="fa-solid fa-arrow-rotate-left mr-1.5"></i>Voltar à ordem por data
+                </button>
+              )}
+            </div>
+            <DndContext
+              sensors={sensorsKanban}
+              collisionDetection={closestCenter}
+              measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
+              onDragEnd={onDragEndKanban}
+            >
+              <SortableContext items={listaFiltrada.map(n => n.id)} strategy={verticalListSortingStrategy}>
+                <div className="space-y-1.5">
+                  {listaFiltrada.map((n, k) => (
+                    <CardNotaOrdenavel
+                      key={n.id}
+                      n={n}
+                      posicao={k + 1}
+                      primeiro={k === 0}
+                      ultimo={k === listaFiltrada.length - 1}
+                      onMover={moverCardKanban}
+                      onAbrirAcoes={abrirAcoes}
+                    />
+                  ))}
+                </div>
+              </SortableContext>
+            </DndContext>
+            <p className="text-[9px] font-bold text-gray-400 uppercase tracking-wider px-1">
+              {listaFiltrada.length} nota(s) nesta visão — {ordemNotas.length > 0 ? 'ORDEM MANUAL ativa (o que você arrastou fica fixo)' : 'arraste para começar a ordem manual'}
+            </p>
+          </div>
+        )}
+
+        {!carregando && !erroLista && listaFiltrada.length > 0 && !kanban && (
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full min-w-[1180px] text-left">
@@ -1415,7 +1661,7 @@ export default function PortalNotasPage() {
             </div>
             <div className="px-4 py-2 bg-gray-50 border-t border-gray-200 flex items-center justify-between flex-wrap gap-2">
               <p className="text-[9px] font-bold text-gray-400 uppercase tracking-wider">
-                {listaFiltrada.length} nota(s) — a última batida vem primeiro
+                {listaFiltrada.length} nota(s) — {ordemNotas.length > 0 ? 'ORDEM MANUAL ativa (kanban)' : 'a última batida vem primeiro'}
               </p>
               <p className="text-[9px] font-bold uppercase tracking-wider">
                 <span className="text-emerald-500">{listaFiltrada.filter(n => n.pdfLocal).length} DANFE no sistema</span>

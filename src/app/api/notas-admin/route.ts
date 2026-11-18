@@ -9,6 +9,7 @@ import {
   hasBoletoColumns,
   hasNotaEmitidaEm,
   hasEstoqueBaixadoColumn,
+  hasNotasOrdem,
 } from '@/lib/serverSchema';
 import { presencaArquivos, listarMetasAvulsas, lerMetaAvulsa, gravarMetaAvulsa, importarAvulsa, invalidaPresenca, NotaAvulsaMeta } from '@/lib/focusArquivos';
 // BLOCO 155: cancelamento na SEFAZ da avulsa FOCUS (nota batida fora do app).
@@ -269,6 +270,20 @@ async function carregarVendasComNotas(): Promise<LinhaNota[]> {
   return tudo;
 }
 
+async function carregarOrdemManual(): Promise<string[]> {
+  // BLOCO 184 — ordem MANUAL das notas (kanban do portal). Um array de ids
+  // guardado em app_settings.notas_ordem (coluna nova — probe degrada sem SQL
+  // aplicado: a lista volta sem ordem manual e o portal avisa).
+  if (!(await hasNotasOrdem())) return [];
+  const { data } = await getServiceClient()
+    .from('app_settings')
+    .select('notas_ordem')
+    .eq('id', 'global_settings')
+    .maybeSingle();
+  const arr = (data as { notas_ordem?: unknown } | null)?.notas_ordem;
+  return Array.isArray(arr) ? arr.map(x => String(x)) : [];
+}
+
 export async function GET(req: NextRequest) {
   // Preview/bridge primeiro (padrao do projeto): no sandbox quem responde e a producao.
   if (!isServerSupabaseConfigured()) {
@@ -285,8 +300,11 @@ export async function GET(req: NextRequest) {
 
   // ---------- LISTA ----------
   if (acao === 'lista') {
-    const notas = await carregarVendasComNotas();
-    return NextResponse.json({ ok: true, notas });
+    const [notas, ordemNotas] = await Promise.all([
+      carregarVendasComNotas(),
+      carregarOrdemManual(),
+    ]);
+    return NextResponse.json({ ok: true, notas, ordemNotas });
   }
 
   // ---------- LINKS DE COMPARTILHAMENTO (WhatsApp — BLOCO 146) ----------
@@ -420,6 +438,44 @@ export async function POST(req: NextRequest) {
   if (session.perfil !== 'ADMIN') return BAD(403, 'Somente o admin acessa este portal.');
 
   const db = getServiceClient();
+
+  // ---------------------------------------------------------------
+  // BLOCO 184 — ORDEM MANUAL DAS NOTAS (kanban do portal).
+  // O dono sobe XMLs batidos fora do app e eles entram FORA DA ORDEM:
+  // o portal agora guarda um array de ids em app_settings.notas_ordem
+  // e a lista respeita essa ordem (ordem manual > última batida).
+  // Salva SÓ esta coluna (upsert id='global_settings') para nunca
+  // tocar nas outras configurações da linha.
+  // ---------------------------------------------------------------
+  if (acao === 'ORDENAR_NOTAS') {
+    const ids = Array.isArray(body.ordem) ? body.ordem.map((x: unknown) => String(x)).filter(Boolean) : [];
+    if (ids.length === 0) return BAD(400, 'Lista de ordem vazia.');
+    if (ids.length > 3000) return BAD(422, 'Ordem grande demais (máx. 3000 ids).');
+
+    const { error } = await db
+      .from('app_settings')
+      .upsert({ id: 'global_settings', notas_ordem: ids }, { onConflict: 'id' });
+    if (error) {
+      if (/notas_ordem/i.test(error.message || '')) {
+        return BAD(503, 'SQL pendente no Supabase: ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS notas_ordem jsonb DEFAULT \'[]\'::jsonb; — rode e tente de novo.');
+      }
+      return BAD(500, `Falha ao salvar a ordem manual: ${error.message || 'erro desconhecido'}`);
+    }
+    return NextResponse.json({ ok: true, gravados: ids.length });
+  }
+
+  if (acao === 'LIMPAR_ORDENACAO') {
+    const { error } = await db
+      .from('app_settings')
+      .upsert({ id: 'global_settings', notas_ordem: [] }, { onConflict: 'id' });
+    if (error) {
+      if (/notas_ordem/i.test(error.message || '')) {
+        return BAD(503, 'SQL pendente no Supabase: ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS notas_ordem jsonb DEFAULT \'[]\'::jsonb; — rode e tente de novo.');
+      }
+      return BAD(500, `Falha ao limpar a ordem manual: ${error.message || 'erro desconhecido'}`);
+    }
+    return NextResponse.json({ ok: true });
+  }
 
   // ---------- EDITAR (registro interno — pagamento; o XML fiscal nao muda) ----------
   if (acao === 'EDITAR') {

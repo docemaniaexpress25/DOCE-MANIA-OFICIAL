@@ -16,7 +16,7 @@ import { getServiceClient } from '@/lib/serverSupabase';
 const TTL_MS = 30_000;
 
 type Probe = { ok: boolean; at: number };
-const probes: Record<string, Probe | null> = { preVenda: null, entrega: null, foto: null, nota: null, fiscalProduto: null, rota2: null, estoquesNota: null, modoCarga: null, pendenteModo: null, modoVenda: null, produtoTeste: null, notaEmitidaEm: null, precoCupom: null, clientModoCupom: null, erpConfig: null, codigoGb: null, clientGb: null };
+const probes: Record<string, Probe | null> = { preVenda: null, entrega: null, foto: null, nota: null, fiscalProduto: null, rota2: null, estoquesNota: null, modoCarga: null, pendenteModo: null, modoVenda: null, produtoTeste: null, notaEmitidaEm: null, precoCupom: null, clientModoCupom: null, erpConfig: null, codigoGb: null, clientGb: null, notasOrdem: null };
 
 async function probeColumn(table: string, column: string, key: string): Promise<boolean> {
   const now = Date.now();
@@ -151,4 +151,9 @@ export function hasXmlCestColumn(): Promise<boolean> {
 /** xml_itens.entrada_estoque_em existe? (Bloco 95.1 — trava de entrada duplicada) */
 export function hasXmlEntradaColumn(): Promise<boolean> {
   return probeColumn('xml_itens', 'entrada_estoque_em', 'xmlEntrada');
+}
+
+/** app_settings.notas_ordem existe? (Bloco 184 — ordem MANUAL das notas no portal, kanban) */
+export function hasNotasOrdem(): Promise<boolean> {
+  return probeColumn('app_settings', 'notas_ordem', 'notasOrdem');
 }

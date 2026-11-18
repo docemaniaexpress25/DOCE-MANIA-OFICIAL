@@ -14,6 +14,8 @@ import { mascararCep, buscarCep, cidadeDeEstado, ufDeEstado, cepDeEstado } from 
 import { podeClienteEspecialGB } from '@/lib/regraClienteGB';
 // BLOCO 181: resultado do salvamento com a verdade do banco (novo x mesclado)
 import type { InsercaoClienteResultado } from '@/services/clientService';
+// BLOCO 184: motor PURO da ordem manual (slots) — compartilhado com o portal de notas
+import { reordenarSlots } from '@/lib/ordemManual';
 // BLOCO 134: fluxo "não pode esquecer de bater a nota" — painel de vendas com nota pendente
 import { rotuloDocumentoNota } from '@/lib/regras-fiscais';
 import PDV from '@/components/doce/PDV';
@@ -29,6 +31,13 @@ import { isIOSDevice, TEXTO_IMPRESSAO_IOS, TITULO_IMPRESSAO_IOS } from '@/lib/io
 // BLOCO 111: impressão térmica USB do PC — canal BT x USB persistente por dispositivo
 import { imprimirViaUsb, lerCanalImpressao } from '@/lib/usbPrint';
 import FilaEntregas from '@/components/doce/FilaEntregas';
+
+// BLOCO 184: kanban de ORDENAÇÃO DA ROTA — arrastar-e-soltar no card da rota
+// do dia (dnd-kit, mesmo padrão do BLOCO 63/61): a ordem arrastada grava no
+// client_order (Supabase) e vale pra rota, pro admin e pro relatório.
+import { DndContext, closestCenter, PointerSensor, KeyboardSensor, useSensor, useSensors, MeasuringStrategy, type DragEndEvent } from '@dnd-kit/core';
+import { SortableContext, verticalListSortingStrategy, useSortable, sortableKeyboardCoordinates, arrayMove } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 
 
 import ClientHistory from '@/components/doce/ClientHistory';
@@ -76,6 +85,49 @@ interface VendedorDashboardProps {
 }
 
 type TabType = 'HOME' | 'ROTEIRO' | 'CARGA' | 'HISTORY' | 'FINANCE' | 'CREDIT' | 'CLIENTES' | 'WEEKLY' | 'STOCK_VIEW' | 'AVISOS' | 'ENTREGAS' | 'LUCRO_ROTA' | 'CAIXA' | 'NOTAS_PENDENTES';
+
+// BLOCO 184: card da rota ORDENÁVEL (kanban). O corpo do card (Atender /
+// Pular / expandir / WhatsApp / Navegar) continua EXATAMENTE igual — o grip
+// lateral (≡) arrasta e as setas ↑↓ ajustam com precisão no celular.
+function SortableRotaCard({ id, posicao, primeiro, ultimo, onMover, children }: {
+  id: string;
+  posicao: number;
+  primeiro: boolean;
+  ultimo: boolean;
+  onMover: (id: string, dir: 'UP' | 'DOWN') => void;
+  children: React.ReactNode;
+}) {
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id });
+  return (
+    <div
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      className={`flex items-stretch ${isDragging ? 'relative z-10' : ''}`}
+    >
+      <div className="flex flex-col items-center justify-center gap-0.5 pr-2 shrink-0">
+        <span className="text-[8px] font-black text-blue-600 bg-blue-50 border border-blue-100 rounded-md px-1.5 py-0.5 tabular-nums" aria-label={`Posição ${posicao} na rota`}>{posicao}</span>
+        <button
+          ref={setActivatorNodeRef}
+          {...attributes}
+          {...listeners}
+          type="button"
+          className="w-9 h-11 rounded-xl text-gray-300 hover:text-blue-600 hover:bg-blue-50 flex items-center justify-center touch-none cursor-grab active:cursor-grabbing"
+          aria-label={`Arrastar cliente ${posicao} da rota para reordenar`}
+          title="Arraste para mudar a ordem da rota"
+        >
+          <i className="fa-solid fa-grip-vertical text-[12px]"></i>
+        </button>
+        <button onClick={() => onMover(id, 'UP')} disabled={primeiro} type="button" className="w-9 h-6 rounded-lg text-gray-300 hover:text-blue-600 hover:bg-blue-50 flex items-center justify-center disabled:opacity-20 disabled:hover:bg-transparent" aria-label="Subir uma posição na rota" title="Subir">
+          <i className="fa-solid fa-chevron-up text-[10px]"></i>
+        </button>
+        <button onClick={() => onMover(id, 'DOWN')} disabled={ultimo} type="button" className="w-9 h-6 rounded-lg text-gray-300 hover:text-blue-600 hover:bg-blue-50 flex items-center justify-center disabled:opacity-20 disabled:hover:bg-transparent" aria-label="Descer uma posição na rota" title="Descer">
+          <i className="fa-solid fa-chevron-down text-[10px]"></i>
+        </button>
+      </div>
+      <div className="flex-1 min-w-0">{children}</div>
+    </div>
+  );
+}
 
 // BLOCO 92 — Aba LUCRO DA ROTA: EXCLUSIVA do vendedor David (R5).
 // BLOCO 118 — regra do dono: comissao DESATIVADA para o David (R5): a aba
@@ -1078,6 +1130,61 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     showToast(`Cliente movido para ${DIAS_SEMANA[newDay]}`);
   };
 
+  // ------------------------------------------------------------------
+  // BLOCO 184 — KANBAN DA ROTA DO DIA: arrastar-e-soltar no card define a
+  // ordem de visita. A ordem grava no client_order GLOBAL (Supabase, via
+  // setClientOrder → updateSetting('clientOrder')) usando o truque dos
+  // SLOTS: os clientes de hoje trocam de posição entre SI, cada um cai no
+  // slot que já ocupava na ordem global — cliente de outro dia/outro
+  // vendedor NUNCA sai do lugar. Clientes do dia que ainda não estão no
+  // snapshot da rota entram nele (updateDailyRoute é otimista + persiste).
+  // ------------------------------------------------------------------
+  const sensorsRota = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 10 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  const aplicarOrdemRota = useCallback((novaVisivel: Client[]) => {
+    if (novaVisivel.length === 0) return;
+    // ordem global atual: clientOrder salvo ou, na 1ª vez, a lista completa
+    // (allClients = todas as rotas — nunca encolhe a ordem dos outros)
+    const base = clientOrder.length > 0
+      ? [...clientOrder]
+      : (allClients.length > 0 ? allClients : clients).map(c => c.id);
+    // clientes novos (ainda fora do array global) entram no fim
+    const faltantes = rotaDeHoje.map(c => c.id).filter(id => !base.includes(id));
+    const ordemBase = [...base, ...faltantes];
+    // BLOCO 184: motor PURO (slots) — os visíveis trocam de posição entre SI
+    // e cada um cai no slot que já ocupava; ninguém fora da rota de hoje anda.
+    const novaOrdem = reordenarSlots(ordemBase, rotaDeHoje.map(c => c.id), novaVisivel.map(c => c.id));
+    if (!novaOrdem) return; // lista mudou no meio do drag — não corrompe
+    setClientOrder(novaOrdem); // estado + Supabase (setClientOrderWithPersistence)
+    // membros da rota de hoje: quem não estava no snapshot entra nele
+    // (sem isso, cliente novo arrastado pra cima volta pro fim no reload)
+    const atuais = dailyRouteState?.clientIds || [];
+    const faltantesSnapshot = rotaDeHoje.map(c => c.id).filter(id => !atuais.includes(id));
+    if (faltantesSnapshot.length > 0) {
+      updateDailyRoute([...atuais, ...faltantesSnapshot], dailyRouteState?.skippedClientIds || []);
+    }
+    showToast('Ordem da rota atualizada e salva!');
+  }, [rotaDeHoje, clientOrder, allClients, clients, dailyRouteState, setClientOrder, updateDailyRoute, showToast]);
+
+  const onDragEndRota = (ev: DragEndEvent) => {
+    const { active, over } = ev;
+    if (!over || active.id === over.id) return;
+    const from = rotaDeHoje.findIndex(c => c.id === String(active.id));
+    const to = rotaDeHoje.findIndex(c => c.id === String(over.id));
+    if (from < 0 || to < 0) return;
+    aplicarOrdemRota(arrayMove(rotaDeHoje, from, to));
+  };
+
+  const moverClienteRota = (id: string, dir: 'UP' | 'DOWN') => {
+    const from = rotaDeHoje.findIndex(c => c.id === id);
+    const to = dir === 'UP' ? from - 1 : from + 1;
+    if (from < 0 || to < 0 || to >= rotaDeHoje.length) return;
+    aplicarOrdemRota(arrayMove(rotaDeHoje, from, to));
+  };
+
   const MenuCard = ({ icon, title, tab, color, badge }: any) => (
     <button onClick={() => setActiveTab(tab)} className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col items-center gap-3 active:scale-95 transition-all text-center relative">
       {badge && <div className="absolute -top-1.5 -right-1.5 bg-red-600 text-white text-[8px] font-black min-w-[20px] h-5 rounded-full flex items-center justify-center border-2 border-white animate-bounce px-0.5">{badge === true ? '' : badge}</div>}
@@ -1524,15 +1631,34 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
             </div>
           </div>
 
-          {rotaNaBusca.map(c => {
+          {/* BLOCO 184: dica do kanban da rota */}
+          {rotaBusca.trim() === '' && rotaNaBusca.length > 1 && (
+            <p className="text-[9px] font-black uppercase tracking-wider text-gray-400 px-1 flex items-center gap-1.5">
+              <i className="fa-solid fa-grip-vertical text-blue-400"></i>
+              Arraste pelo ≡ (ou use as setas) para ordenar a rota de hoje — a ordem fica salva no sistema
+            </p>
+          )}
+
+          {/* BLOCO 184: DndContext sempre montado — os cards da rota viram kanban
+              ordenável quando NÃO há busca (buscando, os cards ficam simples). */}
+          <DndContext
+            sensors={sensorsRota}
+            collisionDetection={closestCenter}
+            measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
+            onDragEnd={onDragEndRota}
+          >
+            <SortableContext items={rotaNaBusca.map(c => c.id)} strategy={verticalListSortingStrategy}>
+              {rotaNaBusca.map((c, k) => {
             const isSold = (sales || []).some(s => s.clientId === c.id && isSameDay(s.data));
             const isSkipped = (dailyRouteState?.skippedClientIds || []).includes(c.id) || optimisticSkipped.includes(c.id);
             // BLOCO 35: atendidosHoje cobre PRE-VENDA (que nao entra em sales ate a entrega)
             const isVisited = (isSold || isSkipped || atendidosHoje.includes(c.id)) && !reopenedClientIds.includes(c.id);
             const lastSale = (sales || []).filter(s => s.clientId === c.id).sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime())[0];
             const isExpanded = expandedRouteClientId === c.id;
-            return (
-              <div key={c.id} className={`rounded-3xl border transition-all overflow-hidden ${isVisited ? 'bg-gray-100 border-gray-200 grayscale opacity-60' : 'bg-white border-gray-100 shadow-sm'}`}>
+            // BLOCO 184: card da rota — com busca ativa ele renderiza simples;
+            // sem busca, entra no kanban (SortableRotaCard com grip + setas).
+            const card = (
+              <div className={`rounded-3xl border transition-all overflow-hidden ${isVisited ? 'bg-gray-100 border-gray-200 grayscale opacity-60' : 'bg-white border-gray-100 shadow-sm'}`}>
                 <div className={`p-4 flex items-center justify-between`}>
                   <div className="flex-1 min-w-0 cursor-pointer pr-3" onClick={() => setViewingClientHistory(c)}>
                     <p className="font-bold text-gray-800 leading-tight uppercase">{c.nomeFantasia ?? 'Cliente'}</p>
@@ -1568,7 +1694,15 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                 )}
               </div>
             );
+            if (rotaBusca.trim() !== '') return <div key={c.id}>{card}</div>;
+            return (
+              <SortableRotaCard key={c.id} id={c.id} posicao={k + 1} primeiro={k === 0} ultimo={k === rotaNaBusca.length - 1} onMover={moverClienteRota}>
+                {card}
+              </SortableRotaCard>
+            );
           })}
+            </SortableContext>
+          </DndContext>
 
           {/* BLOCO 122: clientes FORA da rota de hoje — busca global completa.
               Tudo que casou e não é do dia aparece aqui, com Atender igual. */}

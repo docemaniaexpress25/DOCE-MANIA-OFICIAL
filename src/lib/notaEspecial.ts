@@ -27,18 +27,30 @@
  *
  *  - Tributação por item: CSOSN 101/102/900 (Simples Nacional — a "0101" e
  *    "0900" do dono são aceitas e normalizadas) OU CST de regime normal
- *    (000/040/041/050/060/090) — quando CST, os campos BASE + ALÍQUOTA de
- *    ICMS SOBEM no XML (icms_base_calculo / icms_aliquota — nomes oficiais da
- *    API Focus v2.0, conferidos no echo `requisicao_nota_fiscal` da doc);
- *    quando CSOSN, NADA de ICMS sobe (o Simples não destaca vICMS — a
- *    alíquota digitada vira ESTIMATIVA de conferência na tela).
+ *    (000/040/041/050/060/090) — quando CST 000/090, o trio BASE + ALÍQUOTA
+ *    + VALOR do ICMS SOBEM no XML (icms_base_calculo / icms_aliquota /
+ *    icms_valor — nomes oficiais da API Focus v2.0, conferidos no echo
+ *    `requisicao_nota_fiscal` da doc consultar_nfe.md) e os TOTAIS da nota
+ *    recebem icms_base_calculo + icms_valor_total. O VALOR é CALCULADO
+ *    (base × alíquota ÷ 100) mas pode ser SOBRESCRITO item a item.
+ *    CSOSN (Simples): por padrão NADA de ICMS sobe (o Simples não destaca
+ *    vICMS) — mas o dono pode LIGAR o destaque, e o CSOSN 900 (que aceita o
+ *    grupo ICMS90 opcional do schema) envia o mesmo trio.
+ *
+ *  - Observações: além das informações complementares da NOTA (infCpl),
+ *    cada ITEM aceita observação própria que sobe como
+ *    `informacoes_adicionais_item` (infAdProd — imprime na DANFE abaixo do
+ *    item).
  *
  *  - Pagamento: tPag "90" = SEM PAGAMENTO (o EXEMPLO OFICIAL da Focus usa
  *    exatamente { forma_pagamento: "90", valor_pagamento: "0" } na doc
  *    consultar_nfe.md) — vPag sai 0 quando "90".
  *
  *  - Nota referenciada (devolução): chave de 44 dígitos opcional vai em
- *    `notas_referenciadas` (campo do payload normalizado da v2.0).
+ *    `notas_referenciadas` (campo do payload normalizado da v2.0). O motor
+ *    DECODIFICA a chave (cUF posição 1-2 / modelo posição 21-22) e avisa
+ *    quando a nota original é NFC-e (65) ou foi emitida em UF diferente da
+ *    do destinatário (fornecedor) — confere antes de gastar a emissão.
  *
  *  - Endereço do destinatário: modelo 55 aceita enderDest TODO OU NADA (mesma
  *    regra do Bloco 176 — o erro "nro not expected" morre aqui: a validação
@@ -103,10 +115,14 @@ export interface ItemNotaEspecial {
   valorUnitario: number;
   /** Desconto em R$ aplicado NO item. */
   desconto?: number;
-  /** Base de cálculo do ICMS em R$ (SÓ sobe no XML quando CST de regime normal). */
+  /** Base de cálculo do ICMS em R$ (SÓ sobe no XML quando CST 000/090, ou CSOSN 900 com destaque ligado). */
   baseIcms?: number;
-  /** Alíquota do ICMS em % (sobe no XML quando CST; estimativa quando CSOSN). */
+  /** Alíquota do ICMS em % (sobe no XML quando CST 000/090, ou CSOSN 900 com destaque ligado). */
   aliquotaIcms?: number;
+  /** VALOR do ICMS em R$ — quando digitado (>0) SOBRESCREVE o cálculo base × alíquota ÷ 100. */
+  valorIcms?: number;
+  /** Observação do item (infAdProd) — imprime na DANFE abaixo do item. */
+  observacao?: string;
 }
 
 export interface DestinatarioNotaEspecial {
@@ -130,6 +146,8 @@ export interface NotaEspecialInput {
   finalidade?: number;
   /** ON (default): ajusta o 1º dígito do CFOP pela UF (5202 -> 6202 fora). */
   cfopAutoUf: boolean;
+  /** LIGA o destaque de ICMS nos itens CSOSN 900 (base + alíquota + valor sobem no XML). */
+  destacarIcmsSimples?: boolean;
   destinatario: DestinatarioNotaEspecial;
   itens: ItemNotaEspecial[];
   /** tPag escolhido ('90' = sem pagamento). */
@@ -155,7 +173,9 @@ export interface ResultadoNotaEspecial {
   valorProdutos: number;
   descontoTotal: number;
   valorTotal: number;
-  /** ICMS ESTIMADO para conferência (base x alíquota dos itens). */
+  /** ICMS que SOBE no XML (soma do icms_valor dos itens destacados). */
+  icmsDestacado: number;
+  /** ICMS ESTIMADO para conferência (itens Simples sem destaque). */
   icmsEstimado: number;
   /** Ajustes automáticos feitos pelo motor (ex.: "item 2: CFOP 5202 -> 6202"). */
   cfopsAjustados: string[];
@@ -287,6 +307,78 @@ export function ehCstNormal(v: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// ICMS POR ITEM — "Preciso calcular o ICMS de cada produto com alíquota e etc"
+// ---------------------------------------------------------------------------
+
+export interface IcmsCalculadoItem {
+  /** Base de cálculo (R$) — normalizada. */
+  base: number;
+  /** Alíquota (%). */
+  aliquota: number;
+  /** Valor do ICMS (R$) que vale para a nota: override do dono quando digitou, senão base × alíquota ÷ 100. */
+  valor: number;
+  /** O cálculo PURO (base × alíquota ÷ 100) — para a tela mostrar a diferença quando houver override. */
+  valorCalculado: number;
+  /** true = o trio base + alíquota + valor SOBE no XML (CST 000/090, ou CSOSN 900 com destaque ligado). */
+  destacado: boolean;
+  regime: 'CST' | 'CSOSN' | 'OUTROS';
+}
+
+/**
+ * Calcula o ICMS DE UM ITEM: base × alíquota ÷ 100, com override opcional do
+ * dono (`valorIcms` > 0 sobrescreve). `destacarSimples` = o dono LIGOU o
+ * destaque no CSOSN 900 (o schema aceita o grupo ICMS90 opcional).
+ */
+export function icmsDoItem(it: ItemNotaEspecial, destacarSimples = false): IcmsCalculadoItem {
+  const base = round2(Math.max(0, numeroDe(it.baseIcms)));
+  const aliquota = round2(Math.max(0, numeroDe(it.aliquotaIcms)));
+  const valorCalculado = round2((base * aliquota) / 100);
+  const overrideDigitado = it.valorIcms !== undefined && it.valorIcms !== null && numeroDe(it.valorIcms) > 0;
+  const valor = overrideDigitado ? round2(Math.max(0, numeroDe(it.valorIcms))) : valorCalculado;
+  const t = tributacaoDe(it.tributacao);
+  const regime: IcmsCalculadoItem['regime'] = t ? (t.kind === 'CST' ? 'CST' : 'CSOSN') : 'OUTROS';
+  const cstDestaca = !!t && regime === 'CST' && (t.codigo === '000' || t.codigo === '090') && base > 0;
+  const csosn900Destaca = !!t && regime === 'CSOSN' && t.codigo === '900' && destacarSimples && base > 0;
+  return { base, aliquota, valor, valorCalculado, destacado: cstDestaca || csosn900Destaca, regime };
+}
+
+// ---------------------------------------------------------------------------
+// CHAVE DA NOTA ORIGINAL — decodificação (cUF pos 1-2 · modelo pos 21-22)
+// ---------------------------------------------------------------------------
+
+/** Códigos IBGE das UFs (primeiras 2 posições da chave de acesso). */
+export const UF_CODIGO_IBGE: Record<string, string> = {
+  '11': 'RO', '12': 'AC', '13': 'AM', '14': 'RR', '15': 'PA', '16': 'AP', '17': 'TO',
+  '21': 'MA', '22': 'PI', '23': 'CE', '24': 'RN', '25': 'PB', '26': 'PE', '27': 'AL', '28': 'SE', '29': 'BA',
+  '31': 'MG', '32': 'ES', '33': 'RJ', '35': 'SP',
+  '41': 'PR', '42': 'SC', '43': 'RS', '44': 'MS', '45': 'MT', '50': 'GO', '53': 'DF',
+};
+
+export interface DiagnosticoChaveRef {
+  /** UF decodificada do código IBGE ('' quando código desconhecido). */
+  uf: string;
+  /** Modelo decodificado (posições 21-22): '55' NF-e · '65' NFC-e · '' desconhecido. */
+  modelo: string;
+  /** Ano/mês de emissão (posições 3-4), formatado "25/11". */
+  anoMes: string;
+}
+
+/**
+ * Decodifica a chave da nota original: UF do emitente ORIGINAL, modelo e o
+ * mês da emissão — para a tela mostrar "NF-e · emitida em RS · 25/11" e
+ * avisar quando a UF não bate com o fornecedor ou quando é NFC-e.
+ */
+export function diagnosticoChaveRef(chave: string): DiagnosticoChaveRef {
+  const c = soDigitos(chave);
+  if (c.length !== 44) return { uf: '', modelo: '', anoMes: '' };
+  const uf = UF_CODIGO_IBGE[c.slice(0, 2)] || '';
+  const aamm = c.slice(2, 6); // AAMM (4 posições: ano + mês de emissão)
+  const anoMes = aamm.length === 4 ? `${aamm.slice(0, 2)}/${aamm.slice(2, 4)}` : '';
+  const modelo = c.slice(20, 22);
+  return { uf, modelo: modelo === '55' || modelo === '65' ? modelo : '', anoMes };
+}
+
+// ---------------------------------------------------------------------------
 // Pagamento — tPag oficial (doc campo do NF-e 4.00 via Focus v2.0)
 // ---------------------------------------------------------------------------
 
@@ -402,6 +494,7 @@ export function validarNotaEspecial(input: NotaEspecialInput, ufEmitente: string
 
   // ---- itens ----
   if (!input.itens || input.itens.length === 0) erros.push('Adicione pelo menos UM produto à nota.');
+  const destacarSimples = !!input.destacarIcmsSimples;
   input.itens.forEach((it, i) => {
     const n = i + 1;
     if (!String(it.descricao || '').trim()) erros.push(`Item ${n}: descrição obrigatória.`);
@@ -420,6 +513,13 @@ export function validarNotaEspecial(input: NotaEspecialInput, ufEmitente: string
       if (base <= 0 || ali < 0) {
         erros.push(`Item ${n}: ${trib.label} exige BASE de cálculo (R$) e ALÍQUOTA (%) do ICMS preenchidas — é o que sobe no XML.`);
       }
+    }
+    const ic = icmsDoItem(it, destacarSimples);
+    if (it.valorIcms !== undefined && it.valorIcms !== null && numeroDe(it.valorIcms) < 0) {
+      erros.push(`Item ${n}: valor do ICMS não pode ser negativo (deixe vazio para calcular base × alíquota).`);
+    }
+    if (trib && trib.kind === 'CSOSN' && trib.codigo === '900' && destacarSimples && ic.base <= 0 && ic.aliquota > 0) {
+      avisos.push(`Item ${n}: CSOSN 900 com destaque LIGADO e base de cálculo 0 — nada de ICMS sobe no XML; preencha a base do item.`);
     }
     if (!soDigitos(it.ncm)) avisos.push(`Item ${n} sem NCM — sai com o código genérico 21069090 na nota.`);
     if (soDigitos(it.ean) && ![8, 12, 13, 14].includes(soDigitos(it.ean).length)) {
@@ -445,6 +545,16 @@ export function validarNotaEspecial(input: NotaEspecialInput, ufEmitente: string
   if (input.tipo === 'DEVOLUCAO' && !ref) {
     avisos.push('Devolução sem a chave da nota original — a SEFAZ de alguns estados exige a NF referenciada; informe a chave de 44 dígitos quando tiver.');
   }
+  if (ref.length === 44) {
+    const diag = diagnosticoChaveRef(ref);
+    if (diag.modelo === '65') {
+      avisos.push('A chave informada é de uma NFC-e (modelo 65) — devolução referenciando NFC-e pode ser recusada por alguns estados; confira se é a nota certa.');
+    }
+    const ufDestRef = String(dest?.uf || '').toUpperCase().trim();
+    if (diag.uf && ufDestRef && diag.uf !== ufDestRef) {
+      avisos.push(`A nota referenciada foi emitida em ${diag.uf}, mas o destinatário (fornecedor) é ${ufDestRef} — a nota original normalmente foi emitida pelo fornecedor; confira a chave.`);
+    }
+  }
 
   // ---- UF fora do estado (informativo) ----
   const ufDest = String(dest?.uf || '').toUpperCase().trim();
@@ -467,6 +577,8 @@ export function montarNotaEspecial(input: NotaEspecialInput, ctx: CtxNotaEspecia
   const cfopsAjustados: string[] = [];
 
   // ---- itens ----
+  const destacar = !!input.destacarIcmsSimples;
+  const ics: IcmsCalculadoItem[] = [];
   const items: FocusItemV2[] = input.itens.map((it, i) => {
     const qty = numeroDe(it.quantidade);
     const vunit = numeroDe(it.valorUnitario);
@@ -504,16 +616,20 @@ export function montarNotaEspecial(input: NotaEspecialInput, ctx: CtxNotaEspecia
       item.codigo_barras_tributavel = ean;
     }
     if (desc > 0) item.valor_desconto = desc;
-    // CST de regime normal: base + alíquota SOBEM no XML (nomes oficiais v2.0);
-    // CSOSN (Simples): nada de ICMS sobe — a alíquota na tela é estimativa.
-    if (ehCstNormal(trib)) {
-      const base = round2(numeroDe(it.baseIcms));
-      const ali = round2(numeroDe(it.aliquotaIcms));
-      if (base > 0 && ali >= 0) {
-        (item as unknown as Record<string, unknown>).icms_base_calculo = base;
-        (item as unknown as Record<string, unknown>).icms_aliquota = ali;
-      }
+    // ICMS DE VERDADE: quando o item DESTACA (CST 000/090, ou CSOSN 900 com
+    // destaque ligado), o trio base + alíquota + VALOR sobe no XML (nomes
+    // oficiais v2.0 conferidos no echo da doc) — o valor é CALCULADO
+    // (base × alíquota ÷ 100) com override do dono quando digitou.
+    const ic = icmsDoItem(it, destacar);
+    ics.push(ic);
+    if (ic.destacado) {
+      (item as unknown as Record<string, unknown>).icms_base_calculo = ic.base;
+      (item as unknown as Record<string, unknown>).icms_aliquota = ic.aliquota;
+      (item as unknown as Record<string, unknown>).icms_valor = ic.valor;
     }
+    // Observação do item (infAdProd) — imprime na DANFE abaixo do item.
+    const obsItem = normalizaTexto(it.observacao, 500);
+    if (obsItem) (item as unknown as Record<string, unknown>).informacoes_adicionais_item = obsItem;
     return item;
   });
 
@@ -521,9 +637,13 @@ export function montarNotaEspecial(input: NotaEspecialInput, ctx: CtxNotaEspecia
   const valorProdutos = round2(input.itens.reduce((acc, it) => acc + numeroDe(it.quantidade) * numeroDe(it.valorUnitario), 0));
   const descontoTotal = round2(input.itens.reduce((acc, it) => acc + Math.max(0, numeroDe(it.desconto)), 0));
   const valorTotal = round2(valorProdutos - descontoTotal);
-  const icmsEstimado = round2(input.itens.reduce((acc, it) => {
-    const t = tributacaoDe(it.tributacao);
-    if (t && t.kind === 'CST') return acc + (numeroDe(it.baseIcms) * numeroDe(it.aliquotaIcms)) / 100;
+  // ICMS que SOBE no XML (itens destacados) — vai para os totais do payload.
+  const icmsDestacado = round2(ics.filter(ic => ic.destacado).reduce((acc, ic) => acc + ic.valor, 0));
+  const icmsBaseDestacada = round2(ics.filter(ic => ic.destacado).reduce((acc, ic) => acc + ic.base, 0));
+  // ICMS ESTIMADO para conferência (itens Simples sem destaque — valor do item × alíquota).
+  const icmsEstimado = round2(input.itens.reduce((acc, it, i) => {
+    const ic = ics[i];
+    if (ic && ic.destacado) return acc;
     return acc + (numeroDe(it.quantidade) * numeroDe(it.valorUnitario) - Math.max(0, numeroDe(it.desconto))) * (numeroDe(it.aliquotaIcms) / 100);
   }, 0));
 
@@ -566,6 +686,12 @@ export function montarNotaEspecial(input: NotaEspecialInput, ctx: CtxNotaEspecia
     formas_pagamento: [{ indicador_pagamento: forma.prazo ? 1 : 0, forma_pagamento: forma.forma, valor_pagamento: valorPag }],
   };
 
+  // ---- totais de ICMS no XML (W02/W03) quando houver destaque ----
+  if (icmsDestacado > 0 || icmsBaseDestacada > 0) {
+    (payload as unknown as Record<string, unknown>).icms_base_calculo = icmsBaseDestacada;
+    (payload as unknown as Record<string, unknown>).icms_valor_total = icmsDestacado;
+  }
+
   // ---- nota referenciada (devolução com a chave da nota original) ----
   const ref = soDigitos(input.refNfe);
   if (ref.length === 44) {
@@ -580,7 +706,7 @@ export function montarNotaEspecial(input: NotaEspecialInput, ctx: CtxNotaEspecia
     500,
   );
 
-  return { payload, valorProdutos, descontoTotal, valorTotal, icmsEstimado, cfopsAjustados };
+  return { payload, valorProdutos, descontoTotal, valorTotal, icmsDestacado, icmsEstimado, cfopsAjustados };
 }
 
 /** Rótulo do tPag (mesma tabela do Bloco 145). */

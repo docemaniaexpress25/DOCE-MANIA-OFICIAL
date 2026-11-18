@@ -30,6 +30,14 @@
  *  - BONIFICAÇÃO: CFOP 5910 (6910 fora), CSOSN 900, tPag 90;
  *  - LIVRE: tudo editável (CST regime normal envia base + alíquota no XML).
  *
+ * ICMS POR ITEM (pedido do dono: "Preciso calcular o ICMS de cada produto com
+ * alíquota e etc"): o sistema CALCULA o valor (base × alíquota ÷ 100), mostra
+ * ao vivo no editor do item, aceita override manual e envia base + alíquota +
+ * VALOR no XML (CST 000/090 sempre; CSOSN 900 com o destaque ligado), com
+ * totais icms_base_calculo + icms_valor_total no payload. Nota de referência
+ * com COLAR + diagnóstico (UF/modelo decodificados) e observações por item
+ * (infAdProd) além das da nota (infCpl).
+ *
  * Sessão: MESMA do portal fiscal — POST /api/notas-admin { acao:'AUTH', pin }.
  */
 
@@ -45,8 +53,10 @@ import {
   NotaEspecialInput,
   TipoNotaEspecial,
   cfopAjustadoPorUf,
+  diagnosticoChaveRef,
   ehCstNormal,
   faltandoEnderecoEspecial,
+  icmsDoItem,
   labelCfop,
   labelFormaPagamento,
   normalizaTributacao,
@@ -143,6 +153,8 @@ const novoItemLivre = (tipo: TipoNotaEspecial): ItemNotaEspecial => ({
   desconto: 0,
   baseIcms: 0,
   aliquotaIcms: 0,
+  valorIcms: undefined,
+  observacao: '',
 });
 
 const ORIGENS: { valor: string; label: string }[] = [
@@ -187,6 +199,7 @@ function Campo({ label, children, hint }: { label: string; children: React.React
 }
 
 const inputCls = 'w-full h-12 px-4 rounded-xl border-2 border-gray-200 bg-white text-base font-bold text-gray-800 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-100 placeholder:font-medium placeholder:text-gray-300 transition-colors';
+const textareaCls = 'w-full px-4 py-3 rounded-xl border-2 border-gray-200 bg-white text-base font-bold text-gray-800 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-100 placeholder:font-medium placeholder:text-gray-300 resize-none';
 
 function Progresso({ passo }: { passo: number }) {
   const nomes = ['Destinatário', 'Produtos', 'Pagamento', 'Emissão'];
@@ -244,6 +257,7 @@ export default function PortalNotasEspeciaisPage() {
   const [refNfe, setRefNfe] = useState('');
   const [informacoes, setInformacoes] = useState(preset.motivoSugerido);
   const [cfopAutoUf, setCfopAutoUf] = useState(true);
+  const [destacarIcmsSimples, setDestacarIcmsSimples] = useState(false);
   const [pagErro, setPagErro] = useState<string[]>([]);
 
   const [errosTela, setErrosTela] = useState<string[]>([]);
@@ -477,6 +491,8 @@ export default function PortalNotasEspeciaisPage() {
       desconto: 0,
       baseIcms: vunit,
       aliquotaIcms: 0,
+      valorIcms: undefined,
+      observacao: '',
     };
     const proximo = itens.length;
     setItens(prev => [...prev, novo]);
@@ -501,7 +517,16 @@ export default function PortalNotasEspeciaisPage() {
         const trib = tributacaoDe(String(v));
         if (trib && (trib.codigo === '000' || trib.codigo === '090')) {
           if (!Number(novo.aliquotaIcms)) novo.aliquotaIcms = 18;
-          if (!Number(novo.baseIcms)) novo.baseIcms = Math.max(0, novo.quantidade * novo.valorUnitario - Math.max(0, Number(novo.desconto) || 0));
+          if (!Number(novo.baseIcms)) novo.baseIcms = totalItem(novo);
+        }
+      }
+      // Base de cálculo acompanha o valor do item quando ela é 0 ou já
+      // estava igual ao total (a base "viva" — trocou qtd/vlr/desconto, a
+      // base segue; mexeu na base à mão, ela para de acompanhar).
+      if (campo === 'quantidade' || campo === 'valorUnitario' || campo === 'desconto') {
+        const base = Number(novo.baseIcms) || 0;
+        if (base === 0 || Math.abs(base - totalItem(it)) < 0.005) {
+          novo.baseIcms = totalItem(novo);
         }
       }
       return novo;
@@ -519,11 +544,19 @@ export default function PortalNotasEspeciaisPage() {
   const totalProdutos = useMemo(() => Math.round(itens.reduce((a, it) => a + it.quantidade * it.valorUnitario, 0) * 100) / 100, [itens]);
   const totalDescontos = useMemo(() => Math.round(itens.reduce((a, it) => a + Math.max(0, Number(it.desconto) || 0), 0) * 100) / 100, [itens]);
   const totalNota = useMemo(() => Math.round((totalProdutos - totalDescontos) * 100) / 100, [totalProdutos, totalDescontos]);
-  const icmsEstimado = useMemo(() => Math.round(itens.reduce((a, it) => {
-    const trib = tributacaoDe(it.tributacao);
-    const base = trib?.kind === 'CST' ? (Number(it.baseIcms) || 0) : totalItem(it);
-    return a + (base * (Number(it.aliquotaIcms) || 0)) / 100;
-  }, 0) * 100) / 100, [itens]);
+  // ICMS POR ITEM: o que SOBE no XML (destacado) x o que é só estimativa (Simples).
+  const icmsItens = useMemo(() => itens.map(it => icmsDoItem(it, destacarIcmsSimples)), [itens, destacarIcmsSimples]);
+  const icmsNaNota = useMemo(() => Math.round(icmsItens.filter(ic => ic.destacado).reduce((a, ic) => a + ic.valor, 0) * 100) / 100, [icmsItens]);
+  const icmsEstimado = useMemo(() => Math.round(itens.reduce((a, it, idx) => {
+    const ic = icmsItens[idx];
+    if (ic?.destacado) return a;
+    return a + totalItem(it) * (Number(it.aliquotaIcms) || 0) / 100;
+  }, 0) * 100) / 100, [itens, icmsItens]);
+  // Diagnóstico da chave da nota original (UF/modelo decodificados).
+  const diagChave = useMemo(() => {
+    const d = soDigitos(refNfe);
+    return d.length === 44 ? diagnosticoChaveRef(d) : null;
+  }, [refNfe]);
 
   // ---------- validações por passo (motor puro) ----------
   const inputCompleto = (): NotaEspecialInput => ({
@@ -531,6 +564,7 @@ export default function PortalNotasEspeciaisPage() {
     natureza,
     finalidade,
     cfopAutoUf,
+    destacarIcmsSimples,
     destinatario: dest,
     itens,
     pagamentoForma,
@@ -565,6 +599,7 @@ export default function PortalNotasEspeciaisPage() {
       else if (trib.kind === 'CST' && (trib.codigo === '000' || trib.codigo === '090')) {
         if (!(Number(it.baseIcms) > 0) || Number(it.aliquotaIcms) < 0) erros.push(`Item ${n}: ${trib.label} exige base de cálculo e alíquota do ICMS.`);
       }
+      if (it.valorIcms !== undefined && it.valorIcms !== null && Number(it.valorIcms) < 0) erros.push(`Item ${n}: valor do ICMS não pode ser negativo.`);
     });
     return erros;
   };
@@ -666,6 +701,19 @@ export default function PortalNotasEspeciaisPage() {
       showToast('Chave de acesso copiada.');
     } catch {
       showToast('Não foi possível copiar — selecione o texto.', false);
+    }
+  };
+
+  // Colar a chave da nota original direto da área de transferência (mobile).
+  const colarChave = async () => {
+    try {
+      const txt = await navigator.clipboard.readText();
+      const d = soDigitos(txt).slice(0, 44);
+      if (!d) { showToast('Nada para colar — copie a chave de 44 dígitos primeiro.', false); return; }
+      setRefNfe(d);
+      showToast(d.length === 44 ? 'Chave colada.' : `Colado com ${d.length} dígitos — complete até 44.`, d.length === 44);
+    } catch {
+      showToast('O navegador não deixou ler a área de transferência — cole com o dedo no campo.', false);
     }
   };
 
@@ -945,6 +993,7 @@ export default function PortalNotasEspeciaisPage() {
                   const aberto = itemAberto === idx;
                   const cfopFinal = cfopAjustadoPorUf(it.cfop, dest.uf, ufEmit, cfopAutoUf);
                   const trib = tributacaoDe(it.tributacao);
+                  const ic = icmsItens[idx];
                   return (
                     <div key={idx} className={`bg-white rounded-2xl border shadow-sm overflow-hidden ${aberto ? 'border-amber-300' : 'border-gray-100'}`}>
                       <button onClick={() => setItemAberto(aberto ? null : idx)} className="w-full px-4 py-3.5 flex items-center gap-3 text-left">
@@ -957,7 +1006,11 @@ export default function PortalNotasEspeciaisPage() {
                           <span className="flex flex-wrap gap-1 mt-1.5">
                             <span className="px-1.5 py-0.5 rounded-md bg-gray-100 text-gray-600 text-[9px] font-black">{labelCfop(cfopFinal)}</span>
                             <span className={`px-1.5 py-0.5 rounded-md text-[9px] font-black ${trib?.kind === 'CST' ? 'bg-violet-50 text-violet-700' : 'bg-teal-50 text-teal-700'}`}>{trib?.label || it.tributacao}</span>
-                            {Number(it.aliquotaIcms) > 0 && <span className="px-1.5 py-0.5 rounded-md bg-gray-100 text-gray-500 text-[9px] font-black">ICMS {it.aliquotaIcms}%</span>}
+                            {ic && ic.aliquota > 0 && (
+                              <span className={`px-1.5 py-0.5 rounded-md text-[9px] font-black ${ic.destacado ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>
+                                ICMS {ic.aliquota}% {ic.destacado ? `= ${fmtBRL(ic.valor)}` : '(estimado)'}
+                              </span>
+                            )}
                           </span>
                         </span>
                         <i className={`fa-solid fa-chevron-${aberto ? 'up' : 'down'} text-gray-300 text-xs shrink-0`}></i>
@@ -1007,13 +1060,26 @@ export default function PortalNotasEspeciaisPage() {
                             </button>
                           </div>
                           <div className="grid grid-cols-2 gap-2">
-                            <Campo label={trib?.kind === 'CST' ? 'Base ICMS R$ (vai na nota) *' : 'Base ICMS R$ (estimativa)'} hint={trib?.kind === 'CST' ? 'Sobe no XML para o fisco' : 'Simples: o ICMS não é destacado na nota'}>
+                            <Campo label={ic.destacado ? 'Base ICMS R$ (vai na nota) *' : 'Base ICMS R$'} hint={ic.destacado ? 'Acompanha o valor do item — pode digitar outro' : trib?.kind === 'CSOSN' && ic.aliquota > 0 ? 'Simples: não sobe no XML com o destaque desligado' : undefined}>
                               <input value={String(it.baseIcms || '')} onChange={e => setItemCampo(idx, 'baseIcms', parseNum(e.target.value))} className={inputCls} inputMode="decimal" placeholder="0,00" />
                             </Campo>
-                            <Campo label="Alíquota ICMS %">
+                            <Campo label="Alíquota ICMS %" hint={ic.destacado ? undefined : 'Só estimativa na tela'}>
                               <input value={String(it.aliquotaIcms || '')} onChange={e => setItemCampo(idx, 'aliquotaIcms', parseNum(e.target.value))} className={inputCls} inputMode="decimal" placeholder="0" />
                             </Campo>
                           </div>
+                          {/* ICMS CALCULADO POR ITEM (pedido do dono) + override */}
+                          <div className="grid grid-cols-2 gap-2">
+                            <Campo label="Valor do ICMS R$" hint="Vazio = calcula base × alíquota">
+                              <input value={it.valorIcms !== undefined && it.valorIcms !== null && Number(it.valorIcms) > 0 ? String(it.valorIcms) : ''} onChange={e => setItemCampo(idx, 'valorIcms', parseNum(e.target.value))} className={inputCls} inputMode="decimal" placeholder="automático" />
+                            </Campo>
+                            <div className={`rounded-xl border-2 px-3 flex flex-col justify-center ${ic.destacado ? 'border-emerald-200 bg-emerald-50' : 'border-gray-200 bg-gray-50'}`}>
+                              <span className="block text-[9px] font-black uppercase tracking-wider text-gray-400 leading-tight">{ic.destacado ? 'ICMS na nota (XML)' : 'ICMS estimado (tela)'}</span>
+                              <span className={`text-base font-black leading-tight ${ic.destacado ? 'text-emerald-600' : 'text-gray-500'}`}>{fmtBRL(ic.valor)}</span>
+                            </div>
+                          </div>
+                          {ic.valorCalculado !== ic.valor && ic.valor > 0 && (
+                            <p className="text-[10px] font-bold text-amber-600">Valor digitado ({fmtBRL(ic.valor)}) está substituindo o cálculo ({fmtBRL(ic.valorCalculado)} = base × alíquota).</p>
+                          )}
                           <button onClick={() => setSheetOrigem(idx)} className="w-full h-12 px-3 rounded-xl bg-gray-50 border-2 border-gray-200 flex items-center justify-between active:scale-[0.98] transition-transform">
                             <span className="text-left">
                               <span className="block text-[9px] font-black uppercase text-gray-400">Origem da mercadoria</span>
@@ -1021,6 +1087,9 @@ export default function PortalNotasEspeciaisPage() {
                             </span>
                             <i className="fa-solid fa-globe text-amber-500"></i>
                           </button>
+                          <Campo label="Observação do item" hint="Sai impressa na DANFE abaixo do item (infAdProd) — até 500 caracteres">
+                            <textarea value={it.observacao || ''} onChange={e => setItemCampo(idx, 'observacao', e.target.value.slice(0, 500))} rows={2} className={textareaCls} placeholder="Ex.: Lote 123 — devolvido com embalagem avariada" />
+                          </Campo>
                           <div className="flex justify-between items-center pt-1">
                             <button onClick={() => removerItem(idx)} className="h-11 px-4 rounded-xl bg-rose-50 text-rose-600 text-[11px] font-black uppercase tracking-wide flex items-center gap-2 active:scale-95 transition-transform border border-rose-100">
                               <i className="fa-solid fa-trash-can"></i>Remover
@@ -1039,7 +1108,8 @@ export default function PortalNotasEspeciaisPage() {
                     <span className="text-right">
                       <span className="block text-base font-black text-gray-800">{fmtBRL(totalNota)}</span>
                       {totalDescontos > 0 && <span className="block text-[10px] font-bold text-emerald-600">− descontos {fmtBRL(totalDescontos)}</span>}
-                      {icmsEstimado > 0 && <span className="block text-[10px] font-bold text-gray-400">ICMS estimado {fmtBRL(icmsEstimado)}</span>}
+                      {icmsNaNota > 0 && <span className="block text-[10px] font-black text-emerald-600">ICMS na nota {fmtBRL(icmsNaNota)}</span>}
+                      {icmsEstimado > 0 && <span className="block text-[10px] font-bold text-gray-400">ICMS estimado (Simples) {fmtBRL(icmsEstimado)}</span>}
                     </span>
                   </div>
                 )}
@@ -1049,6 +1119,14 @@ export default function PortalNotasEspeciaisPage() {
                   <span className="flex-1">
                     <span className="block text-xs font-black text-gray-800">CFOP inteligente por UF</span>
                     <span className="block text-[10px] font-bold text-gray-500 leading-snug mt-0.5">Ligado: 5xxx vira 6xxx SOZINHO quando o destinatário for de outra UF (o "5202 → 6202 fora do estado"). Desligado: manda o CFOP exatamente como digitou.</span>
+                  </span>
+                </label>
+
+                <label className="flex items-start gap-3 bg-white rounded-2xl border border-gray-100 p-4">
+                  <input type="checkbox" checked={destacarIcmsSimples} onChange={e => setDestacarIcmsSimples(e.target.checked)} className="w-6 h-6 rounded accent-amber-500 shrink-0 mt-0.5" />
+                  <span className="flex-1">
+                    <span className="block text-xs font-black text-gray-800">Destacar ICMS na nota (CSOSN 900)</span>
+                    <span className="block text-[10px] font-bold text-gray-500 leading-snug mt-0.5">Desligado (padrão Simples): a alíquota é só estimativa na tela. Ligado: os itens CSOSN 900 enviam BASE + ALÍQUOTA + VALOR do ICMS no XML (o schema da SEFAZ aceita o destaque no grupo 900) — para o fornecedor ver o ICMS da devolução.</span>
                   </span>
                 </label>
 
@@ -1090,11 +1168,26 @@ export default function PortalNotasEspeciaisPage() {
                     </span>
                     <i className="fa-solid fa-flag text-amber-500"></i>
                   </button>
-                  <Campo label="Chave da nota original (devolução)" hint="44 dígitos — vira NF referenciada no XML; opcional">
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-[10px] font-black uppercase tracking-wider text-gray-500">Chave da nota original (devolução)</span>
+                      <button onClick={() => void colarChave()} className="h-9 px-3 rounded-lg bg-gray-100 text-gray-600 text-[10px] font-black uppercase tracking-wide flex items-center gap-1.5 active:scale-95 transition-transform">
+                        <i className="fa-solid fa-paste text-amber-600"></i>Colar
+                      </button>
+                    </div>
                     <input value={refNfe} onChange={e => setRefNfe(e.target.value.replace(/\D/g, '').slice(0, 44))} className={`${inputCls} font-mono`} placeholder="Chave de acesso de 44 dígitos" inputMode="numeric" />
-                  </Campo>
-                  <Campo label="Informações complementares / motivo" hint="Sai na DANFE junto do carimbo automático do app">
-                    <textarea value={informacoes} onChange={e => setInformacoes(e.target.value.slice(0, 500))} rows={3} className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 bg-white text-base font-bold text-gray-800 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-100 placeholder:font-medium placeholder:text-gray-300 resize-none" placeholder="Ex.: Devolução de mercadoria com defeito conforme negociação..." />
+                    <span className="block text-[10px] font-bold text-gray-400 mt-1">44 dígitos — vira NF referenciada no XML; opcional (a SEFAZ de vários estados exige na devolução)</span>
+                    {diagChave && (
+                      <p className={`mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] font-black ${diagChave.uf && diagChave.uf !== (dest.uf || '').toUpperCase().trim() ? 'text-rose-600' : 'text-emerald-600'}`}>
+                        <span className={`px-1.5 py-0.5 rounded-md ${diagChave.modelo === '55' ? 'bg-violet-50 text-violet-700' : diagChave.modelo === '65' ? 'bg-amber-50 text-amber-700' : 'bg-gray-100 text-gray-600'}`}>{diagChave.modelo === '55' ? 'NF-e (55)' : diagChave.modelo === '65' ? 'NFC-e (65)' : 'modelo ?'}</span>
+                        <span>emitida em {diagChave.uf || 'UF ?'} · {diagChave.anoMes || 'AAMM ?'}</span>
+                        {diagChave.uf && diagChave.uf !== (dest.uf || '').toUpperCase().trim() && <span>≠ UF do destinatário ({(dest.uf || '').toUpperCase()}) — confira</span>}
+                        {diagChave.modelo === '65' && <span>referência de NFC-e pode ser recusada em alguns estados</span>}
+                      </p>
+                    )}
+                  </div>
+                  <Campo label="Informações complementares / observações da nota" hint="Sai impressa na DANFE junto do carimbo automático do app — cada item também tem observação própria (passo Produtos)">
+                    <textarea value={informacoes} onChange={e => setInformacoes(e.target.value.slice(0, 500))} rows={3} className={textareaCls} placeholder="Ex.: Devolução de mercadoria com defeito conforme negociação..." />
                   </Campo>
                   {pagErro.length > 0 && (
                     <div className="bg-rose-50 border border-rose-200 rounded-2xl p-3 space-y-1">
@@ -1131,12 +1224,14 @@ export default function PortalNotasEspeciaisPage() {
                     {itens.map((it, i) => {
                       const cfopFinal = cfopAjustadoPorUf(it.cfop, dest.uf, ufEmit, cfopAutoUf);
                       const trib = tributacaoDe(it.tributacao);
+                      const ic = icmsItens[i];
                       return (
                         <li key={i} className="px-5 py-3 flex items-start gap-3">
                           <span className="w-6 h-6 rounded-lg bg-gray-100 text-gray-500 text-[10px] font-black flex items-center justify-center shrink-0 mt-0.5">{i + 1}</span>
                           <span className="flex-1 min-w-0">
                             <span className="block text-xs font-black text-gray-800">{it.descricao}</span>
-                            <span className="block text-[10px] font-bold text-gray-400">{it.quantidade} × {fmtBRL(it.valorUnitario)} = {fmtBRL(totalItem(it))} · {labelCfop(cfopFinal)} · {trib?.label || it.tributacao}{Number(it.aliquotaIcms) > 0 ? ` · ICMS ${it.aliquotaIcms}%` : ''}</span>
+                            <span className="block text-[10px] font-bold text-gray-400">{it.quantidade} × {fmtBRL(it.valorUnitario)} = {fmtBRL(totalItem(it))} · {labelCfop(cfopFinal)} · {trib?.label || it.tributacao}{ic && ic.aliquota > 0 ? ` · ICMS ${ic.destacado ? `${fmtBRL(ic.valor)} na nota` : `${ic.aliquota}% estimado`}` : ''}</span>
+                            {it.observacao && <span className="block text-[10px] font-bold text-gray-400 mt-0.5 italic">Obs: {it.observacao}</span>}
                           </span>
                         </li>
                       );
@@ -1146,7 +1241,8 @@ export default function PortalNotasEspeciaisPage() {
                     <span className="text-[10px] font-black uppercase tracking-wider text-gray-500">Total da nota</span>
                     <span className="text-right">
                       <span className="block text-lg font-black text-gray-800">{fmtBRL(totalNota)}</span>
-                      {icmsEstimado > 0 && <span className="block text-[10px] font-bold text-gray-400">ICMS estimado {fmtBRL(icmsEstimado)}</span>}
+                      {icmsNaNota > 0 && <span className="block text-[10px] font-black text-emerald-600">ICMS na nota {fmtBRL(icmsNaNota)}{destacarIcmsSimples ? ' (destaque ligado)' : ''}</span>}
+                      {icmsEstimado > 0 && <span className="block text-[10px] font-bold text-gray-400">ICMS estimado (Simples) {fmtBRL(icmsEstimado)}</span>}
                     </span>
                   </div>
                 </div>

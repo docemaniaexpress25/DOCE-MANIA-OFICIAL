@@ -77,7 +77,9 @@ const clients = [{
   endereco_numero: null, endereco_cep: null, endereco_municipio: null, endereco_uf: null, email: 'padaria@teste.com',
 }, {
   // BLOCO 36: cliente com CNPJ APTO a NF-e (painel CNPJ nota -> Confirmar NF-e)
-  id: 'cli-3', nome_fantasia: 'Mercado CNPJ', nome: null, ativar_cnpj: true, cnpj: '12.345.678/0001-99',
+  // BLOCO 187: CNPJ com dígito verificador VÁLIDO (12.345.678/0001-95) para
+  // testar o caminho "boleto usa o documento do cadastro, sem pedir CPF".
+  id: 'cli-3', nome_fantasia: 'Mercado CNPJ', nome: null, ativar_cnpj: true, cnpj: '12.345.678/0001-95',
   telefone: '(54) 97777-7777', endereco: 'Av Brasil', bairro: 'Centro', ativo: true,
   localizacao: null, dia_roteiro: new Date().getDay(), ordem: 3, observacoes: null,
   pin_localizacao: '-29.167000, -51.180000',

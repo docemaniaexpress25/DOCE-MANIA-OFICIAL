@@ -109,7 +109,7 @@ export function validaCpfOuCnpj(v: string): boolean {
 /** Valida CNPJ (digitos verificadores). true se valido. */
 export function validaCnpj(valor: string): boolean {
   const s = (valor || '').replace(/\D/g, '');
-  if (s.length !== 14 || /^((\d)\1{13})$/.test(s)) return false;
+  if (s.length !== 14 || /^(\d)\1{13}$/.test(s)) return false;
   const calc = (len: number): number => {
     let soma = 0;
     let pos = len - 7;
@@ -126,7 +126,7 @@ export function validaCnpj(valor: string): boolean {
 /** Valida CPF (digitos verificadores). Retorna true se valido. */
 export function validaCpf(valor: string): boolean {
   const s = (valor || '').replace(/\D/g, '');
-  if (s.length !== 11 || /^((\d)\1{10})$/.test(s)) return false;
+  if (s.length !== 11 || /^(\d)\1{10}$/.test(s)) return false;
   const calc = (len: number): number => {
     let soma = 0;
     for (let i = 0; i < len; i++) soma += parseInt(s[i], 10) * (len + 1 - i);

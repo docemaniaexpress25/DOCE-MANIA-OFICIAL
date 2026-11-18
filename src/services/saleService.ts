@@ -149,6 +149,20 @@ export const saleService = {
       try { await saleService.registrarContadoresSaida(String(saleId), modo); } catch { /* nunca quebra */ }
     }
 
+    // BLOCO 187 (regra do dono): CPF/CNPJ do PAGADOR do boleto a prazo —
+    // grava sales.boleto_cpf (SQL do bloco 187). Assim o boleto do Inter nasce
+    // com o documento capturado NA VENDA, sem pedir CPF de novo na tela.
+    // Best-effort: coluna ausente (SQL pendente)/erro NUNCA quebra a venda.
+    const boletoCpf = String((sale as any).boletoCpf || '').replace(/\D/g, '');
+    if (boletoCpf) {
+      try {
+        const { error: cpfErr } = await supabase.from('sales').update({ boleto_cpf: boletoCpf }).eq('id', saleId);
+        if (cpfErr && !/boleto_cpf/i.test(cpfErr.message || '')) {
+          console.warn('boleto_cpf nao gravado:', cpfErr.message);
+        }
+      } catch { /* best-effort: nunca quebra a venda */ }
+    }
+
     return { ...sale, id: saleId };
   },
 

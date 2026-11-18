@@ -19,7 +19,7 @@ import { notaService } from '@/services/notaService';
 import { danfeFiscal80 } from '@/lib/danfe80';
 // BLOCO 158: canal USB imprime o layout de REFERENCIA do dono (HTML 80mm)
 import { danfeFiscal80Html } from '@/lib/danfe80Html';
-import { clienteAptoNfe, mascararCpf, validaCpf } from '@/lib/cnpjAutocomplete';
+import { clienteAptoNfe, mascararCpf, mascararCpfCnpj, validaCpf, validaCpfOuCnpj } from '@/lib/cnpjAutocomplete';
 // BLOCO 123: regras fiscais ARMADAS porém DESLIGADAS (FISCAL_OBRIGATORIO=false
 // até o dono implantar a API fiscal) — pronta entrega só conclui com NF-e/NFC-e
 // BATIDA (+ boleto do prazo). Pré-venda: vendedor SÓ escolhe (nada muda aqui).
@@ -93,6 +93,10 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   // já nasce escolhido e a tela 4 é pulada:
   const [docEscolhido, setDocEscolhido] = useState<'NFE' | 'NFCE' | 'CUPOM' | null>(modoAtendimento || null);
   const [nfcCpfDoc, setNfcCpfDoc] = useState<string>(nfcCpfInicial || '');
+  // BLOCO 187 (regra do dono): CPF/CNPJ do PAGADOR do boleto a prazo —
+  // digitado na tela 6 quando o cadastro não tem documento. Vazio = usa o
+  // documento do cadastro (se válido). Obrigatório para finalizar.
+  const [boletoCpfDoc, setBoletoCpfDoc] = useState('');
   // TELA 5 — condição; TELA 6 — forma:
   const [condicaoDoc, setCondicaoDoc] = useState<'AVISTA' | 'APRAZO' | null>(null);
   const [formaDoc, setFormaDoc] = useState<'DINHEIRO' | 'PIX' | 'MISTO' | 'BOLETO' | 'CHEQUE' | 'DINHEIRO_DATA' | 'PIX_DATA' | null>(null);
@@ -756,12 +760,32 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   // BLOCO 153 (regra do dono): pronta entrega À VISTA na tela 6 = só SELECIONAR
   // a forma (dinheiro/pix/misto). O CAIXA — valor recebido, troco, QR do Pix —
   // aparece na TELA FINAL, DEPOIS da emissão da nota. A prazo exige a data.
+  // ============================================================
+  // BLOCO 187 (regra do dono): CPF/CNPJ do PAGADOR do boleto a prazo.
+  // - Cliente que quer NF-e: NÃO precisa — usa o CNPJ/CPF do cadastro.
+  // - Cupom/NFC-e: o vendedor É OBRIGADO a pedir (boleto do Inter não
+  //   existe sem documento do pagador) — sem CPF válido, não finaliza.
+  // ============================================================
+  const docCadastroDig = ((client.cnpj as string) || '').replace(/\D/g, '');
+  const docCadastroOk = !!docCadastroDig && validaCpfOuCnpj(docCadastroDig);
+  const boletoDocDig = (boletoCpfDoc || (docCadastroOk ? docCadastroDig : '')).replace(/\D/g, '');
+  const boletoDocOk = !!boletoDocDig && validaCpfOuCnpj(boletoDocDig);
+  const boletoDocTipo = boletoDocDig.length === 14 ? 'CNPJ' : 'CPF';
+  // BLOCO 187: se o vendedor pediu o CPF para o boleto (11 dígitos), a NFC-e
+  // sai identificada com o MESMO CPF — não pede duas vezes.
+  const nfcCpfEfetivo = nfcCpfDoc.trim()
+    || (boletoDocDig.length === 11 && validaCpf(boletoDocDig) ? mascararCpf(boletoDocDig) : '');
+
   const formaOk = (() => {
     if (!condicaoDoc || !formaDoc) return false;
     if (condicaoDoc === 'AVISTA') {
       return formaDoc === 'DINHEIRO' || formaDoc === 'PIX' || formaDoc === 'MISTO';
     }
-    return !!vencimentoDoc;
+    if (!vencimentoDoc) return false;
+    // BLOCO 187: boleto a prazo EXIGE CPF/CNPJ válido do pagador — o botão
+    // Continuar nasce travado até o vendedor digitar (ou o cadastro ter).
+    if (formaDoc === 'BOLETO' && !boletoDocOk) return false;
+    return true;
   })();
 
   // ============================================================
@@ -836,6 +860,12 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const continuarDaForma = () => {
     if (!formaOk || isFinalizingRef.current) return;
     if (total <= 0 && getOrderedItems().length === 0) return;
+    // BLOCO 187: defesa extra — boleto sem CPF/CNPJ do pagador não passa
+    // (o botão Continuar já nasce travado pelo formaOk)
+    if (condicaoDoc === 'APRAZO' && formaDoc === 'BOLETO' && !boletoDocOk) {
+      setAppModal({ title: 'Boleto sem CPF/CNPJ', message: 'O boleto a prazo PRECISA do CPF do cliente (o CNPJ do cadastro serve). Peça o CPF, digite na tela 6 e continue.', icon: 'fa-solid fa-id-card', iconColor: 'text-rose-500', type: 'error' });
+      return;
+    }
     if (!validateAndBlockIfNeeded()) return;
     if (isPreVenda) montarResumoPreVenda();
     else montarConferenciaPronta();
@@ -850,7 +880,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     const notaTxt = docEscolhido === 'NFE'
       ? ' | COM NOTA: NF-e'
       : docEscolhido === 'NFCE'
-        ? ` | COM NOTA: NFC-e${nfcCpfDoc ? ` (CPF ${nfcCpfDoc})` : ''}`
+        ? ` | COM NOTA: NFC-e${nfcCpfEfetivo ? ` (CPF ${nfcCpfEfetivo})` : ''}`
         : '';
 
     let metodoP: PaymentMethod;
@@ -873,8 +903,9 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     } else {
       metodoP = 'A_PRAZO';
       // BLOCO 60: a prazo = Boleto, Cheque (bom para), Pix na data, Dinheiro na data
+      // BLOCO 187: o boleto carrega o CPF/CNPJ do pagador no detalhe (escritório enxerga)
       finalDetalhe = formaDoc === 'BOLETO'
-        ? 'Boleto'
+        ? `Boleto (pagador: ${mascararCpfCnpj(boletoDocDig)})`
         : formaDoc === 'CHEQUE'
           ? `Cheque (bom para ${vencimentoDoc.split('-').reverse().join('/')})`
           : formaDoc === 'DINHEIRO_DATA'
@@ -902,6 +933,9 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       data: new Date(),
       // BLOCO 29 (ROTA 2): modo do atendimento — grava sales.modo_nota (baixa/margem real)
       modoNota: rota2Ativo && modoAtivo ? modoAtivo : undefined,
+      // BLOCO 187: CPF/CNPJ do pagador do boleto (grava sales.boleto_cpf — o
+      // boleto do Inter nasce SEM pedir documento de novo)
+      boletoCpf: condicaoDoc === 'APRAZO' && formaDoc === 'BOLETO' ? boletoDocDig : undefined,
     };
     salePayload.statusPagamento = condicaoDoc === 'AVISTA' ? 'PAGO' : 'PENDENTE';
     if (metodoP === 'A_PRAZO') {
@@ -932,7 +966,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     const finalDetalhe = (condicaoDoc === 'AVISTA'
       ? `Entregador recebe ${formaApi === 'PIX' ? 'Pix' : 'dinheiro'} na entrega (A VISTA)`
       : formaDoc === 'BOLETO'
-        ? 'Boleto'
+        ? `Boleto (pagador: ${mascararCpfCnpj(boletoDocDig)})`
         : formaDoc === 'CHEQUE'
           ? `Cheque (bom para ${vencimentoDoc.split('-').reverse().join('/')})`
           : formaDoc === 'DINHEIRO_DATA'
@@ -949,6 +983,9 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       dataVencimento: condicaoDoc === 'APRAZO' ? new Date(`${vencimentoDoc}T12:00:00`) : undefined,
       itens,
       data: new Date(),
+      // BLOCO 187: CPF/CNPJ do pagador do boleto — vai na pré-venda para o
+      // boleto gerar sozinho na entrega/escritório
+      boletoCpf: condicaoDoc === 'APRAZO' && formaDoc === 'BOLETO' ? boletoDocDig : undefined,
     };
     setCupomConferencia(vendaConferenciaDe(previewPayload));
   };
@@ -1035,7 +1072,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       // A venda já está salva — se a SEFAZ rejeitar, o erro aparece na tela de
       // sucesso com "emitir novamente" (nada se perde).
       if (docEscolhido === 'NFE' || docEscolhido === 'NFCE') {
-        emitirNotaFluxo(docEscolhido, saleFinal, docEscolhido === 'NFCE' ? (nfcCpfDoc || undefined) : undefined);
+        // BLOCO 187: NFC-e sai com o CPF digitado (ou o mesmo do boleto)
+        emitirNotaFluxo(docEscolhido, saleFinal, docEscolhido === 'NFCE' ? (nfcCpfEfetivo || undefined) : undefined);
       }
     } else {
       isFinalizingRef.current = false; // Libera se falhou
@@ -1086,7 +1124,9 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       trocas: trocasComObs,
       trocasValor: trocasValorNum || undefined,
       notaIntencao,
-      nfcCpf: docEscolhido === 'NFCE' && nfcCpfDoc ? nfcCpfDoc : undefined,
+      nfcCpf: docEscolhido === 'NFCE' && nfcCpfEfetivo ? nfcCpfEfetivo : undefined,
+      // BLOCO 187: CPF/CNPJ do pagador do boleto a prazo (gravado na venda)
+      boletoCpf: condicaoDoc === 'APRAZO' && formaDoc === 'BOLETO' ? boletoDocDig : undefined,
       // BLOCO 29 (ROTA 2): modo do atendimento — baixa na coluna certa
       modo: rota2Ativo && modoAtivo ? modoAtivo : undefined,
     });
@@ -1971,6 +2011,30 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               {formaDoc === 'BOLETO' && clienteCepOk && (
                 <p className="text-[8px] font-black text-indigo-500 uppercase text-center leading-snug bg-indigo-50 border border-indigo-100 rounded-xl px-3 py-2"><i className="fa-solid fa-circle-check mr-1"></i>CEP OK — o boleto é gerado MAIS TARDE (tela final ou cupom da venda) já com o vencimento combinado{vencimentoDoc ? ` ${vencimentoDoc.split('-').reverse().join('/')}` : ''}.</p>
               )}
+              {/* BLOCO 187 (regra do dono): CPF/CNPJ do PAGADOR do boleto —
+                  OBRIGATÓRIO para finalizar a venda a prazo no boleto. NF-e com
+                  documento válido no cadastro não pede (usa o cadastro); cupom/
+                  NFC-e o vendedor É OBRIGADO a pedir o CPF do cliente. */}
+              {formaDoc === 'BOLETO' && (docEscolhido === 'NFE' && docCadastroOk ? (
+                <p className="text-[8px] font-black text-indigo-500 uppercase text-center leading-snug bg-indigo-50 border border-indigo-100 rounded-xl px-3 py-2"><i className="fa-solid fa-circle-check mr-1"></i>Pagador do boleto: {boletoDocTipo} do cadastro ({mascararCpfCnpj(docCadastroDig)}) — NF-e não precisa digitar.</p>
+              ) : (
+                <div className="bg-white rounded-3xl border border-gray-100 p-4 space-y-2">
+                  <label className="text-[9px] font-black text-gray-400 uppercase">CPF do cliente no boleto — obrigatório</label>
+                  <input
+                    value={boletoCpfDoc || (docCadastroOk ? mascararCpfCnpj(docCadastroDig) : '')}
+                    onChange={e => setBoletoCpfDoc(mascararCpfCnpj(e.target.value))}
+                    placeholder="000.000.000-00"
+                    inputMode="numeric"
+                    aria-label="CPF ou CNPJ do pagador do boleto"
+                    className={`w-full p-4 bg-gray-50 border-2 rounded-2xl text-sm font-black text-center outline-none ${boletoDocOk ? 'border-emerald-200 focus:ring-2 focus:ring-emerald-100' : 'border-amber-200 focus:ring-2 focus:ring-amber-100'}`}
+                  />
+                  {boletoDocOk ? (
+                    <p className="text-[8px] font-black text-emerald-600 uppercase text-center leading-snug"><i className="fa-solid fa-circle-check mr-1"></i>{boletoDocTipo} OK — o boleto nasce com este documento no pagador.</p>
+                  ) : (
+                    <p className="text-[8px] font-bold text-amber-600/90 leading-snug"><i className="fa-solid fa-id-card mr-1"></i>Peça o CPF do cliente (ou CNPJ) e digite acima — SEM ele o boleto do Inter não gera e a venda não finaliza. Cliente com NF-e usa o cadastro.</p>
+                  )}
+                </div>
+              ))}
             </div>
           )}
         </div>
@@ -2262,7 +2326,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               ))}
               {docExigeNota(docEscolhido) && !notaBatida(notaResult?.status) && (docEscolhido === 'NFE' || docEscolhido === 'NFCE') && (
                 <button
-                  onClick={() => emitirNotaFluxo(docEscolhido, sucessoData.sale, docEscolhido === 'NFCE' ? (nfcCpfDoc || undefined) : undefined)}
+                  onClick={() => emitirNotaFluxo(docEscolhido, sucessoData.sale, docEscolhido === 'NFCE' ? (nfcCpfEfetivo || undefined) : undefined)}
                   disabled={notaEmitindo}
                   className="w-full bg-slate-900 text-white font-black py-3.5 rounded-2xl shadow-lg active:scale-95 uppercase text-[11px] tracking-widest disabled:opacity-60"
                 >

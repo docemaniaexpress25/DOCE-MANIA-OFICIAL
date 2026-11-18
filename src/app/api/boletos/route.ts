@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServiceClient, devBridge } from '@/lib/serverSupabase';
 import { sessionFromRequest } from '@/lib/session';
-import { hasBoletoColumns } from '@/lib/serverSchema';
+import { hasBoletoColumns, hasBoletoCpfColumn } from '@/lib/serverSchema';
 import { isFocusConfigured, consultarNota, FocusDoc } from '@/lib/focusNfe';
 // BLOCO 147: nota cancelada + boleto cancelado = venda sai do sistema (e a nota fica no portal em CANCELADAS)
 import { finalizarVendaCancelada } from '@/lib/cascataCancelamento';
@@ -252,7 +252,19 @@ export async function POST(req: NextRequest) {
     .single();
   if (!client) return BAD(422, 'Cliente da venda nao encontrado.');
 
-  const pagador = montarPagador(client as Record<string, unknown>, String(body.docManual || ''), String(body.cepManual || ''));
+  // -----------------------------------------------------------------
+  // BLOCO 187 (regra do dono): o CPF/CNPJ capturado NA VENDA (sales.boleto_cpf,
+  // coluna do bloco 187 — vendedor é OBRIGADO a pedir na tela 6) entra como
+  // fallback quando a tela do boleto não digitou nada — o boleto do prazo
+  // nasce sozinho, SEM pedir CPF de novo. Prioridade: docManual digitado na
+  // tela > boleto_cpf da venda > cadastro do cliente (dentro do montarPagador).
+  // -----------------------------------------------------------------
+  let docDaVenda = '';
+  if (!String(body.docManual || '').replace(/\D/g, '') && (await hasBoletoCpfColumn())) {
+    const { data: saleCpf } = await db.from('sales').select('boleto_cpf').eq('id', saleId).maybeSingle();
+    docDaVenda = String((saleCpf as Record<string, unknown> | null)?.boleto_cpf || '').replace(/\D/g, '');
+  }
+  const pagador = montarPagador(client as Record<string, unknown>, String(body.docManual || '') || docDaVenda, String(body.cepManual || ''));
   if (!pagador) {
     return BAD(422, 'Boleto precisa de CPF ou CNPJ do pagador. Complete o cadastro do cliente (Admin > Clientes) ou informe o documento na tela do boleto.');
   }

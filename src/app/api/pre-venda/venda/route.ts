@@ -191,6 +191,11 @@ export async function POST(req: NextRequest) {
     // Bloco 13 (colunas podem nao existir antes do SQL rodado) + Bloco 98 (trocas_valor)
     const bloco13: Record<string, unknown> = { trocas };
     if (trocasValor !== null) bloco13.trocas_valor = trocasValor;
+    // BLOCO 187 (regra do dono): CPF/CNPJ do PAGADOR do boleto a prazo —
+    // capturado na tela 6 do PDV (obrigatório) e gravado em sales.boleto_cpf
+    // (SQL do bloco 187). Coluna ausente = cai no retry sem a coluna.
+    const boletoCpfDig = String((body as any).boletoCpf || '').replace(/\D/g, '');
+    if (boletoCpfDig) bloco13.boleto_cpf = boletoCpfDig;
     // BLOCO 29: modo do atendimento na venda (quando a coluna existe)
     if (modo && temModoVenda) (basePayload as any).modo_nota = modo;
     // BLOCO 134 (regra do dono: "não podemos esquecer de bater essa nota"):
@@ -214,9 +219,10 @@ export async function POST(req: NextRequest) {
       .select(SEL_COLS)
       .single() as unknown as Promise<any>);
 
-    if (saleErr && /trocas|modo_nota|trocas_valor/i.test(saleErr.message || '')) {
-      const semColunas: any = { ...basePayload, trocas };
+    if (saleErr && /trocas|modo_nota|trocas_valor|boleto_cpf/i.test(saleErr.message || '')) {
+      const semColunas: any = { ...basePayload, trocas, ...bloco13 };
       if (/modo_nota/i.test(saleErr.message || '')) delete (semColunas as any).modo_nota;
+      if (/boleto_cpf/i.test(saleErr.message || '')) delete (semColunas as any).boleto_cpf;
       else if (/trocas_valor/i.test(saleErr.message || '')) { if (!/trocas/i.test(saleErr.message || '')) delete (semColunas as any).trocas; }
       else delete (semColunas as any).trocas;
       ({ data: sale, error: saleErr } = await supabase

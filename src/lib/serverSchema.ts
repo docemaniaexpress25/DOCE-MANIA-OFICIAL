@@ -16,7 +16,7 @@ import { getServiceClient } from '@/lib/serverSupabase';
 const TTL_MS = 30_000;
 
 type Probe = { ok: boolean; at: number };
-const probes: Record<string, Probe | null> = { preVenda: null, entrega: null, foto: null, nota: null, fiscalProduto: null, rota2: null, estoquesNota: null, modoCarga: null, pendenteModo: null, modoVenda: null, produtoTeste: null, notaEmitidaEm: null, precoCupom: null, clientModoCupom: null, erpConfig: null, codigoGb: null, clientGb: null, notasOrdem: null };
+const probes: Record<string, Probe | null> = { preVenda: null, entrega: null, foto: null, nota: null, fiscalProduto: null, rota2: null, estoquesNota: null, modoCarga: null, pendenteModo: null, modoVenda: null, produtoTeste: null, notaEmitidaEm: null, precoCupom: null, clientModoCupom: null, erpConfig: null, codigoGb: null, clientGb: null, notasOrdem: null, boletoCpf: null };
 
 async function probeColumn(table: string, column: string, key: string): Promise<boolean> {
   const now = Date.now();
@@ -156,4 +156,9 @@ export function hasXmlEntradaColumn(): Promise<boolean> {
 /** app_settings.notas_ordem existe? (Bloco 184 — ordem MANUAL das notas no portal, kanban) */
 export function hasNotasOrdem(): Promise<boolean> {
   return probeColumn('app_settings', 'notas_ordem', 'notasOrdem');
+}
+
+/** sales.boleto_cpf existe? (Bloco 187 — CPF/CNPJ do pagador capturado na venda a prazo) */
+export function hasBoletoCpfColumn(): Promise<boolean> {
+  return probeColumn('sales', 'boleto_cpf', 'boletoCpf');
 }

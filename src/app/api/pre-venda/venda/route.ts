@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/serverSupabase';
 import { sessionFromRequest } from '@/lib/session';
 import { comissaoPvDeItens } from '@/lib/comissaoPv';
-import { hasModoVendaColumn, hasEstoquesNotaColumns } from '@/lib/serverSchema';
+import { hasModoVendaColumn, hasEstoquesNotaColumns, hasSalesBoletosTable } from '@/lib/serverSchema';
 
 /**
  * POST /api/pre-venda/venda
@@ -162,6 +162,18 @@ export async function POST(req: NextRequest) {
 
     const formaLabel = forma === 'PIX' ? 'PIX' : forma === 'BOLETO' ? 'BOLETO' : forma === 'CHEQUE' ? 'CHEQUE' : 'DINHEIRO';
 
+    // ---------------------------------------------------------------
+    // BLOCO 199 (BOLETO DUPLICO — rota 5): divisão do a prazo no BOLETO em
+    // 2 boletos que JUNTOS fecham o valor (ex.: 1º em 7 dias com parte do
+    // valor e o restante no 2º em 14 dias — ou dividido por 2). Lido aqui
+    // para: (1) o detalhe do pedido mostrar a divisão e (2) gravar as
+    // parcelas depois que a venda existir (source da verdade da cobrança).
+    // ---------------------------------------------------------------
+    const bruto2 = Array.isArray((body as any).boletos2) ? (body as any).boletos2 : [];
+    const detalheBoletos2 = condicao === 'APRAZO' && forma === 'BOLETO' && bruto2.length >= 2
+      ? ` — BOLETO 2x: ${bruto2.slice(0, 4).map((b: Record<string, unknown>) => `R$ ${(Number(b.valor) || 0).toFixed(2)} em ${String(b.vencimento || '').slice(0, 10).split('-').reverse().join('/')}`).join(' + ')}`
+      : '';
+
     const basePayload: any = pagoNaVisita
       ? {
           vendedor_id: session.sub,
@@ -181,7 +193,7 @@ export async function POST(req: NextRequest) {
           valor_total: valorTotal,
           valor_pago: 0,
           metodo_pagamento: 'A_PRAZO',
-          detalhe_pagamento: `PRE-VENDA — cobrar ${forma} na entrega (${etiquetaCond})${notaTxt}`,
+          detalhe_pagamento: `PRE-VENDA — cobrar ${forma} na entrega (${etiquetaCond})${detalheBoletos2}${notaTxt}`,
           status_pagamento: 'PENDENTE',
           data_venda: new Date().toISOString(),
           data_vencimento: vencimentoIso,
@@ -262,6 +274,42 @@ export async function POST(req: NextRequest) {
       console.error('[api/pre-venda/venda] insert sale_items falhou:', itemsErr.code, itemsErr.message);
       await supabase.from('sales').delete().eq('id', sale.id);
       return NextResponse.json({ ok: false, error: 'Erro ao gravar os itens do pedido.', detalhe: itemsErr.message }, { status: 500 });
+    }
+
+    // ---------------------------------------------------------------
+    // BLOCO 199: GRAVAÇÃO das parcelas (a validação completa está aqui —
+    // soma fecha o valor da venda, mínimo R$ 2,50 por boleto, datas AAAA-MM-DD).
+    // Degradacao graciosa: SQL 199 pendente = pedido segue com boleto único.
+    // ---------------------------------------------------------------
+    if (condicao === 'APRAZO' && forma === 'BOLETO' && bruto2.length >= 2) {
+      try {
+        const saldo = Math.round((valorTotal - 0) * 100) / 100;
+        const linhas = bruto2.slice(0, 4).map((b: Record<string, unknown>, idx: number) => ({
+          sale_id: sale.id,
+          seq: idx + 1,
+          valor: Math.round((Number(b.valor) || 0) * 100) / 100,
+          vencimento: String(b.vencimento || '').slice(0, 10),
+          doc: String(b.doc || '').replace(/\D/g, '').slice(0, 20) || null,
+          cep: String(b.cep || '').replace(/\D/g, '').slice(0, 8) || null,
+          status: 'NAO_GERADO',
+        }));
+        const soma = Math.round(linhas.reduce((acc: number, l) => acc + l.valor, 0) * 100) / 100;
+        const datasOk = linhas.every(l => /^\d{4}-\d{2}-\d{2}$/.test(l.vencimento));
+        const minimosOk = linhas.every(l => l.valor >= 2.5);
+        if (datasOk && minimosOk && Math.abs(soma - saldo) <= 0.02 && (await hasSalesBoletosTable())) {
+          const { error: plErr } = await supabase.from('sales_boletos').insert(linhas);
+          if (plErr) {
+            console.warn('[api/pre-venda/venda] divisão dos 2 boletos não gravada (SQL 199?):', plErr.message);
+          } else {
+            console.log(`[api/pre-venda/venda] boleto duplico gravado — venda ${sale.id}: ${linhas.map(l => `R$ ${l.valor.toFixed(2)} em ${l.vencimento}`).join(' + ')}`);
+          }
+        } else if (!datasOk || !minimosOk || Math.abs(soma - saldo) > 0.02) {
+          console.warn('[api/pre-venda/venda] divisão de boletos descartada (dados inconsistentes — segue boleto único):', { soma, saldo, datasOk, minimosOk });
+        }
+      } catch (e2: unknown) {
+        // A divisão é OPCIONAL — nunca bloqueia o pedido
+        console.warn('[api/pre-venda/venda] divisão dos boletos falhou:', (e2 as Error).message);
+      }
     }
 
     // ---------- BLOCO 88: RESERVA DE ESTOQUE no registro do pedido (regra do dono) ----------

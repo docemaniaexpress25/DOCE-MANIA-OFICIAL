@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServiceClient } from '@/lib/serverSupabase';
-import { hasBoletoColumns } from '@/lib/serverSchema';
+import { hasBoletoColumns, hasSalesBoletosTable } from '@/lib/serverSchema';
 import { isInterConfigured, recuperarCobranca, interpretarCobranca } from '@/lib/interBoleto';
+// BLOCO 199: baixa da PARCELA do boleto duplo (rota 5) compartilhada com o cron
+import { acharParcelaPorCobranca, espelharParcelaInter, baixarParcelaPaga, type ParcelaRow } from '@/lib/baixaBoleto';
 
 /**
  * BLOCO 108 — WEBHOOK DO INTER: baixa AUTOMATICA do boleto pago.
@@ -84,6 +86,58 @@ export async function GET() {
   });
 }
 
+/**
+ * BLOCO 199 — notificação de PARCELA (boleto duplo do Deivid/R5).
+ * Mesma disciplina do boleto único: re-consulta o Inter antes de baixar,
+ * baixa a PARCELA (valor parcial na venda) e fecha a venda PAGO só quando
+ * TODAS as parcelas pagarem (lib/baixaBoleto).
+ */
+async function processarNotificacaoParcela(
+  db: ReturnType<typeof getServiceClient>,
+  body: Record<string, unknown>,
+  parcela: ParcelaRow,
+  codigo: string,
+  seuNumero: string
+) {
+  const log = (resultado: string, processado: boolean) =>
+    logEvento(db, { evento: body, codigo, seuNumero, saleId: String(parcela.sale_id), resultado, processado });
+
+  // Idempotência: parcela já recebida — reconhece e não rebaixa
+  if (parcela.status === 'RECEBIDO' || parcela.status === 'MARCADO_RECEBIDO') {
+    await log(`JA_PAGO — boleto ${parcela.seq} já baixado (R$ ${Number(parcela.valor).toFixed(2)})`, true);
+    return NextResponse.json({ ok: true, processado: true, jaPago: true, parcela: parcela.seq });
+  }
+
+  // VERDADE NA FONTE: re-consulta a cobranca na API do Inter (mTLS)
+  const codigoConsulta = codigo || String(parcela.codigo || '');
+  if (!codigoConsulta) {
+    await log('SEM_CODIGO_CONSULTA (parcela)', false);
+    return NextResponse.json({ ok: true, processado: false, motivo: 'SEM_CODIGO_CONSULTA' });
+  }
+  const r = await recuperarCobranca(codigoConsulta);
+  if (!r.ok || !r.data || 'erro' in r.data) {
+    console.warn('[inter-webhook] falha re-consultando parcela', codigoConsulta);
+    await log(`FALHA_CONSULTA_INTER parcela ${parcela.seq} (codigo ${codigoConsulta}) — reenvio fará nova tentativa`, false);
+    return NextResponse.json({ ok: true, processado: false, motivo: 'FALHA_CONSULTA_INTER' });
+  }
+  const cob = interpretarCobranca(r.data as Record<string, unknown>);
+
+  const hoje = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  await espelharParcelaInter(db, parcela, cob, hoje);
+
+  const pago = cob.status === 'RECEBIDO' || cob.status === 'MARCADO_RECEBIDO' || (cob.valorRecebido !== null && cob.valorRecebido > 0);
+  if (!pago) {
+    await log(`PARCELA ${parcela.seq} — STATUS ${cob.status} — ainda não paga`, true);
+    return NextResponse.json({ ok: true, processado: true, pago: false, status: cob.status, parcela: parcela.seq });
+  }
+
+  const baixou = await baixarParcelaPaga(db, parcela, 'WEBHOOK_INTER');
+  await log(baixou
+    ? `PARCELA ${parcela.seq} PAGA — baixa automatica R$ ${Number(parcela.valor).toFixed(2)} (fecha quando as ${'duas'} pagarem)`
+    : `PARCELA ${parcela.seq} paga — baixa já feita por outra via`, true);
+  return NextResponse.json({ ok: true, processado: true, pago: true, parcela: parcela.seq, baixou });
+}
+
 export async function POST(req: NextRequest) {
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
 
@@ -114,6 +168,14 @@ export async function POST(req: NextRequest) {
     console.warn('[inter-webhook] notificacao sem codigo/seuNumero:', JSON.stringify(body).slice(0, 300));
     await logEvento(db, { evento: body, resultado: 'SEM_CODIGO — payload sem codigoSolicitacao/seuNumero', processado: false });
     return NextResponse.json({ ok: true, processado: false, motivo: 'SEM_CODIGO' });
+  }
+
+  // 1.5 BLOCO 199 (boleto duplo rota 5): a notificação pode ser da PARCELA —
+  // tenta localizar em sales_boletos (por codigo, fallback seu_numero) e,
+  // achando, processa por lá (baixa parcial; a venda fecha quando todas pagarem).
+  if (await hasSalesBoletosTable()) {
+    const parcela = await acharParcelaPorCobranca(db, codigo, seuNumero);
+    if (parcela) return processarNotificacaoParcela(db, body, parcela, codigo, seuNumero);
   }
 
   // 2. Acha a venda (pelo codigo da cobranca gravado na emissao, senao pelo seuNumero)

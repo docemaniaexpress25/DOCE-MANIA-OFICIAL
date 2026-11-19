@@ -15,6 +15,8 @@ import { isIOSDevice, TEXTO_IMPRESSAO_IOS, TITULO_IMPRESSAO_IOS } from '@/lib/io
 import { imprimirHtmlViaUsb, imprimirViaUsb, lerCanalImpressao, salvarCanalImpressao, CanalImpressao } from '@/lib/usbPrint';
 import { saleService } from '@/services/saleService';
 import { notaService } from '@/services/notaService';
+// BLOCO 199 (boleto duplo — rota 5): grava a divisão dos 2 boletos na pronta entrega
+import { boletoService } from '@/services/boletoService';
 // BLOCO 131: cupom fiscal PERFEITO 80mm — dados do XML autorizado pela SEFAZ
 import { danfeFiscal80 } from '@/lib/danfe80';
 // BLOCO 158: canal USB imprime o layout de REFERENCIA do dono (HTML 80mm)
@@ -63,6 +65,10 @@ interface PDVProps {
    *  Quando o cadastro não tem CEP, o vendedor digita na tela 6 e o sistema
    *  GRAVA no cadastro do cliente (o BoletoCard puxa o CEP daí depois). */
   gravarCepCliente?: (clientId: string, cep: string) => Promise<boolean>;
+  /** BLOCO 199 (regra do dono, EXCLUSIVO ROTA 5 / Deivid): habilita o
+   *  interruptor "2 BOLETOS" na tela 6 — divide o valor da venda em dois
+   *  boletos que JUNTOS fecham o total (ex.: parte em 7 dias, restante em 14). */
+  boletoDuplo?: boolean;
 }
 
 // BLOCO 122 (fluxo de 8 telas do dono): CART=3 produtos · DOC=4 documento ·
@@ -92,7 +98,7 @@ const SwitchChip: React.FC<{ ligado: boolean; onClick: () => void; cor: 'violet'
   </button>
 );
 
-const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onCancel, onFinish, processSale, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, sales, onNavigateToCredit, categories, subcategories, modoVenda, processPreVenda, rota2, verProdutosTeste, modoAtendimento, nfcCpfInicial, onCompletarCadastro, gravarCepCliente }) => {
+const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onCancel, onFinish, processSale, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, sales, onNavigateToCredit, categories, subcategories, modoVenda, processPreVenda, rota2, verProdutosTeste, modoAtendimento, nfcCpfInicial, onCompletarCadastro, gravarCepCliente, boletoDuplo }) => {
   const [view, setView] = useState<PDVView>('CART');
   // ============================================================
   // BLOCO 122 (fluxo de 8 telas do dono) — ESTADOS DAS TELAS 3/4/5/6/8
@@ -130,6 +136,21 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const [vencimentoDoc, setVencimentoDoc] = useState<string>(() => {
     const d = new Date();
     d.setDate(d.getDate() + 7);
+    return d.toISOString().split('T')[0];
+  });
+  // BLOCO 199 (BOLETO DUPLICO — regra do dono, EXCLUSIVO rota 5 / Deivid):
+  // dividir a venda em DOIS boletos que JUNTOS fecham o valor (ex.: 1º em 7
+  // dias com parte do valor e o RESTANTE no 2º em 14 dias — ou dividir por 2).
+  // O vendedor digita o valor do 1º boleto — o 2º fecha automaticamente o que
+  // sobrou (impossível não fechar o total).
+  const [doisBoletosDoc, setDoisBoletosDoc] = useState(false);
+  const [b1ValorDoc, setB1ValorDoc] = useState('');
+  const [b1VencDoc, setB1VencDoc] = useState<string>(() => {
+    const d = new Date(); d.setDate(d.getDate() + 7);
+    return d.toISOString().split('T')[0];
+  });
+  const [b2VencDoc, setB2VencDoc] = useState<string>(() => {
+    const d = new Date(); d.setDate(d.getDate() + 14);
     return d.toISOString().split('T')[0];
   });
   // TELA 3 — busca de produto no carrinho (antes: girava abas caçando item)
@@ -819,6 +840,44 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const nfcCpfEfetivo = nfcQuerIdentificar === false ? '' : (nfcCpfDoc.trim()
     || (boletoCpfDoc && boletoDocDig.length === 11 && validaCpf(boletoDocDig) ? mascararCpf(boletoDocDig) : ''));
 
+  // ============================================================
+  // BLOCO 199 (BOLETO DUPLICO — rota 5): valores da divisão. O 2º boleto é
+  // SEMPRE o restante do total (impossível não fechar a venda); mínimo R$ 2,50
+  // em CADA um (regra da API do Inter).
+  // ============================================================
+  const b1Num = Math.round((parseFloat(b1ValorDoc) || 0) * 100) / 100;
+  const b2Num = Math.round((total - b1Num) * 100) / 100;
+  const boletos2Ok = b1Num >= 2.5 && b2Num >= 2.5;
+  const boletos2Ativo = !!boletoDuplo && condicaoDoc === 'APRAZO' && formaDoc === 'BOLETO' && doisBoletosDoc;
+  const formatoDiaBR = (iso: string) => (iso || '').split('-').reverse().join('/');
+  // CEP/CPF capturados na tela 6 vão GRAVADOS em cada parcela (a emissão do
+  // boleto depois resolve: digitado na tela > parcela > boleto_cpf > cadastro)
+  const boletos2Api = boletos2Ativo && boletos2Ok
+    ? [
+        { valor: b1Num, vencimento: b1VencDoc, doc: boletoDocDig, cep: cepBoletoDig },
+        { valor: b2Num, vencimento: b2VencDoc, doc: boletoDocDig, cep: cepBoletoDig },
+      ]
+    : undefined;
+  // Atalho do exemplo do dono: 1º boleto em 7 dias e o restante em 14 dias
+  const atalhoBoletos714 = () => {
+    const d1 = new Date(); d1.setDate(d1.getDate() + 7);
+    const d2 = new Date(); d2.setDate(d2.getDate() + 14);
+    setB1VencDoc(d1.toISOString().split('T')[0]);
+    setB2VencDoc(d2.toISOString().split('T')[0]);
+  };
+  // Ao LIGAR o interruptor: 1º vencimento herda o prazo combinado (tela 6) e
+  // o 2º fica 7 dias depois — o vendedor ajusta se quiser.
+  const alternarDoisBoletos = () => {
+    const proximo = !doisBoletosDoc;
+    setDoisBoletosDoc(proximo);
+    if (proximo) {
+      if (/^\d{4}-\d{2}-\d{2}$/.test(vencimentoDoc)) setB1VencDoc(vencimentoDoc);
+      const d2 = new Date(`${b1VencDoc}T12:00:00Z`);
+      d2.setDate(d2.getDate() + 7);
+      setB2VencDoc(d2.toISOString().split('T')[0]);
+    }
+  };
+
   const formaOk = (() => {
     if (!condicaoDoc || !formaDoc) return false;
     if (condicaoDoc === 'AVISTA') {
@@ -831,6 +890,9 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     // BLOCO 196: boleto a prazo EXIGE o CEP do pagador (cadastro ou digitado
     // na tela 6) — o Inter não gera boleto sem CEP.
     if (formaDoc === 'BOLETO' && !cepBoletoOk) return false;
+    // BLOCO 199 (rota 5): 2 boletos — cada um precisa de no mínimo R$ 2,50
+    // (o 2º é o restante automático do total) e as DUAS datas de vencimento.
+    if (formaDoc === 'BOLETO' && boletos2Ativo && (!boletos2Ok || !b1VencDoc || !b2VencDoc)) return false;
     return true;
   })();
 
@@ -970,8 +1032,11 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       metodoP = 'A_PRAZO';
       // BLOCO 60: a prazo = Boleto, Cheque (bom para), Pix na data, Dinheiro na data
       // BLOCO 187: o boleto carrega o CPF/CNPJ do pagador no detalhe (escritório enxerga)
+      // BLOCO 199 (rota 5): 2 boletos = detalhe mostra a divisão (valor e vencimento de cada)
       finalDetalhe = formaDoc === 'BOLETO'
-        ? `Boleto (pagador: ${mascararCpfCnpj(boletoDocDig)})`
+        ? (boletos2Api
+          ? `Boleto 2x (pagador: ${mascararCpfCnpj(boletoDocDig)}): R$ ${b1Num.toFixed(2)} em ${formatoDiaBR(b1VencDoc)} + R$ ${b2Num.toFixed(2)} em ${formatoDiaBR(b2VencDoc)}`
+          : `Boleto (pagador: ${mascararCpfCnpj(boletoDocDig)})`)
         : formaDoc === 'CHEQUE'
           ? `Cheque (bom para ${vencimentoDoc.split('-').reverse().join('/')})`
           : formaDoc === 'DINHEIRO_DATA'
@@ -1002,11 +1067,15 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       // BLOCO 187: CPF/CNPJ do pagador do boleto (grava sales.boleto_cpf — o
       // boleto do Inter nasce SEM pedir documento de novo)
       boletoCpf: condicaoDoc === 'APRAZO' && formaDoc === 'BOLETO' ? boletoDocDig : undefined,
+      // BLOCO 199 (rota 5): a divisão dos 2 boletos acompanha o payload —
+      // a pronta entrega grava depois que a venda existir (best-effort)
+      boletos2: boletos2Api,
     };
     salePayload.statusPagamento = condicaoDoc === 'AVISTA' ? 'PAGO' : 'PENDENTE';
     if (metodoP === 'A_PRAZO') {
       // meio-dia local: evita a data cair no dia anterior (meia-noite UTC em TZ -3)
-      salePayload.dataVencimento = new Date(`${vencimentoDoc}T12:00:00`);
+      // BLOCO 199: com 2 boletos o prazo da venda = 1º vencimento da divisão
+      salePayload.dataVencimento = new Date(`${boletos2Api ? b1VencDoc : vencimentoDoc}T12:00:00`);
     }
 
     setPendRegistro({
@@ -1032,7 +1101,9 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     const finalDetalhe = (condicaoDoc === 'AVISTA'
       ? `Entregador recebe ${formaApi === 'PIX' ? 'Pix' : 'dinheiro'} na entrega (A VISTA)`
       : formaDoc === 'BOLETO'
-        ? `Boleto (pagador: ${mascararCpfCnpj(boletoDocDig)})`
+        ? (boletos2Api
+          ? `Boleto 2x (pagador: ${mascararCpfCnpj(boletoDocDig)}): R$ ${b1Num.toFixed(2)} em ${formatoDiaBR(b1VencDoc)} + R$ ${b2Num.toFixed(2)} em ${formatoDiaBR(b2VencDoc)}`
+          : `Boleto (pagador: ${mascararCpfCnpj(boletoDocDig)})`)
         : formaDoc === 'CHEQUE'
           ? `Cheque (bom para ${vencimentoDoc.split('-').reverse().join('/')})`
           : formaDoc === 'DINHEIRO_DATA'
@@ -1046,12 +1117,16 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       metodoPagamento: formaApi as PaymentMethod,
       detalhePagamento: finalDetalhe,
       statusPagamento: 'PENDENTE',
-      dataVencimento: condicaoDoc === 'APRAZO' ? new Date(`${vencimentoDoc}T12:00:00`) : undefined,
+      // BLOCO 199: com 2 boletos o prazo do pedido = 1º vencimento da divisão
+      dataVencimento: condicaoDoc === 'APRAZO' ? new Date(`${boletos2Api ? b1VencDoc : vencimentoDoc}T12:00:00`) : undefined,
       itens,
       data: new Date(),
       // BLOCO 187: CPF/CNPJ do pagador do boleto — vai na pré-venda para o
       // boleto gerar sozinho na entrega/escritório
       boletoCpf: condicaoDoc === 'APRAZO' && formaDoc === 'BOLETO' ? boletoDocDig : undefined,
+      // BLOCO 199 (rota 5): os 2 boletos da divisão — a API da pré-venda grava
+      // e a emissão usa CADA um com o seu valor/vencimento
+      boletos2: boletos2Api,
     };
     setCupomConferencia(vendaConferenciaDe(previewPayload));
   };
@@ -1098,6 +1173,15 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     if (newSale) {
       lastFinishedSaleRef.current = newSale;
       setFinalizando(false);
+
+      // BLOCO 199 (boleto duplo — rota 5): grava a divisão dos 2 boletos na
+      // venda AGORA que ela existe. Falha (SQL 199 pendente) NÃO bloqueia —
+      // o card do prazo segue com o boleto único no cupom.
+      if (pend.payload.boletos2 && newSale.id) {
+        try {
+          await boletoService.criarParcelas(String(newSale.id), pend.payload.boletos2);
+        } catch { /* degrada para o boleto único de sempre */ }
+      }
 
       // Calcula comissao
       let comissaoTotal = 0;
@@ -1186,13 +1270,17 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     const r = await processPreVenda!({
       clientId: client.id, valorTotal: total, itens,
       formaPagamento: formaApi, condicao: condicaoDoc || 'AVISTA',
-      vencimento: condicaoDoc === 'APRAZO' ? vencimentoDoc : undefined,
+      // BLOCO 199: com 2 boletos o prazo gravado no pedido = 1º vencimento
+      vencimento: condicaoDoc === 'APRAZO' ? (boletos2Api ? b1VencDoc : vencimentoDoc) : undefined,
       trocas: trocasComObs,
       trocasValor: trocasValorNum || undefined,
       notaIntencao,
       nfcCpf: docEscolhido === 'NFCE' && nfcCpfEfetivo ? nfcCpfEfetivo : undefined,
       // BLOCO 187: CPF/CNPJ do pagador do boleto a prazo (gravado na venda)
       boletoCpf: condicaoDoc === 'APRAZO' && formaDoc === 'BOLETO' ? boletoDocDig : undefined,
+      // BLOCO 199 (rota 5): os 2 boletos da divisão — a API grava e a emissão
+      // usa CADA um com o seu valor/vencimento (juntos fecham o valor)
+      boletos2: boletos2Api,
       // BLOCO 29 (ROTA 2): modo do atendimento — baixa na coluna certa
       modo: rota2Ativo && modoAtivo ? modoAtivo : undefined,
     });
@@ -2141,6 +2229,74 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                 </div>
               )}
               {/* ============================================================
+                  BLOCO 199 (regra do dono, EXCLUSIVO ROTA 5 / Deivid): 2 BOLETOS
+                  — divide o valor da venda em DOIS boletos que JUNTOS fecham o
+                  total. Ex.: 1º em 7 dias com parte do valor e o RESTANTE no
+                  2º em 14 dias — ou DIVIDIR POR 2. O vendedor digita o valor do
+                  1º e o 2º fecha automaticamente o que sobrar. O mesmo
+                  CPF/CEP do pagador (abaixo) serve para os dois boletos.
+                  ============================================================ */}
+              {formaDoc === 'BOLETO' && (
+                <div className="bg-white rounded-3xl border border-violet-100 p-4 space-y-2.5">
+                  <button onClick={alternarDoisBoletos} aria-pressed={doisBoletosDoc}
+                    className="w-full flex items-center gap-2.5 active:scale-95 transition-transform">
+                    <span className={`w-11 h-6 rounded-full relative transition-colors shrink-0 ${doisBoletosDoc ? 'bg-violet-600' : 'bg-gray-300'}`}>
+                      <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all ${doisBoletosDoc ? 'left-[22px]' : 'left-0.5'}`}></span>
+                    </span>
+                    <span className="text-left flex-1 min-w-0">
+                      <span className="block text-[10px] font-black uppercase text-gray-700">2 boletos — o valor fecha dividido em dois</span>
+                      <span className="block text-[8px] font-bold text-gray-400 leading-snug">Ex.: 1º em 7 dias com parte do valor e o restante no 2º em 14 dias, ou dividir por 2. Exclusivo da rota 5.</span>
+                    </span>
+                  </button>
+                  {doisBoletosDoc && (
+                    <div className="space-y-2.5 bg-violet-50/60 rounded-2xl p-3">
+                      <div className="grid grid-cols-2 gap-2">
+                        <label className="block">
+                          <span className="text-[8px] font-black uppercase text-gray-500">Boleto 1 — valor (R$)</span>
+                          <input type="number" step="0.01" min="2.5" inputMode="decimal" value={b1ValorDoc}
+                            onChange={e => setB1ValorDoc(e.target.value)} placeholder="0.00" aria-label="Valor do primeiro boleto"
+                            className="w-full p-3 bg-white border-2 border-gray-100 rounded-xl text-sm font-black text-center outline-none focus:ring-2 focus:ring-violet-100" />
+                        </label>
+                        <div>
+                          <span className="text-[8px] font-black uppercase text-gray-500">Boleto 2 — restante (automático)</span>
+                          <div className="w-full p-3 bg-white border-2 border-gray-100 rounded-xl text-sm font-black text-center text-violet-700" aria-label="Valor do segundo boleto">R$ {b2Num.toFixed(2)}</div>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button onClick={() => setB1ValorDoc((Math.floor((total / 2) * 100) / 100).toFixed(2))}
+                          className="py-2.5 rounded-xl text-[9px] font-black uppercase bg-white border-2 border-violet-200 text-violet-600 active:scale-95">
+                          <i className="fa-solid fa-divide mr-1"></i>Dividir por 2
+                        </button>
+                        <button onClick={atalhoBoletos714}
+                          className="py-2.5 rounded-xl text-[9px] font-black uppercase bg-white border-2 border-violet-200 text-violet-600 active:scale-95">
+                          <i className="fa-solid fa-calendar-days mr-1"></i>7D + 14D
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <label className="block">
+                          <span className="text-[8px] font-black uppercase text-gray-500">Boleto 1 — vencimento</span>
+                          <input type="date" value={b1VencDoc} onChange={e => setB1VencDoc(e.target.value)} aria-label="Vencimento do primeiro boleto"
+                            className="w-full p-3 bg-white border border-gray-100 rounded-xl text-xs font-black text-center outline-none focus:ring-2 focus:ring-violet-100" />
+                        </label>
+                        <label className="block">
+                          <span className="text-[8px] font-black uppercase text-gray-500">Boleto 2 — vencimento</span>
+                          <input type="date" value={b2VencDoc} onChange={e => setB2VencDoc(e.target.value)} aria-label="Vencimento do segundo boleto"
+                            className="w-full p-3 bg-white border border-gray-100 rounded-xl text-xs font-black text-center outline-none focus:ring-2 focus:ring-violet-100" />
+                        </label>
+                      </div>
+                      <p className="text-[8px] font-black text-violet-600 uppercase text-center leading-snug">
+                        R$ {b1Num.toFixed(2)} vence {formatoDiaBR(b1VencDoc)} + R$ {b2Num.toFixed(2)} vence {formatoDiaBR(b2VencDoc)} = R$ {total.toFixed(2)}
+                      </p>
+                      {!boletos2Ok && (
+                        <p className="text-[8px] font-black text-rose-600 uppercase text-center leading-snug">
+                          <i className="fa-solid fa-triangle-exclamation mr-1"></i>Cada boleto precisa de no mínimo R$ 2,50 — ajuste o valor do 1º (o 2º fecha o restante).
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+              {/* ============================================================
                   BLOCO 196 (regra do dono): o boleto do Inter EXIGE o CEP do
                   pagador — "para gerar o boleto precisamos obrigatoriamente o
                   cep também". Se o cadastro não tem, o vendedor DIGITA aqui e
@@ -2492,7 +2648,12 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
           {sucessoData.isPrazo && sucessoData.formaAtraso !== 'CHEQUE' && (
             <div className="bg-amber-50 border border-amber-100 rounded-2xl p-3">
               <p className="text-[9px] font-black text-amber-700 uppercase leading-snug">
-                <i className="fa-solid fa-barcode mr-1"></i>Boleto do prazo — gere agora ou depois (no cupom da venda). O vencimento vem preenchido com a data combinada{vencVendaBR ? ` (${vencVendaBR})` : ''}.
+                <i className="fa-solid fa-barcode mr-1"></i>
+                {/* BLOCO 199: com a divisão em 2 boletos o aviso mostra os DOIS
+                    (o card abaixo já nasce com os dois boletos da divisão) */}
+                {doisBoletosDoc
+                  ? `Boleto em 2x — o card abaixo gera os DOIS boletos que juntos fecham a venda.`
+                  : `Boleto do prazo — gere agora ou depois (no cupom da venda). O vencimento vem preenchido com a data combinada${vencVendaBR ? ` (${vencVendaBR})` : ''}.`}
               </p>
             </div>
           )}

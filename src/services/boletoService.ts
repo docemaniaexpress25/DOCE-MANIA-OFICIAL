@@ -40,6 +40,23 @@ export interface BoletoConfigInfo {
   beneficiarioDoc?: string;
 }
 
+/** BLOCO 199 (BOLETO DUPLICO — rota 5): uma PARCELA = uma cobrança no Inter.
+ *  As parcelas JUNTAS fecham o valor da venda (ex.: 1º em 7 dias com parte do
+ *  valor, o restante no 2º em 14 dias — ou dividir por 2). */
+export interface BoletoParcelaInfo {
+  id: string;
+  seq: number;                 // 1 ou 2 (ordem do boleto na divisão)
+  valor: number;
+  vencimento: string;          // YYYY-MM-DD
+  status: string;              // mesmos status do boleto único
+  codigo?: string;
+  seuNumero?: string;
+  linhaDigitavel?: string;
+  codigoBarras?: string;
+  pixCopiaECola?: string;
+  erro?: string;
+}
+
 export interface GerarBoletoParams {
   vencimento: string;        // YYYY-MM-DD
   valor?: number | string;
@@ -56,7 +73,7 @@ export interface InterStatusInfo {
 
 export const boletoService = {
   /** Estado atual do boleto da venda (leitura barata). */
-  async status(saleId: string): Promise<{ ok: boolean; boleto?: BoletoInfo; inter?: InterStatusInfo; nota?: NotaDaVendaInfo; config?: BoletoConfigInfo; erro?: string }> {
+  async status(saleId: string): Promise<{ ok: boolean; boleto?: BoletoInfo; parcelas?: BoletoParcelaInfo[]; inter?: InterStatusInfo; nota?: NotaDaVendaInfo; config?: BoletoConfigInfo; erro?: string }> {
     try {
       const res = await fetch(`/api/boletos?saleId=${encodeURIComponent(saleId)}`, {
         method: 'GET',
@@ -64,7 +81,7 @@ export const boletoService = {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}` };
-      return { ok: true, boleto: data.boleto, inter: data.inter, nota: data.nota, config: data.config };
+      return { ok: true, boleto: data.boleto, parcelas: data.parcelas, inter: data.inter, nota: data.nota, config: data.config };
     } catch (e: unknown) {
       return { ok: false, erro: e instanceof Error ? e.message : 'Falha de conexao' };
     }
@@ -138,6 +155,98 @@ export const boletoService = {
       return { ok: true, boleto: data.boleto };
     } catch (e: unknown) {
       return { ok: false, erro: e instanceof Error ? e.message : 'Falha de conexao' };
+    }
+  },
+
+  // =====================================================================
+  // BLOCO 199 — BOLETO DUPLICO (regra do dono, EXCLUSIVO rota 5 / Deivid):
+  // dois boletos que JUNTOS fecham o valor da venda.
+  // =====================================================================
+
+  /** Grava a divisão (2 boletos com SEU valor e SEU vencimento). */
+  async criarParcelas(saleId: string, boletos: Array<{ valor: number; vencimento: string; doc?: string; cep?: string }>): Promise<{ ok: boolean; parcelas?: BoletoParcelaInfo[]; erro?: string }> {
+    try {
+      const res = await fetch('/api/boletos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ acao: 'CRIAR_PARCELAS', saleId, boletos }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}` };
+      return { ok: true, parcelas: data.parcelas };
+    } catch (e: unknown) {
+      return { ok: false, erro: e instanceof Error ? e.message : 'Falha de conexao' };
+    }
+  },
+
+  /** Gera UMA parcela no Inter (boleto do seq escolhido). */
+  async gerarParcela(saleId: string, parcelaId: string, p: { docManual?: string; cepManual?: string; atrelarNFe?: boolean }): Promise<{ ok: boolean; jaGerado?: boolean; parcela?: BoletoParcelaInfo; erro?: string }> {
+    try {
+      const res = await fetch('/api/boletos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ acao: 'EMITIR', saleId, parcelaId, ...p }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}`, parcela: data.parcela };
+      return { ok: true, jaGerado: data.jaGerado, parcela: data.parcela };
+    } catch (e: unknown) {
+      return { ok: false, erro: e instanceof Error ? e.message : 'Falha de conexao' };
+    }
+  },
+
+  /** Gera TODAS as parcelas abertas de uma vez (os dois boletos juntos). */
+  async emitirTodasParcelas(saleId: string, p: { docManual?: string; cepManual?: string; atrelarNFe?: boolean } = {}): Promise<{ ok: boolean; resultados?: Array<{ seq: number; ok: boolean; erro?: string; parcela?: BoletoParcelaInfo }>; erro?: string }> {
+    try {
+      const res = await fetch('/api/boletos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ acao: 'EMITIR_TODAS', saleId, ...p }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}` };
+      return { ok: true, resultados: data.resultados || [] };
+    } catch (e: unknown) {
+      return { ok: false, erro: e instanceof Error ? e.message : 'Falha de conexao' };
+    }
+  },
+
+  /** Reconsulta UMA parcela no Inter (emissao assincrona / pagamento). */
+  async consultarParcela(saleId: string, parcelaId: string): Promise<{ ok: boolean; parcela?: BoletoParcelaInfo; erro?: string }> {
+    try {
+      const res = await fetch('/api/boletos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ acao: 'CONSULTAR', saleId, parcelaId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}`, parcela: data.parcela };
+      return { ok: true, parcela: data.parcela };
+    } catch (e: unknown) {
+      return { ok: false, erro: e instanceof Error ? e.message : 'Falha de conexao' };
+    }
+  },
+
+  /** Abre o PDF do Inter de UMA parcela (blob base64). */
+  async abrirPdfParcela(saleId: string, parcelaId: string): Promise<{ ok: boolean; erro?: string }> {
+    try {
+      const res = await fetch('/api/boletos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ acao: 'PDF', saleId, parcelaId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.pdfBase64) return { ok: false, erro: data.erro || `Erro ${res.status}` };
+      const bin = atob(data.pdfBase64 as string);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const blob = new Blob([bytes], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank');
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      return { ok: true };
+    } catch (e: unknown) {
+      return { ok: false, erro: e instanceof Error ? e.message : 'Falha ao abrir o PDF' };
     }
   },
 };

@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServiceClient } from '@/lib/serverSupabase';
 import { sessionFromRequest } from '@/lib/session';
-import { hasBoletoColumns } from '@/lib/serverSchema';
+import { hasBoletoColumns, hasSalesBoletosTable } from '@/lib/serverSchema';
 import { isInterConfigured, recuperarCobranca, interpretarCobranca } from '@/lib/interBoleto';
+// BLOCO 199: varredura/baixa das PARCELAS do boleto duplo (rota 5)
+import { espelharParcelaInter, baixarParcelaPaga, type ParcelaRow } from '@/lib/baixaBoleto';
 
 /**
  * BLOCO 145 — SINCRONIZACAO AUTOMATICA DE BOLETOS (cron da Vercel).
@@ -170,5 +172,66 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // BLOCO 199: segunda varredura — PARCELAS do boleto duplo (rota 5).
+  // Degradacao graciosa: tabela ausente (SQL 199 pendente) não afeta o sync
+  // das vendas acima.
+  if (await hasSalesBoletosTable()) {
+    const sinc = await sincronizarParcelas(db);
+    processadas += sinc.processadas;
+    baixadas += sinc.baixadas;
+    if (sinc.falhas > 0) falhas.push({ id: 'parcelas', erro: `${sinc.falhas} falha(s) no sync das parcelas` });
+  }
+
   return NextResponse.json({ ok: true, processadas, baixadas, falhas: falhas.length ? falhas : undefined });
+}
+
+/**
+ * BLOCO 199 — SINCRONIZACAO DAS PARCELAS (boleto duplo do Deivid/R5).
+ * Mesma rede de segurança do boleto único, aplicada às cobranças da tabela
+ * sales_boletos: reconsulta o Inter, espelha status, marca ATRASADO por
+ * vencimento e baixa a parcela paga (a venda fecha quando TODAS pagarem).
+ */
+async function sincronizarParcelas(db: ReturnType<typeof getServiceClient>): Promise<{ processadas: number; baixadas: number; falhas: number }> {
+  const LIMITE_PARCELAS = 15;
+  const hojeSp = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  let processadas = 0;
+  let baixadas = 0;
+  let falhas = 0;
+
+  const { data: abertas, error } = await db
+    .from('sales_boletos')
+    .select('id, sale_id, seq, valor, vencimento, status, codigo, seu_numero, linha, barras, pix, erro')
+    .in('status', ['EM_PROCESSAMENTO', 'A_RECEBER', 'ATRASADO'])
+    .order('vencimento', { ascending: true })
+    .limit(LIMITE_PARCELAS);
+  if (error) {
+    console.warn('[boletos-sync] leitura das parcelas falhou:', error.message);
+    return { processadas: 0, baixadas: 0, falhas: 1 };
+  }
+  for (const p of (abertas || []) as unknown as ParcelaRow[]) {
+    if (!p.codigo) continue;
+    try {
+      const r = await recuperarCobranca(p.codigo);
+      if (!r.ok || !r.data || 'erro' in r.data) {
+        falhas++;
+        await logCronEvento(db, { codigo: p.codigo, seuNumero: p.seu_numero || '', saleId: p.sale_id, resultado: `CRON parcela ${p.seq} — falha re-consultando ${p.codigo.slice(0, 18)}`, processado: false });
+        continue;
+      }
+      const cob = interpretarCobranca(r.data as Record<string, unknown>);
+      processadas++;
+      await espelharParcelaInter(db, p, cob, hojeSp);
+      const pagoInter = cob.status === 'RECEBIDO' || cob.status === 'MARCADO_RECEBIDO' || (cob.valorRecebido !== null && cob.valorRecebido > 0);
+      if (pagoInter) {
+        const baixou = await baixarParcelaPaga(db, p, 'CRON_INTER');
+        if (baixou) baixadas++;
+        await logCronEvento(db, { codigo: p.codigo, seuNumero: p.seu_numero || '', saleId: p.sale_id, resultado: `PARCELA ${p.seq} PAGA (via sync) — baixa automatica R$ ${Number(p.valor).toFixed(2)}`, processado: true });
+      } else {
+        await logCronEvento(db, { codigo: p.codigo, seuNumero: p.seu_numero || '', saleId: p.sale_id, resultado: `CRON parcela ${p.seq} — STATUS ${cob.status}`, processado: true });
+      }
+    } catch (e: unknown) {
+      falhas++;
+      console.warn('[boletos-sync] parcela', p.seq, 'falhou:', (e as Error).message);
+    }
+  }
+  return { processadas, baixadas, falhas };
 }

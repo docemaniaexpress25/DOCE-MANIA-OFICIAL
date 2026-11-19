@@ -144,6 +144,16 @@ const podeVerFinanceiro = (u: any): boolean => !!u && !isDavidVendedor(u);
 const podeVerCaixa = (u: any): boolean =>
   !!u && String(u.role || '').toUpperCase() === 'VENDEDOR' && isDavidVendedor(u);
 
+// BLOCO 199 — BOLETO DUPLICO (regra do dono): o interruptor "2 BOLETOS" no PDV
+// (tela 6) existe SOMENTE para o vendedor da ROTA 5 (Deivid/David). Casamento
+// duplo: pela ROTA gravada (ROTA_05 — à prova de troca de dispositivo) E pelo
+// id/nome do vendedor (à prova de re-rotação ou renome — mesmo padrão do caixa).
+const podeBoletoDuplo = (u: any): boolean =>
+  !!u && (
+    String(u.rota || '').toUpperCase() === 'ROTA_05' ||
+    (String(u.role || '').toUpperCase() === 'VENDEDOR' && isDavidVendedor(u))
+  );
+
 // Helpers para comprovante
 const compressImage = (file: File): Promise<string> => new Promise((resolve) => {
   const reader = new FileReader();
@@ -1395,6 +1405,9 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         // BLOCO 196 (regra do dono): CEP digitado na tela 6 grava NO CADASTRO
         // do cliente (fetchCoreData recarrega — o boleto puxa o CEP sozinho)
         gravarCepCliente={(clientId, cep) => updateClient(clientId, { enderecoCep: cep })}
+        // BLOCO 199 (regra do dono): o interruptor "2 BOLETOS" (tela 6) é
+        // EXCLUSIVO do Deivid — rota 5. Demais vendedores nem veem.
+        boletoDuplo={podeBoletoDuplo(user)}
         sales={sales} 
         onNavigateToCredit={handleNavigateToCredit}
         categories={categories}

@@ -339,6 +339,21 @@ export function seuNumeroBoleto(saleId: string, anterior?: string): string {
   return `${base.slice(0, 12)}-r${n}`.slice(0, 15);
 }
 
+/**
+ * BLOCO 199 (BOLETO DUPLICO — rota 5): seuNumero único POR PARCELA (<=15 chars).
+ * Base = DM + 8 chars da venda; parcela entra como -P<seq>; reemissão acumula
+ * r2, r3... Ex.: DMBB1E53EE-P1 / DMBB1E53EE-P1r2 (15 chars no limite).
+ * O webhook casa a baixa por codigo e, no fallback, por este seu_numero
+ * gravado inteiro na sales_boletos (sem truncar).
+ */
+export function seuNumeroParcela(saleId: string, seq: number, anterior?: string): string {
+  const base = `DM${saleId.replace(/-/g, '').slice(0, 8)}`.toUpperCase();
+  if (!anterior) return `${base}-P${seq}`.slice(0, 15);
+  const m = anterior.match(/-r(\d+)$/);
+  const n = m ? Number(m[1]) + 1 : 2;
+  return `${base}-P${seq}r${n}`.slice(0, 15);
+}
+
 /** Data de hoje em SP como YYYY-MM-DD (para dataEmissao da notaFiscal). */
 export function hojeSp(): string {
   return new Intl.DateTimeFormat('en-CA', {

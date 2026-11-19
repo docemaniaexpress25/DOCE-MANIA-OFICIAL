@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
-import { boletoService, BoletoInfo, BoletoConfigInfo, NotaDaVendaInfo } from '@/services/boletoService';
+import { boletoService, BoletoInfo, BoletoParcelaInfo, BoletoConfigInfo, NotaDaVendaInfo } from '@/services/boletoService';
 import { validaCpfCnpj } from '@/lib/validaDoc';
 // BLOCO 177: MINI BOLETO imprime DIRETO (sem preview) nos DOIS canais:
 // USB do PC e Bluetooth = MESMO papel HTML 80mm (miniBoleto80Html; no BT o
@@ -52,6 +52,16 @@ import { imprimirHtmlViaUsb, temBluetoothNavegador } from '@/lib/usbPrint';
  *    boleto) e a linha "ATRELADO A NF-e nº X" quando a venda tem NF-e (modelo
  *    55) autorizada — boleto NÃO atrela NFC-e.
  *  - Checkbox "Atrelar" só aparece quando a nota é NF-e (não mais NFC-e).
+ *
+ * BLOCO 199 — BOLETO DUPLICO (regra do dono, EXCLUSIVO rota 5 / Deivid):
+ *  - Quando a venda tem PARCELAS (2 boletos que juntos fecham o valor — ex.:
+ *    1º em 7 dias com parte do valor e o restante no 2º em 14 dias, ou
+ *    dividido por 2), o card renderiza a LISTA dos dois boletos: um mini-card
+ *    por boleto com SEU valor, SEU vencimento, SEU status, SEU PDF/WhatsApp/
+ *    mini boleto e botão GERAR individual — mais o botão "Gerar os 2 boletos".
+ *  - Baixa automática por parcela (webhook/cron): a venda fecha PAGO quando
+ *    TODAS pagarem.
+ *  - Sem parcelas: o card segue EXATAMENTE como antes (boleto único).
  */
 
 interface BoletoCardProps {
@@ -90,11 +100,28 @@ const dataBR = (iso?: string) => {
   return `${d}/${m}/${a}`;
 };
 
+/** BLOCO 199: texto curto do status da parcela (badge individual). */
+const badgeParcelaTxt = (p: BoletoParcelaInfo): string => {
+  switch (p.status) {
+    case 'A_RECEBER': return `A RECEBER — venc. ${dataBR(p.vencimento)}`;
+    case 'RECEBIDO': case 'MARCADO_RECEBIDO': return 'PAGO';
+    case 'EM_PROCESSAMENTO': return 'Gerando no Inter...';
+    case 'ATRASADO': return `ATRASADO — venc. ${dataBR(p.vencimento)}`;
+    case 'PROTESTO': return 'Em protesto';
+    case 'CANCELADO': case 'EXPIRADO': return 'Cancelado';
+    case 'FALHA_EMISSAO': return 'Falha — tente de novo';
+    default: return 'Não gerado';
+  }
+};
+
 const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, notaStatus, notaNumero, notaTipo, clienteDoc, clienteCep, clienteTelefone, clienteNome, showToast, abertoInicial, onStatusChange, vencimentoVenda }) => {
   const [boleto, setBoleto] = useState<BoletoInfo | null>(null);
+  // BLOCO 199: parcelas do boleto duplo (vazio = fluxo de boleto único)
+  const [parcelas, setParcelas] = useState<BoletoParcelaInfo[]>([]);
   const [indisponivel, setIndisponivel] = useState(false);
   const [inter, setInter] = useState<InterStatus | null>(null); // BLOCO 85: env do Inter visivel
   const [busy, setBusy] = useState(false);
+  const [busyParcela, setBusyParcela] = useState<string>(''); // id da parcela em operação
   const [form, setForm] = useState(false);
   // BLOCO 67: card DOBRAVEL — a linha de status e sempre visivel (1 linha),
   // os botoes/form ficam atras do toque. Nao empurra mais o cupom pra fora.
@@ -120,10 +147,11 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
       if (!vivo) return;
       if (!r.ok) { setIndisponivel(true); return; } // SQL/Inter nao configurado: esconde a secao
       setBoleto(r.boleto || null);
+      setParcelas(r.parcelas || []);
       setInter(r.inter || null);
       setNotaApi(r.nota || null);
       setCfgApi(r.config || null);
-      if (r.boleto?.status === 'NAO_GERADO') {
+      if (r.boleto?.status === 'NAO_GERADO' && !(r.parcelas && r.parcelas.length > 0)) {
         // BLOCO 153: prazo correto = vencimento COMBINADO na venda (tela 6 do
         // PDV — sales.data_vencimento); sem prazo gravado, mantém o padrão +7d
         const iso = vencimentoVenda && /^\d{4}-\d{2}-\d{2}/.test(vencimentoVenda) ? vencimentoVenda.slice(0, 10) : null;
@@ -140,13 +168,189 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
     return () => { vivo = false; };
   }, [saleId, vencimentoVenda]);
 
+  // ===================== BLOCO 199: handlers das parcelas =====================
+  /** Refresca a lista da API (usada após cada operação). */
+  const refrescarParcelas = async () => {
+    const r = await boletoService.status(saleId);
+    if (r.ok && r.parcelas) setParcelas(r.parcelas);
+    if (r.ok && r.boleto) setBoleto(r.boleto);
+  };
+
+  /** Doc/CEP finais: digitado no card > cadastro (mesma regra do boleto único). */
+  const docFinal = doc.replace(/\D/g, '') || (clienteDoc || '').replace(/\D/g, '');
+  const cepFinal = cep.replace(/\D/g, '') || (clienteCep || '').replace(/\D/g, '');
+
+  const validarDocCepParcela = (): boolean => {
+    if (inter && !inter.configurado) {
+      setErroLocal('Boleto temporariamente indisponível: as credenciais do Inter não estão configuradas no servidor (env da Vercel). Avise o admin para definir INTER_CLIENT_ID, INTER_CLIENT_SECRET e o certificado.');
+      showToast?.('Inter não configurado no servidor (env Vercel).', 'error');
+      return false;
+    }
+    if (!docFinal) {
+      setErroLocal('Informe o CPF/CNPJ do pagador.');
+      showToast?.('Informe o CPF/CNPJ do pagador.', 'error');
+      return false;
+    }
+    if (!validaCpfCnpj(docFinal)) {
+      setErroLocal('CPF/CNPJ inválido — confira os números (CPF tem 11 dígitos, CNPJ tem 14).');
+      showToast?.('CPF/CNPJ do pagador inválido.', 'error');
+      return false;
+    }
+    if (cepFinal.length !== 8) {
+      setErroLocal('O boleto do Inter precisa do CEP do pagador (8 dígitos). Informe abaixo ou complete no cadastro do cliente.');
+      showToast?.('Informe o CEP do pagador (8 dígitos).', 'error');
+      return false;
+    }
+    return true;
+  };
+
+  /** Gera TODAS as parcelas abertas de uma vez (os 2 boletos juntos). */
+  const handleEmitirTodas = async () => {
+    if (busy || !saleId) return;
+    if (!validarDocCepParcela()) return;
+    setErroLocal('');
+    setBusy(true);
+    const r = await boletoService.emitirTodasParcelas(saleId, { docManual: doc || undefined, cepManual: cep || undefined });
+    setBusy(false);
+    await refrescarParcelas();
+    const falhas = (r.resultados || []).filter(x => !x.ok);
+    if (falhas.length > 0) {
+      showToast?.(`Boleto ${falhas[0].seq} falhou: ${falhas[0].erro || 'erro no Inter'}`, 'error');
+      setErroLocal(`Boleto ${falhas[0].seq}: ${falhas[0].erro || 'falha na emissão'}`);
+    } else if ((r.resultados || []).length > 0) {
+      showToast?.(`${(r.resultados || []).length} boleto(s) gerado(s)! O Inter pode demorar alguns segundos para liberar a linha digitável.`, 'success');
+      // Emissão é assíncrona — reconsulta para pegar linha digitável
+      setTimeout(() => { void refrescarParcelas(); }, 4000);
+    }
+  };
+
+  /** Gera UMA parcela (botão individual do boleto). */
+  const handleGerarParcela = async (p: BoletoParcelaInfo) => {
+    if (busyParcela || !saleId) return;
+    if (!validarDocCepParcela()) return;
+    setErroLocal('');
+    setBusyParcela(p.id);
+    const r = await boletoService.gerarParcela(saleId, p.id, { docManual: doc || undefined, cepManual: cep || undefined });
+    setBusyParcela('');
+    if (!r.ok && !r.parcela) {
+      setErroLocal(r.erro || 'Falha ao gerar o boleto.');
+      showToast?.(r.erro || 'Falha ao gerar o boleto.', 'error');
+      return;
+    }
+    await refrescarParcelas();
+    if (r.jaGerado) { showToast?.(`Boleto ${p.seq} já está gerado.`, 'success'); return; }
+    if (r.parcela?.status === 'EM_PROCESSAMENTO') {
+      showToast?.(`Boleto ${p.seq} gerado! O Inter está processando...`, 'success');
+      setTimeout(() => { void refrescarParcelas(); }, 4000);
+    } else {
+      showToast?.(`Boleto ${p.seq} gerado!`, 'success');
+    }
+  };
+
+  const handleConsultarParcela = async (p: BoletoParcelaInfo) => {
+    if (busyParcela || !saleId) return;
+    setBusyParcela(p.id);
+    const r = await boletoService.consultarParcela(saleId, p.id);
+    setBusyParcela('');
+    if (!r.ok && !r.parcela) { showToast?.(r.erro || 'Falha ao consultar.', 'error'); return; }
+    await refrescarParcelas();
+  };
+
+  const handlePdfParcela = async (p: BoletoParcelaInfo) => {
+    if (busyParcela || !saleId) return;
+    setBusyParcela(p.id);
+    const r = await boletoService.abrirPdfParcela(saleId, p.id);
+    setBusyParcela('');
+    if (!r.ok && r.erro) showToast?.(r.erro, 'error');
+  };
+
+  const handleWhatsParcela = (p: BoletoParcelaInfo) => {
+    const linhas = [
+      `*BOLETO ${p.seq} DE ${parcelas.length} — DOCE MANIA*`,
+      p.valor ? `Valor: R$ ${Number(p.valor).toFixed(2)}` : '',
+      p.vencimento ? `Vencimento: ${dataBR(p.vencimento)}` : '',
+      p.linhaDigitavel ? `Linha digitavel:\n${p.linhaDigitavel}` : '',
+      p.pixCopiaECola ? `PIX (copia e cola):\n${p.pixCopiaECola}` : '',
+    ].filter(Boolean).join('\n\n');
+    const phone = (clienteTelefone || '').replace(/\D/g, '');
+    window.open(`https://wa.me/55${phone}?text=${encodeURIComponent(linhas)}`, '_blank');
+  };
+
+  /** Mini boleto 80mm por parcela (mesmos canais BT/USB do boleto único). */
+  const imprimirMiniParcela = async (canal: 'bt' | 'usb', p: BoletoParcelaInfo) => {
+    if (ocupadoMini) return;
+    setOcupadoMini(canal);
+    try {
+      const dados: MiniBoletoDados = {
+        beneficiarioNome: cfgApi?.beneficiarioNome,
+        beneficiarioDoc: cfgApi?.beneficiarioDoc,
+        pagadorNome: clienteNome,
+        pagadorDoc: clienteDoc,
+        valor: p.valor,
+        vencimento: p.vencimento,
+        status: p.status,
+        linhaDigitavel: p.linhaDigitavel,
+        codigoBarras: p.codigoBarras,
+        pixCopiaECola: p.pixCopiaECola,
+        vendaRef: `${saleId.slice(0, 8).toUpperCase()}-P${p.seq}`,
+        seuNumero: p.seuNumero,
+        mensagemPadrao: cfgApi?.mensagemPadrao,
+      };
+      if (canal === 'usb') {
+        const html = await miniBoleto80Html(dados);
+        imprimirHtmlViaUsb(html, (m) => showToast?.(`Falha na janela USB: ${m}`, 'error'));
+        showToast?.('Janela de impressão aberta — escolha a térmica USB.', 'success');
+        return;
+      }
+      const ok = await imprimirHtmlViaBt(
+        () => miniBoleto80Html(dados, { raster: true }),
+        () => comprovanteBoletoTexto({
+          empresaNome: dados.beneficiarioNome || 'DOCE MANIA',
+          empresaDoc: dados.beneficiarioDoc,
+          vendaRef: dados.vendaRef,
+          seuNumero: dados.seuNumero,
+          pagadorNome: dados.pagadorNome,
+          pagadorDoc: dados.pagadorDoc,
+          valor: dados.valor,
+          vencimento: dados.vencimento,
+          status: dados.status,
+          linhaDigitavel: dados.linhaDigitavel,
+          codigoBarras: dados.codigoBarras,
+          pixCopiaECola: dados.pixCopiaECola,
+          mensagemPadrao: dados.mensagemPadrao,
+        }),
+      );
+      if (ok) showToast?.('Mini Boleto enviado à impressora Bluetooth!', 'success');
+      else showToast?.('Impressão não realizada — conecte a impressora.', 'error');
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      showToast?.(msg === 'BLUETOOTH_NAO_SUPORTADO'
+        ? 'Bluetooth indisponível aqui — use o botão USB do PC.'
+        : `Erro: ${msg}`, 'error');
+    } finally {
+      setOcupadoMini('');
+    }
+  };
+
   // BLOCO 123: reporta o status do boleto ao pai (gate fiscal da pronta
   // entrega a prazo). Card indisponível (Inter sem credenciais) reporta
   // 'INDISPONIVEL' — o pai decide o que fazer (não bloqueia o impossível).
+  // BLOCO 199: no modo parcelado o status AGREGADO conta as parcelas.
+  const statusAgregado = useMemo(() => {
+    if (parcelas.length > 0) {
+      const todasPagas = parcelas.every(p => p.status === 'RECEBIDO' || p.status === 'MARCADO_RECEBIDO');
+      if (todasPagas) return 'RECEBIDO';
+      const temAberta = parcelas.some(p => ['A_RECEBER', 'ATRASADO', 'EM_PROCESSAMENTO'].includes(p.status));
+      if (temAberta) return 'A_RECEBER';
+      return 'NAO_GERADO';
+    }
+    return boleto?.status || 'NAO_GERADO';
+  }, [parcelas, boleto?.status]);
+
   useEffect(() => {
     if (!onStatusChange) return;
-    onStatusChange(indisponivel ? 'INDISPONIVEL' : (boleto?.status || 'NAO_GERADO'));
-  }, [boleto?.status, indisponivel, onStatusChange]);
+    onStatusChange(indisponivel ? 'INDISPONIVEL' : statusAgregado);
+  }, [statusAgregado, indisponivel, onStatusChange]);
 
   const handleGerar = async () => {
     if (busy || !saleId) return;
@@ -158,7 +362,6 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
     }
     setErroLocal('');
     // Validacao local (evita a mensagem generica do Inter e poupa a chamada):
-    const docFinal = doc.replace(/\D/g, '') || (clienteDoc || '').replace(/\D/g, '');
     if (!docFinal) {
       setErroLocal('Informe o CPF/CNPJ do pagador.');
       showToast?.('Informe o CPF/CNPJ do pagador.', 'error');
@@ -169,7 +372,6 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
       showToast?.('CPF/CNPJ do pagador inválido.', 'error');
       return;
     }
-    const cepFinal = cep.replace(/\D/g, '') || (clienteCep || '').replace(/\D/g, '');
     if (cepFinal.length !== 8) {
       setErroLocal('O boleto do Inter precisa do CEP do pagador (8 dígitos). Informe abaixo ou complete no cadastro do cliente.');
       showToast?.('Informe o CEP do pagador (8 dígitos).', 'error');
@@ -276,6 +478,26 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
     }
   };
 
+  // ===================================================================
+  // BLOCO 199: badge AGREGADO do modo parcelado (a venda fecha quando as
+  // duas parcelas pagarem — cada uma com o seu status).
+  // ===================================================================
+  const badgeParcelado = (): { cls: string; icon: string; txt: string } => {
+    const pagas = parcelas.filter(p => p.status === 'RECEBIDO' || p.status === 'MARCADO_RECEBIDO').length;
+    const todas = parcelas.length;
+    const soma = parcelas.reduce((acc, p) => acc + (Number(p.valor) || 0), 0);
+    if (pagas === todas) return { cls: 'bg-emerald-50 text-emerald-700 border-emerald-200', icon: 'fa-circle-check', txt: `BOLETO DUPLICO — PAGO (${pagas}/${todas}) — R$ ${soma.toFixed(2)}` };
+    if (pagas > 0) return { cls: 'bg-emerald-50 text-emerald-700 border-emerald-200', icon: 'fa-circle-half-stroke', txt: `BOLETO DUPLICO — ${pagas}/${todas} pago(s)` };
+    if (parcelas.some(p => p.status === 'EM_PROCESSAMENTO')) return { cls: 'bg-amber-50 text-amber-700 border-amber-200', icon: 'fa-hourglass-half', txt: 'Gerando os boletos no Inter...' };
+    if (parcelas.some(p => ['A_RECEBER', 'ATRASADO'].includes(p.status))) {
+      const atrasada = parcelas.some(p => p.status === 'ATRASADO');
+      return atrasada
+        ? { cls: 'bg-rose-50 text-rose-700 border-rose-200', icon: 'fa-triangle-exclamation', txt: 'BOLETO DUPLICO — há boleto atrasado' }
+        : { cls: 'bg-emerald-50 text-emerald-700 border-emerald-200', icon: 'fa-barcode', txt: 'BOLETO DUPLICO — aguardando pagamento' };
+    }
+    return { cls: 'bg-violet-50 text-violet-700 border-violet-200', icon: 'fa-file-invoice-dollar', txt: `2 BOLETOS — R$ ${soma.toFixed(2)} (juntos fecham a venda)` };
+  };
+
   // BLOCO 177: tipo/número da nota — props do pai primeiro (imediato),
   // senão o que o servidor devolveu no GET.
   const tipoNotaFinal = (notaTipo || notaApi?.tipo || '').toUpperCase();
@@ -361,9 +583,147 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
   };
 
   if (indisponivel || !boleto) return null;
-  const bb = badge();
   const clienteTemDoc = !!(clienteDoc || '').replace(/\D/g, '');
   const clienteTemCep = (clienteCep || '').replace(/\D/g, '').length === 8;
+  const modoParcelado = parcelas.length > 0;
+
+  // ===================================================================
+  // BLOCO 199 — MODO PARCELADO: 2 boletos que juntos fecham a venda.
+  // Substitui todo o conteúdo do card (o boleto único não existe aqui).
+  // ===================================================================
+  if (modoParcelado) {
+    const bb2 = badgeParcelado();
+    const temAberta = parcelas.some(p => ['NAO_GERADO', 'FALHA_EMISSAO', 'CANCELADO', 'EXPIRADO'].includes(p.status));
+    return (
+      <div className={`rounded-2xl border ${bb2.cls}`}>
+        <button onClick={() => setExpandido(!expandido)} className="w-full flex items-center gap-2 p-3 text-left" aria-expanded={expandido}>
+          <i className={`fa-solid ${bb2.icon}`}></i>
+          <span className="text-[10px] font-black uppercase flex-1">{bb2.txt}</span>
+          <i className={`fa-solid fa-chevron-${expandido ? 'up' : 'down'} text-[9px] opacity-60`}></i>
+        </button>
+        {expandido && (
+          <div className="px-3 pb-3 space-y-2">
+            {inter && !inter.configurado && (
+              <p className="text-[9px] leading-snug font-bold bg-amber-50 text-amber-800 border border-amber-200 rounded-lg px-2 py-1.5">
+                <i className="fa-solid fa-plug-circle-xmark mr-1"></i>
+                Boleto temporariamente indisponível: credenciais do Inter ausentes no servidor. O admin precisa definir INTER_CLIENT_ID, INTER_CLIENT_SECRET e o certificado (mTLS) nas variáveis da Vercel.
+              </p>
+            )}
+            {erroLocal && (
+              <p className="text-[9px] leading-snug font-bold text-rose-600 break-words">{erroLocal}</p>
+            )}
+            {/* Botão GERAL: gera os boletos que ainda não saíram */}
+            {temAberta && (
+              <button onClick={handleEmitirTodas} disabled={busy}
+                className="block w-full bg-slate-800 text-white font-black py-3 rounded-xl text-[10px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
+                <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-layer-group'} mr-1`}></i>
+                Gerar {parcelas.filter(p => ['NAO_GERADO', 'FALHA_EMISSAO', 'CANCELADO', 'EXPIRADO'].includes(p.status)).length > 1 ? 'os 2 boletos' : 'o boleto que falta'}
+              </button>
+            )}
+            {/* Os DOIS boletos da divisão */}
+            {parcelas.map(p => {
+              const ocupado = busyParcela === p.id;
+              const aberta = ['NAO_GERADO', 'FALHA_EMISSAO', 'CANCELADO', 'EXPIRADO'].includes(p.status);
+              const paga = p.status === 'RECEBIDO' || p.status === 'MARCADO_RECEBIDO';
+              return (
+                <div key={p.id} className={`rounded-xl border p-2.5 space-y-1.5 ${paga ? 'bg-emerald-50 border-emerald-200' : p.status === 'ATRASADO' || p.status === 'FALHA_EMISSAO' ? 'bg-rose-50 border-rose-200' : 'bg-white/80 border-gray-200'}`}>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${paga ? 'bg-emerald-600 text-white' : 'bg-gray-800 text-white'}`}>Boleto {p.seq}/{parcelas.length}</span>
+                    <span className="text-[11px] font-black text-gray-800">R$ {Number(p.valor).toFixed(2)}</span>
+                    <span className="text-[9px] font-black text-gray-500 uppercase flex-1 text-right truncate">{badgeParcelaTxt(p)}</span>
+                  </div>
+                  {p.erro && p.status === 'FALHA_EMISSAO' && (
+                    <p className="text-[8px] font-bold text-rose-600 leading-snug break-words">{p.erro}</p>
+                  )}
+                  {p.linhaDigitavel && (
+                    <button onClick={() => handleCopiarTexto(p.linhaDigitavel!, 'Linha digitavel')}
+                      className="w-full text-left font-mono text-[9px] font-bold bg-white rounded-lg px-2 py-2 break-all active:scale-95">
+                      {p.linhaDigitavel}
+                    </button>
+                  )}
+                  {p.pixCopiaECola && (
+                    <button onClick={() => handleCopiarTexto(p.pixCopiaECola!, 'PIX copia e cola')}
+                      className="w-full text-left text-[9px] font-black bg-white rounded-lg px-2 py-2 break-all active:scale-95">
+                      <i className="fa-solid fa-qrcode mr-1"></i>PIX COPIA E COLA — TOQUE PARA COPIAR
+                    </button>
+                  )}
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {aberta ? (
+                      <button onClick={() => void handleGerarParcela(p)} disabled={ocupado}
+                        className="bg-slate-800 text-white font-black py-2.5 rounded-xl text-[8px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
+                        <i className={`fa-solid ${ocupado ? 'fa-spinner fa-spin' : 'fa-file-invoice-dollar'} mr-1`}></i>{p.status === 'NAO_GERADO' ? 'Gerar' : 'Refazer'}
+                      </button>
+                    ) : ['A_RECEBER', 'ATRASADO', 'EM_PROCESSAMENTO'].includes(p.status) ? (
+                      <button onClick={() => void handleConsultarParcela(p)} disabled={ocupado}
+                        className="bg-gray-100 text-gray-600 font-black py-2.5 rounded-xl text-[8px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
+                        <i className={`fa-solid ${ocupado ? 'fa-spinner fa-spin' : 'fa-arrows-rotate'} mr-1`}></i>Atualizar
+                      </button>
+                    ) : (
+                      <div className="bg-gray-50 text-gray-300 font-black py-2.5 rounded-xl text-[8px] uppercase text-center">OK</div>
+                    )}
+                    {!aberta && (
+                      <button onClick={() => void handlePdfParcela(p)} disabled={ocupado}
+                        className="bg-slate-800 text-white font-black py-2.5 rounded-xl text-[8px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
+                        <i className={`fa-solid ${ocupado ? 'fa-spinner fa-spin' : 'fa-file-pdf'} mr-1`}></i>PDF
+                      </button>
+                    )}
+                    {!aberta && (
+                      <button onClick={() => handleWhatsParcela(p)}
+                        className="bg-green-600 text-white font-black py-2.5 rounded-xl text-[8px] uppercase tracking-widest active:scale-95">
+                        <i className="fa-brands fa-whatsapp mr-1"></i>Enviar
+                      </button>
+                    )}
+                    {!aberta && (p.linhaDigitavel || p.codigoBarras || p.pixCopiaECola) && (
+                      <>
+                        {temBt && (
+                          <button onClick={() => void imprimirMiniParcela('bt', p)} disabled={ocupadoMini !== ''}
+                            className="bg-teal-600 text-white font-black py-2.5 rounded-xl text-[8px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
+                            <i className={`fa-solid ${ocupadoMini === 'bt' ? 'fa-spinner fa-spin' : 'fa-bluetooth-b'} mr-1`}></i>Mini
+                          </button>
+                        )}
+                        <button onClick={() => void imprimirMiniParcela('usb', p)} disabled={ocupadoMini !== ''}
+                          className={`${temBt ? '' : 'col-span-2'}bg-emerald-700 text-white font-black py-2.5 rounded-xl text-[8px] uppercase tracking-widest active:scale-95 disabled:opacity-60`}>
+                          <i className={`fa-solid ${ocupadoMini === 'usb' ? 'fa-spinner fa-spin' : 'fa-print'} mr-1`}></i>Mini USB
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+            {/* Doc/CEP do pagador — 1 form só para os DOIS boletos (aparece
+                quando o cadastro não tem documento/CEP — Bloco 187/196) */}
+            {(!clienteTemDoc || !clienteTemCep) && (
+              <div className="space-y-2 bg-white/70 rounded-xl p-2.5">
+                {!clienteTemDoc && (
+                  <label className="block">
+                    <span className="text-[8px] font-black uppercase text-gray-500">CPF/CNPJ do pagador (vale para os 2 boletos)</span>
+                    <input type="text" inputMode="numeric" value={doc} onChange={e => setDoc(e.target.value)}
+                      placeholder="000.000.000-00"
+                      className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-[11px] font-bold text-gray-800 focus:outline-none focus:border-gray-400" />
+                  </label>
+                )}
+                {!clienteTemCep && (
+                  <label className="block">
+                    <span className="text-[8px] font-black uppercase text-gray-500">CEP do pagador (obrigatório no Inter — vale para os 2 boletos)</span>
+                    <input type="text" inputMode="numeric" value={cep} onChange={e => setCep(e.target.value)}
+                      placeholder="89500000"
+                      className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-[11px] font-bold text-gray-800 focus:outline-none focus:border-gray-400" />
+                  </label>
+                )}
+              </div>
+            )}
+            <p className="text-[8px] font-bold text-gray-400 leading-snug text-center">
+              Os dois boletos JUNTOS fecham o valor da venda — cada um com o seu vencimento. A venda entra como paga quando os dois forem recebidos.
+            </p>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ====================== FLUXO DE BOLETO ÚNICO (inalterado) ======================
+  const bb = badge();
 
   return (
     <div className={`rounded-2xl border ${bb.cls}`}>

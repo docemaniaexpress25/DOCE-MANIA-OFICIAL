@@ -172,3 +172,8 @@ export function hasCustosEmpresaTable(): Promise<boolean> {
 export function hasBoletoCpfColumn(): Promise<boolean> {
   return probeColumn('sales', 'boleto_cpf', 'boletoCpf');
 }
+
+/** sales_boletos existe? (Bloco 199 — BOLETO DUPLICO do Deivid/R5: parcelas de boleto por venda) */
+export function hasSalesBoletosTable(): Promise<boolean> {
+  return probeColumn('sales_boletos', 'id', 'salesBoletos');
+}

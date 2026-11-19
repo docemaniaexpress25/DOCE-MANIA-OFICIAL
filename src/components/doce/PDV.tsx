@@ -21,6 +21,9 @@ import { boletoService } from '@/services/boletoService';
 import { danfeFiscal80 } from '@/lib/danfe80';
 // BLOCO 158: canal USB imprime o layout de REFERENCIA do dono (HTML 80mm)
 import { danfeFiscal80Html } from '@/lib/danfe80Html';
+// BLOCO 200 (regra do dono): a divisão em 2 boletos é EXCLUSIVA da ROTA 5 —
+// casamento pelo vendedor da venda (id/nome, à prova de renome)
+import { isDavidVendedor } from '@/lib/equipe';
 import { clienteAptoNfe, mascararCpf, mascararCpfCnpj, validaCpf, validaCpfOuCnpj } from '@/lib/cnpjAutocomplete';
 // BLOCO 123: regras fiscais ARMADAS porém DESLIGADAS (FISCAL_OBRIGATORIO=false
 // até o dono implantar a API fiscal) — pronta entrega só conclui com NF-e/NFC-e
@@ -2673,6 +2676,10 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               vencimentoVenda={vencVendaISO}
               abertoInicial
               onStatusChange={handleBoletoStatus}
+              // BLOCO 200 (rota 5): habilita "Dividir em 2 boletos" no card —
+              // vale para a venda do David/Deivid mesmo que a divisão não tenha
+              // sido ligada na tela 6 (cria/edita aqui, no modal de sucesso)
+              podeDividir={isDavidVendedor({ id: String(sucessoData.sale?.vendedorId || vendedorId || '') })}
             />
           )}
 

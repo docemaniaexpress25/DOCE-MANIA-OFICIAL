@@ -22,6 +22,9 @@ import { saleService } from '@/services/saleService';
 // BLOCO 82: impressão no iPhone — Apple bloqueia Web Bluetooth no Safari/Chrome iOS;
 // caminho que funciona: navegador Bluefy (App Store) com instruções passo a passo
 import { isIOSDevice, TEXTO_IMPRESSAO_IOS, TITULO_IMPRESSAO_IOS } from '@/lib/iosPrint';
+// BLOCO 200 (regra do dono): a divisão em 2 boletos é EXCLUSIVA da ROTA 5 —
+// casamento pelo vendedor da venda (id/nome, à prova de renome)
+import { isDavidVendedor } from '@/lib/equipe';
 // BLOCO 111: impressão térmica USB do PC — canal BT x USB persistente por dispositivo
 import { imprimirViaUsb, lerCanalImpressao, salvarCanalImpressao, CanalImpressao } from '@/lib/usbPrint';
 // BLOCO 125: QR do CATÁLOGO do cliente no cupom (flag do admin no hub ERP Fiscal)
@@ -111,6 +114,15 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
   useEffect(() => { setRespRecebimento(null); }, [sale.id]);
   const saldoCupom = Math.max(0, (Number(saleLocal.valorTotal) || 0) - (Number(saleLocal.valorPago) || 0));
   const aPrazoCupom = (saleLocal.metodoPagamento || '') === 'A_PRAZO';
+  // ====================================================================
+  // BLOCO 200 (regra do dono): a DIVISÃO em 2 boletos aparece SOMENTE
+  // quando a venda pertence à ROTA 5 (David/Deivid). O casamento é pelo
+  // vendedorId da VENDA (id — à prova de renome): o cupom pode ser
+  // aberto pelo vendedor, admin, secretário ou fila de entregas e a
+  // opção "Dividir em 2 boletos" aparece em todos, sempre que a venda
+  // for da rota 5.
+  // ====================================================================
+  const rota5Cupom = isDavidVendedor({ id: saleLocal.vendedorId });
   const ePreVendaCupom = saleLocal.tipoVenda === 'PRE_VENDA';
   // Pergunta aparece para pronta-entrega À VISTA com saldo em aberto (ou já respondida nesta sessão)
   const mostraRecebimento = isVendaSalva && !conferencia && !aPrazoCupom && !ePreVendaCupom && (saldoCupom > 0.005 || respRecebimento !== null);
@@ -659,6 +671,8 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
                 return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10) : undefined;
               })()}
               showToast={showToast}
+              // BLOCO 200 (rota 5): habilita "Dividir em 2 boletos" no card
+              podeDividir={rota5Cupom}
             />
           )}
 

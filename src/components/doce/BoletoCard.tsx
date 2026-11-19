@@ -62,6 +62,17 @@ import { imprimirHtmlViaUsb, temBluetoothNavegador } from '@/lib/usbPrint';
  *  - Baixa automática por parcela (webhook/cron): a venda fecha PAGO quando
  *    TODAS pagarem.
  *  - Sem parcelas: o card segue EXATAMENTE como antes (boleto único).
+ *
+ * BLOCO 200 — DIVISÃO CRIADA/EDITADA NA TELA DO CUPOM (regra do dono:
+ * "isso deverá poder ser editado na tela de cupom onde aparece gerar boleto"):
+ *  - Quando podeDividir (venda da ROTA 5) e NÃO existe boleto único ativo, o
+ *    card mostra "Dividir em 2 boletos" ao lado do "Gerar Boleto": o form já
+ *    nasce com o exemplo do dono (metade do valor, 1º em 7 dias e o 2º em 14
+ *    dias) — com atalhos DIVIDIR POR 2 e 7D+14D e campos editáveis. O 2º
+ *    boleto é SEMPRE o restante do saldo — a soma fecha EXATAMENTE a venda.
+ *  - Com a divisão já gravada e NADA emitido no Inter, aparece "Editar
+ *    divisão" (valores e vencimentos) — a API recria do zero enquanto nada
+ *    saiu; depois de emitido, editar exige cancelar no Inter (Admin).
  */
 
 interface BoletoCardProps {
@@ -87,6 +98,10 @@ interface BoletoCardProps {
   /** BLOCO 153: vencimento combinado na venda (YYYY-MM-DD) — o boleto do
    *  Inter nasce com o PRAZO negociado (fim do +7d fixo desalinhado). */
   vencimentoVenda?: string;
+  /** BLOCO 200 (regra do dono): a venda pertence à ROTA 5 (David/Deivid)?
+   *  Só então o card oferece DIVIDIR/EDITAR a divisão em 2 boletos — os
+   *  pais (Cupom/PDV) casam pelo vendedorId da venda (à prova de renome). */
+  podeDividir?: boolean;
 }
 
 interface InterStatus {
@@ -114,7 +129,7 @@ const badgeParcelaTxt = (p: BoletoParcelaInfo): string => {
   }
 };
 
-const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, notaStatus, notaNumero, notaTipo, clienteDoc, clienteCep, clienteTelefone, clienteNome, showToast, abertoInicial, onStatusChange, vencimentoVenda }) => {
+const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, notaStatus, notaNumero, notaTipo, clienteDoc, clienteCep, clienteTelefone, clienteNome, showToast, abertoInicial, onStatusChange, vencimentoVenda, podeDividir }) => {
   const [boleto, setBoleto] = useState<BoletoInfo | null>(null);
   // BLOCO 199: parcelas do boleto duplo (vazio = fluxo de boleto único)
   const [parcelas, setParcelas] = useState<BoletoParcelaInfo[]>([]);
@@ -138,6 +153,16 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
   const [temBt] = useState(() => temBluetoothNavegador());
   const [notaApi, setNotaApi] = useState<NotaDaVendaInfo | null>(null);
   const [cfgApi, setCfgApi] = useState<BoletoConfigInfo | null>(null);
+  // ===================== BLOCO 200: DIVISÃO EM 2 BOLETOS =====================
+  // CRIAR/EDITAR a divisão na tela do cupom (onde aparece "Gerar Boleto"):
+  // dois boletos que JUNTOS fecham o saldo da venda — o 2º é SEMPRE o
+  // restante (impossível não fechar). Exemplo do dono: 1º em 7 dias com
+  // parte do valor e o restante no 2º em 14 dias, ou dividir por 2.
+  const [formDiv, setFormDiv] = useState(false);
+  const [v1Doc, setV1Doc] = useState('');
+  const [venc1Doc, setVenc1Doc] = useState('');
+  const [venc2Doc, setVenc2Doc] = useState('');
+  const [busyDiv, setBusyDiv] = useState(false);
 
   useEffect(() => {
     if (!saleId) return;
@@ -179,6 +204,123 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
   /** Doc/CEP finais: digitado no card > cadastro (mesma regra do boleto único). */
   const docFinal = doc.replace(/\D/g, '') || (clienteDoc || '').replace(/\D/g, '');
   const cepFinal = cep.replace(/\D/g, '') || (clienteCep || '').replace(/\D/g, '');
+
+  // ===================================================================
+  // BLOCO 200 — conta da divisão: saldo que os DOIS boletos precisam
+  // fechar (mesma conta da API: total - pago). O 2º boleto é SEMPRE o
+  // restante — a soma fecha EXATAMENTE o valor da venda.
+  // ===================================================================
+  const saldoDiv = Math.max(0, Math.round(((valorTotal || 0) - (valorPago || 0)) * 100) / 100);
+  const v1Num = Math.round((parseFloat(v1Doc) || 0) * 100) / 100;
+  const v2Num = Math.round((saldoDiv - v1Num) * 100) / 100;
+  const dataOkDiv = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s);
+  const divOk = v1Num >= 2.5 && v2Num >= 2.5 && dataOkDiv(venc1Doc) && dataOkDiv(venc2Doc);
+  const formatoDiaBRDiv = (iso: string) => (iso || '').split('-').reverse().join('/');
+  /** Data de hoje + n dias no fuso de São Paulo (YYYY-MM-DD). */
+  const plusDias = (n: number) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(Date.now() + n * 24 * 3600 * 1000));
+
+  /** BLOCO 200: abre o form da divisão — CRIAR (sem parcelas: metade do
+   *  valor + 1º em 7 dias / 2º em 14 dias, o exemplo do dono) ou EDITAR
+   *  (os valores/vencimentos atuais voltam nos campos). */
+  const abrirDivisao = (editar: boolean) => {
+    setErroLocal('');
+    if (editar && parcelas.length >= 2) {
+      setV1Doc(Number(parcelas[0].valor || 0).toFixed(2));
+      setVenc1Doc(String(parcelas[0].vencimento || '').slice(0, 10));
+      setVenc2Doc(String(parcelas[1].vencimento || '').slice(0, 10));
+    } else {
+      setV1Doc((Math.floor((saldoDiv / 2) * 100) / 100).toFixed(2));
+      setVenc1Doc(plusDias(7));
+      setVenc2Doc(plusDias(14));
+    }
+    setFormDiv(true);
+  };
+
+  /** BLOCO 200: grava a divisão (2 boletos que juntos fecham o saldo). A API
+   *  recria do zero enquanto NADA foi emitido no Inter — depois de emitido,
+   *  editar exige cancelar os boletos no Inter (Admin). */
+  const confirmarDivisao = async () => {
+    if (busyDiv || !saleId) return;
+    if (!(saldoDiv > 0)) {
+      setErroLocal('A venda não tem saldo em aberto para dividir.');
+      showToast?.('Sem saldo em aberto para dividir.', 'error');
+      return;
+    }
+    if (!divOk) {
+      setErroLocal('Cada boleto precisa de no mínimo R$ 2,50 (regra do Inter) e as duas datas de vencimento preenchidas.');
+      showToast?.('Ajuste os valores e as datas da divisão.', 'error');
+      return;
+    }
+    setBusyDiv(true);
+    const r = await boletoService.criarParcelas(saleId, [
+      { valor: v1Num, vencimento: venc1Doc },
+      { valor: v2Num, vencimento: venc2Doc },
+    ]);
+    setBusyDiv(false);
+    if (!r.ok) {
+      setErroLocal(r.erro || 'Falha ao gravar a divisão.');
+      showToast?.(r.erro || 'Falha ao gravar a divisão.', 'error');
+      return;
+    }
+    setFormDiv(false);
+    await refrescarParcelas();
+    showToast?.(`Divisão gravada: R$ ${v1Num.toFixed(2)} em ${formatoDiaBRDiv(venc1Doc)} + R$ ${v2Num.toFixed(2)} em ${formatoDiaBRDiv(venc2Doc)} — os dois juntos fecham a venda.`, 'success');
+  };
+
+  /** BLOCO 200: form da divisão (o MESMO para criar e editar — aparece
+   *  no modo boleto único e no modo parcelado). */
+  const formDivisao = (
+    <div className="space-y-2.5 bg-violet-50/60 rounded-xl p-2.5">
+      <div className="grid grid-cols-2 gap-2">
+        <label className="block">
+          <span className="text-[8px] font-black uppercase text-gray-500">Boleto 1 — valor (R$)</span>
+          <input type="number" step="0.01" min="2.5" inputMode="decimal" value={v1Doc} onChange={e => setV1Doc(e.target.value)} placeholder="0.00" aria-label="Valor do primeiro boleto"
+            className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-[11px] font-black text-center text-gray-800 focus:outline-none focus:border-violet-300" />
+        </label>
+        <div>
+          <span className="text-[8px] font-black uppercase text-gray-500">Boleto 2 — restante (automático)</span>
+          <div className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-[11px] font-black text-center text-violet-700 bg-white" aria-label="Valor do segundo boleto">R$ {v2Num.toFixed(2)}</div>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <button type="button" onClick={() => setV1Doc((Math.floor((saldoDiv / 2) * 100) / 100).toFixed(2))}
+          className="py-2 rounded-lg text-[9px] font-black uppercase bg-white border-2 border-violet-200 text-violet-600 active:scale-95">
+          <i className="fa-solid fa-divide mr-1"></i>Dividir por 2
+        </button>
+        <button type="button" onClick={() => { setVenc1Doc(plusDias(7)); setVenc2Doc(plusDias(14)); }}
+          className="py-2 rounded-lg text-[9px] font-black uppercase bg-white border-2 border-violet-200 text-violet-600 active:scale-95">
+          <i className="fa-solid fa-calendar-days mr-1"></i>7D + 14D
+        </button>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <label className="block">
+          <span className="text-[8px] font-black uppercase text-gray-500">Boleto 1 — vencimento</span>
+          <input type="date" value={venc1Doc} onChange={e => setVenc1Doc(e.target.value)} aria-label="Vencimento do primeiro boleto"
+            className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-[11px] font-black text-center text-gray-800 focus:outline-none focus:border-violet-300" />
+        </label>
+        <label className="block">
+          <span className="text-[8px] font-black uppercase text-gray-500">Boleto 2 — vencimento</span>
+          <input type="date" value={venc2Doc} onChange={e => setVenc2Doc(e.target.value)} aria-label="Vencimento do segundo boleto"
+            className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-[11px] font-black text-center text-gray-800 focus:outline-none focus:border-violet-300" />
+        </label>
+      </div>
+      {dataOkDiv(venc1Doc) && dataOkDiv(venc2Doc) && (
+        <p className="text-[8px] font-black text-violet-600 uppercase text-center leading-snug">
+          R$ {v1Num.toFixed(2)} vence {formatoDiaBRDiv(venc1Doc)} + R$ {v2Num.toFixed(2)} vence {formatoDiaBRDiv(venc2Doc)} = R$ {saldoDiv.toFixed(2)}
+        </p>
+      )}
+      {!divOk && (
+        <p className="text-[8px] font-black text-rose-600 uppercase text-center leading-snug">
+          <i className="fa-solid fa-triangle-exclamation mr-1"></i>Cada boleto precisa de no mínimo R$ 2,50 e das duas datas — o 2º fecha o restante.
+        </p>
+      )}
+      <button onClick={() => void confirmarDivisao()} disabled={busyDiv || !divOk}
+        className="block w-full bg-violet-600 text-white font-black py-2.5 rounded-xl text-[10px] uppercase tracking-widest active:scale-95 disabled:opacity-50">
+        <i className={`fa-solid ${busyDiv ? 'fa-spinner fa-spin' : 'fa-check'} mr-1`}></i>
+        Salvar divisão em 2 boletos
+      </button>
+    </div>
+  );
 
   const validarDocCepParcela = (): boolean => {
     if (inter && !inter.configurado) {
@@ -620,6 +762,22 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
                 Gerar {parcelas.filter(p => ['NAO_GERADO', 'FALHA_EMISSAO', 'CANCELADO', 'EXPIRADO'].includes(p.status)).length > 1 ? 'os 2 boletos' : 'o boleto que falta'}
               </button>
             )}
+            {/* ============================================================
+                BLOCO 200 (regra do dono, rota 5): EDITAR a divisão — os
+                dois boletos JUNTOS fecham a venda; enquanto NADA saiu no
+                Inter, os valores e vencimentos podem ser refeitos aqui
+                (mesma tela do cupom onde aparece "Gerar Boleto").
+                ============================================================ */}
+            {podeDividir && parcelas.length >= 2 && !parcelas.some(p => p.codigo) && (
+              <button onClick={() => (formDiv ? setFormDiv(false) : abrirDivisao(true))} aria-expanded={formDiv}
+                className="block w-full bg-white border-2 border-violet-200 text-violet-600 font-black py-2.5 rounded-xl text-[9px] uppercase tracking-widest active:scale-95">
+                <i className={`fa-solid ${formDiv ? 'fa-xmark' : 'fa-pen-to-square'} mr-1`}></i>
+                {formDiv ? 'Fechar edição da divisão' : 'Editar divisão (valores e vencimentos)'}
+              </button>
+            )}
+            {formDiv && podeDividir && parcelas.length >= 2 && !parcelas.some(p => p.codigo) && (
+              formDivisao
+            )}
             {/* Os DOIS boletos da divisão */}
             {parcelas.map(p => {
               const ocupado = busyParcela === p.id;
@@ -777,6 +935,29 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
               <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-file-invoice-dollar'} mr-1`}></i>
               {boleto.status === 'NAO_GERADO' ? 'Gerar Boleto' : 'Gerar Novamente'}
             </button>
+          )}
+          {/* ============================================================
+              BLOCO 200 (regra do dono, EXCLUSIVO ROTA 5 / Deivid): DIVIDIR
+              EM 2 BOLETOS — aparece na tela do cupom exatamente onde o
+              dono procurava (ao lado do "Gerar Boleto"). Dois boletos que
+              JUNTOS fecham o valor da venda: 1º em 7 dias com parte do
+              valor e o restante no 2º em 14 dias — ou dividir por 2. Só
+              aparece SEM boleto único ativo (senão o cliente pagaria duas
+              vezes) e a soma é conferida pela API (mín. R$ 2,50 cada).
+              ============================================================ */}
+          {podeDividir && ['NAO_GERADO', 'CANCELADO', 'EXPIRADO', 'FALHA_EMISSAO'].includes(boleto.status) && (
+            <div className="rounded-xl border border-violet-100 bg-white/70 p-2.5 space-y-2">
+              <button onClick={() => (formDiv ? setFormDiv(false) : abrirDivisao(false))} aria-expanded={formDiv}
+                className="w-full flex items-center gap-2 text-left active:scale-95 transition-transform">
+                <i className="fa-solid fa-layer-group text-violet-500"></i>
+                <span className="flex-1 min-w-0">
+                  <span className="block text-[10px] font-black uppercase text-gray-700">Dividir em 2 boletos — o valor fecha dividido em dois</span>
+                  <span className="block text-[8px] font-bold text-gray-400 leading-snug">Ex.: 1º em 7 dias com parte do valor e o restante no 2º em 14 dias, ou dividir por 2. Exclusivo da rota 5.</span>
+                </span>
+                <i className={`fa-solid fa-chevron-${formDiv ? 'up' : 'down'} text-[9px] text-gray-300`}></i>
+              </button>
+              {formDiv && formDivisao}
+            </div>
           )}
           {['A_RECEBER', 'ATRASADO', 'RECEBIDO', 'MARCADO_RECEBIDO'].includes(boleto.status) && (
             <div className="grid grid-cols-2 gap-2">

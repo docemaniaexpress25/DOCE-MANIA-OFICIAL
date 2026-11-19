@@ -643,7 +643,11 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
               notaStatus={nota.status}
               notaNumero={nota.numero}
               notaTipo={nota.tipo}
-              clienteDoc={clientLocal.cnpj || (clientLocal as { cpf?: string }).cpf || ''}
+              // BLOCO 196 (regra do dono): NF-e = CNPJ do cadastro (nunca CPF);
+              // NFC-e/cupom = CPF do cadastro ou o digitado na venda (sales.
+              // boleto_cpf do Bloco 187) — o boleto do Inter nasce sem pedir
+              // documento de novo. CEP é obrigatório (cadastro).
+              clienteDoc={clientLocal.cnpj || (clientLocal as { cpf?: string }).cpf || (saleLocal as { boletoCpf?: string }).boletoCpf || ''}
               clienteCep={clientLocal.enderecoCep}
               clienteTelefone={clientLocal.telefone}
               clienteNome={clientLocal.nomeFantasia || clientLocal.nome}

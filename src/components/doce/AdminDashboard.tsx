@@ -1788,17 +1788,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           <div className="grid grid-cols-2 gap-4">
             {/* BLOCO 191 (regra do dono): aba PORTAIS — todos os portais num lugar só */}
             <MenuCard icon="fa-sitemap" title="Portais" tab="PORTAIS" color="bg-violet-50 text-violet-600" />
+            {/* BLOCO 196 (regra do dono): os ÍCONES DOS PORTAIS saíram da HOME —
+                Portal Fiscal, Portal de Entradas, Produtos Fiscais, Clientes
+                Fiscais, Notas Especiais e Catálogo do Portal ficam APENAS dentro
+                da aba PORTAIS (nenhum atalho duplicado na home). */}
             <MenuCard icon="fa-boxes-stacked" title="Estoque" tab="CATALOGO" color="bg-blue-50 text-blue-600" />
-            <MenuCard icon="fa-file-invoice" title="Portal Fiscal" tab="NOTAS_PENDENTES" color="bg-emerald-50 text-emerald-600" />
-            {/* BLOCO 149: Portal de Entradas — notas XML de fornecedores (migra a antiga aba XML → Produtos) */}
-            <MenuCard icon="fa-file-import" title="Portal de Entradas" tab="ENTRADAS" color="bg-teal-50 text-teal-600" />
-            {/* BLOCO 156: Produtos Fiscais — lista EDITÁVEL de NCM/CEST/CFOP de todo o catálogo */}
-            <MenuCard icon="fa-clipboard-list" title="Produtos Fiscais" tab="FISCAL_PRODUTOS" color="bg-amber-50 text-amber-600" />
-            {/* BLOCO 174: Clientes Fiscais — nome/CEP editáveis (boleto do Inter precisa do CEP do cadastro) */}
-            <MenuCard icon="fa-address-card" title="Clientes Fiscais" tab="FISCAL_CLIENTES" color="bg-teal-50 text-teal-600" />
-            {/* BLOCO 182: Notas Especiais — devolução/bonificação/nota manual (wizard mobile-first) */}
-            <MenuCard icon="fa-file-pen" title="Notas Especiais" tab="NOTAS_ESPECIAIS" color="bg-rose-50 text-rose-600" />
-            <MenuCard icon="fa-store" title="Catalogo Portal" tab="CATALOGO_PORTAL" color="bg-emerald-50 text-emerald-600" />
             <MenuCard icon="fa-tags" title="Categorias" tab="CATEGORIAS" color="bg-indigo-50 text-indigo-600" />
             <MenuCard icon="fa-truck-ramp-box" title="Cargas" tab="CARGAS" color="bg-orange-50 text-orange-600" />
             <MenuCard icon="fa-users" title="Clientes" tab="CLIENTES" color="bg-green-50 text-green-600" />

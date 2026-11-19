@@ -59,6 +59,10 @@ interface PDVProps {
   /** BLOCO 122 (fluxo de 8 telas, tela 4): "Completar cadastro agora" quando
    *  o cliente pede NF-e sem CNPJ/email — fecha o PDV e abre o cadastro. */
   onCompletarCadastro?: (c: Client) => void;
+  /** BLOCO 196 (regra do dono): o boleto do Inter EXIGE o CEP do pagador.
+   *  Quando o cadastro não tem CEP, o vendedor digita na tela 6 e o sistema
+   *  GRAVA no cadastro do cliente (o BoletoCard puxa o CEP daí depois). */
+  gravarCepCliente?: (clientId: string, cep: string) => Promise<boolean>;
 }
 
 // BLOCO 122 (fluxo de 8 telas do dono): CART=3 produtos · DOC=4 documento ·
@@ -74,6 +78,11 @@ type CartItem = { quantidade: number; precoVenda: string };
 // — uma linha só, para não comer o espaço da grade de produtos.
 const CHIP_ON: Record<string, string> = { violet: 'bg-violet-600', orange: 'bg-orange-500', teal: 'bg-teal-600', indigo: 'bg-indigo-600' };
 const CHIP_TXT: Record<string, string> = { violet: 'text-violet-600', orange: 'text-orange-500', teal: 'text-teal-600', indigo: 'text-indigo-600' };
+// BLOCO 196: máscara de CEP da tela 6 (pagador do boleto)
+const mascararCep = (v: string): string => {
+  const d = (v || '').replace(/\D/g, '').slice(0, 8);
+  return d.length > 5 ? `${d.slice(0, 5)}-${d.slice(5)}` : d;
+};
 const SwitchChip: React.FC<{ ligado: boolean; onClick: () => void; cor: 'violet' | 'orange' | 'teal' | 'indigo'; label: string; title: string }> = ({ ligado, onClick, cor, label, title }) => (
   <button onClick={onClick} aria-pressed={ligado} title={title} className="flex items-center gap-1.5 active:scale-95 transition-transform">
     <span className={`w-8 h-5 rounded-full relative transition-colors ${ligado ? CHIP_ON[cor] : 'bg-gray-300'}`}>
@@ -83,7 +92,7 @@ const SwitchChip: React.FC<{ ligado: boolean; onClick: () => void; cor: 'violet'
   </button>
 );
 
-const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onCancel, onFinish, processSale, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, sales, onNavigateToCredit, categories, subcategories, modoVenda, processPreVenda, rota2, verProdutosTeste, modoAtendimento, nfcCpfInicial, onCompletarCadastro }) => {
+const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onCancel, onFinish, processSale, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, sales, onNavigateToCredit, categories, subcategories, modoVenda, processPreVenda, rota2, verProdutosTeste, modoAtendimento, nfcCpfInicial, onCompletarCadastro, gravarCepCliente }) => {
   const [view, setView] = useState<PDVView>('CART');
   // ============================================================
   // BLOCO 122 (fluxo de 8 telas do dono) — ESTADOS DAS TELAS 3/4/5/6/8
@@ -106,6 +115,11 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   // digitado na tela 6 quando o cadastro não tem documento. Vazio = usa o
   // documento do cadastro (se válido). Obrigatório para finalizar.
   const [boletoCpfDoc, setBoletoCpfDoc] = useState('');
+  // BLOCO 196 (regra do dono): o boleto do Inter EXIGE o CEP do pagador.
+  // Sem CEP no cadastro, o vendedor digita AQUI (tela 6) e o sistema grava
+  // no cadastro do cliente — o boleto depois puxa sozinho (nunca pede 2x).
+  const [cepDoc, setCepDoc] = useState('');
+  const cepGravadoRef = useRef('');
   // TELA 5 — condição; TELA 6 — forma:
   const [condicaoDoc, setCondicaoDoc] = useState<'AVISTA' | 'APRAZO' | null>(null);
   const [formaDoc, setFormaDoc] = useState<'DINHEIRO' | 'PIX' | 'MISTO' | 'BOLETO' | 'CHEQUE' | 'DINHEIRO_DATA' | 'PIX_DATA' | null>(null);
@@ -791,6 +805,11 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const boletoDocDig = (boletoCpfDoc || (nfcCpfValido ? nfcCpfDig : '') || (docCadastroOk ? docCadastroDig : '')).replace(/\D/g, '');
   const boletoDocOk = !!boletoDocDig && validaCpfOuCnpj(boletoDocDig);
   const boletoDocTipo = boletoDocDig.length === 14 ? 'CNPJ' : 'CPF';
+  // BLOCO 196: CEP do pagador do boleto — vale o do CADASTRO ou o digitado
+  // na tela 6. Sem nenhum dos dois, o boleto NÃO finaliza (regra do dono:
+  // "para gerar o boleto precisamos obrigatoriamente o cep também").
+  const cepBoletoDig = cepDoc.replace(/\D/g, '');
+  const cepBoletoOk = clienteCepOk || cepBoletoDig.length === 8;
   // BLOCO 192: identificação da NFC-e RESPEITA a pergunta da tela 4.
   //  - "Não, anônima" → SEMPRE anônima (o CPF do boleto/cadastro NÃO vaza
   //    para a nota — o vendedor decidiu não identificar);
@@ -809,8 +828,23 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     // BLOCO 187: boleto a prazo EXIGE CPF/CNPJ válido do pagador — o botão
     // Continuar nasce travado até o vendedor digitar (ou o cadastro ter).
     if (formaDoc === 'BOLETO' && !boletoDocOk) return false;
+    // BLOCO 196: boleto a prazo EXIGE o CEP do pagador (cadastro ou digitado
+    // na tela 6) — o Inter não gera boleto sem CEP.
+    if (formaDoc === 'BOLETO' && !cepBoletoOk) return false;
     return true;
   })();
+
+  // BLOCO 196: CEP digitado na tela 6 GRAVA no cadastro do cliente (uma vez
+  // só) — o BoletoCard do Inter puxa o CEP do cadastro sem digitar de novo.
+  useEffect(() => {
+    const dig = cepDoc.replace(/\D/g, '');
+    if (dig.length !== 8 || clienteCepOk) return;
+    if (cepGravadoRef.current === dig) return;
+    cepGravadoRef.current = dig;
+    gravarCepCliente?.(client.id, mascararCep(dig))
+      .then((ok) => { if (!ok) cepGravadoRef.current = ''; })
+      .catch(() => { cepGravadoRef.current = ''; });
+  }, [cepDoc, clienteCepOk, client.id, gravarCepCliente]);
 
   // ============================================================
   // BLOCO 100 (regra do dono): QR DO PIX gerado com o VALOR DA VENDA —
@@ -889,6 +923,13 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     // identificada, do cadastro ou digitado na tela 6).
     if (condicaoDoc === 'APRAZO' && formaDoc === 'BOLETO' && !boletoDocOk) {
       setAppModal({ title: 'Boleto sem CPF/CNPJ', message: 'O boleto a prazo PRECISA do documento do pagador. Peça o CPF do cliente (o CNPJ/CPF do cadastro serve) e digite na tela 6 antes de continuar.', icon: 'fa-solid fa-id-card', iconColor: 'text-rose-500', type: 'error' });
+      return;
+    }
+    // BLOCO 196 (regra do dono): boleto a prazo SEM CEP do pagador NÃO passa
+    // — o Inter não gera boleto sem CEP. Vale o CEP do cadastro OU o digitado
+    // na tela 6 (que já grava no cadastro do cliente).
+    if (condicaoDoc === 'APRAZO' && formaDoc === 'BOLETO' && !cepBoletoOk) {
+      setAppModal({ title: 'Boleto sem CEP', message: 'O boleto do Inter EXIGE o CEP do pagador. Complete o CEP no cadastro do cliente OU digite no campo CEP da tela 6 antes de continuar.', icon: 'fa-solid fa-map-location-dot', iconColor: 'text-rose-500', type: 'error' });
       return;
     }
     if (!validateAndBlockIfNeeded()) return;
@@ -1440,6 +1481,53 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     );
   }
 
+  // ============================================================
+  // BLOCO 196 (regra do dono): card do PAGADOR do boleto na tela 6.
+  // NF-e = cliente CNPJ: NÃO pede CPF — o boleto puxa o CNPJ do cadastro.
+  // NFC-e/cupom = CPF obrigatório (identificação da NFC-e, cadastro ou
+  // digitado aqui) + CEP obrigatório (campo acima).
+  // ============================================================
+  const cardPagadorNfe = (
+    <div className="bg-white rounded-3xl border border-gray-100 p-4 space-y-2">
+      <label className="text-[9px] font-black text-gray-400 uppercase">Documento do pagador — vem do CNPJ do cadastro (NF-e não usa CPF)</label>
+      <div className={`w-full p-4 bg-gray-50 border-2 rounded-2xl text-sm font-black text-center ${docCadastroOk ? 'border-emerald-200' : 'border-amber-200'}`}>
+        {docCadastroOk ? mascararCpfCnpj(docCadastroDig) : '— CNPJ não cadastrado —'}
+      </div>
+      {docCadastroOk ? (
+        <p className="text-[8px] font-black text-emerald-600 uppercase text-center leading-snug"><i className="fa-solid fa-circle-check mr-1"></i>CNPJ do cadastro OK — nada de CPF · o CEP acima completa o pagador.</p>
+      ) : (
+        <p className="text-[8px] font-bold text-amber-600/90 leading-snug"><i className="fa-solid fa-id-card mr-1"></i>NF-e é exclusiva de CNPJ — complete o CNPJ no cadastro (botão na tela 4) para o boleto sair com o pagador certo.</p>
+      )}
+    </div>
+  );
+  const fonteBoletoPf = boletoCpfDoc
+    ? 'digitado na venda'
+    : nfcCpfValido && docEscolhido === 'NFCE'
+      ? 'CPF da identificação da NFC-e'
+      : docCadastroOk
+        ? `${docCadastroDig.length === 14 ? 'CNPJ' : 'CPF'} do cadastro`
+        : '';
+  const cardPagadorPf = (
+    <div className="bg-white rounded-3xl border border-gray-100 p-4 space-y-2">
+      <label className="text-[9px] font-black text-gray-400 uppercase">CPF do pagador do boleto — obrigatório (NFC-e/cupom)</label>
+      <input
+        value={boletoDocDig ? mascararCpfCnpj(boletoDocDig) : ''}
+        onChange={e => setBoletoCpfDoc(mascararCpfCnpj(e.target.value))}
+        placeholder="000.000.000-00"
+        inputMode="numeric"
+        aria-label="CPF ou CNPJ do pagador do boleto"
+        className={`w-full p-4 bg-gray-50 border-2 rounded-2xl text-sm font-black text-center outline-none ${boletoDocOk ? 'border-emerald-200 focus:ring-2 focus:ring-emerald-100' : 'border-amber-200 focus:ring-2 focus:ring-amber-100'}`}
+      />
+      {boletoDocOk ? (
+        <p className="text-[8px] font-black text-emerald-600 uppercase text-center leading-snug"><i className="fa-solid fa-circle-check mr-1"></i>{boletoDocTipo} OK{fonteBoletoPf ? ` — ${fonteBoletoPf}` : ''} · junto com o CEP acima completa o boleto.</p>
+      ) : (
+        <p className="text-[8px] font-bold text-amber-600/90 leading-snug"><i className="fa-solid fa-id-card mr-1"></i>{docEscolhido === 'NFCE' && nfcQuerIdentificar === false
+          ? 'Nota anônima: o boleto puxa o CPF do cadastro — sem CPF no cadastro, peça ao cliente e digite aqui.'
+          : 'NFC-e/cupom com boleto: peça o CPF do cliente e digite acima — SEM CPF e CEP o boleto não gera e a venda não finaliza.'}</p>
+      )}
+    </div>
+  );
+
   return (
     <>
     <div className="fixed inset-0 bg-gray-50 z-[60] flex flex-col overflow-hidden">
@@ -1808,23 +1896,25 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
             <span className="block text-[9px] font-bold text-gray-300 mt-1">Cupom não fiscal — nada na SEFAZ</span>
           </button>
 
-          {/* NF-e — só com CNPJ + email no cadastro (BLOCO 77) */}
+          {/* NF-e — BLOCO 196 (regra do dono): EXCLUSIVA para cliente CNPJ */}
           <div className="rounded-3xl bg-white border border-gray-100 p-3.5 space-y-2">
             <div className="flex items-center gap-2">
               <i className="fa-solid fa-file-invoice-dollar text-violet-600"></i>
-              <p className="text-[11px] font-black text-gray-700 uppercase flex-1">NF-e — nota para empresa</p>
+              <p className="text-[11px] font-black text-gray-700 uppercase flex-1">NF-e — nota para empresa (só CNPJ)</p>
             </div>
-            {/* BLOCO 139 (regra do dono): o card "Falta completar o cadastro" com a
-                frase da nota batida no SISTEMA EXTERNO SAIU — a nota é batida pelo
-                próprio app (Focus). O botão fica SEMPRE disponível; sem CNPJ/email
-                no cadastro vira só um aviso discreto (nada bloqueia). */}
+            {/* BLOCO 196 (regra do dono): NF-e é EXCLUSIVA de cliente com CNPJ —
+                sem CNPJ (14 dígitos) o botão fica TRAVADO (pessoa física sai em
+                NFC-e/cupom). Com CNPJ mas sem email segue liberado (aviso). */}
             <button onClick={() => { setDocEscolhido('NFE'); setView('CONDICAO'); }}
-              className="w-full py-4 rounded-2xl bg-violet-600 text-white text-xs font-black uppercase shadow-md active:scale-95 flex items-center justify-center">
+              disabled={!temCnpjApto}
+              className={`w-full py-4 rounded-2xl text-white text-xs font-black uppercase shadow-md active:scale-95 flex items-center justify-center ${temCnpjApto ? 'bg-violet-600' : 'bg-gray-300 cursor-not-allowed opacity-60'}`}>
               <i className="fa-solid fa-file-invoice-dollar mr-2"></i>Escolher NF-e
             </button>
             {!clienteAptoNfe(client) && (
-              <div className="rounded-xl bg-gray-50 border border-gray-100 p-2.5">
-                <p className="text-[8px] font-bold text-gray-500 leading-snug">Sem {faltantesNfe.join(' + ')} no cadastro — a NF-e da empresa pode rejeitar na SEFAZ. Cadastre depois e emita pela janela fiscal.</p>
+              <div className={`rounded-xl p-2.5 border ${temCnpjApto ? 'bg-gray-50 border-gray-100' : 'bg-amber-50 border-amber-200'}`}>
+                <p className={`text-[8px] font-bold leading-snug ${temCnpjApto ? 'text-gray-500' : 'text-amber-700'}`}>{temCnpjApto
+                  ? 'Falta o EMAIL no cadastro — a NF-e pode rejeitar na SEFAZ. Cadastre depois e emita pela janela fiscal.'
+                  : `NF-e é EXCLUSIVA para cliente com CNPJ — falta: ${faltantesNfe.join(' + ')}. Cadastre o CNPJ (e email) para liberar a nota de empresa; pessoa física sai em NFC-e ou cupom.`}</p>
                 {onCompletarCadastro && (
                   <button onClick={() => onCompletarCadastro(client)}
                     className="w-full mt-1.5 bg-gray-100 text-gray-600 text-[9px] font-black uppercase py-2.5 rounded-lg active:scale-95">
@@ -2050,57 +2140,38 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                   </div>
                 </div>
               )}
-              {/* BLOCO 153 (regra do dono): boleto EXIGE CEP — aviso aqui, na tela
-                  da forma, para o vendedor completar o cadastro ANTES de sair */}
-              {formaDoc === 'BOLETO' && !clienteCepOk && (
-                <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3 space-y-2">
-                  <p className="text-[9px] font-black text-amber-700 uppercase leading-snug"><i className="fa-solid fa-triangle-exclamation mr-1"></i>Cliente SEM CEP no cadastro — o boleto do Inter exige o CEP do pagador (8 dígitos), tanto na NF-e quanto na NFC-e.</p>
-                  {onCompletarCadastro && (
-                    <button onClick={() => onCompletarCadastro(client)} className="w-full bg-amber-500 text-white font-black py-2.5 rounded-xl text-[10px] uppercase tracking-widest active:scale-95">
-                      <i className="fa-solid fa-user-pen mr-1"></i>Completar cadastro agora
-                    </button>
+              {/* ============================================================
+                  BLOCO 196 (regra do dono): o boleto do Inter EXIGE o CEP do
+                  pagador — "para gerar o boleto precisamos obrigatoriamente o
+                  cep também". Se o cadastro não tem, o vendedor DIGITA aqui e
+                  o sistema grava no cadastro do cliente. Boleto sem CEP NÃO
+                  finaliza (botão Continuar travado).
+                  ============================================================ */}
+              {formaDoc === 'BOLETO' && (clienteCepOk ? (
+                <p className="text-[8px] font-black text-indigo-500 uppercase text-center leading-snug bg-indigo-50 border border-indigo-100 rounded-xl px-3 py-2"><i className="fa-solid fa-circle-check mr-1"></i>CEP OK — puxado do cadastro do cliente{vencimentoDoc ? ` · vence ${vencimentoDoc.split('-').reverse().join('/')}` : ''}.</p>
+              ) : (
+                <div className="bg-white rounded-3xl border border-gray-100 p-4 space-y-2">
+                  <label className="text-[9px] font-black text-gray-400 uppercase">CEP do pagador — obrigatório no boleto (Inter)</label>
+                  <input
+                    value={cepDoc}
+                    onChange={e => setCepDoc(mascararCep(e.target.value))}
+                    placeholder="00000-000"
+                    inputMode="numeric"
+                    aria-label="CEP do pagador do boleto"
+                    className={`w-full p-4 bg-gray-50 border-2 rounded-2xl text-sm font-black text-center outline-none ${cepBoletoOk ? 'border-emerald-200 focus:ring-2 focus:ring-emerald-100' : 'border-amber-200 focus:ring-2 focus:ring-amber-100'}`}
+                  />
+                  {cepBoletoOk ? (
+                    <p className="text-[8px] font-black text-emerald-600 uppercase text-center leading-snug"><i className="fa-solid fa-circle-check mr-1"></i>CEP OK — gravado e enviado para o cadastro do cliente.</p>
+                  ) : (
+                    <p className="text-[8px] font-bold text-amber-600/90 leading-snug"><i className="fa-solid fa-map-location-dot mr-1"></i>Peça o CEP ao cliente e digite acima — SEM CEP o boleto do Inter não gera e a venda não finaliza.</p>
                   )}
-                  <p className="text-[8px] font-bold text-amber-600/80 leading-snug">Sem CEP a venda pode concluir, mas o boleto só gera depois que o cadastro tiver o CEP (ou digitando na hora no card do boleto).</p>
                 </div>
-              )}
-              {formaDoc === 'BOLETO' && clienteCepOk && (
-                <p className="text-[8px] font-black text-indigo-500 uppercase text-center leading-snug bg-indigo-50 border border-indigo-100 rounded-xl px-3 py-2"><i className="fa-solid fa-circle-check mr-1"></i>CEP OK — o boleto é gerado MAIS TARDE (tela final ou cupom da venda) já com o vencimento combinado{vencimentoDoc ? ` ${vencimentoDoc.split('-').reverse().join('/')}` : ''}.</p>
-              )}
-              {/* BLOCO 192 (regra do dono): pagador do boleto — a tela SEMPRE
-                  aparece (nunca pula). NF-e puxa o CNPJ + CEP do cadastro;
-                  NFC-e identificada puxa o CPF da identificação; sem nenhum
-                  deles o vendedor DIGITA o CPF agora. Obrigatório finalizar. */}
-              {formaDoc === 'BOLETO' && (() => {
-                const fonte = boletoCpfDoc
-                  ? 'digitado na venda'
-                  : nfcCpfValido && docEscolhido === 'NFCE'
-                    ? 'CPF da identificação da NFC-e'
-                    : docCadastroOk
-                      ? `${docCadastroDig.length === 14 ? 'CNPJ' : 'CPF'} do cadastro`
-                      : '';
-                return (
-                  <div className="bg-white rounded-3xl border border-gray-100 p-4 space-y-2">
-                    <label className="text-[9px] font-black text-gray-400 uppercase">CPF/CNPJ do pagador do boleto — obrigatório</label>
-                    <input
-                      value={boletoDocDig ? mascararCpfCnpj(boletoDocDig) : ''}
-                      onChange={e => setBoletoCpfDoc(mascararCpfCnpj(e.target.value))}
-                      placeholder="000.000.000-00"
-                      inputMode="numeric"
-                      aria-label="CPF ou CNPJ do pagador do boleto"
-                      className={`w-full p-4 bg-gray-50 border-2 rounded-2xl text-sm font-black text-center outline-none ${boletoDocOk ? 'border-emerald-200 focus:ring-2 focus:ring-emerald-100' : 'border-amber-200 focus:ring-2 focus:ring-amber-100'}`}
-                    />
-                    {boletoDocOk ? (
-                      <p className="text-[8px] font-black text-emerald-600 uppercase text-center leading-snug"><i className="fa-solid fa-circle-check mr-1"></i>{boletoDocTipo} OK{fonte ? ` — ${fonte}` : ''}{docEscolhido === 'NFE' && docCadastroOk ? ' · CEP do cadastro completa o boleto' : ''}.</p>
-                    ) : (
-                      <p className="text-[8px] font-bold text-amber-600/90 leading-snug"><i className="fa-solid fa-id-card mr-1"></i>{docEscolhido === 'NFE'
-                        ? 'NF-e puxa o CNPJ e o CEP do cadastro — cadastre o CNPJ ou digite o documento do pagador acima.'
-                        : docEscolhido === 'NFCE' && nfcQuerIdentificar === false
-                          ? 'Nota anônima: o boleto puxa o CPF do cadastro — sem CPF no cadastro, peça ao cliente e digite aqui.'
-                          : 'Peça o CPF do cliente (ou CNPJ) e digite acima — SEM ele o boleto do Inter não gera e a venda não finaliza.'}</p>
-                    )}
-                  </div>
-                );
-              })()}
+              ))}
+              {/* BLOCO 192/196 (regra do dono): pagador do boleto — regras por
+                  documento. NF-e = cliente CNPJ: NÃO pede CPF (o boleto puxa o
+                  CNPJ do cadastro — NF-e não usa CPF). NFC-e/cupom com boleto:
+                  o vendedor PRECISA preencher CPF e CEP. Obrigatório finalizar. */}
+              {formaDoc === 'BOLETO' && (docEscolhido === 'NFE' ? cardPagadorNfe : cardPagadorPf)}
             </div>
           )}
         </div>
@@ -2434,7 +2505,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               notaStatus={notaResult?.status}
               notaNumero={notaResult?.numero}
               notaTipo={notaResult?.tipo}
-              clienteDoc={client.cnpj}
+              clienteDoc={client.cnpj || (client as { cpf?: string }).cpf || (sucessoData.sale as { boletoCpf?: string })?.boletoCpf || ''}
               clienteCep={client.enderecoCep}
               clienteTelefone={client.telefone}
               clienteNome={client.nomeFantasia || client.nome}

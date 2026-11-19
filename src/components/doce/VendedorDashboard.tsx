@@ -1392,6 +1392,9 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         nfcCpfInicial={nfcCpfModo}
         /* BLOCO 122 (tela 4): NF-e sem CNPJ/email → "Completar cadastro agora" */
         onCompletarCadastro={completarCadastroDoPDV}
+        // BLOCO 196 (regra do dono): CEP digitado na tela 6 grava NO CADASTRO
+        // do cliente (fetchCoreData recarrega — o boleto puxa o CEP sozinho)
+        gravarCepCliente={(clientId, cep) => updateClient(clientId, { enderecoCep: cep })}
         sales={sales} 
         onNavigateToCredit={handleNavigateToCredit}
         categories={categories}

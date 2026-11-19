@@ -17,9 +17,10 @@ import { DAVID_USER_ID, isDavidNome } from '@/lib/equipe';
 // BLOCO 123: regras fiscais ARMADAS porém DESLIGADAS (FISCAL_OBRIGATORIO=false
 // até o dono implantar a API fiscal) — bloqueio de carga sem nota batida.
 import { FISCAL_OBRIGATORIO, cargaBloqueadaPorNota } from '@/lib/regras-fiscais';
-// BLOCO 154 (regra do dono): TODAS as notas ficam salvas no portal MESMO
-// EXCLUINDO a venda — a nota é congelada (avulsa) antes da venda ser apagada.
-import { arquivarNotaDaVenda } from '@/lib/cascataCancelamento';
+// BLOCO 192 (regra do dono): EXCLUIR venda com nota batida CANCELA a nota na
+// SEFAZ NA HORA (cancelarNotaAntesExclusao) e depois arquiva no Portal —
+// todas as notas continuam salvas no portal mesmo excluindo a venda.
+import { cancelarNotaAntesExclusao } from '@/lib/cascataCancelamento';
 
 /**
  * PRÉ-VENDA / ROTAS DE ENTREGA (estilo Shopee)
@@ -1839,17 +1840,19 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, documento: docNovo });
     }
 
-    // ---------- ARQUIVAR_NOTA_EXCLUSAO (BLOCO 154 — regra do dono) ----------
-    // Congela a NOTA da venda no Portal Fiscal (avulsa com o status REAL) ANTES
-    // de uma exclusao que NAO passa pela API (caminho RPC do cupom). Depois
-    // disso a venda pode ser apagada sem a nota sumir do portal.
+    // ---------- ARQUIVAR_NOTA_EXCLUSAO (BLOCO 192 — regra do dono) ----------
+    // EXCLUIR uma venda que tem NFC-e/NF-e BATIDA CANCELA A NOTA NA SEFAZ NA
+    // HORA (justificativa automática). Cancelou → arquivada como CANCELADO no
+    // Portal Fiscal. A SEFAZ recusou (prazo 30min/24h vencido) → arquivada com
+    // o status REAL e o aviso manda o admin resolver no Portal/SEFAZ. Depois
+    // disso a venda pode ser apagada sem a nota sumir nem ficar viva.
     // Idempotente: rodar de novo só regrava o mesmo JSON (mesma ref).
     if (acao === 'ARQUIVAR_NOTA_EXCLUSAO') {
       if (!admin) {
         return NextResponse.json({ ok: false, error: 'Somente o admin gerencia exclusao de vendas e notas fiscais.' }, { status: 403 });
       }
       if (!(await hasNotaColumns())) {
-        return NextResponse.json({ ok: true, arquivada: false, msg: 'Schema fiscal ausente — nada a arquivar.' });
+        return NextResponse.json({ ok: true, arquivada: false, canceladaSefaz: false, msg: 'Schema fiscal ausente — nada a arquivar.' });
       }
       const [temChaveN, temEmitN] = await Promise.all([hasBoletoColumns(), hasNotaEmitidaEm()]);
       const selNota = [
@@ -1860,13 +1863,24 @@ export async function POST(req: NextRequest) {
       const { data: sArq } = await supabase.from('sales').select(selNota).eq('id', saleId).maybeSingle();
       const sA = ((sArq || {}) as unknown) as Record<string, unknown>;
       if (!String(sA.nota_ref || '')) {
-        return NextResponse.json({ ok: true, arquivada: false, msg: 'Venda sem nota fiscal — nada a arquivar.' });
+        return NextResponse.json({ ok: true, arquivada: false, canceladaSefaz: false, msg: 'Venda sem nota fiscal — nada a cancelar/arquivar.', aviso: '' });
       }
-      const rArq = await arquivarNotaDaVenda(sA);
-      if (!rArq.ok) {
-        return NextResponse.json({ ok: false, error: `Falha ao arquivar a nota no portal: ${rArq.motivo || 'erro'}` }, { status: 500 });
+      const rCanc = await cancelarNotaAntesExclusao(sA);
+      const docLabel = String(sA.nota_tipo || '').toUpperCase() === 'NFCE' ? 'NFC-e' : 'NF-e';
+      const numeroN = String(sA.nota_numero || '');
+      let aviso: string;
+      if (rCanc.canceladaSefaz) {
+        aviso = `${docLabel}${numeroN ? ` Nº ${numeroN}` : ''} CANCELADA na SEFAZ na hora da exclusão e arquivada no Portal Fiscal (CANCELADAS).${rCanc.avisoArquivamento ? ' ' + rCanc.avisoArquivamento : ''}`;
+      } else if (String(sA.nota_status || '').toUpperCase() === 'AUTORIZADA') {
+        aviso = `ATENÇÃO: a ${docLabel}${numeroN ? ` Nº ${numeroN}` : ''} NÃO pôde ser cancelada na SEFAZ (${rCanc.motivo}) — segue ARQUIVADA com o status real no Portal Fiscal. Resolva no Portal Fiscal ou no portal da SEFAZ.${rCanc.avisoArquivamento ? ' ' + rCanc.avisoArquivamento : ''}`;
+      } else {
+        aviso = rCanc.avisoArquivamento || `Nota ${docLabel} arquivada no Portal Fiscal (status ${String(sA.nota_status || '') || 'atual'}).`;
       }
-      return NextResponse.json({ ok: true, arquivada: true, msg: 'Nota congelada no Portal Fiscal — a venda pode ser excluida sem perder a NF.' });
+      if (!rCanc.arquivada && String(sA.nota_status || '').toUpperCase() !== 'AUTORIZADA' && !rCanc.canceladaSefaz) {
+        // falha de arquivamento em nota sem cancelamento — segue o aviso geral
+        return NextResponse.json({ ok: false, error: aviso, canceladaSefaz: rCanc.canceladaSefaz }, { status: 500 });
+      }
+      return NextResponse.json({ ok: true, arquivada: rCanc.arquivada, canceladaSefaz: rCanc.canceladaSefaz, aviso, msg: aviso });
     }
 
     // ---------- EXCLUIR_VENDA ----------
@@ -1886,22 +1900,26 @@ export async function POST(req: NextRequest) {
         }
         return NextResponse.json({ ok: false, error: 'A exclusao de vendas agora e feita APENAS pelo administrador. Para excluir este pedido (ou cancelar uma NF-e/NFC-e atrelada), fale com o admin.' }, { status: 403 });
       }
-      // BLOCO 154: congela a nota ANTES de apagar a venda (best-effort mas
-      // com aviso na resposta — o Portal reimporta depois se falhar).
+      // BLOCO 192: CANCELA a nota batida na SEFAZ NA HORA antes de apagar a
+      // venda (best-effort com aviso na resposta — o Portal reimporta depois
+      // se o arquivamento falhar).
       let avisoNota = '';
       if (await hasNotaColumns()) {
         const [temChaveN, temEmitN] = await Promise.all([hasBoletoColumns(), hasNotaEmitidaEm()]);
         const selNota = [
-          'nota_ref, nota_tipo, nota_status, nota_numero',
+          'nota_ref, nota_tipo, nota_status, nota_numero, client_id, vendedor_id, valor_total, metodo_pagamento',
           temChaveN ? ', nota_chave' : '',
           temEmitN ? ', nota_emitida_em' : '',
         ].join('');
         const { data: sNotaEx } = await supabase.from('sales').select(selNota).eq('id', saleId).maybeSingle();
         const sN = ((sNotaEx || {}) as unknown) as Record<string, unknown>;
         if (String(sN.nota_ref || '')) {
-          const rArq = await arquivarNotaDaVenda(sN);
-          if (!rArq.ok) {
-            avisoNota = `A nota ${String(sN.nota_ref)} NAO foi arquivada no portal (${rArq.motivo || 'erro'}) — use Portal Fiscal > Buscar TODAS na Focus para recuperar.`;
+          const rCanc = await cancelarNotaAntesExclusao(sN);
+          const docLabel = String(sN.nota_tipo || '').toUpperCase() === 'NFCE' ? 'NFC-e' : 'NF-e';
+          if (rCanc.canceladaSefaz) {
+            avisoNota = `${docLabel} Nº ${String(sN.nota_numero || '')} CANCELADA na SEFAZ e arquivada no Portal.`;
+          } else {
+            avisoNota = `A ${docLabel} Nº ${String(sN.nota_numero || '')} NÃO foi cancelada na SEFAZ (${rCanc.motivo}) — resolva no Portal Fiscal.${rCanc.avisoArquivamento ? ' ' + rCanc.avisoArquivamento : ''}`;
           }
         }
       }

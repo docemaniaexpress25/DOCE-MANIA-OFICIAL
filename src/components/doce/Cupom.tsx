@@ -478,9 +478,9 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
 
   const handleDelete = () => {
     if (onDeleteSale) {
-      // BLOCO 154: a nota fiscal (NF-e/NFC-e) NÃO é apagada — ela é congelada
-      // no Portal Fiscal antes da venda ser excluída (regra do dono).
-      setModal({title:'Excluir Venda', message:'Deseja EXCLUIR esta venda permanentemente? O estoque sera devolvido ao vendedor. A NOTA FISCAL (se houver) fica arquivada no Portal Fiscal. Esta acao nao pode ser desfeita.', icon:'fa-solid fa-trash-can', type:'danger', onConfirm:()=>{setModal(null); onDeleteSale(sale.id); onClose();}});
+      // BLOCO 192: a nota fiscal batida (NF-e/NFC-e) é CANCELADA na SEFAZ na
+      // hora da exclusão e arquivada no Portal Fiscal (regra do dono).
+      setModal({title:'Excluir Venda', message:'Deseja EXCLUIR esta venda permanentemente? O estoque sera devolvido ao vendedor. Se houver NFC-e/NF-e BATIDA, a nota sera CANCELADA na SEFAZ NA HORA e arquivada no Portal Fiscal (CANCELADAS). Esta acao nao pode ser desfeita.', icon:'fa-solid fa-trash-can', type:'danger', onConfirm:()=>{setModal(null); onDeleteSale(sale.id); onClose();}});
     }
   };
 

@@ -113,12 +113,13 @@ const JanelaFiscal: React.FC<JanelaFiscalProps> = ({ sale, client, nota, focus, 
       onNotaChange({ ...nota, ...r.nota });
       setCancelAberto(false); setJustificativa('');
       if (r.nota.status === 'CANCELADA') {
-        // BLOCO 147: o servidor cancelou o BOLETO junto, arquivou a nota no
-        // Portal Fiscal (CANCELADAS) e limpou a venda — mostra a cascata.
-        setInfo(r.aviso || 'Nota CANCELADA na SEFAZ — o XML original continua existindo (evento de cancelamento).');
+        // BLOCO 192 (regra do dono): o servidor cancelou o BOLETO junto e
+        // arquivou a nota no Portal Fiscal (CANCELADAS) — mas a VENDA continua
+        // no sistema (nada é excluído; o dono ajusta o que precisar).
+        setInfo(r.aviso || 'Nota CANCELADA na SEFAZ — arquivada no Portal Fiscal. A VENDA CONTINUA no sistema.');
         showToast?.(r.bloqueioBoleto
           ? 'Nota cancelada, mas o BOLETO continua VIVO! Cancele-o no Portal Fiscal (Ações > Boleto > Cancelar).'
-          : 'Nota cancelada na SEFAZ!', r.bloqueioBoleto ? 'error' : 'success');
+          : 'Nota cancelada na SEFAZ! A venda continua no sistema para ajustes.', r.bloqueioBoleto ? 'error' : 'success');
         onNotaCancelada?.();
       } else {
         setInfo('Cancelamento enviado — toque em "Atualizar situação" em alguns segundos.');

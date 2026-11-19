@@ -1,29 +1,25 @@
 import { getServiceClient } from '@/lib/serverSupabase';
-import {
-  hasNotaColumns,
-  hasModoVendaColumn,
-  hasEstoquesNotaColumns,
-  hasEstoqueBaixadoColumn,
-} from '@/lib/serverSchema';
 import { arquivarNotaCancelada } from '@/lib/focusArquivos';
+import { cancelarNota, interpretarResultado, isFocusConfigured, FocusDoc } from '@/lib/focusNfe';
 
 /**
- * BLOCO 147 — CASCATA DO CANCELAMENTO DA NOTA (regra do dono):
+ * BLOCO 192 — CASCATA FISCAL (regras do dono, atualizadas):
  *
- * "AS NOTAS CANCELADAS ESTAO SUMINDO DO PORTAL, ELAS DEVEM APARECER EM
- *  CANCELADAS! QUANDO CANCELAR UMA NOTA JUNTO DEVEREMOS CANCELAR O BOLETO!"
+ *  REGRA 1 — "SE EU EXCLUIR UMA VENDA QUE TIVER NOTA BATIDA NFC OU NF-e VC
+ *  DEVE CANCELAR A NOTA NA HORA":
+ *    `cancelarNotaAntesExclusao()` tenta o cancelamento na SEFAZ
+ *    (justificativa automática) ANTES de apagar a venda. Cancelou → a nota é
+ *    arquivada no Portal como CANCELADO. A SEFAZ recusou (prazo vencido de
+ *    30min/24h) → a nota segue ARQUIVADA com o status REAL (AUTORIZADO) e o
+ *    chamador avisa o admin para resolver no Portal Fiscal/portal da SEFAZ.
  *
- * O que esta lib faz (sempre DEPOIS que a SEFAZ confirmou o cancelamento):
- *  0) ARQUIVA a nota cancelada como AVULSA no Portal Fiscal (filtro
- *     CANCELADAS) — DANFE, XML e XML do cancelamento ficam no nosso Storage
- *     com cliente/valor/pagamento/vendedor da venda original. Era AQUI que a
- *     nota sumia: a venda era apagada e nada sobrevivia no portal.
- *  1) Devolve a reserva de estoque de CASA (estoque_baixado da pré-venda).
- *  2) Abate o contador de saída (estoque 1 COM NF / estoque 2 SEM NF).
- *  3) EXCLUI a venda (RPC excluir_venda_estornar_estoque devolve a carga da
- *     van, apaga comissões/comprovantes/eventos/itens e a venda; fallback
- *     manual com o mesmo contrato).
- *  4) Recalcula o total de paradas da rota de entrega.
+ *  REGRA 2 — "SE EU CANCELAR A NOTA ANTES VC NÃO DEVE EXCLUIR A VENDA PQ DE
+ *  REPENTE EU VOU AJUSTAR ALGO":
+ *    o cancelamento da nota (/api/notas acao=CANCELAR) NÃO exclui mais a
+ *    venda e NÃO mexe em estoque/comissão — a venda fica intacta para o dono
+ *    ajustar (e o boleto do Inter continua sendo cancelado junto, regra do
+ *    BLOCO 147). O arquivamento no Portal acontece aqui pelo helper
+ *    `arquivarNotaDaVenda()`.
  *
  * Falha de qualquer etapa NUNCA sobe exceção — vira mensagem na lista de
  * avisos para o admin resolver manualmente.
@@ -34,9 +30,9 @@ import { arquivarNotaCancelada } from '@/lib/focusArquivos';
  *
  * Regra do dono: "TODAS as notas geradas pela Focus devem ficar salvas no
  * nosso portal, MESMO QUE EU EXCLUA A VENDA no meu sistema". Chamado:
- *  - no CANCELAMENTO da nota (finalizarVendaCancelada) — statusFinal CANCELADO;
- *  - na EXCLUSAO de venda (API pre-venda) — status REAL preservado
- *    (AUTORIZADA continua AUTORIZADA no portal, com DANFE/XML).
+ *  - no CANCELAMENTO da nota (regra 2 do BLOCO 192) — statusFinal CANCELADO;
+ *  - na EXCLUSAO de venda (API pre-venda, BLOCO 192 regra 1) — status conforme
+ *    o resultado do cancelamento na SEFAZ.
  *
  * Enriquece a avulsa com cliente (fantasia), vendedor, numero, chave, valor e
  * pagamento da venda original. Falha NUNCA sobe excecao — vira motivo para o
@@ -68,8 +64,8 @@ export async function arquivarNotaDaVenda(
       vendedorNome = String(vRow?.nome || '');
     }
     const st = String(sRow.nota_status || '').toUpperCase();
-    // Exclusao preserva o status REAL da nota — cancelamento continua forçando
-    // CANCELADO (o chamador manda, default mantem o contrato do BLOCO 147).
+    // Exclusao preserva o status REAL da nota (a menos que o cancelamento na
+    // SEFAZ tenha funcionado — ai o chamador manda statusFinal CANCELADO).
     const statusFinal = opts?.statusFinal
       || (st === 'AUTORIZADA' ? 'AUTORIZADO'
         : st === 'REJEITADA' ? 'REJEITADO'
@@ -96,127 +92,57 @@ export async function arquivarNotaDaVenda(
   }
 }
 
-export async function finalizarVendaCancelada(saleId: string): Promise<string[]> {
-  const cascade: string[] = [];
-  const db = getServiceClient();
-
-  const [temNota, temModo, temEstoques, temBaixado] = await Promise.all([
-    hasNotaColumns(),
-    hasModoVendaColumn(),
-    hasEstoquesNotaColumns(),
-    hasEstoqueBaixadoColumn(),
-  ]);
-
-  // ----- dados da venda (uma leitura só) -----
-  const sel = [
-    'id, route_id, client_id, vendedor_id, valor_total, metodo_pagamento',
-    temNota ? ', nota_tipo, nota_ref, nota_numero, nota_status' : '',
-    temModo ? ', modo_nota' : '',
-    temBaixado ? ', estoque_baixado' : '',
-  ].join('');
-  const { data: sX } = await db.from('sales').select(sel).eq('id', saleId).single();
-  const sRow = ((sX as unknown) as Record<string, unknown>) || {};
-
-  // ----- 0) ARQUIVA A NOTA CANCELADA NO PORTAL (CANCELADAS) -----
-  // BLOCO 154: a congelacao agora e o helper arquivarNotaDaVenda (mesmo
-  // caminho da EXCLUSAO de venda) — um unico codigo para as duas regras.
+/**
+ * BLOCO 192 — REGRA 1: cancela a nota na SEFAZ NA HORA quando a venda vai ser
+ * excluída. Só tenta quando a nota está AUTORIZADA (batida); REJEITADA/EMITINDO
+ * não tem o que cancelar. O arquivamento no Portal acontece sempre:
+ *  - cancelou  → CANCELADO;
+ *  - recusou/sem Focus → status REAL preservado (aviso para o admin).
+ */
+export async function cancelarNotaAntesExclusao(
+  sRow: Record<string, unknown>,
+): Promise<{ canceladaSefaz: boolean; motivo: string; arquivada: boolean; avisoArquivamento?: string }> {
   const ref = String(sRow.nota_ref || '');
-  if (ref) {
-    try {
-      const rA = await arquivarNotaDaVenda(sRow, { statusFinal: 'CANCELADO' });
-      if (rA.ok) cascade.push('Nota cancelada arquivada no Portal Fiscal (filtro CANCELADAS)');
-      else if (rA.motivo !== 'SEM_NOTA') cascade.push(`Arquivamento da nota cancelada falhou (${rA.motivo || 'erro'}) — reimporte depois em Ações > Importar`);
-    } catch (eA) {
-      cascade.push(`Arquivamento da nota cancelada falhou (${(eA as Error).message}) — reimporte depois em Ações > Importar`);
-    }
+  const tipoNota = String(sRow.nota_tipo || '').toUpperCase();
+  const status = String(sRow.nota_status || '').toUpperCase();
+  if (!ref || (tipoNota !== 'NFCE' && tipoNota !== 'NFE')) {
+    return { canceladaSefaz: false, motivo: 'SEM_NOTA', arquivada: false };
   }
 
-  // ----- 1) reserva da PRÉ-VENDA → devolve ao ESTOQUE TOTAL de casa -----
-  try {
-    if (temBaixado && sRow.estoque_baixado === true) {
-      await db.from('sales').update({ estoque_baixado: false }).eq('id', saleId);
-      const { data: itensRes } = await db.from('sale_items').select('produto_id, quantidade').eq('sale_id', saleId);
-      const devolve = new Map<string, number>();
-      for (const it of ((itensRes || []) as unknown) as Record<string, unknown>[]) {
-        const pid = String(it.produto_id || '');
-        if (pid) devolve.set(pid, (devolve.get(pid) || 0) + (Number(it.quantidade) || 0));
-      }
-      const idsDev = [...devolve.keys()];
-      if (idsDev.length > 0) {
-        const { data: prodsDev } = await db.from('products').select('id, estoque_principal').in('id', idsDev);
-        for (const p of ((prodsDev || []) as unknown) as Record<string, unknown>[]) {
-          await db.from('products').update({
-            estoque_principal: (Number(p.estoque_principal) || 0) + (devolve.get(String(p.id)) || 0),
-          }).eq('id', String(p.id));
+  let canceladaSefaz = false;
+  let motivo = '';
+  if (status === 'AUTORIZADA') {
+    if (!isFocusConfigured()) {
+      motivo = 'Focus NFe não configurada (FOCUS_NFE_TOKEN) — o cancelamento automático não rodou.';
+    } else {
+      try {
+        const doc: FocusDoc = tipoNota === 'NFCE' ? 'nfce' : 'nfe';
+        const rC = await cancelarNota(doc, ref, 'Venda excluida no sistema - cancelamento automatico');
+        if (rC.ok && rC.data && !('erro' in rC.data)) {
+          const res = interpretarResultado(rC.data as Record<string, unknown>);
+          if (res.cancelada) {
+            canceladaSefaz = true;
+          } else {
+            motivo = res.motivo || 'SEFAZ recusou o cancelamento (confira o prazo de 30min/24h).';
+          }
+        } else {
+          motivo = (rC.data as { erro?: string })?.erro || 'Falha ao cancelar na Focus NFe.';
         }
-        cascade.push('Estoque TOTAL (casa) reposto');
+      } catch (eC) {
+        motivo = `Falha ao cancelar na SEFAZ (${(eC as Error).message}).`;
       }
     }
-  } catch (e1) {
-    cascade.push(`Estoque de casa não reposto (${(e1 as Error).message}) — revise manualmente`);
+  } else {
+    motivo = `Nota não está AUTORIZADA (status ${status || 'indefinido'}) — nada a cancelar na SEFAZ.`;
   }
 
-  // ----- 2) abate o CONTADOR DE SAÍDA (estoque 1 COM NF / estoque 2 SEM NF) -----
-  try {
-    if (temEstoques) {
-      const modoVenda = String(sRow.modo_nota || sRow.nota_tipo || '').toUpperCase();
-      const colContador = modoVenda === 'CUPOM' ? 'estoque_semnf' : 'estoque_nota';
-      const { data: itensRes } = await db.from('sale_items').select('produto_id, quantidade').eq('sale_id', saleId);
-      const totais = new Map<string, number>();
-      for (const it of ((itensRes || []) as unknown) as Record<string, unknown>[]) {
-        const pid = String(it.produto_id || '');
-        if (pid) totais.set(pid, (totais.get(pid) || 0) + (Number(it.quantidade) || 0));
-      }
-      const idsC = [...totais.keys()];
-      if (idsC.length > 0) {
-        const { data: prodsC } = await db.from('products').select(`id, ${colContador}`).in('id', idsC);
-        for (const p of ((prodsC || []) as unknown) as Record<string, unknown>[]) {
-          const q = totais.get(String(p.id)) || 0;
-          if (q <= 0) continue;
-          await db.from('products').update({
-            [colContador]: Math.max(0, (Number(p[colContador]) || 0) - q),
-          }).eq('id', String(p.id));
-        }
-        cascade.push('Contador de saídas (estoque 1/2) corrigido');
-      }
-    }
-  } catch (e2) {
-    cascade.push(`Contador de saídas não corrigido (${(e2 as Error).message})`);
-  }
-
-  // ----- 3) carga da VAN + exclusão (comissões, comprovantes, itens, venda) -----
-  try {
-    const rRpc = await db.rpc('excluir_venda_estornar_estoque', { p_sale_id: saleId });
-    if (rRpc.error) {
-      // fallback manual — mesmo contrato do RPC (padrão do projeto)
-      const { data: itensRes } = await db.from('sale_items').select('produto_id, quantidade').eq('sale_id', saleId);
-      const { data: sVend } = await db.from('sales').select('vendedor_id').eq('id', saleId).single();
-      const vendedorId = String((sVend as Record<string, unknown>)?.vendedor_id || '');
-      for (const it of ((itensRes || []) as unknown) as Record<string, unknown>[]) {
-        const { data: cRow } = await db.from('cargas').select('quantidade')
-          .eq('vendedor_id', vendedorId).eq('produto_id', String(it.produto_id)).maybeSingle();
-        await db.from('cargas').update({ quantidade: (Number((cRow as Record<string, unknown>)?.quantidade) || 0) + (Number(it.quantidade) || 0) })
-          .eq('vendedor_id', vendedorId).eq('produto_id', String(it.produto_id));
-      }
-      await db.from('commissions').delete().eq('sale_id', saleId);
-      await db.from('payment_comprovantes').delete().eq('sale_id', saleId);
-      await db.from('entrega_eventos').delete().eq('sale_id', saleId);
-      await db.from('sale_items').delete().eq('sale_id', saleId);
-      await db.from('sales').delete().eq('id', saleId);
-    }
-    cascade.push('Venda excluída do sistema — estoque devolvido (carga da van + casa)');
-  } catch (e3) {
-    cascade.push(`Exclusão da venda não concluída (${(e3 as Error).message}) — revise manualmente`);
-  }
-
-  // ----- 4) rota de entrega: recalcula o total de paradas (best-effort) -----
-  const routeId = String(sRow.route_id || '');
-  if (routeId) {
-    try {
-      const { count } = await db.from('sales').select('id', { count: 'exact', head: true }).eq('route_id', routeId);
-      await db.from('entrega_rotas').update({ total_paradas: count || 0 }).eq('id', routeId);
-    } catch { /* rota já pode ter sido removida */ }
-  }
-
-  return cascade;
+  // Arquiva SEMPRE (best-effort): CANCELADO quando a SEFAZ aceitou, status
+  // real preservado quando recusou — a nota nunca some do portal.
+  const rA = await arquivarNotaDaVenda(sRow, canceladaSefaz ? { statusFinal: 'CANCELADO' } : undefined);
+  return {
+    canceladaSefaz,
+    motivo,
+    arquivada: rA.ok,
+    avisoArquivamento: rA.ok ? undefined : `Falha ao arquivar no Portal (${rA.motivo || 'erro'}) — use Portal Fiscal > Buscar TODAS na Focus.`,
+  };
 }

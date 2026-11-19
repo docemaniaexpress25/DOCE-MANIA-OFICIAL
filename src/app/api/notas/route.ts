@@ -3,8 +3,10 @@ import { after } from 'next/server';
 import { getServiceClient, devBridge } from '@/lib/serverSupabase';
 import { sessionFromRequest } from '@/lib/session';
 import { hasNotaColumns, hasProductFiscalColumns, hasBoletoColumns, hasPrecoCupom, hasNotaEmitidaEm, hasClientModoCupom, hasProductCodigoColumn, hasProductCodigoGbColumn, hasClientEspecialGbColumn } from '@/lib/serverSchema';
-// BLOCO 147: cascata do cancelamento (arquivar nota cancelada no portal + estoque + exclusão da venda)
-import { finalizarVendaCancelada } from '@/lib/cascataCancelamento';
+// BLOCO 192 (regra do dono): cancelar a nota NÃO exclui mais a venda — o
+// dono pode precisar ajustar algo. A nota cancelada é ARQUIVADA no Portal
+// (helper arquivarNotaDaVenda) e a venda permanece intocada no sistema.
+import { arquivarNotaDaVenda } from '@/lib/cascataCancelamento';
 import { lerEmitentePayload, lerErpConfig } from '@/lib/erpConfig';
 import {
   getFocusConfig,
@@ -262,21 +264,18 @@ export async function POST(req: NextRequest) {
     });
 
     // -----------------------------------------------------------------
-    // BLOCO 147 — CASCATA AUTOMÁTICA DO CANCELAMENTO (regra do dono):
-    // "QUANDO CANCELAR UMA NOTA JUNTO DEVEREMOS CANCELAR O BOLETO!" e
-    // "AS NOTAS CANCELADAS DEVEM APARECER EM CANCELADAS NO PORTAL!"
-    //   0. BOLETO INTER: cancelado JUNTO — e vem PRIMEIRO. Se o boleto está
-    //      vivo e NÃO conseguiu cancelar (Inter fora/sem config), a venda NÃO
-    //      é apagada: fica no Portal Fiscal em CANCELADAS com o boleto vivo
-    //      para o admin resolver (Ações > Boleto > Cancelar) — depois que o
-    //      boleto sai, a finalização acontece sozinha. Nada de boleto órfão.
+    // BLOCO 192 (regra do dono): O QUE ACONTECE AO CANCELAR A NOTA:
+    //   0. BOLETO INTER: cancelado JUNTO (regra antiga do BLOCO 147 — se o
+    //      Inter falhar a nota segue cancelada e o aviso pede o cancelamento
+    //      manual no Portal Fiscal > Ações > Boleto).
     //   1. Nota cancelada é ARQUIVADA como avulsa no Portal (filtro
     //      CANCELADAS): DANFE + XML + XML do cancelamento + cliente, valor,
-    //      pagamento e vendedor da venda original — era EXATAMENTE aqui que
-    //      a nota cancelada sumia do portal (a venda apagava e nada restava).
-    //   2. produtos VOLTAM AO ESTOQUE (casa + contadores 1/2 + carga da van);
-    //   3. a VENDA é EXCLUÍDA do sistema (itens, comissões, comprovantes,
-    //      eventos de entrega).
+    //      pagamento e vendedor da venda original.
+    //   2. A VENDA CONTINUA no sistema — SEM exclusão, SEM estorno de
+    //      estoque, SEM tocar em comissão: "se eu cancelar a nota antes vc
+    //      não deve excluir a venda pq de repente eu vou ajustar algo". O
+    //      admin ajusta o que precisar e depois exclui a venda pela tela
+    //      normal (a exclusão devolve o estoque e cancela o que faltar).
     // Falha de qualquer etapa NUNCA desfaz o cancelamento na SEFAZ — vira
     // aviso na resposta para o admin resolver manualmente.
     // -----------------------------------------------------------------
@@ -298,24 +297,29 @@ export async function POST(req: NextRequest) {
                 await db.from('sales').update({ inter_boleto_status: 'CANCELADO', inter_boleto_erro: null }).eq('id', saleId);
                 cascade.push('Boleto bancário cancelado no Inter');
               } else {
-                cascade.push(`Boleto NÃO cancelado no Inter (${rB.erro || 'falha'}) — a venda fica no portal em CANCELADAS até o boleto ser cancelado (Ações > Boleto > Cancelar)`);
+                cascade.push(`Boleto NÃO cancelado no Inter (${rB.erro || 'falha'}) — cancele no Portal Fiscal (Ações > Boleto > Cancelar)`);
                 boletoBloqueado = true;
               }
             } else {
-              cascade.push('Boleto vivo mas o Inter não está configurado — a venda fica no portal em CANCELADAS até o boleto ser cancelado');
+              cascade.push('Boleto vivo mas o Inter não está configurado — cancele no Portal Fiscal (Ações > Boleto > Cancelar)');
               boletoBloqueado = true;
             }
           }
         }
       } catch (eB) {
-        cascade.push(`Boleto não cancelado (${(eB as Error).message}) — a venda fica no portal em CANCELADAS até resolver`);
+        cascade.push(`Boleto não cancelado (${(eB as Error).message}) — cancele no Portal Fiscal (Ações > Boleto > Cancelar)`);
         boletoBloqueado = true;
       }
 
-      // ----- 1) ARQUIVA A NOTA NO PORTAL (CANCELADAS) + 2) ESTOQUE + 3) EXCLUSÃO -----
-      if (!boletoBloqueado) {
-        const msgs = await finalizarVendaCancelada(saleId);
-        cascade.push(...msgs);
+      // ----- 1) ARQUIVA A NOTA NO PORTAL (CANCELADAS) — a venda PERMANECE -----
+      if (sale.nota_ref) {
+        try {
+          const rA = await arquivarNotaDaVenda(sale as Record<string, unknown>, { statusFinal: 'CANCELADO' });
+          if (rA.ok) cascade.push('Nota cancelada arquivada no Portal Fiscal (filtro CANCELADAS)');
+          else if (rA.motivo !== 'SEM_NOTA') cascade.push(`Arquivamento da nota cancelada falhou (${rA.motivo || 'erro'}) — reimporte depois em Ações > Importar`);
+        } catch (eA) {
+          cascade.push(`Arquivamento da nota cancelada falhou (${(eA as Error).message}) — reimporte depois em Ações > Importar`);
+        }
       }
     }
 
@@ -325,7 +329,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       ok: res.cancelada,
       aviso: res.cancelada
-        ? `Nota cancelada na SEFAZ. ${cascade.length > 0 ? cascade.join(' · ') + '.' : ''}`
+        ? `Nota cancelada na SEFAZ e arquivada no Portal (CANCELADAS). A VENDA CONTINUA no sistema para ajustes — ela NÃO foi excluída.${cascade.length > 0 ? ' ' + cascade.join(' · ') + '.' : ''}`
         : (doc === 'nfce'
           ? 'NFC-e so pode ser cancelada em ate 30 minutos apos a emissao (regra da SEFAZ).'
           : undefined),

@@ -910,11 +910,11 @@ const App: React.FC = () => {
   };
 
   const deleteSale = async (id: string) => {
-    // BLOCO 154 (regra do dono): ANTES de apagar a venda, congela a NOTA
-    // FISCAL no Portal Fiscal ("todas as notas geradas pela focus devem ficar
-    // salvas no nosso portal, mesmo que eu exclua a venda"). Best-effort:
-    // falha AVISA e nao bloqueia a exclusao (o portal reimporta depois pelo
-    // backup mensal ou pela ref/chave).
+    // BLOCO 192 (regra do dono): excluir venda com NFC-e/NF-e BATIDA CANCELA
+    // a nota na SEFAZ NA HORA (servidor: cancelarNotaAntesExclusao) e arquiva
+    // no Portal Fiscal. SEFAZ recusou (prazo vencido) → nota segue arquivada
+    // com o status REAL + aviso para resolver no Portal Fiscal/SEFAZ.
+    let avisoNota = '';
     try {
       const { authHeaders } = await import('@/services/userService');
       const resArq = await fetch('/api/pre-venda', {
@@ -923,11 +923,13 @@ const App: React.FC = () => {
         body: JSON.stringify({ acao: 'ARQUIVAR_NOTA_EXCLUSAO', saleId: id }),
       });
       const dArq = await resArq.json().catch(() => null);
-      if (!resArq.ok || !dArq?.ok) {
-        setAdminNotification('Atencao: a nota fiscal pode NAO ter sido arquivada no portal. Depois de excluir, use Portal Fiscal > Buscar TODAS na Focus.');
+      if (resArq.ok && dArq?.ok) {
+        avisoNota = String(dArq.aviso || dArq.msg || '');
+      } else {
+        avisoNota = String(dArq?.error || 'Atencao: a nota fiscal pode NAO ter sido cancelada/arquivada no portal. Depois de excluir, use Portal Fiscal > Buscar TODAS na Focus.');
       }
     } catch {
-      setAdminNotification('Atencao: sem conexao para arquivar a nota antes da exclusao. Depois, use Portal Fiscal > Buscar TODAS na Focus.');
+      avisoNota = 'Atencao: sem conexao para cancelar/arquivar a nota antes da exclusao. Depois, use Portal Fiscal > Buscar TODAS na Focus.';
     }
     // BLOCO 13: pedido de pre-venda pendente — exclui pela API da fila
     // (nao pode estornar estoque: a baixa so acontece na entrega).
@@ -942,7 +944,8 @@ const App: React.FC = () => {
         const d = await res.json().catch(() => null);
         if (res.ok && d?.ok) {
           pvPendentesRef.current.delete(id);
-          setAdminNotification(d?.aviso ? `Pedido cancelado. ${String(d.aviso)}` : 'Pedido cancelado!');
+          const msgPv = String(d?.aviso || '');
+          setAdminNotification([msgPv || 'Pedido cancelado!', avisoNota].filter(Boolean).join(' '));
           fetchTransactionalData();
           return;
         }
@@ -954,7 +957,10 @@ const App: React.FC = () => {
       }
     }
     const success = await saleService.deleteSale(id);
-    if (success) fetchTransactionalData();
+    if (success) {
+      if (avisoNota) setAdminNotification(avisoNota);
+      fetchTransactionalData();
+    }
   };
 
   const receiveAccount = async (saleId: string, method: ReceiveMethod, amount?: number) => {

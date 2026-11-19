@@ -225,6 +225,13 @@ export const clientService = {
         const semGps = { ...patch }; delete semGps.localizacao;
         ({ data, error } = await supabase.from('clients').update(semGps).eq('id', idEx).select().single());
       }
+      // BLOCO 189/190: cpf/frequencia/semana_referencia podem nao existir (SQL
+      // pendente) — refaz a mescla sem elas (mesmo padrao dos blocos acima).
+      if (error && /\bcpf\b|frequencia|semana_referencia/i.test(error.message || '')) {
+        console.warn('Colunas cpf/frequencia ausentes (Bloco 189/190 nao rodado). Mesclando sem elas.');
+        const semNovos = { ...patch }; delete semNovos.cpf; delete semNovos.frequencia; delete semNovos.semana_referencia;
+        ({ data, error } = await supabase.from('clients').update(semNovos).eq('id', idEx).select().single());
+      }
       if (!error && data) {
         return {
           ok: true,

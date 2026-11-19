@@ -1582,9 +1582,14 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
             </div>
           </div>
 
-          {/* BLOCO 188 (regra do dono): a Rota do Dia NÃO tem mais ordenador —
-              sem grip, sem setas, sem kanban. Os cards saem na ordem que o
-              vendedor gravou no Roteiro Semanal (client_order global). */}
+          {/* BLOCO 201 (regra do dono): a Rota do Dia NÃO ordena cliente —
+              sem grip, sem setas, sem kanban. O kanbam de ordem mora SOMENTE
+              no Roteiro Semanal; aqui só exibe a ordem gravada. A dica discreta
+              abaixo existe para o dono achar onde se arruma a ordem. */}
+          <p className="text-[8px] font-black uppercase text-gray-300 px-1 flex items-center gap-1.5" aria-hidden="true">
+            <i className="fa-solid fa-arrow-down-short-wide text-[9px]"></i>
+            Ordem das visitas: arrume no Roteiro Semanal
+          </p>
           {rotaNaBusca.map((c) => {
             const isSold = (sales || []).some(s => s.clientId === c.id && isSameDay(s.data));
             const isSkipped = (dailyRouteState?.skippedClientIds || []).includes(c.id) || optimisticSkipped.includes(c.id);
@@ -1816,9 +1821,9 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                         <SortableContext items={clientsInDay.map(c => c.id)} strategy={verticalListSortingStrategy}>
                           <div className="p-4 bg-white space-y-2 border-t border-indigo-50">
                             {clientsInDay.length > 1 && (
-                              <p className="text-[9px] font-black uppercase tracking-wider text-gray-400 flex items-center gap-1.5">
-                                <i className="fa-solid fa-grip-vertical text-indigo-400"></i>
-                                Arraste pelo ≡ (ou use as setas) para ordenar — grava também na Rota do Dia
+                              <p className="text-[9px] font-black uppercase tracking-wider text-indigo-400 flex items-center gap-1.5">
+                                <i className="fa-solid fa-grip-vertical"></i>
+                                Aqui é o lugar de ordenar as visitas — arraste pelo ≡ (ou use as setas); a ordem vale para a Rota do Dia
                               </p>
                             )}
                             {corpo}

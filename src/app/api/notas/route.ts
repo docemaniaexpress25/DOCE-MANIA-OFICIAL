@@ -141,7 +141,9 @@ export async function GET(req: NextRequest) {
   const db = getServiceClient();
   const { data: sale, error } = await db.from('sales').select(await colsNota()).eq('id', saleId).single();
   if (error || !sale) return BAD(404, 'Venda nao encontrada.');
-  if (session.perfil !== 'ADMIN' && session.sub !== sale.vendedor_id) {
+  // BLOCO 195 (regra do dono): o SECRETÁRIO acompanha a nota de qualquer venda
+  // da fila dele (aba Secretário → cupom → Janela Fiscal).
+  if (session.perfil !== 'ADMIN' && session.perfil !== 'SECRETARIO' && session.sub !== sale.vendedor_id) {
     return BAD(403, 'Voce so pode ver a nota das suas proprias vendas.');
   }
   return NextResponse.json({ ok: true, focus, nota: notaPublica(sale as Record<string, unknown>) });
@@ -172,7 +174,10 @@ export async function POST(req: NextRequest) {
     .single();
 
   if (saleErr || !sale) return BAD(404, 'Venda nao encontrada.');
-  if (session.perfil !== 'ADMIN' && session.sub !== sale.vendedor_id) {
+  // BLOCO 195 (regra do dono): liberar GERAR BOLETO E NOTA na aba Secretário —
+  // o secretário EMITE a nota (NF-e/NFC-e) pelo cupom do pedido na fila dele.
+  // CANCELAR (e o resto de ação destrutiva) segue EXCLUSIVO do admin.
+  if (session.perfil !== 'ADMIN' && session.perfil !== 'SECRETARIO' && session.sub !== sale.vendedor_id) {
     return BAD(403, 'Voce so pode emitir nota para suas proprias vendas.');
   }
 

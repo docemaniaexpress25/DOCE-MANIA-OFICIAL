@@ -54,7 +54,7 @@ interface FilaItem {
   carregadoEm?: string | null;
   entregadorId?: string | null;
   entregadorNome?: string | null;
-  cliente: { id: string; nome: string; endereco: string; numero?: string | null; bairro: string; telefone: string; cnpj?: string | null; email?: string | null; portalCodigo?: string | null; cep?: string | null; razaoSocial?: string | null; inscricaoEstadual?: string | null; municipio?: string | null; uf?: string | null };
+  cliente: { id: string; nome: string; endereco: string; numero?: string | null; bairro: string; telefone: string; cnpj?: string | null; cpf?: string | null; email?: string | null; portalCodigo?: string | null; cep?: string | null; razaoSocial?: string | null; inscricaoEstadual?: string | null; municipio?: string | null; uf?: string | null };
   itens: { nome: string; produtoId: string; quantidade: number; precoVenda: number }[];
 }
 
@@ -226,6 +226,9 @@ const SecretarioView: React.FC<{ user: User; showToast: (m: string, t?: 'success
     bairro: p.cliente.bairro || '',
     // BLOCO 40: CNPJ do cliente — rodape do cupom NF-e ("NF-e: <cnpj>")
     cnpj: p.cliente.cnpj || '',
+    // BLOCO 195: CPF do cadastro entra no cupom — o BoletoCard usa como
+    // documento do pagador quando o cliente não tem CNPJ (Bloco 187/189).
+    cpf: p.cliente.cpf || '',
     // BLOCO 46: e-mail do cliente — rodape do cupom (envio do XML)
     email: p.cliente.email || '',
     // BLOCO 125: portal_code do cliente — QR do catalogo no cupom
@@ -518,11 +521,18 @@ const SecretarioView: React.FC<{ user: User; showToast: (m: string, t?: 'success
       )}
 
       {/* ===== CUPOM IDENTICO ===== */}
+      {/* BLOCO 195 (regra do dono): liberar GERAR BOLETO E NOTA na aba Secretário —
+          allowNota habilita o botão FISCAL (Janela Fiscal: NF-e/NFC-e) e o
+          BoletoCard (boleto do Inter) dentro do cupom do pedido. A emissão usa
+          os dados que JÁ EXISTEM no cadastro (CNPJ/CPF, CEP, razão social, IE,
+          município, UF — Bloco 174/195) e o boleto usa o pagador capturado na
+          venda/cadastro (Bloco 187/189) — nada é digitado de novo aqui. */}
       {cupom && (
         <Cupom
           sale={saleOf(cupom)}
           client={clientOf(cupom)}
           products={productsOf(cupom)}
+          allowNota
           onClose={() => setCupom(null)}
           closeLabel="FECHAR"
           showToast={showToast}

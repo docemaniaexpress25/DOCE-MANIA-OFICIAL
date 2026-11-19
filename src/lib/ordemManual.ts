@@ -16,10 +16,22 @@ export function batidaDe(nota: { emitidaEm?: string | null; dataVenda?: string |
  * Comparador de notas: ORDEM MANUAL primeiro (índice no array salvo em
  * app_settings.notas_ordem); quem não está na ordem manual vem depois pela
  * régua do dono (última batida em primeiro lugar — Bloco 146).
+ *
+ * BLOCO 194 (regra do dono): "sempre deixe a última nota da fila na linha de
+ * cima" — quando `idNovidadeTopo` vem preenchido (id da nota mais recente da
+ * visão), ele é PINADO na primeira linha do portal, MESMO com ordem manual
+ * salva: nota nova batida no app sobe para o topo e o resto da fila segue na
+ * ordem que o dono arrastou (kanban) / batida. No modo kanban o id NÃO vem
+ * preenchido — o dono está arrumando e a ordem manual manda.
  */
-export function criarComparadorNotas<T extends { id: string; emitidaEm?: string | null; dataVenda?: string | null }>(ordemNotas: string[]) {
+export function criarComparadorNotas<T extends { id: string; emitidaEm?: string | null; dataVenda?: string | null }>(ordemNotas: string[], idNovidadeTopo?: string) {
   const pos = new Map(ordemNotas.map((id, i) => [id, i]));
   return (a: T, b: T): number => {
+    // BLOCO 194: a nota mais recente é SEMPRE a primeira linha do portal
+    if (idNovidadeTopo) {
+      if (a.id === idNovidadeTopo && b.id !== idNovidadeTopo) return -1;
+      if (b.id === idNovidadeTopo && a.id !== idNovidadeTopo) return 1;
+    }
     const pa = pos.get(a.id);
     const pb = pos.get(b.id);
     if (pa !== undefined && pb !== undefined) return pa - pb;

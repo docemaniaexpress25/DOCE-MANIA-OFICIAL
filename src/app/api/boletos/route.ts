@@ -119,7 +119,10 @@ export async function GET(req: NextRequest) {
   const db = getServiceClient();
   const { data: sale, error } = await db.from('sales').select(COLS).eq('id', saleId).single();
   if (error || !sale) return BAD(404, 'Venda nao encontrada.');
-  if (session.perfil !== 'ADMIN' && session.sub !== sale.vendedor_id) {
+  // BLOCO 195 (regra do dono): o SECRETÁRIO separa o pedido e agora também
+  // GERA O BOLETO e acompanha a nota pela aba dele — pode ver o boleto de
+  // QUALQUER venda da fila (cancelar segue só admin).
+  if (session.perfil !== 'ADMIN' && session.perfil !== 'SECRETARIO' && session.sub !== sale.vendedor_id) {
     return BAD(403, 'Voce so pode ver o boleto das suas proprias vendas.');
   }
   // BLOCO 85: status das credenciais Inter visivel no app — o dono para de
@@ -167,7 +170,7 @@ export async function POST(req: NextRequest) {
   const db = getServiceClient();
   const { data: sale, error: saleErr } = await db.from('sales').select(COLS).eq('id', saleId).single();
   if (saleErr || !sale) return BAD(404, 'Venda nao encontrada.');
-  if (session.perfil !== 'ADMIN' && session.sub !== sale.vendedor_id) {
+  if (session.perfil !== 'ADMIN' && session.perfil !== 'SECRETARIO' && session.sub !== sale.vendedor_id) {
     return BAD(403, 'Voce so pode gerar boleto para suas proprias vendas.');
   }
 

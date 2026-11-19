@@ -633,6 +633,8 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
 
           {/* ===== Bloco 25: Boleto bancario Inter (boleto + pix) ===== */}
           {/* BLOCO 139: boleto só para venda A PRAZO — à vista o recebimento é confirmado na janela de impressão */}
+          {/* BLOCO 195: documento do pagador — CNPJ do cadastro e, sem CNPJ, o CPF
+              do cadastro (Bloco 189). O boleto do Inter nasce sem digitar de novo. */}
           {isVendaSalva && aPrazoCupom && (
             <BoletoCard
               saleId={String(saleLocal.id)}
@@ -641,7 +643,7 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
               notaStatus={nota.status}
               notaNumero={nota.numero}
               notaTipo={nota.tipo}
-              clienteDoc={clientLocal.cnpj}
+              clienteDoc={clientLocal.cnpj || (clientLocal as { cpf?: string }).cpf || ''}
               clienteCep={clientLocal.enderecoCep}
               clienteTelefone={clientLocal.telefone}
               clienteNome={clientLocal.nomeFantasia || clientLocal.nome}

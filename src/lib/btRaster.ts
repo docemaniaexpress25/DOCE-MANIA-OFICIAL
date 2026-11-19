@@ -57,6 +57,21 @@
  *   c) o MINI BOLETO (modal MiniBoletoImpressao) nem tinha migrado — o BT
  *      dele ainda mandava TEXTO 48 colunas, layout totalmente diferente do
  *      USB (corrigido no proprio componente).
+ *
+ * BLOCO 196 — NITIDEZ (pedido do dono: "melhorar a nitidez do mini boleto e
+ * da mini danfe, nao mude nada no layout delas somente a nitidez"):
+ *   ANTES: o SVG era rasterizado DIRETO na largura da cabeca (560 dots) e o
+ *   canvas binarizava os pixels com antialiasing cinza do navegador — cada
+ *   borda de traco virava pontinhos decididos por um único pixel renderizado,
+ *   o que deixava o texto serrilhado/cinza no papel.
+ *   AGORA: SUPERAMOSTRAGEM — o mesmo SVG e rasterizado em RESOLUCAO MULTIPLA
+ *   (2x ou 3x os 560 dots), cada dot final é a MÉDIA de luminância do bloco
+ *   mult×mult (área real de tinta) e só então o limiar decide o ponto queimado.
+ *   O resultado é o mesmo layout (o downsampling não altera geometria), com
+ *   bordas posicionadas pela cobertura REAL de tinta: tracos retos, cantos
+ *   fechados e código de barras/QR estáveis. O multiplicador é adaptativo
+ *   (3x em cupons curtos, 2x nos longos, 1x acima do limite de memória de
+ *   canvas de celular) — nunca estoura o limite de área do iOS/Android.
  */
 
 export interface OpcoesRaster {
@@ -64,6 +79,10 @@ export interface OpcoesRaster {
   larguraDots?: number;
   /** Luminancia (0..255) abaixo da qual o ponto e queimado. 168 = texto mais escuro (reforco). */
   limiar?: number;
+  /** BLOCO 196: superamostragem (2 ou 3 = rasteriza mult× a resolução da cabeça
+   *  e faz a média por dot antes do limiar — nitidez; 1 = comportamento antigo).
+   *  Por padrão o pipeline escolhe sozinho (adaptativo pelo tamanho do papel). */
+  multiplicador?: number;
 }
 
 export interface BitsRaster {
@@ -183,6 +202,52 @@ export function xmlSafePoster(posterHtml: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// 3c) PURA — BLOCO 196: SUPERAMOSTRAGEM — média de luminância por dot.
+// Recebe o ImageData do canvas HI-RES (mult× a largura da cabeça) e devolve
+// um "ImageData-like" em RESOLUÇÃO FINAL (larguraDots × alturaDots), onde cada
+// pixel guarda a luminância MÉDIA do bloco mult×mult (cobertura real de tinta).
+// O bitsDoCanvas continua decidindo o ponto queimado com o MESMO limiar — a
+// geometria não muda (nada sai deslocado), só a DECISÃO por dot fica com base
+// na área real: bordas retas, cantos fechados, texto sem serrilhado.
+// ---------------------------------------------------------------------------
+export function reduzirMediaLuminancia(
+  dados: { width: number; height: number; data: ArrayLike<number> },
+  multiplicador: number,
+  larguraDots: number,
+  alturaDots: number,
+): { width: number; height: number; data: Uint8ClampedArray } {
+  const mult = Math.max(1, Math.floor(multiplicador));
+  const data = dados.data;
+  const saida = new Uint8ClampedArray(larguraDots * alturaDots * 4);
+  for (let y = 0; y < alturaDots; y++) {
+    const y0 = y * mult;
+    const y1 = Math.min(dados.height, y0 + mult);
+    for (let x = 0; x < larguraDots; x++) {
+      const x0 = x * mult;
+      const x1 = Math.min(dados.width, x0 + mult);
+      let soma = 0;
+      let n = 0;
+      for (let yy = y0; yy < y1; yy++) {
+        const linha = yy * dados.width;
+        for (let xx = x0; xx < x1; xx++) {
+          const i = (linha + xx) * 4;
+          // alpha 0 = papel (branco) — entra na média como luminância cheia
+          const a = data[i + 3] / 255;
+          const lum = a === 0 ? 1 : (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]) / 255;
+          soma += lum * a + (1 - a); // pixel translúcido mistura com o papel
+          n++;
+        }
+      }
+      const media = n > 0 ? soma / n : 1;
+      const o = (y * larguraDots + x) * 4;
+      const v = Math.round(media * 255);
+      saida[o] = v; saida[o + 1] = v; saida[o + 2] = v; saida[o + 3] = 255;
+    }
+  }
+  return { width: larguraDots, height: alturaDots, data: saida };
+}
+
+// ---------------------------------------------------------------------------
 // 4) PURA — monta o SVG <foreignObject> na resolucao da cabeca termica
 // ---------------------------------------------------------------------------
 export function construirSvgRaster(
@@ -191,9 +256,15 @@ export function construirSvgRaster(
   larguraPx: number,
   alturaPx: number,
   larguraDots: number,
+  multiplicador = 1,
 ): { svg: string; alturaDots: number } {
-  const escala = larguraDots / larguraPx;
-  const alturaDots = Math.ceil(alturaPx * escala) + 4;
+  // BLOCO 196: mult>1 rasteriza em resolução MÚLTIPLA (superamostragem) —
+  // o layout é o MESMO (mesma escala proporcional), só a rasterização interna
+  // acontece com mais sub-pixels por dot antes da média.
+  const mult = Math.max(1, Math.floor(multiplicador));
+  const larguraHi = larguraDots * mult;
+  const escala = larguraHi / larguraPx;
+  const alturaDotsHi = Math.ceil(alturaPx * escala) + 4 * mult;
   const px = Math.ceil(larguraPx);
   // Reforco de traco (o USB usa -webkit-text-stroke 0.15px; no raster vai um
   // pouco mais grosso para compensar o 1-bit — se o navegador ignorar, no-op).
@@ -202,14 +273,16 @@ export function construirSvgRaster(
   // como XML: `&` ou `<` cru quebrariam — o XMLSerializer do poster não cobre
   // o css passado como string).
   const cssXml = String(css || '').replace(/&(?!amp;|lt;|gt;|quot;|apos;|#)/g, '&amp;').replace(/<(?![!?a-zA-Z/])/g, '&lt;');
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${larguraDots}" height="${alturaDots}">`
-    + `<foreignObject width="${larguraDots}" height="${alturaDots}">`
-    + `<div xmlns="http://www.w3.org/1999/xhtml" style="margin:0;padding:0;width:${larguraDots}px;height:${alturaDots}px;background:#ffffff;">`
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${larguraHi}" height="${alturaDotsHi}">`
+    + `<foreignObject width="${larguraHi}" height="${alturaDotsHi}">`
+    + `<div xmlns="http://www.w3.org/1999/xhtml" style="margin:0;padding:0;width:${larguraHi}px;height:${alturaDotsHi}px;background:#ffffff;">`
     + `<div style="margin:0;padding:0;width:${px}px;background:#ffffff;transform:scale(${escala.toFixed(6)});transform-origin:0 0;">`
     + `<style>${cssXml}</style>`
     + traco
     + xmlSafePoster(posterHtml)
     + `</div></div></foreignObject></svg>`;
+  // altura em DOTS FINAIS (pós-média) — a banda GS v 0 continua na resolução da cabeça
+  const alturaDots = Math.ceil(alturaDotsHi / mult);
   return { svg, alturaDots };
 }
 
@@ -267,7 +340,8 @@ async function medirPoster(html: string): Promise<Medicao> {
 }
 
 // ---------------------------------------------------------------------------
-// 6) DOM — pipeline completo: HTML -> SVG -> canvas -> bits -> ESC/POS
+// 6) DOM — pipeline completo: HTML -> SVG (hi-res) -> canvas -> média por dot
+//    -> bits -> ESC/POS
 // ---------------------------------------------------------------------------
 export async function htmlParaEscposRaster(html: string, opcoes?: OpcoesRaster): Promise<Uint8Array> {
   if (typeof document === 'undefined') throw new Error('SEM_DOCUMENTO_RASTER');
@@ -275,7 +349,19 @@ export async function htmlParaEscposRaster(html: string, opcoes?: OpcoesRaster):
   const limiar = opcoes?.limiar ?? 168;
 
   const med = await medirPoster(html);
-  const { svg, alturaDots } = construirSvgRaster(med.posterHtml, med.css, med.larguraPx, med.alturaPx, larguraDots);
+
+  // BLOCO 196: multiplicador ADAPTATIVO — 3x em papéis curtos, 2x nos longos e
+  // 1x quando o canvas hi-res estouraria o limite de memória dos celulares
+  // (~12M de pixels — iOS/Android abortam canvas maior em silêncio).
+  // O chamador pode fixar via opcoes.multiplicador (QA/testes).
+  const alturaDotsBase = Math.ceil((med.alturaPx * larguraDots) / med.larguraPx) + 4;
+  const areaFinal = larguraDots * Math.max(1, alturaDotsBase);
+  const multAuto = areaFinal * 9 <= 12_000_000 ? 3 : areaFinal * 4 <= 12_000_000 ? 2 : 1;
+  const mult = Math.max(1, Math.min(3, Math.floor(opcoes?.multiplicador ?? multAuto)));
+
+  const { svg, alturaDots } = construirSvgRaster(med.posterHtml, med.css, med.larguraPx, med.alturaPx, larguraDots, mult);
+  const larguraHi = larguraDots * mult;
+  const alturaHi = alturaDots * mult;
 
   // Diagnóstico real: se o SVG não é XML válido (poster/CSS com sintaxe HTML
   // cru), o <img> falha com erro genérico — aqui a falha vem com o parsererror.
@@ -302,18 +388,22 @@ export async function htmlParaEscposRaster(html: string, opcoes?: OpcoesRaster):
     i.src = url;
   });
 
+  // HI-RES: o navegador rasteriza o SVG vetorial em mult× a cabeça térmica
   const canvas = document.createElement('canvas');
-  canvas.width = larguraDots;
-  canvas.height = alturaDots;
+  canvas.width = larguraHi;
+  canvas.height = alturaHi;
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('SEM_CANVAS_RASTER');
   ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, larguraDots, alturaDots);
+  ctx.fillRect(0, 0, larguraHi, alturaHi);
   ctx.imageSmoothingEnabled = true;
   try { ctx.imageSmoothingQuality = 'high'; } catch { /* navegadores antigos */ }
   ctx.drawImage(img, 0, 0);
 
-  const dados = ctx.getImageData(0, 0, larguraDots, alturaDots);
+  // BLOCO 196: MÉDIA por dot (superamostragem) ANTES do limiar — cada dot
+  // final decide o queimado pela cobertura REAL de tinta do bloco mult×mult.
+  const dadosHi = ctx.getImageData(0, 0, larguraHi, alturaHi);
+  const dados = mult > 1 ? reduzirMediaLuminancia(dadosHi, mult, larguraDots, alturaDots) : dadosHi;
   const bits = cortarLinhasVazias(bitsDoCanvas(dados, limiar));
   if (bits.altura < 10) throw new Error('RASTER_VAZIO');
   // BLOCO 186: bandas de GS v 0 (firmware da MTP-3 nao segura imagem inteira)
@@ -363,25 +453,52 @@ if (typeof window !== 'undefined' && process.env.NODE_ENV !== 'production') {
 
     // Prévia visual (QA): mesmo SVG rasterizado em canvas — o dono/qa vê o
     // papel exatamente como a termica vai queimar os pontos.
+    // BLOCO 196: a prévia replica o pipeline REAL (hi-res + média por dot +
+    // limiar 1-bit) — o que aparece aqui é o papel com a nitidez nova.
     let preview: string | undefined;
     if (alvo?.endsWith('-preview')) {
       const med = await medirPoster(html);
-      const { svg: svgPrev, alturaDots: alturaPrev } = construirSvgRaster(med.posterHtml, med.css, med.larguraPx, med.alturaPx, larguraFixa);
+      const alturaBase = Math.ceil((med.alturaPx * larguraFixa) / med.larguraPx) + 4;
+      const areaFinal = larguraFixa * Math.max(1, alturaBase);
+      const multPrev = areaFinal * 9 <= 12_000_000 ? 3 : areaFinal * 4 <= 12_000_000 ? 2 : 1;
+      const { svg: svgPrev, alturaDots: alturaPrev } = construirSvgRaster(med.posterHtml, med.css, med.larguraPx, med.alturaPx, larguraFixa, multPrev);
       const imgPrev = await new Promise<HTMLImageElement>((res, rej) => {
         const i = new Image();
         i.onload = () => res(i);
         i.onerror = () => rej(new Error('FALHA_RASTERIZACAO_SVG'));
         i.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgPrev);
       });
-      const c = document.createElement('canvas');
-      c.width = larguraFixa;
-      c.height = Math.min(alturaPrev, 8000);
-      const ctx = c.getContext('2d');
-      if (ctx) {
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, c.width, c.height);
-        ctx.drawImage(imgPrev, 0, 0);
-        preview = c.toDataURL('image/png');
+      const cHi = document.createElement('canvas');
+      cHi.width = larguraFixa * multPrev;
+      cHi.height = Math.min(alturaPrev * multPrev, 24000);
+      const ctxHi = cHi.getContext('2d');
+      if (ctxHi) {
+        ctxHi.fillStyle = '#ffffff';
+        ctxHi.fillRect(0, 0, cHi.width, cHi.height);
+        ctxHi.drawImage(imgPrev, 0, 0);
+        // Downsampling para os dots finais + limiar 1-bit (igual ao envio real)
+        const dadosHi = ctxHi.getImageData(0, 0, cHi.width, cHi.height);
+        const dados = multPrev > 1 ? reduzirMediaLuminancia(dadosHi, multPrev, larguraFixa, Math.min(alturaPrev, 8000)) : dadosHi;
+        const bitsPrev = cortarLinhasVazias(bitsDoCanvas(dados, 168));
+        const c = document.createElement('canvas');
+        c.width = larguraFixa;
+        c.height = bitsPrev.altura;
+        const ctx = c.getContext('2d');
+        if (ctx) {
+          const imgData = ctx.createImageData(larguraFixa, bitsPrev.altura);
+          for (let i = 0, p = 0; i < bitsPrev.bytes.length; i++) {
+            const byte = bitsPrev.bytes[i];
+            for (let b = 7; b >= 0 && p < imgData.data.length; b--) {
+              const aceso = (byte >> b) & 1;
+              imgData.data[p++] = aceso ? 0 : 255;
+              imgData.data[p++] = aceso ? 0 : 255;
+              imgData.data[p++] = aceso ? 0 : 255;
+              imgData.data[p++] = 255;
+            }
+          }
+          ctx.putImageData(imgData, 0, 0);
+          preview = c.toDataURL('image/png');
+        }
       }
     }
 

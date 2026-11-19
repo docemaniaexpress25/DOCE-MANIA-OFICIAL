@@ -87,7 +87,10 @@ const CLIENT_COLS_PORTAL = `${CLIENT_COLS_NUM}, portal_code`;
 // e o boleto do Inter — que EXIGE CEP do pagador — ficava sem o dado que já
 // existia no cadastro. Tier fiscal no topo: CEP + fiscais da NF-e. Bancos
 // antigos sem as colunas degradam para o portal (comportamento de antes).
-const CLIENT_COLS_FISCAL = `${CLIENT_COLS_PORTAL}, endereco_cep, razao_social, inscricao_estadual, endereco_municipio, endereco_uf`;
+// BLOCO 195: cpf entra no tier fiscal — o pagador do BOLETO a prazo é o CPF
+// do cadastro quando o cliente não tem CNPJ (Bloco 187/189). Bancos sem a
+// coluna cpf degradam para o tier portal sem quebrar a fila.
+const CLIENT_COLS_FISCAL = `${CLIENT_COLS_PORTAL}, endereco_cep, razao_social, inscricao_estadual, endereco_municipio, endereco_uf, cpf`;
 
 /**
  * clients com colunas de GPS flexíveis. Bancos SEM clients.localizacao
@@ -415,6 +418,8 @@ async function enrichParadas(supabase: any, salesRows: any[]) {
         telefone: c.telefone || '',
         // BLOCO 40: CNPJ para o rodape do cupom NF-e ("NF-e: <cnpj>")
         cnpj: c.cnpj || null,
+        // BLOCO 195: CPF do cadastro — pagador do boleto a prazo (sem CNPJ)
+        cpf: c.cpf || null,
         // BLOCO 46: e-mail para o rodape do cupom (envio do XML)
         email: c.email || null,
         // BLOCO 125: portal_code — QR do catalogo do cliente no cupom
@@ -705,6 +710,8 @@ async function enrichFila(supabase: any, salesRows: any[], donoRecebimento?: str
         telefone: c.telefone || '',
         // BLOCO 40: CNPJ para o rodape do cupom NF-e ("NF-e: <cnpj>")
         cnpj: c.cnpj || null,
+        // BLOCO 195: CPF do cadastro — pagador do boleto a prazo (sem CNPJ)
+        cpf: c.cpf || null,
         // BLOCO 46: e-mail para o rodape do cupom (envio do XML)
         email: c.email || null,
         // BLOCO 125: portal_code — QR do catalogo do cliente no cupom

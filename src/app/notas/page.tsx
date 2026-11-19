@@ -56,7 +56,8 @@ import { CSS } from '@dnd-kit/utilities';
 // BLOCO 142: prazo SEFAZ de cancelamento (NFC-e 30min / NF-e 24h) — fonte única com o servidor
 import { prazoCancelamentoNota } from '@/lib/regras-fiscais';
 // BLOCO 184: motor PURO da ordem manual (comparador + slots) — compartilhado com a rota do vendedor, testável por QA
-import { criarComparadorNotas, reordenarSlots } from '@/lib/ordemManual';
+// BLOCO 194: batidaDe também vem daqui — identifica a nota MAIS RECENTE da visão
+import { criarComparadorNotas, reordenarSlots, batidaDe } from '@/lib/ordemManual';
 // BLOCO 146: cupom não fiscal em IMAGEM + WhatsApp compartilhável
 import CupomNaoFiscal, { foneWhatsApp } from './CupomNaoFiscal';
 
@@ -573,10 +574,21 @@ export default function PortalNotasPage() {
         (n.vendedor || '').toLowerCase().includes(q)
       );
     });
-    // BLOCO 184: ORDEM MANUAL primeiro (kanban salvo) — sem ordem manual, a
-    // regra do dono BLOCO 146 segue intacta (última batida em primeiro lugar).
-    return [...base].sort(criarComparadorNotas(ordemNotas));
-  }, [notas, busca, filtro, filtroTipo, filtroOrigem, periodo, ordemNotas]);
+    // ------------------------------------------------------------------
+    // BLOCO 194 (regra do dono): "sempre deixe a última nota da fila na linha
+    // de cima" — a nota MAIS RECENTE da visão é PINADA na primeira linha,
+    // MESMO com ordem manual salva (kanban): nota nova batida no app sobe para
+    // o topo e o resto da fila segue na ordem arrastada/batida. No MODO KANBAN
+    // o pin desliga — o dono está arrumando e a ordem manual manda.
+    // ------------------------------------------------------------------
+    let idNovidadeTopo = '';
+    if (!kanban && base.length > 0) {
+      let maisRecente = base[0];
+      for (const n of base) if (batidaDe(n) > batidaDe(maisRecente)) maisRecente = n;
+      idNovidadeTopo = maisRecente.id;
+    }
+    return [...base].sort(criarComparadorNotas(ordemNotas, idNovidadeTopo));
+  }, [notas, busca, filtro, filtroTipo, filtroOrigem, periodo, ordemNotas, kanban]);
 
   // ---------- BLOCO 184: gravar a ordem manual (kanban) ----------
   const salvarOrdemAgora = async (ids: string[]) => {
@@ -1572,7 +1584,8 @@ export default function PortalNotasPage() {
               </SortableContext>
             </DndContext>
             <p className="text-[9px] font-bold text-gray-400 uppercase tracking-wider px-1">
-              {listaFiltrada.length} nota(s) nesta visão — {ordemNotas.length > 0 ? 'ORDEM MANUAL ativa (o que você arrastou fica fixo)' : 'arraste para começar a ordem manual'}
+              {/* BLOCO 194: na LISTA a nota mais recente volta pro topo mesmo com ordem manual */}
+              {listaFiltrada.length} nota(s) nesta visão — {ordemNotas.length > 0 ? 'ORDEM MANUAL ativa (nota mais recente segue na 1ª linha)' : 'arraste para começar a ordem manual'}
             </p>
           </div>
         )}

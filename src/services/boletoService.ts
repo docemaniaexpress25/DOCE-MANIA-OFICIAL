@@ -72,8 +72,10 @@ export interface InterStatusInfo {
 }
 
 export const boletoService = {
-  /** Estado atual do boleto da venda (leitura barata). */
-  async status(saleId: string): Promise<{ ok: boolean; boleto?: BoletoInfo; parcelas?: BoletoParcelaInfo[]; inter?: InterStatusInfo; nota?: NotaDaVendaInfo; config?: BoletoConfigInfo; erro?: string }> {
+  /** Estado atual do boleto da venda (leitura barata).
+   *  BLOCO 200: o SERVIDOR também diz se a venda pode dividir em 2 boletos
+   *  (rota 5) — reforço à prova de falha do casamento feito no client. */
+  async status(saleId: string): Promise<{ ok: boolean; boleto?: BoletoInfo; parcelas?: BoletoParcelaInfo[]; inter?: InterStatusInfo; nota?: NotaDaVendaInfo; config?: BoletoConfigInfo; podeDividir?: boolean; erro?: string }> {
     try {
       const res = await fetch(`/api/boletos?saleId=${encodeURIComponent(saleId)}`, {
         method: 'GET',
@@ -81,7 +83,7 @@ export const boletoService = {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}` };
-      return { ok: true, boleto: data.boleto, parcelas: data.parcelas, inter: data.inter, nota: data.nota, config: data.config };
+      return { ok: true, boleto: data.boleto, parcelas: data.parcelas, inter: data.inter, nota: data.nota, config: data.config, podeDividir: data.podeDividir === true };
     } catch (e: unknown) {
       return { ok: false, erro: e instanceof Error ? e.message : 'Falha de conexao' };
     }

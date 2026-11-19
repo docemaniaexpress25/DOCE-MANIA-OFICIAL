@@ -163,6 +163,10 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
   const [venc1Doc, setVenc1Doc] = useState('');
   const [venc2Doc, setVenc2Doc] = useState('');
   const [busyDiv, setBusyDiv] = useState(false);
+  // BLOCO 200: o SERVIDOR também diz se a venda é da rota 5 (GET /api/boletos
+  // devolve podeDividir) — reforço à prova de falha do casamento feito no
+  // client (id fixo/nome): se um dos dois disser SIM, a divisão aparece.
+  const [podeDivApi, setPodeDivApi] = useState(false);
 
   useEffect(() => {
     if (!saleId) return;
@@ -176,6 +180,7 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
       setInter(r.inter || null);
       setNotaApi(r.nota || null);
       setCfgApi(r.config || null);
+      setPodeDivApi(r.podeDividir === true);
       if (r.boleto?.status === 'NAO_GERADO' && !(r.parcelas && r.parcelas.length > 0)) {
         // BLOCO 153: prazo correto = vencimento COMBINADO na venda (tela 6 do
         // PDV — sales.data_vencimento); sem prazo gravado, mantém o padrão +7d
@@ -728,6 +733,9 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
   const clienteTemDoc = !!(clienteDoc || '').replace(/\D/g, '');
   const clienteTemCep = (clienteCep || '').replace(/\D/g, '').length === 8;
   const modoParcelado = parcelas.length > 0;
+  // BLOCO 200: divisão aparece se o CLIENT casou a rota 5 (prop podeDividir)
+  // OU se o SERVIDOR confirmou (GET /api/boletos → podeDividir).
+  const podeDiv = !!podeDividir || podeDivApi;
 
   // ===================================================================
   // BLOCO 199 — MODO PARCELADO: 2 boletos que juntos fecham a venda.
@@ -768,14 +776,14 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
                 Inter, os valores e vencimentos podem ser refeitos aqui
                 (mesma tela do cupom onde aparece "Gerar Boleto").
                 ============================================================ */}
-            {podeDividir && parcelas.length >= 2 && !parcelas.some(p => p.codigo) && (
+            {podeDiv && parcelas.length >= 2 && !parcelas.some(p => p.codigo) && (
               <button onClick={() => (formDiv ? setFormDiv(false) : abrirDivisao(true))} aria-expanded={formDiv}
                 className="block w-full bg-white border-2 border-violet-200 text-violet-600 font-black py-2.5 rounded-xl text-[9px] uppercase tracking-widest active:scale-95">
                 <i className={`fa-solid ${formDiv ? 'fa-xmark' : 'fa-pen-to-square'} mr-1`}></i>
                 {formDiv ? 'Fechar edição da divisão' : 'Editar divisão (valores e vencimentos)'}
               </button>
             )}
-            {formDiv && podeDividir && parcelas.length >= 2 && !parcelas.some(p => p.codigo) && (
+            {formDiv && podeDiv && parcelas.length >= 2 && !parcelas.some(p => p.codigo) && (
               formDivisao
             )}
             {/* Os DOIS boletos da divisão */}
@@ -945,7 +953,7 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
               aparece SEM boleto único ativo (senão o cliente pagaria duas
               vezes) e a soma é conferida pela API (mín. R$ 2,50 cada).
               ============================================================ */}
-          {podeDividir && ['NAO_GERADO', 'CANCELADO', 'EXPIRADO', 'FALHA_EMISSAO'].includes(boleto.status) && (
+          {podeDiv && ['NAO_GERADO', 'CANCELADO', 'EXPIRADO', 'FALHA_EMISSAO'].includes(boleto.status) && (
             <div className="rounded-xl border border-violet-100 bg-white/70 p-2.5 space-y-2">
               <button onClick={() => (formDiv ? setFormDiv(false) : abrirDivisao(false))} aria-expanded={formDiv}
                 className="w-full flex items-center gap-2 text-left active:scale-95 transition-transform">

@@ -21,6 +21,10 @@ import {
   CobrancaPublica,
 } from '@/lib/interBoleto';
 import { espelharParcelaInter, baixarParcelaPaga, type ParcelaRow } from '@/lib/baixaBoleto';
+// BLOCO 200 (regra do dono): a divisão em 2 boletos é EXCLUSIVA da rota 5
+// (Deivid/David) — o SERVIDOR confere de novo (fonte da verdade), com a
+// mesma lib de equipe do caixa/comissão (sem dependências).
+import { isDavidVendedor } from '@/lib/equipe';
 
 /**
  * BOLETO BANCARIO INTER (Bloco 25) — cobranca boleto+pix na venda.
@@ -103,6 +107,26 @@ function parcelaPublica(p: Record<string, unknown>) {
 
 async function atualizar(saleId: string, patch: Record<string, unknown>) {
   await getServiceClient().from('sales').update(patch).eq('id', saleId);
+}
+
+/**
+ * BLOCO 200 (regra do dono): a venda é da ROTA 5 (Deivid/David)? O casamento
+ * é À PROVA DE RENOME/TROCA DE APARELHO: pela ROTA gravada (ROTA_05) OU pelo
+ * id/nome do vendedor (lib/equipe — mesmo padrão do caixa/comissão). O Cupom
+ * casa pelo id da venda no client; aqui o SERVIDOR é a fonte da verdade —
+ * tanto para MOSTRAR a divisão no card (GET) quanto para ACEITAR gravá-la
+ * (POST CRIAR_PARCELAS).
+ */
+async function vendaPodeDividir(vendedorId: string): Promise<boolean> {
+  const { data: v } = await getServiceClient()
+    .from('app_users')
+    .select('id, nome, rota')
+    .eq('id', vendedorId)
+    .maybeSingle();
+  if (!v) return false;
+  const vu = v as Record<string, unknown>;
+  if (String(vu.rota || '').toUpperCase() === 'ROTA_05') return true;
+  return isDavidVendedor({ id: String(vu.id || ''), nome: String(vu.nome || '') });
 }
 
 /**
@@ -428,10 +452,15 @@ export async function GET(req: NextRequest) {
   }
   // BLOCO 85: status das credenciais Inter visivel no app — o card AVISA quando falta env.
   const erpCfgGet = await lerErpConfig();
+  // BLOCO 200 (regra do dono): o SERVIDOR decide se a venda pode DIVIDIR em
+  // 2 boletos (rota 5) — o card usa junto com a prop do client (reforço).
+  let podeDividirServidor = false;
+  try { podeDividirServidor = await vendaPodeDividir(String(sale.vendedor_id || '')); } catch { /* degrada: prop do client decide */ }
   return NextResponse.json({
     ok: true,
     boleto: cobrancaPublica(sale as Record<string, unknown>),
     ...(parcelas ? { parcelas } : {}),
+    podeDividir: podeDividirServidor,
     inter: { configurado: isInterConfigured(), ambiente: getInterConfig().ambiente },
     nota: {
       status: String(sale.nota_status || ''),
@@ -479,6 +508,12 @@ export async function POST(req: NextRequest) {
   if (acao === 'CRIAR_PARCELAS') {
     if (!(await hasSalesBoletosTable())) {
       return BAD(503, 'Tabela de parcelas nao existe ainda no Supabase. Rode o SQL do Bloco 199 (sql/bloco199_boleto_duplo.sql).');
+    }
+    // BLOCO 200 (regra do dono): divisão em 2 boletos é EXCLUSIVA da rota 5
+    // (Deivid/David) — o servidor recusa qualquer outra rota (fonte da
+    // verdade, à prova de troca de aparelho/renome).
+    if (!(await vendaPodeDividir(String(sale.vendedor_id || '')))) {
+      return BAD(403, 'A divisão em 2 boletos é exclusiva da rota 5 (Deivid).');
     }
     // Boleto único já ativo? Dividir aqui cobraria o cliente DUAS vezes.
     if (sale.inter_boleto_codigo && !['CANCELADO', 'EXPIRADO', 'FALHA_EMISSAO'].includes(String(sale.inter_boleto_status))) {

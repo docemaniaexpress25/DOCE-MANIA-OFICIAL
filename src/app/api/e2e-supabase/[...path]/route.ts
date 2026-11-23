@@ -277,6 +277,17 @@ const salesSeed = [
     inter_boleto_vencimento: diaPassado(-2), inter_boleto_valor: 90,
     inter_boleto_linha: null, inter_boleto_barras: null, inter_boleto_pix: null, inter_boleto_erro: null,
   },
+  // BLOCO 211 (E2E): venda À VISTA sem recebimento registrado — o alerta
+  // "vendas sem cobrança" da HOME classifica como SEM RECEBIMENTO (à vista)
+  {
+    id: 'sale-avista-sem-pag', vendedor_id: 'rota2user', client_id: 'cli-7',
+    valor_total: 45.5, valor_pago: 0, metodo_pagamento: 'DINHEIRO',
+    detalhe_pagamento: 'À VISTA — dinheiro',
+    status_pagamento: 'PENDENTE', data_venda: iso(4320), data_vencimento: null,
+    tipo_venda: 'PRONTA', entrega_status: null, trocas: null,
+    prioridade: 0, separado: false, separado_em: null, entregador_id: null,
+    comprovante_foto: null, modo_nota: null, route_id: null, entrega_seq: null, ordem_entrega: null,
+  },
 ];
 
 const saleItemsSeed = [
@@ -289,6 +300,8 @@ const saleItemsSeed = [
   // BLOCO 210 (E2E): itens das vendas com boleto (cupom reaberto renderiza itens)
   { id: 'si-7', sale_id: 'sale-boleto-uni', produto_id: 'prod-1', product_id: 'prod-1', quantidade: 10, preco_venda: 15 },
   { id: 'si-8', sale_id: 'sale-boleto-canc', produto_id: 'prod-2', product_id: 'prod-2', quantidade: 30, preco_venda: 3 },
+  // BLOCO 211 (E2E): item da venda à vista sem pagamento (cupom reaberto com itens)
+  { id: 'si-9', sale_id: 'sale-avista-sem-pag', produto_id: 'prod-2', product_id: 'prod-2', quantidade: 10, preco_venda: 4.55 },
 ];
 
 // BLOCO 191: custos lançados pelo admin (Portal Financeiro) — 1 exemplo

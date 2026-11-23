@@ -1860,9 +1860,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           ==================================================================== */}
       {activeTab === 'PORTAIS' && (
         <div className="space-y-5">
-          <header className="px-1 flex flex-col gap-1">
-            <h2 className="text-xl font-black text-gray-800 tracking-tight leading-none">Portais</h2>
-            <p className="text-[10px] font-black uppercase text-gray-400">Todos os portais do sistema — abre em nova aba (mesmo PIN do admin)</p>
+          <header className="px-1 flex items-center gap-2.5">
+            <span className="w-9 h-9 rounded-xl bg-violet-100 text-violet-600 flex items-center justify-center shrink-0"><i className="fa-solid fa-sitemap text-sm"></i></span>
+            <div className="flex flex-col gap-0.5 min-w-0">
+              <h2 className="text-xl font-black text-gray-800 tracking-tight leading-none">Portais</h2>
+              <p className="text-[10px] font-black uppercase text-gray-400">Todos os portais do sistema — abre em nova aba (mesmo PIN do admin)</p>
+            </div>
           </header>
 
           <div className="space-y-3">
@@ -1941,9 +1944,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           ==================================================================== */}
       {activeTab === 'NOTAS_PENDENTES' && (
         <div className="space-y-4">
-          <header className="px-1 flex flex-col gap-1">
-            <h2 className="text-xl font-black text-gray-800 tracking-tight leading-none">Portal Fiscal</h2>
-            <p className="text-[10px] font-black uppercase text-gray-400">Notas de saída — emissão, DANFE/XML e cancelamento</p>
+          <header className="px-1 flex items-center gap-2.5">
+            <span className="w-9 h-9 rounded-xl bg-blue-50 text-blue-600 border border-blue-100 flex items-center justify-center shrink-0"><i className="fa-solid fa-file-invoice text-sm"></i></span>
+            <div className="flex flex-col gap-0.5 min-w-0">
+              <h2 className="text-xl font-black text-gray-800 tracking-tight leading-none">Portal Fiscal</h2>
+              <p className="text-[10px] font-black uppercase text-gray-400">Notas de saída — emissão, DANFE/XML e cancelamento</p>
+            </div>
           </header>
           <a href="/notas" target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 bg-blue-600 text-white rounded-3xl px-5 py-6 shadow-lg active:scale-[0.98] transition-transform">
             <span className="w-12 h-12 rounded-2xl bg-white/15 flex items-center justify-center shrink-0"><i className="fa-solid fa-file-invoice text-xl"></i></span>
@@ -1965,9 +1971,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           ==================================================================== */}
       {activeTab === 'ENTRADAS' && (
         <div className="space-y-4">
-          <header className="px-1 flex flex-col gap-1">
-            <h2 className="text-xl font-black text-gray-800 tracking-tight leading-none">Portal de Entradas</h2>
-            <p className="text-[10px] font-black uppercase text-gray-400">Notas XML de fornecedores — lote, vinculação e estoque</p>
+          <header className="px-1 flex items-center gap-2.5">
+            <span className="w-9 h-9 rounded-xl bg-teal-50 text-teal-600 border border-teal-100 flex items-center justify-center shrink-0"><i className="fa-solid fa-file-import text-sm"></i></span>
+            <div className="flex flex-col gap-0.5 min-w-0">
+              <h2 className="text-xl font-black text-gray-800 tracking-tight leading-none">Portal de Entradas</h2>
+              <p className="text-[10px] font-black uppercase text-gray-400">Notas XML de fornecedores — lote, vinculação e estoque</p>
+            </div>
           </header>
           <a href="/entradas" target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 bg-teal-600 text-white rounded-3xl px-5 py-6 shadow-lg active:scale-[0.98] transition-transform">
             <span className="w-12 h-12 rounded-2xl bg-white/15 flex items-center justify-center shrink-0"><i className="fa-solid fa-file-import text-xl"></i></span>
@@ -1990,9 +1999,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           ==================================================================== */}
       {activeTab === 'FISCAL_PRODUTOS' && (
         <div className="space-y-4">
-          <header className="px-1 flex flex-col gap-1">
-            <h2 className="text-xl font-black text-gray-800 tracking-tight leading-none">Produtos Fiscais</h2>
-            <p className="text-[10px] font-black uppercase text-gray-400">NCM · CEST · CFOP — lista editável do catálogo</p>
+          <header className="px-1 flex items-center gap-2.5">
+            <span className="w-9 h-9 rounded-xl bg-amber-50 text-amber-600 border border-amber-100 flex items-center justify-center shrink-0"><i className="fa-solid fa-clipboard-list text-sm"></i></span>
+            <div className="flex flex-col gap-0.5 min-w-0">
+              <h2 className="text-xl font-black text-gray-800 tracking-tight leading-none">Produtos Fiscais</h2>
+              <p className="text-[10px] font-black uppercase text-gray-400">NCM · CEST · CFOP — lista editável do catálogo</p>
+            </div>
           </header>
           <a href="/fiscal-produtos" target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 bg-amber-600 text-white rounded-3xl px-5 py-6 shadow-lg active:scale-[0.98] transition-transform">
             <span className="w-12 h-12 rounded-2xl bg-white/15 flex items-center justify-center shrink-0"><i className="fa-solid fa-clipboard-list text-xl"></i></span>
@@ -2014,9 +2026,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           ==================================================================== */}
       {activeTab === 'FISCAL_CLIENTES' && (
         <div className="space-y-4">
-          <header className="px-1 flex flex-col gap-1">
-            <h2 className="text-xl font-black text-gray-800 tracking-tight leading-none">Clientes Fiscais</h2>
-            <p className="text-[10px] font-black uppercase text-gray-400">Nome · CEP — dados do destinatário editáveis</p>
+          <header className="px-1 flex items-center gap-2.5">
+            <span className="w-9 h-9 rounded-xl bg-teal-50 text-teal-600 border border-teal-100 flex items-center justify-center shrink-0"><i className="fa-solid fa-address-card text-sm"></i></span>
+            <div className="flex flex-col gap-0.5 min-w-0">
+              <h2 className="text-xl font-black text-gray-800 tracking-tight leading-none">Clientes Fiscais</h2>
+              <p className="text-[10px] font-black uppercase text-gray-400">Nome · CEP — dados do destinatário editáveis</p>
+            </div>
           </header>
           <a href="/fiscal-clientes" target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 bg-teal-600 text-white rounded-3xl px-5 py-6 shadow-lg active:scale-[0.98] transition-transform">
             <span className="w-12 h-12 rounded-2xl bg-white/15 flex items-center justify-center shrink-0"><i className="fa-solid fa-address-card text-xl"></i></span>
@@ -2039,9 +2054,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           ==================================================================== */}
       {activeTab === 'NOTAS_ESPECIAIS' && (
         <div className="space-y-4">
-          <header className="px-1 flex flex-col gap-1">
-            <h2 className="text-xl font-black text-gray-800 tracking-tight leading-none">Notas Especiais</h2>
-            <p className="text-[10px] font-black uppercase text-gray-400">Devolução · Bonificação · Nota 100% manual</p>
+          <header className="px-1 flex items-center gap-2.5">
+            <span className="w-9 h-9 rounded-xl bg-rose-50 text-rose-600 border border-rose-100 flex items-center justify-center shrink-0"><i className="fa-solid fa-file-pen text-sm"></i></span>
+            <div className="flex flex-col gap-0.5 min-w-0">
+              <h2 className="text-xl font-black text-gray-800 tracking-tight leading-none">Notas Especiais</h2>
+              <p className="text-[10px] font-black uppercase text-gray-400">Devolução · Bonificação · Nota 100% manual</p>
+            </div>
           </header>
           <a href="/fiscal-notas-especiais" target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 bg-rose-600 text-white rounded-3xl px-5 py-6 shadow-lg active:scale-[0.98] transition-transform">
             <span className="w-12 h-12 rounded-2xl bg-white/15 flex items-center justify-center shrink-0"><i className="fa-solid fa-file-pen text-xl"></i></span>
@@ -2057,7 +2075,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
       {activeTab === 'CATALOGO' && (
         <div className="space-y-4">
-          <div className="px-2 flex justify-between items-center gap-2 flex-wrap"><h2 className="text-xl sm:text-2xl font-black text-gray-800 tracking-tight">Estoque Central</h2><div className="flex gap-2"><button onClick={() => handleOpenProduct('NEW')} className="bg-blue-600 text-white w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg active:scale-90 transition-transform"><i className="fa-solid fa-plus text-lg"></i></button></div></div>
+          <div className="px-2 flex items-center justify-between gap-2 flex-wrap"><div className="flex items-center gap-2.5"><span className="w-9 h-9 rounded-xl bg-blue-50 text-blue-600 border border-blue-100 flex items-center justify-center shrink-0"><i className="fa-solid fa-boxes-stacked text-sm"></i></span><h2 className="text-xl sm:text-2xl font-black text-gray-800 tracking-tight">Estoque Central</h2></div><div className="flex gap-2"><button onClick={() => handleOpenProduct('NEW')} className="bg-blue-600 text-white w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg active:scale-90 transition-transform"><i className="fa-solid fa-plus text-lg"></i></button></div></div>
           <div className="px-1"><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar produto..." className="w-full p-4 bg-white border border-gray-100 rounded-2xl shadow-sm text-sm focus:ring-2 focus:ring-blue-100 outline-none" /></div>
           {/* BLOCO 63: ordem do Estoque Central = kanban (arraste pelo grip a
               esquerda do card). Solto, grava e vale pro PDV na hora. */}
@@ -2167,7 +2185,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
       {activeTab === 'CARGAS' && (
         <div className="space-y-4">
-          <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Cargas</h2></div>
+          <div className="px-2 flex items-center gap-2.5"><span className="w-9 h-9 rounded-xl bg-orange-50 text-orange-600 border border-orange-100 flex items-center justify-center shrink-0"><i className="fa-solid fa-truck-ramp-box text-sm"></i></span><h2 className="text-2xl font-black text-gray-800 tracking-tight">Cargas</h2></div>
           <div className="px-1 space-y-3">
             <select value={selectedVendedorId} onChange={e => setSelectedVendedorId(e.target.value)} className="w-full p-4 bg-white border border-gray-100 rounded-2xl shadow-sm text-sm font-bold uppercase outline-none focus:ring-2 focus:ring-orange-100">
               <option value="">Selecione um Vendedor</option>
@@ -3169,7 +3187,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
         {pForm.categoryId && props.subcategories.filter(s => s.categoryId === pForm.categoryId).length > 0 && (
           <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Subcategoria</label><select value={pForm.subcategoryId} onChange={e => setPForm({...pForm, subcategoryId: e.target.value})} className="w-full p-4 bg-gray-50 border rounded-2xl font-bold uppercase"><option value="">Nenhuma</option>{props.subcategories.filter(s => s.categoryId === pForm.categoryId).map(sub => (<option key={sub.id} value={sub.id}>{sub.name}</option>))}</select></div>
         )}
-        <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Custo R$</label><input type="number" value={pForm.custo} onChange={e => { const val = parseFloat(e.target.value) || 0; const venda = props.margemGlobalAtiva ? updatePriceFromMargin(val, props.margemGlobalValor) : parseFloat(pForm.venda) || 0; const margem = props.margemGlobalAtiva ? props.margemGlobalValor : updateMarginFromPrice(val, venda); setPForm({...pForm, custo: e.target.value, venda: venda.toFixed(2), margem: margem.toFixed(2)}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Venda R$</label><input type="number" value={pForm.venda} onChange={e => { const val = parseFloat(e.target.value) || 0; const margem = updateMarginFromPrice(parseFloat(pForm.custo) || 0, val); setPForm({...pForm, margem: margem.toFixed(2), venda: e.target.value}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Margem %</label><input type="number" value={pForm.margem} onChange={e => { const val = parseFloat(e.target.value) || 0; const venda = updatePriceFromMargin(parseFloat(pForm.custo) || 0, val); setPForm({...pForm, margem: e.target.value, venda: venda.toFixed(2)}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Preço Mínimo R$</label><input type="number" value={pForm.precoMinimo} onChange={e => setPForm({...pForm, precoMinimo: e.target.value})} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-amber-600 uppercase ml-1">Preço Especial GB R$ (0 = sem preço GB — cai no normal)</label><input type="number" value={pForm.precoEspecialGb} onChange={e => setPForm({...pForm, precoEspecialGb: e.target.value})} placeholder="0.00" className="w-full p-4 bg-amber-50 border border-amber-100 rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-amber-600 uppercase ml-1">Código do Produto Especial GB (aparece na NF do cliente ESPECIAL GB)</label><input value={pForm.codigoEspecialGb} onChange={e => setPForm({...pForm, codigoEspecialGb: e.target.value})} placeholder="Ex: GB-001 (vazio = usa o código interno)" className="w-full p-4 bg-amber-50 border border-amber-100 rounded-2xl font-bold min-w-0 tracking-wide" /><p className="text-[8px] font-bold text-amber-500 leading-snug">Quando a nota for para um cliente ESPECIAL GB, este código sobe no lugar do código interno. Vazio = segue o código normal.</p></div><div className="space-y-1"><label className="text-[9px] font-black text-violet-600 uppercase ml-1">Preço Cupom R$ (NFC anônima do modo cupom — 0 = sai no custo)</label><input type="number" value={pForm.precoCupom} onChange={e => setPForm({...pForm, precoCupom: e.target.value})} placeholder="0.00" className="w-full p-4 bg-violet-50 border border-violet-100 rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Comissão Pronta Entrega % (vazio = 10%)</label><input type="number" value={pForm.comissao} onChange={e => setPForm({...pForm, comissao: e.target.value})} placeholder="10" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Comissão Pré-Venda % (vazio = 5%)</label><input type="number" value={pForm.comissaoPv} onChange={e => setPForm({...pForm, comissaoPv: e.target.value})} placeholder="5" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-blue-600 uppercase ml-1">Estoque Total</label><input type="number" value={pForm.estoquePrincipal} onChange={e => setPForm({...pForm, estoquePrincipal: e.target.value})} placeholder="0" className="w-full p-4 bg-blue-50 border border-blue-100 rounded-2xl font-bold" /></div><div className="grid grid-cols-2 gap-2"><div className="space-y-1"><label className="text-[9px] font-black text-violet-500 uppercase ml-1">Saiu COM NF (estoque 1)</label><input type="number" value={pForm.estoqueNota} onChange={e => setPForm({...pForm, estoqueNota: e.target.value})} placeholder="0" title="Contador automático de saídas com NF — editável para correção" className="w-full p-4 bg-violet-50 border border-violet-100 rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Saiu SEM NF (cupom — estoque 2)</label><input type="number" value={pForm.estoqueSemnf} onChange={e => setPForm({...pForm, estoqueSemnf: e.target.value})} placeholder="0" title="Contador automático de saídas com cupom — editável para correção" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div></div><p className="text-[8px] font-bold text-blue-400 leading-snug">BLOCO 75: toda entrada entra no ESTOQUE TOTAL. Os contadores 1 (NF) e 2 (cupom) somam as saídas automaticamente — edite só para corrigir. A conta fecha: Total = entradas − 1 − 2.</p>
+        <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Custo R$</label><input type="number" value={pForm.custo} onChange={e => { const val = parseFloat(e.target.value) || 0; const venda = props.margemGlobalAtiva ? updatePriceFromMargin(val, props.margemGlobalValor) : parseFloat(pForm.venda) || 0; const margem = props.margemGlobalAtiva ? props.margemGlobalValor : updateMarginFromPrice(val, venda); setPForm({...pForm, custo: e.target.value, venda: venda.toFixed(2), margem: margem.toFixed(2)}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Venda R$</label><input type="number" value={pForm.venda} onChange={e => { const val = parseFloat(e.target.value) || 0; const margem = updateMarginFromPrice(parseFloat(pForm.custo) || 0, val); setPForm({...pForm, margem: margem.toFixed(2), venda: e.target.value}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Margem %</label><input type="number" value={pForm.margem} onChange={e => { const val = parseFloat(e.target.value) || 0; const venda = updatePriceFromMargin(parseFloat(pForm.custo) || 0, val); setPForm({...pForm, margem: e.target.value, venda: venda.toFixed(2)}); }} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Preço Mínimo R$</label><input type="number" value={pForm.precoMinimo} onChange={e => setPForm({...pForm, precoMinimo: e.target.value})} placeholder="0.00" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-amber-600 uppercase ml-1">Preço Especial GB R$ (0 = sem preço GB — cai no normal)</label><input type="number" value={pForm.precoEspecialGb} onChange={e => setPForm({...pForm, precoEspecialGb: e.target.value})} placeholder="0.00" className="w-full p-4 bg-amber-50 border border-amber-100 rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-amber-600 uppercase ml-1">Código do Produto Especial GB (aparece na NF do cliente ESPECIAL GB)</label><input value={pForm.codigoEspecialGb} onChange={e => setPForm({...pForm, codigoEspecialGb: e.target.value})} placeholder="Ex: GB-001 (vazio = usa o código interno)" className="w-full p-4 bg-amber-50 border border-amber-100 rounded-2xl font-bold min-w-0 tracking-wide" /><p className="text-[8px] font-bold text-amber-500 leading-snug">Quando a nota for para um cliente ESPECIAL GB, este código sobe no lugar do código interno. Vazio = segue o código normal.</p></div><div className="space-y-1"><label className="text-[9px] font-black text-violet-600 uppercase ml-1">Preço Cupom R$ (NFC anônima do modo cupom — 0 = sai no custo)</label><input type="number" value={pForm.precoCupom} onChange={e => setPForm({...pForm, precoCupom: e.target.value})} placeholder="0.00" className="w-full p-4 bg-violet-50 border border-violet-100 rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Comissão Pronta Entrega % (vazio = 10%)</label><input type="number" value={pForm.comissao} onChange={e => setPForm({...pForm, comissao: e.target.value})} placeholder="10" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase ml-1">Comissão Pré-Venda % (vazio = 5%)</label><input type="number" value={pForm.comissaoPv} onChange={e => setPForm({...pForm, comissaoPv: e.target.value})} placeholder="5" className="w-full p-4 bg-gray-50 border rounded-2xl font-bold" /></div><div className="space-y-1"><label className="text-[9px] font-black text-blue-600 uppercase ml-1">Estoque Total</label><input type="number" value={pForm.estoquePrincipal} onChange={e => setPForm({...pForm, estoquePrincipal: e.target.value})} placeholder="0" className="w-full p-4 bg-blue-50 border border-blue-100 rounded-2xl font-bold" /></div><p className="text-[8px] font-bold text-blue-400 leading-snug">BLOCO 208 (regra do dono): as caixas do estoque 1 (NF) e 2 (cupom) saíram do cadastro — são CONTADORES AUTOMÁTICOS: o sistema soma as saídas sozinho na entrega (NF conta no estoque 1, cupom no estoque 2) e os números seguem nos chips dos cards do Estoque Central. Toda entrada entra no ESTOQUE TOTAL acima.</p>
         <div className="flex items-center gap-2 py-2"><input type="checkbox" id="prod_ativo" checked={pForm.ativo} onChange={e => setPForm({...pForm, ativo: e.target.checked})} className="w-5 h-5" /><label htmlFor="prod_ativo" className="text-xs font-bold text-gray-700 uppercase">Produto Ativo</label></div><button onClick={handleSaveProduct} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 uppercase text-xs mt-4 tracking-widest">Salvar Produto</button><button onClick={() => setShowProductModal(null)} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button></div></div></div>
       )}
 
@@ -3182,7 +3200,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           {(parseInt(entryForm.qtd) > 0) && (parseFloat(entryForm.custo) > 0) && (() => {
             const qP = parseInt(entryForm.qtd) || 0; const cP = parseFloat(entryForm.custo) || 0;
             const estP = showEntryModal.estoquePrincipal || 0; const cusP = showEntryModal.precoCusto || 0;
-            const novoTot = estP + qP; const novoCus = novoTot > 0 ? ((estP * cusP) + (qP * cP)) / novoTot : cP;
+            const novoTot = estP + qP; const novoCus = novoTot > 0 ? ((Math.max(0, estP) * cusP) + (qP * cP)) / novoTot : cP;
             return (
               <div className="rounded-2xl bg-emerald-50 border border-emerald-100 px-3 py-2.5 text-center">
                 <p className="text-[8px] font-black text-emerald-600 uppercase tracking-wide"><i className="fa-solid fa-scale-balanced mr-1"></i>Preço médio que vai ficar</p>
@@ -3191,7 +3209,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
               </div>
             );
           })()}
-          <button onClick={() => { const q = parseInt(entryForm.qtd) || 0; const c = parseFloat(entryForm.custo) || 0; if (q <= 0 || c <= 0) { showToast("Valores inválidos", "error"); return; } const estA = showEntryModal.estoquePrincipal || 0; const cusA = showEntryModal.precoCusto || 0; const nEst = estA + q; const nCus = ((estA * cusA) + (q * c)) / nEst; const nVen = props.margemGlobalAtiva ? updatePriceFromMargin(nCus, props.margemGlobalValor) : showEntryModal.precoVenda;
+          <button onClick={() => { const q = parseInt(entryForm.qtd) || 0; const c = parseFloat(entryForm.custo) || 0; if (q <= 0 || c <= 0) { showToast("Valores inválidos", "error"); return; } const estA = showEntryModal.estoquePrincipal || 0; const cusA = showEntryModal.precoCusto || 0; const nEst = estA + q; const nCus = ((Math.max(0, estA) * cusA) + (q * c)) / nEst; const nVen = props.margemGlobalAtiva ? updatePriceFromMargin(nCus, props.margemGlobalValor) : showEntryModal.precoVenda;
           // BLOCO 75 (ESTOQUE TOTAL): entrada unica — soma no Estoque Total
           props.updateProduct(showEntryModal.id, { estoquePrincipal: nEst, precoCusto: Number(nCus.toFixed(2)), precoVenda: Number(nVen.toFixed(2)) });
           setShowEntryModal(null); setEntryForm({ qtd: '', custo: '' }); showToast(`Entrada registrada! Custo médio: R$ ${nCus.toFixed(2)} · Estoque Total: ${nEst} un`); }} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest">Confirmar Entrada</button><button onClick={() => { setShowEntryModal(null); setEntryForm({ qtd: '', custo: '' }); }} className="w-full py-2 text-gray-400 font-bold text-[9px] uppercase text-center">Cancelar</button></div></div></div>

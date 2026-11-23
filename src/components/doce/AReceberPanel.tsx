@@ -172,10 +172,13 @@ const AReceberPanel: React.FC<Props> = ({ sales, clients, onRegistrarPagamento, 
 
   return (
     <div className="space-y-4 pb-10">
-      {/* ===== TÍTULO ===== */}
-      <div className="px-2">
-        <h2 className="text-2xl font-black text-gray-800 tracking-tight">Contas a Receber</h2>
-        <p className="text-[9px] font-black text-gray-400 uppercase tracking-wider mt-0.5">Vendas entregues com saldo em aberto — agrupado por cliente</p>
+      {/* ===== TÍTULO (BLOCO 208: ícone no padrão das outras telas) ===== */}
+      <div className="px-2 flex items-center gap-2.5">
+        <span className="w-9 h-9 rounded-xl bg-rose-50 text-rose-600 border border-rose-100 flex items-center justify-center shrink-0"><i className="fa-solid fa-file-invoice-dollar text-sm"></i></span>
+        <div className="min-w-0">
+          <h2 className="text-2xl font-black text-gray-800 tracking-tight">Contas a Receber</h2>
+          <p className="text-[9px] font-black text-gray-400 uppercase tracking-wider mt-0.5">Vendas entregues com saldo em aberto — agrupado por cliente</p>
+        </div>
       </div>
 
       {/* ===== HERO ===== */}

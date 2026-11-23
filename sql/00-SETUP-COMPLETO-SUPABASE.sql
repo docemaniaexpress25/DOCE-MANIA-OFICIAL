@@ -851,6 +851,10 @@ as $$
 declare
   v_delta numeric;
   v_novo  numeric;
+  -- BLOCO 208: custo médio ponderado na ENTRADA (mesma fórmula do sql/bloco208)
+  v_saldo_antes numeric;
+  v_custo_atual numeric;
+  v_novo_custo  numeric;
 begin
   if p_quantidade is null or p_quantidade <= 0 then
     return json_build_object('ok', false, 'erro', 'Quantidade deve ser maior que zero.');
@@ -870,13 +874,32 @@ begin
     return json_build_object('ok', false, 'erro', 'Produto não encontrado.');
   end if;
 
+  -- BLOCO 208: ENTRADA com custo recalcula o PREÇO DE CUSTO MÉDIO ponderado:
+  --   (saldo_antes × custo_atual + qtd × custo_nota) ÷ (saldo_antes + qtd).
+  --   Saldo antes <= 0 → o custo médio vira o custo da própria nota (a entrada
+  --   é 100% do saldo). SAÍDA nunca mexe no custo. Preço de venda intacto.
+  if p_tipo = 'ENTRADA' and coalesce(p_custo_unitario, 0) > 0 then
+    v_saldo_antes := v_novo - v_delta;
+    select preco_custo into v_custo_atual from public.products where id = p_produto_id;
+    v_novo_custo := case
+      when v_saldo_antes > 0 then
+        ((v_saldo_antes * coalesce(v_custo_atual, 0)) + (p_quantidade * p_custo_unitario))
+          / (v_saldo_antes + p_quantidade)
+      else p_custo_unitario
+    end;
+    update public.products
+       set preco_custo = round(v_novo_custo::numeric, 2)
+     where id = p_produto_id;
+  end if;
+
   insert into public.estoque_movimentos
     (produto_id, tipo, origem, referencia, quantidade, custo_unitario, saldo_apos, usuario_id, usuario_nome)
   values
     (p_produto_id, p_tipo, coalesce(p_origem, 'MANUAL'), p_referencia, p_quantidade,
      p_custo_unitario, v_novo, p_usuario_id, p_usuario_nome);
 
-  return json_build_object('ok', true, 'saldo', v_novo);
+  return json_build_object('ok', true, 'saldo', v_novo,
+    'custoMedio', (select preco_custo from public.products where id = p_produto_id));
 exception when others then
   return json_build_object('ok', false, 'erro', sqlerrm);
 end $$;

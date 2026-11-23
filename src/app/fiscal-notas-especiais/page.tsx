@@ -765,9 +765,12 @@ export default function PortalNotasEspeciaisPage() {
         {/* ---------- header ---------- */}
         <header className="sticky top-0 z-40 bg-white/95 backdrop-blur border-b border-gray-200 px-4 pt-3 pb-2.5">
           <div className="flex items-center justify-between gap-2">
-            <div className="min-w-0">
-              <h1 className="text-lg font-black text-gray-800 tracking-tight leading-none truncate">Notas Especiais</h1>
-              <p className="text-[9px] font-black uppercase tracking-widest text-gray-400 mt-1 truncate">Devolução · Bonificação · Nota manual (NF-e)</p>
+            <div className="flex items-center gap-2.5 min-w-0">
+              <span className="w-9 h-9 rounded-xl bg-rose-50 border border-rose-100 text-rose-600 flex items-center justify-center shrink-0"><i className="fa-solid fa-file-pen text-sm"></i></span>
+              <div className="min-w-0">
+                <h1 className="text-lg font-black text-gray-800 tracking-tight leading-none truncate">Notas Especiais</h1>
+                <p className="text-[9px] font-black uppercase tracking-widest text-gray-400 mt-1 truncate">Devolução · Bonificação · Nota manual (NF-e)</p>
+              </div>
             </div>
             <div className="flex items-center gap-2 shrink-0">
               {carregandoDados ? (

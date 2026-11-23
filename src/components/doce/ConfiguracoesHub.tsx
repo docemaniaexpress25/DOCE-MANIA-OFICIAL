@@ -437,11 +437,12 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
 
   return (
     <div className="space-y-4 pb-10">
-      {/* ===== HEADER ===== */}
+      {/* ===== HEADER (BLOCO 208: ícone no padrão das outras telas) ===== */}
       <div className="flex items-center gap-3 px-2">
         <button onClick={onBack} className="w-10 h-10 bg-white text-gray-500 rounded-xl flex items-center justify-center shadow-sm border border-gray-100 active:scale-90 transition-transform flex-shrink-0">
           <i className="fa-solid fa-arrow-left"></i>
         </button>
+        <span className="w-9 h-9 rounded-xl bg-indigo-50 text-indigo-600 border border-indigo-100 flex items-center justify-center shrink-0"><i className="fa-solid fa-gears text-sm"></i></span>
         <div className="min-w-0">
           <h2 className="text-xl font-black text-gray-800 tracking-tight truncate">ERP Fiscal &amp; Automações</h2>
           <p className="text-[9px] font-black text-gray-400 uppercase tracking-wider">Nota fiscal, boletos e estoque em um só lugar</p>

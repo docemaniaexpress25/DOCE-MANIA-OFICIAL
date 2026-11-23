@@ -346,6 +346,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [expandedDay, setExpandedDay] = useState<number | null>(null);
   const [showReceiveModal, setShowReceiveModal] = useState<Sale | null>(null);
   const [valorRecebidoParcial, setValorRecebidoParcial] = useState<string>('');
+  // BLOCO 203 (pedido do dono): clicar em Receber PERGUNTA "Realmente quer
+  // receber?" antes de baixar e, ao confirmar, mostra o EMOJI de processando
+  // enquanto grava no banco (evita baixa por toque errado).
+  const [metodoConfirmar, setMetodoConfirmar] = useState<ReceiveMethod | null>(null);
+  const [processandoRecebimento, setProcessandoRecebimento] = useState(false);
   const [payoutVendedor, setPayoutVendedor] = useState<User | null>(null);
   const [payoutType, setPayoutType] = useState<'TOTAL' | 'PARCIAL'>('TOTAL');
   const [partialAmount, setPartialAmount] = useState<string>('');
@@ -1311,12 +1316,29 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     showToast("Subcategoria atualizada!");
   };
 
-  const handleConfirmReceive = (method: ReceiveMethod) => {
-    if (!showReceiveModal) return;
+  // BLOCO 203 (pedido do dono): os botões de método SÓ marcam o método
+  // escolhido; a baixa só acontece depois da pergunta "Realmente quer
+  // receber?". Ao confirmar, mostra o emoji de processando e AGUARDA o
+  // banco gravar antes de fechar o modal.
+  const pedirConfirmacaoRecebimento = (method: ReceiveMethod) => {
+    if (processandoRecebimento) return;
     const valor = parseFloat(valorRecebidoParcial);
-    props.receiveAccount(showReceiveModal.id, method, valor);
-    setShowReceiveModal(null);
-    showToast("Recebimento registrado!");
+    if (Number.isNaN(valor) || valor <= 0) { showToast('Informe um valor válido.', 'error'); return; }
+    setMetodoConfirmar(method);
+  };
+
+  const handleConfirmReceive = async () => {
+    if (!showReceiveModal || !metodoConfirmar || processandoRecebimento) return;
+    const valor = parseFloat(valorRecebidoParcial);
+    setProcessandoRecebimento(true);
+    try {
+      await props.receiveAccount(showReceiveModal.id, metodoConfirmar, valor);
+      setShowReceiveModal(null);
+      setMetodoConfirmar(null);
+      showToast('Recebimento registrado!');
+    } finally {
+      setProcessandoRecebimento(false);
+    }
   };
 
   const updateStaging = (pId: string, delta: number) => {
@@ -3166,6 +3188,15 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       {showReceiveModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[200] flex items-center justify-center p-6">
           <div className="bg-white w-full max-w-xs rounded-3xl p-8 shadow-2xl text-center">
+            {/* BLOCO 203 (pedido do dono): emoji de processando enquanto grava no banco */}
+            {processandoRecebimento ? (
+              <div className="py-6" role="status" aria-live="polite">
+                <span className="inline-block text-5xl animate-bounce" aria-hidden="true">⏳</span>
+                <h3 className="font-black text-gray-800 uppercase text-sm mt-4">Processando recebimento...</h3>
+                <p className="text-[10px] font-bold text-gray-400 uppercase mt-2 leading-snug">Gravando no banco — não feche o app</p>
+              </div>
+            ) : (
+              <>
             <h3 className="font-black text-gray-800 uppercase text-sm mb-2">Receber Pagamento</h3>
             <p className="text-xs text-gray-400 font-bold uppercase mb-1">{props.clients.find(c => c.id === showReceiveModal.clientId)?.nomeFantasia || 'Cliente'}</p>
             <p className="text-xl font-black text-gray-800 mb-4">R$ {showReceiveModal.valorTotal?.toFixed(2)}</p>
@@ -3177,14 +3208,28 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
               {/* BLOCO 124 (regra do dono): a prazo é TODA BOLETO — recebe como
                   BOLETO (fecha o saldo, não vira metodo da venda, não entra no
                   caixa). Dinheiro/Pix para quem paga na mão, Depósito para conta. */}
+              {/* BLOCO 203 (pedido do dono): clicar num método NÃO baixa direto —
+                  mostra a pergunta "Realmente quer receber?" antes de gravar. */}
+              {metodoConfirmar ? (
+                <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 text-center space-y-3">
+                  <p className="text-[11px] font-black text-gray-800 uppercase leading-snug">Realmente quer receber R$ {(parseFloat(valorRecebidoParcial) || 0).toFixed(2)} como {metodoConfirmar}?</p>
+                  <div className="flex gap-2">
+                    <button onClick={handleConfirmReceive} className="flex-1 bg-emerald-600 text-white py-3 rounded-xl font-black text-[9px] uppercase active:scale-95 shadow-sm">Sim, receber</button>
+                    <button onClick={() => setMetodoConfirmar(null)} className="flex-1 bg-white border border-gray-200 text-gray-500 py-3 rounded-xl font-black text-[9px] uppercase active:scale-95">Voltar</button>
+                  </div>
+                </div>
+              ) : (
               <div className="grid grid-cols-2 gap-2">
-                <button onClick={() => handleConfirmReceive('DINHEIRO')} className="bg-emerald-600 text-white py-3 rounded-xl font-black text-[9px] uppercase active:scale-95">Dinheiro</button>
-                <button onClick={() => handleConfirmReceive('PIX')} className="bg-blue-600 text-white py-3 rounded-xl font-black text-[9px] uppercase active:scale-95">Pix</button>
-                <button onClick={() => handleConfirmReceive('BOLETO')} className="bg-slate-600 text-white py-3 rounded-xl font-black text-[9px] uppercase active:scale-95">Boleto</button>
-                <button onClick={() => handleConfirmReceive('DEPOSITO')} className="bg-purple-600 text-white py-3 rounded-xl font-black text-[9px] uppercase active:scale-95">Deposito</button>
+                <button onClick={() => pedirConfirmacaoRecebimento('DINHEIRO')} className="bg-emerald-600 text-white py-3 rounded-xl font-black text-[9px] uppercase active:scale-95">Dinheiro</button>
+                <button onClick={() => pedirConfirmacaoRecebimento('PIX')} className="bg-blue-600 text-white py-3 rounded-xl font-black text-[9px] uppercase active:scale-95">Pix</button>
+                <button onClick={() => pedirConfirmacaoRecebimento('BOLETO')} className="bg-slate-600 text-white py-3 rounded-xl font-black text-[9px] uppercase active:scale-95">Boleto</button>
+                <button onClick={() => pedirConfirmacaoRecebimento('DEPOSITO')} className="bg-purple-600 text-white py-3 rounded-xl font-black text-[9px] uppercase active:scale-95">Deposito</button>
               </div>
-              <button onClick={() => setShowReceiveModal(null)} className="w-full py-2 text-gray-400 font-bold uppercase text-[10px]">Cancelar</button>
+              )}
+              <button onClick={() => { setShowReceiveModal(null); setMetodoConfirmar(null); }} className="w-full py-2 text-gray-400 font-bold uppercase text-[10px]">Cancelar</button>
             </div>
+              </>
+            )}
           </div>
         </div>
       )}

@@ -93,9 +93,10 @@ interface VendedorDashboardProps {
 // tem mais card, aba ou link para o portal.
 type TabType = 'HOME' | 'ROTEIRO' | 'CARGA' | 'HISTORY' | 'FINANCE' | 'CREDIT' | 'CLIENTES' | 'WEEKLY' | 'STOCK_VIEW' | 'AVISOS' | 'ENTREGAS' | 'LUCRO_ROTA' | 'CAIXA';
 
-// BLOCO 188: card ORDENÁVEL do ROTEIRO SEMANAL (kanban). O grip (≡) arrasta;
-// as setas ↑↓ continuam DENTRO do item (funcionam até na busca, onde o
-// arrasto desliga). O corpo do item (nome/bairro/puxar/editar) não muda.
+// BLOCO 188: card ORDENÁVEL do ROTEIRO SEMANAL (kanban). O grip (≡) arrasta.
+// BLOCO 204 (pedido do dono): as setas ↑↓ foram REMOVIDAS — o kanban de
+// arrastar é o único jeito de ordenar. O corpo do item (nome/bairro/puxar/
+// editar) não muda.
 function SortableSemanalCard({ id, posicao, children }: {
   id: string;
   posicao: number;
@@ -1101,13 +1102,15 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
   // ------------------------------------------------------------------
   // BLOCO 188 — ORDEM DOS CLIENTES: grava SOMENTE no ROTEIRO SEMANAL
-  // (kanban de arrastar + setas ↑↓) e VALE PARA A ROTA DO DIA. Regra do
+  // (kanban de arrastar) e VALE PARA A ROTA DO DIA. Regra do
   // dono: "arrumar a ordem ali no Roteiro Semanal grava no Roteiro do Dia
   // também" — os dois lugares leem a MESMA ordem global (client_order no
   // Supabase, via setClientOrder → appSettingsService). Motor de SLOTS
   // (lib ordemManual, BLOCO 184): os clientes DO DIA trocam de posição
   // entre SI, cada um cai no slot que já ocupava na ordem global —
   // cliente de outro dia/outro vendedor NUNCA sai do lugar.
+  // BLOCO 204 (pedido do dono): as SETAS ↑↓ saíram — o kanban de
+  // arrastar é o único jeito de ordenar (flechas não seriam usadas).
   // ------------------------------------------------------------------
   const sensorsSemanal = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 10 } }),
@@ -1131,14 +1134,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     setClientOrder(novaOrdem); // estado + Supabase
     showToast('Ordem salva! Já vale para a Rota do Dia também.');
   }, [clientOrder, allClients, clients, setClientOrder, showToast]);
-
-  // Setas ↑↓ do Roteiro Semanal (mesma gravação do kanban; funciona na busca)
-  const moveClientInDay = (clientId: string, dir: 'UP' | 'DOWN', diaClientes: Client[]) => {
-    const from = diaClientes.findIndex(c => c.id === clientId);
-    const to = dir === 'UP' ? from - 1 : from + 1;
-    if (from < 0 || to < 0 || to >= diaClientes.length) return;
-    aplicarOrdemSemanal(diaClientes, arrayMove(diaClientes, from, to));
-  };
 
   const onDragEndSemanal = (diaClientes: Client[]) => (ev: DragEndEvent) => {
     const { active, over } = ev;
@@ -1778,10 +1773,10 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                   </button>
                   {isOpen && (() => {
                     // BLOCO 188 (regra do dono): AQUI fica o kanban de clientes.
-                    // Arrastar pelo ≡ (ou setas ↑↓) grava a ordem no client_order
-                    // global e a Rota do Dia abre NESSA MESMA ordem. Com busca
-                    // ativa o arrasto desliga (cards simples) e as setas seguem
-                    // funcionando — mesma gravação.
+                    // Arrastar pelo ≡ grava a ordem no client_order global e a
+                    // Rota do Dia abre NESSA MESMA ordem. BLOCO 204: as setas
+                    // ↑↓ saíram (dono pediu — o arrasto é o único jeito).
+                    // Com busca ativa o arrasto desliga (cards simples).
                     const podeArrastar = weeklySearch.trim() === '';
                     // BLOCO 190: quem é quinzenal/mensal nem sempre vem essa semana
                     const semanaISOAgora = numeroSemanaISO(new Date());
@@ -1790,10 +1785,6 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                       const freqChip = c.frequencia && c.frequencia !== 'SEMANAL' ? `${rotuloFrequencia(c.frequencia)}${rotuloSemanaReferencia(c.frequencia, c.semanaReferencia) ? ` · ${rotuloSemanaReferencia(c.frequencia, c.semanaReferencia)}` : ''}` : '';
                       const item = (
                         <div className="p-3 bg-gray-50 rounded-2xl flex items-center justify-between group">
-                          <div className="flex flex-col gap-1 mr-3">
-                            <button onClick={(e)=>{e.stopPropagation(); moveClientInDay(c.id, 'UP', clientsInDay);}} disabled={k === 0} className="w-9 h-9 bg-white border text-gray-400 rounded-lg flex items-center justify-center active:scale-90 disabled:opacity-20" aria-label={`Subir ${c.nomeFantasia} uma posição`}><i className="fa-solid fa-chevron-up text-[10px]"></i></button>
-                            <button onClick={(e)=>{e.stopPropagation(); moveClientInDay(c.id, 'DOWN', clientsInDay);}} disabled={k === clientsInDay.length - 1} className="w-9 h-9 bg-white border text-gray-400 rounded-lg flex items-center justify-center active:scale-90 disabled:opacity-20" aria-label={`Descer ${c.nomeFantasia} uma posição`}><i className="fa-solid fa-chevron-down text-[10px]"></i></button>
-                          </div>
                           <div className="flex-1 cursor-pointer min-w-0" onClick={() => setViewingClientHistory(c)}>
                             <p className="font-bold text-gray-800 text-xs uppercase break-words">{c.nomeFantasia}</p>
                             <p className="text-[9px] text-gray-400 font-bold mt-0.5">{c.bairro || 'Sem Bairro'}</p>
@@ -1830,7 +1821,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                             {clientsInDay.length > 1 && (
                               <p className="text-[9px] font-black uppercase tracking-wider text-indigo-400 flex items-center gap-1.5">
                                 <i className="fa-solid fa-grip-vertical"></i>
-                                Aqui é o lugar de ordenar as visitas — arraste pelo ≡ (ou use as setas); a ordem vale para a Rota do Dia
+                                Aqui é o lugar de ordenar as visitas — arraste pelo ≡; a ordem vale para a Rota do Dia
                               </p>
                             )}
                             {corpo}

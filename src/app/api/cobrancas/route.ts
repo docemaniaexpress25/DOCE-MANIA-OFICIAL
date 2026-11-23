@@ -104,15 +104,65 @@ export async function GET(req: NextRequest) {
 
   const erp = await lerErpConfig();
 
-  // Inter nao configurado: o portal abre mesmo assim (mostra o aviso de env).
+  // Inter nao configurado: o portal abre MESMO ASSIM com os boletos do
+  // BANCO LOCAL (sales_boletos, BLOCO 199) vencidos e em aberto — assim a
+  // cobranca já funciona hoje; quando as credenciais do Inter forem
+  // cadastradas (env Vercel), a lista passa a vir da API oficial sozinha.
   if (!isInterConfigured()) {
+    const hoje = dataHojeSp();
+    let atrasados: BoletoAtrasado[] = [];
+    try {
+      const db = getServiceClient();
+      const [bRes, vRes, cRes] = await Promise.all([
+        db.from('sales_boletos')
+          .select('sale_id, seq, valor, vencimento, status, codigo, seu_numero')
+          .gte('vencimento', dataMenosDiasSp(JANELA_DIAS))
+          .lt('vencimento', hoje)
+          .order('vencimento', { ascending: true })
+          .limit(500),
+        db.from('sales').select('id, client_id'),
+        db.from('clients').select('id, nome_fantasia, nome, telefone'),
+      ]);
+      const vendaPorId = new Map<string, Record<string, unknown>>();
+      for (const s of vRes.data || []) vendaPorId.set(String((s as Record<string, unknown>).id || ''), s as Record<string, unknown>);
+      const clientePorId = new Map<string, Record<string, unknown>>();
+      for (const c of cRes.data || []) clientePorId.set(String((c as Record<string, unknown>).id || ''), c as Record<string, unknown>);
+
+      // status que AINDA sao cobranca em aberto (o resto fechou: pago/cancelado/expirado...)
+      const aberto = new Set(['NAO_GERADO', 'EM_PROCESSAMENTO', 'A_RECEBER', 'ATRASADO']);
+      atrasados = (bRes.data || [])
+        .filter((b) => aberto.has(String((b as Record<string, unknown>).status || 'NAO_GERADO').toUpperCase()))
+        .map((b) => {
+          const row = b as Record<string, unknown>;
+          const saleId = String(row.sale_id || '') || null;
+          const cli = clientePorId.get(String(vendaPorId.get(saleId || '')?.client_id || ''));
+          const venc = String(row.vencimento || '');
+          return {
+            codigo: String(row.codigo || `local-${row.seu_numero || row.sale_id}-${row.seq || 1}`),
+            seuNumero: String(row.seu_numero || ''),
+            situacao: String(row.status || 'ATRASADO'),
+            vencimento: venc,
+            vencimentoFmt: fmtData(venc),
+            valor: Number(row.valor) || 0,
+            diasAtraso: diasAtrasoDe(venc, hoje),
+            cliente: String(cli?.nome_fantasia || cli?.nome || 'Cliente'),
+            telefone: telWaMe(String(cli?.telefone || '')),
+            saleId,
+            parcela: row.seq != null ? Number(row.seq) : null,
+          } as BoletoAtrasado;
+        });
+    } catch {
+      // sales_boletos ainda nao existe (SQL 199 nao rodou) — segue vazio
+    }
     return NextResponse.json({
       ok: true,
       interConfigurado: false,
+      fonte: 'LOCAL',
       mensagem: erp.cobrancaMensagem,
       mensagemPadrao: COBRANCA_MENSAGEM_DEFAULT,
-      atrasados: [] as BoletoAtrasado[],
-      totalAtrasado: 0,
+      atrasados,
+      totalAtrasado: Number(atrasados.reduce((acc, x) => acc + x.valor, 0).toFixed(2)),
+      consultadoEm: new Date().toISOString(),
     });
   }
 
@@ -129,6 +179,7 @@ export async function GET(req: NextRequest) {
       ok: false,
       erro: `Falha ao consultar o Inter: ${lista.erro || 'erro desconhecido'}`,
       interConfigurado: true,
+      fonte: 'INTER',
       mensagem: erp.cobrancaMensagem,
       mensagemPadrao: COBRANCA_MENSAGEM_DEFAULT,
       atrasados: [],
@@ -208,6 +259,7 @@ export async function GET(req: NextRequest) {
   const payload = {
     ok: true,
     interConfigurado: true,
+    fonte: 'INTER',
     mensagem: erp.cobrancaMensagem,
     mensagemPadrao: COBRANCA_MENSAGEM_DEFAULT,
     atrasados,

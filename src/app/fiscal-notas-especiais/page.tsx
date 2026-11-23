@@ -760,8 +760,8 @@ export default function PortalNotasEspeciaisPage() {
   }).slice(0, 80);
 
   return (
-    <main className="min-h-screen bg-gray-100">
-      <div className="max-w-2xl mx-auto pb-40">
+    <main className="min-h-screen bg-gray-100 flex flex-col">
+      <div className="max-w-2xl mx-auto pb-40 w-full">
         {/* ---------- header ---------- */}
         <header className="sticky top-0 z-40 bg-white/95 backdrop-blur border-b border-gray-200 px-4 pt-3 pb-2.5">
           <div className="flex items-center justify-between gap-2">
@@ -1448,6 +1448,9 @@ export default function PortalNotasEspeciaisPage() {
           </div>
         </div>
       </div>
+      <footer className="mt-auto pt-2 text-center" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom) + 8px)' }}>
+        <p className="text-[9px] font-bold text-gray-300 uppercase tracking-wider">Notas Especiais · Devolução · Bonificação · nota manual · Doce Mania</p>
+      </footer>
     </main>
   );
 }

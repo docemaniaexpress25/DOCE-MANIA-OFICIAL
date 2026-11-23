@@ -865,7 +865,7 @@ export default function PortalEntradasPage() {
       </div>
 
       {/* ================= TABELA (estilo IOB — 1 linha por nota) ================= */}
-      <main className="max-w-[1600px] w-full mx-auto px-4 mt-2 flex-1 pb-10">
+      <main className="max-w-[1600px] w-full mx-auto px-4 mt-2 flex-1 pb-10 flex flex-col">
         {carregando && importacoes.length === 0 && (
           <div className="py-16 flex justify-center"><div className="w-10 h-10 border-4 border-teal-100 border-t-teal-600 rounded-full animate-spin" /></div>
         )}
@@ -1090,7 +1090,7 @@ export default function PortalEntradasPage() {
           </div>
         )}
 
-        <footer className="mt-6 text-center">
+        <footer className="mt-auto pt-6 text-center" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
           <p className="text-[9px] font-bold text-gray-300 uppercase tracking-wider">
             Portal de Entradas · XMLs de fornecedores → catálogo → estoque · Doce Mania
           </p>

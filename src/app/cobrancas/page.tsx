@@ -38,6 +38,7 @@ type DadosApi = {
   ok: boolean;
   erro?: string;
   interConfigurado: boolean;
+  fonte?: 'INTER' | 'LOCAL'; // BLOCO 207: LOCAL = fallback sales_boletos (Inter não configurado)
   mensagem: string;
   mensagemPadrao: string;
   atrasados: BoletoAtrasado[];
@@ -284,11 +285,11 @@ export default function CobrancasPortal() {
       </div>
 
       <div className="p-3 space-y-3 max-w-3xl mx-auto w-full flex-1">
-        {/* Inter não configurado */}
+        {/* Inter não configurado — BLOCO 207: portal segue ÚTIL com os boletos do banco local */}
         {dados && !dados.interConfigurado && (
           <div className="rounded-2xl bg-amber-950/60 border border-amber-900 text-amber-200 text-[10px] font-bold px-4 py-3 leading-snug">
-            <p className="font-black uppercase text-[11px] mb-1"><i className="fa-solid fa-triangle-exclamation mr-1.5"></i>API do Inter não configurada</p>
-            Para buscar os boletos atrasados, cadastre na Vercel as variáveis <span className="font-mono">INTER_CLIENT_ID</span>, <span className="font-mono">INTER_CLIENT_SECRET</span>, <span className="font-mono">INTER_CERT</span> + <span className="font-mono">INTER_KEY</span> (ou <span className="font-mono">INTER_P12</span> + <span className="font-mono">INTER_P12_SENHA</span>). Depois clique em Atualizar.
+            <p className="font-black uppercase text-[11px] mb-1"><i className="fa-solid fa-triangle-exclamation mr-1.5"></i>API do Inter não configurada — lista do banco local</p>
+            Mostrando os boletos vencidos gravados no sistema (vendas a prazo e boleto duplo). Ao cadastrar na Vercel as variáveis <span className="font-mono">INTER_CLIENT_ID</span>, <span className="font-mono">INTER_CLIENT_SECRET</span>, <span className="font-mono">INTER_CERT</span> + <span className="font-mono">INTER_KEY</span> (ou <span className="font-mono">INTER_P12</span> + <span className="font-mono">INTER_P12_SENHA</span>), a lista passa a vir direto do Banco Inter automaticamente.
           </div>
         )}
 
@@ -299,7 +300,7 @@ export default function CobrancasPortal() {
         {/* hero: total atrasado */}
         <section className={`rounded-3xl p-4 ${dark}`}>
           <div className="flex items-start justify-between gap-2">
-            <p className="text-[9px] font-black uppercase tracking-widest text-slate-400"><i className="fa-solid fa-bell-dollar mr-1.5 text-rose-400"></i>Boletos atrasados (API do Inter)</p>
+            <p className="text-[9px] font-black uppercase tracking-widest text-slate-400"><i className="fa-solid fa-bell-dollar mr-1.5 text-rose-400"></i>{dados?.fonte === 'LOCAL' ? 'Boletos atrasados (banco local)' : 'Boletos atrasados (API do Inter)'}</p>
             {dados?.consultadoEm && (
               <span className="text-[8px] font-bold text-slate-500 whitespace-nowrap">consulta {new Date(dados.consultadoEm).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
             )}

@@ -191,7 +191,7 @@ export default function ProdutosBalancoPortal() {
 
   // ---------------- DASHBOARD ----------------
   return (
-    <main className="min-h-screen bg-gradient-to-b from-slate-900 to-slate-950 pb-16" style={{ paddingTop: 'max(env(safe-area-inset-top), 0px)' }}>
+    <main className="min-h-screen bg-gradient-to-b from-slate-900 to-slate-950 pb-16 flex flex-col" style={{ paddingTop: 'max(env(safe-area-inset-top), 0px)' }}>
       {/* header */}
       <div className="sticky top-0 z-40 bg-slate-950/90 backdrop-blur border-b border-slate-800 px-4 py-3 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
@@ -201,10 +201,15 @@ export default function ProdutosBalancoPortal() {
             {nome && <p className="text-[9px] font-bold text-slate-500 uppercase truncate">{nome}</p>}
           </div>
         </div>
-        <button onClick={() => { try { localStorage.removeItem(TOKEN_KEY); } catch { /* ignore */ } setToken(null); setDados(null); }} className="text-slate-400 hover:text-slate-200 text-xs font-black uppercase px-3 py-2 rounded-xl border border-slate-700">Sair</button>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button onClick={() => token && void carregar(token)} disabled={carregando || !token} className="text-slate-300 hover:text-white text-[10px] font-black uppercase px-3 py-2 rounded-xl border border-slate-700 disabled:opacity-50" title="Recalcular o balanço agora">
+            <i className={`fa-solid ${carregando ? 'fa-spinner fa-spin' : 'fa-rotate'} mr-1`}></i>Atualizar
+          </button>
+          <button onClick={() => { try { localStorage.removeItem(TOKEN_KEY); } catch { /* ignore */ } setToken(null); setDados(null); }} className="text-slate-400 hover:text-slate-200 text-xs font-black uppercase px-3 py-2 rounded-xl border border-slate-700">Sair</button>
+        </div>
       </div>
 
-      <div className="p-3 space-y-3 max-w-3xl mx-auto">
+      <div className="p-3 space-y-3 max-w-3xl mx-auto w-full flex-1">
         {carregando && <span className="text-[10px] font-black text-amber-400 uppercase animate-pulse">Carregando...</span>}
         {erroLoad && <div className="rounded-2xl bg-rose-950/60 border border-rose-900 text-rose-200 text-[10px] font-bold px-4 py-3">{erroLoad}</div>}
 
@@ -316,7 +321,7 @@ export default function ProdutosBalancoPortal() {
           </section>
         )}
 
-        <p className="text-[8px] font-bold text-slate-600 text-center leading-snug px-2">Portal de Produtos · balanço entrada x saída · sql/bloco193_xml_direcao.sql · Doce Mania</p>
+        <p className="text-[8px] font-bold text-slate-600 text-center leading-snug px-2 mt-auto" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>Portal de Produtos · balanço entrada x saída · Doce Mania</p>
       </div>
     </main>
   );

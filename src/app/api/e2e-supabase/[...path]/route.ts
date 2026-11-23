@@ -14,7 +14,7 @@ import { numeroSemanaISO } from '@/lib/frequencia';
  * testar a fila de entrega do admin (setas de ordem + editor de pedido).
  */
 
-const CATCH_TABLES = ['app_users', 'clients', 'products', 'app_settings', 'product_categories', 'product_subcategories', 'cargas', 'cargas_pendentes', 'system_messages', 'commissions', 'commission_payment_logs', 'sales', 'seller_expenses', 'push_tokens', 'daily_routes', 'entrega_rotas', 'entrega_eventos', 'sale_items', 'payment_comprovantes', 'caixa_fechamentos', 'caixa_fechamentos_geral', 'caixa_pagamentos', 'pre_vendas', 'pedidos', 'xml_importacoes', 'xml_itens', 'custos_empresa'];
+const CATCH_TABLES = ['app_users', 'clients', 'products', 'app_settings', 'product_categories', 'product_subcategories', 'cargas', 'cargas_pendentes', 'system_messages', 'commissions', 'commission_payment_logs', 'sales', 'sales_boletos', 'seller_expenses', 'push_tokens', 'daily_routes', 'entrega_rotas', 'entrega_eventos', 'sale_items', 'payment_comprovantes', 'caixa_fechamentos', 'caixa_fechamentos_geral', 'caixa_pagamentos', 'pre_vendas', 'pedidos', 'xml_importacoes', 'xml_itens', 'custos_empresa'];
 
 const users = [{
   id: 'adminuser', nome: 'Admin Teste', email: '', perfil: 'ADMIN', ativo: true,
@@ -180,6 +180,11 @@ const settings = [{
 const agora = new Date();
 const iso = (minAtras: number) => new Date(agora.getTime() - minAtras * 60000).toISOString();
 
+// BLOCO 207 (E2E): data YYYY-MM-DD no passado (boletos VENCIDOS do portal de cobranças)
+const diaPassado = (dias: number) => new Date(new Date(`${hojeSp() || new Date().toISOString().slice(0, 10)}T12:00:00Z`).getTime() - dias * 86_400_000).toISOString().slice(0, 10);
+function hojeSp(): string { return new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' })).toISOString().slice(0, 10); }
+
+
 // BLOCO 31: 2 pre-vendas pendentes para a fila do admin (setas + editor)
 const salesSeed = [
   {
@@ -305,6 +310,12 @@ const tables: Record<string, any[]> = {
   xml_itens: xmlItensSeed,
   // BLOCO 191: custos da empresa (Portal Financeiro)
   custos_empresa: custosEmpresaSeed,
+  // BLOCO 207 (E2E): boletos vencidos do FALLBACK LOCAL do Portal de Cobranças
+  // (2 boletos da venda sale-fila-001 / cli-1 Emporio Teste — vencidos há 12 e 3 dias)
+  sales_boletos: [
+    { id: 'sb-1', sale_id: 'sale-fila-001', seq: 1, valor: 350.75, vencimento: diaPassado(12), doc: null, cep: null, status: 'ATRASADO', codigo: 'mock-cob-1', seu_numero: 'DM-E2E-P1', linha: null, barras: null, pix: null, erro: null, emitido_em: new Date().toISOString(), pago_em: null, criado_em: new Date().toISOString() },
+    { id: 'sb-2', sale_id: 'sale-fila-001', seq: 2, valor: 180, vencimento: diaPassado(3), doc: null, cep: null, status: 'A_RECEBER', codigo: null, seu_numero: 'DM-E2E-P2', linha: null, barras: null, pix: null, erro: null, emitido_em: null, pago_em: null, criado_em: new Date().toISOString() },
+  ],
 };
 
 function json(data: any, status = 200) {

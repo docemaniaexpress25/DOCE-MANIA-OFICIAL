@@ -85,6 +85,12 @@ function comprimirImagem(file: File, maxLado = 640, qualidade = 0.72): Promise<s
 
 export default function GestaoCatalogoPortal(props: GestaoCatalogoPortalProps) {
   const { products } = props;
+  // BLOCO 206 — imagens buscadas na internet nesta sessão (URL por produto).
+  // O banco já gravou pela API; aqui atualiza a UI na hora (o estado do app
+  // só sincroniza no reload). O porId aplica por cima do products.
+  const [imgExtras, setImgExtras] = useState<Map<string, string>>(new Map());
+  const [imgBusy, setImgBusy] = useState(false);
+  const [faltamImagens, setFaltamImagens] = useState<number | null>(null);
   const [bloco15ok, setBloco15ok] = useState<boolean | null>(null);
   const [obsOk, setObsOk] = useState<boolean | null>(null);
   const [vinculosOk, setVinculosOk] = useState<boolean | null>(null);
@@ -158,7 +164,15 @@ export default function GestaoCatalogoPortal(props: GestaoCatalogoPortalProps) {
     [produtosPortal]
   );
 
-  const porId = useMemo(() => new Map(products.map((p) => [p.id, p])), [products]);
+  const porId = useMemo(() => {
+    const m = new Map(products.map((p) => [p.id, p]));
+    // BLOCO 206: imagens buscadas na internet sobrepõem (UI instantânea)
+    for (const [id, url] of imgExtras) {
+      const p = m.get(id);
+      if (p) m.set(id, { ...p, imagem: url } as Product);
+    }
+    return m;
+  }, [products, imgExtras]);
 
   const fotoDaFamilia = (f: { nome: string; variantes: { produtoId: string }[] }): string | null => {
     for (const v of f.variantes) {
@@ -325,6 +339,40 @@ export default function GestaoCatalogoPortal(props: GestaoCatalogoPortalProps) {
     }
   };
 
+  /** BLOCO 206 (regra do dono): completa as imagens SEM foto buscando na
+   *  internet. Rodada de até 4 produtos por clique — o botão mostra quantos
+   *  faltam e o dono repete até zerar. */
+  const completarImagens = async () => {
+    if (imgBusy) return;
+    setImgBusy(true);
+    try {
+      const res = await fetch('/api/admin/catalogo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ acao: 'BUSCAR_IMAGENS' }),
+      });
+      const d = await res.json().catch(() => null);
+      if (!res.ok || !d?.ok) {
+        props.showToast(String(d?.erro || 'Falha na busca de imagens.'), 'error');
+        return;
+      }
+      const novos = new Map(imgExtras);
+      let achou = 0;
+      for (const r of (d.resultados || []) as { id: string; ok: boolean; url?: string; motivo?: string }[]) {
+        if (r.ok && r.url) { novos.set(r.id, r.url); achou++; }
+      }
+      setImgExtras(novos);
+      const faltam = typeof d.faltam === 'number' ? d.faltam : null;
+      setFaltamImagens(faltam);
+      if (achou > 0) props.showToast(`${achou} foto(s) encontrada(s) na internet!${faltam ? ` Faltam ${faltam} — clique de novo para continuar.` : ' Catálogo completo!'}`);
+      else props.showToast('Nenhuma foto encontrada nesta rodada — clique de novo para tentar os próximos.', 'error');
+    } catch {
+      props.showToast('Sem conexão para buscar as imagens.', 'error');
+    } finally {
+      setImgBusy(false);
+    }
+  };
+
   const fotosBloqueadas = bloco15ok === false;
   const obsBloqueada = obsOk === false;
   const vinculosBloqueados = vinculosOk === false;
@@ -348,6 +396,24 @@ export default function GestaoCatalogoPortal(props: GestaoCatalogoPortalProps) {
             {semFotoCount === 0 ? 'todas com foto' : `${semFotoCount} sem foto`}
           </span>
           <span className="text-[9px] font-black text-emerald-600 bg-emerald-50 px-2 py-1 rounded-lg border border-emerald-100 uppercase tracking-tight"><i className="fa-solid fa-shuffle mr-1 text-[9px]"></i>ordem só do portal</span>
+        </div>
+        {/* BLOCO 206 (regra do dono): completar IMAGENS buscando na internet */}
+        <div className="flex items-center gap-2 mt-2 flex-wrap">
+          <button
+            onClick={() => void completarImagens()}
+            disabled={imgBusy}
+            className="bg-violet-600 text-white font-black px-4 py-2.5 rounded-xl text-[10px] uppercase tracking-wider active:scale-95 disabled:opacity-60 flex items-center gap-2 shadow-sm"
+            title="Busca fotos dos produtos sem imagem na internet (4 por clique)"
+          >
+            <i className={`fa-solid ${imgBusy ? 'fa-spinner fa-spin' : 'fa-camera-retro'}`}></i>
+            {imgBusy ? 'Buscando fotos...' : 'Completar imagens da internet'}
+          </button>
+          {faltamImagens !== null && (
+            <span className={`text-[9px] font-black px-2 py-1 rounded-lg border uppercase tracking-tight ${faltamImagens === 0 ? 'text-emerald-600 bg-emerald-50 border-emerald-100' : 'text-amber-600 bg-amber-50 border-amber-200'}`}>
+              {faltamImagens === 0 ? 'produtos todos com foto' : `${faltamImagens} produto(s) sem foto`}
+            </span>
+          )}
+          {imgBusy && <span className="text-[9px] font-bold text-gray-400 uppercase">cada rodada busca 4 produtos — clique de novo até zerar</span>}
         </div>
       </div>
 

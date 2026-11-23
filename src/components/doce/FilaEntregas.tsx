@@ -1430,7 +1430,8 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
             <div>
               <p className="text-[10px] font-black text-gray-700 uppercase leading-none">Fila de entregas</p>
               <p className="text-[8px] font-bold text-gray-400 uppercase mt-0.5">
-                {modo === 'ADMIN' ? 'Continua — entra pedido, sai entregue' : modo === 'ENTREGADOR' ? 'Você vê TODAS SEPARADAS — recebe SÓ a carga carregada NO SEU NOME' : 'Você vê TODAS SEPARADAS — recebe SÓ o que o admin/secretário carregou NO SEU NOME'}
+                {/* BLOCO 206 (regra do dono): vendedor vê SOMENTE as vendas dele */}
+                {modo === 'ADMIN' ? 'Continua — entra pedido, sai entregue' : modo === 'ENTREGADOR' ? 'Você vê TODAS SEPARADAS — recebe SÓ a carga carregada NO SEU NOME' : 'Você vê SOMENTE as entregas vendidas por você — cada vendedor tem a própria fila'}
               </p>
             </div>
           </div>
@@ -1465,12 +1466,10 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
           )}
         </div>
 
-        {/* BLOCO 119.1 (regra do dono): DUAS ABAS CLARAS — "SUAS ENTREGAS"
-            mostra APENAS o que foi carregado NO SEU NOME pelo admin/secretario
-            (ou venda própria); "TODAS" mostra a fila inteira SEPARADA — as
-            entregas dos outros ficam visíveis para conferência, porém SEM
-            receber (sem botões + servidor recusa com 403). */}
-        {modo !== 'ADMIN' && podeEntregar && (
+        {/* BLOCO 206 (regra do dono): o toggle "Suas entregas / Todas" ficou
+            SÓ PARA O ENTREGADOR — o vendedor agora recebe do servidor a fila
+            com SOMENTE as vendas dele (rota 5 não vê rota 1), toggle desnecessário. */}
+        {modo === 'ENTREGADOR' && (
           <div className="mt-2 print:hidden">
             <div className="grid grid-cols-2 gap-2">
               <button
@@ -1791,14 +1790,14 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
         onDragEnd={onDragEnd}
         measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}>
         <SortableContext items={listaOrdenada.map(p => p.saleId)} strategy={verticalListSortingStrategy}>
-          {modo !== 'ADMIN' && podeEntregar && !soMinhaCarga ? (
-            /* ===== BLOCO 119.1 (regra do dono): FILA DO VENDEDOR/ENTREGADOR
-               SEPARADA em dois blocos — SUAS ENTREGAS (carregadas NO SEU NOME
-               pelo admin/secretario, com botao ENTREGUE/FALHOU) e DEMAIS
-               ENTREGAS (so conferencia, AGRUPADAS por dono da carga, SEM
-               receber). A aba "SUAS ENTREGAS" acima mostra APENAS o primeiro
-               bloco. A ordem dentro de cada bloco segue a rota (manual do
-               admin quando houver; senao P1 -> P2 -> mais antigo). ===== */
+          {modo === 'ENTREGADOR' && !soMinhaCarga ? (
+            /* ===== BLOCO 119.1 (regra do dono): FILA DO ENTREGADOR SEPARADA em
+               dois blocos — SUAS ENTREGAS (carregadas NO SEU NOME pelo
+               admin/secretario, com botao ENTREGUE/FALHOU) e DEMAIS ENTREGAS
+               (so conferencia, AGRUPADAS por dono da carga, SEM receber).
+               BLOCO 206: o VENDEDOR NAO usa mais esta visão — ele recebe do
+               servidor a fila com SOMENTE as vendas dele (rota 5 não vê rota
+               1) e vê a LISTA SIMPLES, igual o admin vê. ===== */
             <>
               <div className="space-y-3">
                 <div className={`rounded-xl px-3 py-2.5 flex items-center justify-between gap-2 shadow-sm ${minhasNaFila.length > 0 ? 'bg-emerald-600' : 'bg-gray-100'}`}>
@@ -1816,7 +1815,7 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                 )}
                 {minhasVisiveis.map(p => <SortableCard key={p.saleId} p={p} acento={p.prioridade === 1 ? 'p1' : p.prioridade === 2 ? 'p2' : 'normal'} posicao={listaOrdenada.findIndex(x => x.saleId === p.saleId) + 1} draggable={false} />)}
               </div>
-              {outrasNaFila.length > 0 && (
+              {outrasNaFila.length > 0 && modo !== 'VENDEDOR' && (
                 <div className="space-y-2.5">
                   <div className="rounded-xl bg-slate-200 px-3 py-2.5 flex items-center justify-between gap-2">
                     <p className="text-[10px] font-black text-slate-600 uppercase leading-tight">

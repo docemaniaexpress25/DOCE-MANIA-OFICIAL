@@ -29,6 +29,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { unzipSync } from 'fflate';
+import PortalPinGate from '@/components/doce/PortalPinGate';
 
 // ---------------- tipos ----------------
 interface Importacao {
@@ -514,6 +515,34 @@ export default function PortalEntradasPage() {
     });
   };
 
+  // BLOCO 206 (regra do dono): excluir o XML inteiro da lista do portal
+  const excluirImportacao = (imp: Importacao) => {
+    const totalItens = imp.qtdItens || (itensPorNota.get(imp.id)?.length || 0);
+    setConf({
+      titulo: 'Excluir XML da lista?',
+      texto: `A nota ${imp.numero || ''} de ${imp.emitNome || 'fornecedor'} (${totalItens} itens, ${fmtBRL(imp.valorTotal)}) será APAGADA — sai da lista e do balanço fiscal.`,
+      detalhe: 'Itens que JÁ entraram no estoque continuam no estoque (a exclusão não devolve nem tira quantidade). Não dá para desfazer.',
+      icone: 'fa-trash',
+      botao: 'Excluir nota',
+      run: async () => {
+        if (!token) return;
+        setBusy(imp.id);
+        try {
+          const res = await fetch(`/api/xml-importacao?id=${encodeURIComponent(imp.id)}`, { method: 'DELETE', headers: headers(token) });
+          const d = await res.json().catch(() => null);
+          if (!res.ok || !d?.ok) { showToast(String(d?.erro || 'Falha ao excluir.'), false); return; }
+          showToast('XML excluído do portal.');
+          if (linhaAberta === imp.id) setLinhaAberta(null);
+          await carregar(token);
+        } catch {
+          showToast('Sem conexão para excluir.', false);
+        } finally {
+          setBusy(null);
+        }
+      },
+    });
+  };
+
   const entradaItem = (item: ItemFila) => {
     setConf({
       titulo: 'Entrada no estoque deste item?',
@@ -611,36 +640,21 @@ export default function PortalEntradasPage() {
   }
 
   if (!token) {
+    // BLOCO 206: tela de login ÚNICA dos portais (mesmo visual do fiscal/financeiro/cobranças)
     return (
-      <div className={`min-h-screen bg-gray-100 flex items-center justify-center p-4 ${pinShake ? 'animate-shake' : ''}`}>
-        <div className="bg-white rounded-3xl shadow-xl p-8 w-full max-w-sm text-center">
-          <div className="w-16 h-16 rounded-2xl bg-teal-50 mx-auto flex items-center justify-center mb-4">
-            <i className="fa-solid fa-truck-ramp-box text-teal-600 text-3xl"></i>
-          </div>
-          <h1 className="text-xl font-black text-gray-800 mb-1">Portal de Entradas</h1>
-          <p className="text-gray-400 text-sm mb-8 font-medium">XMLs de fornecedores · estoque · fiscal</p>
-          <div className="flex justify-center gap-3 mb-6" aria-label="PIN digitado">
-            {[0, 1, 2, 3, 4, 5].map(i => (
-              <div key={i} className={`w-4 h-4 rounded-full border-2 transition-colors ${pin.length > i ? 'bg-teal-600 border-teal-600' : 'border-gray-200'}`} />
-            ))}
-          </div>
-          {pinErro && <p className="text-rose-500 text-xs font-bold mb-4">{pinErro}</p>}
-          <div className="grid grid-cols-3 gap-3 mb-4">
-            {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(d => (
-              <button key={d} type="button" onClick={() => digitar(d)} className="h-14 rounded-2xl bg-gray-50 text-lg font-black text-gray-700 active:scale-95 transition-transform" aria-label={`Digitar ${d}`}>{d}</button>
-            ))}
-            <button type="button" onClick={apagar} className="h-14 rounded-2xl bg-rose-50 text-rose-500 active:scale-95 transition-transform" aria-label="Apagar dígito">
-              <i className="fa-solid fa-delete-left"></i>
-            </button>
-            <button type="button" onClick={() => digitar('0')} className="h-14 rounded-2xl bg-gray-50 text-lg font-black text-gray-700 active:scale-95 transition-transform" aria-label="Digitar 0">0</button>
-            <button type="button" onClick={() => void entrarComPin(pin)} disabled={pinBusy || pin.length === 0} className="h-14 rounded-2xl bg-teal-600 text-white text-[11px] font-black uppercase tracking-wider active:scale-95 transition-transform disabled:opacity-50">
-              {pinBusy ? <i className="fa-solid fa-spinner fa-spin"></i> : 'Entrar'}
-            </button>
-          </div>
-          <p className="text-[9px] font-bold text-gray-300 uppercase tracking-wider">DOCE MANIA · Entradas de XML de fornecedores</p>
-          <style>{`@keyframes shake { 10%, 90% { transform: translateX(-1px);} 20%, 80% { transform: translateX(2px);} 30%, 50%, 70% { transform: translateX(-4px);} 40%, 60% { transform: translateX(4px);} } .animate-shake { animation: shake 0.5s; }`}</style>
-        </div>
-      </div>
+      <PortalPinGate
+        titulo="Portal de Entradas"
+        subtitulo="XMLs de fornecedores · estoque · fiscal"
+        icone="fa-truck-ramp-box"
+        accent="bg-teal-600"
+        pin={pin}
+        pinErro={pinErro}
+        pinBusy={pinBusy}
+        pinShake={pinShake}
+        onDigito={digitar}
+        onApagar={apagar}
+        onEntrar={() => void entrarComPin(pin)}
+      />
     );
   }
 
@@ -945,6 +959,15 @@ export default function PortalEntradasPage() {
                           <i className={`fa-solid ${busy === imp.id ? 'fa-spinner fa-spin' : 'fa-truck-ramp-box'}`}></i>Entrada
                         </button>
                       )}
+                      {/* BLOCO 206 (regra do dono): excluir o XML da lista */}
+                      <button
+                        onClick={() => excluirImportacao(imp)}
+                        disabled={busy === imp.id}
+                        className="rounded-lg px-2 h-7 text-[9px] font-black uppercase tracking-wide bg-white text-rose-600 border border-rose-200 hover:bg-rose-50 disabled:opacity-50 active:scale-95 flex items-center gap-1"
+                        title="Excluir este XML do portal (com confirmação)"
+                      >
+                        <i className={`fa-solid ${busy === imp.id ? 'fa-spinner fa-spin' : 'fa-trash'} text-[10px]`}></i>Excluir
+                      </button>
                     </span>
                   </div>
 

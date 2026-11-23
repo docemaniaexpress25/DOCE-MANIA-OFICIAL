@@ -42,6 +42,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import PortalPinGate from '@/components/doce/PortalPinGate';
 import {
   CFOP_BASES,
   FINALIDADES,
@@ -727,40 +728,21 @@ export default function PortalNotasEspeciaisPage() {
   }
 
   if (!token) {
+    // BLOCO 206: tela de login ÚNICA dos portais (mesmo visual dos demais)
     return (
-      <main className="min-h-screen bg-gray-100 flex flex-col items-center justify-center px-4">
-        <div className="w-full max-w-sm bg-white rounded-3xl shadow-sm border border-gray-100 p-6">
-          <div className="flex flex-col items-center gap-2 mb-4">
-            <span className="w-14 h-14 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center"><i className="fa-solid fa-file-pen text-2xl"></i></span>
-            <h1 className="text-lg font-black text-gray-800 tracking-tight">Notas Especiais</h1>
-            <p className="text-[10px] font-bold uppercase text-gray-400 text-center">Devolução · Bonificação · Nota manual — PIN do admin</p>
-          </div>
-          <div className={`flex justify-center gap-2 mb-4 ${pinShake ? 'animate-in shake' : ''}`}>
-            {[0, 1, 2, 3, 4, 5].map(i => (
-              <span key={i} className={`w-3.5 h-3.5 rounded-full border-2 ${i < pin.length ? 'bg-amber-500 border-amber-500' : 'border-gray-300'}`} />
-            ))}
-          </div>
-          {pinErro && <p className="text-center text-[11px] font-black text-rose-600 mb-3">{pinErro}</p>}
-          <div className="grid grid-cols-3 gap-2.5">
-            {['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'DEL'].map((d, i) => {
-              if (d === '') return <span key={i} />;
-              if (d === 'DEL') {
-                return (
-                  <button key={i} onClick={apagar} aria-label="Apagar" className="h-14 rounded-2xl bg-gray-50 text-gray-500 font-black text-lg flex items-center justify-center active:scale-95 transition-transform border border-gray-100">
-                    <i className="fa-solid fa-delete-left"></i>
-                  </button>
-                );
-              }
-              return (
-                <button key={i} onClick={() => digitar(d)} className="h-14 rounded-2xl bg-white border-2 border-gray-100 text-xl font-black text-gray-700 flex items-center justify-center active:scale-95 active:bg-amber-50 transition-transform shadow-sm">
-                  {d}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-        <p className="text-[9px] font-bold text-gray-400 mt-4 text-center max-w-xs">Nota de devolução sai SEM PAGAMENTO com CFOP 5202/6202 e CSOSN 900 — tudo editável no wizard.</p>
-      </main>
+      <PortalPinGate
+        titulo="Notas Especiais"
+        subtitulo="Devolução · Bonificação · Nota manual"
+        icone="fa-file-pen"
+        accent="bg-amber-600"
+        pin={pin}
+        pinErro={pinErro}
+        pinBusy={pinBusy}
+        pinShake={pinShake}
+        onDigito={digitar}
+        onApagar={apagar}
+        onEntrar={() => void entrarComPin(pin)}
+      />
     );
   }
 

@@ -65,9 +65,9 @@ export async function GET(request: NextRequest) {
   {
     const r = await db
       .from('sales')
-      .select('id, data, nota_numero, nota_status, client_id, cliente_id, sale_items(produto_id, quantidade, preco_venda, custo_unitario)')
+      .select('id, data_venda, nota_numero, nota_status, client_id, cliente_id, sale_items(produto_id, quantidade, preco_venda, custo_unitario)')
       .not('nota_numero', 'is', null)
-      .order('data', { ascending: false })
+      .order('data_venda', { ascending: false })
       .limit(5000);
     salesRaw = r.data as Record<string, unknown>[] | null;
     salesErr = r.error as { message: string } | null;
@@ -75,9 +75,9 @@ export async function GET(request: NextRequest) {
   if (salesErr && /custo_unitario/i.test(salesErr.message || '')) {
     const r = await db
       .from('sales')
-      .select('id, data, nota_numero, nota_status, client_id, cliente_id, sale_items(produto_id, quantidade, preco_venda)')
+      .select('id, data_venda, nota_numero, nota_status, client_id, cliente_id, sale_items(produto_id, quantidade, preco_venda)')
       .not('nota_numero', 'is', null)
-      .order('data', { ascending: false })
+      .order('data_venda', { ascending: false })
       .limit(5000);
     salesRaw = r.data as Record<string, unknown>[] | null;
     salesErr = r.error as { message: string } | null;

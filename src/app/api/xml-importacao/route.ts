@@ -140,6 +140,43 @@ interface ArquivoXml {
   conteudo?: string;
 }
 
+/**
+ * BLOCO 206 (regra do dono) — EXCLUIR uma importação de XML no Portal de
+ * Entradas. DELETE /api/xml-importacao?id=<id>   [ADMIN]
+ * Apaga os xml_itens da nota e o cabeçalho xml_importacoes. Atenção: entradas
+ * que JÁ foram confirmadas no estoque continuam no estoque — a exclusão remove
+ * a nota da lista fiscal (e ela deixa de contar no balanço).
+ */
+export async function DELETE(request: NextRequest) {
+  if (!isServerSupabaseConfigured()) {
+    const bridged = await devBridge(request);
+    if (bridged) return bridged;
+    return BAD(503, 'Indisponivel no preview local.');
+  }
+  if (!isAdminSession(request)) {
+    return BAD(401, 'Sessao invalida.');
+  }
+  if (!(await hasXmlTables())) {
+    return BAD(503, 'Banco desatualizado: rode sql/bloco95_xml_produtos.sql no Supabase (tabelas xml_importacoes/xml_itens).');
+  }
+
+  const id = request.nextUrl.searchParams.get('id') || '';
+  if (!id) return BAD(400, 'Falta o id da importação.');
+
+  try {
+    const supabase = getServiceClient();
+    // 1) itens da nota primeiro (sem FK cascade garantida no SQL 95)
+    const { error: eItens } = await supabase.from('xml_itens').delete().eq('importacao_id', id);
+    if (eItens) return BAD(500, `Falha apagando os itens da nota: ${eItens.message}`);
+    // 2) cabeçalho
+    const { error: eImp } = await supabase.from('xml_importacoes').delete().eq('id', id);
+    if (eImp) return BAD(500, `Falha apagando a nota: ${eImp.message}`);
+    return NextResponse.json({ ok: true });
+  } catch (e) {
+    return BAD(500, `Erro inesperado: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
 export async function POST(request: NextRequest) {
   if (!isServerSupabaseConfigured()) {
     const bridged = await devBridge(request);

@@ -63,6 +63,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import PortalPinGate from '@/components/doce/PortalPinGate';
 // BLOCO 177: o CPF/CNPJ virou EDITÁVEL no portal — boleto a prazo do cliente
 // PF precisa do CPF (nfe = cnpj, nfc > cpf — regra do dono).
 import { validaCpfCnpj } from '@/lib/validaDoc';
@@ -701,36 +702,21 @@ export default function PortalClientesFiscaisPage() {
   }
 
   if (!token) {
+    // BLOCO 206: tela de login ÚNICA dos portais (mesmo visual dos demais)
     return (
-      <div className={`min-h-screen bg-gray-100 flex items-center justify-center p-4 ${pinShake ? 'animate-shake' : ''}`}>
-        <div className="bg-white rounded-3xl shadow-xl p-8 w-full max-w-sm text-center">
-          <div className="w-16 h-16 rounded-2xl bg-teal-50 mx-auto flex items-center justify-center mb-4">
-            <i className="fa-solid fa-address-card text-teal-600 text-3xl"></i>
-          </div>
-          <h1 className="text-xl font-black text-gray-800 mb-1">Clientes Fiscais</h1>
-          <p className="text-gray-400 text-sm mb-8 font-medium">Nome · CPF/CNPJ · CEP · Endereço — preenche sozinho e tem lote pelo CEP</p>
-          <div className="flex justify-center gap-3 mb-6" aria-label="PIN digitado">
-            {[0, 1, 2, 3, 4, 5].map(i => (
-              <div key={i} className={`w-4 h-4 rounded-full border-2 transition-colors ${pin.length > i ? 'bg-teal-600 border-teal-600' : 'border-gray-200'}`} />
-            ))}
-          </div>
-          {pinErro && <p className="text-rose-500 text-xs font-bold mb-4">{pinErro}</p>}
-          <div className="grid grid-cols-3 gap-3 mb-4">
-            {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(d => (
-              <button key={d} type="button" onClick={() => digitar(d)} className="h-14 rounded-2xl bg-gray-50 text-lg font-black text-gray-700 active:scale-95 transition-transform" aria-label={`Digitar ${d}`}>{d}</button>
-            ))}
-            <button type="button" onClick={apagar} className="h-14 rounded-2xl bg-rose-50 text-rose-500 active:scale-95 transition-transform" aria-label="Apagar dígito">
-              <i className="fa-solid fa-delete-left"></i>
-            </button>
-            <button type="button" onClick={() => digitar('0')} className="h-14 rounded-2xl bg-gray-50 text-lg font-black text-gray-700 active:scale-95 transition-transform" aria-label="Digitar 0">0</button>
-            <button type="button" onClick={() => void entrarComPin(pin)} disabled={pinBusy || pin.length === 0} className="h-14 rounded-2xl bg-teal-600 text-white text-[11px] font-black uppercase tracking-wider active:scale-95 transition-transform disabled:opacity-50">
-              {pinBusy ? <i className="fa-solid fa-spinner fa-spin"></i> : 'Entrar'}
-            </button>
-          </div>
-          <p className="text-[9px] font-bold text-gray-300 uppercase tracking-wider">DOCE MANIA · Cadastro fiscal dos clientes</p>
-          <style>{`@keyframes shake { 10%, 90% { transform: translateX(-1px);} 20%, 80% { transform: translateX(2px);} 30%, 50%, 70% { transform: translateX(-4px);} 40%, 60% { transform: translateX(4px);} } .animate-shake { animation: shake 0.5s; }`}</style>
-        </div>
-      </div>
+      <PortalPinGate
+        titulo="Clientes Fiscais"
+        subtitulo="Nome · CPF/CNPJ · CEP · Endereço — preenche sozinho e tem lote pelo CEP"
+        icone="fa-address-card"
+        accent="bg-teal-600"
+        pin={pin}
+        pinErro={pinErro}
+        pinBusy={pinBusy}
+        pinShake={pinShake}
+        onDigito={digitar}
+        onApagar={apagar}
+        onEntrar={() => void entrarComPin(pin)}
+      />
     );
   }
 

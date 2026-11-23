@@ -45,6 +45,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import PortalPinGate from '@/components/doce/PortalPinGate';
 import { createPortal } from 'react-dom';
 import { unzipSync } from 'fflate';
 // BLOCO 184: kanban de ORDENAÇÃO MANUAL das notas — o dono sobe XML batido
@@ -578,8 +579,8 @@ export default function PortalNotasPage() {
     // BLOCO 194 (regra do dono): "sempre deixe a última nota da fila na linha
     // de cima" — a nota MAIS RECENTE da visão é PINADA na primeira linha,
     // MESMO com ordem manual salva (kanban): nota nova batida no app sobe para
-    // o topo e o resto da fila segue na ordem arrastada/batida. No MODO KANBAN
-    // o pin desliga — o dono está arrumando e a ordem manual manda.
+    // o topo. No MODO KANBAN o pin desliga — o dono está arrastando e a ordem
+    // manual manda.
     // ------------------------------------------------------------------
     let idNovidadeTopo = '';
     if (!kanban && base.length > 0) {
@@ -587,7 +588,11 @@ export default function PortalNotasPage() {
       for (const n of base) if (batidaDe(n) > batidaDe(maisRecente)) maisRecente = n;
       idNovidadeTopo = maisRecente.id;
     }
-    return [...base].sort(criarComparadorNotas(ordemNotas, idNovidadeTopo));
+    // BLOCO 206 (regra do dono): "150, 151, 152 — sempre a mais nova em cima".
+    // FORA do kanban a ordem manual é IGNORADA: a régua é o NÚMERO da nota
+    // (desc) — a nota nova entra na posição certa sozinha. No kanban a ordem
+    // arrastada manda (comportamento do 184).
+    return [...base].sort(criarComparadorNotas(kanban ? ordemNotas : [], idNovidadeTopo));
   }, [notas, busca, filtro, filtroTipo, filtroOrigem, periodo, ordemNotas, kanban]);
 
   // ---------- BLOCO 184: gravar a ordem manual (kanban) ----------
@@ -1275,40 +1280,22 @@ export default function PortalNotasPage() {
     );
   }
 
-  // ---------- tela: PIN ----------
+  // ---------- tela: PIN — BLOCO 206: tela ÚNICA dos portais ----------
   if (!token) {
     return (
-      <div className="min-h-dvh flex flex-col items-center justify-center bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-800 p-6">
-        <div className={`bg-white p-8 rounded-3xl shadow-2xl w-full max-w-md text-center ${pinShake ? 'animate-shake' : ''}`}>
-          <div className="w-20 h-20 bg-blue-50 rounded-full flex items-center justify-center mx-auto mb-6 shadow-inner">
-            <i className="fa-solid fa-file-invoice-dollar text-blue-600 text-3xl"></i>
-          </div>
-          <h1 className="text-xl font-black text-gray-800 mb-1">Portal de Notas Fiscais</h1>
-          <p className="text-gray-400 text-sm mb-8 font-medium">Acesso restrito — mesmo PIN do admin</p>
-
-          <div className="flex justify-center gap-3 mb-6" aria-label="PIN digitado">
-            {[0, 1, 2, 3, 4, 5].map(i => (
-              <div key={i} className={`w-4 h-4 rounded-full border-2 transition-colors ${pin.length > i ? 'bg-blue-600 border-blue-600' : 'border-gray-200'}`} />
-            ))}
-          </div>
-          {pinErro && <p className="text-rose-500 text-xs font-bold mb-4">{pinErro}</p>}
-
-          <div className="grid grid-cols-3 gap-3 mb-4">
-            {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(d => (
-              <button key={d} type="button" onClick={() => digitar(d)} className="h-14 rounded-2xl bg-gray-50 text-lg font-black text-gray-700 active:scale-95 transition-transform" aria-label={`Digitar ${d}`}>{d}</button>
-            ))}
-            <button type="button" onClick={apagar} className="h-14 rounded-2xl bg-rose-50 text-rose-500 active:scale-95 transition-transform" aria-label="Apagar dígito">
-              <i className="fa-solid fa-delete-left"></i>
-            </button>
-            <button type="button" onClick={() => digitar('0')} className="h-14 rounded-2xl bg-gray-50 text-lg font-black text-gray-700 active:scale-95 transition-transform" aria-label="Digitar 0">0</button>
-            <button type="button" onClick={() => void entrarComPin(pin)} disabled={pinBusy || pin.length === 0} className="h-14 rounded-2xl bg-blue-600 text-white text-[11px] font-black uppercase tracking-wider active:scale-95 transition-transform disabled:opacity-50">
-              {pinBusy ? <i className="fa-solid fa-spinner fa-spin"></i> : 'Entrar'}
-            </button>
-          </div>
-          <p className="text-[9px] font-bold text-gray-300 uppercase tracking-wider">DOCE MANIA · Administração de notas de saída</p>
-        </div>
-        <style>{`@keyframes shake { 10%, 90% { transform: translateX(-1px);} 20%, 80% { transform: translateX(2px);} 30%, 50%, 70% { transform: translateX(-4px);} 40%, 60% { transform: translateX(4px);} } .animate-shake { animation: shake 0.5s; }`}</style>
-      </div>
+      <PortalPinGate
+        titulo="Portal de Notas Fiscais"
+        subtitulo="NF-e · NFC-e · Acesso restrito — mesmo PIN do admin"
+        icone="fa-file-invoice-dollar"
+        accent="bg-blue-600"
+        pin={pin}
+        pinErro={pinErro}
+        pinBusy={pinBusy}
+        pinShake={pinShake}
+        onDigito={digitar}
+        onApagar={apagar}
+        onEntrar={() => void entrarComPin(pin)}
+      />
     );
   }
 
@@ -1549,7 +1536,7 @@ export default function PortalNotasPage() {
                 <button
                   onClick={() => setConf({
                     titulo: 'Limpar ordem manual?',
-                    texto: 'A lista volta para a regra padrão: a última nota batida vem primeiro (de cima pra baixo). Sua ordem arrastada é apagada.',
+                    texto: 'A lista volta para a regra padrão: sempre a nota mais nova em cima (152, 151, 150... pelo número). Sua ordem arrastada é apagada.',
                     icone: 'fa-arrow-rotate-left',
                     botao: 'Limpar ordem',
                     run: limparOrdemManual,
@@ -1584,8 +1571,8 @@ export default function PortalNotasPage() {
               </SortableContext>
             </DndContext>
             <p className="text-[9px] font-bold text-gray-400 uppercase tracking-wider px-1">
-              {/* BLOCO 194: na LISTA a nota mais recente volta pro topo mesmo com ordem manual */}
-              {listaFiltrada.length} nota(s) nesta visão — {ordemNotas.length > 0 ? 'ORDEM MANUAL ativa (nota mais recente segue na 1ª linha)' : 'arraste para começar a ordem manual'}
+              {/* BLOCO 206: fora do kanban a régua é o NÚMERO (mais nova em cima) */}
+              {listaFiltrada.length} nota(s) nesta visão — modo ordenar ativo: {ordemNotas.length > 0 ? 'ORDEM MANUAL (arraste) manda aqui' : 'arraste para começar a ordem manual'}
             </p>
           </div>
         )}

@@ -13,18 +13,29 @@ export function batidaDe(nota: { emitidaEm?: string | null; dataVenda?: string |
 }
 
 /**
+ * BLOCO 206 (regra do dono): "150, 151, 152 etc — sempre a mais nova em cima".
+ * Número da nota como número (9 < 10 na comparação numérica, não textual).
+ */
+export function numeroNotaDe(nota: { numero?: string | null }): number {
+  const s = String(nota.numero || '').replace(/\D/g, '');
+  return s ? parseInt(s, 10) : NaN;
+}
+
+/**
  * Comparador de notas: ORDEM MANUAL primeiro (índice no array salvo em
- * app_settings.notas_ordem); quem não está na ordem manual vem depois pela
- * régua do dono (última batida em primeiro lugar — Bloco 146).
+ * app_settings.notas_ordem — só vale no MODO KANBAN, a página passa [] fora
+ * dele); quem não está na ordem manual usa a régua BLOCO 206 do dono:
+ * NÚMERO da nota desc (152, 151, 150...) — a nota nova entra na posição
+ * certa sozinha, mesmo que o XML importado venha com data estranha. Nota
+ * SEM número (pendente) vem depois, pela batida (última primeiro).
  *
  * BLOCO 194 (regra do dono): "sempre deixe a última nota da fila na linha de
  * cima" — quando `idNovidadeTopo` vem preenchido (id da nota mais recente da
- * visão), ele é PINADO na primeira linha do portal, MESMO com ordem manual
- * salva: nota nova batida no app sobe para o topo e o resto da fila segue na
- * ordem que o dono arrastou (kanban) / batida. No modo kanban o id NÃO vem
- * preenchido — o dono está arrumando e a ordem manual manda.
+ * visão), ele é PINADO na primeira linha do portal: nota nova batida no app
+ * sobe para o topo. No modo kanban o id NÃO vem preenchido — o dono está
+ * arrumando e a ordem manual manda.
  */
-export function criarComparadorNotas<T extends { id: string; emitidaEm?: string | null; dataVenda?: string | null }>(ordemNotas: string[], idNovidadeTopo?: string) {
+export function criarComparadorNotas<T extends { id: string; emitidaEm?: string | null; dataVenda?: string | null; numero?: string | null }>(ordemNotas: string[], idNovidadeTopo?: string) {
   const pos = new Map(ordemNotas.map((id, i) => [id, i]));
   return (a: T, b: T): number => {
     // BLOCO 194: a nota mais recente é SEMPRE a primeira linha do portal
@@ -37,7 +48,18 @@ export function criarComparadorNotas<T extends { id: string; emitidaEm?: string 
     if (pa !== undefined && pb !== undefined) return pa - pb;
     if (pa !== undefined) return -1;
     if (pb !== undefined) return 1;
-    return batidaDe(b).localeCompare(batidaDe(a));
+    // BLOCO 206: régua do NÚMERO (mais nova = maior número em cima)
+    const na = numeroNotaDe(a);
+    const nb = numeroNotaDe(b);
+    const temA = !Number.isNaN(na);
+    const temB = !Number.isNaN(nb);
+    if (temA && temB) {
+      if (na !== nb) return nb - na;
+      return batidaDe(b).localeCompare(batidaDe(a)); // empate: batida desc
+    }
+    if (temA) return -1;  // emitida (tem número) antes de pendente
+    if (temB) return 1;
+    return batidaDe(b).localeCompare(batidaDe(a)); // pendentes: batida desc
   };
 }
 

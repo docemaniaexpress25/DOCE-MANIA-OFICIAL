@@ -76,10 +76,11 @@ export async function POST(request: NextRequest) {
     const periodo: Periodo = ['HOJE', '7D', '30D', 'TUDO'].includes(String(body.periodo)) ? body.periodo : '30D';
     const desde = inicioDoPeriodo(periodo);
 
-    // ---- vendas (entradas) ----
-    let salesQ = db.from('sales').select('id, data, valor_total, valor_pago, metodo_pagamento, status_pagamento, tipo_venda, entrega_status, cliente_id, client_id, vendedor_id, nota_numero, trocas_valor');
-    if (desde) salesQ = salesQ.gte('data', desde);
-    salesQ = salesQ.order('data', { ascending: false }).limit(3000);
+    // ---- vendas (entradas) — BLOCO 205.1 FIX: a coluna de sales é data_venda
+    //      (não existe sales.data — erro "column sales.data does not exist") ----
+    let salesQ = db.from('sales').select('id, data_venda, valor_total, valor_pago, metodo_pagamento, status_pagamento, tipo_venda, entrega_status, cliente_id, client_id, vendedor_id, nota_numero, trocas_valor');
+    if (desde) salesQ = salesQ.gte('data_venda', desde);
+    salesQ = salesQ.order('data_venda', { ascending: false }).limit(3000);
     const { data: salesRaw, error: eSales } = await salesQ;
     if (eSales) return BAD(500, `Falha lendo vendas: ${eSales.message}`);
 
@@ -131,7 +132,7 @@ export async function POST(request: NextRequest) {
 
     const ultimasVendas = sales.slice(0, 40).map((s) => ({
       id: s.id,
-      data: s.data,
+      data: s.data_venda,
       cliente: nomes.get(String(s.client_id || s.cliente_id || '')) || 'Cliente',
       vendedor: nomesVend.get(String(s.vendedor_id || '')) || '—',
       valor: round2(s.valor_total),

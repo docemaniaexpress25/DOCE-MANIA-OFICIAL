@@ -14,6 +14,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import PortalPinGate from '@/components/doce/PortalPinGate';
 
 const TOKEN_KEY = 'dm_notas_admin_token';
 const NOME_KEY = 'dm_notas_admin_nome';
@@ -44,9 +45,24 @@ type DadosApi = {
 export default function ProdutosBalancoPortal() {
   const [token, setToken] = useState<string | null>(null);
   const [nome, setNome] = useState('');
+  // BLOCO 206: tela de login ÚNICA dos portais (teclado numérico + shake)
   const [pin, setPin] = useState('');
   const [pinErro, setPinErro] = useState('');
   const [pinBusy, setPinBusy] = useState(false);
+  const [pinShake, setPinShake] = useState(false);
+  const shakeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const chacoalha = () => {
+    setPinShake(true);
+    if (shakeTimer.current) clearTimeout(shakeTimer.current);
+    shakeTimer.current = setTimeout(() => setPinShake(false), 520);
+  };
+  const digitar = (d: string) => {
+    setPinErro('');
+    const proximo = (pin + d).slice(0, 8);
+    setPin(proximo);
+    if (proximo.length === 6) void entrarComPin(proximo); // auto-entra no 6º dígito
+  };
+  const apagar = () => { setPinErro(''); setPin((p) => p.slice(0, -1)); };
 
   const [dados, setDados] = useState<DadosApi | null>(null);
   const [carregando, setCarregando] = useState(false);
@@ -92,10 +108,10 @@ export default function ProdutosBalancoPortal() {
     if (token) void carregar(token);
   }, [token, carregar]);
 
-  const entrarComPin = async () => {
+  const entrarComPin = async (pinFinal?: string) => {
     if (pinBusy) return;
-    const p = pin.replace(/\D/g, '');
-    if (p.length < 4) { setPinErro('Digite o PIN (4-8 dígitos).'); return; }
+    const p = (pinFinal ?? pin).replace(/\D/g, '');
+    if (p.length < 4) { setPinErro('Digite o PIN (4-8 dígitos).'); chacoalha(); return; }
     setPinBusy(true);
     setPinErro('');
     try {
@@ -105,7 +121,7 @@ export default function ProdutosBalancoPortal() {
         body: JSON.stringify({ acao: 'AUTH', pin: p }),
       });
       const d = await res.json().catch(() => null);
-      if (!res.ok || !d?.ok) { setPinErro(String(d?.erro || 'PIN incorreto. Tente novamente.')); setPin(''); return; }
+      if (!res.ok || !d?.ok) { setPinErro(String(d?.erro || 'PIN incorreto. Tente novamente.')); chacoalha(); setPin(''); return; }
       try {
         localStorage.setItem(TOKEN_KEY, d.token);
         localStorage.setItem(NOME_KEY, d.nome || '');
@@ -115,6 +131,7 @@ export default function ProdutosBalancoPortal() {
       setPin('');
     } catch {
       setPinErro('Sem conexão com o servidor.');
+      chacoalha();
     } finally {
       setPinBusy(false);
     }
@@ -150,32 +167,22 @@ export default function ProdutosBalancoPortal() {
     }
   };
 
-  // ---------------- GATE (PIN) ----------------
+  // ---------------- GATE (PIN) — BLOCO 206: tela ÚNICA dos portais ----------------
   if (!token) {
     return (
-      <main className="min-h-screen bg-gradient-to-b from-slate-900 to-slate-950 flex items-center justify-center p-6">
-        <div className="w-full max-w-sm bg-white rounded-[2rem] p-8 shadow-2xl">
-          <div className="flex flex-col items-center gap-2 mb-6">
-            <div className="w-16 h-16 rounded-3xl bg-amber-600 text-white flex items-center justify-center text-2xl shadow-lg"><i className="fa-solid fa-boxes-stacked"></i></div>
-            <h1 className="text-lg font-black text-gray-800 tracking-tight">Portal de Produtos</h1>
-            <p className="text-[10px] font-black uppercase text-gray-400 tracking-widest">Balanço · entrada x saída com nota</p>
-          </div>
-          <input
-            type="password"
-            value={pin}
-            onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 8))}
-            onKeyDown={(e) => { if (e.key === 'Enter') void entrarComPin(); }}
-            placeholder="PIN do administrador"
-            inputMode="numeric"
-            className="w-full p-4 bg-gray-50 border border-gray-200 rounded-2xl font-black text-center text-xl tracking-[0.5em] outline-none focus:ring-2 focus:ring-amber-100"
-          />
-          {pinErro && <p className="text-[10px] font-black text-rose-600 mt-2 text-center">{pinErro}</p>}
-          <button onClick={() => void entrarComPin()} disabled={pinBusy} className="w-full mt-4 bg-amber-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest disabled:opacity-50">
-            {pinBusy ? 'Verificando...' : 'Entrar'}
-          </button>
-          <p className="text-[9px] font-bold text-gray-400 mt-4 text-center leading-snug">Mesmo PIN do Portal Fiscal. Somente o administrador acessa.</p>
-        </div>
-      </main>
+      <PortalPinGate
+        titulo="Portal de Produtos"
+        subtitulo="Balanço · entrada x saída com nota"
+        icone="fa-boxes-stacked"
+        accent="bg-amber-600"
+        pin={pin}
+        pinErro={pinErro}
+        pinBusy={pinBusy}
+        pinShake={pinShake}
+        onDigito={digitar}
+        onApagar={apagar}
+        onEntrar={() => void entrarComPin()}
+      />
     );
   }
 

@@ -748,6 +748,12 @@ async function getFila(supabase: any, userId: string, perfil: string) {
   // "ENTREGADOR" (string) com o uuid da carga e nunca bate.
   const meuUuidCarga: string | null =
     perfil === 'ENTREGADOR' ? entFiltroUuid : (perfil === 'VENDEDOR' ? userId : null);
+  // BLOCO 206 (regra do dono): "na fila entregas logado como vendedor deverá
+  // aparecer somente as entregas vendidas por esse vendedor! rota 5 nao deve
+  // ver a fila da rota 1". O filtro é NO SERVIDOR — a fila dos outros nem
+  // chega no aparelho do vendedor. Entregador/admin continuam com a fila
+  // inteira (carga/conferência — Bloco 119 mantido para eles).
+  const soVendasDesteVendedor = perfil === 'VENDEDOR' ? userId : null;
   // BLOCO 31: ordem_entrega entra nas colunas SO se o SQL ja rodou (sonda)
   const temOrdem = await hasOrdemEntregaColumn();
   // BLOCO 40: modo_nota idem (tipo do documento no cupom da fila/pedidos)
@@ -770,6 +776,7 @@ async function getFila(supabase: any, userId: string, perfil: string) {
     .eq('tipo_venda', 'PRE_VENDA')
     .in('entrega_status', ['PENDENTE', 'EM_ROTA'])
     .order('data_venda', { ascending: true });
+  if (soVendasDesteVendedor) qAtiva = qAtiva.eq('vendedor_id', soVendasDesteVendedor);
   const { data: ativas, error: ativaErr } = await qAtiva;
 
   // Bloco 13 nao rodou: refaz sem as colunas novas
@@ -783,6 +790,7 @@ async function getFila(supabase: any, userId: string, perfil: string) {
       .eq('tipo_venda', 'PRE_VENDA')
       .in('entrega_status', ['PENDENTE', 'EM_ROTA'])
       .order('data_venda', { ascending: true });
+    if (soVendasDesteVendedor) q2 = q2.eq('vendedor_id', soVendasDesteVendedor);
     const { data } = await q2;
     ativasRows = data;
   } else if (ativaErr) {
@@ -798,6 +806,7 @@ async function getFila(supabase: any, userId: string, perfil: string) {
     .eq('entrega_status', 'FALHOU')
     .gte('data_venda', dias7)
     .order('data_venda', { ascending: false });
+  if (soVendasDesteVendedor) qFal = qFal.eq('vendedor_id', soVendasDesteVendedor);
   const { data: falhados } = await qFal;
 
   // ---- Entregues HOJE (para o resumo/transparencia) ----
@@ -808,6 +817,7 @@ async function getFila(supabase: any, userId: string, perfil: string) {
     .eq('entrega_status', 'ENTREGUE')
     .gte('data_venda', dias7)
     .order('data_venda', { ascending: false });
+  if (soVendasDesteVendedor) qEnt = qEnt.eq('vendedor_id', soVendasDesteVendedor);
   const { data: entreguesRows } = await qEnt;
   // entregues hoje = data_venda em qualquer dia, mas o evento ENTREGUE de hoje:
   // simplificacao segura: usamos os eventos de hoje para filtrar

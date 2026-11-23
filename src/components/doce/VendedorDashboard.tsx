@@ -983,11 +983,14 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
   const handleSaveClientBasic = async () => {
     if (!cForm.nomeFantasia || !cForm.telefone) { showToast("Preencha ao menos Nome e Telefone.", 'error'); return; }
-    // BLOCO 153 (regra do dono): CEP SEMPRE preenchido — o boleto do Inter
-    // EXIGE o CEP do pagador (8 dígitos) e a nota (NF-e/NFC-e) usa o endereço.
-    // Cliente sem CEP não pode ser salvo.
+    // BLOCO 202 (correção do dono — "erro ao editar clientes!"): o CEP NÃO
+    // bloqueia mais o salvamento do cadastro. 155 dos 325 clientes estão sem
+    // CEP e a validação antiga (BLOCO 153) impedia editar qualquer um deles.
+    // A regra real (J3) é: CEP obrigatório na GERAÇÃO DO BOLETO — o BoletoCard
+    // recusa e pede o CEP na hora. Aqui: salva normal e AVISA para completar.
     const cepDigitos = (cForm.enderecoCep || '').replace(/\D/g, '');
-    if (cepDigitos.length !== 8) { showToast("CEP é obrigatório (8 dígitos) — o boleto do Inter e a nota precisam dele.", 'error'); return; }
+    const cepIncompleto = cepDigitos.length > 0 && cepDigitos.length !== 8;
+    if (cepIncompleto) { showToast("CEP incompleto — complete os 8 dígitos ou apague o campo (vazio = preencher depois).", 'error'); return; }
     const cnpjDigitos = (cForm.cnpj || '').replace(/\D/g, '');
     // BLOCO 138 (regra do dono): cadastro pede so CNPJ — e OPCIONAL (aceita
     // salvar sem documento para preencher depois em Editar Cliente).
@@ -1036,6 +1039,10 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     // BLOCO 181: guarda de TOQUE DUPLO (o botão disparava dois salvamentos
     // em seguida — outra fonte de duplicados no portal) + aviso honesto
     // quando o banco MESCLou no cliente já existente.
+    // BLOCO 202: aviso AMIGÁVEL quando salva sem CEP (não é erro — o CEP só
+    // é cobrado na hora de gerar o boleto do Inter, no card do cupom).
+    const semCepVenda = cepDigitos.length === 0;
+    const avisoSemCep = ' Cliente salvo SEM CEP — complete quando for gerar boleto.';
     if (editingClient === 'NEW') {
       if (salvandoClienteRef.current) return;
       salvandoClienteRef.current = true;
@@ -1043,9 +1050,9 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
         const r = await addClient(clientData);
         if (!r?.ok) { showToast('Não gravou no banco — verifique a conexão e tente de novo.', 'error'); return; }
         if (r.mesclado) {
-          showToast(`Cliente JÁ EXISTIA (${r.nomeExistente}) — cadastro EXISTENTE atualizado, sem criar duplicado ✓`);
+          showToast(`Cliente JÁ EXISTIA (${r.nomeExistente}) — cadastro EXISTENTE atualizado, sem criar duplicado ✓${semCepVenda ? avisoSemCep : ''}`);
         } else {
-          showToast('Cliente salvo no banco ✓');
+          showToast(`Cliente salvo no banco ✓${semCepVenda ? avisoSemCep : ''}`);
         }
       } finally {
         salvandoClienteRef.current = false;
@@ -1053,7 +1060,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     } else if (typeof editingClient === 'object') {
       const ok = await updateClient(editingClient.id, clientData);
       if (!ok) { showToast('Não gravou no banco — verifique a conexão e tente de novo.', 'error'); return; }
-      showToast('Cliente salvo no banco ✓', 'success');
+      showToast(`Cliente salvo no banco ✓${semCepVenda ? avisoSemCep : ''}`, 'success');
     }
     // BLOCO 122: veio da TELA 4 do PDV ("Completar cadastro agora") — volta
     // direto para a tela do modo. O carrinho segue guardado no aparelho.

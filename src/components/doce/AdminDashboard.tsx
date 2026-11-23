@@ -1204,10 +1204,16 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
   const handleSaveClient = async () => {
     if (!clientForm.nomeFantasia || !clientForm.telefone) { showToast("Preencha Nome e Telefone.", 'error'); return; }
-    // BLOCO 153 (regra do dono): CEP SEMPRE preenchido — o boleto do Inter
-    // EXIGE o CEP do pagador (8 dígitos) e a nota (NF-e/NFC-e) usa o endereço.
+    // BLOCO 202 (correção do dono — "erro ao editar clientes!"): o CEP NÃO
+    // bloqueia mais o salvamento do cadastro. 155 dos 325 clientes estão sem
+    // CEP e a validação antiga (BLOCO 153) impedia editar qualquer um deles —
+    // virava o toast de erro em TODA edição. A regra real (J3) é outra:
+    // CEP obrigatório fica na GERAÇÃO DO BOLETO (BoletoCard recusa e pede o
+    // CEP na hora). Aqui no cadastro: salva normal e AVISA para completar
+    // depois (o filtro "sem CEP" do portal de clientes fiscais ajuda).
     const cepDigitos = (clientForm.enderecoCep || '').replace(/\D/g, '');
-    if (cepDigitos.length !== 8) { showToast("CEP é obrigatório (8 dígitos) — o boleto do Inter e a nota precisam dele.", 'error'); return; }
+    const cepIncompleto = cepDigitos.length > 0 && cepDigitos.length !== 8;
+    if (cepIncompleto) { showToast("CEP incompleto — complete os 8 dígitos ou apague o campo (vazio = preencher depois).", 'error'); return; }
     const cnpjDigitos = (clientForm.cnpj || '').replace(/\D/g, '');
     if (cnpjDigitos.length > 0 && cnpjDigitos.length < 14) { showToast("CNPJ incompleto — complete os 14 dígitos ou apague o campo.", 'error'); return; }
     if (cnpjDigitos.length > 0 && !validaCnpj(cnpjDigitos)) { showToast("CNPJ inválido (dígitos verificadores não conferem).", 'error'); return; }
@@ -1216,15 +1222,23 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     if (cpfDigitos.length > 0 && cpfDigitos.length !== 11) { showToast("CPF incompleto — complete os 11 dígitos ou apague o campo.", 'error'); return; }
     if (cpfDigitos.length > 0 && !validaCpf(cpfDigitos)) { showToast("CPF inválido (dígitos verificadores não conferem).", 'error'); return; }
     const payload: Omit<Client, 'id'> = { nomeFantasia: clientForm.nomeFantasia!, telefone: clientForm.telefone!, endereco: clientForm.endereco || '', bairro: clientForm.bairro || '', diaRoteiro: clientForm.diaRoteiro ?? 1, ativo: clientForm.ativo ?? true, ativarCnpj: clientForm.ativarCnpj ?? false, cnpj: clientForm.cnpj, cpf: clientForm.cpf, pinLocalizacao: clientForm.pinLocalizacao, ordem: clientForm.ordem ?? 0, nome: clientForm.nome, observacoes: clientForm.observacoes, rota: clientForm.rota || availableRoutes[0] || 'ROTA_01', razaoSocial: clientForm.razaoSocial, inscricaoEstadual: clientForm.inscricaoEstadual, enderecoNumero: clientForm.enderecoNumero, enderecoCep: clientForm.enderecoCep, enderecoMunicipio: clientForm.enderecoMunicipio, enderecoUf: clientForm.enderecoUf, email: clientForm.email, clienteEspecialGb: podeClienteEspecialGB(clientForm.rota || availableRoutes[0] || 'ROTA_01') ? (clientForm.clienteEspecialGb ?? false) : false, modoCupom: clientForm.modoCupom ?? false, frequencia: clientForm.frequencia || 'SEMANAL', semanaReferencia: clientForm.semanaReferencia || 1 };
+    // BLOCO 202: aviso AMIGÁVEL quando salva sem CEP (não é erro — o cadastro
+    // vai direto; o CEP só é cobrado na hora de gerar o boleto do Inter).
+    const semCep = cepDigitos.length === 0;
+    const avisoSemCep = ' Cliente salvo SEM CEP — complete quando for gerar boleto.';
     // BLOCO 181: espera o banco responder e DIZ a verdade — gravou novo ou
     // mesclou no cadastro JÁ EXISTENTE (o guardião do insertClient nunca cria
     // a segunda linha com o mesmo CNPJ/nome).
     if (showClientModal === 'NEW') {
       const r = await props.addClient(payload);
       if (!r?.ok) { showToast('Não gravou no banco — verifique a conexão e tente de novo.', 'error'); return; }
-      showToast(r.mesclado ? `Cliente JÁ EXISTIA (${r.nomeExistente}) — cadastro EXISTENTE atualizado, sem criar duplicado ✓` : "Cliente salvo!");
+      showToast(r.mesclado ? `Cliente JÁ EXISTIA (${r.nomeExistente}) — cadastro EXISTENTE atualizado, sem criar duplicado ✓${semCep ? avisoSemCep : ''}` : `Cliente salvo!${semCep ? avisoSemCep : ''}`);
     }
-    else if (typeof showClientModal === 'object') props.updateClient(showClientModal.id, payload);
+    else if (typeof showClientModal === 'object') {
+      const ok = await props.updateClient(showClientModal.id, payload);
+      if (!ok) { showToast('Não gravou no banco — verifique a conexão e tente de novo.', 'error'); return; }
+      showToast(`Cliente atualizado!${semCep ? avisoSemCep : ''}`);
+    }
     setShowClientModal(null);
   };
 

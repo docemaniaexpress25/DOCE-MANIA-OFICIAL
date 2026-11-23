@@ -164,7 +164,7 @@ export interface SpedyEmpresa {
 
 /** GET /v1/companies — teste de conexao + achar a empresa emissora. */
 export async function listarEmpresasSpedy() {
-  return spedyRequest<{ data?: SpedyEmpresa[] } | Spedy[]>('GET', '/v1/companies');
+  return spedyRequest<{ data?: SpedyEmpresa[] } | SpedyEmpresa[]>('GET', '/v1/companies');
 }
 
 export interface SpedyCertificado {

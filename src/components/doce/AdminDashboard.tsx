@@ -3083,6 +3083,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
       {showClientModal && (() => {
         const aptoNfe = clienteAptoNfe({ cnpj: clientForm.cnpj, email: clientForm.email });
+        // BLOCO 202 (correção do dono — "clico no botão de editar cliente e dá
+        // erro"): o JSX do BLOCO 189 usa cpfDigitos para pintar o card do CPF,
+        // mas a variável só existia DENTRO do handleSaveClient — ao abrir o
+        // modal o React quebrava com "cpfDigitos is not defined" e o sistema
+        // caía na tela de erro. Agora nasce aqui, no escopo do modal.
+        const cpfDigitos = (clientForm.cpf || '').replace(/\D/g, '');
         return (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-w-md rounded-[2rem] p-6 shadow-2xl overflow-y-auto max-h-[90dvh]"><h3 className="font-black text-gray-800 uppercase text-sm mb-6 text-center">{showClientModal === 'NEW' ? 'Novo Cliente' : 'Editar Cliente'}</h3><div className="space-y-4">
         {/* ===== BLOCO 1: DADOS FISCAIS (NO TOPO — define se o cliente apto a NF-e) ===== */}

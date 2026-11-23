@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { devBridge, getServiceClient, isServerSupabaseConfigured } from '@/lib/serverSupabase';
 import { isAdminSession } from '@/lib/session';
 import { parseXmlNfe } from '@/lib/xmlCompra';
-import { hasXmlCestColumn } from '@/lib/serverSchema';
+import { hasXmlCestColumn, hasXmlDirecaoColumn } from '@/lib/serverSchema';
 
 /**
  * IMPORTACAO DE XML DE COMPRA (Bloco 95) — origem da aba "XML → Produtos".

@@ -216,7 +216,7 @@ export default function FinanceiroPortal() {
 
   // ---------------- DASHBOARD ----------------
   return (
-    <main className="min-h-screen bg-gradient-to-b from-slate-900 to-slate-950 pb-16" style={{ paddingTop: 'max(env(safe-area-inset-top), 0px)' }}>
+    <main className="min-h-screen bg-gradient-to-b from-slate-900 to-slate-950 pb-16 flex flex-col" style={{ paddingTop: 'max(env(safe-area-inset-top), 0px)' }}>
       {/* header */}
       <div className="sticky top-0 z-40 bg-slate-950/90 backdrop-blur border-b border-slate-800 px-4 py-3 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
@@ -226,10 +226,16 @@ export default function FinanceiroPortal() {
             {nome && <p className="text-[9px] font-bold text-slate-500 uppercase truncate">{nome}</p>}
           </div>
         </div>
-        <button onClick={() => { try { localStorage.removeItem(TOKEN_KEY); } catch { /* ignore */ } setToken(null); setDados(null); }} className="text-slate-400 hover:text-slate-200 text-xs font-black uppercase px-3 py-2 rounded-xl border border-slate-700">Sair</button>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {/* BLOCO 205 (otimização dos portais): botão ATUALIZAR explícito no header */}
+          <button onClick={() => token && void carregarResumo(token, periodo)} disabled={carregando} className="text-slate-300 hover:text-white text-[10px] font-black uppercase px-3 py-2 rounded-xl border border-slate-700 disabled:opacity-50" title="Recarregar o balanço">
+            <i className={`fa-solid ${carregando ? 'fa-spinner fa-spin' : 'fa-rotate'} mr-1`}></i>Atualizar
+          </button>
+          <button onClick={() => { try { localStorage.removeItem(TOKEN_KEY); } catch { /* ignore */ } setToken(null); setDados(null); }} className="text-slate-400 hover:text-slate-200 text-xs font-black uppercase px-3 py-2 rounded-xl border border-slate-700">Sair</button>
+        </div>
       </div>
 
-      <div className="p-3 space-y-3 max-w-3xl mx-auto">
+      <div className="p-3 space-y-3 max-w-3xl mx-auto w-full flex-1">
         {/* período */}
         <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
           {PERIODOS.map((p) => (
@@ -385,7 +391,8 @@ export default function FinanceiroPortal() {
           </>
         )}
 
-        <p className="text-[8px] font-bold text-slate-600 text-center leading-snug px-2">Portal Financeiro · custos em sql/bloco191_financeiro.sql · Doce Mania</p>
+        {/* BLOCO 205 (otimização dos portais): footer colado no fim da página */}
+        <p className="text-[8px] font-bold text-slate-600 text-center leading-snug px-2 mt-auto" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>Portal Financeiro · custos em sql/bloco191_financeiro.sql · Doce Mania</p>
       </div>
     </main>
   );

@@ -250,6 +250,76 @@ export function cancelarCobranca(codigoSolicitacao: string, motivo: string): Pro
 }
 
 // ---------------------------------------------------------------------------
+// BLOCO 205 — PORTAL DE COBRANCAS: colecao de cobrancas (boleto atrasado)
+// ---------------------------------------------------------------------------
+export interface CobrancaColecaoItem {
+  codigo: string;           // codigoSolicitacao
+  seuNumero: string;
+  situacao: string;
+  vencimento: string;       // YYYY-MM-DD
+  valor: number | null;
+  pagadorNome: string;
+  pagadorDoc: string;       // so digitos
+}
+
+/**
+ * Lista cobrancas da API do Inter (GET /cobranca/v3/cobrancas — colecao).
+ * Janela de vencimento [dataInicial, dataFinal] (YYYY-MM-DD) + paginacao.
+ * A resposta da colecao vem { itens: [...], pagina, qtdPaginas, ... } — o
+ * parser e defensivo (aceita `itens` ou array direto; campos nos 2 shapes
+ * conhecidos: plano ou cobranca aninhada).
+ */
+export async function listarCobrancas(opts: {
+  dataInicial: string;
+  dataFinal: string;
+  size?: number;
+  maxPaginas?: number;
+}): Promise<{ ok: boolean; itens: CobrancaColecaoItem[]; erro?: string; paginas?: number }> {
+  const size = Math.min(Math.max(opts.size || 100, 1), 100);
+  const maxPaginas = Math.min(Math.max(opts.maxPaginas || 5, 1), 10);
+  const todas: CobrancaColecaoItem[] = [];
+
+  const parseItem = (raw: Record<string, unknown>): CobrancaColecaoItem | null => {
+    const cob = ((raw.cobranca as Record<string, unknown>) || raw) as Record<string, unknown>;
+    const pag = ((cob.pagador as Record<string, unknown>) || (raw.pagador as Record<string, unknown>) || {}) as Record<string, unknown>;
+    const codigo = String(cob.codigoSolicitacao || raw.codigoSolicitacao || '');
+    if (!codigo) return null;
+    const num = (v: unknown) => (v === null || v === undefined || v === '' ? null : Number(v));
+    return {
+      codigo,
+      seuNumero: String(cob.seuNumero || raw.seuNumero || ''),
+      situacao: String(cob.situacao || raw.situacao || cob.status || ''),
+      vencimento: String(cob.dataVencimento || raw.dataVencimento || ''),
+      valor: num(cob.valorNominal ?? raw.valorNominal),
+      pagadorNome: String(pag.nome || ''),
+      pagadorDoc: String(pag.cpfCnpj || pag.cpf_cnpj || '').replace(/\D/g, ''),
+    };
+  };
+
+  for (let pagina = 0; pagina < maxPaginas; pagina++) {
+    const qs = new URLSearchParams({
+      dataInicial: opts.dataInicial,
+      dataFinal: opts.dataFinal,
+      size: String(size),
+      page: String(pagina),
+    });
+    const r = await requestJson('GET', `/cobranca/v3/cobrancas?${qs.toString()}`);
+    if (!r.ok) return { ok: false, itens: todas, erro: r.erro };
+    const data = r.data as Record<string, unknown>;
+    const arr: Record<string, unknown>[] = Array.isArray((data as { itens?: unknown }).itens)
+      ? ((data as { itens: unknown[] }).itens as Record<string, unknown>[])
+      : (Array.isArray(data) ? (data as unknown as Record<string, unknown>[]) : []);
+    for (const raw of arr) {
+      const it = parseItem(raw);
+      if (it) todas.push(it);
+    }
+    const qtdPaginas = Number((data as Record<string, unknown>).qtdPaginas || (data as Record<string, unknown>).totalPaginas || 1);
+    if (!Number.isFinite(qtdPaginas) || pagina + 1 >= qtdPaginas || arr.length < size) break;
+  }
+  return { ok: true, itens: todas, paginas: maxPaginas };
+}
+
+// ---------------------------------------------------------------------------
 // Interpretacao da resposta da cobranca
 // ---------------------------------------------------------------------------
 export interface CobrancaPublica {

@@ -42,8 +42,18 @@ export interface ErpConfig {
    *  da cobranca do Inter (PDF na seção "INFORMAÇÕES DE RESPONSABILIDADE DO
    *  BENEFICIÁRIO", ate 78 caracteres). Vazio = nao envia linha 2. */
   boletoMensagemPadrao: string;
+  /** BLOCO 205 (PORTAL DE COBRANCAS): mensagem personalizada de cobrança que o
+   *  dono envia ao cliente com boleto atrasado. Placeholders substituídos por
+   *  boleto: {nome} {valor} {vencimento} {dias}. Editável no Portal de
+   *  Cobranças (/cobrancas) e no Hub de Configurações. */
+  cobrancaMensagem: string;
   emitente: ErpEmitente;
 }
+
+/** BLOCO 205: mensagem de cobrança padrão (portal de cobranças / WhatsApp).
+ *  Placeholders: {nome} {valor} {vencimento} {dias}. */
+export const COBRANCA_MENSAGEM_DEFAULT =
+  'Olá {nome}! Aqui é a Doce Mania. Passando para lembrar do boleto de {valor} que venceu em {vencimento} ({dias} dia(s) de atraso). Quando puder, me manda o comprovante por aqui. Obrigado!';
 
 export const ERP_CONFIG_DEFAULT: ErpConfig = {
   nfeAutoPe: false,
@@ -51,6 +61,7 @@ export const ERP_CONFIG_DEFAULT: ErpConfig = {
   boletoAutoAReceber: false,
   qrCatalogoNoCupom: true,
   boletoMensagemPadrao: '',
+  cobrancaMensagem: COBRANCA_MENSAGEM_DEFAULT,
   emitente: { cnpj: '', ie: '', razao: '', fantasia: '', logradouro: '', numero: '', bairro: '', municipio: '', uf: 'RS', cep: '', regime: 1 },
 };
 
@@ -93,6 +104,8 @@ export async function lerErpConfig(supabase?: any): Promise<ErpConfig> {
       qrCatalogoNoCupom: raw.qrCatalogoNoCupom !== false,
       // BLOCO 152: texto padrao do boleto (linha 2 da mensagem da cobranca)
       boletoMensagemPadrao: String(raw.boletoMensagemPadrao || '').slice(0, 78),
+      // BLOCO 205: mensagem de cobrança (ausente no jsonb = default do dono)
+      cobrancaMensagem: String(raw.cobrancaMensagem || '').trim() || COBRANCA_MENSAGEM_DEFAULT,
       emitente: raw.emitente ? sanitizaEmitente(raw.emitente as Record<string, unknown>) : { ...ERP_CONFIG_DEFAULT.emitente },
     };
   } catch {
@@ -112,6 +125,10 @@ export async function salvarErpConfig(parcial: Partial<ErpConfig>, supabase?: an
       qrCatalogoNoCupom: typeof parcial.qrCatalogoNoCupom === 'boolean' ? parcial.qrCatalogoNoCupom : atual.qrCatalogoNoCupom,
       // BLOCO 152: texto padrao do boleto (vazio = limpa a linha 2)
       boletoMensagemPadrao: parcial.boletoMensagemPadrao !== undefined ? String(parcial.boletoMensagemPadrao || '').trim().slice(0, 78) : atual.boletoMensagemPadrao,
+      // BLOCO 205: mensagem de cobrança (vazio = volta pro default)
+      cobrancaMensagem: parcial.cobrancaMensagem !== undefined
+        ? (String(parcial.cobrancaMensagem || '').trim().slice(0, 600) || COBRANCA_MENSAGEM_DEFAULT)
+        : atual.cobrancaMensagem,
       emitente: parcial.emitente ? sanitizaEmitente(parcial.emitente as unknown as Record<string, unknown>) : atual.emitente,
     };
     const { error } = await db

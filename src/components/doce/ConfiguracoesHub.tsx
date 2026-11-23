@@ -34,6 +34,8 @@ interface BoletoConfig {
   autoBoletoAReceber: boolean;
   /** BLOCO 152: texto padrao na seção "responsabilidade do beneficiário" do PDF */
   mensagemPadrao: string;
+  /** BLOCO 205: mensagem personalizada de cobrança (Portal de Cobranças / WhatsApp) */
+  cobrancaMensagem: string;
 }
 
 // BLOCO 167 — evento do webhook do Inter (tabela webhook_logs, SQL 167)
@@ -150,6 +152,11 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
   const [msgPadraoInput, setMsgPadraoInput] = useState('');
   const [salvandoMsgPadrao, setSalvandoMsgPadrao] = useState(false);
 
+  // BLOCO 205 — mensagem personalizada de cobrança (Portal de Cobranças)
+  const PLACEHOLDERS_COBRANCA = ['{nome}', '{valor}', '{vencimento}', '{dias}'];
+  const [msgCobrancaInput, setMsgCobrancaInput] = useState('');
+  const [salvandoMsgCobranca, setSalvandoMsgCobranca] = useState(false);
+
   // BLOCO 167 — log de eventos do webhook do Inter (pagamentos/recebimentos)
   const [logAberto, setLogAberto] = useState(false);
   const [logHook, setLogHook] = useState<WebhookLogEvento[] | null>(null);
@@ -194,8 +201,11 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
         autoBoletoAReceber: !!d.boleto?.autoBoletoAReceber,
         // BLOCO 152: texto padrao do boleto (linha 2 da mensagem da cobranca)
         mensagemPadrao: String(d.boleto?.mensagemPadrao || ''),
+        // BLOCO 205: mensagem personalizada de cobrança
+        cobrancaMensagem: String(d.boleto?.cobrancaMensagem || ''),
       });
       setMsgPadraoInput(String(d.boleto?.mensagemPadrao || ''));
+      setMsgCobrancaInput(String(d.boleto?.cobrancaMensagem || ''));
       // BLOCO 125: flag do QR do catálogo (geral.qrCatalogoNoCupom)
       setQrCat(d.geral?.qrCatalogoNoCupom !== false);
       setFocoWebhook(
@@ -257,6 +267,15 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
     setSalvandoMsgPadrao(true);
     await postConfig({ boletoMensagemPadrao: msgPadraoInput }, 'Mensagem padrão do boleto salva!');
     setSalvandoMsgPadrao(false);
+  };
+
+  /* ===== BLOCO 205 — salva a mensagem de cobrança (Portal de Cobranças) ===== */
+  const salvarMensagemCobranca = async () => {
+    if (salvandoMsgCobranca) return;
+    if (msgCobrancaInput.trim() === (boleto?.cobrancaMensagem || '')) return;
+    setSalvandoMsgCobranca(true);
+    await postConfig({ cobrancaMensagem: msgCobrancaInput }, 'Mensagem de cobrança salva! Vale para o Portal de Cobranças.');
+    setSalvandoMsgCobranca(false);
   };
 
   /* ===== BLOCO 125 — switch do QR do catálogo no cupom (otimista) ===== */
@@ -764,6 +783,51 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
                 </button>
               </div>
             </div>
+          </div>
+
+          {/* ===== BLOCO 205 — MENSAGEM DE COBRANÇA (Portal de Cobranças) ===== */}
+          <div className="border-t border-gray-50 pt-3 space-y-2">
+            <div className="flex items-start gap-3">
+              <i className="fa-solid fa-bell-dollar text-rose-500 mt-1"></i>
+              <div className="flex-1">
+                <p className="text-[11px] font-bold text-gray-600 uppercase">Mensagem de cobrança (boletos atrasados)</p>
+                <p className="text-[9px] text-gray-400 font-semibold leading-snug mt-0.5">Texto enviado ao cliente pelo <strong className="text-gray-500">Portal de Cobranças</strong> (boletos atrasados do Inter). Os marcadores viram os dados de cada boleto: <span className="font-mono text-gray-500">{'{nome}'} {'{valor}'} {'{vencimento}'} {'{dias}'}</span>.</p>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {PLACEHOLDERS_COBRANCA.map((ph) => (
+                <button
+                  key={ph}
+                  onClick={() => setMsgCobrancaInput((v) => `${v}${v && !v.endsWith(' ') ? ' ' : ''}${ph}`)}
+                  className="text-[9px] font-black uppercase bg-rose-50 border border-rose-100 text-rose-600 px-2.5 py-1.5 rounded-lg active:scale-95 transition-transform"
+                  title="Adicionar ao texto"
+                >{ph}</button>
+              ))}
+            </div>
+            <textarea
+              value={msgCobrancaInput}
+              onChange={(e) => setMsgCobrancaInput(e.target.value.slice(0, 600))}
+              rows={4}
+              maxLength={600}
+              placeholder="Ex.: Olá {nome}! O boleto de {valor} venceu em {vencimento} ({dias} dia(s) de atraso). Quando puder, me manda o comprovante. Obrigado!"
+              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-[11px] font-bold text-gray-800 focus:outline-none focus:border-rose-400 resize-none"
+            />
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[9px] font-black text-gray-400">{msgCobrancaInput.length}/600</span>
+              <div className="flex gap-2">
+                {msgCobrancaInput !== (boleto.cobrancaMensagem || '') && (
+                  <button onClick={() => setMsgCobrancaInput(boleto.cobrancaMensagem || '')} className="text-[9px] font-black uppercase text-gray-400 underline active:scale-95 px-2 py-1.5">Cancelar</button>
+                )}
+                <button
+                  onClick={salvarMensagemCobranca}
+                  disabled={salvandoMsgCobranca || msgCobrancaInput === (boleto.cobrancaMensagem || '')}
+                  className="bg-rose-600 text-white font-black px-4 py-2 rounded-xl text-[9px] uppercase tracking-widest active:scale-95 disabled:opacity-50 flex items-center gap-1.5"
+                >
+                  <i className={`fa-solid ${salvandoMsgCobranca ? 'fa-spinner fa-spin' : 'fa-check'}`}></i>Salvar
+                </button>
+              </div>
+            </div>
+            <p className="text-[8px] text-gray-400 font-semibold leading-snug">Também edita no próprio Portal de Cobranças (botão “Mensagem de cobrança”) — é o mesmo texto.</p>
           </div>
         </div>
       )}

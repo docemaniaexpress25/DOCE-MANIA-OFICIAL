@@ -1855,6 +1855,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           portais do sistema num lugar só: Portal Fiscal, Portal do Cliente,
           Portal de Entradas, Portal de Produtos (balanço entrada x saída) e
           o Portal Financeiro (balanço geral da empresa, custos e logs).
+          BLOCO 205 (regra do dono): PORTAL DE COBRANCAS — boletos atrasados
+          buscados na API do Banco Inter + mensagem personalizada de cobrança.
           ==================================================================== */}
       {activeTab === 'PORTAIS' && (
         <div className="space-y-5">
@@ -1878,6 +1880,16 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
               <span className="flex-1 flex flex-col items-start">
                 <span className="text-sm font-black uppercase tracking-widest">Portal Financeiro</span>
                 <span className="text-[9px] font-bold opacity-80 leading-snug">Balanço geral · entradas e saídas de valores · custos lançados · logs e caixa</span>
+              </span>
+              <i className="fa-solid fa-up-right-from-square text-xs opacity-70"></i>
+            </a>
+
+            {/* BLOCO 205 (regra do dono): PORTAL DE COBRANCAS — boletos atrasados do Inter */}
+            <a href="/cobrancas" target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 bg-rose-600 text-white rounded-3xl px-5 py-5 shadow-lg active:scale-[0.98] transition-transform">
+              <span className="w-12 h-12 rounded-2xl bg-white/15 flex items-center justify-center shrink-0"><i className="fa-solid fa-bell-dollar text-xl"></i></span>
+              <span className="flex-1 flex flex-col items-start">
+                <span className="text-sm font-black uppercase tracking-widest">Portal de Cobranças</span>
+                <span className="text-[9px] font-bold opacity-80 leading-snug">Boletos atrasados (API do Inter) · mensagem de cobrança personalizada · WhatsApp em 1 toque</span>
               </span>
               <i className="fa-solid fa-up-right-from-square text-xs opacity-70"></i>
             </a>

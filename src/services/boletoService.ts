@@ -74,8 +74,9 @@ export interface InterStatusInfo {
 export const boletoService = {
   /** Estado atual do boleto da venda (leitura barata).
    *  BLOCO 200: o SERVIDOR também diz se a venda pode dividir em 2 boletos
-   *  (rota 5) — reforço à prova de falha do casamento feito no client. */
-  async status(saleId: string): Promise<{ ok: boolean; boleto?: BoletoInfo; parcelas?: BoletoParcelaInfo[]; inter?: InterStatusInfo; nota?: NotaDaVendaInfo; config?: BoletoConfigInfo; podeDividir?: boolean; erro?: string }> {
+   *  (rota 5) — reforço à prova de falha do casamento feito no client.
+   *  BLOCO 210: podeCancelar diz se o botão CANCELAR BOLETO aparece (ADMIN). */
+  async status(saleId: string): Promise<{ ok: boolean; boleto?: BoletoInfo; parcelas?: BoletoParcelaInfo[]; inter?: InterStatusInfo; nota?: NotaDaVendaInfo; config?: BoletoConfigInfo; podeDividir?: boolean; podeCancelar?: boolean; erro?: string }> {
     try {
       const res = await fetch(`/api/boletos?saleId=${encodeURIComponent(saleId)}`, {
         method: 'GET',
@@ -83,7 +84,7 @@ export const boletoService = {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}` };
-      return { ok: true, boleto: data.boleto, parcelas: data.parcelas, inter: data.inter, nota: data.nota, config: data.config, podeDividir: data.podeDividir === true };
+      return { ok: true, boleto: data.boleto, parcelas: data.parcelas, inter: data.inter, nota: data.nota, config: data.config, podeDividir: data.podeDividir === true, podeCancelar: data.podeCancelar === true };
     } catch (e: unknown) {
       return { ok: false, erro: e instanceof Error ? e.message : 'Falha de conexao' };
     }
@@ -144,7 +145,9 @@ export const boletoService = {
     }
   },
 
-  /** [ADMIN] Cancela a cobranca no Inter (motivo obrigatorio). */
+  /** [ADMIN] Cancela a cobranca no Inter (motivo obrigatorio).
+   *  BLOCO 210: cancela APENAS o boleto — a venda permanece e o status
+   *  CANCELADO volta a oferecer "Gerar Novamente" no card. */
   async cancelar(saleId: string, motivo: string): Promise<{ ok: boolean; boleto?: BoletoInfo; erro?: string }> {
     try {
       const res = await fetch('/api/boletos', {
@@ -155,6 +158,23 @@ export const boletoService = {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}`, boleto: data.boleto };
       return { ok: true, boleto: data.boleto };
+    } catch (e: unknown) {
+      return { ok: false, erro: e instanceof Error ? e.message : 'Falha de conexao' };
+    }
+  },
+
+  /** BLOCO 210: [ADMIN] cancela o boleto de UMA parcela da divisão (só o
+   *  boleto escolhido — a venda e as outras parcelas seguem normais). */
+  async cancelarParcela(saleId: string, parcelaId: string, motivo: string): Promise<{ ok: boolean; parcela?: BoletoParcelaInfo; erro?: string }> {
+    try {
+      const res = await fetch('/api/boletos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ acao: 'CANCELAR', saleId, parcelaId, motivo }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}` };
+      return { ok: true, parcela: data.parcela };
     } catch (e: unknown) {
       return { ok: false, erro: e instanceof Error ? e.message : 'Falha de conexao' };
     }

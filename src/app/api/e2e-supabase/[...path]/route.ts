@@ -249,6 +249,34 @@ const salesSeed = [
     prioridade: 0, separado: false, separado_em: null, entregador_id: null,
     comprovante_foto: null, modo_nota: null, route_id: null, entrega_seq: null, ordem_entrega: null,
   },
+  // BLOCO 210 (E2E): vendas com BOLETO UNICO do Inter para o botão CANCELAR
+  // BOLETO — 1º A_RECEBER (ativo, com linha digitável e vencimento futuro) e
+  // 2º CANCELADO (o card volta a oferecer "Gerar Novamente" — a chance de
+  // gerar um novo boleto com a data que o cliente escolher).
+  {
+    id: 'sale-boleto-uni', vendedor_id: 'rota2user', client_id: 'cli-5',
+    valor_total: 150, valor_pago: 0, metodo_pagamento: 'A_PRAZO',
+    detalhe_pagamento: 'PRONTA — cobrar BOLETO na entrega (A PRAZO)',
+    status_pagamento: 'PENDENTE', data_venda: iso(45), data_vencimento: `${diaPassado(-5)}T23:59:59-03:00`,
+    tipo_venda: 'PRONTA', entrega_status: null, trocas: null,
+    prioridade: 0, separado: false, separado_em: null, entregador_id: null,
+    comprovante_foto: null, modo_nota: null, route_id: null, entrega_seq: null, ordem_entrega: null,
+    inter_boleto_status: 'A_RECEBER', inter_boleto_codigo: 'mock-cob-uni', inter_boleto_seu_numero: 'DM-E2E-UNI',
+    inter_boleto_vencimento: diaPassado(-5), inter_boleto_valor: 150,
+    inter_boleto_linha: '34191090081234567890123456789012345678901234567', inter_boleto_barras: null, inter_boleto_pix: null, inter_boleto_erro: null,
+  },
+  {
+    id: 'sale-boleto-canc', vendedor_id: 'rota2user', client_id: 'cli-2',
+    valor_total: 90, valor_pago: 0, metodo_pagamento: 'A_PRAZO',
+    detalhe_pagamento: 'PRONTA — cobrar BOLETO na entrega (A PRAZO)',
+    status_pagamento: 'PENDENTE', data_venda: iso(90), data_vencimento: `${diaPassado(-2)}T23:59:59-03:00`,
+    tipo_venda: 'PRONTA', entrega_status: null, trocas: null,
+    prioridade: 0, separado: false, separado_em: null, entregador_id: null,
+    comprovante_foto: null, modo_nota: null, route_id: null, entrega_seq: null, ordem_entrega: null,
+    inter_boleto_status: 'CANCELADO', inter_boleto_codigo: 'mock-cob-old', inter_boleto_seu_numero: 'DM-E2E-CANC',
+    inter_boleto_vencimento: diaPassado(-2), inter_boleto_valor: 90,
+    inter_boleto_linha: null, inter_boleto_barras: null, inter_boleto_pix: null, inter_boleto_erro: null,
+  },
 ];
 
 const saleItemsSeed = [
@@ -258,6 +286,9 @@ const saleItemsSeed = [
   { id: 'si-4', sale_id: 'sale-fila-003', produto_id: 'prod-1', product_id: 'prod-1', quantidade: 5, preco_venda: 4.35 },
   { id: 'si-5', sale_id: 'sale-fila-004', produto_id: 'prod-1', product_id: 'prod-1', quantidade: 5, preco_venda: 3.1 },
   { id: 'si-6', sale_id: 'sale-fila-005', produto_id: 'prod-2', product_id: 'prod-2', quantidade: 10, preco_venda: 3.39 },
+  // BLOCO 210 (E2E): itens das vendas com boleto (cupom reaberto renderiza itens)
+  { id: 'si-7', sale_id: 'sale-boleto-uni', produto_id: 'prod-1', product_id: 'prod-1', quantidade: 10, preco_venda: 15 },
+  { id: 'si-8', sale_id: 'sale-boleto-canc', produto_id: 'prod-2', product_id: 'prod-2', quantidade: 30, preco_venda: 3 },
 ];
 
 // BLOCO 191: custos lançados pelo admin (Portal Financeiro) — 1 exemplo
@@ -315,11 +346,26 @@ const tables: Record<string, any[]> = {
   sales_boletos: [
     { id: 'sb-1', sale_id: 'sale-fila-001', seq: 1, valor: 350.75, vencimento: diaPassado(12), doc: null, cep: null, status: 'ATRASADO', codigo: 'mock-cob-1', seu_numero: 'DM-E2E-P1', linha: null, barras: null, pix: null, erro: null, emitido_em: new Date().toISOString(), pago_em: null, criado_em: new Date().toISOString() },
     { id: 'sb-2', sale_id: 'sale-fila-001', seq: 2, valor: 180, vencimento: diaPassado(3), doc: null, cep: null, status: 'A_RECEBER', codigo: null, seu_numero: 'DM-E2E-P2', linha: null, barras: null, pix: null, erro: null, emitido_em: null, pago_em: null, criado_em: new Date().toISOString() },
+    // BLOCO 210 (E2E): divisão na venda VISÍVEL no histórico (sale-divida-001 /
+    // Acougue 25.00) para validar o botão CANCELAR POR PARCELA no card —
+    // boleto 1 ATIVO (A_RECEBER, com código) e boleto 2 ainda NAO_GERADO.
+    { id: 'sb-3', sale_id: 'sale-divida-001', seq: 1, valor: 15, vencimento: diaPassado(-3), doc: null, cep: null, status: 'A_RECEBER', codigo: 'mock-cob-3', seu_numero: 'DM-E2E-D1', linha: null, barras: null, pix: null, erro: null, emitido_em: new Date().toISOString(), pago_em: null, criado_em: new Date().toISOString() },
+    { id: 'sb-4', sale_id: 'sale-divida-001', seq: 2, valor: 10, vencimento: diaPassado(-10), doc: null, cep: null, status: 'NAO_GERADO', codigo: null, seu_numero: null, linha: null, barras: null, pix: null, erro: null, emitido_em: null, pago_em: null, criado_em: new Date().toISOString() },
   ],
 };
 
+// BLOCO 210: headers CORS — o supabase-js roda NO BROWSER e quando a env do
+// mock aponta para 127.0.0.1 enquanto o app abre em localhost, cada request
+// vira CROSS-ORIGIN: sem estes headers nas RESPOSTAS (e no preflight OPTIONS)
+// o browser bloqueia e a tela de login fica travada em "carregando usuários".
+const CORS_HEADERS: Record<string, string> = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': '*',
+  'Access-Control-Allow-Methods': 'GET,POST,PATCH,PUT,DELETE,OPTIONS',
+};
+
 function json(data: any, status = 200) {
-  return NextResponse.json(data, { status });
+  return NextResponse.json(data, { status, headers: CORS_HEADERS });
 }
 
 // ---------- BLOCO 31: filtros PostgREST basicos ----------
@@ -453,7 +499,7 @@ async function handle(req: NextRequest, segments: string[]) {
       if (wantsObject) {
         return new NextResponse(JSON.stringify(rows[0] ?? null), {
           status: rows.length > 0 ? 200 : 406,
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
         });
       }
       return new NextResponse(JSON.stringify(rows), {
@@ -461,6 +507,7 @@ async function handle(req: NextRequest, segments: string[]) {
         headers: {
           'Content-Type': 'application/json',
           'Content-Range': `0-${Math.max(0, rows.length - 1)}/${rows.length}`,
+          ...CORS_HEADERS,
         },
       });
     }
@@ -479,7 +526,7 @@ async function handle(req: NextRequest, segments: string[]) {
           if (idx >= 0) rows[idx] = { ...rows[idx], ...row };
           else rows.push({ ...row, id: row.id ?? `${table}-novo-${Math.random().toString(36).slice(2, 8)}` });
         });
-        return NextResponse.json(arr, { status: 201 });
+        return NextResponse.json(arr, { status: 201, headers: CORS_HEADERS });
       }
       // BLOCO 88: devolve os CLONES (com o id gerado) — antes devolvia `arr`
       // (payload original SEM id) e o .select() do insert recebia sale.id
@@ -562,10 +609,10 @@ async function handle(req: NextRequest, segments: string[]) {
       if (wantsObject) {
         return new NextResponse(JSON.stringify(clones[0] ?? null), {
           status: 201,
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
         });
       }
-      return NextResponse.json(clones, { status: 201 });
+      return NextResponse.json(clones, { status: 201, headers: CORS_HEADERS });
     }
 
     // BLOCO 31: PATCH persistente com filtro col=eq.valor (ordem_entrega, editor...)
@@ -581,10 +628,10 @@ async function handle(req: NextRequest, segments: string[]) {
       if (wantsObject) {
         return new NextResponse(JSON.stringify(alvos.length > 0 ? rows[alvos[0]] : null), {
           status: alvos.length > 0 ? 200 : 406,
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
         });
       }
-      return NextResponse.json(alvos.length > 0 ? [body] : [], { status: 200 });
+      return NextResponse.json(alvos.length > 0 ? [body] : [], { status: 200, headers: CORS_HEADERS });
     }
 
     // BLOCO 31: DELETE persistente com filtro col=eq.valor (itens do editor)
@@ -613,6 +660,10 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ path: str
 export async function DELETE(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
   return handle(req, (await ctx.params).path || []);
 }
+// BLOCO 210: preflight do supabase-js — quando o app abre em localhost e a
+// env aponta para 127.0.0.1 o browser trata como CROSS-ORIGIN e exige os
+// headers CORS na resposta do OPTIONS (sem isso a tela de login ficava
+// travada em "carregando usuários").
 export async function OPTIONS() {
-  return new NextResponse(null, { status: 204 });
+  return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
 }

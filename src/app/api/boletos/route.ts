@@ -110,6 +110,29 @@ async function atualizar(saleId: string, patch: Record<string, unknown>) {
 }
 
 /**
+ * BLOCO 210 (botao CANCELAR BOLETO por cliente): o prazo EXIBIDO da venda
+ * (fila de entregas / roteiro / cobranças) deve ser sempre o MENOR vencimento
+ * EM ABERTO das parcelas — canceladas/expiradas/falhadas não contam. Chamado
+ * depois de CANCELAR uma parcela e depois de EMITIR/REEMITIR uma parcela,
+ * para que "cancelei o boleto 1 e gerei outro com nova data" atualize a fila.
+ */
+async function recomputeVencimentoVenda(saleId: string) {
+  try {
+    const { data: ps } = await getServiceClient()
+      .from('sales_boletos')
+      .select('vencimento, status')
+      .eq('sale_id', saleId);
+    const ativas = ((ps as Record<string, unknown>[]) || [])
+      .filter(p => !['CANCELADO', 'EXPIRADO', 'FALHA_EMISSAO'].includes(String(p.status)))
+      .map(p => String(p.vencimento || ''))
+      .filter(Boolean)
+      .sort();
+    if (ativas.length === 0) return;
+    await atualizar(saleId, { data_vencimento: `${ativas[0]}T23:59:59-03:00` });
+  } catch { /* melhor esforco: fila segue com o prazo anterior */ }
+}
+
+/**
  * BLOCO 200 (regra do dono): a venda é da ROTA 5 (Deivid/David)? O casamento
  * é À PROVA DE RENOME/TROCA DE APARELHO: pela ROTA gravada (ROTA_05) OU pelo
  * id/nome do vendedor (lib/equipe — mesmo padrão do caixa/comissão). O Cupom
@@ -367,6 +390,9 @@ async function emitirCobrancaUnificada(args: {
   const codigo = String((r.data as Record<string, unknown>).codigoSolicitacao);
   if (parcela) {
     await db.from('sales_boletos').update({ codigo, emitido_em: new Date().toISOString() }).eq('id', String(parcela.id));
+    // BLOCO 210: prazo da venda acompanha o vencimento mais novo em aberto
+    // (a parcela reemitida pode ter OUTRA data que o cliente escolheu).
+    await recomputeVencimentoVenda(saleId);
   } else {
     await atualizar(saleId, { inter_boleto_codigo: codigo, inter_boleto_em: new Date().toISOString() });
   }
@@ -456,11 +482,16 @@ export async function GET(req: NextRequest) {
   // 2 boletos (rota 5) — o card usa junto com a prop do client (reforço).
   let podeDividirServidor = false;
   try { podeDividirServidor = await vendaPodeDividir(String(sale.vendedor_id || '')); } catch { /* degrada: prop do client decide */ }
+  // BLOCO 210 (botão CANCELAR BOLETO junto ao boleto de cada cliente): o
+  // servidor DIZ ao card se o botão pode aparecer (cancelamento segue só
+  // ADMIN — mesma regra da ação abaixo). Vendedor não vê o botão.
+  const podeCancelar = session.perfil === 'ADMIN';
   return NextResponse.json({
     ok: true,
     boleto: cobrancaPublica(sale as Record<string, unknown>),
     ...(parcelas ? { parcelas } : {}),
     podeDividir: podeDividirServidor,
+    podeCancelar,
     inter: { configurado: isInterConfigured(), ambiente: getInterConfig().ambiente },
     nota: {
       status: String(sale.nota_status || ''),
@@ -553,11 +584,15 @@ export async function POST(req: NextRequest) {
     if (Math.abs(soma - saldo) > 0.02) {
       return BAD(422, `Os dois boletos devem fechar o saldo da venda: soma R$ ${soma.toFixed(2)} vs saldo R$ ${saldo.toFixed(2)}. Ajuste os valores.`);
     }
-    // Recriar só com NADA emitido (parcela com codigo no Inter = recusa)
+    // BLOCO 210 (fluxo do dono: cancelou o boleto para trocar a data):
+    // regravar a divisão fica PERMITIDO quando TODAS as parcelas com cobrança
+    // estão CANCELADAS/EXPIRADAS/FALHADAS (nada ATIVO no Inter) e NENHUMA foi
+    // paga. Parcela ATIVA ou PAGA continua travando (dinheiro em jogo).
     const { data: existentes } = await db.from('sales_boletos').select('id, seq, status, codigo').eq('sale_id', saleId);
-    if ((existentes || []).some((p: Record<string, unknown>) => p.codigo)) {
-      return BAD(422, 'Esta venda já tem boletos da divisão gerados no Inter — cancele-os (Admin) antes de recriar a divisão.');
-    }
+    const temPaga = (existentes || []).some((p: Record<string, unknown>) => ['RECEBIDO', 'MARCADO_RECEBIDO'].includes(String(p.status)));
+    if (temPaga) return BAD(422, 'Há boleto da divisão já PAGO — a divisão não pode ser regravada.');
+    const temAtiva = (existentes || []).some((p: Record<string, unknown>) => p.codigo && !['CANCELADO', 'EXPIRADO', 'FALHA_EMISSAO'].includes(String(p.status)));
+    if (temAtiva) return BAD(422, 'Esta venda tem boleto da divisão ATIVO no Inter — use o botão CANCELAR BOLETO antes de regravar a divisão.');
     await db.from('sales_boletos').delete().eq('sale_id', saleId);
     const { error: insErr } = await db.from('sales_boletos').insert(linhas);
     if (insErr) {
@@ -635,7 +670,10 @@ export async function POST(req: NextRequest) {
       if (!r.ok && r.status !== 202) {
         return BAD(502, r.erro || 'Falha ao cancelar na API do Inter.');
       }
+      // BLOCO 210: CANCELADO volta a oferecer Gerar/Refazer no card — a
+      // parcela continua na divisão (a venda NÃO é cancelada, só o boleto).
       await db.from('sales_boletos').update({ status: 'CANCELADO', erro: null }).eq('id', String(parcela.id));
+      await recomputeVencimentoVenda(saleId);
       const { data: atual } = await db.from('sales_boletos').select(PARC_COLS).eq('id', String(parcela.id)).maybeSingle();
       return NextResponse.json({ ok: true, parcela: parcelaPublica(atual as Record<string, unknown>) });
     }

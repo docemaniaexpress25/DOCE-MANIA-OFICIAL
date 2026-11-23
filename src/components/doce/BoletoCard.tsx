@@ -167,6 +167,18 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
   // devolve podeDividir) — reforço à prova de falha do casamento feito no
   // client (id fixo/nome): se um dos dois disser SIM, a divisão aparece.
   const [podeDivApi, setPodeDivApi] = useState(false);
+  // =========================================================================
+  // BLOCO 210 — BOTÃO CANCELAR BOLETO (pedido do dono): junto ao boleto de
+  // cada cliente, depois de gerado. Cancela APENAS o boleto escolhido (a
+  // venda segue normal) e devolve a chance de gerar um NOVO boleto com a
+  // data que o cliente decidir (ex.: saiu com data X e o cliente quer Y).
+  // O SERVIDOR diz (GET podeCancelar) se o botão aparece — cancelamento
+  // segue só ADMIN; o motivo (máx. 50) vai registrado no banco Inter.
+  // =========================================================================
+  const [podeCancelApi, setPodeCancelApi] = useState(false);
+  const [alvoCancel, setAlvoCancel] = useState<string>(''); // '' | 'unico' | parcelaId
+  const [motivoCancel, setMotivoCancel] = useState('Cliente pediu nova data');
+  const [busyCancel, setBusyCancel] = useState(false);
 
   useEffect(() => {
     if (!saleId) return;
@@ -181,6 +193,7 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
       setNotaApi(r.nota || null);
       setCfgApi(r.config || null);
       setPodeDivApi(r.podeDividir === true);
+      setPodeCancelApi(r.podeCancelar === true);
       if (r.boleto?.status === 'NAO_GERADO' && !(r.parcelas && r.parcelas.length > 0)) {
         // BLOCO 153: prazo correto = vencimento COMBINADO na venda (tela 6 do
         // PDV — sales.data_vencimento); sem prazo gravado, mantém o padrão +7d
@@ -204,6 +217,7 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
     const r = await boletoService.status(saleId);
     if (r.ok && r.parcelas) setParcelas(r.parcelas);
     if (r.ok && r.boleto) setBoleto(r.boleto);
+    if (r.ok) setPodeCancelApi(r.podeCancelar === true);
   };
 
   /** Doc/CEP finais: digitado no card > cadastro (mesma regra do boleto único). */
@@ -611,6 +625,58 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
     window.open(`https://wa.me/55${phone}?text=${encodeURIComponent(linhas)}`, '_blank');
   };
 
+  // =====================================================================
+  // BLOCO 210: CANCELAR APENAS O BOLETO (venda NÃO é cancelada — BLOCO 192
+  // já garantia isso no servidor). Boleto único OU a parcela escolhida.
+  // Depois recarrega: status CANCELADO volta a oferecer "Gerar Novamente"
+  // (boleto único) / "Refazer" (parcela) — a chance de gerar o novo boleto
+  // com a data que o cliente escolheu.
+  // =====================================================================
+  const confirmarCancelamento = async () => {
+    if (busyCancel || !saleId) return;
+    const motivo = motivoCancel.trim();
+    if (!motivo) return;
+    setBusyCancel(true);
+    const r = alvoCancel === 'unico'
+      ? await boletoService.cancelar(saleId, motivo)
+      : await boletoService.cancelarParcela(saleId, alvoCancel, motivo);
+    setBusyCancel(false);
+    if (!r.ok) {
+      setErroLocal(r.erro || 'Falha ao cancelar o boleto.');
+      showToast?.(r.erro || 'Falha ao cancelar o boleto.', 'error');
+      return;
+    }
+    setAlvoCancel('');
+    await refrescarParcelas();
+    showToast?.('Boleto cancelado no banco — a venda segue normal. Agora gere o novo boleto com a data que o cliente escolheu.', 'success');
+  };
+
+  /** BLOCO 210: mini-form de CONFIRMAÇÃO do cancelamento (motivo editável —
+   *  vai registrado no banco; máx. 50 chars, limite da API do Inter). */
+  const formCancel = (alvo: string, rotulo: string) => (
+    <div className="space-y-2 bg-rose-50/70 border border-rose-200 rounded-xl p-2.5">
+      <p className="text-[9px] font-black text-rose-700 uppercase leading-snug">
+        <i className="fa-solid fa-ban mr-1"></i>
+        Cancelar {rotulo}? O cliente NÃO poderá mais pagar ESTE boleto. A venda fica NORMAL — depois toque em GERAR com a nova data escolhida.
+      </p>
+      <label className="block">
+        <span className="text-[8px] font-black uppercase text-gray-500">Motivo no banco (máx. 50)</span>
+        <input type="text" maxLength={50} value={motivoCancel} onChange={e => setMotivoCancel(e.target.value)} aria-label="Motivo do cancelamento"
+          className="w-full border border-rose-200 rounded-lg px-2 py-1.5 text-[11px] font-bold text-gray-800 focus:outline-none focus:border-rose-300" />
+      </label>
+      <div className="grid grid-cols-2 gap-2">
+        <button type="button" onClick={() => setAlvoCancel('')} disabled={busyCancel}
+          className="bg-white border-2 border-gray-200 text-gray-500 font-black py-2.5 rounded-xl text-[8px] uppercase tracking-widest active:scale-95 disabled:opacity-50">
+          <i className="fa-solid fa-arrow-left mr-1"></i>Voltar
+        </button>
+        <button type="button" onClick={() => void confirmarCancelamento()} disabled={busyCancel || !motivoCancel.trim()}
+          className="bg-rose-600 text-white font-black py-2.5 rounded-xl text-[8px] uppercase tracking-widest active:scale-95 disabled:opacity-50">
+          <i className={`fa-solid ${busyCancel ? 'fa-spinner fa-spin' : 'fa-ban'} mr-1`}></i>Cancelar boleto
+        </button>
+      </div>
+    </div>
+  );
+
   const badge = (): { cls: string; icon: string; txt: string } => {
     const s = boleto?.status || 'NAO_GERADO';
     switch (s) {
@@ -736,6 +802,16 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
   // BLOCO 200: divisão aparece se o CLIENT casou a rota 5 (prop podeDividir)
   // OU se o SERVIDOR confirmou (GET /api/boletos → podeDividir).
   const podeDiv = !!podeDividir || podeDivApi;
+  // BLOCO 210: o botão CANCELAR BOLETO aparece só quando o SERVIDOR autorizou
+  // (ADMIN) e o boleto está numa situação cancelável (ativo no banco).
+  const podeCancel = podeCancelApi;
+  const cancelavel = ['A_RECEBER', 'ATRASADO', 'EM_PROCESSAMENTO'];
+  // BLOCO 210: regravar a divisão (Editar divisão) passou a ser permitido
+  // quando as parcelas com cobrança estão TODAS canceladas/expiradas/falhadas
+  // e nenhuma paga — é o fluxo "cancelei o boleto e quero regravar a divisão
+  // com outra data/valor". Cobrança ATIVA ou paga continua travando.
+  const temCobrancaAtivaDiv = parcelas.some(p => p.codigo && !['CANCELADO', 'EXPIRADO', 'FALHA_EMISSAO'].includes(p.status));
+  const temParcelaPagaDiv = parcelas.some(p => ['RECEBIDO', 'MARCADO_RECEBIDO'].includes(p.status));
 
   // ===================================================================
   // BLOCO 199 — MODO PARCELADO: 2 boletos que juntos fecham a venda.
@@ -776,14 +852,14 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
                 Inter, os valores e vencimentos podem ser refeitos aqui
                 (mesma tela do cupom onde aparece "Gerar Boleto").
                 ============================================================ */}
-            {podeDiv && parcelas.length >= 2 && !parcelas.some(p => p.codigo) && (
+            {podeDiv && parcelas.length >= 2 && !temCobrancaAtivaDiv && !temParcelaPagaDiv && (
               <button onClick={() => (formDiv ? setFormDiv(false) : abrirDivisao(true))} aria-expanded={formDiv}
                 className="block w-full bg-white border-2 border-violet-200 text-violet-600 font-black py-2.5 rounded-xl text-[9px] uppercase tracking-widest active:scale-95">
                 <i className={`fa-solid ${formDiv ? 'fa-xmark' : 'fa-pen-to-square'} mr-1`}></i>
                 {formDiv ? 'Fechar edição da divisão' : 'Editar divisão (valores e vencimentos)'}
               </button>
             )}
-            {formDiv && podeDiv && parcelas.length >= 2 && !parcelas.some(p => p.codigo) && (
+            {formDiv && podeDiv && parcelas.length >= 2 && !temCobrancaAtivaDiv && !temParcelaPagaDiv && (
               formDivisao
             )}
             {/* Os DOIS boletos da divisão */}
@@ -853,7 +929,17 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
                         </button>
                       </>
                     )}
+                    {/* BLOCO 210 (pedido do dono): CANCELAR ESTE boleto — só o
+                        boleto da parcela; a venda e a outra parcela seguem.
+                        Depois o botão vira GERAR de novo (nova data). */}
+                    {podeCancel && cancelavel.includes(p.status) && (
+                      <button onClick={() => { setErroLocal(''); setAlvoCancel(alvoCancel === p.id ? '' : p.id); }} disabled={busyCancel}
+                        className="bg-white border-2 border-rose-200 text-rose-600 font-black py-2.5 rounded-xl text-[8px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
+                        <i className="fa-solid fa-ban mr-1"></i>Cancelar
+                      </button>
+                    )}
                   </div>
+                  {alvoCancel === p.id && formCancel(p.id, `Boleto ${p.seq}`)}
                 </div>
               );
             })}
@@ -997,6 +1083,20 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
               </button>
             </div>
           )}
+          {/* ============================================================
+              BLOCO 210 (pedido do dono): CANCELAR BOLETO — junto ao boleto
+              de cada cliente, depois de gerado. Cancela APENAS o boleto (a
+              venda segue) e libera a geração de um NOVO boleto com a data
+              que o cliente escolher (gerou com data X, cliente quer data Y).
+              Só o ADMIN vê o botão; motivo vai registrado no banco Inter.
+              ============================================================ */}
+          {podeCancel && cancelavel.includes(boleto.status) && alvoCancel === '' && (
+            <button onClick={() => { setErroLocal(''); setAlvoCancel('unico'); }} disabled={busyCancel}
+              className="block w-full bg-white border-2 border-rose-200 text-rose-600 font-black py-2.5 rounded-xl text-[9px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
+              <i className="fa-solid fa-ban mr-1"></i>Cancelar boleto (cliente pediu outra data?)
+            </button>
+          )}
+          {podeCancel && alvoCancel === 'unico' && formCancel('unico', 'este boleto')}
           {form && (
             <div className="space-y-2 bg-white/70 rounded-xl p-2.5">
               <div className="grid grid-cols-2 gap-2">

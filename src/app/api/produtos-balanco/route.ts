@@ -60,12 +60,13 @@ export async function GET(request: NextRequest) {
   if (itensErr) return BAD(503, `Banco desatualizado: rode sql/bloco95_xml_produtos.sql (${itensErr.message})`);
 
   // ---- vendas com nota do app (saídas) + itens ----
+  // BLOCO 206 FIX: sales usa client_id (não existe sales.cliente_id).
   let salesRaw: Record<string, unknown>[] | null = null;
   let salesErr: { message: string } | null = null;
   {
     const r = await db
       .from('sales')
-      .select('id, data_venda, nota_numero, nota_status, client_id, cliente_id, sale_items(produto_id, quantidade, preco_venda, custo_unitario)')
+      .select('id, data_venda, nota_numero, nota_status, client_id, sale_items(produto_id, quantidade, preco_venda, custo_unitario)')
       .not('nota_numero', 'is', null)
       .order('data_venda', { ascending: false })
       .limit(5000);
@@ -75,7 +76,7 @@ export async function GET(request: NextRequest) {
   if (salesErr && /custo_unitario/i.test(salesErr.message || '')) {
     const r = await db
       .from('sales')
-      .select('id, data_venda, nota_numero, nota_status, client_id, cliente_id, sale_items(produto_id, quantidade, preco_venda)')
+      .select('id, data_venda, nota_numero, nota_status, client_id, sale_items(produto_id, quantidade, preco_venda)')
       .not('nota_numero', 'is', null)
       .order('data_venda', { ascending: false })
       .limit(5000);

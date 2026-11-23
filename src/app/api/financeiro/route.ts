@@ -77,8 +77,10 @@ export async function POST(request: NextRequest) {
     const desde = inicioDoPeriodo(periodo);
 
     // ---- vendas (entradas) — BLOCO 205.1 FIX: a coluna de sales é data_venda
-    //      (não existe sales.data — erro "column sales.data does not exist") ----
-    let salesQ = db.from('sales').select('id, data_venda, valor_total, valor_pago, metodo_pagamento, status_pagamento, tipo_venda, entrega_status, cliente_id, client_id, vendedor_id, nota_numero, trocas_valor');
+    //      (não existe sales.data — erro "column sales.data does not exist").
+    //      BLOCO 206 FIX: sales usa client_id (não existe sales.cliente_id —
+    //      erro "column sales.cliente_id does not exist" quebrando o portal). ----
+    let salesQ = db.from('sales').select('id, data_venda, valor_total, valor_pago, metodo_pagamento, status_pagamento, tipo_venda, entrega_status, client_id, vendedor_id, nota_numero, trocas_valor');
     if (desde) salesQ = salesQ.gte('data_venda', desde);
     salesQ = salesQ.order('data_venda', { ascending: false }).limit(3000);
     const { data: salesRaw, error: eSales } = await salesQ;
@@ -115,7 +117,7 @@ export async function POST(request: NextRequest) {
     }
 
     // ---- nomes dos clientes/vendedores das últimas vendas ----
-    const clientIds = [...new Set(sales.slice(0, 200).map((s) => String(s.client_id || s.cliente_id || '')))].filter(Boolean);
+    const clientIds = [...new Set(sales.slice(0, 200).map((s) => String(s.client_id || '')))].filter(Boolean);
     const nomes = new Map<string, string>();
     if (clientIds.length > 0) {
       const { data: cl } = await db.from('clients').select('id, nome_fantasia, nome').in('id', clientIds.slice(0, 200));
@@ -133,7 +135,7 @@ export async function POST(request: NextRequest) {
     const ultimasVendas = sales.slice(0, 40).map((s) => ({
       id: s.id,
       data: s.data_venda,
-      cliente: nomes.get(String(s.client_id || s.cliente_id || '')) || 'Cliente',
+      cliente: nomes.get(String(s.client_id || '')) || 'Cliente',
       vendedor: nomesVend.get(String(s.vendedor_id || '')) || '—',
       valor: round2(s.valor_total),
       recebido: round2(ehContaAReceber(vendaCamel(s)) ? s.valor_pago : s.valor_total),

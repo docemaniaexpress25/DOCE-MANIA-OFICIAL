@@ -85,12 +85,15 @@ function comprimirImagem(file: File, maxLado = 640, qualidade = 0.72): Promise<s
 
 export default function GestaoCatalogoPortal(props: GestaoCatalogoPortalProps) {
   const { products } = props;
-  // BLOCO 206 — imagens buscadas na internet nesta sessão (URL por produto).
-  // O banco já gravou pela API; aqui atualiza a UI na hora (o estado do app
-  // só sincroniza no reload). O porId aplica por cima do products.
-  const [imgExtras, setImgExtras] = useState<Map<string, string>>(new Map());
-  const [imgBusy, setImgBusy] = useState(false);
-  const [faltamImagens, setFaltamImagens] = useState<number | null>(null);
+  // BLOCO 208 — AS FOTOS DA INTERNET FORAM ERRADAS (pedido do dono): o antigo
+  // botao COMPLETAR IMAGENS (BLOCO 206) foi aposentado e agora a aba traz o
+  // botao VOLTAR FOTOS COMO ANTES, que limpa APENAS as fotos buscadas na
+  // internet (dominio z-cdn.chatglm.cn). Fotos enviadas pelo dono ficam
+  // intocadas. `limpas` atualiza a UI na hora (o products do pai sincroniza
+  // no reload).
+  const [fotosInternet, setFotosInternet] = useState<number | null>(null);
+  const [revertBusy, setRevertBusy] = useState(false);
+  const [limpas, setLimpas] = useState<Set<string>>(new Set());
   const [bloco15ok, setBloco15ok] = useState<boolean | null>(null);
   const [obsOk, setObsOk] = useState<boolean | null>(null);
   const [vinculosOk, setVinculosOk] = useState<boolean | null>(null);
@@ -130,6 +133,8 @@ export default function GestaoCatalogoPortal(props: GestaoCatalogoPortalProps) {
         if (vivo) setBloco15ok(res.ok && json?.ok === true ? json?.bloco15ok === true : null);
         if (vivo) setObsOk(res.ok && json?.ok === true ? json?.obsOk === true : null);
         if (vivo) setVinculosOk(res.ok && json?.ok === true ? json?.vinculosOk === true : null);
+        // BLOCO 208: quantas fotos da internet ainda estao no catalogo
+        if (vivo) setFotosInternet(res.ok && json?.ok === true && typeof json?.fotosInternet === 'number' ? json.fotosInternet : null);
       } catch {
         if (vivo) setBloco15ok(null);
       }
@@ -166,13 +171,13 @@ export default function GestaoCatalogoPortal(props: GestaoCatalogoPortalProps) {
 
   const porId = useMemo(() => {
     const m = new Map(products.map((p) => [p.id, p]));
-    // BLOCO 206: imagens buscadas na internet sobrepõem (UI instantânea)
-    for (const [id, url] of imgExtras) {
+    // BLOCO 208: fotos da internet revertidas somem da UI na hora
+    for (const id of limpas) {
       const p = m.get(id);
-      if (p) m.set(id, { ...p, imagem: url } as Product);
+      if (p) m.set(id, { ...p, imagem: '' } as Product);
     }
     return m;
-  }, [products, imgExtras]);
+  }, [products, limpas]);
 
   const fotoDaFamilia = (f: { nome: string; variantes: { produtoId: string }[] }): string | null => {
     for (const v of f.variantes) {
@@ -339,37 +344,33 @@ export default function GestaoCatalogoPortal(props: GestaoCatalogoPortalProps) {
     }
   };
 
-  /** BLOCO 206 (regra do dono): completa as imagens SEM foto buscando na
-   *  internet. Rodada de até 4 produtos por clique — o botão mostra quantos
-   *  faltam e o dono repete até zerar. */
-  const completarImagens = async () => {
-    if (imgBusy) return;
-    setImgBusy(true);
+  /** BLOCO 208 (pedido do dono): VOLTAR FOTOS COMO ANTES — apaga APENAS as
+   *  fotos que vieram da busca de internet (dominio z-cdn.chatglm.cn,
+   *  gravadas pelo antigo botao COMPLETAR IMAGENS). Foto enviada pelo dono
+   *  (Storage do Supabase ou URL propria) NAO e tocada. Idempotente. */
+  const reverterImagens = async () => {
+    if (revertBusy) return;
+    setRevertBusy(true);
     try {
       const res = await fetch('/api/admin/catalogo', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify({ acao: 'BUSCAR_IMAGENS' }),
+        body: JSON.stringify({ acao: 'REVERTER_IMAGENS' }),
       });
       const d = await res.json().catch(() => null);
       if (!res.ok || !d?.ok) {
-        props.showToast(String(d?.erro || 'Falha na busca de imagens.'), 'error');
+        props.showToast(String(d?.erro || 'Falha ao reverter as fotos.'), 'error');
         return;
       }
-      const novos = new Map(imgExtras);
-      let achou = 0;
-      for (const r of (d.resultados || []) as { id: string; ok: boolean; url?: string; motivo?: string }[]) {
-        if (r.ok && r.url) { novos.set(r.id, r.url); achou++; }
-      }
-      setImgExtras(novos);
-      const faltam = typeof d.faltam === 'number' ? d.faltam : null;
-      setFaltamImagens(faltam);
-      if (achou > 0) props.showToast(`${achou} foto(s) encontrada(s) na internet!${faltam ? ` Faltam ${faltam} — clique de novo para continuar.` : ' Catálogo completo!'}`);
-      else props.showToast('Nenhuma foto encontrada nesta rodada — clique de novo para tentar os próximos.', 'error');
+      const ids = (d.ids || []) as string[];
+      if (ids.length > 0) setLimpas((prev) => new Set([...prev, ...ids]));
+      setFotosInternet((n) => Math.max(0, (n ?? ids.length) - (d.limpas ?? ids.length)));
+      if ((d.limpas ?? 0) > 0) props.showToast(`Feito! ${d.limpas} foto(s) da internet removida(s) — o catálogo voltou como era antes. Suas fotos enviadas ficam intactas.`);
+      else props.showToast('Nenhuma foto da internet no catálogo — já está como era antes.');
     } catch {
-      props.showToast('Sem conexão para buscar as imagens.', 'error');
+      props.showToast('Sem conexão para reverter as fotos.', 'error');
     } finally {
-      setImgBusy(false);
+      setRevertBusy(false);
     }
   };
 
@@ -397,24 +398,23 @@ export default function GestaoCatalogoPortal(props: GestaoCatalogoPortalProps) {
           </span>
           <span className="text-[9px] font-black text-emerald-600 bg-emerald-50 px-2 py-1 rounded-lg border border-emerald-100 uppercase tracking-tight"><i className="fa-solid fa-shuffle mr-1 text-[9px]"></i>ordem só do portal</span>
         </div>
-        {/* BLOCO 206 (regra do dono): completar IMAGENS buscando na internet */}
-        <div className="flex items-center gap-2 mt-2 flex-wrap">
-          <button
-            onClick={() => void completarImagens()}
-            disabled={imgBusy}
-            className="bg-violet-600 text-white font-black px-4 py-2.5 rounded-xl text-[10px] uppercase tracking-wider active:scale-95 disabled:opacity-60 flex items-center gap-2 shadow-sm"
-            title="Busca fotos dos produtos sem imagem na internet (4 por clique)"
-          >
-            <i className={`fa-solid ${imgBusy ? 'fa-spinner fa-spin' : 'fa-camera-retro'}`}></i>
-            {imgBusy ? 'Buscando fotos...' : 'Completar imagens da internet'}
-          </button>
-          {faltamImagens !== null && (
-            <span className={`text-[9px] font-black px-2 py-1 rounded-lg border uppercase tracking-tight ${faltamImagens === 0 ? 'text-emerald-600 bg-emerald-50 border-emerald-100' : 'text-amber-600 bg-amber-50 border-amber-200'}`}>
-              {faltamImagens === 0 ? 'produtos todos com foto' : `${faltamImagens} produto(s) sem foto`}
-            </span>
-          )}
-          {imgBusy && <span className="text-[9px] font-bold text-gray-400 uppercase">cada rodada busca 4 produtos — clique de novo até zerar</span>}
-        </div>
+        {/* BLOCO 208 (pedido do dono): VOLTAR FOTOS COMO ANTES — limpa as
+            fotos erradas que vieram da busca de internet (BLOCO 206). So
+            aparece enquanto existir foto da internet no catalogo. */}
+        {fotosInternet !== null && fotosInternet > 0 && (
+          <div className="flex items-center gap-2 mt-2 flex-wrap">
+            <button
+              onClick={() => void reverterImagens()}
+              disabled={revertBusy}
+              className="bg-rose-600 text-white font-black px-4 py-2.5 rounded-xl text-[10px] uppercase tracking-wider active:scale-95 disabled:opacity-60 flex items-center gap-2 shadow-sm"
+              title="Remove APENAS as fotos buscadas na internet (as suas fotos enviadas ficam intactas)"
+            >
+              <i className={`fa-solid ${revertBusy ? 'fa-spinner fa-spin' : 'fa-rotate-left'}`}></i>
+              {revertBusy ? 'Revertendo...' : `Voltar fotos como antes (${fotosInternet} da internet)`}
+            </button>
+            <span className="text-[9px] font-bold text-gray-400 uppercase">remove só as fotos erradas da internet — suas fotos enviadas ficam intactas</span>
+          </div>
+        )}
       </div>
 
       {/* BLOCO 89 — VISAO: ESPELHO DO ESTOQUE CENTRAL x MODO GESTAO */}

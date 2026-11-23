@@ -1919,7 +1919,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
               <span className="w-12 h-12 rounded-2xl bg-white/15 flex items-center justify-center shrink-0"><i className="fa-solid fa-store text-xl"></i></span>
               <span className="flex-1 flex flex-col items-start">
                 <span className="text-sm font-black uppercase tracking-widest">Portal do Cliente</span>
-                <span className="text-[9px] font-bold opacity-80 leading-snug">Catálogo que o cliente abre pelo QR do cupom — gerenciar aqui dentro</span>
+                {/* BLOCO 208: o QR do cupom saiu (pedido do dono) — o portal do
+                    cliente segue existindo (extrato/catálogo/pedido). */}
+                <span className="text-[9px] font-bold opacity-80 leading-snug">Catálogo que o cliente acessa pelo portal — gerenciar aqui dentro</span>
               </span>
               <i className="fa-solid fa-arrow-right text-xs opacity-70"></i>
             </button>

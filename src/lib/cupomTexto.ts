@@ -17,10 +17,6 @@ export interface CupomTextoInput {
   client: Pick<Client, 'nomeFantasia' | 'telefone'> & Partial<Client>;
   products: Pick<Product, 'id' | 'nome'>[];
   width: '56MM' | '80MM';
-  /** BLOCO 125: URL do portal do cliente — quando presente, o cupom imprime
-   *  o QR do catálogo + legenda. Falsy = sai sem QR (flag do admin desligado
-   *  ou cliente sem portal_code). */
-  qrCatalogo?: string;
 }
 
 const FORMA_LABEL: Record<string, string> = {
@@ -120,7 +116,7 @@ export function formaPagamentoDeSale(s: { metodoPagamento?: string; detalhePagam
   return { forma, condicao };
 }
 
-export function gerarCupomTexto({ sale, client, products, width, qrCatalogo }: CupomTextoInput): string {
+export function gerarCupomTexto({ sale, client, products, width }: CupomTextoInput): string {
   const totalWidth = width === '80MM' ? 48 : 32;
 
   // BLOCO 40: datas do cupom em America/Sao_Paulo — o cupom e UNICO (mesmo
@@ -375,18 +371,11 @@ export function gerarCupomTexto({ sale, client, products, width, qrCatalogo }: C
   t += '='.repeat(totalWidth) + '\n';
 
   // ============================================================
-  // BLOCO 125 — QR DO CATALOGO DO CLIENTE (regra do dono): o cliente aponta
-  // a câmera e abre o PORTAL dele (extrato, catálogo e pedido de recompra).
-  //  - Bluetooth: [[QR:...]] vira QR Code ESC/POS real (model 2, centrado);
-  //  - USB do PC: o marcador vira IMAGEM no papel virtual (usbPrint);
-  //  - Copiar/WhatsApp: o marcador vira a URL (link clicável).
-  // A legenda entra no papel; no preview as duas linhas saem (imagem própria
-  // do preview — cupomSegmentos/cupomSemMarcadores tratam os marcadores).
+  // BLOCO 208 (pedido do dono): o QR do portal do cliente saiu do cupom —
+  // o papel volta a terminar direto no pagamento + agradecimento. Os QRs da
+  // NFC-e (consulta SEFAZ) e do PIX continuam nos fluxos onde sempre
+  // estiveram (danfeTexto/danfe80 e pagamento).
   // ============================================================
-  if (qrCatalogo) {
-    t += `[[QR:${qrCatalogo}]]\n`;
-    t += center(CUPOM_QR_LEGENDA, totalWidth) + '\n';
-  }
 
   t += '-'.repeat(totalWidth) + '\n';
   t += center('OBRIGADO PELA PREFERENCIA!', totalWidth) + '\n';
@@ -406,17 +395,6 @@ export function gerarCupomTexto({ sale, client, products, width, qrCatalogo }: C
 export const CUPOM_PEQ_ABRE = '[[PEQ]]';
 export const CUPOM_PEQ_FECHA = '[[FIMPEQ]]';
 
-// ============================================================
-// BLOCO 125: marcador/legenda do QR do catálogo no cupom.
-//   [[QR:<url>]]             -> QR Code no papel (ESC/POS no BT, imagem no USB)
-//   CUPOM_QR_LEGENDA         -> "APONTE A CAMERA - CATALOGO" (centralizada)
-// O preview (Cupom.tsx) desenha o QR como imagem e NÃO mostra estas duas
-// linhas (cupomSegmentos pula); copiar/WhatsApp trocam o marcador pela URL
-// (link clicável) e mantêm a legenda (cupomSemMarcadores).
-// ============================================================
-export const CUPOM_QR_LEGENDA = 'APONTE A CAMERA - CATALOGO';
-const RE_LINHA_QR = /^\[\[QR:(.+)\]\]$/;
-
 /** Divide o texto do cupom em segmentos normais/pequenos (para o preview) */
 export function cupomSegmentos(texto: string): { txt: string; pequeno: boolean }[] {
   const segs: { txt: string; pequeno: boolean }[] = [];
@@ -429,24 +407,16 @@ export function cupomSegmentos(texto: string): { txt: string; pequeno: boolean }
       pequeno = linha === CUPOM_PEQ_ABRE;
       continue;
     }
-    // BLOCO 125: o QR e a legenda NÃO entram como texto no preview — o
-    // Cupom.tsx desenha a imagem do QR (com a própria legenda) no lugar.
-    if (RE_LINHA_QR.test(linha) || linha === CUPOM_QR_LEGENDA) continue;
     buf += (buf ? '\n' : '') + linhaBruta;
   }
   if (buf) segs.push({ txt: buf, pequeno });
   return segs;
 }
 
-/** Texto do cupom SEM marcadores (para copiar / WhatsApp).
- *  BLOCO 125: a linha [[QR:url]] vira a URL — link clicável no WhatsApp. */
+/** Texto do cupom SEM marcadores (para copiar / WhatsApp). */
 export function cupomSemMarcadores(texto: string): string {
   return String(texto || '')
     .split('\n')
-    .map(l => {
-      const m = RE_LINHA_QR.exec(l.trim());
-      return m ? m[1].trim() : l;
-    })
     .filter(l => l.trim() !== CUPOM_PEQ_ABRE && l.trim() !== CUPOM_PEQ_FECHA)
     .join('\n');
 }

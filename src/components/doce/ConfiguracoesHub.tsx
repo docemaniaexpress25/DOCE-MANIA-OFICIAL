@@ -130,8 +130,8 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
   const [erro, setErro] = useState<string | null>(null);
   const [fiscal, setFiscal] = useState<FiscalConfig | null>(null);
   const [boleto, setBoleto] = useState<BoletoConfig | null>(null);
-  // BLOCO 125 — QR do catálogo do cliente no cupom (default LIGADO)
-  const [qrCat, setQrCat] = useState(true);
+  // BLOCO 208: o switch do QR do catálogo no cupom saiu (o QR foi removido do
+  // cupom impresso a pedido do dono — o papel sai limpo sem QR do portal).
   const [focoWebhook, setFocoWebhook] = useState<FocoWebhook | null>(null);
   const [processandoHook, setProcessandoHook] = useState(false);
 
@@ -206,8 +206,6 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
       });
       setMsgPadraoInput(String(d.boleto?.mensagemPadrao || ''));
       setMsgCobrancaInput(String(d.boleto?.cobrancaMensagem || ''));
-      // BLOCO 125: flag do QR do catálogo (geral.qrCatalogoNoCupom)
-      setQrCat(d.geral?.qrCatalogoNoCupom !== false);
       setFocoWebhook(
         d.focoWebhook
           ? {
@@ -276,16 +274,6 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
     setSalvandoMsgCobranca(true);
     await postConfig({ cobrancaMensagem: msgCobrancaInput }, 'Mensagem de cobrança salva! Vale para o Portal de Cobranças.');
     setSalvandoMsgCobranca(false);
-  };
-
-  /* ===== BLOCO 125 — switch do QR do catálogo no cupom (otimista) ===== */
-  const alternarQrCatalogo = async (novo: boolean) => {
-    const prev = qrCat;
-    setQrCat(novo);
-    setSalvandoSwitch('qrCatalogoNoCupom');
-    const ok = await postConfig({ qrCatalogoNoCupom: novo }, 'Preferência salva!');
-    if (!ok) setQrCat(prev);
-    setSalvandoSwitch(null);
   };
 
   /* ===== emitente: CNPJ 14 dígitos obrigatório + diff por campo ===== */
@@ -829,35 +817,6 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
               </div>
             </div>
             <p className="text-[8px] text-gray-400 font-semibold leading-snug">Também edita no próprio Portal de Cobranças (botão “Mensagem de cobrança”) — é o mesmo texto.</p>
-          </div>
-        </div>
-      )}
-
-      {/* ===== CARD 3 — QR CODE / CATALOGO (BLOCO 125) ===== */}
-      {!carregando && !erro && (
-        <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm mx-2 space-y-4">
-          <h3 className="font-black text-gray-800 uppercase text-xs tracking-wider"><i className="fa-solid fa-qrcode text-slate-600 mr-2"></i>QR Code no cupom</h3>
-          <p className="text-[10px] text-gray-400 font-semibold leading-snug">O cupom térmico pode sair com um QR que abre o <strong className="text-gray-500">portal do cliente</strong> (extrato de compras, catálogo com preços e pedido de recompra) — a câmera do cliente lê e o portal abre na hora.</p>
-
-          <div className="flex items-center justify-between gap-3 border-t border-gray-50 pt-3">
-            <div className="flex items-start gap-3 pr-2">
-              <i className="fa-solid fa-qrcode text-emerald-500 mt-1"></i>
-              <div>
-                <p className="text-[11px] font-bold text-gray-600 uppercase">QR do catálogo do cliente no cupom</p>
-                <p className="text-[9px] text-gray-400 font-semibold leading-snug mt-0.5">Imprime o QR + “APONTE A CAMERA - CATALOGO” no papel. No WhatsApp/copiar o link vai clicável. Funciona para os clientes que têm código do portal no cadastro.</p>
-              </div>
-            </div>
-            <Switch on={qrCat} disabled={salvandoSwitch === 'qrCatalogoNoCupom'} onClick={() => alternarQrCatalogo(!qrCat)} />
-          </div>
-
-          <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4">
-            <p className="text-[9px] font-black text-slate-500 uppercase flex items-center gap-1.5 mb-1.5"><i className="fa-solid fa-circle-info text-teal-600"></i>Como o QR chega ao cliente</p>
-            <ul className="text-[9px] font-semibold text-gray-500 leading-snug space-y-1 list-disc list-inside">
-              <li>Impressora Bluetooth: QR nativo da térmica (crisp e rápido).</li>
-              <li>Térmica USB do PC e iPhone: QR como imagem no papel.</li>
-              <li>WhatsApp: a mensagem leva o link clicável do portal do cliente.</li>
-              <li>LIGADO é o padrão — desligue aqui e os próximos cupons saem sem o QR (os aparelhos atualizam em até 5 minutos).</li>
-            </ul>
           </div>
         </div>
       )}

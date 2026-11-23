@@ -4,14 +4,15 @@ import { getServiceClient } from '@/lib/serverSupabase';
  * BLOCO 108 — ERP CONFIG (central de automações da tela ERP Fiscal & Automações).
  *
  * Uma unica coluna jsonb em app_settings (id='global_settings') guarda tudo:
- *   { nfeAutoPe, cupomDuploNfc, boletoAutoAReceber, qrCatalogoNoCupom,
+ *   { nfeAutoPe, cupomDuploNfc, boletoAutoAReceber,
  *     emitente: { cnpj, ie, razao, fantasia, logradouro, numero, bairro,
  *                 municipio, uf, cep, regime } }
  *
  * Regras:
  * - Tudo com default OFF (nada muda na rotina das vendedoras sem o dono ligar).
- * - EXCECAO: qrCatalogoNoCupom (BLOCO 125) nasce LIGADO — o dono pediu o QR
- *   do catalogo no cupom; o switch no hub ERP Fiscal desliga quando quiser.
+ * - BLOCO 208: o flag qrCatalogoNoCupom (BLOCO 125) foi APOSENTADO — o QR do
+ *   portal saiu do cupom impresso (pedido do dono). Valor antigo no jsonb
+ *   fica ignorado.
  * - Emitente aqui SOBRESCREVE as env vars FOCUS_NFE_* no payload — assim o
  *   dono cadastra/atualiza o CNPJ emissor pela tela, sem deploy.
  * - Degradacao graciosa: coluna ausente (SQL 108 nao rodou) = defaults,
@@ -36,8 +37,6 @@ export interface ErpConfig {
   nfeAutoPe: boolean;
   cupomDuploNfc: boolean;
   boletoAutoAReceber: boolean;
-  /** BLOCO 125: QR do catalogo do cliente impresso no cupom (default LIGADO). */
-  qrCatalogoNoCupom: boolean;
   /** BLOCO 152: texto padrao do boleto — vai na LINHA 2 do campo mensagem
    *  da cobranca do Inter (PDF na seção "INFORMAÇÕES DE RESPONSABILIDADE DO
    *  BENEFICIÁRIO", ate 78 caracteres). Vazio = nao envia linha 2. */
@@ -59,7 +58,6 @@ export const ERP_CONFIG_DEFAULT: ErpConfig = {
   nfeAutoPe: false,
   cupomDuploNfc: false,
   boletoAutoAReceber: false,
-  qrCatalogoNoCupom: true,
   boletoMensagemPadrao: '',
   cobrancaMensagem: COBRANCA_MENSAGEM_DEFAULT,
   emitente: { cnpj: '', ie: '', razao: '', fantasia: '', logradouro: '', numero: '', bairro: '', municipio: '', uf: 'RS', cep: '', regime: 1 },
@@ -100,8 +98,6 @@ export async function lerErpConfig(supabase?: any): Promise<ErpConfig> {
       nfeAutoPe: raw.nfeAutoPe === true,
       cupomDuploNfc: raw.cupomDuploNfc === true,
       boletoAutoAReceber: raw.boletoAutoAReceber === true,
-      // BLOCO 125: ausente no jsonb (flag novo) = LIGADO (regra do dono)
-      qrCatalogoNoCupom: raw.qrCatalogoNoCupom !== false,
       // BLOCO 152: texto padrao do boleto (linha 2 da mensagem da cobranca)
       boletoMensagemPadrao: String(raw.boletoMensagemPadrao || '').slice(0, 78),
       // BLOCO 205: mensagem de cobrança (ausente no jsonb = default do dono)
@@ -122,7 +118,6 @@ export async function salvarErpConfig(parcial: Partial<ErpConfig>, supabase?: an
       nfeAutoPe: typeof parcial.nfeAutoPe === 'boolean' ? parcial.nfeAutoPe : atual.nfeAutoPe,
       cupomDuploNfc: typeof parcial.cupomDuploNfc === 'boolean' ? parcial.cupomDuploNfc : atual.cupomDuploNfc,
       boletoAutoAReceber: typeof parcial.boletoAutoAReceber === 'boolean' ? parcial.boletoAutoAReceber : atual.boletoAutoAReceber,
-      qrCatalogoNoCupom: typeof parcial.qrCatalogoNoCupom === 'boolean' ? parcial.qrCatalogoNoCupom : atual.qrCatalogoNoCupom,
       // BLOCO 152: texto padrao do boleto (vazio = limpa a linha 2)
       boletoMensagemPadrao: parcial.boletoMensagemPadrao !== undefined ? String(parcial.boletoMensagemPadrao || '').trim().slice(0, 78) : atual.boletoMensagemPadrao,
       // BLOCO 205: mensagem de cobrança (vazio = volta pro default)

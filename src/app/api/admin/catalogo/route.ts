@@ -11,16 +11,23 @@ import { devBridge, getServiceClient, isServerSupabaseConfigured } from '@/lib/s
  * products.unidades_por_caixa) e do Bloco 18 (products.obs) para a aba saber
  * se FOTO/CAIXA/OBS ja podem salvar de verdade — e se existe product_order
  * (ordem do PDV) aplicada. Renomear/reordenar NAO dependem deste SQL
- * (colunas de sempre).
+ * (colunas de sempre). BLOCO 208: devolve tambem `fotosInternet`, quantos
+ * produtos ainda tem foto buscada na internet (BLOCO 206, aposentado).
  *
- * POST /api/admin/catalogo { acao: 'BUSCAR_IMAGENS' }   [ADMIN]
- *   BLOCO 206 (regra do dono): completa as IMAGENS dos produtos SEM foto
- *   buscando na INTERNET (servico de busca de imagens do SDK, re-hospedadas
- *   em OSS — links estaveis). Processa ate 4 produtos POR CHAMADA (cada busca
- *   demora alguns segundos); o botao mostra quantos faltam e o dono clica
- *   de novo ate zerar. A foto entra em products.imagem (vira a foto da
- *   familia no portal). Produto com foto NAO e tocado.
+ * POST /api/admin/catalogo { acao: 'REVERTER_IMAGENS' }   [ADMIN]
+ *   BLOCO 208 (pedido do dono): AS FOTOS DA INTERNET ESTAVAM ERRADAS —
+ *   limpa de products.imagem APENAS as URLs buscadas na internet pelo
+ *   antigo botao COMPLETAR IMAGENS (BLOCO 206, dominio z-cdn.chatglm.cn).
+ *   As fotos que o dono enviou pelo celular / colou URL (Supabase Storage
+ *   ou qualquer outro dominio) NAO sao tocadas — o catalogo volta
+ *   EXATAMENTE ao estado de antes da busca. Idempotente: rodar 2x nao faz
+ *   nada na segunda vez (0 linhas).
  */
+
+// BLOCO 208: as fotos buscadas na internet pelo BLOCO 206 foram re-hospedadas
+// pelo servico de busca de imagens neste dominio (links estaveis OSS) — e o
+// UNICO marcador que garante que a foto veio da busca e nao do upload do dono.
+const PREFIXO_FOTO_INTERNET = 'https://z-cdn.chatglm.cn/';
 
 export async function GET(request: NextRequest) {
   if (!isServerSupabaseConfigured()) {
@@ -88,23 +95,22 @@ export async function GET(request: NextRequest) {
       totalEmOrdem = Array.isArray(ordem) ? ordem.length : 0;
     } catch { /* settings opcional */ }
 
-    return NextResponse.json({ ok: true, bloco15ok, obsOk, vinculosOk, totalEmOrdem });
+    // BLOCO 208: quantas fotos da internet (BLOCO 206) ainda estao no catalogo
+    let fotosInternet = 0;
+    try {
+      const { data: imgs } = await supabase
+        .from('products')
+        .select('id, imagem')
+        .like('imagem', `${PREFIXO_FOTO_INTERNET}%`)
+        .limit(2000);
+      fotosInternet = ((imgs || []) as Record<string, unknown>[]).length;
+    } catch { /* coluna sem foto / sem acesso — best effort */ }
+
+    return NextResponse.json({ ok: true, bloco15ok, obsOk, vinculosOk, totalEmOrdem, fotosInternet });
   } catch (e: any) {
     console.error('[api/admin/catalogo] erro:', e?.message);
     return NextResponse.json({ ok: false, erro: 'Erro interno' }, { status: 500 });
   }
-}
-
-const POR_RODADA = 4;
-
-/** Limpa tamanho/abreviação do nome para a busca ficar on-topic ("Ruffles 115g" -> "Ruffles"). */
-function nomeParaBusca(nome: string): string {
-  const limpo = String(nome || '')
-    .replace(/\s*\d+(?:[.,]\d+)?\s*(g|gr|ml|l|kg|un|unds?|x)\s*$/i, '')
-    .replace(/\s*\d+(?:[.,]\d+)?\s*(g|gr|ml|l|kg|un|unds?|x)\b/ig, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return limpo || String(nome || 'produto');
 }
 
 export async function POST(request: NextRequest) {
@@ -118,56 +124,46 @@ export async function POST(request: NextRequest) {
   }
 
   const body = await request.json().catch(() => ({} as Record<string, unknown>));
-  if (String(body.acao || '') !== 'BUSCAR_IMAGENS') {
+  if (String(body.acao || '') !== 'REVERTER_IMAGENS') {
     return NextResponse.json({ ok: false, erro: 'Acao desconhecida.' }, { status: 400 });
   }
 
   try {
     const supabase = getServiceClient();
-    const { data: todos } = await supabase.from('products').select('id, nome, imagem, ativo').limit(2000);
-    const semFoto = ((todos || []) as Record<string, unknown>[])
-      .filter((p) => p.ativo !== false && !String(p.imagem || '').trim())
-      .slice(0, POR_RODADA);
 
-    const resultados: { id: string; nome: string; ok: boolean; url?: string; motivo?: string }[] = [];
-    if (semFoto.length > 0) {
-      const ZAI = (await import('z-ai-web-dev-sdk')).default;
-      const zai = await ZAI.create();
-      for (const p of semFoto) {
-        const nome = String(p.nome || 'Produto');
-        const query = `${nomeParaBusca(nome)} produto embalagem`;
-        try {
-          const r = await zai.images.search.create({ query, count: 3, gl: 'us', rank: false });
-          const url = String((r?.results || [])[0]?.original_url || '');
-          if (r?.success && url) {
-            const { error: eUpd } = await supabase.from('products').update({ imagem: url }).eq('id', p.id);
-            if (eUpd) resultados.push({ id: String(p.id), nome, ok: false, motivo: eUpd.message });
-            else resultados.push({ id: String(p.id), nome, ok: true, url });
-          } else {
-            resultados.push({ id: String(p.id), nome, ok: false, motivo: r?.error || 'busca sem resultado' });
-          }
-        } catch (e: unknown) {
-          resultados.push({ id: String(p.id), nome, ok: false, motivo: e instanceof Error ? e.message : 'falha na busca' });
-        }
-      }
+    // 1) Acha TODAS as fotos que vieram da busca de internet (dominio propio).
+    //    Foto do dono (Storage do Supabase, data URL ou outro dominio) = intocavel.
+    const { data: alvo, error: eSel } = await supabase
+      .from('products')
+      .select('id, nome, imagem')
+      .like('imagem', `${PREFIXO_FOTO_INTERNET}%`)
+      .limit(2000);
+    if (eSel) {
+      console.error('[api/admin/catalogo] REVERTER_IMAGENS select:', eSel.message);
+      return NextResponse.json({ ok: false, erro: 'Falha ao localizar as fotos da internet.' }, { status: 500 });
     }
 
-    // quantos ainda faltam (depois desta rodada)
-    let faltam = 0;
-    try {
-      const { data: depois } = await supabase.from('products').select('id, imagem, ativo').limit(2000);
-      faltam = ((depois || []) as Record<string, unknown>[]).filter((p) => p.ativo !== false && !String(p.imagem || '').trim()).length;
-    } catch { /* contagem best-effort */ }
+    const linhas = ((alvo || []) as Record<string, unknown>[]).filter((p) => String(p.imagem || '').startsWith(PREFIXO_FOTO_INTERNET));
+
+    // 2) Zera a imagem desses produtos (voltam a ficar como eram: sem foto,
+    //    ou com a foto do dono quando ela existia em outra linha da familia).
+    let limpas = 0;
+    const falhas: { id: string; erro: string }[] = [];
+    for (const p of linhas) {
+      const { error } = await supabase.from('products').update({ imagem: null }).eq('id', p.id);
+      if (error) falhas.push({ id: String(p.id), erro: error.message });
+      else limpas++;
+    }
 
     return NextResponse.json({
       ok: true,
-      processados: resultados.length,
-      achados: resultados.filter((r) => r.ok).length,
-      faltam,
-      resultados,
+      limpas,
+      falhas,
+      ids: linhas.map((p) => String(p.id)),
+      nomes: linhas.map((p) => String(p.nome || '')),
     });
   } catch (e: unknown) {
-    console.error('[api/admin/catalogo] BUSCAR_IMAGENS erro:', e instanceof Error ? e.message : e);
-    return NextResponse.json({ ok: false, erro: 'Erro na busca de imagens' }, { status: 500 });
+    console.error('[api/admin/catalogo] REVERTER_IMAGENS erro:', e instanceof Error ? e.message : e);
+    return NextResponse.json({ ok: false, erro: 'Erro ao reverter as imagens' }, { status: 500 });
   }
 }

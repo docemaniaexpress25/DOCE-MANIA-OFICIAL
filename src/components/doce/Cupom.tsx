@@ -27,10 +27,9 @@ import { isIOSDevice, TEXTO_IMPRESSAO_IOS, TITULO_IMPRESSAO_IOS } from '@/lib/io
 import { isDavidVendedor } from '@/lib/equipe';
 // BLOCO 111: impressão térmica USB do PC — canal BT x USB persistente por dispositivo
 import { imprimirViaUsb, lerCanalImpressao, salvarCanalImpressao, CanalImpressao } from '@/lib/usbPrint';
-// BLOCO 125: QR do CATÁLOGO do cliente no cupom (flag do admin no hub ERP Fiscal)
-import QRCode from 'qrcode';
-import { lerQrCatalogoCupom, urlCatalogoCliente } from '@/lib/qrCatalogo';
-import { CUPOM_QR_LEGENDA } from '@/lib/cupomTexto';
+// BLOCO 208: o QR do portal do cliente saiu do cupom impresso (pedido do
+// dono — o papel volta a sair limpo, sem QR). Os QRs de NFC-e (SEFAZ) e PIX
+// continuam normalmente em DANFE/pagamento.
 
 type PrinterWidth = '56MM' | '80MM';
 
@@ -217,31 +216,6 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
   const [clientLocal, setClientLocal] = useState<Client>(client);
   useEffect(() => { setClientLocal(client); }, [client]);
 
-  // ============================================================
-  // BLOCO 125 — QR DO CATALOGO DO CLIENTE NO CUPOM.
-  // O admin liga/desliga no hub ERP Fiscal (erp_config). Com o flag ON e o
-  // cliente com portal_code, o papel ganha o QR que abre o portal do cliente
-  // (extrato, catálogo, pedido) — Bluetooth imprime QR nativo ESC/POS, USB
-  // imprime imagem, copiar/WhatsApp levam o link clicável.
-  // ============================================================
-  const [qrCatalogoAtivo, setQrCatalogoAtivo] = useState<boolean>(false);
-  useEffect(() => {
-    let vivo = true;
-    lerQrCatalogoCupom().then((v) => { if (vivo) setQrCatalogoAtivo(v); }).catch(() => { /* default OFF no erro */ });
-    return () => { vivo = false; };
-  }, []);
-  const qrUrl = urlCatalogoCliente(clientLocal?.portalCodigo);
-  const [qrImg, setQrImg] = useState<string>('');
-  useEffect(() => {
-    if (!qrUrl) { setQrImg(''); return; }
-    let vivo = true;
-    QRCode.toDataURL(qrUrl, { margin: 1, errorCorrectionLevel: 'M', width: 320 })
-      .then((d) => { if (vivo) setQrImg(d); })
-      .catch(() => { if (vivo) setQrImg(''); });
-    return () => { vivo = false; };
-  }, [qrUrl]);
-  const qrLigado = qrCatalogoAtivo && !!qrUrl && !!qrImg;
-
   const [contatoAberto, setContatoAberto] = useState(false);
   const [zapStr, setZapStr] = useState('');
   const [gpsSt, setGpsSt] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
@@ -350,15 +324,13 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
 
   // BLOCO 13: texto do cupom vem do gerador COMPARTILHADO (cupomTexto.ts) —
   // vendedor, secretario, entregador e admin imprimem EXATAMENTE o mesmo cupom.
-  // BLOCO 125: com o flag do admin ON + portal_code, o papel sai com o QR do
-  // catálogo do cliente (BT = QR nativo, USB = imagem, copiar/WhatsApp = URL).
+  // BLOCO 208: sem QR do portal no papel (pedido do dono).
   const generateText = (width: PrinterWidth): string => {
     return gerarCupomTexto({
       sale: sale as any,
       client: clientLocal as any,
       products: products as any,
       width,
-      qrCatalogo: qrLigado ? qrUrl : undefined,
     });
   };
 
@@ -370,7 +342,7 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
   const [cupomImg, setCupomImg] = useState<string>('');
   useEffect(() => {
     if (!imprAberto) return;
-    const texto = cupomSemMarcadores(gerarCupomTexto({ sale: saleLocal as any, client: clientLocal as any, products: products as any, width: printWidth, qrCatalogo: qrLigado ? qrUrl : undefined }));
+    const texto = cupomSemMarcadores(gerarCupomTexto({ sale: saleLocal as any, client: clientLocal as any, products: products as any, width: printWidth }));
     const linhas = texto.split('\n').filter((l) => !l.includes('[['));
     const largura = printWidth === '80MM' ? 576 : 384;
     const fs = printWidth === '80MM' ? 15 : 14;
@@ -387,7 +359,7 @@ const Cupom: React.FC<CupomProps> = ({ sale, client, products, onClose, onBack, 
     ctx.textBaseline = 'top';
     linhas.forEach((l, i) => ctx.fillText(l, 14, 20 + i * linhaH));
     setCupomImg(canvas.toDataURL('image/png'));
-  }, [imprAberto, printWidth, saleLocal, clientLocal, products, qrLigado, qrUrl]);
+  }, [imprAberto, printWidth, saleLocal, clientLocal, products]);
 
   const handlePrint = useCallback(async () => {
     const doPrint = async () => {
@@ -579,15 +551,7 @@ Total: R$ ${(sale.valorTotal || 0).toFixed(2)}`, icon:'fa-solid fa-print', onCon
             ) : (
               <React.Fragment key={i}>{seg.txt}</React.Fragment>
             ))}
-            {/* BLOCO 125: QR do catálogo — no papel sai depois do pagamento; no
-                preview a imagem entra aqui (as linhas [[QR]]/legenda são
-                puladas no texto para não duplicar). */}
-            {qrLigado && (
-              <span className="block text-center pt-1">
-                <img src={qrImg} alt="QR Code do catálogo do cliente" className="w-24 h-24 mx-auto" />
-                <span className="block text-[8px] font-black tracking-widest text-gray-500 uppercase mt-1">{CUPOM_QR_LEGENDA}</span>
-              </span>
-            )}
+            {/* BLOCO 208: sem QR do portal no cupom (pedido do dono). */}
           </div>
           {(sale.itens || []).length > 5 && (
             <p className="text-[8px] text-gray-300 text-center mt-1.5 uppercase font-black tracking-widest">

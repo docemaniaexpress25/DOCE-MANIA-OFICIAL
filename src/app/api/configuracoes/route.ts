@@ -25,7 +25,7 @@ import { isInterConfigured } from '@/lib/interBoleto';
  *         pela própria API /v2/hooks — atualizacao de status em tempo real).
  *
  * POST /api/configuracoes  [ADMIN]
- *      { nfeAutoPe?, cupomDuploNfc?, boletoAutoAReceber?, qrCatalogoNoCupom?, emitente? {...} }
+ *      { nfeAutoPe?, cupomDuploNfc?, boletoAutoAReceber?, emitente? {...} }
  *      -> merge no app_settings.erp_config (jsonb). Emitente gravado aqui
  *         SOBRESCREVE as env vars no payload da Focus (sem deploy).
  *
@@ -132,8 +132,6 @@ export async function GET(req: NextRequest) {
     geral: {
       nfeAutoPe: erp.nfeAutoPe,
       cupomDuploNfc: erp.cupomDuploNfc,
-      // BLOCO 125: QR do catalogo do cliente no cupom (hub ERP Fiscal)
-      qrCatalogoNoCupom: erp.qrCatalogoNoCupom,
     },
   });
 }
@@ -217,8 +215,6 @@ export async function POST(req: NextRequest) {
   if (typeof body.nfeAutoPe === 'boolean') parcial.nfeAutoPe = body.nfeAutoPe;
   if (typeof body.cupomDuploNfc === 'boolean') parcial.cupomDuploNfc = body.cupomDuploNfc;
   if (typeof body.boletoAutoAReceber === 'boolean') parcial.boletoAutoAReceber = body.boletoAutoAReceber;
-  // BLOCO 125: switch do QR do catalogo no cupom (card proprio no hub)
-  if (typeof body.qrCatalogoNoCupom === 'boolean') parcial.qrCatalogoNoCupom = body.qrCatalogoNoCupom;
   // BLOCO 152: texto padrao do boleto (mensagem do beneficiario no PDF do Inter)
   if (typeof body.boletoMensagemPadrao === 'string') parcial.boletoMensagemPadrao = body.boletoMensagemPadrao;
   // BLOCO 205: mensagem personalizada de cobrança (Portal de Cobranças + hub)

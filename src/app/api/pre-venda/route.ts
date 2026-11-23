@@ -1694,6 +1694,30 @@ export async function POST(req: NextRequest) {
 
       const valorTotal = round2(itens.reduce((a: number, i: any) => a + i.quantidade * i.precoVenda, 0));
 
+      // -----------------------------------------------------------------
+      // BLOCO 212 (desconto da TROCA sumia na edição): a pré-venda nasce com
+      // valor_total = subtotal − troca e o "(Troca: R$ x)" no detalhe. Ao
+      // editar itens, o servidor recalculava a SOMA CHEIA e apagava o
+      // desconto — o cliente passava a dever o que foi combinado. Agora o
+      // desconto original (soma antiga − total gravado) é reaplicado e o
+      // texto "(Troca: ...)" é preservado no detalhe.
+      // -----------------------------------------------------------------
+      let descontoTroca = 0;
+      let trocaTxt = '';
+      try {
+        const { data: itensAntigos } = await supabase
+          .from('sale_items')
+          .select('quantidade, preco_venda')
+          .eq('sale_id', saleId);
+        const somaAntiga = round2(((itensAntigos as Record<string, unknown>[]) || [])
+          .reduce((a: number, i: Record<string, unknown>) => a + Number(i.quantidade || 0) * Number(i.preco_venda || 0), 0));
+        descontoTroca = Math.max(0, Math.round((somaAntiga - Number(saleRow.valor_total || 0)) * 100) / 100);
+        const trocaM = String(saleRow.detalhe_pagamento || '').match(/\(Troca: [^)]*\)/);
+        if (trocaM) trocaTxt = ` ${trocaM[0]}`;
+        if (descontoTroca > 0) console.log(`[api/pre-venda] EDITAR_PEDIDO preserva desconto de troca: R$ ${descontoTroca.toFixed(2)}`);
+      } catch { /* sonda best-effort: sem itens antigos, sem desconto */ }
+      const valorTotalFinal = round2(Math.max(0, valorTotal - descontoTroca));
+
       // BLOCO 88: pedido RESERVADO? (estoque baixa no registro agora). A edicao
       // precisa acompanhar a reserva: delta por produto (novo - antigo).
       let wasReserved = false;
@@ -1728,15 +1752,17 @@ export async function POST(req: NextRequest) {
       }
       const upd: Record<string, unknown> = pagoNaVisita
         ? {
-            valor_total: valorTotal, valor_pago: valorTotal,
+            valor_total: valorTotalFinal, valor_pago: valorTotalFinal,
             metodo_pagamento: forma === 'PIX' ? 'PIX' : 'DINHEIRO',
-            detalhe_pagamento: `PAGO NA VISITA pelo vendedor (${formaLabel}) — entrega sem cobranca${notaTxt}`,
+            detalhe_pagamento: `PAGO NA VISITA pelo vendedor (${formaLabel})${trocaTxt} — entrega sem cobranca${notaTxt}`,
             status_pagamento: 'PAGO', data_vencimento: null,
           }
         : {
-            valor_total: valorTotal, valor_pago: 0,
+            // BLOCO 212: valorTotalFinal = soma dos itens − desconto da troca
+            // (antes a edição apagava o desconto combinado com o cliente).
+            valor_total: valorTotalFinal, valor_pago: 0,
             metodo_pagamento: 'A_PRAZO',
-            detalhe_pagamento: `PRE-VENDA — cobrar ${forma} na entrega (${etiquetaCond})${notaTxt}`,
+            detalhe_pagamento: `PRE-VENDA — cobrar ${forma} na entrega (${etiquetaCond})${trocaTxt}${notaTxt}`,
             status_pagamento: 'PENDENTE', data_vencimento: vencimentoIso,
           };
 
@@ -2336,6 +2362,11 @@ export async function POST(req: NextRequest) {
     }
 
     if (acao === 'REABRIR') {
+      // BLOCO 212 (guard que faltava): venda ENTREGUE não reabre — só pedido
+      // FALHOU/PENDENTE volta para a fila (mesmo guard das ações vizinhas).
+      if (saleRow.entrega_status === 'ENTREGUE') {
+        return NextResponse.json({ ok: false, error: 'Pedido ja entregue — nao pode voltar para a fila.' }, { status: 409 });
+      }
       // Fila continua: o pedido falhado VOLTA para a fila (PENDENTE) — nada se perde.
       const { error: upErr } = await supabase.from('sales').update({ entrega_status: 'PENDENTE' }).eq('id', saleId);
       if (upErr) throw upErr;

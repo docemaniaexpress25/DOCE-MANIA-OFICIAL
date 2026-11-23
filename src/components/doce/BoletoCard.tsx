@@ -197,7 +197,11 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
       if (r.boleto?.status === 'NAO_GERADO' && !(r.parcelas && r.parcelas.length > 0)) {
         // BLOCO 153: prazo correto = vencimento COMBINADO na venda (tela 6 do
         // PDV — sales.data_vencimento); sem prazo gravado, mantém o padrão +7d
-        const iso = vencimentoVenda && /^\d{4}-\d{2}-\d{2}/.test(vencimentoVenda) ? vencimentoVenda.slice(0, 10) : null;
+        // BLOCO 212: data_vencimento é fim-do-dia em SP (30/11T23:59:59-03:00
+        // = 01/12 02:59 UTC) — slice(0,10) direto mostrava/gravava D+1. A data
+        // é convertida para o fuso America/Sao_Paulo antes de cortar.
+        const isoRaw = vencimentoVenda && /^\d{4}-\d{2}-\d{2}/.test(vencimentoVenda) ? vencimentoVenda : null;
+        const iso = isoRaw ? new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(isoRaw)) : null;
         if (iso) {
           setVenc(iso);
         } else {
@@ -367,7 +371,10 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
 
   /** Gera TODAS as parcelas abertas de uma vez (os 2 boletos juntos). */
   const handleEmitirTodas = async () => {
-    if (busy || !saleId) return;
+    // BLOCO 212: o lock agora é ÚNICO (busy || busyParcela) — antes "Gerar os
+    // 2 boletos" e "Gerar" individual usavam locks separados e um atravessava
+    // o outro, emitindo cobrança DUPLA no Inter para o mesmo débito.
+    if (busy || busyParcela || !saleId) return;
     if (!validarDocCepParcela()) return;
     setErroLocal('');
     setBusy(true);
@@ -375,8 +382,16 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
     setBusy(false);
     await refrescarParcelas();
     const falhas = (r.resultados || []).filter(x => !x.ok);
+    if (!r.ok && (r.resultados || []).length === 0) {
+      // BLOCO 212: falha de rede/HTTP (resultados vazio) agora APARECE na tela
+      // — antes o ok/erro do servidor era ignorado e o clique "não fazia nada".
+      showToast?.(r.erro || 'Falha ao gerar os boletos.', 'error');
+      setErroLocal(r.erro || 'Falha ao gerar os boletos.');
+      return;
+    }
     if (falhas.length > 0) {
-      showToast?.(`Boleto ${falhas[0].seq} falhou: ${falhas[0].erro || 'erro no Inter'}`, 'error');
+      const okN = (r.resultados || []).length - falhas.length;
+      showToast?.(`Boleto ${falhas[0].seq} falhou: ${falhas[0].erro || 'erro no Inter'}${okN > 0 ? ` (${okN} gerado(s) com sucesso)` : ''}`, 'error');
       setErroLocal(`Boleto ${falhas[0].seq}: ${falhas[0].erro || 'falha na emissão'}`);
     } else if ((r.resultados || []).length > 0) {
       showToast?.(`${(r.resultados || []).length} boleto(s) gerado(s)! O Inter pode demorar alguns segundos para liberar a linha digitável.`, 'success');
@@ -387,7 +402,8 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
 
   /** Gera UMA parcela (botão individual do boleto). */
   const handleGerarParcela = async (p: BoletoParcelaInfo) => {
-    if (busyParcela || !saleId) return;
+    // BLOCO 212: mesmo lock único da geração em lote (ver comentário acima).
+    if (busy || busyParcela || !saleId) return;
     if (!validarDocCepParcela()) return;
     setErroLocal('');
     setBusyParcela(p.id);

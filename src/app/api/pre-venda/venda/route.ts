@@ -138,8 +138,35 @@ export async function POST(req: NextRequest) {
     // BLOCO 75: temEstoquesNota saiu — o aviso consulta sempre o Estoque Total
     const [temModoVenda] = sondas;
     if (dedupRes.data) {
-      console.log('[api/pre-venda/venda] dedup: pedido identico de menos de 60s — devolvendo o existente', dedupRes.data.id);
-      return NextResponse.json({ ok: true, sale: dedupRes.data, dedup: true });
+      // -----------------------------------------------------------------
+      // BLOCO 212 (dedup engolia pedido DIFERENTE): o casamento por
+      // vendedor+cliente+VALOR em 60s também casa com um pedido novo e
+      // legítimo que só tem o MESMO total (itens diferentes!) — os itens do
+      // carrinho novo nunca eram gravados e a entrega saia com o pedido
+      // antigo. Agora o dedup só aceita quando os ITENS batem (produto +
+      // quantidade + preço). Não bater = pedido de verdade, grava normal.
+      // -----------------------------------------------------------------
+      const { data: itensDedup } = await supabase
+        .from('sale_items')
+        .select('product_id, quantidade, preco_venda')
+        .eq('sale_id', String(dedupRes.data.id));
+      const qtds = (rows: Record<string, unknown>[]) => {
+        const m = new Map<string, string>();
+        for (const r of rows) {
+          const k = `${String(r.product_id)}|${Number(r.quantidade)}|${Number(r.preco_venda)}`;
+          m.set(k, String((m.get(k) || 0) + 1));
+        }
+        return m;
+      };
+      const pedidos = (itens || []).map(i => ({ product_id: i.produtoId, quantidade: i.quantidade, preco_venda: i.precoVenda }));
+      const mOld = qtds((itensDedup as Record<string, unknown>[]) || []);
+      const mNew = qtds(pedidos as unknown as Record<string, unknown>[]);
+      const itensIguais = mOld.size === mNew.size && [...mOld].every(([k, v]) => mNew.get(k) === v);
+      if (itensIguais) {
+        console.log('[api/pre-venda/venda] dedup: pedido identico de menos de 60s — devolvendo o existente', dedupRes.data.id);
+        return NextResponse.json({ ok: true, sale: dedupRes.data, dedup: true });
+      }
+      console.log('[api/pre-venda/venda] dedup recusado (itens diferentes) — gravando pedido novo', { valorTotal, antigo: dedupRes.data.id });
     }
 
     const etiquetaCond = condicao === 'APRAZO' ? 'A PRAZO' : 'A VISTA';
@@ -354,9 +381,30 @@ export async function POST(req: NextRequest) {
         await Promise.all([...reservas].map(async ([pid, qtd]) => {
           const p = map[pid];
           if (!p) return;
-          await supabase.from('products').update({
-            estoque_principal: (Number(p.estoque_principal) || 0) - qtd,
-          }).eq('id', pid);
+          // -----------------------------------------------------------
+          // BLOCO 212 (read-modify-write perdia reserva): dois vendedores
+          // registrando o MESMO produto ao mesmo tempo liam o mesmo saldo e
+          // gravavam `lido - qtd` — uma reserva se perdia (oversell
+          // silencioso). Agora é CAS: grava CONDICIONAL ao saldo lido
+          // (.eq('estoque_principal', atual)); se outro request mudou o
+          // saldo no meio, re-le e tenta de novo (3x). NUNCA bloqueia a
+          // venda: após 3 tentativas grava best-effort (comportamento de
+          // antes), pois a venda por encomenda existe.
+          // -----------------------------------------------------------
+          let atual = Number(p.estoque_principal) || 0;
+          for (let tent = 0; tent < 3; tent++) {
+            const { data: ganhou } = await supabase.from('products').update({
+              estoque_principal: Math.round((atual - qtd) * 10000) / 10000,
+            })
+              .eq('id', pid)
+              .eq('estoque_principal', atual)
+              .select('id');
+            if (ganhou && (ganhou as unknown[]).length > 0) return;
+            const { data: re } = await supabase.from('products').select('estoque_principal').eq('id', pid).maybeSingle();
+            atual = Number((re as Record<string, unknown> | null)?.estoque_principal) || 0;
+          }
+          await supabase.from('products').update({ estoque_principal: Math.round((atual - qtd) * 10000) / 10000 }).eq('id', pid);
+          console.warn('[api/pre-venda/venda] reserva por CAS falhou 3x (concorrencia) — gravada best-effort:', pid);
         }));
       } else {
         // Guard falhou (rede/coluna): NAO reserva — a entrega faz a baixa

@@ -227,7 +227,10 @@ export const boletoService = {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}` };
-      return { ok: true, resultados: data.resultados || [] };
+      // BLOCO 212: o servidor devolve ok:false (200) quando alguma parcela
+      // falhou — o ok real do SERVIDOR agora chega à tela (antes era sempre
+      // ok:true e falha parcial/total ficava silenciosa).
+      return { ok: data.ok !== false, resultados: data.resultados || [], erro: data.erro || (data.ok === false ? 'Falha ao gerar os boletos.' : undefined) };
     } catch (e: unknown) {
       return { ok: false, erro: e instanceof Error ? e.message : 'Falha de conexao' };
     }

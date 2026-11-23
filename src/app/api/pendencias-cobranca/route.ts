@@ -91,12 +91,15 @@ export async function GET(req: NextRequest) {
   const colsComBoleto = 'id, data_venda, valor_total, valor_pago, metodo_pagamento, status_pagamento, tipo_venda, entrega_status, client_id, vendedor_id, inter_boleto_status, inter_boleto_codigo';
   let e: { message: string } | null = null;
   {
-    const r = await db.from('sales').select(colsComBoleto).gte('data_venda', desde).limit(1000);
+    // BLOCO 212: order DESC antes do limit — sem order, quando a base passa de
+    // 1000 vendas no período o PostgREST cortava linhas ARBITRARIAS e vendas
+    // em aberto sumiam do alerta (o propósito do Bloco 211 falhava).
+    const r = await db.from('sales').select(colsComBoleto).gte('data_venda', desde).order('data_venda', { ascending: false }).limit(2000);
     if (r.error) e = r.error;
     else vendas = (r.data as Record<string, unknown>[]) || [];
   }
   if (vendas === null && e && /column/i.test(e.message || '')) {
-    const r2 = await db.from('sales').select('id, data_venda, valor_total, valor_pago, metodo_pagamento, status_pagamento, tipo_venda, entrega_status, client_id, vendedor_id').gte('data_venda', desde).limit(1000);
+    const r2 = await db.from('sales').select('id, data_venda, valor_total, valor_pago, metodo_pagamento, status_pagamento, tipo_venda, entrega_status, client_id, vendedor_id').gte('data_venda', desde).order('data_venda', { ascending: false }).limit(2000);
     vendas = (r2.data as Record<string, unknown>[]) || [];
   } else if (vendas === null) {
     return BAD(500, e?.message || 'Falha ao consultar as vendas.');
@@ -118,7 +121,7 @@ export async function GET(req: NextRequest) {
   const parcelasPorSale = new Map<string, { codigo: string; status: string; seq: number }[]>();
   if (candidatas.length > 0 && (await hasSalesBoletosTable())) {
     const ids = candidatas.map(s => String(s.id));
-    const { data: pl } = await db.from('sales_boletos').select('sale_id, seq, status, codigo').in('sale_id', ids).limit(2000);
+    const { data: pl } = await db.from('sales_boletos').select('sale_id, seq, status, codigo').in('sale_id', ids).order('seq', { ascending: true }).limit(4000);
     for (const p of (pl as Record<string, unknown>[]) || []) {
       const sid = String(p.sale_id || '');
       if (!parcelasPorSale.has(sid)) parcelasPorSale.set(sid, []);

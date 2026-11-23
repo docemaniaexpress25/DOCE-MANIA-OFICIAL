@@ -106,7 +106,11 @@ function parcelaPublica(p: Record<string, unknown>) {
 }
 
 async function atualizar(saleId: string, patch: Record<string, unknown>) {
-  await getServiceClient().from('sales').update(patch).eq('id', saleId);
+  // BLOCO 212: o erro do update NUNCA mais é engolido em silêncio — se a
+  // gravação do código do Inter falhar, o boleto fica órfão no banco (sem PDF,
+  // sem cancelar, webhook não casa). Log explícito para diagnosticar.
+  const { error } = await getServiceClient().from('sales').update(patch).eq('id', saleId);
+  if (error) console.error('[api/boletos] update sales falhou:', error.message, JSON.stringify(Object.keys(patch)));
 }
 
 /**
@@ -343,11 +347,21 @@ async function emitirCobrancaUnificada(args: {
 
   // Marca processando antes de chamar o Inter (rastreabilidade se cair a conexao)
   if (parcela) {
-    await db.from('sales_boletos').update({
+    // BLOCO 212 (race de emissão): dois cliques/telas podem chegar aqui juntos
+    // e gravar EM_PROCESSAMENTO DUAS VEZES antes de qualquer código existir —
+    // o CAS por status NAO_GERADO/FALHA/CANCELADO garante que só UM request
+    // conquista a emissão (o outro perde e sai com 409).
+    const { data: ganhou } = await db.from('sales_boletos').update({
       status: 'EM_PROCESSAMENTO',
       seu_numero: seuNumero,
       erro: null,
-    }).eq('id', String(parcela.id));
+    })
+      .eq('id', String(parcela.id))
+      .in('status', ['NAO_GERADO', 'FALHA_EMISSAO', 'CANCELADO', 'EXPIRADO'])
+      .select('id');
+    if (!ganhou || ganhou.length === 0) {
+      return NextResponse.json({ ok: false, erro: 'Boleto ' + (Number(parcela.seq) || 1) + ' já está sendo gerado agora (aguarde alguns segundos).' }, { status: 409 });
+    }
   } else {
     await atualizar(saleId, {
       inter_boleto_status: 'EM_PROCESSAMENTO',
@@ -380,7 +394,8 @@ async function emitirCobrancaUnificada(args: {
   if (!r.ok || !r.data || !(r.data as Record<string, unknown>).codigoSolicitacao) {
     const erro = r.erro || `HTTP ${r.status}`;
     if (parcela) {
-      await db.from('sales_boletos').update({ status: 'FALHA_EMISSAO', erro }).eq('id', String(parcela.id));
+      await db.from('sales_boletos').update({ status: 'FALHA_EMISSAO', erro }).eq('id', String(parcela.id))
+        .then(({ error }) => { if (error) console.error('[api/boletos] rollback FALHA_EMISSAO parcela:', error.message); });
       return BAD(502, `Inter recusou o boleto ${Number(parcela.seq) || 1}: ${erro}`, { parcela: parcelaPublica({ ...parcela, status: 'FALHA_EMISSAO', erro }) });
     }
     await atualizar(saleId, { inter_boleto_status: 'FALHA_EMISSAO', inter_boleto_erro: erro });
@@ -389,7 +404,9 @@ async function emitirCobrancaUnificada(args: {
 
   const codigo = String((r.data as Record<string, unknown>).codigoSolicitacao);
   if (parcela) {
-    await db.from('sales_boletos').update({ codigo, emitido_em: new Date().toISOString() }).eq('id', String(parcela.id));
+    const { error: codErr } = await db.from('sales_boletos').update({ codigo, emitido_em: new Date().toISOString() }).eq('id', String(parcela.id));
+    // BLOCO 212: se a gravação do código falhar o boleto fica órfão — log.
+    if (codErr) console.error('[api/boletos] gravação do codigo da parcela falhou:', codErr.message);
     // BLOCO 210: prazo da venda acompanha o vencimento mais novo em aberto
     // (a parcela reemitida pode ter OUTRA data que o cliente escolheu).
     await recomputeVencimentoVenda(saleId);
@@ -596,8 +613,16 @@ export async function POST(req: NextRequest) {
     await db.from('sales_boletos').delete().eq('sale_id', saleId);
     const { error: insErr } = await db.from('sales_boletos').insert(linhas);
     if (insErr) {
-      console.error('[api/boletos] CRIAR_PARCELAS falhou:', insErr.message);
-      return BAD(500, 'Falha ao gravar os dois boletos. Tente novamente.');
+      console.error('[api/boletos] CRIAR_PARCELAS falhou (1a tentativa):', insErr.message);
+      // BLOCO 212 (delete+insert sem transação): as parcelas antigas já foram
+      // apagadas — tentar de novo ANTES de devolver erro; se falhar de novo,
+      // devolver mensagem que deixa claro que a divisão foi apagada e pode
+      // ser regravada (estado recuperável, não corrompido).
+      const { error: insErr2 } = await db.from('sales_boletos').insert(linhas);
+      if (insErr2) {
+        console.error('[api/boletos] CRIAR_PARCELAS falhou (2a tentativa):', insErr2.message);
+        return BAD(500, 'Falha ao gravar os dois boletos (a divisão anterior foi apagada — regrave a divisão no card do boleto).');
+      }
     }
     // data_vencimento da venda = vencimento mais próximo (fila/cupom enxergam o prazo certo)
     const vencimentos = linhas.map(l => String(l.vencimento)).sort();
@@ -701,8 +726,17 @@ export async function POST(req: NextRequest) {
       .select(PARC_COLS)
       .eq('sale_id', saleId)
       .order('seq', { ascending: true });
-    const fila = (abertas || []).filter((p: Record<string, unknown>) =>
-      !p.codigo || ['NAO_GERADO', 'FALHA_EMISSAO', 'CANCELADO', 'EXPIRADO'].includes(String(p.status)));
+    const fila = (abertas || []).filter((p: Record<string, unknown>) => {
+      // BLOCO 212 (race): antes o filtro era `!p.codigo || status em [mortos]`
+      // — uma parcela EM_PROCESSAMENTO (emissão em voo, código ainda null)
+      // PASSAVA pelo `!p.codigo` e era re-emitida: 2 boletos vivos no Inter
+      // para o mesmo débito. Agora EM_PROCESSAMENTO sai da fila SEMPRE;
+      // emissão conjunta ainda tem o CAS dentro de emitirCobrancaUnificada.
+      const st = String(p.status || '');
+      if (st === 'EM_PROCESSAMENTO') return false;
+      if (['NAO_GERADO', 'FALHA_EMISSAO', 'CANCELADO', 'EXPIRADO'].includes(st)) return true;
+      return !p.codigo; // legado: status desconhecido sem código de cobrança
+    });
     if (!fila || fila.length === 0) {
       return NextResponse.json({ ok: true, resultados: [], aviso: 'Todos os boletos da divisão já estão gerados.' });
     }
@@ -755,12 +789,24 @@ export async function POST(req: NextRequest) {
   if (sale.inter_boleto_codigo && !['CANCELADO', 'EXPIRADO', 'FALHA_EMISSAO'].includes(String(sale.inter_boleto_status))) {
     return NextResponse.json({ ok: true, jaGerado: true, boleto: cobrancaPublica(sale as Record<string, unknown>) });
   }
+  // BLOCO 212 (race do boleto unico): EM_PROCESSAMENTO SEM codigo = emissao
+  // em voo (o update roda antes do POST ao Inter). Re-emitir aqui criaria a
+  // segunda cobranca — o vendedor aguarda ou recarrega o card.
+  if (!sale.inter_boleto_codigo && String(sale.inter_boleto_status) === 'EM_PROCESSAMENTO') {
+    return BAD(429, 'O boleto desta venda já está sendo gerado agora — aguarde alguns segundos e recarregue o card.');
+  }
 
   // Valor: saldo em aberto (ou informado), minimo R$ 2,50 (regra da API)
   const total = Number(sale.valor_total) || 0;
   const pago = Number(sale.valor_pago) || 0;
   const saldo = Math.max(0, Math.round((total - pago) * 100) / 100);
   const valorUnico = body.valor !== undefined && body.valor !== null && body.valor !== '' ? Number(body.valor) : saldo;
+  // BLOCO 212 (boleto acima do saldo): o valor digitado podia passar do saldo
+  // em aberto (ex.: recebimento parcial feito por outro canal depois que o
+  // card abriu) — o cliente pagaria MAIS que a dívida. Agora o servidor recusa.
+  if (Number.isFinite(valorUnico) && saldo > 0 && Math.round(valorUnico * 100) / 100 > saldo + 0.02) {
+    return BAD(422, `O valor do boleto (R$ ${(Math.round(valorUnico * 100) / 100).toFixed(2)}) está acima do saldo em aberto desta venda (R$ ${saldo.toFixed(2)}). Atualize o card e ajuste o valor.`);
+  }
   const vencUnico = String(body.vencimento || '').trim();
 
   return emitirCobrancaUnificada({

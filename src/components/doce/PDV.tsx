@@ -30,6 +30,17 @@ import { clienteAptoNfe, mascararCpf, mascararCpfCnpj, validaCpf, validaCpfOuCnp
 // BATIDA (+ boleto do prazo). Pré-venda: vendedor SÓ escolhe (nada muda aqui).
 import { FISCAL_OBRIGATORIO, docExigeNota, notaBatida, pendenciasFinaProntaEntrega } from '@/lib/regras-fiscais';
 
+// ---------------------------------------------------------------------------
+// BLOCO 212 (bug do fuso): vencimentos usavam toISOString() que é UTC — entre
+// 21h e 23:59 de São Paulo o ISO já está no DIA SEGUINTE, então os atalhos 7D/
+// 14D/21D/30D e os defaults gravavam D+8, D+15... e o boleto/"bom para" saia
+// com um dia a mais que o combinado com o cliente. Agora a data é formatada
+// no fuso America/Sao_Paulo (mesma regra do BoletoCard.plusDias e da API).
+// ---------------------------------------------------------------------------
+const TZ_SP = 'America/Sao_Paulo';
+const dataSp = (d: Date): string => new Intl.DateTimeFormat('en-CA', { timeZone: TZ_SP, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+const hojeMaisDiasSp = (dias: number): string => { const d = new Date(); d.setDate(d.getDate() + dias); return dataSp(d); };
+
 interface PDVProps {
   client: Client;
   products: Product[];
@@ -136,11 +147,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const [mistoPixDoc, setMistoPixDoc] = useState('');
   const [pixSlotDoc, setPixSlotDoc] = useState<1 | 2>(1);
   // A prazo: UMA data só (boleto / cheque "bom para" / pix na data / dinheiro na data)
-  const [vencimentoDoc, setVencimentoDoc] = useState<string>(() => {
-    const d = new Date();
-    d.setDate(d.getDate() + 7);
-    return d.toISOString().split('T')[0];
-  });
+  const [vencimentoDoc, setVencimentoDoc] = useState<string>(() => hojeMaisDiasSp(7)); // BLOCO 212: fuso SP (era toISOString UTC = D+8 após 21h)
   // BLOCO 199 (BOLETO DUPLICO — regra do dono, EXCLUSIVO rota 5 / Deivid):
   // dividir a venda em DOIS boletos que JUNTOS fecham o valor (ex.: 1º em 7
   // dias com parte do valor e o RESTANTE no 2º em 14 dias — ou dividir por 2).
@@ -148,14 +155,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   // sobrou (impossível não fechar o total).
   const [doisBoletosDoc, setDoisBoletosDoc] = useState(false);
   const [b1ValorDoc, setB1ValorDoc] = useState('');
-  const [b1VencDoc, setB1VencDoc] = useState<string>(() => {
-    const d = new Date(); d.setDate(d.getDate() + 7);
-    return d.toISOString().split('T')[0];
-  });
-  const [b2VencDoc, setB2VencDoc] = useState<string>(() => {
-    const d = new Date(); d.setDate(d.getDate() + 14);
-    return d.toISOString().split('T')[0];
-  });
+  const [b1VencDoc, setB1VencDoc] = useState<string>(() => hojeMaisDiasSp(7)); // BLOCO 212: fuso SP
+  const [b2VencDoc, setB2VencDoc] = useState<string>(() => hojeMaisDiasSp(14)); // BLOCO 212: fuso SP
   // TELA 3 — busca de produto no carrinho (antes: girava abas caçando item)
   const [buscaProduto, setBuscaProduto] = useState('');
   const [isPrePedido, setIsPrePedido] = useState(false);
@@ -396,11 +397,16 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
 
   // BLOCO 153: vencimento combinado da venda (tela 6) — o boleto do prazo
   // nasce com ESTA data (fim do +7d fixo desalinhado).
+  // BLOCO 212: o banco grava fim-do-dia em SP (30/11T23:59:59-03:00 = 01/12
+  // 02:59 UTC) — ler toISOString e cortar 10 chars mostrava D+1 na tela de
+  // sucesso ("recebe na data combinada 01/12" quando o combinado era 30/11).
+  // A data agora é formatada SEMPRE no fuso America/Sao_Paulo.
   const vencVendaISO = (() => {
     const v = sucessoData?.sale?.dataVencimento as Date | string | undefined | null;
     if (!v) return undefined;
-    const s = v instanceof Date ? v.toISOString() : String(v);
-    return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10) : undefined;
+    const d = v instanceof Date ? v : new Date(v);
+    if (!isFinite(d.getTime())) return undefined;
+    return dataSp(d);
   })();
   const vencVendaBR = vencVendaISO ? vencVendaISO.split('-').reverse().join('/') : '';
   // BLOCO 153: CEP do cliente — o Inter EXIGE o CEP do pagador para gerar o boleto
@@ -863,10 +869,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
     : undefined;
   // Atalho do exemplo do dono: 1º boleto em 7 dias e o restante em 14 dias
   const atalhoBoletos714 = () => {
-    const d1 = new Date(); d1.setDate(d1.getDate() + 7);
-    const d2 = new Date(); d2.setDate(d2.getDate() + 14);
-    setB1VencDoc(d1.toISOString().split('T')[0]);
-    setB2VencDoc(d2.toISOString().split('T')[0]);
+    setB1VencDoc(hojeMaisDiasSp(7)); // BLOCO 212: fuso SP (era toISOString UTC)
+    setB2VencDoc(hojeMaisDiasSp(14)); // BLOCO 212: fuso SP
   };
   // Ao LIGAR o interruptor: 1º vencimento herda o prazo combinado (tela 6) e
   // o 2º fica 7 dias depois — o vendedor ajusta se quiser.
@@ -877,7 +881,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
       if (/^\d{4}-\d{2}-\d{2}$/.test(vencimentoDoc)) setB1VencDoc(vencimentoDoc);
       const d2 = new Date(`${b1VencDoc}T12:00:00Z`);
       d2.setDate(d2.getDate() + 7);
-      setB2VencDoc(d2.toISOString().split('T')[0]);
+      setB2VencDoc(dataSp(d2)); // BLOCO 212: fuso SP (T12:00Z + dataSp evita off-by-one)
     }
   };
 
@@ -2221,8 +2225,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                     className="w-full p-4 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-black text-center outline-none focus:ring-2 focus:ring-indigo-100" />
                   <div className="grid grid-cols-4 gap-2">
                     {[7, 14, 21, 30].map(days => {
-                      const d = new Date(); d.setDate(d.getDate() + days);
-                      const target = d.toISOString().split('T')[0];
+                      const target = hojeMaisDiasSp(days); // BLOCO 212: fuso SP (era toISOString UTC)
                       return (
                         <button key={days} onClick={() => setVencimentoDoc(target)}
                           className={`py-3 rounded-xl text-[10px] font-black transition-all ${vencimentoDoc === target ? 'bg-indigo-600 text-white border-2 border-indigo-600 shadow-lg' : 'bg-gray-50 border-2 border-gray-100 text-gray-500'}`}>{days}D</button>

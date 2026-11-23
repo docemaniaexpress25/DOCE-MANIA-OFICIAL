@@ -81,14 +81,21 @@ export async function registrarPagamentoCaixa(
     const valor = round2(Number(p.valor || 0));
     if (!(valor > 0)) return { ok: false, erro: 'valor invalido' };
 
-    // Idempotência: venda/método/valor já no caixa aberto -> não duplica
+    // Idempotência: venda/método/valor MUITO RECENTE no caixa aberto -> não
+    // duplica (proteção contra duplo clique/reenvio).
+    // BLOCO 212: antes casava SEM janela de tempo — o 2º recebimento PARCIAL
+    // legítimo de mesmo valor (venda R$ 100 recebida R$ 50 hoje e R$ 50
+    // amanhã) era descartado e o caixa fechava R$ 50 abaixo. Agora só é
+    // "duplicado" se o pagamento igual foi gravado nos últimos 25s.
     if (p.saleId) {
+      const vinteCincoAtras = new Date(Date.now() - 25_000).toISOString();
       const { data: dup } = await supabase
         .from('caixa_pagamentos')
         .select('id')
         .eq('sale_id', p.saleId)
         .eq('metodo', metodo)
         .eq('valor', valor)
+        .gte('criado_em', vinteCincoAtras)
         .is('fechamento_id', null)
         .limit(1);
       if (dup && dup.length > 0) return { ok: true, id: String(dup[0].id) };

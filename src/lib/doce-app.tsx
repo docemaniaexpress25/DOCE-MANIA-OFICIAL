@@ -672,36 +672,12 @@ const App: React.FC = () => {
     fetchCoreData();
   };
 
+  // BLOCO 217: carga SEM modo — a regra COM_NF/SEM_NF do estoque 1/2 acabou.
+  // APLICAR: aplica AGORA no servidor (delta van × estoque central).
   const applyCargaDirectly = async (vId: string, itens: { produtoId: string, quantidade: number }[]): Promise<{ ok: boolean; erro?: string }> => {
-    try {
-      await cargaService.applyCargaAdminRPC(vId, itens);
-      setAdminNotification("Carga aplicada com sucesso!");
-      fetchCargas();
-      return { ok: true };
-    } catch (e: any) {
-      console.error(e);
-      setAdminNotification("Erro ao aplicar carga.");
-      return { ok: false, erro: e?.message || 'Erro ao aplicar carga.' };
-    }
-  };
-
-  const syncVendedorCarga = async (vId: string, itens: { produtoId: string, quantidade: number }[]): Promise<{ ok: boolean; erro?: string }> => {
-    try {
-      await cargaService.insertCargaPendente({ vendedorId: vId, itens, data: new Date() });
-      fetchCargas();
-      return { ok: true };
-    } catch (e: any) {
-      console.error('[carga] falha ao enviar pendente:', e);
-      return { ok: false, erro: e?.message || 'Erro ao enviar a carga. Tente novamente.' };
-    }
-  };
-
-  // ===== BLOCO 29 (ROTA 2): carga da van com MODO (COM_NF | SEM_NF) =====
-  // Toda a logica (bloqueio de mistura + movimento de casa) roda no SERVIDOR.
-  const applyCargaDirectlyRota2 = async (vId: string, itens: { produtoId: string, quantidade: number }[], modo: 'COM_NF' | 'SEM_NF'): Promise<{ ok: boolean; erro?: string }> => {
-    const r = await cargaService.aplicarCargaRota2(vId, itens, modo, 'APLICAR');
+    const r = await cargaService.aplicarCarga(vId, itens, 'APLICAR');
     if (r.ok) {
-      setAdminNotification(`Carga ${modo === 'COM_NF' ? 'COM NF' : 'SEM NF'} aplicada com sucesso!`);
+      setAdminNotification('Carga aplicada com sucesso!');
       fetchCargas();
       fetchCoreData(); // estoque de casa mudou
       return { ok: true };
@@ -710,8 +686,10 @@ const App: React.FC = () => {
     return { ok: false, erro: r.erro };
   };
 
-  const syncVendedorCargaRota2 = async (vId: string, itens: { produtoId: string, quantidade: number }[], modo: 'COM_NF' | 'SEM_NF'): Promise<{ ok: boolean; erro?: string }> => {
-    const r = await cargaService.aplicarCargaRota2(vId, itens, modo, 'PENDENTE');
+  // PENDENTE: grava a pendência no servidor — o vendedor aceita depois e a
+  // casa baixa no ACEITE (mesma mecânica do aplicar, v2 server-side).
+  const syncVendedorCarga = async (vId: string, itens: { produtoId: string, quantidade: number }[]): Promise<{ ok: boolean; erro?: string }> => {
+    const r = await cargaService.aplicarCarga(vId, itens, 'PENDENTE');
     if (r.ok) {
       fetchCargas();
       return { ok: true };
@@ -1103,7 +1081,6 @@ const App: React.FC = () => {
             {...{ products, users, cargas, cargasLoaded, clients, sales, commissions, payoutLogs, expenses, logo, margemGlobalAtiva, margemGlobalValor, margemMinima, margemMinimaAtiva, pix1Name, pix1Code, pix2Name, pix2Code, pixChave, adminNotification, companyName, companyCnpj, orderedProductIds: productOrder, portalOrderIds: catalogoOrder, categories, subcategories, clientOrder, melhorias }}
             addProduct={addProduct} updateProduct={updateProduct} deleteProduct={deleteProduct} registerStockEntry={()=>{}} adjustStockManual={()=>{}}
             syncVendedorCarga={syncVendedorCarga} applyCargaDirectly={applyCargaDirectly}
-            syncVendedorCargaRota2={syncVendedorCargaRota2} applyCargaDirectlyRota2={applyCargaDirectlyRota2}
             addClient={addClient} updateClient={updateClient} deleteClient={deleteClient}
             addUser={addUser} updateUser={updateUser} deleteUser={deleteUser} payCommission={payCommission} setCommissions={()=>{}} updateEstoqueCentral={()=>{}} reinforceCarga={()=>{}} deleteSale={deleteSale} receiveAccount={receiveAccount}
             setLogo={(v)=>updateSetting('logo', v)} adminUser={currentUser} setMargemGlobalAtiva={(v)=>updateSetting('margemGlobalAtiva', v)} setMargemGlobalValor={(v)=>updateSetting('margemGlobalValor', v)}

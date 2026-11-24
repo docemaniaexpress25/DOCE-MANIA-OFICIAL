@@ -61,9 +61,8 @@ export const productService = {
       unidadesPorCaixa: (p.unidades_por_caixa === null || p.unidades_por_caixa === undefined) ? undefined : Number(p.unidades_por_caixa),
       // Bloco 18: observacao do produto — SO o cliente ve (catalogo do portal)
       obs: p.obs || null,
-      // BLOCO 29 (ROTA 2): dois estoques em casa — undefined = SQL ainda nao rodado (fallback legado)
-      estoqueNota: (p.estoque_nota === null || p.estoque_nota === undefined) ? undefined : (Number(p.estoque_nota) || 0),
-      estoqueSemnf: (p.estoque_semnf === null || p.estoque_semnf === undefined) ? undefined : (Number(p.estoque_semnf) || 0),
+      // BLOCO 217: estoqueNota/estoqueSemnf REMOVIDOS — a regra de ESTOQUE 1/2
+      // acabou; o saldo único é o ESTOQUE CENTRAL (estoque_principal).
       produtoTeste: !!p.produto_teste,
       // BLOCO 70: preço especial GB — undefined = SQL ainda nao rodado (cai no preço normal)
       precoEspecialGb: (p.preco_especial_gb === null || p.preco_especial_gb === undefined) ? undefined : (Number(p.preco_especial_gb) || 0),
@@ -111,10 +110,9 @@ export const productService = {
     // Bloco 23: vínculo manual à família do catálogo (null/undefined = automático)
     const b23: Record<string, string | null> = {};
     if (product.familiaCatalogo) b23.familia_catalogo = String(product.familiaCatalogo).trim().slice(0, 80);
-    // BLOCO 29 (ROTA 2): dois estoques em casa + produto de teste
+    // BLOCO 29 (ROTA 2): produto de teste (BLOCO 217: estoque_nota/estoque_semnf
+    // saíram junto com a regra de ESTOQUE 1/2)
     const b29: Record<string, number | boolean | null> = {};
-    if (product.estoqueNota !== undefined) b29.estoque_nota = Number(product.estoqueNota) || 0;
-    if (product.estoqueSemnf !== undefined) b29.estoque_semnf = Number(product.estoqueSemnf) || 0;
     if (product.produtoTeste !== undefined) b29.produto_teste = !!product.produtoTeste;
     // Bloco 14: comissão PV — BLOCO 23: vazio grava o PADRÃO 5 (regra do dono)
     const extra14: Record<string, number | null> = {};
@@ -147,8 +145,8 @@ export const productService = {
       console.warn('Coluna preco_especial_gb ausente (Bloco 69 nao rodado). Salvando sem ela.');
       const sem69: Record<string, unknown> = { ...payload, ...fiscal, ...extra14, ...b15, ...b18, ...b23, ...b29 };
       ({ data, error } = await supabase.from('products').insert(sem69).select().single());
-    } else if (error && /estoque_nota|estoque_semnf|produto_teste/i.test(error.message || '')) {
-      console.warn('Colunas do Bloco 29 ausentes (estoques COM NF/SEM NF). Salvando sem elas.');
+    } else if (error && /produto_teste/i.test(error.message || '')) {
+      console.warn('Coluna produto_teste ausente (Bloco 29). Salvando sem ela.');
       const sem29: Record<string, unknown> = { ...payload, ...fiscal, ...extra14, ...b15, ...b18, ...b23 };
       ({ data, error } = await supabase.from('products').insert(sem29).select().single());
     } else if (error && /familia_catalogo/i.test(error.message || '')) {
@@ -205,8 +203,6 @@ export const productService = {
       imagem: data.imagem || undefined,
       unidadesPorCaixa: (data.unidades_por_caixa === null || data.unidades_por_caixa === undefined) ? undefined : Number(data.unidades_por_caixa),
       obs: data.obs || null,
-      estoqueNota: (data.estoque_nota === null || data.estoque_nota === undefined) ? undefined : (Number(data.estoque_nota) || 0),
-      estoqueSemnf: (data.estoque_semnf === null || data.estoque_semnf === undefined) ? undefined : (Number(data.estoque_semnf) || 0),
       produtoTeste: !!data.produto_teste,
       precoEspecialGb: (data.preco_especial_gb === null || data.preco_especial_gb === undefined) ? undefined : (Number(data.preco_especial_gb) || 0),
       codigoEspecialGb: data.codigo_especial_gb ? String(data.codigo_especial_gb) : undefined,
@@ -243,9 +239,8 @@ export const productService = {
     if (updates.unidadesPorCaixa !== undefined) payload.unidades_por_caixa = Math.max(1, Math.floor(Number(updates.unidadesPorCaixa) || 1));
     // Bloco 18: observacao para o cliente (portal) — vazio = limpa
     if (updates.obs !== undefined) payload.obs = updates.obs || null;
-    // BLOCO 29 (ROTA 2): dois estoques em casa + produto de teste
-    if (updates.estoqueNota !== undefined) payload.estoque_nota = Number(updates.estoqueNota) || 0;
-    if (updates.estoqueSemnf !== undefined) payload.estoque_semnf = Number(updates.estoqueSemnf) || 0;
+    // BLOCO 29 (ROTA 2): produto de teste (BLOCO 217: estoque_nota/estoque_semnf
+    // saíram junto com a regra de ESTOQUE 1/2)
     if (updates.produtoTeste !== undefined) payload.produto_teste = !!updates.produtoTeste;
     // BLOCO 70: preço especial GB — 0/vazio = sem preço GB (cai no normal)
     if (updates.precoEspecialGb !== undefined) payload.preco_especial_gb = Number(updates.precoEspecialGb) || 0;
@@ -268,9 +263,9 @@ export const productService = {
       const fb69: Record<string, unknown> = { ...payload };
       delete fb69.preco_especial_gb;
       ({ data, error } = await supabase.from('products').update(fb69).eq('id', id).select().single());
-    } else if (error && /estoque_nota|estoque_semnf|produto_teste/i.test(error.message || '')) {
+    } else if (error && /produto_teste/i.test(error.message || '')) {
       const fb29: Record<string, unknown> = { ...payload };
-      delete fb29.estoque_nota; delete fb29.estoque_semnf; delete fb29.produto_teste;
+      delete fb29.produto_teste;
       ({ data, error } = await supabase.from('products').update(fb29).eq('id', id).select().single());
     } else if (error && /familia_catalogo/i.test(error.message || '')) {
       const fb23: Record<string, unknown> = { ...payload };
@@ -328,8 +323,6 @@ export const productService = {
       imagem: data.imagem || undefined,
       unidadesPorCaixa: (data.unidades_por_caixa === null || data.unidades_por_caixa === undefined) ? undefined : Number(data.unidades_por_caixa),
       obs: data.obs || null,
-      estoqueNota: (data.estoque_nota === null || data.estoque_nota === undefined) ? undefined : (Number(data.estoque_nota) || 0),
-      estoqueSemnf: (data.estoque_semnf === null || data.estoque_semnf === undefined) ? undefined : (Number(data.estoque_semnf) || 0),
       produtoTeste: !!data.produto_teste,
       precoEspecialGb: (data.preco_especial_gb === null || data.preco_especial_gb === undefined) ? undefined : (Number(data.preco_especial_gb) || 0),
       codigoEspecialGb: data.codigo_especial_gb ? String(data.codigo_especial_gb) : undefined,

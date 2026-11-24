@@ -2290,36 +2290,11 @@ export async function POST(req: NextRequest) {
       // (estoque_baixado=true) e o guard do RPC torna esta chamada NO-OP.
       // Pedidos ANTIGOS (pre-deploy, sem reserva) continuam baixando aqui —
       // migracao graciosa, nenhuma pendente fica sem baixa.
+      // BLOCO 217: o RPC baixar_estoque_principal (v3) baixa SEMPRE o ESTOQUE
+      // CENTRAL — os contadores de saida do estoque 1/2 (Bloco 75) foram
+      // removidos junto com a regra.
       try { await supabase.rpc('baixar_estoque_principal', { p_sale_id: saleId }); } catch (e) {
         console.error('[pre-venda] baixa estoque falhou:', (e as any)?.message);
-      }
-
-      // BLOCO 75 (ESTOQUE TOTAL): alimenta o CONTADOR de saida do documento
-      // gravado na venda (CUPOM -> estoque 2 / NFE|NFCE -> estoque 1). Best-effort.
-      try {
-        const { data: modoRow75 } = await supabase.from('sales').select('modo_nota').eq('id', saleId).maybeSingle();
-        const modo75 = String((modoRow75 as any)?.modo_nota || '').toUpperCase();
-        if (['CUPOM', 'NFE', 'NFCE'].includes(modo75)) {
-          const col75 = modo75 === 'CUPOM' ? 'estoque_semnf' : 'estoque_nota';
-          const { data: itens75 } = await supabase.from('sale_items').select('produto_id, quantidade').eq('sale_id', saleId);
-          const tot75 = new Map<string, number>();
-          for (const it of (itens75 || []) as any[]) {
-            const pid = String(it.produto_id);
-            tot75.set(pid, (tot75.get(pid) ?? 0) + (Number(it.quantidade) || 0));
-          }
-          const ids75 = [...tot75.keys()];
-          if (ids75.length > 0) {
-            const { data: prods75 } = await supabase.from('products').select(`id, ${col75}`).in('id', ids75);
-            for (const pr of (prods75 || []) as any[]) {
-              const q = tot75.get(String(pr.id)) || 0;
-              if (q <= 0) continue;
-              const novo = (Number(pr[col75]) || 0) + q;
-              await supabase.from('products').update({ [col75]: novo }).eq('id', pr.id);
-            }
-          }
-        }
-      } catch (e75) {
-        console.warn('[pre-venda] contador de saida (Bloco 75) falhou:', (e75 as any)?.message);
       }
 
       await logEventoSeguro(supabase, rotaIdRef, saleId, userId, 'ENTREGUE', eventoMotivo, lat, lng, eventoFoto);

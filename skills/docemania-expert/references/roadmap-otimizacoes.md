@@ -19,7 +19,7 @@ REGRA (lei 4): NADA aqui foi implementado — é lista para o dono aprovar item 
 
 Disciplina de egress (aplicar em qualquer tela nova): `select` só das colunas usadas (nunca `select=*` em lista grande), paginação/limite, catálogo com cache no cliente, imagens otimizadas e lazy.
 
-## 1. ESTOQUE (existe hoje: kardex atômico + EXCEPTION swallow 108; entrada sempre no Estoque Total; cupom→Estoque 2, NF→Estoque 1, contadores editáveis 75; reserva na pré-venda 88; estorno automático ao excluir; carga COM_NF/SEM_NF com aceite 95.1; importação XML de compra com entrada de estoque; estoque negativo PERMITIDO — proposta do bloco 70 parada por autorização)
+## 1. ESTOQUE (existe hoje: kardex atômico + EXCEPTION swallow 108; entrada sempre no Estoque CENTRAL; estoque 1/2 REMOVIDOS no 217 — um só saldo que abastece van e central; reserva na pré-venda 88; estorno automático ao excluir; carga da van SEM modo com aceite 95.1/217; importação XML de compra com entrada de estoque; estoque negativo PERMITIDO — proposta do bloco 70 parada por autorização)
 
 Propostas (aprováveis):
 - **E1 — Estoque mínimo + lista de reposição** (SQL leve: `alter table products add column if not exists estoque_minimo int default 0` + coluna na tela de produto + card "Repor" no dashboard admin e no vendedor com produtos abaixo). Custo baixo, risco zero, alto impacto operacional.

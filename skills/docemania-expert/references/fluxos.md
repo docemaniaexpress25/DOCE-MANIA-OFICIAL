@@ -64,7 +64,7 @@ Como os dados fluem de ponta a ponta. Ao mudar qualquer etapa, confira os arquiv
 ## 8. Fluxo de configurações e estoque (admin)
 
 - **SETTINGS** (4 sub-abas, 167): Geral (empresa, logo) / Pagamentos (Pix 1/2 + chave recebimento) / Sistema (margem 35%, mínimo, melhorias) / Integrações (atalhos). Hub ERP (`ConfiguracoesHub.tsx`): Focus (emitente, switches, webhook INSTALAR/REMOVER), Inter (autoBoletoAReceber, mensagem padrão, LOG webhook), QR catálogo, impressão.
-- **Estoque**: ajuste manual (admin — posição, preço, tudo; secretário — só qty `estoque_principal`), entrada por XML (Portal de Entradas: fila xml_itens → VINCULAR/CRIAR/IGNORAR → ENTRADA_ESTOQUE/ENTRADA_LOTE), carga da van (COM_NF/SEM_NF → cargas_pendentes → aceite do vendedor), kardex (`estoque_movimentos`, `/api/estoque/movimentos`), DnD no Estoque Central (ordem do PDV — não mexer, 89).
+- **Estoque**: ajuste manual (admin — posição, preço, tudo; secretário — só qty `estoque_principal`), entrada por XML (Portal de Entradas: fila xml_itens → VINCULAR/CRIAR/IGNORAR → ENTRADA_ESTOQUE/ENTRADA_LOTE), carga da van SEM modo (estoque central único — Bloco 217; → cargas_pendentes → aceite do vendedor), kardex (`estoque_movimentos`, `/api/estoque/movimentos`), DnD no Estoque Central (ordem do PDV — não mexer, 89).
 
 ## 9. Onde cada dado aparece (checklist de consistência)
 

@@ -304,20 +304,20 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
   const precoEspecialGbDe = (p: Product): number => (clienteGB ? (Number(p.precoEspecialGb) || 0) : 0);
 
   // ============================================================
-  // BLOCO 75 (ESTOQUE TOTAL) — DOIS ESTOQUES VIRARAM CONTADORES
-  // Pre-venda consulta SEMPRE o ESTOQUE TOTAL (estoque_principal).
-  // O documento do atendimento (CUPOM / NFE / NFCE) nao escolhe mais cofre:
-  // so alimenta o CONTADOR de saida (estoque 2 sem NF / estoque 1 com NF)
-  // na baixa. undefined nas colunas = fallback legado (tudo no principal).
+  // BLOCO 217 — ESTOQUE CENTRAL ÚNICO
+  // A regra de ESTOQUE 1/ESTOQUE 2 (contadores estoque_nota/estoque_semnf)
+  // foi REMOVIDA. O documento do atendimento (CUPOM / NFE / NFCE) continua
+  // sendo escolhido na tela e gravado na venda, mas NÃO escolhe mais cofre
+  // nem alimenta contador: o saldo único é o ESTOQUE CENTRAL
+  // (products.estoque_principal), que abastece a van e o próprio central.
   // ============================================================
   const rota2Ativo = !!rota2; // BLOCO 64: fluxo novo da ROTA 2 — geral (todos os vendedores)
-  const temDualEstoque = React.useMemo(() => products.some(p => p.estoqueNota !== undefined), [products]);
   // BLOCO 122: modo fiscal EFETIVO = fixado pelo dashboard (van SEM NF) OU o
   // documento escolhido na TELA 4. Enquanto ninguém escolheu, null.
-  const modoAtivo = rota2Ativo && temDualEstoque ? (modoAtendimento || docEscolhido || null) : null;
+  const modoAtivo = rota2Ativo ? (modoAtendimento || docEscolhido || null) : null;
 
-  /** Saldo que o PDV usa para o produto — BLOCO 75: pre-venda consulta o
-   *  ESTOQUE TOTAL unico; o modo do atendimento so alimenta o contador. */
+  /** Saldo que o PDV usa para o produto — BLOCO 75/217: pre-venda consulta o
+   *  ESTOQUE CENTRAL unico (o documento do atendimento não altera saldo). */
   const saldoFonte = React.useCallback((p: Product): number => {
     if (!sellFromCentral) {
       return minhaCarga.find(c => c.produtoId === p.id)?.quantidade || 0;

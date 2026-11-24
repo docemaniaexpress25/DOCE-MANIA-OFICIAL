@@ -566,13 +566,11 @@ alter table public.sales add column if not exists nota_chave              text;
 -- [BLOCO 27] Rota 2 por vendedor
 alter table public.app_users add column if not exists rota2 boolean not null default false;
 
--- [BLOCO 29/40] estoques nota/semnf + produto teste + modo do documento
-alter table public.products         add column if not exists estoque_nota   int default 0;
-alter table public.products         add column if not exists estoque_semnf  int default 0;
+-- [BLOCO 29/40] produto teste + modo do DOCUMENTO da venda
+-- BLOCO 217: estoque_nota/estoque_semnf (estoque 1/2) e o modo da van
+-- (cargas.modo_nota) foram REMOVIDOS — um só saldo: estoque_principal.
 alter table public.products         add column if not exists produto_teste  boolean default false;
-alter table public.cargas           add column if not exists modo_nota      text;   -- COM_NF | SEM_NF
-alter table public.cargas_pendentes add column if not exists modo_nota      text;
-alter table public.sales            add column if not exists modo_nota      text;   -- NFE | NFCE | CUPOM
+alter table public.sales            add column if not exists modo_nota      text;   -- NFE | NFCE | CUPOM (documento da venda)
 
 -- [BLOCO 31] ordem manual da fila
 alter table public.sales add column if not exists ordem_entrega int;
@@ -630,7 +628,7 @@ alter table public.sales add column if not exists nota_emitida_em timestamptz;
 -- ============================================================================
 
 -- ---------------------------------------------------------------------------
--- 4.1 baixar_estoque_principal [BLOCO 5, atualizado pelo BLOCO 29/75]
+-- 4.1 baixar_estoque_principal [BLOCO 5, v3 do BLOCO 217 — estoque central único]
 -- ---------------------------------------------------------------------------
 create or replace function public.baixar_estoque_principal(p_sale_id uuid)
 returns void
@@ -640,39 +638,24 @@ set search_path = public
 as $$
 declare
   v_baixado boolean;
-  v_modo    text;
 begin
-  select estoque_baixado, modo_nota into v_baixado, v_modo
+  select estoque_baixado into v_baixado
     from public.sales where id = p_sale_id;
   if v_baixado is not true then
     update public.sales set estoque_baixado = true where id = p_sale_id;
 
-    if v_modo = 'CUPOM' then
-      update public.products p
-         set estoque_semnf = coalesce(p.estoque_semnf, 0) - i.quantidade
-        from public.sale_items i
-       where i.sale_id = p_sale_id
-         and i.produto_id = p.id;
-    elsif v_modo in ('NFE','NFCE') then
-      update public.products p
-         set estoque_nota = coalesce(p.estoque_nota, 0) - i.quantidade
-        from public.sale_items i
-       where i.sale_id = p_sale_id
-         and i.produto_id = p.id;
-    else
-      -- LEGADO (Bloco 5 original): venda sem modo baixa o estoque principal
-      update public.products p
-         set estoque_principal = coalesce(p.estoque_principal, 0) - i.quantidade
-        from public.sale_items i
-       where i.sale_id = p_sale_id
-         and i.produto_id = p.id;
-    end if;
+    -- BLOCO 217: UM só saldo — a entrega da pré-venda baixa o ESTOQUE CENTRAL
+    update public.products p
+       set estoque_principal = coalesce(p.estoque_principal, 0) - i.quantidade
+      from public.sale_items i
+     where i.sale_id = p_sale_id
+       and i.produto_id = p.id;
   end if;
 end;
 $$;
 
 -- ---------------------------------------------------------------------------
--- 4.2 Estornos na exclusão de item/venda [BLOCO 5/6, v2 do BLOCO 29]
+-- 4.2 Estornos na exclusão de item/venda [BLOCO 5/6, v3 do BLOCO 217]
 -- ---------------------------------------------------------------------------
 create or replace function public.pre_venda_estorna_item()
 returns trigger
@@ -681,22 +664,12 @@ as $$
 declare
   v_sale record;
 begin
-  select tipo_venda, estoque_baixado, modo_nota into v_sale
+  select tipo_venda, estoque_baixado into v_sale
     from public.sales where id = old.sale_id;
   if found and v_sale.tipo_venda = 'PRE_VENDA' and v_sale.estoque_baixado is true then
-    if v_sale.modo_nota = 'CUPOM' then
-      update public.products
-         set estoque_semnf = coalesce(estoque_semnf, 0) + old.quantidade
-       where id = old.produto_id;
-    elsif v_sale.modo_nota in ('NFE','NFCE') then
-      update public.products
-         set estoque_nota = coalesce(estoque_nota, 0) + old.quantidade
-       where id = old.produto_id;
-    else
-      update public.products
-         set estoque_principal = coalesce(estoque_principal, 0) + old.quantidade
-       where id = old.produto_id;
-    end if;
+    update public.products
+       set estoque_principal = coalesce(estoque_principal, 0) + old.quantidade
+     where id = old.produto_id;
     update public.sales set estoque_baixado = false where id = old.sale_id;
   end if;
   return old;
@@ -714,22 +687,10 @@ language plpgsql
 as $$
 begin
   if old.tipo_venda = 'PRE_VENDA' and old.estoque_baixado is true then
-    if old.modo_nota = 'CUPOM' then
-      update public.products p
-         set estoque_semnf = coalesce(p.estoque_semnf, 0) + i.quantidade
-        from public.sale_items i
-       where i.sale_id = old.id and i.produto_id = p.id;
-    elsif old.modo_nota in ('NFE','NFCE') then
-      update public.products p
-         set estoque_nota = coalesce(p.estoque_nota, 0) + i.quantidade
-        from public.sale_items i
-       where i.sale_id = old.id and i.produto_id = p.id;
-    else
-      update public.products p
-         set estoque_principal = coalesce(p.estoque_principal, 0) + i.quantidade
-        from public.sale_items i
-       where i.sale_id = old.id and i.produto_id = p.id;
-    end if;
+    update public.products p
+       set estoque_principal = coalesce(p.estoque_principal, 0) + i.quantidade
+      from public.sale_items i
+     where i.sale_id = old.id and i.produto_id = p.id;
   end if;
   return old;
 end;

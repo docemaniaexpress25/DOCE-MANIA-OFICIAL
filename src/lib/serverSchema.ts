@@ -16,7 +16,9 @@ import { getServiceClient } from '@/lib/serverSupabase';
 const TTL_MS = 30_000;
 
 type Probe = { ok: boolean; at: number };
-const probes: Record<string, Probe | null> = { preVenda: null, entrega: null, foto: null, nota: null, fiscalProduto: null, rota2: null, estoquesNota: null, modoCarga: null, pendenteModo: null, modoVenda: null, produtoTeste: null, notaEmitidaEm: null, precoCupom: null, clientModoCupom: null, erpConfig: null, codigoGb: null, clientGb: null, notasOrdem: null, boletoCpf: null };
+// BLOCO 217: sondas estoquesNota/modoCarga/pendenteModo REMOVIDAS junto com a
+// regra de ESTOQUE 1/ESTOQUE 2 (colunas dropadas no Supabase).
+const probes: Record<string, Probe | null> = { preVenda: null, entrega: null, foto: null, nota: null, fiscalProduto: null, rota2: null, modoVenda: null, produtoTeste: null, notaEmitidaEm: null, precoCupom: null, clientModoCupom: null, erpConfig: null, codigoGb: null, clientGb: null, notasOrdem: null, boletoCpf: null };
 
 async function probeColumn(table: string, column: string, key: string): Promise<boolean> {
   const now = Date.now();
@@ -68,24 +70,9 @@ export function hasRota2Column(): Promise<boolean> {
   return probeColumn('app_users', 'rota2', 'rota2');
 }
 
-/** products.estoque_nota existe? (Bloco 29 — dois estoques em casa: COM NF / SEM NF) */
-export function hasEstoquesNotaColumns(): Promise<boolean> {
-  return probeColumn('products', 'estoque_nota', 'estoquesNota');
-}
-
 /** products.produto_teste existe? (Bloco 29 — produtos de teste so na rota 2) */
 export function hasProdutoTesteColumn(): Promise<boolean> {
   return probeColumn('products', 'produto_teste', 'produtoTeste');
-}
-
-/** cargas.modo_nota existe? (Bloco 29 — modo da van: COM_NF | SEM_NF, 1 ou outro) */
-export function hasModoCargaColumn(): Promise<boolean> {
-  return probeColumn('cargas', 'modo_nota', 'modoCarga');
-}
-
-/** cargas_pendentes.modo_nota existe? (Bloco 29 — modo da carga enviada pelo admin) */
-export function hasCargaPendenteModoColumn(): Promise<boolean> {
-  return probeColumn('cargas_pendentes', 'modo_nota', 'pendenteModo');
 }
 
 /** sales.modo_nota existe? (Bloco 29 — modo do atendimento: NFE | NFCE | CUPOM) */

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/serverSupabase';
 import { sessionFromRequest } from '@/lib/session';
 import { comissaoPvDeItens } from '@/lib/comissaoPv';
-import { hasModoVendaColumn, hasEstoquesNotaColumns, hasSalesBoletosTable } from '@/lib/serverSchema';
+import { hasModoVendaColumn, hasSalesBoletosTable } from '@/lib/serverSchema';
 
 /**
  * POST /api/pre-venda/venda
@@ -115,7 +115,8 @@ export async function POST(req: NextRequest) {
     const sessentaAtras = new Date(Date.now() - 60_000).toISOString();
     const [clientRes, sondas, dedupRes] = await Promise.all([
       supabase.from('clients').select('id').eq('id', clientId).limit(1).maybeSingle(),
-      Promise.all([hasModoVendaColumn(), hasEstoquesNotaColumns()]),
+      // BLOCO 217: sonda hasEstoquesNotaColumns REMOVIDA com a regra do estoque 1/2
+      hasModoVendaColumn(),
       // ANTI-DUPLICAÇÃO: pedido idêntico do MESMO vendedor para o MESMO cliente
       // com o MESMO valor registrado há menos de 60s = duplo clique / retry depois
       // da demora / recarregou a tela achando que travou. Devolve o existente
@@ -135,8 +136,8 @@ export async function POST(req: NextRequest) {
     const client = clientRes.data;
     if (clientRes.error) throw clientRes.error;
     if (!client) return NextResponse.json({ ok: false, error: 'Cliente nao encontrado.' }, { status: 404 });
-    // BLOCO 75: temEstoquesNota saiu — o aviso consulta sempre o Estoque Total
-    const [temModoVenda] = sondas;
+    // BLOCO 217: temEstoquesNota saiu — o aviso consulta sempre o ESTOQUE CENTRAL
+    const temModoVenda = sondas;
     if (dedupRes.data) {
       // -----------------------------------------------------------------
       // BLOCO 212 (dedup engolia pedido DIFERENTE): o casamento por

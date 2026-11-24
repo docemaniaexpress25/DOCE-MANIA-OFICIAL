@@ -429,23 +429,15 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     setClientInfoModal(client);
   };
 
-  // BLOCO 29 (ROTA 2): modo da VAN do vendedor — definido na CARGA pelo admin (1 ou outro)
-  const vanModo = React.useMemo(() => {
-    const modos = new Set(cargas.filter(c => c.vendedorId === user.id && c.modoNota).map(c => c.modoNota as string));
-    return modos.size === 1 ? ([...modos][0] as 'COM_NF' | 'SEM_NF') : null;
-  }, [cargas, user.id]);
-  // Dois estoques em casa já rodaram no banco? (produtos com estoque_nota presente)
-  const temDualEstoque = products.some(p => p.estoqueNota !== undefined);
-  // BLOCO 64 (decisão do chefe): o fluxo aprovado na ROTA 2 — pergunta de nota,
-  // wizard de pagamento (boleto/cheque/pix/dinheiro na data) e estoques COM NF/
-  // SEM NF — agora vale para TODOS os vendedores. NÃO depende mais da flag
-  // rota2 (que fica só para o piloto enxergar produtos de teste). A guarda
-  // temDualEstoque continua: se o SQL do bloco 29 não rodou no banco, degrada
-  // para o fluxo legado em vez de quebrar.
-  const fluxoNovoAtivo = temDualEstoque;
+  // BLOCO 217 — ESTOQUE CENTRAL ÚNICO: o modo da VAN (COM_NF/SEM_NF) e a
+  // guarda temDualEstoque da regra de ESTOQUE 1/ESTOQUE 2 foram REMOVIDOS.
+  // O fluxo novo (pergunta de nota + wizard de pagamento) vale para TODOS os
+  // vendedores, sempre — o saldo único é o estoque central.
+  const fluxoNovoAtivo = true;
 
   // Abre o PDV no modo escolhido no sheet (so para pre-vendedor).
-  // BLOCO 122: nota só vem fixada quando a VAN do dia é SEM NF (cupom forçado).
+  // BLOCO 217: nota fica null — o documento é escolhido na TELA 4 do PDV
+  // (a fixação por "van SEM NF" foi removida com a regra do estoque 1/2).
   const abrirNoModo = (client: Client, modo: 'PRONTA' | 'PRE_VENDA', nota?: 'NFE' | 'NFCE' | 'CUPOM' | null, nfcCpf?: string) => {
     setModoAtendimento(modo);
     setModoSheet(null);
@@ -461,14 +453,10 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
    * 3) documento cupom/NF-e/NFC-e DENTRO do PDV (tela 4)
    * 4) à vista / a prazo (tela 5) + forma (tela 6)
    * 5) cupom de conferência / resumo (tela 7) + documento verde (tela 8)
-   * Única exceção: VAN do dia SEM NF — cupom forçado, sem pergunta.
+   * BLOCO 217: a exceção "VAN SEM NF força cupom" foi removida junto com o
+   * modo da van (estoque 1/2) — o documento é escolhido na venda (tela 4).
    */
   const escolherModoVenda = (client: Client, modo: 'PRONTA' | 'PRE_VENDA') => {
-    if (fluxoNovoAtivo && modo === 'PRONTA' && vanModo === 'SEM_NF') {
-      abrirNoModo(client, modo, 'CUPOM');
-      showToast('VAN DE HOJE: MERCADORIA SEM NF — venda em cupom.', 'success');
-      return;
-    }
     abrirNoModo(client, modo);
   };
 

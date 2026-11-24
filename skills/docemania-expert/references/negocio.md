@@ -68,10 +68,10 @@ Regras ditas pelo dono ao longo de 167 blocos. Se uma tarefa contradiz qualquer 
 
 ## 7. Estoque / carga (blocos 75/80/88/95/95.1/108/108.1)
 
-- **Entrada sempre no Estoque Total**; cupom baixa e conta no Estoque 2 (sem NF); NF-e/NFC baixa e conta no Estoque 1; contadores editáveis. (75)
+- **ESTOQUE CENTRAL ÚNICO (Bloco 217)**: existe UM só saldo — `products.estoque_principal` — que abastece a VAN (pronta entrega) e o próprio CENTRAL (pré-venda). A regra de ESTOQUE 1/ESTOQUE 2 (contadores `estoque_nota`/`estoque_semnf` dos blocos 29/75) foi REMOVIDA: colunas dropadas e RPCs (baixa/estorno da pré-venda) baixam sempre o central. `sales.modo_nota` continua — é o DOCUMENTO da venda (NFE/NFCE/CUPOM), não estoque. (217)
 - **Custo congelado no momento da venda** ("SEMPRE VALE O PREÇO DE CUSTO NO MOMENTO DA VENDA") — trigger `setar_custo_unitario_venda`; lucro por rota usa custo congelado. (80/79)
 - Kardex completo (`estoque_movimentos`) com RPC atômico; EXCEPTION swallow ("kardex NUNCA quebra venda"). (108)
-- Carga da van: MODO COM_NF/SEM_NF (contadores separados); aceite do vendedor bloqueia carga zerada; ENTRADA_LOTE idempotente. (95.1/108)
+- Carga da van: SEM modo (Bloco 217 removeu COM_NF/SEM_NF) — sai do estoque central, delta van × casa no servidor (`/api/cargas` APLICAR/PENDENTE); aceite do vendedor bloqueia carga zerada; ENTRADA_LOTE idempotente. (95.1/108/217)
 - Estoque negativo: RPCs sem conferência de saldo (análise bloco 70) — proposta GREATEST(0,...)+CHECK aguardando autorização; NÃO implementar sem o dono aprovar.
 
 ## 8. Configurações (bloco 167)

@@ -1,0 +1,2055 @@
+openapi: 3.0.3
+info:
+  description: >
+    API para emissão, cancelamento e controle de boletos de cobrança simples.
+    <img src="https://img.shields.io/badge/DEPRECATED-red"/>
+
+
+    Obs: Esta versão está depreciada e será descontinuada em breve. Recomendamos
+    utilizar a **API Cobrança (Boleto com Pix)**.
+  version: ''
+  title: API Cobrança
+paths:
+  /boletos:
+    post:
+      summary: Emitir boleto de cobrança
+      description: >
+        Método utilizado para emitir um novo boleto registrado.
+
+
+        O boleto emitido estará disponível para consulta e pagamento, após um
+        tempo apróximado de 5 minutos da sua inclusão. Esse tempo é necessário
+        para o registro do boleto na CIP.
+
+
+        * Escopo requerido: boleto-cobranca.write
+
+        * rate limit: 120 chamadas por minuto
+
+
+        <div class="button-div"> 
+          <button class="button-yaml" data-category="CODE_EXAMPLE" data-value="emitirBoleto">
+            <img src="/img/icons/recipes.svg" alt="Ícone" width="24" height="24" />
+            Exemplos de código
+          </button>
+        </div>
+
+
+        <div class="swagger-link-container">
+          <div class="url-container">
+            <img src="https://img.shields.io/badge/POST-blue"/>
+            <span class="span-container">
+              <span class="server">https://cdpj.partners.bancointer.com.br/cobranca/v2<span class="url">/boletos</span></span>
+            </span>
+          </div>
+          <img src="/img/icons/copy.svg" alt="Ícone" width="24" height="24" class="copy-icon" />
+        </div>
+      tags:
+        - Boletos
+      operationId: incluirBoleto
+      parameters:
+        - $ref: '#/components/parameters/xContaCorrente'
+      requestBody:
+        description: Corpo do boleto
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/incluiBoletoRequest'
+            examples:
+              exemplo1:
+                $ref: '#/components/examples/incluiBoletoRequestExample'
+        required: true
+      responses:
+        '200':
+          description: Sucesso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/incluiBoletoResponse'
+              examples:
+                exemplo1:
+                  $ref: '#/components/examples/incluiBoletoResponseExample'
+        '400':
+          $ref: '#/components/responses/RequisicaoInvalida'
+        '403':
+          $ref: '#/components/responses/AcessoNegado'
+        '404':
+          $ref: '#/components/responses/NaoEncontrado'
+        '503':
+          $ref: '#/components/responses/ServicoIndisponivel'
+      x-codegen-request-body-name: body
+    get:
+      summary: Recuperar coleção de boletos
+      description: |
+        Método utilizado para recuperar uma coleção de Boletos por um período
+        específico, de acordo com os parâmetros informados.
+
+        * Escopo requerido: boleto-cobranca.read
+        * rate limit: 120 chamadas por minuto
+
+        <div class="button-div"> 
+          <button class="button-yaml" data-category="CODE_EXAMPLE" data-value="consultarListaBoletos">
+            <img src="/img/icons/recipes.svg" alt="Ícone" width="24" height="24" />
+            Exemplos de código
+          </button>
+        </div>
+
+        <div class="swagger-link-container">
+          <div class="url-container">
+            <img src="https://img.shields.io/badge/GET-green"/>
+            <span class="span-container">
+              <span class="server">https://cdpj.partners.bancointer.com.br/cobranca/v2<span class="url">/boletos</span></span>
+            </span>
+          </div>
+          <img src="/img/icons/copy.svg" alt="Ícone" width="24" height="24" class="copy-icon" />
+        </div>
+      tags:
+        - Boletos
+      operationId: pesquisarBoletos
+      parameters:
+        - $ref: '#/components/parameters/xContaCorrente'
+        - $ref: '#/components/parameters/dataInicial'
+        - $ref: '#/components/parameters/dataFinal'
+        - $ref: '#/components/parameters/filtrarDataPor'
+        - $ref: '#/components/parameters/situacao'
+        - $ref: '#/components/parameters/nome'
+        - $ref: '#/components/parameters/email'
+        - $ref: '#/components/parameters/cpfCnpj'
+        - $ref: '#/components/parameters/itensPorPagina'
+        - $ref: '#/components/parameters/paginaAtual'
+        - $ref: '#/components/parameters/ordenarPor'
+        - $ref: '#/components/parameters/tipoOrdenacao'
+      responses:
+        '200':
+          description: Sucesso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BoletosPageResponse'
+              examples:
+                exemplo1:
+                  $ref: '#/components/examples/consultaBoletosResponseExample'
+        '400':
+          $ref: '#/components/responses/RequisicaoInvalida'
+        '403':
+          $ref: '#/components/responses/AcessoNegado'
+        '404':
+          $ref: '#/components/responses/NaoEncontrado'
+        '500':
+          $ref: '#/components/responses/ServicoIndisponivel'
+  /boletos/sumario:
+    get:
+      summary: Recuperar sumário de boletos
+      description: >
+        Utilizado para recuperar o sumário de uma coleção de Boletos por um
+        período
+
+        específico, de acordo com os parâmetros informados.
+
+
+        * Escopo requerido: boleto-cobranca.read
+
+        * rate limit: 120 chamadas por minuto
+
+
+        <div class="button-div"> 
+          <button class="button-yaml" data-category="CODE_EXAMPLE" data-value="obterSumarioBoletos">
+            <img src="/img/icons/recipes.svg" alt="Ícone" width="24" height="24" />
+            Exemplos de código
+          </button>
+        </div>
+
+
+        <div class="swagger-link-container">
+          <div class="url-container">
+            <img src="https://img.shields.io/badge/GET-green"/>
+            <span class="span-container">
+              <span class="server">https://cdpj.partners.bancointer.com.br/cobranca/v2<span class="url">/boletos/sumario</span></span>
+            </span>
+          </div>
+          <img src="/img/icons/copy.svg" alt="Ícone" width="24" height="24" class="copy-icon" />
+        </div>
+      tags:
+        - Boletos
+      operationId: consultarSumario
+      parameters:
+        - $ref: '#/components/parameters/xContaCorrente'
+        - $ref: '#/components/parameters/dataInicial'
+        - $ref: '#/components/parameters/dataFinal'
+        - $ref: '#/components/parameters/filtrarDataPor'
+        - $ref: '#/components/parameters/situacao'
+        - $ref: '#/components/parameters/nome'
+        - $ref: '#/components/parameters/email'
+        - $ref: '#/components/parameters/cpfCnpj'
+      responses:
+        '200':
+          description: Sucesso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/sumarioResponse'
+              examples:
+                exemplo1:
+                  $ref: '#/components/examples/consultaSumarioResponseExample'
+        '400':
+          $ref: '#/components/responses/RequisicaoInvalida'
+        '403':
+          $ref: '#/components/responses/AcessoNegado'
+        '404':
+          $ref: '#/components/responses/NaoEncontrado'
+        '500':
+          $ref: '#/components/responses/ServicoIndisponivel'
+  /boletos/{nossoNumero}:
+    get:
+      summary: Recuperar boleto detalhado
+      description: >
+        Recupera um boleto detalhado de acordo com o parâmetro nossoNumero
+        informado.
+
+
+        * Escopo requerido: boleto-cobranca.read
+
+        * rate limit: 120 chamadas por minuto
+
+
+        <div class="button-div"> 
+          <button class="button-yaml" data-category="CODE_EXAMPLE" data-value="obterDetalhesBoleto">
+            <img src="/img/icons/recipes.svg" alt="Ícone" width="24" height="24" />
+            Exemplos de código
+          </button>
+        </div>
+
+
+        <div class="swagger-link-container">
+          <div class="url-container">
+            <img src="https://img.shields.io/badge/GET-green"/>
+            <span class="span-container">
+              <span class="server">https://cdpj.partners.bancointer.com.br/cobranca/v2<span class="url">/boletos/{nossoNumero}</span></span>
+            </span>
+          </div>
+          <img src="/img/icons/copy.svg" alt="Ícone" width="24" height="24" class="copy-icon" />
+        </div>
+      tags:
+        - Boletos
+      operationId: consultarBoleto
+      parameters:
+        - $ref: '#/components/parameters/xContaCorrente'
+        - $ref: '#/components/parameters/nossoNumero'
+      responses:
+        '200':
+          description: Sucesso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/boletoResponse'
+              examples:
+                exemplo1:
+                  $ref: '#/components/examples/consultaBoletoResponseExample'
+        '400':
+          $ref: '#/components/responses/RequisicaoInvalida'
+        '403':
+          $ref: '#/components/responses/AcessoNegado'
+        '404':
+          $ref: '#/components/responses/NaoEncontrado'
+        '500':
+          $ref: '#/components/responses/ServicoIndisponivel'
+  /boletos/{nossoNumero}/pdf:
+    get:
+      summary: Recuperar boleto em PDF
+      description: >
+        Recupera um boleto em pdf de acordo com o parâmetro nossoNumero
+        informado.
+
+
+        * Escopo requerido: boleto-cobranca.read
+
+        * rate limit: 120 chamadas por minuto
+
+
+        <div class="button-div"> 
+          <button class="button-yaml" data-category="CODE_EXAMPLE" data-value="obterPdfBoleto">
+            <img src="/img/icons/recipes.svg" alt="Ícone" width="24" height="24" />
+            Exemplos de código
+          </button>
+        </div>
+
+
+        <div class="swagger-link-container">
+          <div class="url-container">
+            <img src="https://img.shields.io/badge/GET-green"/>
+            <span class="span-container">
+              <span class="server">https://cdpj.partners.bancointer.com.br/cobranca/v2<span class="url">/boletos/{nossoNumero}/pdf</span></span>
+            </span>
+          </div>
+          <img src="/img/icons/copy.svg" alt="Ícone" width="24" height="24" class="copy-icon" />
+        </div>
+      tags:
+        - Boletos
+      operationId: descarregarPdfBoleto
+      parameters:
+        - $ref: '#/components/parameters/xContaCorrente'
+        - $ref: '#/components/parameters/nossoNumero'
+      responses:
+        '200':
+          description: Sucesso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PdfResponse'
+        '400':
+          $ref: '#/components/responses/RequisicaoInvalida'
+        '403':
+          $ref: '#/components/responses/AcessoNegado'
+        '404':
+          $ref: '#/components/responses/NaoEncontrado'
+        '500':
+          $ref: '#/components/responses/ServicoIndisponivel'
+  /boletos/{nossoNumero}/cancelar:
+    post:
+      summary: Cancelar boleto
+      description: |
+        Realiza o cancelamento de um boleto.
+
+        * Escopo requerido: boleto-cobranca.write
+        * rate limit: 120 chamadas por minuto
+
+        <div class="button-div"> 
+          <button class="button-yaml" data-category="CODE_EXAMPLE" data-value="cancelarBoleto">
+            <img src="/img/icons/recipes.svg" alt="Ícone" width="24" height="24" />
+            Exemplos de código
+          </button>
+        </div>
+
+        <div class="swagger-link-container">
+          <div class="url-container">
+            <img src="https://img.shields.io/badge/POST-blue"/>
+            <span class="span-container">
+              <span class="server">https://cdpj.partners.bancointer.com.br/cobranca/v2<span class="url">/boletos/{nossoNumero}/cancelar</span></span>
+            </span>
+          </div>
+          <img src="/img/icons/copy.svg" alt="Ícone" width="24" height="24" class="copy-icon" />
+        </div>
+      tags:
+        - Boletos
+      operationId: baixarBoleto
+      parameters:
+        - $ref: '#/components/parameters/xContaCorrente'
+        - $ref: '#/components/parameters/nossoNumero'
+      requestBody:
+        description: Corpo do boleto
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/baixaBoletoRequest'
+        required: true
+      responses:
+        '204':
+          description: Sucesso
+          content: {}
+        '400':
+          $ref: '#/components/responses/RequisicaoInvalida'
+        '403':
+          $ref: '#/components/responses/AcessoNegado'
+        '404':
+          $ref: '#/components/responses/NaoEncontrado'
+        '500':
+          $ref: '#/components/responses/ServicoIndisponivel'
+      x-codegen-request-body-name: body
+  /boletos/webhook:
+    put:
+      summary: Criar webhook
+      description: >
+        Método destinado a criar um webhook para receber notificações
+        (callbacks) de boletos pagos, cancelados e expirados.
+
+
+        Caso o servidor de webhook retorne erro de recebimento do callback,
+        serão realizadas até 4 tentativas com intervalos de 20, 30, 60 e 120
+        minutos.
+
+
+        * Escopo requerido: boleto-cobranca.write
+
+        * rate limit: 10 chamadas por minuto
+
+
+        <div class="button-div"> 
+          <button class="button-yaml" data-category="CODE_EXAMPLE" data-value="criarWebhookBoleto">
+            <img src="/img/icons/recipes.svg" alt="Ícone" width="24" height="24" />
+            Exemplos de código
+          </button>
+        </div>
+
+
+        <div class="swagger-link-container">
+          <div class="url-container">
+              <img src="https://img.shields.io/badge/PUT-purple"/>
+            <span class="span-container">
+              <span class="server">https://cdpj.partners.bancointer.com.br/cobranca/v2<span class="url">/boletos/webhook</span></span>
+            </span>
+          </div>
+          <img src="/img/icons/copy.svg" alt="Ícone" width="24" height="24" class="copy-icon" />
+        </div>
+      tags:
+        - Webhook
+      operationId: webhookPut
+      parameters:
+        - $ref: '#/components/parameters/xContaCorrente'
+      requestBody:
+        $ref: '#/components/requestBodies/WebhookConfigBody'
+      responses:
+        '204':
+          description: Sucesso
+          content: {}
+      callbacks:
+        listaBoletoCobranca:
+          '{$request.body#/webhookUrl/boleto}':
+            post:
+              parameters:
+                - in: header
+                  name: x-conta-corrente
+                  schema:
+                    type: string
+                    pattern: ^[1-9][0-9]*$
+                    example: '13525622'
+                  description: >-
+                    Conta corrente relacionada ao callback. Enviar apenas
+                    números(incluindo o dígito), e não enviar zeros a esquerda.
+              requestBody:
+                $ref: '#/components/requestBodies/WebhookBoletoBody'
+              responses:
+                '200':
+                  description: Notificação recebida com sucesso
+    get:
+      summary: Obter webhook cadastrado
+      description: |
+        Obtém o webhook cadastrado, caso exista.
+
+        * Escopo requerido: boleto-cobranca.read
+        * rate limit: 10 chamadas por minuto
+
+        <div class="button-div"> 
+          <button class="button-yaml" data-category="CODE_EXAMPLE" data-value="obterWebhookBoleto">
+            <img src="/img/icons/recipes.svg" alt="Ícone" width="24" height="24" />
+            Exemplos de código
+          </button>
+        </div>
+
+        <div class="swagger-link-container">
+          <div class="url-container">
+              <img src="https://img.shields.io/badge/GET-green"/>
+            <span class="span-container">
+              <span class="server">https://cdpj.partners.bancointer.com.br/cobranca/v2<span class="url">/boletos/webhook</span></span>
+            </span>
+          </div>
+          <img src="/img/icons/copy.svg" alt="Ícone" width="24" height="24" class="copy-icon" />
+        </div>
+      tags:
+        - Webhook
+      operationId: webhookGet
+      parameters:
+        - $ref: '#/components/parameters/xContaCorrente'
+      responses:
+        '200':
+          description: Sucesso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookCompleto'
+    delete:
+      summary: Excluir webhook
+      description: |
+        Exclui o webhook.
+
+        * Escopo requerido: boleto-cobranca.write
+        * rate limit: 10 chamadas por minuto
+
+        <div class="button-div"> 
+          <button class="button-yaml" data-category="CODE_EXAMPLE" data-value="excluirWebhookBoleto">
+            <img src="/img/icons/recipes.svg" alt="Ícone" width="24" height="24" />
+            Exemplos de código
+          </button>
+        </div>
+
+        <div class="swagger-link-container">
+          <div class="url-container">
+              <img src="https://img.shields.io/badge/DELETE-red"/>
+            <span class="span-container">
+              <span class="server">https://cdpj.partners.bancointer.com.br/cobranca/v2<span class="url">/boletos/webhook</span></span>
+            </span>
+          </div>
+          <img src="/img/icons/copy.svg" alt="Ícone" width="24" height="24" class="copy-icon" />
+        </div>
+      tags:
+        - Webhook
+      operationId: webhookDelete
+      parameters:
+        - $ref: '#/components/parameters/xContaCorrente'
+      responses:
+        '204':
+          description: Sucesso
+          content: {}
+  /boletos/webhook/callbacks:
+    get:
+      summary: Consultar callbacks
+      description: >-
+        Retorna as requisições de callbacks ordenadas pela data de disparo
+        (decrescente).
+
+        Permite consultar erros no envio de callbacks.
+
+
+        * Escopo requerido: boleto-cobranca.read
+
+        * rate limit: 10 chamadas por minuto
+
+
+        <div class="button-div"> 
+          <button class="button-yaml" data-category="CODE_EXAMPLE" data-value="consultarCallbacksBoleto">
+            <img src="/img/icons/recipes.svg" alt="Ícone" width="24" height="24" />
+            Exemplos de código
+          </button>
+        </div>
+
+
+        <div class="swagger-link-container">
+          <div class="url-container">
+              <img src="https://img.shields.io/badge/GET-green"/>
+            <span class="span-container">
+              <span class="server">https://cdpj.partners.bancointer.com.br/cobranca/v2<span class="url">/boletos/webhook/callbacks</span></span>
+            </span>
+          </div>
+          <img src="/img/icons/copy.svg" alt="Ícone" width="24" height="24" class="copy-icon" />
+        </div>
+      tags:
+        - Webhook
+      operationId: callbacksFilter
+      parameters:
+        - $ref: '#/components/parameters/xContaCorrente'
+        - name: dataHoraInicio
+          in: query
+          required: true
+          description: 'Formato aceito: yyyy-MM-dd''T''HH:mm[:ss][.SSS]XXX'
+          example: 2023-06-01T00:00Z ou 2023-06-01T00:00:00.000Z
+          x-arch-date-time-pattern: yyyy-MM-dd'T'HH:mm[:ss][.SSS]XXX
+          schema:
+            type: string
+            format: date-time
+            nullable: false
+        - name: dataHoraFim
+          description: 'Formato aceito: yyyy-MM-dd''T''HH:mm[:ss][.SSS]XXX'
+          in: query
+          example: 2023-06-01T00:00Z ou 2023-06-01T00:00:00.000Z
+          required: true
+          x-arch-date-time-pattern: yyyy-MM-dd'T'HH:mm[:ss][.SSS]XXX
+          schema:
+            type: string
+            format: date-time
+            nullable: false
+        - name: pagina
+          in: query
+          schema:
+            type: integer
+            description: Posição da página na lista de dados
+            default: 0
+            nullable: false
+        - name: tamanhoPagina
+          in: query
+          schema:
+            type: integer
+            description: Tamanho da página
+            default: 20
+            maximum: 50
+            minimum: 10
+            nullable: false
+        - name: nossoNumero
+          in: query
+          schema:
+            type: string
+            description: Nosso número a ser filtrado
+      responses:
+        '200':
+          description: Sucesso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CallbackAttemptPage'
+        '400':
+          $ref: '#/components/responses/RequisicaoInvalida'
+        '500':
+          $ref: '#/components/responses/ServicoIndisponivel'
+servers:
+  - url: https://cdpj.partners.bancointer.com.br/cobranca/v2
+    description: Servidor de Produção
+components:
+  parameters:
+    situacao:
+      name: situacao
+      in: query
+      required: false
+      schema:
+        type: string
+      description: >
+        Filtro pela situação da cobrança.
+
+        * `EXPIRADO `
+
+        * `VENCIDO`
+
+        * `EMABERTO`
+
+        * `PAGO`
+
+        * `CANCELADO`
+
+        * `EMPROCESSAMENTO`
+
+        * `FALHAEMISSAO`
+
+        OBS: No caso de filtrar por mais de uma situação, as situações devem ser
+        separadas por vírgula (PAGO,EMABERTO,VENCIDO)
+      example: EMABERTO
+    nome:
+      name: nome
+      description: Filtro pelo nome do pagador
+      in: query
+      required: false
+      schema:
+        type: string
+    email:
+      name: email
+      description: Filtro pelo email do pagador
+      in: query
+      required: false
+      schema:
+        type: string
+    cpfCnpj:
+      name: cpfCnpj
+      description: Campo para informar o cpf ou cnpj do pagador
+      in: query
+      required: false
+      schema:
+        type: string
+    filtrarDataPor:
+      name: filtrarDataPor
+      in: query
+      required: false
+      schema:
+        type: string
+        default: VENCIMENTO
+      description: >
+        Os filtros de data inicial e data final se aplicarão a:
+
+        * `VENCIMENTO` - Filtro de data pelo vencimento. (Default)
+
+        * `EMISSAO` - Filtro de data pela emissão.
+
+        * `SITUACAO` - Filtro de data pela mudança de situação.
+
+
+        Caso o campo situacao seja:
+
+
+        `EXPIRADO` as datas corresponderão a data de expiração dos boletos;
+
+
+        `VENCIDO` as datas corresponderão a data de vencimento dos boletos;
+
+
+        `EMABERTO` as datas corresponderão a data de emissão dos boletos;
+
+
+        `PAGO` as datas corresponderão a data de pagamento dos boletos;
+
+
+        `CANCELADO` as datas corresponderão a data de cancelamento dos boletos;
+
+
+        `EMPROCESSAMENTO` as datas corresponderão a data de boletos que se
+        encontram em processamento;
+
+
+        `FALHAEMISSAO` as datas corresponderão a data de boletos que se
+        encontram com falha na emissão;
+
+
+        Obs: o default é `VENCIMENTO`
+    dataInicial:
+      name: dataInicial
+      in: query
+      required: true
+      schema:
+        type: string
+      description: |
+        Data inicial, em acordo com o campo "filtrarDataPor"
+
+        Formato aceito: YYYY-MM-DD
+    dataFinal:
+      name: dataFinal
+      in: query
+      required: true
+      schema:
+        type: string
+      description: |
+        Data final, em acordo com o campo "filtrarDataPor"
+
+        Formato aceito: YYYY-MM-DD
+    itensPorPagina:
+      name: itensPorPagina
+      in: query
+      required: false
+      schema:
+        type: integer
+        format: int32
+        default: 100
+        minimum: 1
+        maximum: 1000
+      description: >
+        Quantidade máxima de registros retornados em cada página. Apenas a
+        última página pode conter uma quantidade menor de registros.
+
+
+        Valor mínimo: 1
+
+        Valor máximo: 1000
+
+        Valor default: 100
+    paginaAtual:
+      name: paginaAtual
+      in: query
+      required: false
+      schema:
+        type: integer
+        format: int32
+        default: 0
+      description: |
+        Página a ser retornada pela consulta.
+        Valor default: 0
+    ordenarPor:
+      name: ordenarPor
+      in: query
+      required: false
+      schema:
+        type: string
+        default: PAGADOR
+      description: |
+        Ordenar resultado por:
+          * `PAGADOR` (Default)
+          * `NOSSONUMERO`
+          * `SEUNUMERO`
+          * `DATASITUACAO`
+          * `DATAVENCIMENTO`
+          * `VALOR`
+          * `STATUS`
+    tipoOrdenacao:
+      name: tipoOrdenacao
+      in: query
+      required: false
+      schema:
+        type: string
+        default: ASC
+      description: |
+        Ordenação em ordem:
+          * `ASC` - Crescente (Default)
+          * `DESC` - Decrescente
+    nossoNumero:
+      name: nossoNumero
+      in: path
+      required: true
+      schema:
+        type: string
+      description: Nosso número associado ao boleto
+    xContaCorrente:
+      name: x-conta-corrente
+      in: header
+      description: >-
+        Conta corrente que será utilizada na operação. Necessário somente quando
+        a aplicação estiver associada a mais de uma conta corrente. Enviar
+        apenas números(incluindo o dígito), e não enviar zeros a esquerda.
+      schema:
+        type: string
+        pattern: ^[1-9][0-9]*$
+  requestBodies:
+    WebhookConfigBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/WebhookSolicitado'
+    WebhookBoletoBody:
+      description: Dados para notificação dos Boletos.
+      required: true
+      content:
+        application/json:
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/CallbackBoletoCobranca'
+          examples:
+            exemplo1:
+              $ref: '#/components/examples/CallbackBoletoCobrancaExample'
+  examples:
+    incluiBoletoRequestExample:
+      summary: Exemplo de inclusão de boleto de cobrança.
+      value:
+        seuNumero: '00000'
+        valorNominal: 100
+        dataVencimento: '2022-07-31'
+        numDiasAgenda: 30
+        pagador:
+          cnpjCpf: '99999999999'
+          nome: Nome do Pagador
+          email: ''
+          telefone: ''
+          cep: '99999999'
+          numero: '00'
+          complemento: ''
+          bairro: Bairro do Pagador
+          cidade: Cidade do Pagador
+          uf: MG
+          endereco: Endereço do Pagador
+          ddd: '31'
+          tipoPessoa: FISICA
+        mensagem:
+          linha1: mensagem na linha 1
+          linha2: mensagem na linha 2
+        desconto1:
+          codigoDesconto: PERCENTUALDATAINFORMADA
+          taxa: 1
+          valor: 0
+          data: '2022-07-20'
+        desconto2:
+          codigoDesconto: PERCENTUALDATAINFORMADA
+          taxa: 0.5
+          valor: 0
+          data: '2022-07-25'
+        multa:
+          codigoMulta: VALORFIXO
+          data: '2022-08-15'
+          taxa: 0
+          valor: 50
+        mora:
+          codigoMora: TAXAMENSAL
+          data: '2022-07-31'
+          taxa: 0.5
+          valor: 0
+        beneficiarioFinal:
+          nome: Beneficiário de teste
+          cpfCnpj: '07799085460'
+          tipoPessoa: FISICA
+          cep: '36420000'
+          endereco: Avenida Afonso Pena
+          bairro: Centro
+          cidade: Belo Horizonte
+          uf: MG
+    incluiBoletoResponseExample:
+      summary: Exemplo de resposta da inclusão de boleto de cobrança.
+      value:
+        seuNumero: '0000'
+        nossoNumero: '00000000000'
+        codigoBarras: '00000000000000000000000000000000000000000000'
+        linhaDigitavel: '00000000000000000000000000000000000000000000000'
+    consultaBoletosResponseExample:
+      summary: Exemplo de resposta da consulta dos boletos de cobrança.
+      value:
+        totalPages: 1
+        totalElements: 4
+        last: true
+        first: true
+        size: 20
+        numberOfElements: 3
+        content:
+          - nomeBeneficiario: BANCO INTER
+            cnpjCpfBeneficiario: '00000000000000'
+            tipoPessoaBeneficiario: JURIDICA
+            contaCorrente: '9999999'
+            nossoNumero: '00999999999'
+            seuNumero: '0128000'
+            pagador:
+              cpfCnpj: '04415122120'
+              tipoPessoa: FISICA
+              nome: João da Silva
+              endereco: Rua São Paulo
+              cidade: Belo Horizonte
+              uf: MG
+              cep: '36200000'
+              numero: '510'
+              complemento: bloco 3
+              bairro: Centro
+              email: joao.silva@email.com.br
+              ddd: '31'
+              telefone: '31318854'
+            situacao: EMABERTO
+            dataHoraSituacao: 2022-04-11 11:30
+            dataVencimento: '2022-12-19'
+            valorNominal: 123.45
+            dataEmissao: '2022-04-11'
+            dataLimite: '2023-01-19'
+            codigoEspecie: DUPLICATAMERCANTIL
+            codigoBarras: '00000000000000000000000000000000000000000000'
+            linhaDigitavel: '00000000000000000000000000000000000000000000000'
+            origem: CERTIFICADO
+            mensagem:
+              linha1: mensagem na linha 1
+              linha2: mensagem na linha 2
+            desconto1:
+              codigo: VALORFIXODATAINFORMADA
+              data: '2022-10-20'
+              taxa: 0
+              valor: 0.2
+            desconto2:
+              codigo: NAOTEMDESCONTO
+              taxa: 0
+              valor: 0
+            desconto3:
+              codigo: NAOTEMDESCONTO
+              taxa: 0
+              valor: 0
+            multa:
+              codigoMulta: VALORFIXO
+              taxa: 0
+              valor: 50
+              data: '2022-12-20'
+            mora:
+              codigoMora: TAXAMENSAL
+              taxa: 0.5
+              valor: 0
+              data: '2022-12-21'
+          - nomeBeneficiario: BANCO INTER
+            cnpjCpfBeneficiario: '00000000000000'
+            tipoPessoaBeneficiario: JURIDICA
+            contaCorrente: '9999999'
+            nossoNumero: '00999999999'
+            seuNumero: '0000'
+            pagador:
+              cpfCnpj: '04415122120'
+              tipoPessoa: FISICA
+              nome: João da Silva
+              endereco: Rua São Paulo
+              cidade: Belo Horizonte
+              uf: MG
+              cep: '36200000'
+              numero: '510'
+              complemento: bloco 3
+              bairro: Centro
+              email: joao.silva@email.com.br
+              ddd: '31'
+              telefone: '31318854'
+            situacao: PAGO
+            dataHoraSituacao: 2022-01-04 12:05
+            dataVencimento: '2022-05-24'
+            valorNominal: 100
+            dataEmissao: '2022-01-04'
+            dataLimite: '2022-07-24'
+            codigoEspecie: DUPLICATAMERCANTIL
+            codigoBarras: '00000000000000000000000000000000000000000000'
+            linhaDigitavel: '00000000000000000000000000000000000000000000000'
+            origem: CERTIFICADO
+            mensagem:
+              linha1: mensagem na linha 1
+            desconto1:
+              codigo: VALORFIXODATAINFORMADA
+              data: '2022-04-13'
+              taxa: 0
+              valor: 6
+            desconto2:
+              codigo: VALORFIXODATAINFORMADA
+              data: '2022-05-03'
+              taxa: 0
+              valor: 3
+            desconto3:
+              codigo: NAOTEMDESCONTO
+              taxa: 0
+              valor: 0
+            multa:
+              codigoMulta: VALORFIXO
+              data: '2022-08-15'
+              taxa: 0
+              valor: 50
+            mora:
+              codigoMora: TAXAMENSAL
+              data: '2022-07-31'
+              taxa: 0.5
+              valor: 0
+          - nomeBeneficiario: BANCO INTER
+            cnpjCpfBeneficiario: '00000000000000'
+            tipoPessoaBeneficiario: JURIDICA
+            contaCorrente: '9999999'
+            nossoNumero: '00999999999'
+            seuNumero: '0000'
+            pagador:
+              cpfCnpj: '04415122120'
+              tipoPessoa: FISICA
+              nome: João da Silva
+              endereco: Rua São Paulo
+              cidade: Belo Horizonte
+              uf: MG
+              cep: '36200000'
+              numero: '510'
+              complemento: bloco 3
+              bairro: Centro
+              email: joao.silva@email.com.br
+              ddd: '31'
+              telefone: '31318854'
+            situacao: PAGO
+            dataHoraSituacao: 2022-01-10 00:00
+            dataVencimento: '2022-01-19'
+            valorNominal: 100
+            dataEmissao: '2022-01-20'
+            dataLimite: '2022-02-19'
+            codigoEspecie: DUPLICATAMERCANTIL
+            codigoBarras: '00000000000000000000000000000000000000000000'
+            linhaDigitavel: '00000000000000000000000000000000000000000000000'
+            origem: CERTIFICADO
+            mensagem:
+              linha1: mensagem na linha 1
+              linha2: mensagem na linha 2
+            desconto1:
+              codigo: VALORFIXODATAINFORMADA
+              data: '2022-04-13'
+              taxa: 0
+              valor: 1
+            desconto2:
+              codigo: NAOTEMDESCONTO
+              taxa: 0
+              valor: 0
+            desconto3:
+              codigo: NAOTEMDESCONTO
+              taxa: 0
+              valor: 0
+            multa:
+              codigoMulta: VALORFIXO
+              data": '2022-08-15'
+              taxa": 0
+              valor": 50
+            mora:
+              codigoMora: TAXAMENSAL
+              data": '2022-07-31'
+              taxa": 0.5
+              valor": 0
+    consultaBoletoResponseExample:
+      summary: Exemplo de resposta da consulta de boleto de cobrança.
+      value:
+        nomeBeneficiario: BANCO INTER
+        cnpjCpfBeneficiario: '00000000000000'
+        tipoPessoaBeneficiario: JURIDICA
+        contaCorrente: '9999999'
+        nossoNumero: '00999999999'
+        seuNumero: '0000'
+        pagador:
+          cpfCnpj: '04415122120'
+          tipoPessoa: FISICA
+          nome: João da Silva
+          endereco: Rua São Paulo
+          cidade: Belo Horizonte
+          uf: MG
+          cep: '36200000'
+          numero: '510'
+          complemento: bloco 3
+          bairro: Centro
+          email: joao.silva@email.com.br
+          ddd: '31'
+          telefone: '31318854'
+        situacao: PAGO
+        dataHoraSituacao: 2022-01-10 00:00
+        dataVencimento: '2022-01-19'
+        valorNominal: 100
+        dataEmissao: '2022-01-20'
+        dataLimite: '2022-02-19'
+        codigoEspecie: DUPLICATAMERCANTIL
+        codigoBarras: '00000000000000000000000000000000000000000000'
+        linhaDigitavel: '00000000000000000000000000000000000000000000000'
+        origem: CERTIFICADO
+        mensagem:
+          linha1: mensagem na linha 1
+          linha2: mensagem na linha 2
+        desconto1:
+          codigo: PERCENTUALDATAINFORMADA
+          data: '2022-07-20'
+          taxa: 0.5
+          valor: 0
+        desconto2:
+          codigo: NAOTEMDESCONTO
+          taxa: 0
+          valor: 0
+        desconto3:
+          codigo: NAOTEMDESCONTO
+          taxa: 0
+          valor: 0
+        multa:
+          codigoMulta: VALORFIXO
+          data: '2022-08-15'
+          taxa: 0
+          valor: 50
+        mora:
+          codigoMora: TAXAMENSAL
+          data": '2022-07-31'
+          taxa": 0.5
+          valor": 0
+    consultaSumarioResponseExample:
+      summary: Exemplo de resposta da consulta de sumário de boleto de cobrança.
+      value:
+        pagos:
+          quantidade: 3
+          valor: 9
+        abertos:
+          quantidade: 5
+          valor: 10
+        vencidos:
+          quantidade: 1
+          valor: 1.5
+        cancelados:
+          quantidade: 2
+          valor: 4.5
+        expirados:
+          quantidade: 9
+          valor: 25
+    CallbackBoletoCobrancaExample:
+      summary: Exemplo de request para a notificação dos boletos
+      value:
+        - nossoNumero: '00999999999'
+          seuNumero: '0000'
+          situacao: PAGO
+          dataHoraSituacao: '2022-01-10'
+          valorNominal: 100
+          valorTotalRecebimento: 105
+          codigoBarras: '00000000000000000000000000000000000000000000'
+          linhaDigitavel: '00000000000000000000000000000000000000000000000'
+    AcessoNegadoExample1:
+      summary: Exemplo de erro da requisição 1
+      value:
+        title: Acesso Negado
+        status: 403
+        detail: >-
+          Requisição de participante autenticado que viola alguma regra de
+          autorização.
+    NaoEncontradoExample1:
+      summary: Exemplo de erro da requisição 1
+      value:
+        title: Não Encontrado
+        status: 404
+        detail: Entidade não encontrada.
+    ServicoIndisponivelExample1:
+      summary: Exemplo de erro da requisição 1
+      value:
+        title: Serviço Indisponível
+        status: 500
+        detail: >-
+          Serviço não está disponível no momento. Serviço solicitado pode estar
+          em manutenção ou fora da janela de funcionamento.
+    BadRequestExample1:
+      summary: Exemplo de bad request 1
+      value:
+        title: Bad Request
+        status: 400
+        detail: Requisição inválida
+  schemas:
+    BoletosPageResponse:
+      type: object
+      title: Boletos Consultados
+      required:
+        - content
+      properties:
+        totalPages:
+          $ref: '#/components/schemas/totalPages'
+        totalElements:
+          $ref: '#/components/schemas/totalElements'
+        last:
+          $ref: '#/components/schemas/last'
+        first:
+          $ref: '#/components/schemas/first'
+        size:
+          $ref: '#/components/schemas/size'
+        numberOfElements:
+          $ref: '#/components/schemas/numberOfElements'
+        content:
+          type: array
+          title: Lista de Boletos consultados
+          items:
+            $ref: '#/components/schemas/boletoResponse'
+    totalPages:
+      type: integer
+      title: Quantidade total de páginas
+      description: Quantidade total de páginas disponíveis para consulta.
+      minimum: 1
+      example: 1
+    totalElements:
+      type: integer
+      format: int32
+      title: Quantidade total de itens
+      description: >-
+        Quantidade total de itens disponíveis de acordo com os parâmetros
+        informados.
+      minimum: 0
+    last:
+      type: boolean
+      description: Última página
+      example: true
+    first:
+      type: boolean
+      description: Primeira página
+      example: true
+    size:
+      type: integer
+      title: Quantidade de itens por página
+      description: Quantidade de registros por página, configurado na requisição.
+      minimum: 1
+      example: 20
+    numberOfElements:
+      type: integer
+      title: Quantidade de itens na página atual
+      description: Quantidade de registros retornado na página atual.
+      minimum: 1
+    descontoResponse:
+      properties:
+        codigo:
+          type: string
+        data:
+          type: string
+        taxa:
+          type: number
+        valor:
+          type: number
+    multaResponse:
+      properties:
+        codigo:
+          type: string
+        data:
+          type: string
+        taxa:
+          type: number
+        valor:
+          type: number
+    moraResponse:
+      properties:
+        codigo:
+          type: string
+        data:
+          type: string
+        taxa:
+          type: number
+        valor:
+          type: number
+    beneficiarioFinal:
+      required:
+        - nome
+        - cpfCnpj
+        - tipoPessoa
+        - cep
+        - endereco
+        - bairro
+        - cidade
+        - uf
+      type: object
+      properties:
+        nome:
+          type: string
+          description: Nome do beneficiário final
+          maxLength: 100
+        cpfCnpj:
+          type: string
+          description: |
+            CPF/CNPJ do beneficiário final do título
+            CNPJ: NNNNNNNNNFFFFCC
+            CPF : 0000NNNNNNNNNCC,
+            onde
+            __NNNNNNNNN__ é a raiz do CNPJ/CPF
+            __FFFF__ = filial do CNPJ
+            __CC__ = dígitos de controle
+        tipoPessoa:
+          type: string
+          description: |
+            Tipo do beneficiário final:
+            * FISICA - Pessoa Física
+            * JURIDICA - Pessoa Jurídica
+        cep:
+          type: string
+          description: CEP do beneficiário final
+          example: '30110000'
+        endereco:
+          type: string
+          description: Endereço (logradouro) do beneficiário final
+          maxLength: 100
+          example: Avenida Brasil
+        bairro:
+          type: string
+          description: Bairro do beneficiário final
+          example: Centro
+          maxLength: 60
+          default: ''
+        cidade:
+          type: string
+          description: Cidade do beneficiário final
+          maxLength: 60
+          example: Belo Horizonte
+        uf:
+          $ref: '#/components/schemas/enumUF'
+    incluiBoletoRequest:
+      type: object
+      required:
+        - seuNumero
+        - dataVencimento
+        - valorNominal
+        - pagador
+        - numDiasAgenda
+      properties:
+        seuNumero:
+          type: string
+          description: Campo Seu Número do título
+          example: '123456'
+          maxLength: 15
+        valorNominal:
+          type: number
+          description: |
+            Valor Nominal do título
+
+            O valor nominal deve ser maior ou igual à R$2.50
+          minimum: 2.5
+          maximum: 99999999.99
+        dataVencimento:
+          type: string
+          description: |
+            Data de vencimento do título
+
+            Formato aceito: YYYY-MM-DD
+          example: '2018-07-27'
+        numDiasAgenda:
+          type: integer
+          description: >-
+            Número de dias corridos após o vencimento para o cancelamento
+            efetivo automático do boleto. (de 0 até 60)
+        pagador:
+          $ref: '#/components/schemas/pagador'
+        mensagem:
+          $ref: '#/components/schemas/mensagem'
+        desconto1:
+          $ref: '#/components/schemas/desconto'
+        desconto2:
+          $ref: '#/components/schemas/desconto'
+        desconto3:
+          $ref: '#/components/schemas/desconto'
+        multa:
+          $ref: '#/components/schemas/multa'
+        mora:
+          $ref: '#/components/schemas/mora'
+        beneficiarioFinal:
+          $ref: '#/components/schemas/beneficiarioFinal'
+      xml:
+        name: Boleto
+    incluiBoletoResponse:
+      type: object
+      properties:
+        seuNumero:
+          type: string
+          description: Seu Número, enviado na requisição para inclusão do título.
+          maxLength: 11
+        nossoNumero:
+          type: string
+          description: >-
+            Nosso Número, atribuído automaticamente pelo banco na emissão do
+            título.
+          maxLength: 11
+        codigoBarras:
+          type: string
+          description: >-
+            Representação numérica do código de barras do título emitido. (44
+            dígitos)
+          maxLength: 44
+        linhaDigitavel:
+          type: string
+          description: >-
+            Contém os mesmos dados do código de barras dispostos em ordem
+            diferente e acrescido de dígitos verificadores. (47 dígitos)
+          maxLength: 47
+    pagador:
+      type: object
+      required:
+        - cpfCnpj
+        - nome
+        - tipoPessoa
+        - cep
+        - endereco
+        - cidade
+        - uf
+      properties:
+        cpfCnpj:
+          type: string
+          description: |
+            CPF/CNPJ do pagador do título
+
+            CNPJ: NNNNNNNNNFFFFCC
+
+            CPF : 0000NNNNNNNNNCC,
+
+            onde
+
+            __NNNNNNNNN__ é a raiz do CNPJ/CPF
+
+            __FFFF__ = filial do CNPJ
+
+            __CC__ = dígitos de controle
+          minLength: 11
+          maxLength: 14
+        tipoPessoa:
+          type: string
+          description: |
+            Tipo do pagador:
+            * `FISICA` - Pessoa Física
+            * `JURIDICA` - Pessoa Jurídica
+        nome:
+          type: string
+          description: Nome do pagador
+          maxLength: 100
+          minLength: 1
+        endereco:
+          type: string
+          description: Endereço do pagador
+          maxLength: 100
+          minLength: 1
+          example: Avenida Brasil
+        numero:
+          type: string
+          description: Número no logradouro do pagador
+          maxLength: 10
+          example: '3456'
+          default: ''
+        complemento:
+          type: string
+          description: Complemento do endereço do pagador
+          maxLength: 30
+          example: apartamento 3 bloco 4
+          default: ''
+        bairro:
+          type: string
+          description: Bairro do pagador
+          maxLength: 60
+          example: Centro
+          default: ''
+        cidade:
+          type: string
+          description: Cidade do pagador
+          maxLength: 60
+          minLength: 1
+          example: Belo Horizonte
+        uf:
+          type: string
+          description: UF do pagador
+          minLength: 2
+          maxLength: 2
+          example: MG
+        cep:
+          type: string
+          description: CEP do pagador
+          minLength: 8
+          maxLength: 8
+          example: '30110000'
+        email:
+          type: string
+          default: ''
+          description: E-mail do pagador
+          maxLength: 50
+        ddd:
+          type: string
+          default: ''
+          description: DDD do telefone do pagador
+          maxLength: 2
+          example: '31'
+        telefone:
+          type: string
+          default: ''
+          description: Telefone do pagador
+          maxLength: 9
+    enumUF:
+      type: string
+      enum:
+        - AC
+        - AL
+        - AP
+        - AM
+        - BA
+        - CE
+        - DF
+        - ES
+        - GO
+        - MA
+        - MT
+        - MS
+        - MG
+        - PA
+        - PB
+        - PR
+        - PE
+        - PI
+        - RJ
+        - RN
+        - RS
+        - RO
+        - RR
+        - SC
+        - SP
+        - SE
+        - TO
+      description: UF
+      example: MG
+    mensagem:
+      properties:
+        linha1:
+          type: string
+          description: Linha 1 do campo de texto do título
+          maxLength: 78
+        linha2:
+          type: string
+          description: Linha 2 do campo de texto do título
+          maxLength: 78
+        linha3:
+          type: string
+          description: Linha 3 do campo de texto do título
+          maxLength: 78
+        linha4:
+          type: string
+          description: Linha 4 do campo de texto do título
+          maxLength: 78
+        linha5:
+          type: string
+          description: Linha 5 do campo de texto do título
+          maxLength: 78
+    desconto:
+      required:
+        - codigoDesconto
+        - valor
+        - taxa
+      properties:
+        codigoDesconto:
+          type: string
+          description: |
+            Código de Desconto do título.
+            * `NAOTEMDESCONTO` - Não tem desconto.
+            * `VALORFIXODATAINFORMADA` - Valor fixo até a data informada.
+            * `PERCENTUALDATAINFORMADA` - Percentual até a data informada.
+        data:
+          type: string
+          description: >
+            Data de Desconto do título.
+
+
+            Obrigatório para códigos de desconto VALORFIXODATAINFORMADA e
+            PERCENTUALDATAINFORMADA. Não informar para os
+
+            demais.
+
+
+            Formato aceito: YYYY-MM-DD
+          example: '2018-07-27'
+        taxa:
+          type: number
+          description: |
+            Taxa Percentual de Desconto do título.
+
+            Obrigatório para o código de desconto PERCENTUALDATAINFORMADA.
+            Para os demais informar 0.
+        valor:
+          type: number
+          description: |
+            Valor de Desconto, expresso na moeda do título.
+
+            Obrigatório para o código de desconto VALORFIXODATAINFORMADA.
+            Para os demais informar 0.
+    multa:
+      required:
+        - codigoMulta
+      properties:
+        codigoMulta:
+          type: string
+          description: |
+            Código de Multa do título.
+            * `NAOTEMMULTA` - Não tem multa
+            * `VALORFIXO` – Valor fixo
+            * `PERCENTUAL` - Percentual
+        data:
+          type: string
+          description: |
+            Data da Multa do título.
+
+            Obrigatório se informado código de multa VALORFIXO ou PERCENTUAL.
+
+            Deve ser maior que o vencimento e marca a data de início de cobrança
+            de multa (incluindo essa data)
+
+            Formato aceito: YYYY-MM-DD
+        taxa:
+          type: number
+          description: |
+            Taxa Percentual de Multa do título. Obrigatória se informado código
+            de multa PERCENTUAL
+
+            Deve ser 0 para código de multa NAOTEMMULTA
+        valor:
+          type: number
+          description: |
+            Valor de Multa expresso na moeda do título.
+
+            Obrigatório se informado código de multa VALORFIXO
+
+            Deve ser 0 para código de multa NAOTEMMULTA
+    mora:
+      required:
+        - codigoMora
+      properties:
+        codigoMora:
+          type: string
+          example: ISENTO
+          description: |
+            Código de Mora do título.
+            * `VALORDIA` - Valor ao dia
+            * `TAXAMENSAL` - Taxa mensal
+            * `ISENTO` - Isento
+        data:
+          type: string
+          description: |
+            Data da Mora do título.
+
+            Obrigatório se informado código de mora VALORDIA, TAXAMENSAL.
+
+            Deve ser maior que o vencimento e marca a data de início de cobrança
+            de mora (incluindo essa data)
+
+            Formato aceito: YYYY-MM-DD
+          example: '2018-07-27'
+        taxa:
+          type: number
+          description: |
+            Percentual de Mora do título.
+
+            Obrigatória se informado código de mora TAXAMENSAL
+          example: 0
+        valor:
+          type: number
+          description: |
+            Valor de Mora expresso na moeda do título.
+
+            Obrigatório se informado código de mora TAXAMENSAL
+
+            Deve ser 0 para código de mora ISENTO
+          example: 0
+    PdfResponse:
+      type: object
+      properties:
+        pdf:
+          type: string
+          description: Retorno do pdf base64 para String
+    boletoResponse:
+      type: object
+      properties:
+        nomeBeneficiario:
+          type: string
+          description: |
+            Nome do beneficiário.
+        cnpjCpfBeneficiario:
+          type: string
+          description: |
+            CNPJ do beneficiário.
+        tipoPessoaBeneficiario:
+          type: string
+          description: |
+            Tipo do beneficiário.
+        contaCorrente:
+          type: string
+          description: |
+            Conta corrente do boleto emitido
+        nossoNumero:
+          type: string
+          description: |
+            Identificador único do boleto emitido.
+        seuNumero:
+          type: string
+          description: |
+            Campo seuNumero do boleto emitido.
+        pagador:
+          $ref: '#/components/schemas/pagador'
+        motivoCancelamento:
+          type: string
+          description: |
+            Motivo do Cancelamento.
+        situacao:
+          type: string
+          description: |
+            Situacao do boleto.
+        dataHoraSituacao:
+          type: string
+          description: |
+            Data referente à situação do boleto.
+            Formato aceito: YYYY-MM-DD
+        dataVencimento:
+          type: string
+          description: |
+            Data referente ao vencimento do boleto.
+            Formato aceito: YYYY-MM-DD
+        valorNominal:
+          type: number
+          description: |
+            Valor Nominal do boleto.
+        valorTotalRecebimento:
+          type: number
+          description: |
+            Valor Total Recebimento.
+        dataEmissao:
+          type: string
+          description: |
+            Data referente à emissão do boleto.
+            Formato aceito: YYYY-MM-DD
+        dataLimite:
+          type: string
+          description: |
+            Data referente ao limite de pagamento do boleto.
+            Formato aceito: YYYY-MM-DD
+        codigoEspecie:
+          type: string
+          description: |
+            Codigo de Espécie do boleto.
+        codigoBarras:
+          type: string
+          description: |
+            Codigo de barras do boleto.
+        linhaDigitavel:
+          type: string
+          description: |
+            Linha digitável do boleto.
+        origem:
+          type: string
+          description: |
+            Origem da requisição que gerou o boleto.
+        mensagem:
+          $ref: '#/components/schemas/mensagem'
+        desconto1:
+          $ref: '#/components/schemas/descontoResponse'
+        desconto2:
+          $ref: '#/components/schemas/descontoResponse'
+        desconto3:
+          $ref: '#/components/schemas/descontoResponse'
+        multa:
+          $ref: '#/components/schemas/multaResponse'
+        mora:
+          $ref: '#/components/schemas/moraResponse'
+    baixaBoletoRequest:
+      type: object
+      required:
+        - motivoCancelamento
+      properties:
+        motivoCancelamento:
+          type: string
+          description: >
+            Domínio que descreve o tipo de cancelamento sendo solicitado.
+
+            * `ACERTOS` (cancelado por acertos)
+
+            * `APEDIDODOCLIENTE` (cancelado a pedido do cliente)
+
+            * `PAGODIRETOAOCLIENTE` (cancelado por ter sido pago direto ao
+            cliente)
+
+            * `SUBSTITUICAO` (cancelado por substituição)
+          example: ACERTOS
+    sumarioResponse:
+      type: object
+      properties:
+        pagos:
+          $ref: '#/components/schemas/quantidadeValor'
+        abertos:
+          $ref: '#/components/schemas/quantidadeValor'
+        vencidos:
+          $ref: '#/components/schemas/quantidadeValor'
+        cancelados:
+          $ref: '#/components/schemas/quantidadeValor'
+        expirados:
+          $ref: '#/components/schemas/quantidadeValor'
+    quantidadeValor:
+      type: object
+      properties:
+        quantidade:
+          type: integer
+          description: quantidade
+          example: 1
+        valor:
+          type: number
+          description: valor
+          example: 1.5
+    responseErro:
+      type: object
+      properties:
+        erro:
+          $ref: '#/components/schemas/erro'
+    erro:
+      type: object
+      properties:
+        mensagem:
+          type: string
+          example: Id Invalido
+          description: mensagem de erro.
+          maxLength: 200
+        status:
+          type: integer
+          example: 400
+          description: status HTTP.
+    CallbackBoletoCobranca:
+      description: Callback para o boleto de cobrança
+      type: object
+      properties:
+        idSolicitacao:
+          type: string
+          description: |
+            Identificador único da request [beta]
+        nossoNumero:
+          type: string
+          description: |
+            Nosso Numero.
+        seuNumero:
+          type: string
+          description: |
+            Seu Número.
+        motivoCancelamento:
+          type: string
+          description: |
+            Motivo do Cancelamento.
+        situacao:
+          type: string
+          enum:
+            - PAGO
+            - CANCELADO
+            - EXPIRADO
+        dataHoraSituacao:
+          type: string
+          description: |
+            Data referente à situação do título
+
+            Formato aceito: YYYY-MM-DD
+          example: '2018-07-27'
+        valorNominal:
+          type: number
+          description: |
+            Valor Nominal do Título
+          example: 1234
+        valorTotalRecebimento:
+          type: number
+          description: |
+            Valor Total Recebimento
+          example: 10
+        codigoBarras:
+          type: string
+        linhaDigitavel:
+          type: string
+          description: |
+            Linha Digitavel do Título.
+            Origem do request que gerou o boleto
+          example: certificado
+    WebhookSolicitado:
+      type: object
+      required:
+        - webhookUrl
+      title: Webhook
+      properties:
+        webhookUrl:
+          type: string
+          pattern: ^https://[^\s]*$
+          format: uri
+          example: https://boleto.example.com/api/webhook/
+          description: >-
+            URL de configuração do webhook. Deve iniciar obrigatoriamente com
+            **https://**
+    WebhookCompleto:
+      type: object
+      required:
+        - webhookUrl
+        - criacao
+      title: Webhook
+      properties:
+        webhookUrl:
+          type: string
+          format: uri
+          example: https://boleto.example.com/api/webhook/
+        criacao:
+          type: string
+          format: date-time
+          title: Data de Criação
+          description: Data e hora em que o webhook foi cadastrado. Respeita RFC 3339.
+          readOnly: true
+    Violacao:
+      type: object
+      title: Violação
+      properties:
+        razao:
+          type: string
+          title: Descrição do erro
+          description: Descrição do erro
+          example: Valor da cobrança não pode ser 0.00
+        propriedade:
+          type: string
+          title: Nome da propriedade
+          description: Nome da propriedade
+          example: cob.chave
+        valor:
+          type: string
+          title: Valor da propriedade
+          description: Valor da propriedade
+          example: '061996671234'
+    ProblemaViolacao:
+      type: object
+      required:
+        - type
+        - title
+        - status
+      properties:
+        type:
+          type: string
+          format: uri
+          description: >-
+            URI de referência que identifica o tipo de problema. De acordo com a
+            RFC 7807.
+          example: https://boleto.bcb.gov.br/api/v2/error/NaoEncontrado
+        title:
+          type: string
+          description: Descrição resumida do problema.
+          example: Not found
+        status:
+          type: integer
+          description: Código HTTP do status retornado.
+          example: 404
+        detail:
+          type: string
+          description: Descrição completa do problema.
+        violacoes:
+          type: array
+          items:
+            $ref: '#/components/schemas/Violacao'
+    Problema:
+      type: object
+      required:
+        - type
+        - title
+        - status
+      properties:
+        type:
+          type: string
+          format: uri
+          description: >-
+            URI de referência que identifica o tipo de problema. De acordo com a
+            RFC 7807.
+          example: https://boleto.bcb.gov.br/api/v2/error/NaoEncontrado
+        title:
+          type: string
+          description: Descrição resumida do problema.
+          example: Not found
+        status:
+          type: integer
+          description: Código HTTP do status retornado.
+          example: 404
+        detail:
+          type: string
+          description: Descrição completa do problema.
+    CallbackAttemptPage:
+      type: object
+      required:
+        - data
+      properties:
+        totalElementos:
+          type: integer
+          format: int64
+          description: >-
+            Quantidade total de itens disponíveis de acordo com os parâmetros
+            informados
+        totalPaginas:
+          type: integer
+          description: Quantidade total de páginas disponíveis para consulta.
+        primeiraPagina:
+          description: Informa se é a primeira página
+          type: boolean
+        ultimaPagina:
+          description: Informa se é a última página
+          type: boolean
+        data:
+          description: Dados de cada notificação de callback.
+          type: array
+          items:
+            $ref: '#/components/schemas/CallbackAttemptPageItem'
+    CallbackAttemptPageItem:
+      type: object
+      required:
+        - payload
+        - numeroTentativa
+        - dataEnvio
+        - sucesso
+      properties:
+        webhookUrl:
+          type: string
+          description: URL do webhook no momento do disparo.
+          format: uri
+        payload:
+          description: Corpo enviado na requisição.
+          type: object
+        numeroTentativa:
+          description: Qual o índice da tentativa de disparo.
+          type: integer
+        dataHoraDisparo:
+          description: Data/hora da tentativa de disparo do callback.
+          type: string
+          format: date-time
+        sucesso:
+          type: boolean
+          description: Informa se obteve sucesso no disparo do callback.
+        httpStatus:
+          description: Resposta da chamada ao endpoint do webhook.
+          type: integer
+        mensagemErro:
+          description: Mensagem de erro em caso de falha no dispardo do callback.
+          type: string
+    SituacaoBoletoEnum:
+      type: string
+      enum:
+        - EMABERTO
+        - PAGO
+        - CANCELADO
+        - VENCIDO
+        - EXPIRADO
+        - FALHAEMISSAO
+        - EMPROCESSAMENTO
+      description: Possíveis situações de um boleto.
+  responses:
+    RequisicaoInvalida:
+      description: Requisição com formato inválido.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ProblemaViolacao'
+          examples:
+            exemplos1:
+              $ref: '#/components/examples/BadRequestExample1'
+    NaoEncontrado:
+      description: Recurso solicitado não foi encontrado.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problema'
+          examples:
+            exemplo1:
+              $ref: '#/components/examples/NaoEncontradoExample1'
+    AcessoNegado:
+      description: >-
+        Requisição de participante autenticado que viola alguma regra de
+        autorização.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problema'
+          examples:
+            exemplo1:
+              $ref: '#/components/examples/AcessoNegadoExample1'
+    ServicoIndisponivel:
+      description: >-
+        Serviço não está disponível no momento. Serviço solicitado pode estar em
+        manutenção ou fora da janela de funcionamento.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problema'
+          examples:
+            exemplo1:
+              $ref: '#/components/examples/ServicoIndisponivelExample1'

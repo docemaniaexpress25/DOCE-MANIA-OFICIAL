@@ -264,10 +264,19 @@ export interface CobrancaColecaoItem {
 
 /**
  * Lista cobrancas da API do Inter (GET /cobranca/v3/cobrancas — colecao).
- * Janela de vencimento [dataInicial, dataFinal] (YYYY-MM-DD) + paginacao.
- * A resposta da colecao vem { itens: [...], pagina, qtdPaginas, ... } — o
- * parser e defensivo (aceita `itens` ou array direto; campos nos 2 shapes
- * conhecidos: plano ou cobranca aninhada).
+ *
+ * BLOCO 218 — CORRECAO CRITICA (portal de cobrancas mostrava "tudo em dia"
+ * com boletos vencidos): a consulta estava na SPEC V2 deprecada. A colecao
+ * V3 (spec OpenAPI oficial swagger-cobranca-bolepix.yaml, operacao
+ * pesquisaCobranca) usa:
+ *   - paginacao.paginaAtual   (0-based, default 0)  — nao era enviado
+ *   - paginacao.itensPorPagina (default 100, MAX 1000) — antes ia `size` (ignorado)
+ *   - ordenarPor=DATA_VENCIMENTO + tipoOrdenacao=ASC — o default da API e
+ *     PESSOA_PAGADORA (alfabetico), que espalha os vencidos pelas paginas
+ *   - resposta: array em `cobrancas` + `totalPaginas` (antes leia `itens`/`qtdPaginas`)
+ * Janela de vencimento [dataInicial, dataFinal] (YYYY-MM-DD). O parser segue
+ * defensivo: aceita `cobrancas` (V3), `itens` (legado) ou array direto.
+ * Situacao do boleto vencido e nao pago na V3: ATRASADO.
  */
 export async function listarCobrancas(opts: {
   dataInicial: string;
@@ -275,7 +284,7 @@ export async function listarCobrancas(opts: {
   size?: number;
   maxPaginas?: number;
 }): Promise<{ ok: boolean; itens: CobrancaColecaoItem[]; erro?: string; paginas?: number }> {
-  const size = Math.min(Math.max(opts.size || 100, 1), 100);
+  const size = Math.min(Math.max(opts.size || 500, 1), 1000);
   const maxPaginas = Math.min(Math.max(opts.maxPaginas || 5, 1), 10);
   const todas: CobrancaColecaoItem[] = [];
 
@@ -300,20 +309,26 @@ export async function listarCobrancas(opts: {
     const qs = new URLSearchParams({
       dataInicial: opts.dataInicial,
       dataFinal: opts.dataFinal,
-      size: String(size),
-      page: String(pagina),
+      // SPEC V3: paginacao em sub-campos (BLOCO 218 — antes size/page da V2
+      // eram ignorados e a resposta `cobrancas` nunca era lida)
+      'paginacao.paginaAtual': String(pagina),
+      'paginacao.itensPorPagina': String(size),
+      ordenarPor: 'DATA_VENCIMENTO',
+      tipoOrdenacao: 'ASC',
     });
     const r = await requestJson('GET', `/cobranca/v3/cobrancas?${qs.toString()}`);
     if (!r.ok) return { ok: false, itens: todas, erro: r.erro };
     const data = r.data as Record<string, unknown>;
-    const arr: Record<string, unknown>[] = Array.isArray((data as { itens?: unknown }).itens)
-      ? ((data as { itens: unknown[] }).itens as Record<string, unknown>[])
-      : (Array.isArray(data) ? (data as unknown as Record<string, unknown>[]) : []);
+    const arr: Record<string, unknown>[] = Array.isArray((data as { cobrancas?: unknown }).cobrancas)
+      ? ((data as { cobrancas: unknown[] }).cobrancas as Record<string, unknown>[])
+      : Array.isArray((data as { itens?: unknown }).itens)
+        ? ((data as { itens: unknown[] }).itens as Record<string, unknown>[])
+        : (Array.isArray(data) ? (data as unknown as Record<string, unknown>[]) : []);
     for (const raw of arr) {
       const it = parseItem(raw);
       if (it) todas.push(it);
     }
-    const qtdPaginas = Number((data as Record<string, unknown>).qtdPaginas || (data as Record<string, unknown>).totalPaginas || 1);
+    const qtdPaginas = Number((data as Record<string, unknown>).totalPaginas || (data as Record<string, unknown>).qtdPaginas || 1);
     if (!Number.isFinite(qtdPaginas) || pagina + 1 >= qtdPaginas || arr.length < size) break;
   }
   return { ok: true, itens: todas, paginas: maxPaginas };

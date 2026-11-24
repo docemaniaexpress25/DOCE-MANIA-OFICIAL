@@ -277,6 +277,22 @@ const salesSeed = [
     inter_boleto_vencimento: diaPassado(-2), inter_boleto_valor: 90,
     inter_boleto_linha: null, inter_boleto_barras: null, inter_boleto_pix: null, inter_boleto_erro: null,
   },
+  // BLOCO 218 (E2E): boleto ANTIGO vencido (fluxo Bloco 25, gravado em
+  // sales.inter_boleto_*) — antes do fix este boleto NAO aparecia no Portal
+  // de Cobrancas (o fallback local so olhava sales_boletos). Agora entra na
+  // lista junto com os vencidos de sales_boletos (total 530.75 + 456.78).
+  {
+    id: 'sale-boleto-antigo', vendedor_id: 'rota2user', client_id: 'cli-2',
+    valor_total: 456.78, valor_pago: 0, metodo_pagamento: 'A_PRAZO',
+    detalhe_pagamento: 'PRONTA — cobrar BOLETO na entrega (A PRAZO)',
+    status_pagamento: 'PENDENTE', data_venda: iso(20160), data_vencimento: `${diaPassado(8)}T23:59:59-03:00`,
+    tipo_venda: 'PRONTA', entrega_status: null, trocas: null,
+    prioridade: 0, separado: false, separado_em: null, entregador_id: null,
+    comprovante_foto: null, modo_nota: null, route_id: null, entrega_seq: null, ordem_entrega: null,
+    inter_boleto_status: 'A_RECEBER', inter_boleto_codigo: 'mock-cob-antigo', inter_boleto_seu_numero: 'DM-E2E-ANTIGO',
+    inter_boleto_vencimento: diaPassado(8), inter_boleto_valor: 456.78,
+    inter_boleto_linha: '34191090089999999999123456789012345678901234567', inter_boleto_barras: null, inter_boleto_pix: null, inter_boleto_erro: null,
+  },
   // BLOCO 211 (E2E): venda À VISTA sem recebimento registrado — o alerta
   // "vendas sem cobrança" da HOME classifica como SEM RECEBIMENTO (à vista)
   {
@@ -300,6 +316,8 @@ const saleItemsSeed = [
   // BLOCO 210 (E2E): itens das vendas com boleto (cupom reaberto renderiza itens)
   { id: 'si-7', sale_id: 'sale-boleto-uni', produto_id: 'prod-1', product_id: 'prod-1', quantidade: 10, preco_venda: 15 },
   { id: 'si-8', sale_id: 'sale-boleto-canc', produto_id: 'prod-2', product_id: 'prod-2', quantidade: 30, preco_venda: 3 },
+  // BLOCO 218 (E2E): item da venda com boleto antigo vencido (cupom com itens)
+  { id: 'si-10', sale_id: 'sale-boleto-antigo', produto_id: 'prod-1', product_id: 'prod-1', quantidade: 30, preco_venda: 15.226 },
   // BLOCO 211 (E2E): item da venda à vista sem pagamento (cupom reaberto com itens)
   { id: 'si-9', sale_id: 'sale-avista-sem-pag', produto_id: 'prod-2', product_id: 'prod-2', quantidade: 10, preco_venda: 4.55 },
 ];
@@ -386,8 +404,12 @@ function json(data: any, status = 200) {
 // ---------- BLOCO 31: filtros PostgREST basicos ----------
 function aplicarFiltros(rows: any[], params: URLSearchParams): any[] {
   let out = [...rows];
+  // BLOCO 218 (correção do fechamento do PDV no E2E): `range` NÃO é filtro —
+  // é o parâmetro de PAGINAÇÃO do PostgREST (.range() do fetchAllPages). Sem
+  // o skip, TODA query paginada (clients/products/sales) voltava VAZIA no
+  // mock, o guard de clients zerava a lista e o PDV fechava no meio da venda.
   for (const [key, raw] of params.entries()) {
-    if (['select', 'order', 'limit', 'offset', 'on_conflict', 'apikey', 'columns'].includes(key)) continue;
+    if (['select', 'order', 'limit', 'offset', 'range', 'on_conflict', 'apikey', 'columns'].includes(key)) continue;
     if (key === 'or' || key === 'and' || key === 'or=( Foto' ) continue;
     let val = raw;
     let negar = false;

@@ -1676,15 +1676,15 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
         </div>
       </header>
 
-      {/* ===== BLOCO 29 (ROTA 2): SELO DO DOCUMENTO (tela 4 escolhe ou van fixa) ===== */}
+      {/* ===== SELO DO DOCUMENTO (escolhido na tela 4) — BLOCO 217: estoque único ===== */}
       {modoAtivo && (
         <div className={`w-full px-3 py-2 flex items-center gap-2.5 border-b ${modoAtivo === 'CUPOM' ? 'bg-gray-100 border-gray-200' : 'bg-violet-50 border-violet-200'}`}>
           <i className={`fa-solid ${modoAtivo === 'CUPOM' ? 'fa-receipt text-gray-500' : modoAtivo === 'NFE' ? 'fa-file-invoice-dollar text-violet-600' : 'fa-file-lines text-violet-600'} text-sm`}></i>
           <div className="flex-1 min-w-0">
             <p className={`text-[10px] font-black uppercase tracking-wide ${modoAtivo === 'CUPOM' ? 'text-gray-600' : 'text-violet-700'}`}>
-              {modoAtivo === 'CUPOM' ? 'CUPOM — sai do TOTAL, conta no ESTOQUE 2 (SEM NF)' : modoAtivo === 'NFE' ? 'NF-e — sai do TOTAL, conta no ESTOQUE 1 (COM NF)' : 'NFC-e — sai do TOTAL, conta no ESTOQUE 1 (COM NF)'}
+              {modoAtivo === 'CUPOM' ? 'CUPOM — sai do TOTAL, baixa o ESTOQUE CENTRAL' : modoAtivo === 'NFE' ? 'NF-e — sai do TOTAL, baixa o ESTOQUE CENTRAL' : 'NFC-e — sai do TOTAL, baixa o ESTOQUE CENTRAL'}
             </p>
-            <p className={`text-[8px] font-bold ${modoAtivo === 'CUPOM' ? 'text-gray-400' : 'text-violet-400'}`}>{modoAtendimento ? 'Fixado pelo carregamento da van' : 'Documento escolhido na tela 4'} — baixa o Estoque Total e alimenta o contador</p>
+            <p className={`text-[8px] font-bold ${modoAtivo === 'CUPOM' ? 'text-gray-400' : 'text-violet-400'}`}>{modoAtendimento ? 'Fixado pelo atendimento' : 'Documento escolhido na tela 4'} — a saída baixa o estoque central (van pronta entrega)</p>
           </div>
         </div>
       )}

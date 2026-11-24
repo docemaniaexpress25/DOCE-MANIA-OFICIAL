@@ -1,0 +1,2802 @@
+openapi: 3.0.3
+info:
+  title: API Cobrança (Boleto com Pix)
+  version: ''
+  description: ''
+servers:
+  - url: https://cdpj.partners.bancointer.com.br/cobranca/v3
+    description: Servidor de Produção
+  - url: https://cdpj-sandbox.partners.uatinter.co/cobranca/v3
+    description: Servidor de Sandbox
+paths:
+  /cobrancas:
+    get:
+      tags:
+        - Cobrança
+      summary: Recuperar coleção de cobranças
+      description: >
+        Recuperar coleção de cobranças
+
+
+        * Escopo requerido: boleto-cobranca.read
+
+        * rate limit: <br />
+            * <img src="https://img.shields.io/badge/PRODUÇÃO-FF7043"/> 120 chamadas por minuto <br />
+            * <img src="https://img.shields.io/badge/SANDBOX-07605B"/> 10 chamadas por minuto
+
+        *Obs: O [ token
+        ](https://developers.inter.co/references/token#tag/Token/operation/Token)
+        tem validade de 60 minutos e deverá ser reutilizado nas requisições.*
+
+
+        <div class="button-div"> 
+          <button class="button-yaml" data-category="CODE_EXAMPLE" data-value="consultarListaCobrancas">
+            <img src="/img/icons/recipes.svg" alt="Ícone" width="24" height="24" />
+            Exemplos de código
+          </button>
+        </div>
+
+
+        <div class="swagger-link-container">
+          <div class="url-container">
+            <img src="https://img.shields.io/badge/PRODUÇÃO-FF7043"/>
+            <img src="https://img.shields.io/badge/GET-green"/>
+            <span class="span-container">
+              <span class="server">https://cdpj.partners.bancointer.com.br/cobranca/v3<span class="url">/cobrancas</span></span>
+            </span>
+          </div>
+          <img src="/img/icons/copy.svg" alt="Ícone" width="24" height="24" class="copy-icon" />
+        </div>
+
+
+        <div class="swagger-link-container">
+          <div class="url-container">
+            <img src="https://img.shields.io/badge/SANDBOX-07605B"/>
+            <img src="https://img.shields.io/badge/GET-green"/>
+            <span class="span-container">
+              <span class="server">https://cdpj-sandbox.partners.uatinter.co/cobranca/v3<span class="url">/cobrancas</span></span>
+            </span>
+          </div>
+          <img src="/img/icons/copy.svg" alt="Ícone" width="24" height="24" class="copy-icon" />
+        </div>
+      operationId: pesquisaCobranca
+      parameters:
+        - $ref: '#/components/parameters/xContaCorrente'
+        - $ref: '#/components/parameters/dataInicial'
+        - $ref: '#/components/parameters/dataFinal'
+        - $ref: '#/components/parameters/filtrarDataPor'
+        - $ref: '#/components/parameters/situacao'
+        - $ref: '#/components/parameters/pessoaPagadora'
+        - $ref: '#/components/parameters/cpfCnpjPessoaPagadora'
+        - $ref: '#/components/parameters/seuNumero'
+        - $ref: '#/components/parameters/tipoCobranca'
+        - $ref: '#/components/parameters/itensPorPagina'
+        - $ref: '#/components/parameters/paginaAtual'
+        - $ref: '#/components/parameters/ordenarPor'
+        - $ref: '#/components/parameters/tipoOrdenacao'
+      responses:
+        '200':
+          description: Solicitação realizada com sucesso.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CobrancasResponse'
+              examples:
+                exemplo1:
+                  $ref: '#/components/examples/exemploRetornoListaCobrancas'
+        '400':
+          $ref: '#/components/responses/RequisicaoInvalida'
+        '403':
+          $ref: '#/components/responses/AcessoNegado'
+        '404':
+          $ref: '#/components/responses/NaoEncontrado'
+        '500':
+          $ref: '#/components/responses/ServicoIndisponivel'
+    post:
+      tags:
+        - Cobrança
+      description: >
+        Método utilizado para emitir uma cobrança com código de barras e QRCode
+
+        de forma assíncrona.
+
+
+        Após a emissão, será disparado um callback com os dados da cobrança
+
+        gerada para seu webhook cadastrado.
+
+        Você também poderá buscar atualizações da cobrança de forma ativa
+
+        utilizando o Código identificador(codigoSolicitacao) único retornado na
+
+        chamada de inclusão.
+
+
+        Sua chave Pix será automaticamente selecionada para emissão do QR Code
+
+        no boleto de cobrança. Caso nenhuma chave seja encontrada, o boleto
+
+        será emitido sem o QR Code. Cadastre uma chave Pix via aplicativo ou
+
+        Internet Banking para aproveitar todos os benefícios do produto.
+
+
+        <div style="color: red"><b>Atenção:</b></div>
+
+
+        **Horário limite para vencimento no dia corrente:**<br>
+
+        Cobranças com vencimento para o mesmo dia só podem ser emitidas até às
+
+        19h59.
+
+
+        **Controle de duplicidade:**<br>
+
+        Para evitar emissão de cobranças em duplicidade, utilizamos os campos
+
+        seuNumero, valorNominal, dataVencimento e cpfCnpj do pagador para
+
+        montar uma chave de idempotência, com duração de 30min. Portanto, não
+
+        será possível emitir mais de uma cobrança com todos estes campos
+
+        idênticos em um intervalo de 30 minutos entre as chamadas.
+
+
+        * Escopo requerido: boleto-cobranca.write
+
+        * rate limit: <br />
+            * <img src="https://img.shields.io/badge/PRODUÇÃO-FF7043"/> 120 chamadas por minuto <br />
+            * <img src="https://img.shields.io/badge/SANDBOX-07605B"/> 10 chamadas por minuto
+
+        *Obs: O [ token
+        ](https://developers.inter.co/references/token#tag/Token/operation/Token)
+        tem validade de 60 minutos e deverá ser reutilizado nas requisições.*
+
+
+        <div class="button-div"> 
+          <button class="button-yaml" data-category="CODE_EXAMPLE" data-value="emitirCobranca">
+            <img src="/img/icons/recipes.svg" alt="Ícone" width="24" height="24" />
+            Exemplos de código
+          </button>
+        </div>
+
+
+        <div class="swagger-link-container">
+          <div class="url-container">
+            <img src="https://img.shields.io/badge/PRODUÇÃO-FF7043"/>
+            <img src="https://img.shields.io/badge/POST-blue"/>
+            <span class="span-container">
+              <span class="server">https://cdpj.partners.bancointer.com.br/cobranca/v3<span class="url">/cobrancas</span></span>
+            </span>
+          </div>
+          <img src="/img/icons/copy.svg" alt="Ícone" width="24" height="24" class="copy-icon" />
+        </div>
+
+
+        <div class="swagger-link-container">
+          <div class="url-container">
+            <img src="https://img.shields.io/badge/SANDBOX-07605B"/>
+            <img src="https://img.shields.io/badge/POST-blue"/>
+            <span class="span-container">
+              <span class="server">https://cdpj-sandbox.partners.uatinter.co/cobranca/v3<span class="url">/cobrancas</span></span>
+            </span>
+          </div>
+          <img src="/img/icons/copy.svg" alt="Ícone" width="24" height="24" class="copy-icon" />
+        </div>
+      summary: Emitir cobrança
+      operationId: emitirCobrancaAsync
+      parameters:
+        - $ref: '#/components/parameters/xContaCorrente'
+      requestBody:
+        $ref: '#/components/requestBodies/EmitirCobrancaAsyncRequest'
+      responses:
+        '200':
+          description: Retorno do inserir boleto
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmitirCobrancaAsyncResponse'
+              examples:
+                exemplo1:
+                  $ref: '#/components/examples/exemploRetornoEmitirCobranca'
+        '400':
+          $ref: '#/components/responses/RequisicaoInvalida'
+        '403':
+          $ref: '#/components/responses/AcessoNegado'
+        '500':
+          $ref: '#/components/responses/ErroInterno'
+        '503':
+          $ref: '#/components/responses/ServicoIndisponivel'
+  /cobrancas/{codigoSolicitacao}:
+    get:
+      tags:
+        - Cobrança
+      description: >
+        Retorna os dados da cobrança de acordo com codigoSolicitacao informado.
+
+
+        * Escopo requerido: boleto-cobranca.read
+
+        * rate limit: <br />
+            * <img src="https://img.shields.io/badge/PRODUÇÃO-FF7043"/> 120 chamadas por minuto <br />
+            * <img src="https://img.shields.io/badge/SANDBOX-07605B"/> 10 chamadas por minuto
+
+        *Obs: O [ token
+        ](https://developers.inter.co/references/token#tag/Token/operation/Token)
+        tem validade de 60 minutos e deverá ser reutilizado nas requisições.*
+
+
+        <div class="button-div"> 
+          <button class="button-yaml" data-category="CODE_EXAMPLE" data-value="obterDetalhesBoleto">
+            <img src="/img/icons/recipes.svg" alt="Ícone" width="24" height="24" />
+            Exemplos de código
+          </button>
+        </div>
+
+
+        <div class="swagger-link-container">
+          <div class="url-container">
+            <img src="https://img.shields.io/badge/PRODUÇÃO-FF7043"/>
+            <img src="https://img.shields.io/badge/GET-green"/>
+            <span class="span-container">
+              <span class="server">https://cdpj.partners.bancointer.com.br/cobranca/v3<span class="url">/cobrancas/{codigoSolicitacao}</span></span>
+            </span>
+          </div>
+          <img src="/img/icons/copy.svg" alt="Ícone" width="24" height="24" class="copy-icon" />
+        </div>
+
+
+        <div class="swagger-link-container">
+          <div class="url-container">
+            <img src="https://img.shields.io/badge/SANDBOX-07605B"/>
+            <img src="https://img.shields.io/badge/GET-green"/>
+            <span class="span-container">
+              <span class="server">https://cdpj-sandbox.partners.uatinter.co/cobranca/v3<span class="url">/cobrancas/{codigoSolicitacao}</span></span>
+            </span>
+          </div>
+          <img src="/img/icons/copy.svg" alt="Ícone" width="24" height="24" class="copy-icon" />
+        </div>
+      summary: Recuperar cobrança
+      operationId: recuperarCobrancaDetalhada
+      parameters:
+        - $ref: '#/components/parameters/codigoSolicitacao'
+        - $ref: '#/components/parameters/xContaCorrente'
+      responses:
+        '200':
+          description: Sucesso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CobrancaDetalhadaResponseBody'
+              examples:
+                example1:
+                  $ref: '#/components/examples/exemploRetornoRecuperarCobranca'
+        '400':
+          $ref: '#/components/responses/RequisicaoInvalida'
+        '403':
+          $ref: '#/components/responses/AcessoNegado'
+        '404':
+          $ref: '#/components/responses/NaoEncontrado'
+        '500':
+          $ref: '#/components/responses/ServicoIndisponivel'
+    patch:
+      tags:
+        - Cobrança
+      description: |
+        Editar os dados da cobrança de acordo com codigoSolicitacao informado.
+
+        * Escopo requerido: boleto-cobranca.write
+        * rate limit: <br />
+            * <img src="https://img.shields.io/badge/PRODUÇÃO-FF7043"/> 10 chamadas por minuto <br />
+            * <img src="https://img.shields.io/badge/SANDBOX-07605B"/> 10 chamadas por minuto
+
+        <div class="button-div"> 
+          <button class="button-yaml" data-category="CODE_EXAMPLE" data-value="editarCobranca">
+            <img src="/img/icons/recipes.svg" alt="Ícone" width="24" height="24" />
+            Exemplos de código
+          </button>
+        </div>
+
+        <div class="swagger-link-container">
+          <div class="url-container">
+            <img src="https://img.shields.io/badge/PRODUÇÃO-FF7043"/>
+            <img src="https://img.shields.io/badge/PATCH-orange"/>
+            <span class="span-container">
+              <span class="server">https://cdpj.partners.bancointer.com.br/cobranca/v3<span class="url">/cobrancas/{codigoSolicitacao}</span></span>
+            </span>
+          </div>
+          <img src="/img/icons/copy.svg" alt="Ícone" width="24" height="24" class="copy-icon" />
+        </div>
+
+        <div class="swagger-link-container">
+          <div class="url-container">
+            <img src="https://img.shields.io/badge/SANDBOX-07605B"/>
+            <img src="https://img.shields.io/badge/PATCH-orange"/>
+            <span class="span-container">
+              <span class="server">https://cdpj-sandbox.partners.uatinter.co/cobranca/v3<span class="url">/cobrancas/{codigoSolicitacao}</span></span>
+            </span>
+          </div>
+          <img src="/img/icons/copy.svg" alt="Ícone" width="24" height="24" class="copy-icon" />
+        </div>
+
+        * Observações: <br />
+            * O [ token ](https://developers.inter.co/references/token#tag/Token/operation/Token) tem validade de 60 minutos e deverá ser reutilizado nas requisições. <br />
+            * Após editar uma cobrança, seu valor pode levar até **30 minutos** para ser atualizado.
+      summary: Editar cobrança
+      operationId: editarCobranca
+      parameters:
+        - $ref: '#/components/parameters/codigoSolicitacao'
+        - $ref: '#/components/parameters/xContaCorrente'
+      requestBody:
+        $ref: '#/components/requestBodies/UpdateCobrancaRequest'
+      responses:
+        '200':
+          description: Sucesso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdateCobrancaResponseBody'
+        '400':
+          $ref: '#/components/responses/RequisicaoInvalida'
+        '403':
+          $ref: '#/components/responses/AcessoNegado'
+        '404':
+          $ref: '#/components/responses/NaoEncontrado'
+        '500':
+          $ref: '#/components/responses/ServicoIndisponivel'
+  /cobrancas/edicao/{codigoEdicao}:
+    get:
+      tags:
+        - Cobrança
+      description: |
+        Consultar edição da cobrança de acordo com codigoEdicao informado.
+
+        * Escopo requerido: boleto-cobranca.read
+        * rate limit: <br />
+            * <img src="https://img.shields.io/badge/PRODUÇÃO-FF7043"/> 10 chamadas por minuto <br />
+            * <img src="https://img.shields.io/badge/SANDBOX-07605B"/> 10 chamadas por minuto
+
+        <div class="button-div"> 
+          <button class="button-yaml" data-category="CODE_EXAMPLE" data-value="obterEdicaoCobranca">
+            <img src="/img/icons/recipes.svg" alt="Ícone" width="24" height="24" />
+            Exemplos de código
+          </button>
+        </div>
+
+        <div class="swagger-link-container">
+          <div class="url-container">
+            <img src="https://img.shields.io/badge/PRODUÇÃO-FF7043"/>
+            <img src="https://img.shields.io/badge/GET-green"/>
+            <span class="span-container">
+              <span class="server">https://cdpj.partners.bancointer.com.br/cobranca/v3<span class="url">/cobrancas/edicao/{codigoEdicao}</span></span>
+            </span>
+          </div>
+          <img src="/img/icons/copy.svg" alt="Ícone" width="24" height="24" class="copy-icon" />
+        </div>
+
+        <div class="swagger-link-container">
+          <div class="url-container">
+            <img src="https://img.shields.io/badge/SANDBOX-07605B"/>
+            <img src="https://img.shields.io/badge/GET-green"/>
+            <span class="span-container">
+              <span class="server">https://cdpj-sandbox.partners.uatinter.co/cobranca/v3<span class="url">/cobrancas/edicao/{codigoEdicao}</span></span>
+            </span>
+          </div>
+          <img src="/img/icons/copy.svg" alt="Ícone" width="24" height="24" class="copy-icon" />
+        </div>
+
+        * Observações: <br />
+            * O [ token ](https://developers.inter.co/references/token#tag/Token/operation/Token) tem validade de 60 minutos e deverá ser reutilizado nas requisições. <br />
+            * Após editar uma cobrança, seu valor pode levar até **30 minutos** para ser atualizado.
+      summary: Consultar status da edição da cobrança
+      operationId: consultarAtualizacaoCobranca
+      parameters:
+        - $ref: '#/components/parameters/codigoEdicao'
+        - $ref: '#/components/parameters/xContaCorrente'
+      responses:
+        '200':
+          description: Sucesso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetStatusUpdateResponseBody'
+        '400':
+          $ref: '#/components/responses/RequisicaoInvalida'
+        '403':
+          $ref: '#/components/responses/AcessoNegado'
+        '404':
+          $ref: '#/components/responses/NaoEncontrado'
+        '500':
+          $ref: '#/components/responses/ServicoIndisponivel'
+  /cobrancas/{codigoSolicitacao}/pdf:
+    get:
+      tags:
+        - Cobrança
+      description: >
+        Recupera uma cobrança com código de barras e QRCode em PDF.
+
+
+        * Escopo requerido: boleto-cobranca.read
+
+        * rate limit: <br />
+            * <img src="https://img.shields.io/badge/PRODUÇÃO-FF7043"/> 120 chamadas por minuto <br />
+            * <img src="https://img.shields.io/badge/SANDBOX-07605B"/> 10 chamadas por minuto
+
+        *Obs: O [ token
+        ](https://developers.inter.co/references/token#tag/Token/operation/Token)
+        tem validade de 60 minutos e deverá ser reutilizado nas requisições.*
+
+
+        <div class="button-div"> 
+          <button class="button-yaml" data-category="CODE_EXAMPLE" data-value="obterPdfCobranca">
+            <img src="/img/icons/recipes.svg" alt="Ícone" width="24" height="24" />
+            Exemplos de código
+          </button>
+        </div>
+
+
+        <div class="swagger-link-container">
+          <div class="url-container">
+            <img src="https://img.shields.io/badge/PRODUÇÃO-FF7043"/>
+            <img src="https://img.shields.io/badge/GET-green"/>
+            <span class="span-container">
+              <span class="server">https://cdpj.partners.bancointer.com.br/cobranca/v3<span class="url">/cobrancas/{codigoSolicitacao}/pdf</span></span>
+            </span>
+          </div>
+          <img src="/img/icons/copy.svg" alt="Ícone" width="24" height="24" class="copy-icon" />
+        </div>
+
+
+        <div class="swagger-link-container">
+          <div class="url-container">
+            <img src="https://img.shields.io/badge/SANDBOX-07605B"/>
+            <img src="https://img.shields.io/badge/GET-green"/>
+            <span class="span-container">
+              <span class="server">https://cdpj-sandbox.partners.uatinter.co/cobranca/v3<span class="url">/cobrancas/{codigoSolicitacao}/pdf</span></span>
+            </span>
+          </div>
+          <img src="/img/icons/copy.svg" alt="Ícone" width="24" height="24" class="copy-icon" />
+        </div>
+      summary: Recuperar cobrança em PDF
+      operationId: obterPdfCobranca
+      parameters:
+        - $ref: '#/components/parameters/codigoSolicitacao'
+        - $ref: '#/components/parameters/xContaCorrente'
+      responses:
+        '200':
+          description: Sucesso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PdfResponse'
+              examples:
+                exemplo1:
+                  $ref: '#/components/examples/exemploResponsePdf'
+        '400':
+          $ref: '#/components/responses/RequisicaoInvalida'
+        '403':
+          $ref: '#/components/responses/AcessoNegado'
+        '404':
+          $ref: '#/components/responses/NaoEncontrado'
+        '500':
+          $ref: '#/components/responses/ServicoIndisponivel'
+  /cobrancas/{codigoSolicitacao}/cancelar:
+    post:
+      tags:
+        - Cobrança
+      description: >
+        Cancelar cobrança com o codigoSolicitacao informado.
+
+
+        * Escopo requerido: boleto-cobranca.write
+
+        * rate limit: <br />
+            * <img src="https://img.shields.io/badge/PRODUÇÃO-FF7043"/> 120 chamadas por minuto <br />
+            * <img src="https://img.shields.io/badge/SANDBOX-07605B"/> 10 chamadas por minuto
+
+        *Obs: O [ token
+        ](https://developers.inter.co/references/token#tag/Token/operation/Token)
+        tem validade de 60 minutos e deverá ser reutilizado nas requisições.*
+
+
+        <div class="button-div"> 
+          <button class="button-yaml" data-category="CODE_EXAMPLE" data-value="cancelarCobranca">
+            <img src="/img/icons/recipes.svg" alt="Ícone" width="24" height="24" />
+            Exemplos de código
+          </button>
+        </div>
+
+
+        <div class="swagger-link-container">
+          <div class="url-container">
+            <img src="https://img.shields.io/badge/PRODUÇÃO-FF7043"/>
+            <img src="https://img.shields.io/badge/POST-blue"/>
+            <span class="span-container">
+              <span class="server">https://cdpj.partners.bancointer.com.br/cobranca/v3<span class="url">/cobrancas/{codigoSolicitacao}/cancelar</span></span>
+            </span>
+          </div>
+          <img src="/img/icons/copy.svg" alt="Ícone" width="24" height="24" class="copy-icon" />
+        </div>
+
+
+        <div class="swagger-link-container">
+          <div class="url-container">
+            <img src="https://img.shields.io/badge/SANDBOX-07605B"/>
+            <img src="https://img.shields.io/badge/POST-blue"/>
+            <span class="span-container">
+              <span class="server">https://cdpj-sandbox.partners.uatinter.co/cobranca/v3<span class="url">/cobrancas/{codigoSolicitacao}/cancelar</span></span>
+            </span>
+          </div>
+          <img src="/img/icons/copy.svg" alt="Ícone" width="24" height="24" class="copy-icon" />
+        </div>
+      summary: Cancelar cobrança
+      operationId: cancelarCobranca
+      parameters:
+        - $ref: '#/components/parameters/codigoSolicitacao'
+        - $ref: '#/components/parameters/xContaCorrente'
+      requestBody:
+        $ref: '#/components/requestBodies/CancelarCobrancaRequest'
+      responses:
+        '202':
+          description: Sucesso
+          content: {}
+        '400':
+          $ref: '#/components/responses/RequisicaoInvalida'
+        '403':
+          $ref: '#/components/responses/AcessoNegado'
+        '404':
+          $ref: '#/components/responses/NaoEncontrado'
+        '500':
+          $ref: '#/components/responses/ServicoIndisponivel'
+  /cobrancas/sumario:
+    get:
+      tags:
+        - Cobrança
+      description: >
+        Utilizado para recuperar o sumário de uma coleção de Cobranças por um
+        período
+
+        específico, de acordo com os parâmetros informados.
+
+
+        * Escopo requerido: boleto-cobranca.read
+
+        * rate limit: <br />
+            * <img src="https://img.shields.io/badge/PRODUÇÃO-FF7043"/> 120 chamadas por minuto <br />
+            * <img src="https://img.shields.io/badge/SANDBOX-07605B"/> 10 chamadas por minuto
+
+        *Obs: O [ token
+        ](https://developers.inter.co/references/token#tag/Token/operation/Token)
+        tem validade de 60 minutos e deverá ser reutilizado nas requisições.*
+
+
+        <div class="button-div">
+          <button class="button-yaml" data-category="CODE_EXAMPLE" data-value="obterSumarioCobrancas">
+            <img src="/img/icons/recipes.svg" alt="Ícone" width="24" height="24" />
+            Exemplos de código
+          </button>
+        </div>
+
+
+        <div class="swagger-link-container">
+          <div class="url-container">
+            <img src="https://img.shields.io/badge/PRODUÇÃO-FF7043"/>
+            <img src="https://img.shields.io/badge/GET-green"/>
+            <span class="span-container">
+              <span class="server">https://cdpj.partners.bancointer.com.br/cobranca/v3<span class="url">/cobrancas/sumario</span></span>
+            </span>
+          </div>
+          <img src="/img/icons/copy.svg" alt="Ícone" width="24" height="24" class="copy-icon" />
+        </div>
+
+
+        <div class="swagger-link-container">
+          <div class="url-container">
+            <img src="https://img.shields.io/badge/SANDBOX-07605B"/>
+            <img src="https://img.shields.io/badge/GET-green"/>
+            <span class="span-container">
+              <span class="server">https://cdpj-sandbox.partners.uatinter.co/cobranca/v3<span class="url">/cobrancas/sumario</span></span>
+            </span>
+          </div>
+          <img src="/img/icons/copy.svg" alt="Ícone" width="24" height="24" class="copy-icon" />
+        </div>
+      summary: Recuperar sumário de cobranças
+      operationId: consultarSumario
+      parameters:
+        - $ref: '#/components/parameters/xContaCorrente'
+        - $ref: '#/components/parameters/dataInicial'
+        - $ref: '#/components/parameters/dataFinal'
+        - $ref: '#/components/parameters/filtrarDataPor'
+        - $ref: '#/components/parameters/situacao'
+        - $ref: '#/components/parameters/tipoCobranca'
+        - $ref: '#/components/parameters/seuNumero'
+        - $ref: '#/components/parameters/pessoaPagadora'
+        - $ref: '#/components/parameters/cpfCnpjPessoaPagadora'
+      responses:
+        '200':
+          description: Sucesso
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/itemSumarioCobrancas'
+              examples:
+                exemploe1:
+                  $ref: '#/components/examples/exemploRetornoSumario'
+        '400':
+          $ref: '#/components/responses/RequisicaoInvalida'
+        '403':
+          $ref: '#/components/responses/AcessoNegado'
+        '404':
+          $ref: '#/components/responses/NaoEncontrado'
+        '500':
+          $ref: '#/components/responses/ServicoIndisponivel'
+  /cobrancas/{codigoSolicitacao}/pagar:
+    post:
+      tags:
+        - Cobrança
+      description: >
+        Pagamento de uma cobrança com código de barras ou QRCode(**Exclusivo
+        para o ambiente Sandbox**).
+
+
+        Após o pagamento, será disparado um callback com os dados da cobrança
+        atualizados para seu webhook cadastrado.
+
+
+        * Escopo requerido: boleto-cobranca.write
+
+        * rate limit: <br />
+            * <img src="https://img.shields.io/badge/SANDBOX-07605B"/> 10 chamadas por minuto
+
+        *Obs: O [ token
+        ](https://developers.inter.co/references/token#tag/Token/operation/Token)
+        tem validade de 60 minutos e deverá ser reutilizado nas requisições.*
+
+
+        <div class="button-div">
+          <button class="button-yaml" data-category="CODE_EXAMPLE" data-value="pagamentoCobrancaSandbox">
+            <img src="/img/icons/recipes.svg" alt="Ícone" width="24" height="24" />
+            Exemplos de código
+          </button>
+        </div>
+
+        <div class="swagger-link-container">
+          <div class="url-container">
+            <img src="https://img.shields.io/badge/SANDBOX-07605B"/>
+            <img src="https://img.shields.io/badge/POST-blue"/>
+            <span class="span-container">
+              <span class="server">https://cdpj-sandbox.partners.uatinter.co/cobranca/v3<span class="url">/cobrancas/{codigoSolicitacao}/pagar</span></span>
+            </span>
+          </div>
+          <img src="/img/icons/copy.svg" alt="Ícone" width="24" height="24" class="copy-icon" />
+        </div>
+      summary: Pagar cobrança (Sandbox)
+      operationId: pagarCobranca
+      servers:
+        - url: https://cdpj-sandbox.partners.uatinter.co/cobranca/v3
+          description: Servidor de Sandbox
+      parameters:
+        - $ref: '#/components/parameters/codigoSolicitacao'
+      requestBody:
+        $ref: '#/components/requestBodies/PagarCobrancaRequest'
+      responses:
+        '204':
+          description: Sucesso no Pagamento
+          content: {}
+        '400':
+          $ref: '#/components/responses/RequisicaoInvalida'
+        '403':
+          $ref: '#/components/responses/AcessoNegado'
+        '500':
+          $ref: '#/components/responses/ErroInterno'
+        '503':
+          $ref: '#/components/responses/ServicoIndisponivel'
+  /cobrancas/webhook:
+    put:
+      tags:
+        - Webhook
+      description: >
+        Método destinado a criar um webhook para receber notificações
+        (callbacks) de cobranças pagas, canceladas e expiradas.
+
+
+        Caso o servidor de webhook retorne erro de recebimento do callback,
+        serão realizadas até 4 tentativas com intervalos de 20, 30, 60 e 120
+        minutos.
+
+
+        * Escopo requerido: boleto-cobranca.write
+
+        * rate limit: <br />
+            * <img src="https://img.shields.io/badge/PRODUÇÃO-FF7043"/> 5 chamadas por minuto <br />
+            * <img src="https://img.shields.io/badge/SANDBOX-07605B"/> 5 chamadas por minuto
+
+        *Obs: O [ token
+        ](https://developers.inter.co/references/token#tag/Token/operation/Token)
+        tem validade de 60 minutos e deverá ser reutilizado nas requisições.*
+
+
+        <div class="button-div"> 
+          <button class="button-yaml" data-category="CODE_EXAMPLE" data-value="criarWebhookCobranca">
+            <img src="/img/icons/recipes.svg" alt="Ícone" width="24" height="24" />
+            Exemplos de código
+          </button>
+          <button class="button-yaml" data-category="VALIDATE_WEBHOOK" data-value='cobranca'>
+            <img src="/img/icons/webhook.svg" alt="Ícone" width="24" height="24" />
+            Validar webhook
+          </button>
+        </div>
+
+
+        <div class="swagger-link-container">
+          <div class="url-container">
+            <img src="https://img.shields.io/badge/PRODUÇÃO-FF7043"/>
+            <img src="https://img.shields.io/badge/PUT-purple"/>
+            <span class="span-container">
+              <span class="server">https://cdpj.partners.bancointer.com.br/cobranca/v3<span class="url">/cobrancas/webhook</span></span>
+            </span>
+          </div>
+          <img src="/img/icons/copy.svg" alt="Ícone" width="24" height="24" class="copy-icon" />
+        </div>
+
+
+        <div class="swagger-link-container">
+          <div class="url-container">
+            <img src="https://img.shields.io/badge/SANDBOX-07605B"/>
+            <img src="https://img.shields.io/badge/PUT-purple"/>
+            <span class="span-container">
+              <span class="server">https://cdpj-sandbox.partners.uatinter.co/cobranca/v3<span class="url">/cobrancas/webhook</span></span>
+            </span>
+          </div>
+          <img src="/img/icons/copy.svg" alt="Ícone" width="24" height="24" class="copy-icon" />
+        </div>
+      summary: Criar ou editar um webhook
+      operationId: webhookPut
+      requestBody:
+        $ref: '#/components/requestBodies/WebhookConfigBody'
+      parameters:
+        - $ref: '#/components/parameters/xContaCorrente'
+      responses:
+        '204':
+          description: Sucesso
+          content: {}
+        '500':
+          $ref: '#/components/responses/ServicoIndisponivel'
+      callbacks:
+        listaCobrancas:
+          '{$request.body#/webhookUrl}':
+            post:
+              parameters:
+                - in: header
+                  name: x-conta-corrente
+                  schema:
+                    type: string
+                    pattern: ^[1-9][0-9]*$
+                    example: '13525622'
+                  description: >-
+                    Conta corrente relacionada ao callback. Enviar apenas
+                    números(incluindo o dígito), e não enviar zeros a esquerda.
+              requestBody:
+                $ref: '#/components/requestBodies/WebhookCobrancaCallbackBody'
+              responses:
+                '200':
+                  description: Notificação recebida com sucesso
+    get:
+      tags:
+        - Webhook
+      description: >
+        Obtém o webhook cadastrado, caso exista.
+
+
+        * Escopo requerido: boleto-cobranca.read
+
+        * rate limit: <br />
+            * <img src="https://img.shields.io/badge/PRODUÇÃO-FF7043"/> 5 chamadas por minuto <br />
+            * <img src="https://img.shields.io/badge/SANDBOX-07605B"/> 5 chamadas por minuto
+
+        *Obs: O [ token
+        ](https://developers.inter.co/references/token#tag/Token/operation/Token)
+        tem validade de 60 minutos e deverá ser reutilizado nas requisições.*
+
+
+        <div class="button-div"> 
+          <button class="button-yaml" data-category="CODE_EXAMPLE" data-value="obterWebhookCobranca">
+            <img src="/img/icons/recipes.svg" alt="Ícone" width="24" height="24" />
+            Exemplos de código
+          </button>
+        </div>
+
+
+        <div class="swagger-link-container">
+          <div class="url-container">
+            <img src="https://img.shields.io/badge/PRODUÇÃO-FF7043"/>
+            <img src="https://img.shields.io/badge/GET-green"/>
+            <span class="span-container">
+              <span class="server">https://cdpj.partners.bancointer.com.br/cobranca/v3<span class="url">/cobrancas/webhook</span></span>
+            </span>
+          </div>
+          <img src="/img/icons/copy.svg" alt="Ícone" width="24" height="24" class="copy-icon" />
+        </div>
+
+
+        <div class="swagger-link-container">
+          <div class="url-container">
+            <img src="https://img.shields.io/badge/SANDBOX-07605B"/>
+            <img src="https://img.shields.io/badge/GET-green"/>
+            <span class="span-container">
+              <span class="server">https://cdpj-sandbox.partners.uatinter.co/cobranca/v3<span class="url">/cobrancas/webhook</span></span>
+            </span>
+          </div>
+          <img src="/img/icons/copy.svg" alt="Ícone" width="24" height="24" class="copy-icon" />
+        </div>
+      summary: Obter webhook cadastrado
+      operationId: webhookGet
+      parameters:
+        - $ref: '#/components/parameters/xContaCorrente'
+      responses:
+        '200':
+          description: Sucesso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookCompleto'
+        '404':
+          $ref: '#/components/responses/NaoEncontrado'
+        '500':
+          $ref: '#/components/responses/ServicoIndisponivel'
+    delete:
+      tags:
+        - Webhook
+      description: >
+        Exclui o webhook.
+
+
+        * Escopo requerido: boleto-cobranca.write
+
+        * rate limit: <br />
+            * <img src="https://img.shields.io/badge/PRODUÇÃO-FF7043"/> 5 chamadas por minuto <br />
+            * <img src="https://img.shields.io/badge/SANDBOX-07605B"/> 5 chamadas por minuto
+
+        *Obs: O [ token
+        ](https://developers.inter.co/references/token#tag/Token/operation/Token)
+        tem validade de 60 minutos e deverá ser reutilizado nas requisições.*
+
+
+        <div class="button-div"> 
+          <button class="button-yaml" data-category="CODE_EXAMPLE" data-value="excluirWebhookCobranca">
+            <img src="/img/icons/recipes.svg" alt="Ícone" width="24" height="24" />
+            Exemplos de código
+          </button>
+        </div>
+
+
+        <div class="swagger-link-container">
+          <div class="url-container">
+            <img src="https://img.shields.io/badge/PRODUÇÃO-FF7043"/>
+            <img src="https://img.shields.io/badge/DELETE-red"/>
+            <span class="span-container">
+              <span class="server">https://cdpj.partners.bancointer.com.br/cobranca/v3<span class="url">/cobrancas/webhook</span></span>
+            </span>
+          </div>
+          <img src="/img/icons/copy.svg" alt="Ícone" width="24" height="24" class="copy-icon" />
+        </div>
+
+
+        <div class="swagger-link-container">
+          <div class="url-container">
+            <img src="https://img.shields.io/badge/SANDBOX-07605B"/>
+            <img src="https://img.shields.io/badge/DELETE-red"/>
+            <span class="span-container">
+              <span class="server">https://cdpj-sandbox.partners.uatinter.co/cobranca/v3<span class="url">/cobrancas/webhook</span></span>
+            </span>
+          </div>
+          <img src="/img/icons/copy.svg" alt="Ícone" width="24" height="24" class="copy-icon" />
+        </div>
+      summary: Excluir webhook
+      operationId: webhookDelete
+      parameters:
+        - $ref: '#/components/parameters/xContaCorrente'
+      responses:
+        '204':
+          description: Sucesso
+          content: {}
+        '404':
+          $ref: '#/components/responses/NaoEncontrado'
+        '500':
+          $ref: '#/components/responses/ServicoIndisponivel'
+  /cobrancas/webhook/callbacks:
+    get:
+      tags:
+        - Webhook
+      summary: Consulta de callbacks enviados
+      description: >-
+        Retorna as requisições de callbacks ordenado pela data de disparo
+        (decrescente)
+
+
+        * Escopo requerido: boleto-cobranca.read
+
+        * rate limit: <br />
+            * <img src="https://img.shields.io/badge/PRODUÇÃO-FF7043"/> 10 chamadas por minuto <br />
+            * <img src="https://img.shields.io/badge/SANDBOX-07605B"/> 10 chamadas por minuto
+
+        *Obs: O [ token
+        ](https://developers.inter.co/references/token#tag/Token/operation/Token)
+        tem validade de 60 minutos e deverá ser reutilizado nas requisições.*
+
+
+        <div class="button-div"> 
+          <button class="button-yaml" data-category="CODE_EXAMPLE" data-value="consultarCallbacksCobranca">
+            <img src="/img/icons/recipes.svg" alt="Ícone" width="24" height="24" />
+            Exemplos de código
+          </button>
+        </div>
+
+
+        <div class="swagger-link-container">
+          <div class="url-container">
+            <img src="https://img.shields.io/badge/PRODUÇÃO-FF7043"/>
+            <img src="https://img.shields.io/badge/GET-green"/>
+            <span class="span-container">
+              <span class="server">https://cdpj.partners.bancointer.com.br/cobranca/v3<span class="url">/cobrancas/webhook/callbacks</span></span>
+            </span>
+          </div>
+          <img src="/img/icons/copy.svg" alt="Ícone" width="24" height="24" class="copy-icon" />
+        </div>
+
+
+        <div class="swagger-link-container">
+          <div class="url-container">
+            <img src="https://img.shields.io/badge/SANDBOX-07605B"/>
+            <img src="https://img.shields.io/badge/GET-green"/>
+            <span class="span-container">
+              <span class="server">https://cdpj-sandbox.partners.uatinter.co/cobranca/v3<span class="url">/cobrancas/webhook/callbacks</span></span>
+            </span>
+          </div>
+          <img src="/img/icons/copy.svg" alt="Ícone" width="24" height="24" class="copy-icon" />
+        </div>
+      operationId: callbacksFilter
+      parameters:
+        - $ref: '#/components/parameters/xContaCorrente'
+        - name: dataHoraInicio
+          in: query
+          required: true
+          description: 'Formato aceito: yyyy-MM-dd''T''HH:mm[:ss][.SSS]XXX'
+          example: 2023-06-01T00:00Z ou 2023-06-01T00:00:00.000Z
+          x-arch-date-time-pattern: yyyy-MM-dd'T'HH:mm[:ss][.SSS]XXX
+          schema:
+            type: string
+            format: date-time
+            nullable: false
+        - name: dataHoraFim
+          description: 'Formato aceito: yyyy-MM-dd''T''HH:mm[:ss][.SSS]XXX'
+          in: query
+          example: 2023-06-01T00:00Z ou 2023-06-01T00:00:00.000Z
+          required: true
+          x-arch-date-time-pattern: yyyy-MM-dd'T'HH:mm[:ss][.SSS]XXX
+          schema:
+            type: string
+            format: date-time
+            nullable: false
+        - name: pagina
+          in: query
+          schema:
+            type: integer
+            description: Posição da página na lista de dados
+            default: 0
+            nullable: false
+        - name: tamanhoPagina
+          in: query
+          schema:
+            type: integer
+            description: Tamanho da página
+            default: 20
+            maximum: 50
+            minimum: 10
+            nullable: false
+        - name: codigoSolicitacao
+          in: query
+          schema:
+            type: string
+            format: uuid
+            description: Codigo único da cobrança
+      responses:
+        '200':
+          description: Sucesso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CallbackAttemptPage'
+              examples:
+                exemplo1:
+                  $ref: '#/components/examples/exemploListaCallback'
+        '400':
+          $ref: '#/components/responses/RequisicaoInvalida'
+        '500':
+          $ref: '#/components/responses/ServicoIndisponivel'
+  /webhook/callbacks/retry:
+    post:
+      tags:
+        - Webhook
+      summary: Reenviar callbacks
+      description: >-
+        Método utilizado para reenviar uma mensagem de callback de uma cobrança
+        através de seu código identificador(codigoSolicitacao). 
+
+
+        A funcionalidade permite o envio de até 50 codigos identificadores, para
+        o reenvio de seus respectivos callbacks.
+
+
+        * Escopo requerido: boleto-cobranca.write
+
+        * rate limit: <br />
+            * <img src="https://img.shields.io/badge/PRODUÇÃO-FF7043"/> 5 chamadas por minuto   
+
+        *Obs: O [ token
+        ](https://developers.inter.co/references/token#tag/Token/operation/Token)
+        tem validade de 60 minutos e deverá ser reutilizado nas requisições.*
+
+
+        <div class="button-div"> 
+          <button class="button-yaml" data-category="CODE_EXAMPLE" data-value="reenviarCallbackBillingRecipe">
+            <img src="/img/icons/recipes.svg" alt="Ícone" width="24" height="24" />
+            Exemplos de código
+          </button>
+        </div>  
+
+
+        <div class="swagger-link-container">
+          <div class="url-container">
+            <img src="https://img.shields.io/badge/PRODUÇÃO-FF7043"/>
+            <img src="https://img.shields.io/badge/POST-blue"/>
+            <span class="span-container">
+              <span class="server">https://cdpj.partners.bancointer.com.br/cobranca/v3<span class="url">/cobrancas/webhook/callbacks/retry</span></span>
+            </span>
+          </div>
+          <img src="/img/icons/copy.svg" alt="Ícone" width="24" height="24" class="copy-icon" />
+        </div>
+      operationId: retryCallback
+      servers:
+        - url: https://cdpj.partners.bancointer.com.br/cobranca/v3
+          description: Servidor de Produção
+      parameters:
+        - $ref: '#/components/parameters/xContaCorrente'
+      requestBody:
+        $ref: '#/components/requestBodies/RetryCallbacksRequest'
+      responses:
+        '200':
+          description: Sucesso
+          content:
+            aplication/json:
+              schema:
+                $ref: '#/components/schemas/RetryCallbackResponse'
+              examples:
+                exemplo1:
+                  $ref: '#/components/examples/exemploRetryCallbackResponse'
+        '400':
+          $ref: '#/components/responses/RequisicaoInvalidaRetryCallback'
+        '403':
+          $ref: '#/components/responses/AcessoNegado'
+        '404':
+          $ref: '#/components/responses/NaoEncontrado'
+        '500':
+          $ref: '#/components/responses/ServicoIndisponivel'
+components:
+  parameters:
+    xContaCorrente:
+      name: x-conta-corrente
+      in: header
+      description: >-
+        Conta corrente que será utilizada na operação, caso faça parte da lista
+        de contas correntes da aplicação. Enviar apenas números(incluindo o
+        dígito), e não enviar zeros a esquerda.
+      required: false
+      schema:
+        type: string
+        pattern: '[1-9][0-9]*'
+    codigoSolicitacao:
+      name: codigoSolicitacao
+      in: path
+      description: Código único da cobrança
+      required: true
+      schema:
+        type: string
+        format: uuid
+    situacao:
+      in: query
+      name: situacao
+      required: false
+      schema:
+        $ref: '#/components/schemas/SituacaoCobrancaEnum'
+    pessoaPagadora:
+      name: pessoaPagadora
+      in: query
+      required: false
+      schema:
+        type: string
+        title: Nome da pessoa pagadora
+        description: Filtro pelo nome do pagador
+    cpfCnpjPessoaPagadora:
+      name: cpfCnpjPessoaPagadora
+      in: query
+      required: false
+      schema:
+        type: string
+        title: cpfCnpj da pessoa pagadora
+        description: Filtro pelo cpf/cnpj do pagador
+        minLength: 1
+        maxLength: 18
+    seuNumero:
+      name: seuNumero
+      in: query
+      required: false
+      schema:
+        type: string
+        title: Seu código da cobrança
+        description: Filtro pelo código "seu número"
+        maxLength: 15
+    tipoCobranca:
+      name: tipoCobranca
+      in: query
+      required: false
+      schema:
+        $ref: '#/components/schemas/TipoCobrancaEnum'
+    filtrarDataPor:
+      name: filtrarDataPor
+      in: query
+      required: false
+      schema:
+        $ref: '#/components/schemas/FiltrarDataPorEnum'
+    dataInicial:
+      name: dataInicial
+      in: query
+      required: true
+      schema:
+        type: string
+        format: date
+        description: |
+          Data de vencimento do título
+
+          Formato aceito: YYYY-MM-DD
+    dataFinal:
+      name: dataFinal
+      in: query
+      required: true
+      schema:
+        type: string
+        format: date
+        description: |
+          Data de fim do filtro
+
+          Formato aceito: YYYY-MM-DD
+    paginaAtual:
+      in: query
+      name: paginacao.paginaAtual
+      required: false
+      schema:
+        type: integer
+        format: int32
+        title: Página atual
+        default: 0
+        description: >-
+          Página a ser retornada pela consulta. Se não for informada, assumirá
+          que será 0.
+    itensPorPagina:
+      in: query
+      name: paginacao.itensPorPagina
+      required: false
+      schema:
+        type: integer
+        format: int32
+        title: Itens por Página
+        maximum: 1000
+        default: 100
+        description: >-
+          Quantidade máxima de registros retornados em cada página. Apenas a
+          última página pode conter uma quantidade menor de registros.
+    ordenarPor:
+      name: ordenarPor
+      in: query
+      required: false
+      schema:
+        $ref: '#/components/schemas/OrdenarCobrancasPorEnum'
+    tipoOrdenacao:
+      name: tipoOrdenacao
+      in: query
+      required: false
+      schema:
+        $ref: '#/components/schemas/TipoOrdenacaoCobrancasEnum'
+    codigoEdicao:
+      name: codigoEdicao
+      in: path
+      description: Identificador para consultar a edição da cobrança (UUID)
+      required: true
+      schema:
+        type: string
+        format: uuid
+  requestBodies:
+    EmitirCobrancaAsyncRequest:
+      description: Corpo da Cobrança
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/EmitirCobrancaRequestBody'
+          examples:
+            exemplo1:
+              $ref: '#/components/examples/exemploEmitirCobranca'
+    CancelarCobrancaRequest:
+      description: Corpo do objeto para cancelar a cobrança
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/CancelarCobrancaRequestBody'
+          examples:
+            exemplo1:
+              $ref: '#/components/examples/ExemploCancelarCobranca'
+    WebhookConfigBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/WebhookSolicitado'
+          examples:
+            exemplo1:
+              $ref: '#/components/examples/exemploCriarWebhook'
+    WebhookCobrancaCallbackBody:
+      description: Corpo do callback de cobrança.
+      required: true
+      content:
+        application/json:
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/CallbackCobranca'
+    PagarCobrancaRequest:
+      description: Pagar Cobrança
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/PagamentoCobrancaRequestBody'
+          examples:
+            exemplo1:
+              $ref: '#/components/examples/exemploPagarCobranca1'
+            exemplo2:
+              $ref: '#/components/examples/exemploPagarCobranca2'
+    UpdateCobrancaRequest:
+      description: Corpo do objeto para atualizar a cobrança
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/UpdateCobrancaRequestBody'
+    RetryCallbacksRequest:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/RetryCallbacksRequestBody'
+  schemas:
+    CobrancasResponse:
+      type: object
+      title: Cobranças Consultadas
+      required:
+        - cobrancas
+      properties:
+        totalPaginas:
+          type: integer
+          title: Quantidade total de páginas
+          description: Quantidade total de páginas disponíveis para consulta.
+          minimum: 1
+          example: 1
+        totalElementos:
+          type: integer
+          format: int32
+          title: Quantidade total de itens
+          description: >-
+            Quantidade total de itens disponíveis de acordo com os parâmetros
+            informados.
+          minimum: 0
+        tamanhoPagina:
+          type: integer
+          title: Quantidade de itens por página
+          description: Quantidade de registros por página, configurado na requisição.
+          minimum: 1
+          example: 20
+        primeiraPagina:
+          type: boolean
+          description: Primeira página
+          example: true
+        ultimaPagina:
+          type: boolean
+          description: Última página
+          example: true
+        numeroDeElementos:
+          type: integer
+          title: Quantidade de itens na página atual
+          description: Quantidade de registros retornado na página atual.
+          minimum: 1
+        cobrancas:
+          type: array
+          title: Lista de Cobranças consultadas
+          items:
+            $ref: '#/components/schemas/CobrancaResponse'
+    CobrancaResponse:
+      type: object
+      title: Cobrança
+      required:
+        - cobranca
+      properties:
+        cobranca:
+          $ref: '#/components/schemas/cobranca'
+        boleto:
+          $ref: '#/components/schemas/boletoCobranca'
+        pix:
+          $ref: '#/components/schemas/pixCobranca'
+    cobranca:
+      type: object
+      required:
+        - id
+        - pagador
+        - identificador
+        - valorNominal
+        - situacao
+      properties:
+        codigoSolicitacao:
+          type: string
+          format: UUID
+          title: Identificador único de uma cobrança
+        seuNumero:
+          type: string
+          title: Codigo da cobrança (seu número)
+          description: Codigo da cobrança (seu número)
+        situacao:
+          $ref: '#/components/schemas/SituacaoCobrancaEnum'
+        dataSituacao:
+          type: string
+          format: date
+          title: Data da situação
+          description: Data que a situação da cobrança sofreu alteração.
+        dataEmissao:
+          type: string
+          format: date
+          title: Data e hora de emissão
+          description: Data e hora em que a cobrança foi emitida.
+        dataVencimento:
+          type: string
+          format: date
+          title: Data de vencimento da cobrança
+        valorNominal:
+          type: string
+          title: Valor da cobrança
+          pattern: ^\\d{1,10}\\.\\d{2}$
+          description: Valor original da cobrança.
+        valorTotalRecebido:
+          type: string
+          title: Valor total recebido
+          pattern: ^\d{1,10}\.\d{2}$
+        origemRecebimento:
+          $ref: '#/components/schemas/OrigemRecebimentoEnum'
+        tipoCobranca:
+          type: string
+          title: Tipo de cobrança
+          enum:
+            - SIMPLES
+            - PARCELADO
+            - RECORRENTE
+        pagador:
+          $ref: '#/components/schemas/pagadorCobranca'
+    pagadorCobranca:
+      type: object
+      required:
+        - nome
+        - cpfCnpj
+      properties:
+        nome:
+          type: string
+          title: Nome do pagador
+        cpfCnpj:
+          type: string
+          title: Cpf/Cnpj da pessoa pagadora
+    boletoCobranca:
+      description: >
+        Objeto com os dados da Cobrança gerada para pagamento via código de
+        barras/linha digitável.
+
+
+        <strong>Caso a cobrança esteja com a situação EM_PROCESSAMENTO, essa
+        propriedade poderá não ser retornada.</strong>
+      type: object
+      required:
+        - linhaDigitavel
+        - codigoBarras
+      properties:
+        nossoNumero:
+          type: string
+          title: Nosso número
+          maxLength: 11
+          description: >
+            <strong>Caso a cobrança esteja com a situação EM_PROCESSAMENTO, esse
+            campo poderá não ser retornada.</strong>
+        linhaDigitavel:
+          type: string
+          title: Linha digitável da cobrança
+          minLength: 47
+          maxLength: 47
+        codigoBarras:
+          type: string
+          title: Código de barras do boleto da cobrança
+          minLength: 44
+          maxLength: 44
+    pixCobranca:
+      description: >
+        Objeto com os dados da Cobrança gerada para pagamento via QRCode.
+
+
+        **Caso não seja possível gerar o Pix no momento, essa propriedade não
+        será retornada.**
+      type: object
+      required:
+        - txid
+        - pixCopiaECola
+      properties:
+        pixCopiaECola:
+          type: string
+          description: QRCode de cobrança para pagamento
+        txid:
+          type: string
+          pattern: ^[a-zA-Z0-9]{26,35}$
+          description: Txid da Cobrança PIX gerada
+    EmitirCobrancaRequestBody:
+      type: object
+      required:
+        - seuNumero
+        - dataVencimento
+        - valorNominal
+        - pagador
+        - numDiasAgenda
+      properties:
+        seuNumero:
+          type: string
+          description: Campo Seu Número do título
+          example: '123456'
+          maxLength: 15
+        valorNominal:
+          type: number
+          description: Valor Nominal do título
+          minimum: 2.5
+          maximum: 99999999.99
+        dataVencimento:
+          type: string
+          format: date
+          description: |
+            Data de vencimento do título
+
+            Formato aceito: YYYY-MM-DD
+          example: '2018-07-27'
+        numDiasAgenda:
+          type: integer
+          format: int32
+          minimum: 0
+          maximum: 60
+          default: 0
+          description: >-
+            Número de dias corridos após o vencimento para o cancelamento
+            efetivo automático da cobrança. (de 0 até 60)
+        pagador:
+          $ref: '#/components/schemas/Pagador'
+        desconto:
+          type: object
+          description: Informações do desconto a ser aplicado.
+          oneOf:
+            - $ref: '#/components/schemas/DescontoTaxa'
+            - $ref: '#/components/schemas/DescontoValor'
+          discriminator:
+            propertyName: codigo
+            mapping:
+              PERCENTUALDATAINFORMADA: '#/components/schemas/DescontoTaxa'
+              VALORFIXODATAINFORMADA: '#/components/schemas/DescontoValor'
+        multa:
+          type: object
+          description: Informações da multa a ser cobrada.
+          oneOf:
+            - $ref: '#/components/schemas/MultaTaxa'
+            - $ref: '#/components/schemas/MultaValor'
+          discriminator:
+            propertyName: codigo
+            mapping:
+              PERCENTUAL: '#/components/schemas/MultaTaxa'
+              VALORFIXO: '#/components/schemas/MultaValor'
+        mora:
+          type: object
+          description: Informações da mora a ser cobrada.
+          oneOf:
+            - $ref: '#/components/schemas/MoraTaxa'
+            - $ref: '#/components/schemas/MoraValor'
+          discriminator:
+            propertyName: codigo
+            mapping:
+              TAXAMENSAL: '#/components/schemas/MoraTaxa'
+              VALORDIA: '#/components/schemas/MoraValor'
+        mensagem:
+          $ref: '#/components/schemas/Mensagem'
+        beneficiarioFinal:
+          $ref: '#/components/schemas/BeneficiarioBase'
+        formasRecebimento:
+          description: >
+            Lista com as formas de recebimento de uma cobrança, separadas por
+            vírgula.
+
+
+            Se não for informado, será criada a cobrança com o boleto e, caso
+            haja uma chave registrada no Inter, o PIX cobrança com vencimento. 
+
+            Também é possível gerar uma cobrança sem forma de pagamento,
+            informando o valor SEM_FORMA_PAGAMENTO, dessa forma nenhum pagamento
+            será atrelado à cobrança e a baixa não será realizada de forma
+            automática, sendo necessário marcar como recebido manualmente.
+
+
+            Atualmente não é possível informar somente **PIX** como forma de
+            recebimento. Para uma cobrança de pix com vencimento deverá ser
+            utilizada a [API
+            PIX](/references/pix#tag/Cobranca-com-Vencimento/paths/~1cobv~1%7Btxid%7D/put).
+          type: array
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/FormaRecebimentoEnum'
+          default:
+            - BOLETO
+            - PIX
+        notaFiscal:
+          $ref: '#/components/schemas/NotaFiscal'
+    CancelarCobrancaRequestBody:
+      type: object
+      required:
+        - motivoCancelamento
+      properties:
+        motivoCancelamento:
+          type: string
+          maxLength: 50
+          description: Motivo pelo qual a cobrança está sendo cancelada
+    WebhookSolicitado:
+      type: object
+      required:
+        - webhookUrl
+      title: Webhook
+      properties:
+        webhookUrl:
+          type: string
+          pattern: ^https://[^\s]*$
+          format: uri
+          example: https://boleto.example.com/api/webhook/
+          description: >-
+            URL de configuração do webhook. Deve iniciar obrigatoriamente com
+            **https://**
+    CobrancaDetalhadaResponseBody:
+      type: object
+      required:
+        - cobranca
+      properties:
+        cobranca:
+          required:
+            - codigoSolicitacao
+            - seuNumero
+            - valorNominal
+            - dataEmissao
+            - dataVencimento
+            - situacao
+            - tipoCobranca
+          properties:
+            codigoSolicitacao:
+              type: string
+              description: Identificador único da cobranca.
+            seuNumero:
+              type: string
+              description: |
+                Seu Número.
+            dataEmissao:
+              type: string
+              format: date
+              description: Data de emissao da cobrança
+            dataVencimento:
+              type: string
+              format: date
+              description: Data de vencimento da cobrança
+            valorNominal:
+              type: number
+              description: Valor Nominal da cobrança
+              example: 1234
+            tipoCobranca:
+              $ref: '#/components/schemas/TipoCobrancaEnum'
+            situacao:
+              $ref: '#/components/schemas/SituacaoCobrancaEnum'
+            dataSituacao:
+              type: string
+              format: date
+              title: Data da situação
+              description: Data que a situação da cobrança sofreu alteração.
+            valorTotalRecebido:
+              type: string
+              pattern: ^\\d{1,10}\\.\\d{2}$
+              description: Valor total recebido, no caso da cobrança ter sido paga.
+            origemRecebimento:
+              $ref: '#/components/schemas/OrigemRecebimentoEnum'
+            motivoCancelamento:
+              type: string
+              description: Motivo do Cancelamento.
+            arquivada:
+              type: boolean
+              description: Cobrança está arquivada ou não
+              example: true
+            descontos:
+              type: array
+              maxLength: 3
+              items:
+                $ref: '#/components/schemas/DescontoResponse'
+            multa:
+              $ref: '#/components/schemas/MultaMoraResponse'
+            mora:
+              $ref: '#/components/schemas/MultaMoraResponse'
+            pagador:
+              $ref: '#/components/schemas/Pagador'
+        boleto:
+          description: >
+            Objeto com os dados da Cobrança gerada para pagamento via código de
+            barras/linha digitável.
+
+
+            <strong>Caso a cobrança esteja com a situação EM_PROCESSAMENTO, essa
+            propriedade poderá não ser retornada.</strong>
+          type: object
+          required:
+            - linhaDigitavel
+            - codigoBarras
+          properties:
+            nossoNumero:
+              type: string
+              description: >
+                Nosso Número, atribuído automaticamente ao longo da inclusão do
+                título.
+
+
+                <strong>Caso a cobrança esteja com a situação EM_PROCESSAMENTO,
+                essa campo poderá não ser retornada.</strong>
+              maxLength: 11
+            codigoBarras:
+              type: string
+              description: >-
+                Dígitos que compõem o código de barras do boleto (44 posições
+                preenchidas)
+              minLength: 44
+              maxLength: 44
+            linhaDigitavel:
+              type: string
+              description: >-
+                Dígitos que compõem a linha digitável do boleto, sem formatação
+                (47 posições preenchidas)
+              minLength: 47
+              maxLength: 47
+        pix:
+          description: >
+            Objeto com os dados da Cobrança gerada para pagamento via QRCode.
+
+
+            **Caso não seja possível gerar o Pix no momento, essa propriedade
+            não será retornada.**
+          type: object
+          required:
+            - txid
+            - pixCopiaECola
+          properties:
+            txid:
+              type: string
+              pattern: ^[a-zA-Z0-9]{26,35}$
+              description: Txid da Cobrança PIX gerada
+            pixCopiaECola:
+              type: string
+              description: QRCode de cobrança para pagamento
+        notaFiscal:
+          $ref: '#/components/schemas/NotaFiscalResponse'
+    WebhookCompleto:
+      type: object
+      required:
+        - webhookUrl
+        - criacao
+      title: Webhook
+      properties:
+        webhookUrl:
+          type: string
+          format: uri
+          example: https://boleto.example.com/api/webhook/
+        criacao:
+          type: string
+          format: date-time
+          title: Data de Criação
+          description: Data e hora em que o webhook foi cadastrado. Respeita RFC 3339.
+          readOnly: true
+        atualizacao:
+          type: string
+          format: date-time
+          title: Data de Atualização
+          description: Data e hora em que o webhook foi atualizado. Respeita RFC 3339.
+          readOnly: true
+    CallbackAttemptPage:
+      type: object
+      required:
+        - data
+      properties:
+        totalElementos:
+          type: integer
+          format: int64
+          description: >-
+            Quantidade total de itens disponíveis de acordo com os parâmetros
+            informados
+        totalPaginas:
+          type: integer
+          description: Quantidade total de páginas disponíveis para consulta.
+        primeiraPagina:
+          description: Informa se é a primeira página
+          type: boolean
+        ultimaPagina:
+          description: Informa se é a última página
+          type: boolean
+        data:
+          description: Dados de cada notificação de callback.
+          type: array
+          items:
+            $ref: '#/components/schemas/CallbackAttemptPageItem'
+    CallbackAttemptPageItem:
+      type: object
+      required:
+        - payload
+        - numeroTentativa
+        - dataEnvio
+        - sucesso
+      properties:
+        webhookUrl:
+          type: string
+          description: URL do webhook no momento do disparo.
+          format: uri
+        payload:
+          type: array
+          items:
+            $ref: '#/components/schemas/CallbackCobranca'
+        numeroTentativa:
+          description: Qual o índice da tentativa de disparo.
+          type: integer
+        dataHoraDisparo:
+          description: Data/hora da tentativa de disparo do callback.
+          type: string
+          format: date-time
+        sucesso:
+          type: boolean
+          description: Informa se obteve sucesso no disparo do callback.
+        httpStatus:
+          description: Resposta da chamada ao endpoint do webhook.
+          type: integer
+        mensagemErro:
+          description: Mensagem de erro em caso de falha no dispardo do callback.
+          type: string
+    CallbackCobranca:
+      type: object
+      required:
+        - codigoSolicitacao
+        - dataHoraSituacao
+        - situacao
+      properties:
+        codigoSolicitacao:
+          type: string
+          description: Identificador único da cobrança
+        seuNumero:
+          type: string
+          description: Seu Número, enviado na requisição para inclusão do título.
+          maxLength: 15
+        situacao:
+          $ref: '#/components/schemas/SituacaoCobrancaCallbackEnum'
+        dataHoraSituacao:
+          type: string
+          format: date-time
+        valorTotalRecebido:
+          type: string
+          pattern: ^\\d{1,10}\\.\\d{2}$
+        origemRecebimento:
+          $ref: '#/components/schemas/OrigemRecebimentoEnum'
+        nossoNumero:
+          type: string
+          description: >-
+            Nosso Número, atribuído automaticamente ao longo da inclusão do
+            título.
+          maxLength: 11
+        codigoBarras:
+          type: string
+          description: >-
+            Dígitos que compõem o código de barras do boleto (44 posições
+            preenchidas)
+          minLength: 44
+          maxLength: 44
+        linhaDigitavel:
+          type: string
+          description: >-
+            Dígitos que compõem a linha digitável do boleto, sem formatação (47
+            posições preenchidas)
+          minLength: 47
+          maxLength: 47
+        txid:
+          type: string
+          pattern: ^[a-zA-Z0-9]{26,35}$
+          description: Txid da Cobrança PIX gerada
+        pixCopiaECola:
+          type: string
+          description: QRCode de cobrança para pagamento
+    PagadorBase:
+      type: object
+      required:
+        - cpfCnpj
+        - nome
+        - tipoPessoa
+        - cep
+        - endereco
+        - cidade
+        - uf
+      properties:
+        cpfCnpj:
+          type: string
+          description: |
+            CPF/CNPJ do pagador do título
+          minLength: 11
+          maxLength: 18
+        tipoPessoa:
+          type: string
+          enum:
+            - FISICA
+            - JURIDICA
+          description: |
+            Tipo do pagador:
+            * `FISICA` - Pessoa Física
+            * `JURIDICA` - Pessoa Jurídica
+        nome:
+          type: string
+          description: Nome do pagador
+          maxLength: 100
+          minLength: 1
+        endereco:
+          type: string
+          description: Endereço do pagador
+          maxLength: 100
+          minLength: 1
+          example: Avenida Brasil
+        bairro:
+          type: string
+          description: Bairro do pagador
+          maxLength: 60
+          example: Centro
+          default: ''
+        cidade:
+          type: string
+          description: Cidade do pagador
+          maxLength: 60
+          minLength: 1
+          example: Belo Horizonte
+        uf:
+          $ref: '#/components/schemas/EnumUF'
+        cep:
+          type: string
+          description: CEP do pagador
+          minLength: 8
+          maxLength: 8
+          example: '30110000'
+    BeneficiarioBase:
+      type: object
+      required:
+        - cpfCnpj
+        - nome
+        - tipoPessoa
+        - cep
+        - endereco
+        - cidade
+        - uf
+      properties:
+        cpfCnpj:
+          type: string
+          description: |
+            CPF/CNPJ do beneficiário do título
+          minLength: 11
+          maxLength: 18
+        tipoPessoa:
+          type: string
+          enum:
+            - FISICA
+            - JURIDICA
+          description: |
+            Tipo do beneficiário:
+            * `FISICA` - Pessoa Física
+            * `JURIDICA` - Pessoa Jurídica
+        nome:
+          type: string
+          description: Nome do beneficiário
+          maxLength: 100
+          minLength: 1
+        endereco:
+          type: string
+          description: Endereço do beneficiário
+          maxLength: 100
+          minLength: 1
+          example: Avenida Brasil
+        bairro:
+          type: string
+          description: Bairro do beneficiário
+          maxLength: 60
+          example: Centro
+          default: ''
+        cidade:
+          type: string
+          description: Cidade do beneficiário
+          maxLength: 60
+          minLength: 1
+          example: Belo Horizonte
+        uf:
+          $ref: '#/components/schemas/EnumUF'
+        cep:
+          type: string
+          description: CEP do beneficiário
+          minLength: 8
+          maxLength: 8
+          example: '30110000'
+    Pagador:
+      type: object
+      allOf:
+        - $ref: '#/components/schemas/PagadorBase'
+      properties:
+        email:
+          type: string
+          default: ''
+          description: E-mail do pagador
+          maxLength: 50
+        ddd:
+          type: string
+          description: DDD do telefone do pagador
+          maxLength: 2
+          example: '31'
+        telefone:
+          type: string
+          description: Telefone do pagador
+          maxLength: 9
+        numero:
+          type: string
+          description: Número no logradouro do pagador
+          maxLength: 10
+          example: '3456'
+          default: ''
+        complemento:
+          type: string
+          description: Complemento do endereço do pagador
+          maxLength: 30
+          example: apartamento 3 bloco 4
+          default: ''
+    Mensagem:
+      properties:
+        linha1:
+          type: string
+          description: Linha 1 do campo de texto do título
+          maxLength: 78
+        linha2:
+          type: string
+          description: Linha 2 do campo de texto do título
+          maxLength: 78
+        linha3:
+          type: string
+          description: Linha 3 do campo de texto do título
+          maxLength: 78
+        linha4:
+          type: string
+          description: Linha 4 do campo de texto do título
+          maxLength: 78
+        linha5:
+          type: string
+          description: Linha 5 do campo de texto do título
+          maxLength: 78
+    Desconto:
+      required:
+        - codigo
+        - quantidadeDias
+      properties:
+        codigo:
+          type: string
+          enum:
+            - PERCENTUALDATAINFORMADA
+            - VALORFIXODATAINFORMADA
+          description: |
+            * `VALORFIXODATAINFORMADA` - Valor fixo até a data informada.
+            * `PERCENTUALDATAINFORMADA` - Percentual até a data informada.
+        quantidadeDias:
+          type: integer
+          description: |
+            Quantidade de dias antes do vencimento que será aplicado o desconto.
+    DescontoTaxa:
+      type: object
+      allOf:
+        - $ref: '#/components/schemas/Desconto'
+      required:
+        - taxa
+      properties:
+        taxa:
+          type: number
+          description: >
+            Taxa Percentual de Desconto do título.<br/>
+
+            Máximo de duas casas decimais, valores excedentes são
+            arredondados.<br/>
+
+            Ex: 0.033 -> 0.03 | 0.049 -> 0.05 | 0.335 -> 0.34
+    DescontoValor:
+      type: object
+      allOf:
+        - $ref: '#/components/schemas/Desconto'
+      required:
+        - valor
+      properties:
+        valor:
+          type: number
+          description: >
+            Valor de Desconto, expresso na moeda do título.<br/>
+
+            Máximo de duas casas decimais, valores excedentes são
+            arredondados.<br/>
+
+            Ex: 10.032 -> 10.03 | 0.249 -> 0.25 | 15.745 -> 15.75
+    DescontoResponse:
+      oneOf:
+        - $ref: '#/components/schemas/DescontoTaxa'
+        - $ref: '#/components/schemas/DescontoValor'
+      discriminator:
+        propertyName: codigo
+        mapping:
+          PERCENTUALDATAINFORMADA: '#/components/schemas/DescontoTaxa'
+          VALORFIXODATAINFORMADA: '#/components/schemas/DescontoValor'
+    Multa:
+      type: object
+      required:
+        - codigo
+      properties:
+        codigo:
+          type: string
+          enum:
+            - PERCENTUAL
+            - VALORFIXO
+    MultaTaxa:
+      type: object
+      required:
+        - taxa
+      allOf:
+        - $ref: '#/components/schemas/Multa'
+      properties:
+        taxa:
+          type: number
+          description: >
+            Taxa Percentual de Multa do título.<br/>
+
+            Máximo de duas casas decimais, valores excedentes são
+            arredondados.<br/>
+
+            Ex: 0.033 -> 0.03 | 0.049 -> 0.05 | 0.335 -> 0.34
+    MultaValor:
+      type: object
+      required:
+        - valor
+      allOf:
+        - $ref: '#/components/schemas/Multa'
+      properties:
+        valor:
+          type: number
+          description: >
+            Valor de Multa expresso na moeda do título.<br/>
+
+            Máximo de duas casas decimais, valores excedentes são
+            arredondados.<br/>
+
+            Ex: 1.033 -> 1.03 | 0.249 -> 0.25 | 2.745 -> 2.75
+    Mora:
+      type: object
+      required:
+        - codigo
+      properties:
+        codigo:
+          type: string
+          enum:
+            - TAXAMENSAL
+            - VALORDIA
+    MoraTaxa:
+      type: object
+      allOf:
+        - $ref: '#/components/schemas/Mora'
+      required:
+        - taxa
+      properties:
+        taxa:
+          type: number
+          description: >
+            Percentual de Mora do título.<br/>
+
+            Máximo de duas casas decimais, valores excedentes são
+            arredondados.<br/>
+
+            Ex: 0.033 -> 0.03 | 0.049 -> 0.05 | 0.335 -> 0.34
+          example: 1
+    MoraValor:
+      required:
+        - valor
+      allOf:
+        - $ref: '#/components/schemas/Mora'
+      properties:
+        valor:
+          type: number
+          description: >
+            Valor de Mora expresso na moeda do título.<br/>
+
+            Máximo de duas casas decimais, valores excedentes são
+            arredondados.<br/>
+
+            Ex: 1.033 -> 1.03 | 0.249 -> 0.25 | 2.745 -> 2.75
+          example: 1.5
+    NotaFiscal:
+      description: Nota fiscal atrelada à cobrança realizada
+      type: object
+      required:
+        - chaveNFe
+        - numero
+        - serie
+        - dataEmissao
+      properties:
+        chaveNFe:
+          type: string
+          description: |
+            Chave de Acesso da Nota Fiscal.
+          minLength: 44
+          maxLength: 44
+          pattern: ^[0-9]+$
+        numero:
+          type: integer
+          format: int32
+          description: |
+            Número da Nota Fiscal.
+        serie:
+          type: integer
+          format: int32
+          description: |
+            Série da Nota Fiscal.
+        dataEmissao:
+          type: string
+          format: date
+          description: |
+            Data de Emissão da Nota Fiscal.
+        parcela:
+          type: integer
+          format: int32
+          description: |
+            Parcela da Nota Fiscal.
+        naturezaOperacao:
+          type: string
+          description: |
+            Natureza da Operação da Nota Fiscal.
+    NotaFiscalResponse:
+      type: object
+      description: >
+        Nota fiscal relacionada à cobrança.
+
+
+        **Essa propriedade só será retornada caso a nota fiscal tenha sido
+        especificada no momento do cadastro da cobrança.**
+      allOf:
+        - $ref: '#/components/schemas/NotaFiscal'
+    MultaMoraResponse:
+      type: object
+      required:
+        - codigo
+      properties:
+        codigo:
+          type: string
+        taxa:
+          type: number
+        valor:
+          type: number
+    TipoOrdenacaoCobrancasEnum:
+      type: string
+      default: ASC
+      enum:
+        - ASC
+        - DESC
+    OrdenarCobrancasPorEnum:
+      type: string
+      default: PESSOA_PAGADORA
+      enum:
+        - PESSOA_PAGADORA
+        - TIPO_COBRANCA
+        - CODIGO_COBRANCA
+        - IDENTIFICADOR
+        - DATA_EMISSAO
+        - DATA_VENCIMENTO
+        - VALOR
+        - STATUS
+    OrigemRecebimentoEnum:
+      type: string
+      title: Origem do recebimento da cobrança
+      enum:
+        - BOLETO
+        - PIX
+    EnumUF:
+      type: string
+      enum:
+        - AC
+        - AL
+        - AP
+        - AM
+        - BA
+        - CE
+        - DF
+        - ES
+        - GO
+        - MA
+        - MT
+        - MS
+        - MG
+        - PA
+        - PB
+        - PR
+        - PE
+        - PI
+        - RJ
+        - RN
+        - RS
+        - RO
+        - RR
+        - SC
+        - SP
+        - SE
+        - TO
+      description: UF
+      example: MG
+    SituacaoCobrancaEnum:
+      type: string
+      enum:
+        - RECEBIDO
+        - A_RECEBER
+        - MARCADO_RECEBIDO
+        - ATRASADO
+        - CANCELADO
+        - EXPIRADO
+        - FALHA_EMISSAO
+        - EM_PROCESSAMENTO
+        - PROTESTO
+      description: Possíveis situações de uma cobranca.
+    SituacaoCobrancaCallbackEnum:
+      type: string
+      enum:
+        - RECEBIDO
+        - A_RECEBER
+        - MARCADO_RECEBIDO
+        - CANCELADO
+        - EXPIRADO
+        - FALHA_EMISSAO
+      description: Possíveis situações de uma cobranca.
+    TipoCobrancaEnum:
+      type: string
+      description: Tipos de cobranças existentes.
+      enum:
+        - SIMPLES
+        - PARCELADO
+        - RECORRENTE
+    FiltrarDataPorEnum:
+      type: string
+      default: VENCIMENTO
+      enum:
+        - VENCIMENTO
+        - EMISSAO
+        - PAGAMENTO
+    FormaRecebimentoEnum:
+      type: string
+      enum:
+        - BOLETO
+        - PIX
+        - SEM_FORMA_PAGAMENTO
+      description: Possíveis formas de recebimento de uma cobranca.
+    EmitirCobrancaAsyncResponse:
+      type: object
+      required:
+        - codigoSolicitacao
+      properties:
+        codigoSolicitacao:
+          type: string
+          description: Código identificador único da cobranca
+    PdfResponse:
+      type: object
+      properties:
+        pdf:
+          type: string
+          description: Retorno do pdf base64 para String
+    Violacao:
+      type: object
+      title: Violação
+      properties:
+        razao:
+          type: string
+          title: Descrição do erro
+          description: Descrição do erro
+          example: Valor do pagamento não pode ser 0.00
+        propriedade:
+          type: string
+          title: Nome da propriedade
+          description: Nome da propriedade
+          example: valor
+        valor:
+          type: string
+          title: Valor da propriedade
+          description: Valor da propriedade
+          example: '061996671234'
+    Problema:
+      type: object
+      required:
+        - title
+        - status
+      properties:
+        status:
+          type: integer
+          description: Código HTTP do status retornado.
+          example: 404
+        title:
+          type: string
+          description: Descrição resumida do problema.
+          example: Erro
+        detail:
+          type: string
+          description: Descrição completa do problema.
+        violacoes:
+          type: array
+          items:
+            $ref: '#/components/schemas/Violacao'
+    StatusCobrancaEnum:
+      type: string
+      enum:
+        - RECEBIDO
+        - A_RECEBER
+        - MARCADO_RECEBIDO
+        - ATRASADO
+        - CANCELADO
+        - EXPIRADO
+        - FALHA_EMISSAO
+        - EM_PROCESSAMENTO
+        - PROTESTO
+      description: Possíveis status de uma cobranca.
+    itemSumarioCobrancas:
+      type: object
+      required:
+        - situacao
+        - valor
+        - quantidade
+      properties:
+        situacao:
+          $ref: '#/components/schemas/StatusCobrancaEnum'
+        valor:
+          type: number
+          default: 0
+          description: Valor
+          example: 1.5
+        quantidade:
+          type: integer
+          format: int64
+          default: 0
+          description: Número de cobranças com esta situação
+          example: 12
+    PagamentoCobrancaRequestBody:
+      type: object
+      required:
+        - pagarCom
+      properties:
+        pagarCom:
+          type: string
+          enum:
+            - BOLETO
+            - PIX
+    UpdateCobrancaResponseBody:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+            - PROCESSANDO
+            - SUCESSO
+            - FALHA
+        mensagem:
+          type: string
+        codigoEdicao:
+          type: string
+          description: |
+            Identificador utilizado para consultar status da edição.
+    UpdateCobrancaRequestBody:
+      type: object
+      properties:
+        dataVencimento:
+          type: string
+          description: |
+            Data de vencimento
+
+            Formato aceito: YYYY-MM-DD
+          format: date
+          x-future-or-present: true
+        valorNominal:
+          type: number
+          description: Valor Nominal do título
+          minimum: 2.5
+          maximum: 99999999.99
+    GetStatusUpdateResponseBody:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+            - PROCESSANDO
+            - SUCESSO
+            - FALHA
+    RetryCallbacksRequestBody:
+      type: object
+      required:
+        - codigoSolicitacao
+      properties:
+        codigoSolicitacao:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: >-
+            Lista de códigos identificadores das cobranças. Poderá ser enviado
+            até 50 códigos para efetuar o reenvio.
+          minItems: 1
+          maxItems: 50
+    RetryCallbackResponse:
+      type: object
+      properties:
+        foundIds:
+          type: array
+          items:
+            type: string
+          description: >-
+            Lista dos códigos identificadores das cobranças em que o reenvio foi
+            solicitado com sucesso.
+  responses:
+    RequisicaoInvalida:
+      description: Problemas na requisição.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Problema'
+          examples:
+            exemplos1:
+              $ref: '#/components/examples/RequisicaoInvalidaExample1'
+    NaoEncontrado:
+      description: Recurso solicitado não foi encontrado.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problema'
+          examples:
+            exemplo1:
+              $ref: '#/components/examples/NaoEncontradoExample1'
+    AcessoNegado:
+      description: >-
+        Requisição de participante autenticado que viola alguma regra de
+        autorização.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problema'
+          examples:
+            exemplo1:
+              $ref: '#/components/examples/AcessoNegadoExample1'
+    ServicoIndisponivel:
+      description: >-
+        Serviço não está disponível no momento. Serviço solicitado pode estar em
+        manutenção ou fora da janela de funcionamento.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problema'
+          examples:
+            exemplo1:
+              $ref: '#/components/examples/ServicoIndisponivelExample1'
+    ErroInterno:
+      description: >-
+        Serviço não está disponível no momento. Serviço solicitado pode estar em
+        manutenção ou fora da janela de funcionamento.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problema'
+          examples:
+            exemplo1:
+              $ref: '#/components/examples/ErroInternoExample1'
+    RequisicaoInvalidaRetryCallback:
+      description: Problemas na requisição.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Problema'
+          examples:
+            exemplos1:
+              $ref: '#/components/examples/RequisicaoInvalidaExampleRetryCallback'
+  examples:
+    ErroInternoExample1:
+      summary: Exemplo de erro da requisição 1
+      value:
+        title: Erro Interno
+        status: 500
+        detail: Ocorreu um erro não esperado. Tente novamente mais tarde.
+    ServicoIndisponivelExample1:
+      summary: Exemplo de erro da requisição 1
+      value:
+        title: Serviço Indisponível
+        status: 503
+        detail: >-
+          Serviço não está disponível no momento. Serviço solicitado pode estar
+          em manutenção ou fora da janela de funcionamento.
+    RequisicaoInvalidaExample1:
+      summary: Exemplo de bad request 1
+      value:
+        title: Dados inválidos.
+        detail: >-
+          Verifique se os dados informados estão de acordo com a documentação
+          disponibilizada e tente novamente.
+        timestamp: '2023-09-26T18:06:11.692931-03:00'
+        violacoes:
+          - razao: Não foi possível converter o valor.
+            propriedade: dataInicial
+    RequisicaoInvalidaExampleRetryCallback:
+      summary: Exemplo de bad request para o reenvio de callback
+      value:
+        title: Dados inválidos.
+        detail: >-
+          Verifique se os dados informados estão de acordo com a documentação
+          disponibilizada e tente novamente.
+        timestamp: '2023-09-26T18:06:11.692931-03:00'
+        violacoes:
+          - razao: Required Body [body] not specified.
+    AcessoNegadoExample1:
+      summary: Exemplo de erro da requisição 1
+      value:
+        title: Acesso Negado
+        status: 403
+        detail: >-
+          Requisição de participante autenticado que viola alguma regra de
+          autorização.
+    NaoEncontradoExample1:
+      summary: Exemplo de erro da requisição 1
+      value:
+        title: Não Encontrado
+        status: 404
+        detail: Entidade não encontrada.
+    exemploEmitirCobranca:
+      summary: Exemplo de inclusão de cobrança
+      value:
+        seuNumero: '123456'
+        valorNominal: 2.5
+        dataVencimento: '2026-10-20'
+        numDiasAgenda: 60
+        pagador:
+          email: nome.sobrenome@x.com.br
+          ddd: '31'
+          telefone: '999999999'
+          numero: '3456'
+          complemento: apartamento 3 bloco 4
+          cpfCnpj: '01123456789'
+          tipoPessoa: FISICA
+          nome: Nome do pagador
+          endereco: Avenida Brasil, 1200
+          bairro: Centro
+          cidade: Belo Horizonte
+          uf: MG
+          cep: '30110000'
+        desconto:
+          taxa: 3
+          codigo: PERCENTUALDATAINFORMADA
+          quantidadeDias: 7
+        multa:
+          taxa: 2
+          codigo: PERCENTUAL
+        mora:
+          taxa: 5
+          codigo: TAXAMENSAL
+        mensagem:
+          linha1: mensagem 1
+          linha2: mensagem 2
+          linha3: mensagem 3
+          linha4: mensagem 4
+          linha5: mensagem 5
+        beneficiarioFinal:
+          cpfCnpj: '12345678901'
+          tipoPessoa: FISICA
+          nome: Nome do beneficiário
+          endereco: Avenida Brasil, 1200
+          bairro: Centro
+          cidade: Belo Horizonte
+          uf: MG
+          cep: '30110000'
+        formasRecebimento:
+          - BOLETO
+          - PIX
+        notaFiscal:
+          chaveNFe: '87268327085470029496566305356486731069319792'
+          numero: 31231
+          serie: 910
+          dataEmissao: '2026-01-15'
+          parcela: 1
+          naturezaOperacao: Venda
+    exemploResponsePdf:
+      summary: Exemplo de mensagem de retorno do PDF
+      value:
+        pdf: JVBERi0xLjUKJeLjz9MKMyAwIG9...
+    ExemploCancelarCobranca:
+      summary: Exemplo de cancelamento de cobrança
+      value:
+        motivoCancelamento: Devedor pagou por outra forma
+    exemploRetornoRecuperarCobranca:
+      summary: Exemplo de retorno em recuperar uma cobrança
+      value:
+        cobranca:
+          codigoSolicitacao: 183e982a-34e5-4bc0-9643-def5432a
+          seuNumero: '12345678'
+          dataEmissao: '2023-09-24'
+          dataVencimento: '2023-10-15'
+          valorNominal: 1234.56
+          tipoCobranca: SIMPLES
+          situacao: RECEBIDO
+          dataSituacao: '2023-09-26'
+          valorTotalRecebido: '1234.56'
+          origemRecebimento: BOLETO
+          arquivada: true
+          descontos:
+            - codigo: PERCENTUALDATAINFORMADA
+              quantidadeDias: 7
+              taxa: 5
+          multa:
+            codigo: VALORFIXO
+            valor: 4
+          mora:
+            codigo: TAXAMENSAL
+            taxa: 5
+          pagador:
+            email: nome.sobrenome@x.com.br
+            ddd: '31'
+            telefone: 9999-9999
+            numero: '3456'
+            complemento: apartamento 3 bloco 4
+            cpfCnpj: '12345678901'
+            tipoPessoa: FISICA
+            nome: Nome do pagador
+            endereco: Avenida Brasil
+            bairro: Centro
+            cidade: Belo Horizonte
+            uf: MG
+            cep: '30110000'
+        boleto:
+          nossoNumero: '12345678'
+          codigoBarras: '01234567890123456789012345678901234567890123'
+          linhaDigitavel: '01234567890123456789012345678901234567890123456'
+        pix:
+          txid: '012345678901234567890123456789012345'
+          pixCopiaECola: >-
+            012345678901234567890BR.GOV.BCB.PIX2576spi-qrcode-h.bancointer.com.br...
+        notaFiscal:
+          chaveNFe: '87268327085470029496566305356486731069319792'
+          numero: 31231
+          serie: 910
+          dataEmissao: '2026-01-15'
+          parcela: 1
+          naturezaOperacao: Venda
+    exemploRetornoSumario:
+      summary: Exemplo de retorno sumário
+      value:
+        - situacao: A_RECEBER
+          valor: 1000
+          quantidade: 30
+        - situacao: RECEBIDO
+          valor: 4000
+          quantidade: 65
+        - situacao: ATRASADO
+          valor: 500
+          quantidade: 3
+        - situacao: CANCELADO
+          valor: 0
+          quantidade: 0
+        - situacao: EXPIRADO
+          valor: 0
+          quantidade: 0
+        - situacao: MARCADO_RECEBIDO
+          valor: 0
+          quantidade: 0
+        - situacao: FALHA_EMISSAO
+          valor: 0
+          quantidade: 0
+        - situacao: EM_PROCESSAMENTO
+          valor: 0
+          quantidade: 0
+        - situacao: PROTESTO
+          valor: 0
+          quantidade: 0
+    exemploCriarWebhook:
+      summary: Exemplo de retorno sumário
+      value:
+        webhookUrl: https://cobranca.example.com/api/webhook
+    exemploRetornoListaCobrancas:
+      summary: Exemplo de retorno lista cobranças
+      value:
+        totalPaginas: 1
+        totalElementos: 0
+        tamanhoPagina: 20
+        primeiraPagina: true
+        ultimaPagina: true
+        numeroDeElementos: 1
+        cobrancas:
+          - cobranca:
+              codigoSolicitacao: 183e982a-34e5-4bc0-9643-def5432a
+              seuNumero: '123456'
+              situacao: A_RECEBER
+              dataSituacao: '2023-09-26'
+              dataEmissao: '2023-09-26'
+              dataVencimento: '2023-10-01'
+              valorNominal: '123.45'
+              tipoCobranca: SIMPLES
+              pagador:
+                nome: Nome do pagador
+                cpfCnpj: '01234567890'
+            boleto:
+              nossoNumero: '01234567890'
+              codigoBarras: '01234567890123456789012345678901234567890123'
+              linhaDigitavel: '01234567890123456789012345678901234567890123456'
+            pix:
+              txid: '012345678901234567890123456789012345'
+              pixCopiaECola: >-
+                012345678901234567890BR.GOV.BCB.PIX2576spi-qrcode-h.bancointer.com.br...
+    exemploRetornoEmitirCobranca:
+      summary: Exemplo de retorno lista cobranças
+      value:
+        codigoSolicitacao: 183e982a-34e5-4bc0-9643-def5432a
+    exemploListaCallback:
+      summary: Exemplo de retorno lista de callback
+      value:
+        totalElementos: 0
+        totalPaginas: 0
+        primeiraPagina: true
+        ultimaPagina: true
+        data:
+          - webhookUrl: http://example.com
+            payload: {}
+            numeroTentativa: 1
+            dataHoraDisparo: '2023-09-24T14:15:22Z'
+            sucesso: true
+            httpStatus: 200
+          - webhookUrl: http://example.com
+            payload: {}
+            numeroTentativa: 1
+            dataHoraDisparo: '2023-09-24T14:15:22Z'
+            sucesso: false
+            httpStatus: 403
+            mensagemErro: mensagem de erro
+    exemploPagarCobranca1:
+      summary: Exemplo de Pagamento de cobrança via Pix
+      value:
+        pagarCom: PIX
+    exemploPagarCobranca2:
+      summary: Exemplo de Pagamento de cobrança via Boleto
+      value:
+        pagarCom: BOLETO
+    exemploRetryCallbackResponse:
+      summary: Exemplo de retorno da lista de callbacks reenviados.
+      value:
+        foundIds:
+          - 497f6eca-6276-4993-bfeb-53cbbbba6f08

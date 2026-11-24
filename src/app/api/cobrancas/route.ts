@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { getServiceClient, devBridge } from '@/lib/serverSupabase';
 import { sessionFromRequest } from '@/lib/session';
 import { salvarErpConfig, lerErpConfig, COBRANCA_MENSAGEM_DEFAULT } from '@/lib/erpConfig';
@@ -12,11 +13,23 @@ import {
 /**
  * BLOCO 205 — PORTAL DE COBRANCAS (API do dono).
  *
+ * BLOCO 218 — CORRECAO: o portal mostrava "Nenhum boletado atrasado" com
+ * boletos vencidos reais. 2 causas corrigidas:
+ *   1) A colecao do Inter estava na spec V2 deprecada (size/page + resposta
+ *      `itens`) — a V3 usa paginacao.paginaAtual/itensPorPagina e responde em
+ *      `cobrancas`/`totalPaginas` (fix no listarCobrancas de interBoleto.ts);
+ *   2) Os boletos do fluxo ANTIGO (Bloco 25) gravam em sales.inter_boleto_* e
+ *      o fallback LOCAL so olhava sales_boletos — boletos vencidos antigos
+ *      sumiam. Agora o banco local (sales_boletos + sales.inter_boleto_*)
+ *      alimenta o portal tanto no fallback quanto como REDE DE SEGURANCA
+ *      mesclada a lista do Inter (dedup por codigo/seuNumero/parcela).
+ *
  * GET  /api/cobrancas
- *      -> lista de boletos ATRASADOS buscada na API do Banco Inter
- *         (colecao /cobranca/v3/cobrancas, janela de 180 dias) + cruzamento
- *         com sales_boletos -> sales -> clients para NOME e TELEFONE do
- *         cliente (o botao de cobranca abre o WhatsApp com a mensagem).
+ *      -> lista de boletos ATRASADOS (janela de 180 dias) da API do Banco
+ *         Inter (colecao /cobranca/v3/cobrancas) MESCLADA com os vencidos em
+ *         aberto gravados no banco local (sales_boletos + sales.inter_boleto_*)
+ *         + cruzamento com clients para NOME e TELEFONE (o botao de cobranca
+ *         abre o WhatsApp com a mensagem).
  *      Devolve tb a mensagem personalizada (erp_config.cobrancaMensagem).
  *
  * POST /api/cobrancas { acao: 'MENSAGEM', texto }
@@ -90,6 +103,113 @@ function telWaMe(tel: string): string {
   return '';
 }
 
+// ---------------------------------------------------------------------------
+// BLOCO 218 — BOLETOS VENCIDOS DO BANCO LOCAL (rede de seguranca)
+//
+// O Inter e a fonte oficial da cobranca, mas o app tem 2 locais de gravacao:
+//   - sales_boletos (Bloco 199+, boleto unico/duplo novo);
+//   - sales.inter_boleto_* (Bloco 25, fluxo antigo — boletos emitidos ate
+//     a migracao, os que o dono precisa cobrar HOJE).
+// Sem o Inter configurado, o portal caia SO em sales_boletos e os antigos
+// sumiam. Agora `boletosLocaisVencidos` junta os DOIS; no caminho INTER eles
+// entram como rede de seguranca (dedup), cobrindo boleto que o Inter nao
+// devolveu (paginacao, cobranca emitida fora do app, parcela nunca emitida).
+// ---------------------------------------------------------------------------
+
+/** Status de cobranca em aberto (boleto que ainda pode ser cobrado). */
+const STATUS_ABERTO = new Set(['NAO_GERADO', 'EM_PROCESSAMENTO', 'A_RECEBER', 'ATRASADO']);
+
+/** Busca vencidos em aberto nos DOIS locais e mapeia p/ BoletoAtrasado. */
+async function boletosLocaisVencidos(
+  db: SupabaseClient,
+  hoje: string,
+  clientePorId: Map<string, Record<string, unknown>>,
+  vendaPorId: Map<string, Record<string, unknown>>
+): Promise<BoletoAtrasado[]> {
+  const desde = dataMenosDiasSp(JANELA_DIAS);
+  const [bRes, sRes] = await Promise.all([
+    db.from('sales_boletos')
+      .select('sale_id, seq, valor, vencimento, status, codigo, seu_numero')
+      .gte('vencimento', desde)
+      .lt('vencimento', hoje)
+      .order('vencimento', { ascending: true })
+      .limit(500),
+    db.from('sales')
+      .select('id, client_id, valor_total, inter_boleto_status, inter_boleto_codigo, inter_boleto_seu_numero, inter_boleto_vencimento, inter_boleto_valor')
+      .neq('inter_boleto_codigo', null)
+      .gte('inter_boleto_vencimento', desde)
+      .lt('inter_boleto_vencimento', hoje)
+      .order('inter_boleto_vencimento', { ascending: true })
+      .limit(500),
+  ]);
+
+  const nomeClienteDe = (saleId: string | null): string => {
+    const cli = clientePorId.get(String(vendaPorId.get(saleId || '')?.client_id || ''));
+    return String(cli?.nome_fantasia || cli?.nome || '') || 'Cliente';
+  };
+  const telDe = (saleId: string | null): string => {
+    const cli = clientePorId.get(String(vendaPorId.get(saleId || '')?.client_id || ''));
+    return telWaMe(String(cli?.telefone || ''));
+  };
+
+  const lista: BoletoAtrasado[] = [];
+
+  // 1) fluxo novo (sales_boletos — Bloco 199)
+  for (const row of bRes.data || []) {
+    const b = row as Record<string, unknown>;
+    if (!STATUS_ABERTO.has(String(b.status || 'NAO_GERADO').toUpperCase())) continue;
+    const saleId = String(b.sale_id || '') || null;
+    const venc = String(b.vencimento || '');
+    if (!venc || venc >= hoje) continue;
+    lista.push({
+      codigo: String(b.codigo || `local-${b.seu_numero || saleId}-${b.seq || 1}`),
+      seuNumero: String(b.seu_numero || ''),
+      situacao: String(b.status || 'ATRASADO'),
+      vencimento: venc,
+      vencimentoFmt: fmtData(venc),
+      valor: Number(b.valor) || 0,
+      diasAtraso: diasAtrasoDe(venc, hoje),
+      cliente: nomeClienteDe(saleId),
+      telefone: telDe(saleId),
+      saleId,
+      parcela: b.seq != null ? Number(b.seq) : null,
+    });
+  }
+
+  // 2) fluxo antigo (sales.inter_boleto_* — Bloco 25)
+  for (const row of sRes.data || []) {
+    const s = row as Record<string, unknown>;
+    if (!STATUS_ABERTO.has(String(s.inter_boleto_status || '').toUpperCase())) continue;
+    const saleId = String(s.id || '') || null;
+    const venc = String(s.inter_boleto_vencimento || '');
+    if (!venc || venc >= hoje) continue;
+    lista.push({
+      codigo: String(s.inter_boleto_codigo || ''),
+      seuNumero: String(s.inter_boleto_seu_numero || ''),
+      situacao: String(s.inter_boleto_status || 'ATRASADO'),
+      vencimento: venc,
+      vencimentoFmt: fmtData(venc),
+      valor: Number(s.inter_boleto_valor ?? s.valor_total) || 0,
+      diasAtraso: diasAtrasoDe(venc, hoje),
+      cliente: nomeClienteDe(saleId),
+      telefone: telDe(saleId),
+      saleId,
+      parcela: null,
+    });
+  }
+
+  return lista.sort((a, b) => (a.vencimento < b.vencimento ? -1 : a.vencimento > b.vencimento ? 1 : 0));
+}
+
+/** Dedup da mescla Inter + local (mesmo boleto pode estar nos dois). */
+function chavesDedup(b: BoletoAtrasado): string[] {
+  const ch = [] as string[];
+  if (b.codigo) ch.push(`cod:${b.codigo}`);
+  if (b.seuNumero) ch.push(`seu:${b.seuNumero}`);
+  if (b.saleId) ch.push(`sale:${b.saleId}:${b.parcela ?? 'unico'}`);
+  return ch;
+}
+
 export async function GET(req: NextRequest) {
   const bridged = await devBridge(req);
   if (bridged) return bridged;
@@ -104,55 +224,33 @@ export async function GET(req: NextRequest) {
 
   const erp = await lerErpConfig();
 
+  /** Mapas de vendas/clientes usados pelo cruzamento (nome/telefone). */
+  const carregarMapas = async (db: SupabaseClient) => {
+    const [vRes, cRes] = await Promise.all([
+      db.from('sales').select('id, client_id'),
+      db.from('clients').select('id, nome_fantasia, nome, telefone'),
+    ]);
+    const vendaPorId = new Map<string, Record<string, unknown>>();
+    for (const s of vRes.data || []) vendaPorId.set(String((s as Record<string, unknown>).id || ''), s as Record<string, unknown>);
+    const clientePorId = new Map<string, Record<string, unknown>>();
+    for (const c of cRes.data || []) clientePorId.set(String((c as Record<string, unknown>).id || ''), c as Record<string, unknown>);
+    return { vendaPorId, clientePorId };
+  };
+
   // Inter nao configurado: o portal abre MESMO ASSIM com os boletos do
-  // BANCO LOCAL (sales_boletos, BLOCO 199) vencidos e em aberto — assim a
-  // cobranca já funciona hoje; quando as credenciais do Inter forem
-  // cadastradas (env Vercel), a lista passa a vir da API oficial sozinha.
+  // BANCO LOCAL (sales_boletos Bloco 199 + sales.inter_boleto_* Bloco 25)
+  // vencidos e em aberto — assim a cobranca já funciona hoje; quando as
+  // credenciais do Inter forem cadastradas (env Vercel), a lista passa a
+  // vir da API oficial sozinha.
   if (!isInterConfigured()) {
     const hoje = dataHojeSp();
     let atrasados: BoletoAtrasado[] = [];
     try {
       const db = getServiceClient();
-      const [bRes, vRes, cRes] = await Promise.all([
-        db.from('sales_boletos')
-          .select('sale_id, seq, valor, vencimento, status, codigo, seu_numero')
-          .gte('vencimento', dataMenosDiasSp(JANELA_DIAS))
-          .lt('vencimento', hoje)
-          .order('vencimento', { ascending: true })
-          .limit(500),
-        db.from('sales').select('id, client_id'),
-        db.from('clients').select('id, nome_fantasia, nome, telefone'),
-      ]);
-      const vendaPorId = new Map<string, Record<string, unknown>>();
-      for (const s of vRes.data || []) vendaPorId.set(String((s as Record<string, unknown>).id || ''), s as Record<string, unknown>);
-      const clientePorId = new Map<string, Record<string, unknown>>();
-      for (const c of cRes.data || []) clientePorId.set(String((c as Record<string, unknown>).id || ''), c as Record<string, unknown>);
-
-      // status que AINDA sao cobranca em aberto (o resto fechou: pago/cancelado/expirado...)
-      const aberto = new Set(['NAO_GERADO', 'EM_PROCESSAMENTO', 'A_RECEBER', 'ATRASADO']);
-      atrasados = (bRes.data || [])
-        .filter((b) => aberto.has(String((b as Record<string, unknown>).status || 'NAO_GERADO').toUpperCase()))
-        .map((b) => {
-          const row = b as Record<string, unknown>;
-          const saleId = String(row.sale_id || '') || null;
-          const cli = clientePorId.get(String(vendaPorId.get(saleId || '')?.client_id || ''));
-          const venc = String(row.vencimento || '');
-          return {
-            codigo: String(row.codigo || `local-${row.seu_numero || row.sale_id}-${row.seq || 1}`),
-            seuNumero: String(row.seu_numero || ''),
-            situacao: String(row.status || 'ATRASADO'),
-            vencimento: venc,
-            vencimentoFmt: fmtData(venc),
-            valor: Number(row.valor) || 0,
-            diasAtraso: diasAtrasoDe(venc, hoje),
-            cliente: String(cli?.nome_fantasia || cli?.nome || 'Cliente'),
-            telefone: telWaMe(String(cli?.telefone || '')),
-            saleId,
-            parcela: row.seq != null ? Number(row.seq) : null,
-          } as BoletoAtrasado;
-        });
+      const { vendaPorId, clientePorId } = await carregarMapas(db);
+      atrasados = await boletosLocaisVencidos(db, hoje, clientePorId, vendaPorId);
     } catch {
-      // sales_boletos ainda nao existe (SQL 199 nao rodou) — segue vazio
+      // sales_boletos/inter_* ainda nao existem (SQL pendente) — segue vazio
     }
     return NextResponse.json({
       ok: true,
@@ -170,8 +268,8 @@ export async function GET(req: NextRequest) {
   const lista = await listarCobrancas({
     dataInicial: dataMenosDiasSp(JANELA_DIAS),
     dataFinal: hoje,
-    size: 100,
-    maxPaginas: 5,
+    size: 500,          // BLOCO 218: spec V3 aceita ate 1000/pagina
+    maxPaginas: 5,      // ate 2500 cobrancas na janela
   });
   if (!lista.ok) {
     // Erro do Inter: devolve erro (o portal mostra) — mensagem segue pra edição.
@@ -255,6 +353,25 @@ export async function GET(req: NextRequest) {
       };
     })
     .sort((a, b) => (b.vencimento < a.vencimento ? 1 : b.vencimento > a.vencimento ? -1 : 0));
+
+  // BLOCO 218: rede de seguranca — os vencidos do BANCO LOCAL (sales_boletos
+  // + sales.inter_boleto_*) que NAO vieram do Inter entram na lista (dedup por
+  // codigo/seuNumero/sale+parcela). Garante que nenhum vencido escape da
+  // cobranca (paginacao do Inter, cobranca criada fora do app, parcela nunca
+  // emitida, etc). Reusa os mapas vendas/clientes ja carregados acima.
+  try {
+    const locais = await boletosLocaisVencidos(db, hoje, clientePorId, vendaPorId);
+    const vistos = new Set<string>();
+    for (const a of atrasados) for (const k of chavesDedup(a)) vistos.add(k);
+    for (const l of locais) {
+      if (chavesDedup(l).some((k) => vistos.has(k))) continue;
+      atrasados.push(l);
+      for (const k of chavesDedup(l)) vistos.add(k);
+    }
+    atrasados.sort((a, b) => (b.vencimento < a.vencimento ? 1 : b.vencimento > a.vencimento ? -1 : 0));
+  } catch {
+    // cruzamento local indisponivel — a lista do Inter segue sozinha
+  }
 
   const payload = {
     ok: true,

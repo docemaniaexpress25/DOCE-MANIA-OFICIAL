@@ -332,9 +332,13 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
     });
   }, [dailyRouteState]);
 
-  // Se o cliente selecionado nao existe mais na lista, limpa a selecao
+  // BLOCO 218: se o cliente selecionado SUMIU do cadastro, limpa a seleção —
+  // mas NÃO durante um carregamento/refetch (clients vazio ou falha de rede):
+  // com a lista vazia o guard fechava o PDV no MEIO da venda (aparece até no
+  // E2E mock quando o refetch de clients voltava sem linhas). Só fecha com a
+  // lista carregada e o cliente realmente inexistente (ex.: excluído).
   useEffect(() => {
-    if (selectedClient && !clients.find(c => c.id === selectedClient.id)) {
+    if (selectedClient && clients.length > 0 && !clients.find(c => c.id === selectedClient.id)) {
       setSelectedClient(null);
     }
   }, [selectedClient, clients]);
@@ -1402,10 +1406,11 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
 
   if (selectedClient) {
-    const pdvClient = clients.find(c => c.id === selectedClient.id);
-    if (!pdvClient) {
-      return null;
-    }
+    // BLOCO 218: o PDV usa o cliente do ESTADO (o mesmo que abriu o modo)
+    // e só troca pelo da lista quando ele está lá — se clients estiver em
+    // refetch vazio, o atendimento CONTINUA (antes: return null matava o
+    // PDV no meio da venda sem gravar nem avisar).
+    const pdvClient = clients.find(c => c.id === selectedClient.id) || selectedClient;
 
   return (
       <PDV

@@ -109,7 +109,15 @@ export async function lerErpConfig(supabase?: any): Promise<ErpConfig> {
   }
 }
 
-/** Salva parcialmente (merge no jsonb). Devolve o config final. */
+/** Salva parcialmente (merge no jsonb). Devolve o config final.
+ *
+ * BLOCO 217 — FIX DO UF DO EMITENTE: o front envia SOMENTE o diff do form
+ * (ex.: { uf: 'SP' } — quantos campos o dono mexeu). O merge anterior fazia
+ * sanitizaEmitente(parcial) e GRAVAVA O OBJETO INTEIRO: editar só o UF
+ * apagava CNPJ/razão/endereço do banco, o form voltava com o CNPJ vazio e o
+ * botão de salvar ficava morto ("não consigo editar o UF"). Agora cada campo
+ * do diff é aplicado SOBRE o emitente já gravado (merge campo a campo) e a
+ * sanitização roda sobre o resultado completo. */
 export async function salvarErpConfig(parcial: Partial<ErpConfig>, supabase?: any): Promise<{ ok: boolean; erro?: string; config?: ErpConfig }> {
   try {
     const db = supabase || getServiceClient();
@@ -124,7 +132,12 @@ export async function salvarErpConfig(parcial: Partial<ErpConfig>, supabase?: an
       cobrancaMensagem: parcial.cobrancaMensagem !== undefined
         ? (String(parcial.cobrancaMensagem || '').trim().slice(0, 600) || COBRANCA_MENSAGEM_DEFAULT)
         : atual.cobrancaMensagem,
-      emitente: parcial.emitente ? sanitizaEmitente(parcial.emitente as unknown as Record<string, unknown>) : atual.emitente,
+      emitente: parcial.emitente
+        ? sanitizaEmitente({
+            ...(atual.emitente as unknown as Record<string, unknown>),
+            ...(parcial.emitente as unknown as Record<string, unknown>),
+          })
+        : atual.emitente,
     };
     const { error } = await db
       .from('app_settings')
@@ -149,7 +162,10 @@ export async function lerEmitentePayload(supabase?: any): Promise<Record<string,
   const peg = (gravado: string, env: string) => (gravado || env || '').trim();
   const out: Record<string, unknown> = {
     uf_emitente: peg(e.uf, cfg.ufEmitente).toUpperCase(),
-    regime_tributario_emitente: e.razao ? e.regime : cfg.regime,
+    // FIX BLOCO 217: o marcador de "emitente gravado aqui" é o CNPJ (mesma
+    // regra de fonteEmitente) — antes usava e.razao e um emitente salvo sem
+    // razão mandava o regime do env, ignorando o regime escolhido pelo dono.
+    regime_tributario_emitente: e.cnpj ? e.regime : cfg.regime,
   };
   const cnpj = (e.cnpj || cfg.cnpj || '').replace(/\D/g, '');
   if (cnpj) out.cnpj_emitente = cnpj;

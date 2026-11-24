@@ -122,8 +122,16 @@ export const boletoService = {
     }
   },
 
-  /** Baixa o PDF do boleto e abre numa aba nova (blob URL). */
-  async abrirPdf(saleId: string): Promise<{ ok: boolean; erro?: string }> {
+  /**
+   * BLOCO 217 — baixa o PDF do boleto e devolve o base64 (SEM abrir janela).
+   * O window.open(blob) antigo era bloqueado no celular (popup após fetch
+   * async já não conta como gesto do usuário) e blob: não abre em apps
+   * externos — por isso "gera o PDF mas não consigo visualizar/compartilhar/
+   * salvar". Agora o card recebe o base64 e mostra o VISUALIZADOR próprio
+   * (iframe) com COMPARTILHAR (Web Share API com arquivo real), SALVAR
+   * (download) e ABRIR EM NOVA ABA — tudo com gesto direto do usuário.
+   */
+  async obterPdf(saleId: string): Promise<{ ok: boolean; pdfBase64?: string; erro?: string }> {
     try {
       const res = await fetch('/api/boletos', {
         method: 'POST',
@@ -132,16 +140,9 @@ export const boletoService = {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.pdfBase64) return { ok: false, erro: data.erro || `Erro ${res.status}` };
-      const bin = atob(data.pdfBase64 as string);
-      const bytes = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      const blob = new Blob([bytes], { type: 'application/pdf' });
-      const url = URL.createObjectURL(blob);
-      window.open(url, '_blank');
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
-      return { ok: true };
+      return { ok: true, pdfBase64: String(data.pdfBase64) };
     } catch (e: unknown) {
-      return { ok: false, erro: e instanceof Error ? e.message : 'Falha ao abrir o PDF' };
+      return { ok: false, erro: e instanceof Error ? e.message : 'Falha ao buscar o PDF' };
     }
   },
 
@@ -252,8 +253,9 @@ export const boletoService = {
     }
   },
 
-  /** Abre o PDF do Inter de UMA parcela (blob base64). */
-  async abrirPdfParcela(saleId: string, parcelaId: string): Promise<{ ok: boolean; erro?: string }> {
+  /** BLOCO 217: baixa o PDF do Inter de UMA parcela (base64, sem abrir janela
+   *  — mesmo fluxo do visualizador do boleto único). */
+  async obterPdfParcela(saleId: string, parcelaId: string): Promise<{ ok: boolean; pdfBase64?: string; erro?: string }> {
     try {
       const res = await fetch('/api/boletos', {
         method: 'POST',
@@ -262,16 +264,9 @@ export const boletoService = {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.pdfBase64) return { ok: false, erro: data.erro || `Erro ${res.status}` };
-      const bin = atob(data.pdfBase64 as string);
-      const bytes = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      const blob = new Blob([bytes], { type: 'application/pdf' });
-      const url = URL.createObjectURL(blob);
-      window.open(url, '_blank');
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
-      return { ok: true };
+      return { ok: true, pdfBase64: String(data.pdfBase64) };
     } catch (e: unknown) {
-      return { ok: false, erro: e instanceof Error ? e.message : 'Falha ao abrir o PDF' };
+      return { ok: false, erro: e instanceof Error ? e.message : 'Falha ao buscar o PDF' };
     }
   },
 };

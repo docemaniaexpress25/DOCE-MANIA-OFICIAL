@@ -180,6 +180,102 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
   const [motivoCancel, setMotivoCancel] = useState('Cliente pediu nova data');
   const [busyCancel, setBusyCancel] = useState(false);
 
+  /* ===========================================================
+   * BLOCO 217 — VISUALIZADOR DE PDF DO BOLETO (visualizar /
+   * compartilhar / salvar).
+   * O window.open(blob) antigo era bloqueado no celular (popup
+   * depois de fetch async não é gesto do usuário) e blob: não
+   * abre em apps externos — por isso o dono não conseguia ver,
+   * compartilhar nem salvar. Agora o PDF abre NUM MODAL do
+   * próprio app com os três botões, todos com gesto direto:
+   * COMPARTILHAR (Web Share API com o ARQUIVO real — vai no
+   * WhatsApp, e-mail etc.), SALVAR (download) e ABRIR EM NOVA
+   * ABA (fallback desktop).
+   * =========================================================== */
+  const [pdfModal, setPdfModal] = useState<{ url: string; nome: string } | null>(null);
+  const [ocupadoPdf, setOcupadoPdf] = useState(false);
+
+  const abrirPdfModal = (base64: string, nome: string) => {
+    const bin = atob(base64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const blob = new Blob([bytes], { type: 'application/pdf' });
+    setPdfModal({ url: URL.createObjectURL(blob), nome });
+  };
+
+  const fecharPdfModal = () => {
+    if (pdfModal) URL.revokeObjectURL(pdfModal.url);
+    setPdfModal(null);
+  };
+
+  const compartilharPdf = async () => {
+    if (!pdfModal) return;
+    try {
+      const res = await fetch(pdfModal.url);
+      const blob = await res.blob();
+      const arquivo = new File([blob], pdfModal.nome, { type: 'application/pdf' });
+      const podeArquivo = !!navigator.canShare && navigator.canShare({ files: [arquivo] });
+      if (podeArquivo) {
+        await navigator.share({ files: [arquivo], title: pdfModal.nome, text: 'Boleto Doce Mania' });
+        showToast?.('Boleto compartilhado!', 'success');
+      } else {
+        // Fallback: sem Web Share de arquivo (desktop/PC) — salva o PDF
+        // (o dono anexa manualmente no WhatsApp Web) e avisa.
+        const a = document.createElement('a');
+        a.href = pdfModal.url; a.download = pdfModal.nome;
+        document.body.appendChild(a); a.click(); a.remove();
+        showToast?.('Compartilhamento direto indisponível aqui — o PDF foi salvo, anexe no WhatsApp.', 'success');
+      }
+    } catch (e: unknown) {
+      if ((e as Error)?.name === 'AbortError') return; // usuário fechou a janela de compartilhar
+      showToast?.('Não foi possível compartilhar — use SALVAR e anexe no WhatsApp.', 'error');
+    }
+  };
+
+  const salvarPdf = () => {
+    if (!pdfModal) return;
+    const a = document.createElement('a');
+    a.href = pdfModal.url; a.download = pdfModal.nome;
+    document.body.appendChild(a); a.click(); a.remove();
+    showToast?.('PDF salvo!', 'success');
+  };
+
+  const modalPdf = pdfModal ? (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[600] flex items-center justify-center p-3" onClick={fecharPdfModal}>
+      <div className="bg-white w-full max-w-md rounded-3xl overflow-hidden shadow-2xl flex flex-col max-h-[92dvh]" onClick={e => e.stopPropagation()}>
+        <div className="bg-slate-800 px-4 py-3 flex items-center justify-between gap-2 shrink-0">
+          <p className="text-white text-[10px] font-black uppercase tracking-widest flex items-center gap-2 min-w-0"><i className="fa-solid fa-file-pdf"></i><span className="truncate">Boleto — PDF do Inter</span></p>
+          <button onClick={fecharPdfModal} className="text-white/80 active:scale-90 p-1" aria-label="Fechar PDF"><i className="fa-solid fa-xmark text-lg"></i></button>
+        </div>
+        {/* Visualização embutida do PDF — funciona no Chrome/Safari modernos */}
+        <div className="flex-1 min-h-[280px] bg-gray-100 overflow-hidden">
+          <iframe src={pdfModal.url} title="Boleto PDF" className="w-full h-full" />
+        </div>
+        <div className="p-3 grid grid-cols-3 gap-2 shrink-0 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+          <button onClick={() => void compartilharPdf()} className="bg-green-600 text-white font-black py-3 rounded-xl text-[9px] uppercase tracking-widest active:scale-95 flex flex-col items-center gap-1">
+            <i className="fa-solid fa-share-nodes text-sm"></i>Compartilhar
+          </button>
+          <button onClick={salvarPdf} className="bg-blue-600 text-white font-black py-3 rounded-xl text-[9px] uppercase tracking-widest active:scale-95 flex flex-col items-center gap-1">
+            <i className="fa-solid fa-download text-sm"></i>Salvar
+          </button>
+          <a href={pdfModal.url} target="_blank" rel="noopener noreferrer" className="bg-gray-200 text-gray-700 font-black py-3 rounded-xl text-[9px] uppercase tracking-widest active:scale-95 flex flex-col items-center gap-1">
+            <i className="fa-solid fa-up-right-from-square text-sm"></i>Nova aba
+          </a>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
+  /** BLOCO 217: PDF do boleto único — abre no visualizador (não mais window.open). */
+  const handlePdf = async () => {
+    if (busy || !saleId) return;
+    setBusy(true);
+    const r = await boletoService.obterPdf(saleId);
+    setBusy(false);
+    if (!r.ok || !r.pdfBase64) { showToast?.(r.erro || 'Falha ao buscar o PDF.', 'error'); return; }
+    abrirPdfModal(r.pdfBase64, `boleto-doce-mania-${saleId.slice(0, 8).toUpperCase()}.pdf`);
+  };
+
   useEffect(() => {
     if (!saleId) return;
     let vivo = true;
@@ -433,22 +529,27 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
     await refrescarParcelas();
   };
 
+  /** BLOCO 217: PDF da parcela — mesmo visualizador do boleto único. */
   const handlePdfParcela = async (p: BoletoParcelaInfo) => {
     if (busyParcela || !saleId) return;
     setBusyParcela(p.id);
-    const r = await boletoService.abrirPdfParcela(saleId, p.id);
+    const r = await boletoService.obterPdfParcela(saleId, p.id);
     setBusyParcela('');
-    if (!r.ok && r.erro) showToast?.(r.erro, 'error');
+    if (!r.ok || !r.pdfBase64) { showToast?.(r.erro || 'Falha ao buscar o PDF.', 'error'); return; }
+    abrirPdfModal(r.pdfBase64, `boleto-${p.seq}-doce-mania-${saleId.slice(0, 8).toUpperCase()}.pdf`);
   };
 
+  /* BLOCO 217 (regra do dono): o WhatsApp não leva mais linha digitável nem
+   * PIX copia-e-cola — não usamos isso. Mensagem curta: valor, vencimento e
+   * pedido de confirmação. O PDF real vai pelo botão COMPARTILHAR do
+   * visualizador (arquivo do Inter). */
   const handleWhatsParcela = (p: BoletoParcelaInfo) => {
     const linhas = [
       `*BOLETO ${p.seq} DE ${parcelas.length} — DOCE MANIA*`,
       p.valor ? `Valor: R$ ${Number(p.valor).toFixed(2)}` : '',
       p.vencimento ? `Vencimento: ${dataBR(p.vencimento)}` : '',
-      p.linhaDigitavel ? `Linha digitavel:\n${p.linhaDigitavel}` : '',
-      p.pixCopiaECola ? `PIX (copia e cola):\n${p.pixCopiaECola}` : '',
-    ].filter(Boolean).join('\n\n');
+      'Assim que pagar, me manda o comprovante por aqui. Obrigado!',
+    ].filter(Boolean).join('\n');
     const phone = (clienteTelefone || '').replace(/\D/g, '');
     window.open(`https://wa.me/55${phone}?text=${encodeURIComponent(linhas)}`, '_blank');
   };
@@ -599,16 +700,8 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
     if (r.boleto) setBoleto(r.boleto);
   };
 
-  // BLOCO 152: PDF ORIGINAL do Inter — único documento do boleto no app
-  // (mini boleto 80mm foi excluido pelo dono).
-  const handlePdf = async () => {
-    if (busy || !saleId) return;
-    setBusy(true);
-    const r = await boletoService.abrirPdf(saleId);
-    setBusy(false);
-    if (!r.ok && r.erro) showToast?.(r.erro, 'error');
-  };
-
+  // BLOCO 217: o handlePdf do boleto único agora vive junto do visualizador
+  // (topo do componente — usa boletoService.obterPdf e abre o modal PDF).
   // BLOCO 170: COMPROVANTE 80mm removido deste card (pedido do dono) — o mini
   // boleto completo (impressão DIRETA, BLOCO 177) cobre a térmica com linha
   // digitável + código de barras + QR do PIX.
@@ -628,15 +721,16 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
     } catch { showToast?.('Falha ao copiar.', 'error'); }
   };
 
+  /* BLOCO 217 (regra do dono): WhatsApp do boleto único SEM linha digitável
+   * e SEM PIX copia-e-cola — mensagem curta com valor e vencimento. */
   const handleWhats = () => {
     if (!boleto) return;
     const linhas = [
       '*BOLETO DOCE MANIA*',
       boleto.valor ? `Valor: R$ ${Number(boleto.valor).toFixed(2)}` : '',
       boleto.vencimento ? `Vencimento: ${dataBR(boleto.vencimento)}` : '',
-      boleto.linhaDigitavel ? `Linha digitavel:\n${boleto.linhaDigitavel}` : '',
-      boleto.pixCopiaECola ? `PIX (copia e cola):\n${boleto.pixCopiaECola}` : '',
-    ].filter(Boolean).join('\n\n');
+      'Assim que pagar, me manda o comprovante por aqui. Obrigado!',
+    ].filter(Boolean).join('\n');
     const phone = (clienteTelefone || '').replace(/\D/g, '');
     window.open(`https://wa.me/55${phone}?text=${encodeURIComponent(linhas)}`, '_blank');
   };
@@ -893,18 +987,10 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
                   {p.erro && p.status === 'FALHA_EMISSAO' && (
                     <p className="text-[8px] font-bold text-rose-600 leading-snug break-words">{p.erro}</p>
                   )}
-                  {p.linhaDigitavel && (
-                    <button onClick={() => handleCopiarTexto(p.linhaDigitavel!, 'Linha digitavel')}
-                      className="w-full text-left font-mono text-[9px] font-bold bg-white rounded-lg px-2 py-2 break-all active:scale-95">
-                      {p.linhaDigitavel}
-                    </button>
-                  )}
-                  {p.pixCopiaECola && (
-                    <button onClick={() => handleCopiarTexto(p.pixCopiaECola!, 'PIX copia e cola')}
-                      className="w-full text-left text-[9px] font-black bg-white rounded-lg px-2 py-2 break-all active:scale-95">
-                      <i className="fa-solid fa-qrcode mr-1"></i>PIX COPIA E COLA — TOQUE PARA COPIAR
-                    </button>
-                  )}
+                  {/* BLOCO 217 (regra do dono): linha digitável e PIX copia-e-cola
+                      SAÍRAM do card — “não vamos usar isso, apenas informe se o
+                      boleto foi gerado com sucesso”. O status segue no badge e
+                      o PDF do Inter abre pelo botão PDF. */}
                   <div className="grid grid-cols-3 gap-1.5">
                     {aberta ? (
                       <button onClick={() => void handleGerarParcela(p)} disabled={ocupado}
@@ -986,8 +1072,10 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
             </p>
           </div>
         )}
-      </div>
-    );
+      {/* BLOCO 217: visualizador do PDF (compartilhar/salvar/nova aba) */}
+      {modalPdf}
+    </div>
+  );
   }
 
   // ====================== FLUXO DE BOLETO ÚNICO (inalterado) ======================
@@ -1018,20 +1106,10 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
           {(erroLocal || (boleto.erro && boleto.status === 'FALHA_EMISSAO')) && (
             <p className="text-[9px] leading-snug font-bold opacity-80 break-words">{erroLocal || boleto.erro}</p>
           )}
-          {['A_RECEBER', 'ATRASADO'].includes(boleto.status) && boleto.linhaDigitavel && (
-            <div className="space-y-1.5">
-              <button onClick={() => handleCopiarTexto(boleto.linhaDigitavel!, 'Linha digitavel')}
-                className="w-full text-left font-mono text-[9px] font-bold bg-white/70 rounded-lg px-2 py-2.5 break-all active:scale-95">
-                {boleto.linhaDigitavel}
-              </button>
-              {boleto.pixCopiaECola && (
-                <button onClick={() => handleCopiarTexto(boleto.pixCopiaECola!, 'PIX copia e cola')}
-                  className="w-full text-left text-[9px] font-black bg-white/70 rounded-lg px-2 py-2.5 break-all active:scale-95">
-                  <i className="fa-solid fa-qrcode mr-1"></i>PIX COPIA E COLA — TOQUE PARA COPIAR
-                </button>
-              )}
-            </div>
-          )}
+          {/* BLOCO 217 (regra do dono): linha digitável e PIX copia-e-cola
+              REMOVIDOS do card — “não vamos usar isso, apenas informe se o
+              boleto foi gerado com sucesso”. O badge do card informa o status
+              e o PDF do Inter abre pelo botão PDF (visualizar/compartilhar/salvar). */}
           {boleto.status === 'EM_PROCESSAMENTO' && (
             <button onClick={handleGerar} disabled={busy}
               className="block w-full bg-slate-800 text-white font-black py-3 rounded-xl text-[10px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
@@ -1164,6 +1242,8 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
       )}
       {/* BLOCO 177: o modal de PREVIEW do mini boleto (MiniBoletoImpressao) foi
           REMOVIDO pelo dono — os botões acima imprimem DIRETO no canal escolhido. */}
+      {/* BLOCO 217: visualizador do PDF (compartilhar/salvar/nova aba) */}
+      {modalPdf}
     </div>
   );
 };

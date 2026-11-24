@@ -72,14 +72,18 @@ function erroColunaFaltando(e: any): boolean {
   return code === '42703' || /pago_em|does not exist|schema cache/i.test(String(e?.message || ''));
 }
 
-/** Query do LEDGER ABERTO do caixa: à vista aberto + boletos PENDENTES (167). */
-function openLedgerQuery(supabase: any, campos: string) {
+/** Query do LEDGER ABERTO do caixa: à vista aberto + boletos PENDENTES (167).
+ *  BLOCO 217: limite paramétrico — GET usa 600 (UI), FECHAR usa 5000: o
+ *  snapshot do fechamento precisa enxergar TODOS os pagamentos que o update
+ *  vai prender (antes, com 600, um caixa com mais de 600 pagamentos à vista
+ *  gravaria totais MENORES que o real — números não reais). */
+function openLedgerQuery(supabase: any, campos: string, limite = 600) {
   const q = supabase
     .from('caixa_pagamentos')
     .select(campos)
     .is('fechamento_id', null)
     .order('criado_em', { ascending: true })
-    .limit(600);
+    .limit(limite);
   // pago_em IS NULL = boleto pendente (não pago). Com a coluna:
   // "metodo != BOLETO OU pago_em IS NULL" = à vista aberto + boletos pendentes.
   return pagoEmOkCache === false ? q : q.or('metodo.neq.BOLETO,pago_em.is.null');
@@ -337,15 +341,18 @@ export async function POST(req: NextRequest) {
 
       // Leitura com o MESMO filtro do GET (boleto pendente não entra no
       // fechamento; boleto pago não aparece mais na conferência).
+      // BLOCO 217: limite 5000 — snapshot precisa bater com o update global.
       let { data: rows, error: rowsErr } = await openLedgerQuery(
         supabase,
-        'id, criado_em, origem, sale_id, cliente, vendedor, metodo, valor, detalhe, usuario_nome'
+        'id, criado_em, origem, sale_id, cliente, vendedor, metodo, valor, detalhe, usuario_nome',
+        5000
       );
       if (rowsErr && erroColunaFaltando(rowsErr) && pagoEmOkCache !== false) {
         pagoEmOkCache = false;
         ({ data: rows, error: rowsErr } = await openLedgerQuery(
           supabase,
-          'id, criado_em, origem, sale_id, cliente, vendedor, metodo, valor, detalhe, usuario_nome'
+          'id, criado_em, origem, sale_id, cliente, vendedor, metodo, valor, detalhe, usuario_nome',
+          5000
         ));
       } else if (!rowsErr && pagoEmOkCache === null) {
         pagoEmOkCache = true;

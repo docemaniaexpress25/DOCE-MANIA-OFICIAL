@@ -543,8 +543,16 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
                 <Campo label="Número"><input value={form.numero} onChange={e => setF('numero', e.target.value)} className={inputCls} /></Campo>
                 <Campo label="Bairro"><input value={form.bairro} onChange={e => setF('bairro', e.target.value)} className={inputCls} /></Campo>
                 <div className="col-span-2"><Campo label="Município"><input value={form.municipio} onChange={e => setF('municipio', e.target.value)} className={inputCls} /></Campo></div>
+                {/* BLOCO 217: UF agora é SELECT com os 27 estados — antes era
+                    um input livre de 2 caracteres, que o dono não conseguia
+                    atualizar (e o bug do merge apagava o CNPJ ao salvar). */}
                 <Campo label="UF">
-                  <input value={form.uf} onChange={e => setF('uf', e.target.value.toUpperCase().slice(0, 2))} placeholder="RS" maxLength={2} className={`${inputCls} uppercase`} />
+                  <select value={form.uf || ''} onChange={e => setF('uf', e.target.value.toUpperCase())} className={`${inputCls} uppercase`}>
+                    <option value="">—</option>
+                    {['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'].map(uf => (
+                      <option key={uf} value={uf}>{uf}</option>
+                    ))}
+                  </select>
                 </Campo>
                 <Campo label="CEP"><input value={form.cep} onChange={e => setF('cep', mascaraCep(e.target.value))} placeholder="00000-000" inputMode="numeric" className={inputCls} /></Campo>
               </div>

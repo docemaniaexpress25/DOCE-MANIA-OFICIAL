@@ -42,18 +42,18 @@ const ORIGEM_ICON: Record<string, string> = {
 };
 
 const FILTROS_TIPO = [
-  { v: 'TODOS', l: 'Todos' },
-  { v: 'ENTRADA', l: 'Entrada' },
-  { v: 'SAIDA', l: 'Saída' },
-  { v: 'AJUSTE', l: 'Ajuste' },
-  { v: 'ESTORNO', l: 'Estorno' },
+  { v: 'TODOS', l: 'Todos', i: 'fa-list' },
+  { v: 'ENTRADA', l: 'Entrada', i: 'fa-arrow-right-to-bracket' },
+  { v: 'SAIDA', l: 'Saída', i: 'fa-arrow-right-from-bracket' },
+  { v: 'AJUSTE', l: 'Ajuste', i: 'fa-sliders' },
+  { v: 'ESTORNO', l: 'Estorno', i: 'fa-rotate-left' },
 ];
 
 const FILTROS_ORIGEM = [
-  { v: 'TODAS', l: 'Todas' },
-  { v: 'VENDA', l: 'Venda' },
-  { v: 'MANUAL', l: 'Manual' },
-  { v: 'XML', l: 'XML' },
+  { v: 'TODAS', l: 'Todas', i: 'fa-list' },
+  { v: 'VENDA', l: 'Venda', i: ORIGEM_ICON.VENDA },
+  { v: 'MANUAL', l: 'Manual', i: ORIGEM_ICON.MANUAL },
+  { v: 'XML', l: 'XML', i: ORIGEM_ICON.XML },
 ];
 
 const fmtDataHora = (iso: string) => {
@@ -223,13 +223,13 @@ const MovimentacoesEstoque: React.FC<Props> = ({ onBack }) => {
       <div className="space-y-1.5">
         <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
           {FILTROS_TIPO.map(f => (
-            <button key={f.v} onClick={() => setFiltroTipo(f.v)} className={chipCls(filtroTipo === f.v)}>{f.l}</button>
+            <button key={f.v} onClick={() => setFiltroTipo(f.v)} className={chipCls(filtroTipo === f.v)}><i className={`fa-solid ${f.i} text-[9px] opacity-70 mr-1`}></i>{f.l}</button>
           ))}
         </div>
         <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
           <span className="text-[8px] font-black text-gray-300 uppercase tracking-wider pr-0.5">Origem</span>
           {FILTROS_ORIGEM.map(f => (
-            <button key={f.v} onClick={() => setFiltroOrigem(f.v)} className={chipCls(filtroOrigem === f.v)}>{f.l}</button>
+            <button key={f.v} onClick={() => setFiltroOrigem(f.v)} className={chipCls(filtroOrigem === f.v)}><i className={`fa-solid ${f.i} text-[9px] opacity-70 mr-1`}></i>{f.l}</button>
           ))}
         </div>
       </div>

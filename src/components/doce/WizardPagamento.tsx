@@ -279,7 +279,8 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
           <div className={`grid gap-2 ${formasAvista.length === 2 ? 'grid-cols-2' : 'grid-cols-3'}`}>
             {formasAvista.map(f => (
               <button key={f} onClick={() => setForma(f)}
-                className={`py-3 rounded-xl text-[9px] font-black uppercase transition-all border-2 ${forma === f ? 'bg-emerald-600 text-white border-emerald-600 shadow-md' : 'bg-gray-50 text-gray-400 border-gray-100'}`}>
+                className={`py-3 rounded-xl text-[9px] font-black uppercase transition-all border-2 flex flex-col items-center justify-center gap-1 ${forma === f ? 'bg-emerald-600 text-white border-emerald-600 shadow-md' : 'bg-gray-50 text-gray-400 border-gray-100'}`}>
+                <i className={`${f === 'DINHEIRO' ? 'fa-solid fa-money-bill' : f === 'PIX' ? 'fa-brands fa-pix' : 'fa-solid fa-layer-group'} text-sm`}></i>
                 {f === 'DINHEIRO' ? 'Dinheiro' : f === 'PIX' ? 'Pix' : 'Misto'}
               </button>
             ))}
@@ -314,8 +315,8 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
             <div className="space-y-2 animate-in fade-in duration-200">
               <p className="text-[9px] font-black text-gray-400 uppercase text-center">Chave Pix que recebe</p>
               <div className="grid grid-cols-2 gap-2">
-                <button onClick={() => setPixSlot(1)} className={`p-3 rounded-xl border text-[10px] font-black uppercase transition-all ${pixSlot === 1 ? 'border-emerald-600 bg-emerald-50 text-emerald-700' : 'border-gray-100 text-gray-400'}`}>{pix1Name}</button>
-                <button onClick={() => setPixSlot(2)} className={`p-3 rounded-xl border text-[10px] font-black uppercase transition-all ${pixSlot === 2 ? 'border-emerald-600 bg-emerald-50 text-emerald-700' : 'border-gray-100 text-gray-400'}`}>{pix2Name}</button>
+                <button onClick={() => setPixSlot(1)} className={`p-3 rounded-xl border text-[10px] font-black uppercase transition-all flex items-center justify-center gap-1.5 ${pixSlot === 1 ? 'border-emerald-600 bg-emerald-50 text-emerald-700' : 'border-gray-100 text-gray-400'}`}><i className="fa-brands fa-pix text-sm"></i>{pix1Name}</button>
+                <button onClick={() => setPixSlot(2)} className={`p-3 rounded-xl border text-[10px] font-black uppercase transition-all flex items-center justify-center gap-1.5 ${pixSlot === 2 ? 'border-emerald-600 bg-emerald-50 text-emerald-700' : 'border-gray-100 text-gray-400'}`}><i className="fa-brands fa-pix text-sm"></i>{pix2Name}</button>
               </div>
               {/* BLOCO 100 (regra do dono): QR GERADO com o VALOR DA VENDA —
                   BR Code da chave Pix das Configurações. Sem chave/erro de
@@ -381,7 +382,8 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
           <div className="grid grid-cols-2 gap-2">
             {formasAprazo.map(f => (
               <button key={f} onClick={() => setForma(f)}
-                className={`py-3 rounded-xl text-[9px] font-black uppercase transition-all border-2 ${forma === f ? 'bg-amber-500 text-white border-amber-500 shadow-md' : 'bg-gray-50 text-gray-400 border-gray-100'}`}>
+                className={`py-3 rounded-xl text-[9px] font-black uppercase transition-all border-2 flex items-center justify-center gap-1.5 ${forma === f ? 'bg-amber-500 text-white border-amber-500 shadow-md' : 'bg-gray-50 text-gray-400 border-gray-100'}`}>
+                <i className={`${f === 'BOLETO' ? 'fa-solid fa-barcode' : f === 'CHEQUE' ? 'fa-solid fa-money-check' : f === 'PIX' ? 'fa-brands fa-pix' : 'fa-solid fa-money-bill-wave'} text-xs`}></i>
                 {f === 'BOLETO' ? 'Boleto' : f === 'CHEQUE' ? 'Cheque' : f === 'PIX' ? 'Pix na data' : 'Dinheiro na data'}
               </button>
             ))}
@@ -398,7 +400,7 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
               <p className="text-[9px] font-black text-gray-400 uppercase text-center">Bom para</p>
               <div className="grid grid-cols-4 gap-2">
                 {[7, 14, 21, 30].map(d => (
-                  <button key={d} onClick={() => { setChequeAtalho(d); const iso = somaDias(d); setChequeBomPara(iso); setVencimento(iso); }} className={`py-2.5 rounded-xl text-[10px] font-black transition-all ${chequeAtalho === d ? 'bg-amber-500 text-white shadow-md scale-105' : 'bg-gray-50 border-2 border-gray-100 text-gray-500'}`}>{d}D</button>
+                  <button key={d} onClick={() => { setChequeAtalho(d); const iso = somaDias(d); setChequeBomPara(iso); setVencimento(iso); }} className={`py-2.5 rounded-xl text-[10px] font-black transition-all flex items-center justify-center gap-1 ${chequeAtalho === d ? 'bg-amber-500 text-white shadow-md scale-105' : 'bg-gray-50 border-2 border-gray-100 text-gray-500'}`}><i className="fa-solid fa-calendar-plus text-[9px] opacity-70"></i>{d}D</button>
                 ))}
               </div>
               <input type="date" value={chequeBomPara} onChange={e => { setChequeBomPara(e.target.value); setVencimento(e.target.value); setChequeAtalho(null); }} className="w-full p-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-bold text-center outline-none" />
@@ -410,7 +412,7 @@ const WizardPagamento: React.FC<WizardPagamentoProps> = ({
               <p className="text-[9px] font-black text-gray-400 uppercase text-center">Vencimento do boleto</p>
               <div className="grid grid-cols-4 gap-2">
                 {[7, 14, 21, 30].map(d => (
-                  <button key={d} onClick={() => { setVencAtalho(d); setVencimento(somaDias(d)); }} className={`py-2.5 rounded-xl text-[10px] font-black transition-all ${vencAtalho === d ? 'bg-amber-500 text-white shadow-md scale-105' : 'bg-gray-50 border-2 border-gray-100 text-gray-500'}`}>{d}D</button>
+                  <button key={d} onClick={() => { setVencAtalho(d); setVencimento(somaDias(d)); }} className={`py-2.5 rounded-xl text-[10px] font-black transition-all flex items-center justify-center gap-1 ${vencAtalho === d ? 'bg-amber-500 text-white shadow-md scale-105' : 'bg-gray-50 border-2 border-gray-100 text-gray-500'}`}><i className="fa-solid fa-calendar-plus text-[9px] opacity-70"></i>{d}D</button>
                 ))}
               </div>
             </div>

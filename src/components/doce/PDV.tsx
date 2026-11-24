@@ -2143,7 +2143,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                 {(['DINHEIRO', 'PIX', 'MISTO'] as const).map(f => (
                   <button key={f} disabled={isPreVenda && f === 'MISTO'}
                     onClick={() => setFormaDoc(f)}
-                    className={`py-4 rounded-2xl text-[10px] font-black uppercase border-2 transition-all ${formaDoc === f ? 'bg-emerald-600 text-white border-emerald-600 shadow-md' : 'bg-white border-gray-100 text-gray-500'} disabled:opacity-40`}>
+                    className={`py-4 rounded-2xl text-[10px] font-black uppercase border-2 transition-all flex flex-col items-center justify-center gap-1 ${formaDoc === f ? 'bg-emerald-600 text-white border-emerald-600 shadow-md' : 'bg-white border-gray-100 text-gray-500'} disabled:opacity-40`}>
+                    <i className={`${f === 'DINHEIRO' ? 'fa-solid fa-money-bill' : f === 'PIX' ? 'fa-brands fa-pix' : 'fa-solid fa-layer-group'} text-sm`}></i>
                     {f === 'DINHEIRO' ? 'Dinheiro' : f === 'PIX' ? 'Pix' : 'Misto'}
                   </button>
                 ))}
@@ -2176,8 +2177,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                 <div className="bg-white rounded-3xl border border-gray-100 p-4 space-y-3">
                   <p className="text-[9px] font-black text-gray-400 uppercase text-center">Conta do Pix (anotação da venda)</p>
                   <div className="grid grid-cols-2 gap-2">
-                    <button onClick={() => setPixSlotDoc(1)} className={`p-3 rounded-xl border text-[10px] font-black uppercase ${pixSlotDoc === 1 ? 'border-teal-600 bg-teal-50 text-teal-600' : 'border-gray-100 text-gray-400'}`}>{pix1Name}</button>
-                    <button onClick={() => setPixSlotDoc(2)} className={`p-3 rounded-xl border text-[10px] font-black uppercase ${pixSlotDoc === 2 ? 'border-teal-600 bg-teal-50 text-teal-600' : 'border-gray-100 text-gray-400'}`}>{pix2Name}</button>
+                    <button onClick={() => setPixSlotDoc(1)} className={`p-3 rounded-xl border text-[10px] font-black uppercase flex items-center justify-center gap-1.5 ${pixSlotDoc === 1 ? 'border-teal-600 bg-teal-50 text-teal-600' : 'border-gray-100 text-gray-400'}`}><i className="fa-brands fa-pix text-sm"></i>{pix1Name}</button>
+                    <button onClick={() => setPixSlotDoc(2)} className={`p-3 rounded-xl border text-[10px] font-black uppercase flex items-center justify-center gap-1.5 ${pixSlotDoc === 2 ? 'border-teal-600 bg-teal-50 text-teal-600' : 'border-gray-100 text-gray-400'}`}><i className="fa-brands fa-pix text-sm"></i>{pix2Name}</button>
                   </div>
                   <div className="bg-teal-50/60 p-4 rounded-2xl flex flex-col items-center border border-teal-100">
                     <i className="fa-solid fa-qrcode text-teal-500 text-2xl"></i>
@@ -2196,7 +2197,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               {/* MISTO — BLOCO 153: informativo (valores de cada parte no caixa da tela final) */}
               {formaDoc === 'MISTO' && !isPreVenda && (
                 <div className="bg-white rounded-3xl border border-gray-100 p-4 text-center">
-                  <i className="fa-solid fa-money-bill-transfer text-slate-600 text-lg"></i>
+                  <i className="fa-solid fa-layer-group text-slate-600 text-lg"></i>
                   <p className="text-[10px] font-black text-slate-700 uppercase mt-1">Misto: parte DINHEIRO + parte PIX (total R$ {total.toFixed(2)})</p>
                   <p className="text-[9px] text-gray-400 font-semibold mt-0.5">Os valores de cada parte você informa no CAIXA da tela final — depois da emissão da nota.</p>
                 </div>
@@ -2210,7 +2211,8 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
               <div className="grid grid-cols-2 gap-2">
                 {(['BOLETO', 'CHEQUE', ...(docEscolhido === 'NFE' ? [] : ['DINHEIRO_DATA', 'PIX_DATA'])] as Array<'BOLETO' | 'CHEQUE' | 'DINHEIRO_DATA' | 'PIX_DATA'>).map(f => (
                   <button key={f} onClick={() => setFormaDoc(f)}
-                    className={`py-3.5 rounded-xl text-[10px] font-black uppercase border-2 transition-all ${formaDoc === f ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' : 'bg-white border-gray-100 text-gray-500'}`}>
+                    className={`py-3.5 rounded-xl text-[10px] font-black uppercase border-2 transition-all flex items-center justify-center gap-1.5 ${formaDoc === f ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' : 'bg-white border-gray-100 text-gray-500'}`}>
+                    <i className={`${f === 'BOLETO' ? 'fa-solid fa-barcode' : f === 'CHEQUE' ? 'fa-solid fa-money-check' : f === 'DINHEIRO_DATA' ? 'fa-solid fa-money-bill-wave' : 'fa-brands fa-pix'} text-xs`}></i>
                     {f === 'BOLETO' ? 'Boleto' : f === 'CHEQUE' ? 'Cheque' : f === 'DINHEIRO_DATA' ? 'Dinheiro na data' : 'Pix na data'}
                   </button>
                 ))}
@@ -2228,7 +2230,7 @@ const PDV: React.FC<PDVProps> = ({ client, products, minhaCarga, vendedorId, onC
                       const target = hojeMaisDiasSp(days); // BLOCO 212: fuso SP (era toISOString UTC)
                       return (
                         <button key={days} onClick={() => setVencimentoDoc(target)}
-                          className={`py-3 rounded-xl text-[10px] font-black transition-all ${vencimentoDoc === target ? 'bg-indigo-600 text-white border-2 border-indigo-600 shadow-lg' : 'bg-gray-50 border-2 border-gray-100 text-gray-500'}`}>{days}D</button>
+                          className={`py-3 rounded-xl text-[10px] font-black transition-all flex items-center justify-center gap-1 ${vencimentoDoc === target ? 'bg-indigo-600 text-white border-2 border-indigo-600 shadow-lg' : 'bg-gray-50 border-2 border-gray-100 text-gray-500'}`}><i className="fa-solid fa-calendar-plus text-[9px] opacity-70"></i>{days}D</button>
                       );
                     })}
                   </div>

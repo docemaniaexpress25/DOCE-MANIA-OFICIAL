@@ -18,12 +18,14 @@ const NOME_KEY = 'dm_notas_admin_nome';
 
 type Periodo = 'HOJE' | '7D' | '30D' | 'TUDO';
 
-const PERIODOS: { id: Periodo; label: string }[] = [
-  { id: 'HOJE', label: 'Hoje' },
-  { id: '7D', label: '7 dias' },
-  { id: '30D', label: '30 dias' },
-  { id: 'TUDO', label: 'Tudo' },
+const PERIODOS: { id: Periodo; label: string; icon: string }[] = [
+  { id: 'HOJE', label: 'Hoje', icon: 'fa-calendar-day' },
+  { id: '7D', label: '7 dias', icon: 'fa-calendar-week' },
+  { id: '30D', label: '30 dias', icon: 'fa-calendar' },
+  { id: 'TUDO', label: 'Tudo', icon: 'fa-infinity' },
 ];
+// BLOCO 213: ícone das abas do portal (nenhuma aba só com texto)
+const ABA_ICON: Record<string, string> = { BALANCO: 'fa-receipt', CUSTOS: 'fa-tags', LOGS: 'fa-clipboard-list' };
 
 const CATEGORIAS = ['MERCADORIA', 'FRETE', 'ALUGUEL', 'ENERGIA', 'AGUA', 'INTERNET', 'SALARIOS', 'IMPOSTOS', 'MANUTENCAO', 'OUTROS'];
 
@@ -239,7 +241,7 @@ export default function FinanceiroPortal() {
           <button onClick={() => token && void carregarResumo(token, periodo)} disabled={carregando} className="text-slate-300 hover:text-white text-[10px] font-black uppercase px-3 py-2 rounded-xl border border-slate-700 disabled:opacity-50" title="Recarregar o balanço">
             <i className={`fa-solid ${carregando ? 'fa-spinner fa-spin' : 'fa-rotate'} mr-1`}></i>Atualizar
           </button>
-          <button onClick={() => { try { localStorage.removeItem(TOKEN_KEY); } catch { /* ignore */ } setToken(null); setDados(null); }} className="text-slate-400 hover:text-slate-200 text-xs font-black uppercase px-3 py-2 rounded-xl border border-slate-700">Sair</button>
+          <button onClick={() => { try { localStorage.removeItem(TOKEN_KEY); } catch { /* ignore */ } setToken(null); setDados(null); }} className="text-slate-400 hover:text-slate-200 text-xs font-black uppercase px-3 py-2 rounded-xl border border-slate-700 flex items-center gap-1.5"><i className="fa-solid fa-arrow-right-from-bracket"></i>Sair</button>
         </div>
       </div>
 
@@ -247,7 +249,7 @@ export default function FinanceiroPortal() {
         {/* período */}
         <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
           {PERIODOS.map((p) => (
-            <button key={p.id} onClick={() => setPeriodo(p.id)} className={`px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-wide whitespace-nowrap border transition-all ${periodo === p.id ? 'bg-emerald-600 text-white border-emerald-500' : `${dark} text-slate-400`}`}>{p.label}</button>
+            <button key={p.id} onClick={() => setPeriodo(p.id)} className={`px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-wide whitespace-nowrap border transition-all flex items-center gap-1.5 ${periodo === p.id ? 'bg-emerald-600 text-white border-emerald-500' : `${dark} text-slate-400`}`}><i className={`fa-solid ${p.icon} text-[9px] ${periodo === p.id ? 'opacity-90' : 'opacity-50'}`}></i>{p.label}</button>
           ))}
           {carregando && <span className="text-[10px] font-black text-emerald-400 uppercase ml-1 animate-pulse">Carregando...</span>}
         </div>
@@ -285,7 +287,7 @@ export default function FinanceiroPortal() {
         {/* abas */}
         <div className="flex items-center gap-1.5">
           {([['BALANCO', 'Vendas'], ['CUSTOS', 'Custos'], ['LOGS', 'Logs']] as const).map(([id, label]) => (
-            <button key={id} onClick={() => setAba(id)} className={`flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-wide border transition-all ${aba === id ? 'bg-emerald-600 text-white border-emerald-500' : `${dark} text-slate-400`}`}>{label}</button>
+            <button key={id} onClick={() => setAba(id)} className={`flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-wide border transition-all flex items-center justify-center gap-1.5 ${aba === id ? 'bg-emerald-600 text-white border-emerald-500' : `${dark} text-slate-400`}`}><i className={`fa-solid ${ABA_ICON[id]} text-[9px] ${aba === id ? 'opacity-90' : 'opacity-50'}`}></i>{label}</button>
           ))}
         </div>
 

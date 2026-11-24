@@ -145,12 +145,17 @@ const fmtDia = (iso: string) => {
   } catch { return '—'; }
 };
 
-const STATUS_META: Record<string, { label: string; cls: string; dot: string }> = {
-  AUTORIZADA: { label: 'Autorizada', cls: 'bg-emerald-50 text-emerald-600 border-emerald-200', dot: 'bg-emerald-500' },
-  EMITINDO: { label: 'Emitindo', cls: 'bg-amber-50 text-amber-600 border-amber-200', dot: 'bg-amber-500' },
-  REJEITADA: { label: 'Rejeitada', cls: 'bg-rose-50 text-rose-600 border-rose-200', dot: 'bg-rose-500' },
-  CANCELADA: { label: 'Cancelada', cls: 'bg-gray-100 text-gray-500 border-gray-200', dot: 'bg-gray-400' },
-  NAO_EMITIDA: { label: 'Pendente', cls: 'bg-blue-50 text-blue-600 border-blue-200', dot: 'bg-blue-500' },
+const STATUS_META: Record<string, { label: string; cls: string; dot: string; icon: string }> = {
+  AUTORIZADA: { label: 'Autorizada', cls: 'bg-emerald-50 text-emerald-600 border-emerald-200', dot: 'bg-emerald-500', icon: 'fa-circle-check' },
+  EMITINDO: { label: 'Emitindo', cls: 'bg-amber-50 text-amber-600 border-amber-200', dot: 'bg-amber-500', icon: 'fa-spinner' },
+  REJEITADA: { label: 'Rejeitada', cls: 'bg-rose-50 text-rose-600 border-rose-200', dot: 'bg-rose-500', icon: 'fa-circle-xmark' },
+  CANCELADA: { label: 'Cancelada', cls: 'bg-gray-100 text-gray-500 border-gray-200', dot: 'bg-gray-400', icon: 'fa-ban' },
+  NAO_EMITIDA: { label: 'Pendente', cls: 'bg-blue-50 text-blue-600 border-blue-200', dot: 'bg-blue-500', icon: 'fa-hourglass-half' },
+};
+// BLOCO 213: ícone dos chips de filtro por status (nenhuma aba só com texto)
+const FILTRO_STATUS_ICON: Record<string, string> = {
+  TODAS: 'fa-list', AUTORIZADA: 'fa-circle-check', PENDENTE: 'fa-hourglass-half',
+  EMITINDO: 'fa-spinner', REJEITADA: 'fa-circle-xmark', CANCELADA: 'fa-ban',
 };
 
 function metaStatus(st: string) {
@@ -1448,8 +1453,9 @@ export default function PortalNotasPage() {
               <button
                 key={f}
                 onClick={() => setFiltro(f)}
-                className={`shrink-0 whitespace-nowrap rounded-xl px-3 h-9 py-0 text-[9px] font-black uppercase tracking-wider border transition-all active:scale-95 ${ativo ? 'bg-blue-600 text-white border-blue-600 shadow-sm' : `bg-white ${meta.cls} border-gray-200 shadow-none`}`}
+                className={`shrink-0 whitespace-nowrap rounded-xl px-3 h-9 py-0 text-[9px] font-black uppercase tracking-wider border transition-all active:scale-95 flex items-center gap-1.5 ${ativo ? 'bg-blue-600 text-white border-blue-600 shadow-sm' : `bg-white ${meta.cls} border-gray-200 shadow-none`}`}
               >
+                <i className={`fa-solid ${FILTRO_STATUS_ICON[f] || 'fa-list'} text-[9px] ${ativo ? 'opacity-90' : 'opacity-60'}`}></i>
                 {f === 'TODAS' ? 'Todas' : f === 'PENDENTE' ? 'Pendente' : meta.label} ({contagem(f)})
               </button>
             );

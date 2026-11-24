@@ -458,11 +458,11 @@ export default function ClienteDashboard() {
       {/* Tabs + Lista */}
       <div className="max-w-md mx-auto px-4 mt-5">
         <div className="flex bg-white p-1 rounded-xl shadow-sm border border-gray-100 mb-4">
-          <button onClick={() => setTab('todas')} className={`flex-1 py-2.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${tab === 'todas' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-400'}`}>
-            Todas ({sales.length})
+          <button onClick={() => setTab('todas')} className={`flex-1 py-2.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 ${tab === 'todas' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-400'}`}>
+            <i className={`fa-solid fa-list text-[9px] ${tab === 'todas' ? 'opacity-90' : 'opacity-50'}`}></i>Todas ({sales.length})
           </button>
-          <button onClick={() => setTab('pendentes')} className={`flex-1 py-2.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${tab === 'pendentes' ? 'bg-rose-500 text-white shadow-sm' : 'text-gray-400'}`}>
-            Pendentes ({vendasPendentes.length})
+          <button onClick={() => setTab('pendentes')} className={`flex-1 py-2.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 ${tab === 'pendentes' ? 'bg-rose-500 text-white shadow-sm' : 'text-gray-400'}`}>
+            <i className={`fa-solid fa-hourglass-half text-[9px] ${tab === 'pendentes' ? 'opacity-90' : 'opacity-50'}`}></i>Pendentes ({vendasPendentes.length})
           </button>
         </div>
 

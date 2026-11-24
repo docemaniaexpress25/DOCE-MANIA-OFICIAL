@@ -184,7 +184,7 @@ const AReceberPanel: React.FC<Props> = ({ sales, clients, onRegistrarPagamento, 
       {/* ===== HERO ===== */}
       <div className="bg-gradient-to-br from-emerald-600 to-emerald-700 rounded-3xl p-5 text-white shadow-lg mx-2">
         <div className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-emerald-100">
-          <i className="fa-solid fa-sack-dollar"></i>Total a receber
+          <i className="fa-solid fa-piggy-bank"></i>Total a receber
         </div>
         <p className="text-3xl font-black tracking-tight mt-1">{fmt(total)}</p>
         <p className="text-[10px] font-bold text-emerald-100 mt-0.5">{qtdVendas} venda(s) em aberto</p>

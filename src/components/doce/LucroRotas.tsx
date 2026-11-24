@@ -78,11 +78,14 @@ export default function LucroRotas() {
 
   return (
     <div className="space-y-4 py-4">
-      {/* Cabecalho */}
+      {/* Cabecalho — BLOCO 213: ícone da tela (padrão dos headers com ícone) */}
       <div className="px-2 flex items-center justify-between gap-2">
-        <div>
-          <h2 className="text-xl sm:text-2xl font-black text-gray-800 tracking-tight">Lucro por Rota</h2>
-          <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Bruto: vendas − custo dos produtos</p>
+        <div className="flex items-center gap-2.5 min-w-0">
+          <span className="w-9 h-9 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center shrink-0"><i className="fa-solid fa-piggy-bank text-sm"></i></span>
+          <div className="min-w-0">
+            <h2 className="text-xl sm:text-2xl font-black text-gray-800 tracking-tight">Lucro por Rota</h2>
+            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Bruto: vendas − custo dos produtos</p>
+          </div>
         </div>
         <button onClick={() => carregar(mes)} aria-label="Atualizar números" className="w-10 h-10 bg-white text-emerald-600 rounded-xl flex items-center justify-center shadow-sm border border-gray-100 active:scale-90 flex-shrink-0">
           <i className={`fa-solid fa-rotate-right ${loading ? 'fa-spin' : ''}`}></i>
@@ -139,7 +142,7 @@ export default function LucroRotas() {
                 <p className="text-2xl font-black tracking-tight mt-1">{brl(T.lucro)}</p>
                 <p className="text-[10px] font-bold text-emerald-100 mt-1">Margem média: {String(T.margem).replace('.', ',')}%</p>
               </div>
-              <i className="fa-solid fa-sack-dollar text-4xl text-emerald-400/60"></i>
+              <i className="fa-solid fa-piggy-bank text-4xl text-emerald-400/60"></i>
             </div>
           </div>
           {(T.nVendas === 0) && (

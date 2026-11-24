@@ -205,7 +205,7 @@ export default function ProdutosBalancoPortal() {
           <button onClick={() => token && void carregar(token)} disabled={carregando || !token} className="text-slate-300 hover:text-white text-[10px] font-black uppercase px-3 py-2 rounded-xl border border-slate-700 disabled:opacity-50" title="Recalcular o balanço agora">
             <i className={`fa-solid ${carregando ? 'fa-spinner fa-spin' : 'fa-rotate'} mr-1`}></i>Atualizar
           </button>
-          <button onClick={() => { try { localStorage.removeItem(TOKEN_KEY); } catch { /* ignore */ } setToken(null); setDados(null); }} className="text-slate-400 hover:text-slate-200 text-xs font-black uppercase px-3 py-2 rounded-xl border border-slate-700">Sair</button>
+          <button onClick={() => { try { localStorage.removeItem(TOKEN_KEY); } catch { /* ignore */ } setToken(null); setDados(null); }} className="text-slate-400 hover:text-slate-200 text-xs font-black uppercase px-3 py-2 rounded-xl border border-slate-700 flex items-center gap-1.5"><i className="fa-solid fa-arrow-right-from-bracket"></i>Sair</button>
         </div>
       </div>
 
@@ -258,10 +258,10 @@ export default function ProdutosBalancoPortal() {
           {xmlMsg && <p className="rounded-xl bg-slate-800/60 border border-slate-700 text-slate-300 text-[9px] font-bold px-3 py-2">{xmlMsg}</p>}
         </section>
 
-        {/* abas */}
+        {/* abas — BLOCO 213: ícone em cada aba */}
         <div className="flex items-center gap-1.5">
-          {([['BALANCO', 'Balanço'], ['ENTRADAS', 'Entradas'], ['SAIDAS', 'Saídas']] as const).map(([id, label]) => (
-            <button key={id} onClick={() => setAba(id)} className={`flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-wide border transition-all ${aba === id ? 'bg-amber-600 text-white border-amber-500' : `${dark} text-slate-400`}`}>{label}</button>
+          {([['BALANCO', 'Balanço', 'fa-scale-balanced'], ['ENTRADAS', 'Entradas', 'fa-arrow-right-to-bracket'], ['SAIDAS', 'Saídas', 'fa-arrow-right-from-bracket']] as const).map(([id, label, icon]) => (
+            <button key={id} onClick={() => setAba(id)} className={`flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-wide border transition-all flex items-center justify-center gap-1.5 ${aba === id ? 'bg-amber-600 text-white border-amber-500' : `${dark} text-slate-400`}`}><i className={`fa-solid ${icon} text-[9px] ${aba === id ? 'opacity-90' : 'opacity-50'}`}></i>{label}</button>
           ))}
         </div>
 

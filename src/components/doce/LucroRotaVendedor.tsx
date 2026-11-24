@@ -166,11 +166,14 @@ const LucroRotaVendedor: React.FC<LucroRotaVendedorProps> = ({ user, showToast }
       {/* ===== Cabeçalho + navegação de mês ===== */}
       <header className="px-1 flex flex-col gap-3">
         <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-xl font-black text-gray-800 tracking-tight leading-none">Lucro da Rota</h2>
-            <p className="text-[9px] font-black uppercase text-gray-400 mt-1">
-              {user?.nome || 'Vendedor'}{user?.rota ? ` · ${user.rota.replace(/^ROTA_/i, 'Rota ')}` : ''}
-            </p>
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span className="w-9 h-9 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center shrink-0"><i className="fa-solid fa-piggy-bank text-sm"></i></span>
+            <div className="min-w-0">
+              <h2 className="text-xl font-black text-gray-800 tracking-tight leading-none">Lucro da Rota</h2>
+              <p className="text-[9px] font-black uppercase text-gray-400 mt-1">
+                {user?.nome || 'Vendedor'}{user?.rota ? ` · ${user.rota.replace(/^ROTA_/i, 'Rota ')}` : ''}
+              </p>
+            </div>
           </div>
           <div className="flex items-center gap-1.5">
             <button onClick={() => setMes(somarMes(mes, -1))} disabled={loading} aria-label="Mês anterior"
@@ -240,7 +243,7 @@ const LucroRotaVendedor: React.FC<LucroRotaVendedorProps> = ({ user, showToast }
               {/* ===== Faturamento × Custo ===== */}
               <div className="grid grid-cols-2 gap-3">
                 <div className="bg-white p-4 rounded-3xl shadow-sm border border-gray-100 min-w-0">
-                  <p className="text-[9px] font-black text-gray-400 uppercase mb-1"><i className="fa-solid fa-sack-dollar mr-1 text-emerald-500"></i>Faturamento</p>
+                  <p className="text-[9px] font-black text-gray-400 uppercase mb-1"><i className="fa-solid fa-piggy-bank mr-1 text-emerald-500"></i>Faturamento</p>
                   <p className="text-base sm:text-xl font-black text-gray-800 tabular-nums break-words">{fmtBRL(t!.faturamento)}</p>
                   <p className="text-[8px] font-bold text-gray-400 uppercase mt-1">{t!.nVendas} vendas · ticket {fmtBRL(t!.ticketMedio)}</p>
                 </div>

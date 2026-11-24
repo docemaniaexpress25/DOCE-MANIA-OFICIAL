@@ -851,12 +851,15 @@ export default function PortalEntradasPage() {
               ? linhas.length
               : linhas.filter(imp => (itensPorNota.get(imp.id) || []).some(i => i.status === f)).length;
             const ativo = filtroItem === f;
+            // BLOCO 213: ícone em cada chip de filtro (nenhuma aba só com texto)
+            const chipIcon = f === 'TODOS' ? 'fa-list' : f === 'PENDENTE' ? 'fa-inbox' : f === 'VINCULADO' ? 'fa-link' : f === 'CRIADO' ? 'fa-plus' : 'fa-eye-slash';
             return (
               <button
                 key={f}
                 onClick={() => setFiltroItem(f)}
-                className={`shrink-0 rounded-xl px-3 py-2 text-[9px] font-black uppercase tracking-wider border transition-all active:scale-95 ${ativo ? 'bg-teal-600 text-white border-teal-600 shadow-sm' : `bg-white ${f === 'TODOS' ? 'text-gray-600' : meta.cls} border-gray-200`}`}
+                className={`shrink-0 rounded-xl px-3 py-2 text-[9px] font-black uppercase tracking-wider border transition-all active:scale-95 flex items-center gap-1.5 ${ativo ? 'bg-teal-600 text-white border-teal-600 shadow-sm' : `bg-white ${f === 'TODOS' ? 'text-gray-600' : meta.cls} border-gray-200`}`}
               >
+                <i className={`fa-solid ${chipIcon} text-[9px] ${ativo ? 'opacity-90' : 'opacity-60'}`}></i>
                 {f === 'TODOS' ? 'Todas' : meta.label} ({n})
               </button>
             );

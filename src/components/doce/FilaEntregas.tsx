@@ -2023,7 +2023,8 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                   <div className="flex gap-1.5">
                     {(['DINHEIRO', 'PIX', 'MISTO'] as const).map(m => (
                       <button key={m} onClick={() => { setPgtoAgora(m); setQrPix(null); setQrErro(''); }}
-                        className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${pgtoAgora === m ? 'bg-gray-800 text-white shadow-md' : 'bg-gray-50 text-gray-400'}`}>
+                        className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all flex items-center justify-center gap-1 ${pgtoAgora === m ? 'bg-gray-800 text-white shadow-md' : 'bg-gray-50 text-gray-400'}`}>
+                        <i className={`${m === 'DINHEIRO' ? 'fa-solid fa-money-bill' : m === 'PIX' ? 'fa-brands fa-pix' : 'fa-solid fa-layer-group'} text-xs`}></i>
                         {m === 'DINHEIRO' ? 'Dinheiro' : m === 'PIX' ? 'Pix' : 'Misto'}
                       </button>
                     ))}
@@ -2465,8 +2466,8 @@ export const FilaEntregas: React.FC<{ user: User; showToast: (m: string, t?: 'su
                 <div className="flex gap-1.5 flex-wrap mt-1">
                   {listaCaixaSheet.map((g: any) => (
                     <button key={g.entregadorId} onClick={() => trocarEntCaixa(g.entregadorId)}
-                      className={`px-3 py-2 rounded-xl text-[9px] font-black uppercase border-2 transition-colors ${caixaEntId === g.entregadorId ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white border-gray-100 text-gray-500'}`}>
-                      {g.nome || 'Entregador'} ({g.qtdEntregas})
+                      className={`px-3 py-2 rounded-xl text-[9px] font-black uppercase border-2 transition-colors flex items-center gap-1.5 ${caixaEntId === g.entregadorId ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white border-gray-100 text-gray-500'}`}>
+                      <i className="fa-solid fa-motorcycle text-xs"></i>{g.nome || 'Entregador'} ({g.qtdEntregas})
                     </button>
                   ))}
                 </div>

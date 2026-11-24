@@ -95,22 +95,27 @@ const AlertaCobranca: React.FC<AlertaCobrancaProps> = ({ onAbrirVenda }) => {
   const saldoTotal = Math.round(pendencias.reduce((a, p) => a + p.saldo, 0) * 100) / 100;
 
   return (
-    <div className="rounded-3xl border-2 border-rose-200 bg-white shadow-sm overflow-hidden">
-      {/* Cabecalho: contagem + total (expande/recolhe) */}
-      <button onClick={() => setExpandido(!expandido)} className="w-full bg-rose-600 px-4 py-3.5 flex items-center gap-3 text-left active:scale-[0.99] transition-transform" aria-expanded={expandido}>
-        <span className="w-10 h-10 rounded-2xl bg-white/15 flex items-center justify-center shrink-0 relative">
-          <i className={`fa-solid ${carregando ? 'fa-spinner fa-spin' : 'fa-triangle-exclamation'} text-white`}></i>
-          {!carregando && <span className="absolute -top-1.5 -right-1.5 min-w-5 h-5 px-1 bg-amber-400 text-rose-900 text-[9px] font-black rounded-full flex items-center justify-center border border-white">{pendencias.length > 9 ? '9+' : pendencias.length}</span>}
+    <div className="rounded-3xl border border-amber-200/80 bg-white shadow-sm overflow-hidden">
+      {/* BLOCO 213 (regra do dono: "ícone de clientes sem boleto mais discreto"):
+          cabecalho saiu do VERMELHO forte e do triângulo gigante com badge —
+          agora é um sino pequeno em tom âmbar, com contador discreto. A lista
+          expandida continua com as badges de tipo (rosa/âmbar) por item. */}
+      <button onClick={() => setExpandido(!expandido)} className="w-full bg-gradient-to-r from-amber-50/80 to-white px-4 py-3 flex items-center gap-3 text-left active:scale-[0.99] transition-transform" aria-expanded={expandido}>
+        <span className="w-8 h-8 rounded-xl bg-amber-100 text-amber-600 flex items-center justify-center shrink-0">
+          <i className={`fa-solid ${carregando ? 'fa-spinner fa-spin' : 'fa-bell'} text-sm`}></i>
         </span>
         <span className="flex-1 min-w-0">
-          <span className="block text-[11px] font-black uppercase text-white tracking-wide">Vendas sem cobrança</span>
-          <span className="block text-[8.5px] font-bold text-white/80 leading-snug">
+          <span className="flex items-center gap-1.5">
+            <span className="text-[10px] font-black uppercase text-amber-800 tracking-wide">Vendas sem cobrança</span>
+            <span className="min-w-4 h-4 px-1 bg-amber-400 text-amber-900 text-[8px] font-black rounded-full flex items-center justify-center">{pendencias.length > 9 ? '9+' : pendencias.length}</span>
+          </span>
+          <span className="block text-[8.5px] font-bold text-gray-400 leading-snug">
             {boletoPend > 0 && <>{boletoPend} sem boleto gerado{avistaPend > 0 ? ' · ' : ''}</>}
             {avistaPend > 0 && <>{avistaPend} à vista sem recebimento</>}
             {' · '}{fmt(saldoTotal)}
           </span>
         </span>
-        <i className={`fa-solid fa-chevron-${expandido ? 'up' : 'down'} text-white/80 text-xs`}></i>
+        <i className={`fa-solid fa-chevron-${expandido ? 'up' : 'down'} text-gray-300 text-xs`}></i>
       </button>
 
       {expandido && (

@@ -23,6 +23,26 @@ import Cupom from '@/components/doce/Cupom';
 import ClientHistory from '@/components/doce/ClientHistory';
 // BLOCO 79: Lucro por Rota — faturamento x custo dos produtos vendidos, rota por rota, ao vivo
 import LucroRotas from '@/components/doce/LucroRotas';
+
+// BLOCO 213 (regra do dono: "recrie todos os ícones de todas as telas"): ícones
+// PADRONIZADOS de todas as abas/filtros — nenhuma aba só com texto. Font Awesome 6.
+const PERIODO_ICON: Record<string, string> = {
+  HOJE: 'fa-calendar-day', DIA: 'fa-calendar-day', SEMANA: 'fa-calendar-week', MES: 'fa-calendar', GERAL: 'fa-infinity',
+};
+const REPORT_ICON: Record<string, string> = {
+  RESUMO: 'fa-chart-pie', TOP_PRODUTOS: 'fa-trophy', PRODUTOS_RENTAVEIS: 'fa-coins',
+  TOP_CLIENTES: 'fa-users', CATEGORIAS: 'fa-layer-group', VENDEDORES: 'fa-user-tag', DIVIDAS: 'fa-hand-holding-dollar',
+};
+const CREDIT_ICON: Record<string, string> = {
+  TODOS: 'fa-list', COMUM: 'fa-money-bill-wave', CHEQUE: 'fa-money-check', BOLETO: 'fa-barcode',
+};
+const COMPROVANTE_ICON: Record<string, string> = {
+  PENDENTE: 'fa-hourglass-half', CONFIRMADO: 'fa-circle-check', REJEITADO: 'fa-circle-xmark', TODOS: 'fa-list',
+};
+/** Chip de aba padronizado: ícone + texto (BLOCO 213). */
+const IconeAba = ({ icon, children }: { icon: string; children: React.ReactNode }) => (
+  <span className="inline-flex items-center gap-1"><i className={`fa-solid ${icon} text-[8px] opacity-70`}></i>{children}</span>
+);
 // BLOCO 95: Fiscal — fila de produtos vindos das XMLs de compra (Spedy/upload)
 import FiscalXml from '@/components/doce/FiscalXml';
 // BLOCO 62: validação da chave Pix do recebimento (CPF/CNPJ/telefone/email/EVP)
@@ -1857,7 +1877,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             <MenuCard icon="fa-calendar-days" title="Roteiro" tab="ROTEIRO" color="bg-indigo-50 text-indigo-600" />
             <MenuCard icon="fa-chart-line" title="Relatórios" tab="REPORTS" color="bg-emerald-50 text-emerald-600" />
             {/* BLOCO 79: Lucro por Rota — a conta do dono ao vivo */}
-            <MenuCard icon="fa-sack-dollar" title="Lucro por Rota" tab="LUCRO" color="bg-amber-50 text-amber-600" />
+            <MenuCard icon="fa-piggy-bank" title="Lucro por Rota" tab="LUCRO" color="bg-amber-50 text-amber-600" />
             <MenuCard icon="fa-file-invoice-dollar" title="Contas a Receber" tab="CONTAS_RECEBER" color="bg-rose-50 text-rose-600" />
             <MenuCard icon="fa-clipboard-check" title="Comprovantes Pix" tab="COMPROVANTES" color="bg-teal-50 text-teal-600" badge={comprovantesBadge} />
             <MenuCard icon="fa-truck" title="Entregas" tab="ENTREGAS" color="bg-emerald-50 text-emerald-600" />
@@ -1906,7 +1926,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
             {/* BLOCO 205 (regra do dono): PORTAL DE COBRANCAS — boletos atrasados do Inter */}
             <a href="/cobrancas" target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 bg-rose-600 text-white rounded-3xl px-5 py-5 shadow-lg active:scale-[0.98] transition-transform">
-              <span className="w-12 h-12 rounded-2xl bg-white/15 flex items-center justify-center shrink-0"><i className="fa-solid fa-bell-dollar text-xl"></i></span>
+              <span className="w-12 h-12 rounded-2xl bg-white/15 flex items-center justify-center shrink-0"><i className="fa-solid fa-bell text-xl"></i></span>
               <span className="flex-1 flex flex-col items-start">
                 <span className="text-sm font-black uppercase tracking-widest">Portal de Cobranças</span>
                 <span className="text-[9px] font-bold opacity-80 leading-snug">Boletos atrasados (API do Inter) · mensagem de cobrança personalizada · WhatsApp em 1 toque</span>
@@ -2283,15 +2303,18 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       {activeTab === 'CLIENTES' && (
         <div className="space-y-4">
           <div className="px-2 flex justify-between items-center">
-            <h2 className="text-2xl font-black text-gray-800 tracking-tight">Clientes</h2>
+            <div className="flex items-center gap-2.5">
+              <span className="w-9 h-9 rounded-xl bg-green-50 text-green-600 flex items-center justify-center shrink-0"><i className="fa-solid fa-users text-sm"></i></span>
+              <h2 className="text-2xl font-black text-gray-800 tracking-tight">Clientes</h2>
+            </div>
             <button onClick={() => handleOpenClient('NEW')} className="bg-green-600 text-white px-4 py-2 rounded-xl font-black text-xs uppercase shadow-md active:scale-95"><i className="fa-solid fa-user-plus mr-2"></i>Novo</button>
           </div>
           <div className="px-1 space-y-2">
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar cliente..." className="w-full p-4 bg-white border border-gray-100 rounded-2xl shadow-sm text-sm outline-none focus:ring-2 focus:ring-green-100" />
             <div className="flex flex-wrap bg-gray-100 p-1 rounded-2xl overflow-hidden gap-1">
-              <button onClick={() => setRouteFilter('TODOS')} className={`flex-1 min-w-[60px] py-2 rounded-xl text-[9px] font-black uppercase transition-all ${routeFilter === 'TODOS' ? 'bg-white text-green-600 shadow-sm' : 'text-gray-400'}`}>Todos</button>
+              <button onClick={() => setRouteFilter('TODOS')} className={`flex-1 min-w-[60px] py-2 rounded-xl text-[9px] font-black uppercase transition-all ${routeFilter === 'TODOS' ? 'bg-white text-green-600 shadow-sm' : 'text-gray-400'}`}><IconeAba icon="fa-users">Todos</IconeAba></button>
               {availableRoutes.map(r => (
-                <button key={r} onClick={() => setRouteFilter(r)} className={`flex-1 min-w-[60px] py-2 rounded-xl text-[9px] font-black uppercase transition-all whitespace-nowrap ${routeFilter === r ? 'bg-white text-green-600 shadow-sm' : 'text-gray-400'}`}>{formatRouteName(r)}</button>
+                <button key={r} onClick={() => setRouteFilter(r)} className={`flex-1 min-w-[60px] py-2 rounded-xl text-[9px] font-black uppercase transition-all whitespace-nowrap ${routeFilter === r ? 'bg-white text-green-600 shadow-sm' : 'text-gray-400'}`}><IconeAba icon="fa-route">{formatRouteName(r)}</IconeAba></button>
               ))}
             </div>
           </div>
@@ -2474,8 +2497,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
       {activeTab === 'HISTORY' && (
         <div className="space-y-6 py-4">
-          <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Vendas Realizadas</h2></div>
-          <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner">{(['HOJE', 'SEMANA', 'MES', 'GERAL'] as const).map(p => (<button key={p} onClick={() => setFiltroPeriodo(p)} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${filtroPeriodo === p ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>{p}</button>))}</div>
+          <div className="px-2 flex items-center gap-2.5"><span className="w-9 h-9 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0"><i className="fa-solid fa-receipt text-sm"></i></span><h2 className="text-2xl font-black text-gray-800 tracking-tight">Vendas Realizadas</h2></div>
+          <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner">{(['HOJE', 'SEMANA', 'MES', 'GERAL'] as const).map(p => (<button key={p} onClick={() => setFiltroPeriodo(p)} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all flex items-center justify-center gap-1 ${filtroPeriodo === p ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}><i className={`fa-solid ${PERIODO_ICON[p]} text-[8px] opacity-70`}></i>{p}</button>))}</div>
           <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-md flex flex-col gap-4 mx-2">
              <div className="flex justify-between items-center gap-2 min-w-0 border-b border-gray-100 pb-3"><span className="text-xs font-black text-gray-400 uppercase shrink-0">Total Geral</span><span className="text-xl sm:text-2xl font-black text-gray-900 tabular-nums break-words text-right">R$ {historySummary.total.toFixed(2)}</span></div>
              <div className="grid grid-cols-3 gap-3">
@@ -2527,7 +2550,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
       {activeTab === 'ROTEIRO' && (
         <div className="space-y-4">
-          <div className="px-2"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Roteiro Semanal</h2></div>
+          <div className="px-2 flex items-center gap-2.5"><span className="w-9 h-9 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0"><i className="fa-solid fa-calendar-days text-sm"></i></span><h2 className="text-2xl font-black text-gray-800 tracking-tight">Roteiro Semanal</h2></div>
           {/* BLOCO 12: abas de dia funcionais — mostra SOMENTE o dia selecionado */}
           <div className="flex flex-wrap bg-gray-100 p-1 rounded-2xl mx-1 shadow-inner overflow-hidden gap-1">
             {DIAS_SEMANA.slice(1).map((dia, i) => {
@@ -2535,17 +2558,17 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
               const qtdDia = props.clients.filter(c => (c.diaRoteiro ?? 1) === d && c.ativo && (routeFilter === 'TODOS' || c.rota === routeFilter)).length;
               const isToday = new Date().getDay() === d;
               return (
-                <button key={d} onClick={() => setRoteiroDia(d)} className={`flex-1 min-w-[52px] px-1 py-2 rounded-xl text-[9px] font-black uppercase transition-all whitespace-nowrap ${roteiroDia === d ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-400'}`}>
-                  {isToday ? <i className="fa-solid fa-location-dot text-[7px] mr-0.5"></i> : null}{dia.slice(0, 3)}
+                <button key={d} onClick={() => setRoteiroDia(d)} className={`flex-1 min-w-[52px] px-1 py-2 rounded-xl text-[9px] font-black uppercase transition-all whitespace-nowrap flex items-center justify-center gap-0.5 ${roteiroDia === d ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-400'}`}>
+                  <i className={`fa-solid ${isToday ? 'fa-location-dot text-amber-500' : 'fa-calendar-day text-[7px] opacity-60'} mr-0.5`}></i>{dia.slice(0, 3)}
                   <span className={`block text-[8px] ${roteiroDia === d ? 'text-indigo-400' : 'text-gray-300'}`}>{qtdDia} cli</span>
                 </button>
               );
             })}
           </div>
           <div className="flex flex-wrap bg-gray-100 p-1 rounded-2xl mx-1 overflow-hidden gap-1">
-            <button onClick={() => setRouteFilter('TODOS')} className={`flex-1 min-w-[60px] py-2 rounded-xl text-[9px] font-black uppercase transition-all ${routeFilter === 'TODOS' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-400'}`}>Todos</button>
+            <button onClick={() => setRouteFilter('TODOS')} className={`flex-1 min-w-[60px] py-2 rounded-xl text-[9px] font-black uppercase transition-all ${routeFilter === 'TODOS' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-400'}`}><IconeAba icon="fa-users">Todos</IconeAba></button>
             {availableRoutes.map(r => (
-              <button key={r} onClick={() => setRouteFilter(r)} className={`flex-1 min-w-[60px] py-2 rounded-xl text-[9px] font-black uppercase transition-all whitespace-nowrap ${routeFilter === r ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-400'}`}>{formatRouteName(r)}</button>
+              <button key={r} onClick={() => setRouteFilter(r)} className={`flex-1 min-w-[60px] py-2 rounded-xl text-[9px] font-black uppercase transition-all whitespace-nowrap ${routeFilter === r ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-400'}`}><IconeAba icon="fa-route">{formatRouteName(r)}</IconeAba></button>
             ))}
           </div>
           <div className="space-y-2 px-1">
@@ -2600,16 +2623,21 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
       {activeTab === 'REPORTS' && (
         <div className="space-y-4">
-          <header className="px-1 flex justify-between items-center"><h2 className="text-2xl font-black text-gray-800 tracking-tight">Relatorios</h2></header>
+          <header className="px-1 flex justify-between items-center">
+            <div className="flex items-center gap-2.5">
+              <span className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0"><i className="fa-solid fa-chart-line text-sm"></i></span>
+              <h2 className="text-2xl font-black text-gray-800 tracking-tight">Relatorios</h2>
+            </div>
+          </header>
           
           <div className="flex flex-wrap bg-gray-100 p-1 rounded-2xl mx-1 shadow-inner overflow-hidden gap-1">
             {(['RESUMO', 'TOP_PRODUTOS', 'PRODUTOS_RENTAVEIS', 'TOP_CLIENTES', 'CATEGORIAS', 'VENDEDORES', 'DIVIDAS'] as const).map(r => (
-              <button key={r} onClick={() => setReportFilter(r as any)} className={`flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all whitespace-nowrap ${reportFilter === r ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>{r === 'TOP_PRODUTOS' ? 'Top Produtos' : r === 'PRODUTOS_RENTAVEIS' ? 'Rentaveis' : r === 'TOP_CLIENTES' ? 'Top Clientes' : r === 'VENDEDORES' ? 'Vendedores' : r === 'CATEGORIAS' ? 'Categorias' : r === 'DIVIDAS' ? 'Dividas' : 'Resumo'}</button>
+              <button key={r} onClick={() => setReportFilter(r as any)} className={`flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all whitespace-nowrap flex items-center justify-center gap-1 ${reportFilter === r ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}><i className={`fa-solid ${REPORT_ICON[r]} text-[8px] opacity-70`}></i>{r === 'TOP_PRODUTOS' ? 'Top Produtos' : r === 'PRODUTOS_RENTAVEIS' ? 'Rentaveis' : r === 'TOP_CLIENTES' ? 'Top Clientes' : r === 'VENDEDORES' ? 'Vendedores' : r === 'CATEGORIAS' ? 'Categorias' : r === 'DIVIDAS' ? 'Dividas' : 'Resumo'}</button>
             ))}
           </div>
 
           {reportFilter !== 'DIVIDAS' && (
-            <div className="flex bg-gray-100 p-1 rounded-2xl mx-1 shadow-inner">{(['HOJE', 'SEMANA', 'MES', 'GERAL'] as const).map(p => (<button key={p} onClick={() => setReportPeriodo(p)} className={`flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all ${reportPeriodo === p ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}>{p}</button>))}</div>
+            <div className="flex bg-gray-100 p-1 rounded-2xl mx-1 shadow-inner">{(['HOJE', 'SEMANA', 'MES', 'GERAL'] as const).map(p => (<button key={p} onClick={() => setReportPeriodo(p)} className={`flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all flex items-center justify-center gap-1 ${reportPeriodo === p ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}><i className={`fa-solid ${PERIODO_ICON[p]} text-[8px] opacity-70`}></i>{p}</button>))}</div>
           )}
 
           {(() => {
@@ -2828,9 +2856,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       {activeTab === 'CONTAS_RECEBER' && (
         <div className="space-y-4">
           <header className="px-1 flex justify-between items-center">
-            <div>
-              <h2 className="text-2xl font-black text-gray-800 tracking-tight">Contas a Receber</h2>
-              <p className="text-[10px] text-gray-400 font-bold uppercase mt-1">Vendas a prazo pendentes</p>
+            <div className="flex items-center gap-2.5">
+              <span className="w-9 h-9 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0"><i className="fa-solid fa-file-invoice-dollar text-sm"></i></span>
+              <div>
+                <h2 className="text-2xl font-black text-gray-800 tracking-tight">Contas a Receber</h2>
+                <p className="text-[10px] text-gray-400 font-bold uppercase mt-1">Vendas a prazo pendentes</p>
+              </div>
             </div>
             <button
               onClick={() => setFilterOverdueOnly(!filterOverdueOnly)}
@@ -2846,9 +2877,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
               <button
                 key={t}
                 onClick={() => setCreditTypeFilter(t)}
-                className={`flex-1 min-w-[70px] py-2 rounded-xl text-[9px] font-black uppercase transition-all ${creditTypeFilter === t ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}
+                className={`flex-1 min-w-[70px] py-2 rounded-xl text-[9px] font-black uppercase transition-all flex items-center justify-center gap-1 ${creditTypeFilter === t ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}
               >
-                {t}
+                <i className={`fa-solid ${CREDIT_ICON[t]} text-[8px] opacity-70`}></i>{t}
               </button>
             ))}
           </div>
@@ -2941,9 +2972,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       {activeTab === 'COMPROVANTES' && (
         <div className="space-y-4">
           <header className="px-1 flex justify-between items-center">
-            <div>
-              <h2 className="text-2xl font-black text-gray-800 tracking-tight">Comprovantes Pix</h2>
-              <p className="text-[10px] text-gray-400 font-bold uppercase mt-1">Pagamentos enviados pelo portal do cliente</p>
+            <div className="flex items-center gap-2.5">
+              <span className="w-9 h-9 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center shrink-0"><i className="fa-solid fa-clipboard-check text-sm"></i></span>
+              <div>
+                <h2 className="text-2xl font-black text-gray-800 tracking-tight">Comprovantes Pix</h2>
+                <p className="text-[10px] text-gray-400 font-bold uppercase mt-1">Pagamentos enviados pelo portal do cliente</p>
+              </div>
             </div>
             <button onClick={loadComprovantes} className="w-10 h-10 bg-white text-blue-600 rounded-xl flex items-center justify-center shadow-sm border border-gray-100 active:scale-90"><i className={`fa-solid fa-rotate ${comprovantesLoading ? 'animate-spin' : ''}`}></i></button>
           </header>
@@ -2953,9 +2987,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
               <button
                 key={t}
                 onClick={() => setComprovantesFilter(t)}
-                className={`flex-1 min-w-[70px] py-2 rounded-xl text-[9px] font-black uppercase transition-all ${comprovantesFilter === t ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}
+                className={`flex-1 min-w-[70px] py-2 rounded-xl text-[9px] font-black uppercase transition-all flex items-center justify-center gap-1 ${comprovantesFilter === t ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}
               >
-                {t === 'PENDENTE' ? `Pendentes (${comprovantes.filter(c => c.status === 'PENDENTE').length})` : t === 'CONFIRMADO' ? 'Confirmados' : t === 'REJEITADO' ? 'Recusados' : 'Todos'}
+                <i className={`fa-solid ${COMPROVANTE_ICON[t]} text-[8px] opacity-70`}></i>{t === 'PENDENTE' ? `Pendentes (${comprovantes.filter(c => c.status === 'PENDENTE').length})` : t === 'CONFIRMADO' ? 'Confirmados' : t === 'REJEITADO' ? 'Recusados' : 'Todos'}
               </button>
             ))}
           </div>

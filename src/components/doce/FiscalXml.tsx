@@ -705,22 +705,23 @@ const FiscalXml: React.FC<FiscalXmlProps> = ({ products, showToast, onProdutoCri
             )}
           </div>
 
-          {/* Sub abas */}
+          {/* Sub abas — BLOCO 213: ícone em cada sub-aba (regra do dono: nenhuma aba só com texto) */}
           <div className="flex gap-2 overflow-x-auto pb-1">
             {([
-              ['FILA', `Fila (${stats.PENDENTE})`],
-              ['VINCULADOS', `Vinculados (${stats.VINCULADO})`],
-              ['CRIADOS', `Criados (${stats.CRIADO})`],
-              ['IGNORADOS', `Ignorados (${stats.IGNORADO})`],
-              ['NOTAS', `Notas (${dados?.importacoes.length ?? 0})`],
-            ] as [SubAba, string][]).map(([id, label]) => (
+              ['FILA', `Fila (${stats.PENDENTE})`, 'fa-inbox'],
+              ['VINCULADOS', `Vinculados (${stats.VINCULADO})`, 'fa-link'],
+              ['CRIADOS', `Criados (${stats.CRIADO})`, 'fa-plus'],
+              ['IGNORADOS', `Ignorados (${stats.IGNORADO})`, 'fa-eye-slash'],
+              ['NOTAS', `Notas (${dados?.importacoes.length ?? 0})`, 'fa-file-invoice'],
+            ] as [SubAba, string, string][]).map(([id, label, icon]) => (
               <button
                 key={id}
                 onClick={() => { setSubAba(id); setBusca(''); }}
-                className={`px-3 h-9 rounded-xl text-xs font-bold whitespace-nowrap transition-colors ${
+                className={`px-3 h-9 rounded-xl text-xs font-bold whitespace-nowrap transition-colors flex items-center gap-1.5 ${
                   subAba === id ? 'bg-gray-900 text-white' : 'bg-white text-gray-600 border border-gray-200'
                 }`}
               >
+                <i className={`fa-solid ${icon} text-[10px] ${subAba === id ? 'opacity-90' : 'text-gray-300'}`} />
                 {label}
               </button>
             ))}

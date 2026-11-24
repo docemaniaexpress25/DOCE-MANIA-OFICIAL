@@ -111,6 +111,12 @@ interface Stats {
 }
 
 type Filtro = 'TODOS' | 'SEM_CEP' | 'SEM_ENDERECO' | 'SEM_MUNICIPIO' | 'SEM_CNPJ' | 'SEM_IE' | 'INATIVOS' | 'CEP_SEM_ENDERECO';
+// BLOCO 213: ícone de cada chip de filtro (nenhuma aba só com texto)
+const FILTRO_ICON: Record<Filtro, string> = {
+  TODOS: 'fa-list', SEM_CEP: 'fa-map-location-dot', SEM_ENDERECO: 'fa-road',
+  SEM_MUNICIPIO: 'fa-city', SEM_CNPJ: 'fa-id-card', SEM_IE: 'fa-file-signature',
+  INATIVOS: 'fa-eye-slash', CEP_SEM_ENDERECO: 'fa-location-crosshairs',
+};
 
 const TOKEN_KEY = 'dm_notas_admin_token';
 const NOME_KEY = 'dm_notas_admin_nome';
@@ -594,8 +600,9 @@ export default function PortalClientesFiscaisPage() {
   const chipFiltro = (f: Filtro, label: string, count: number, cor: string) => (
     <button
       onClick={() => setFiltro(f)}
-      className={`px-3 h-8 rounded-full text-[10px] font-black uppercase tracking-wider border transition-all whitespace-nowrap ${filtro === f ? `${cor} border-transparent` : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'}`}
+      className={`px-3 h-8 rounded-full text-[10px] font-black uppercase tracking-wider border transition-all whitespace-nowrap flex items-center gap-1.5 ${filtro === f ? `${cor} border-transparent` : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'}`}
     >
+      <i className={`fa-solid ${FILTRO_ICON[f]} text-[9px] ${filtro === f ? 'opacity-80' : 'text-gray-300'}`}></i>
       {label} <b>{count}</b>
     </button>
   );

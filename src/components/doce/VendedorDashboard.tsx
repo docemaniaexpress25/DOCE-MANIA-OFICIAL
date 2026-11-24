@@ -49,6 +49,15 @@ import { CSS } from '@dnd-kit/utilities';
 import ClientHistory from '@/components/doce/ClientHistory';
 import { DailyRouteState, loadLocalState, saveLocalState } from '@/utils/persistence';
 
+// BLOCO 213 (regra do dono: "recrie todos os ícones de todas as telas"): ícones PADRONIZADOS
+// de todas as abas/filtros — nenhuma aba só com texto. Mesmos mapas do AdminDashboard.
+const PERIODO_ICON: Record<string, string> = {
+  HOJE: 'fa-calendar-day', DIA: 'fa-calendar-day', SEMANA: 'fa-calendar-week', MES: 'fa-calendar', GERAL: 'fa-infinity',
+};
+const CREDIT_ICON: Record<string, string> = {
+  TODOS: 'fa-list', COMUM: 'fa-money-bill-wave', CHEQUE: 'fa-money-check', BOLETO: 'fa-barcode',
+};
+
 interface VendedorDashboardProps {
   user: User;
   products: Product[];
@@ -1917,7 +1926,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
 
       {activeTab === 'HISTORY' && (
         <div className="space-y-4">
-          <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner">{(['DIA', 'SEMANA', 'MES', 'GERAL'] as const).map(f => (<button key={f} onClick={() => setHistoryFilter(f)} className={`flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase ${historyFilter === f ? 'bg-white text-[#1E3A5F] shadow-sm' : 'text-gray-400'}`}>{f}</button>))}</div>
+          <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner">{(['DIA', 'SEMANA', 'MES', 'GERAL'] as const).map(f => (<button key={f} onClick={() => setHistoryFilter(f)} className={`flex-1 py-2.5 rounded-xl text-[9px] font-black uppercase flex items-center justify-center gap-1 ${historyFilter === f ? 'bg-white text-[#1E3A5F] shadow-sm' : 'text-gray-400'}`}><i className={`fa-solid ${PERIODO_ICON[f]} text-[8px] opacity-70`}></i>{f}</button>))}</div>
           <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-md flex flex-col gap-4">
              <div className="flex justify-between items-center gap-2 min-w-0 border-b border-gray-100 pb-3"><span className="text-xs font-black text-gray-400 uppercase shrink-0">Total Geral</span><span className="text-xl sm:text-2xl font-black text-gray-900 tabular-nums break-words text-right">R$ {historySummary.total.toFixed(2)}</span></div>
              <div className="grid grid-cols-3 gap-2">
@@ -1991,7 +2000,7 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                </div>
              </div>
            )}
-           <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner">{(['DIA', 'SEMANA', 'MES', 'GERAL'] as const).map(f => (<button key={f} onClick={() => setFinanceFilter(f)} className={`flex-1 py-2 rounded-xl text-[9px] font-black uppercase ${financeFilter === f ? 'bg-white text-emerald-600 shadow-sm' : 'text-gray-400'}`}>{f}</button>))}</div>
+           <div className="flex bg-gray-100 p-1 rounded-2xl mx-2 shadow-inner">{(['DIA', 'SEMANA', 'MES', 'GERAL'] as const).map(f => (<button key={f} onClick={() => setFinanceFilter(f)} className={`flex-1 py-2 rounded-xl text-[9px] font-black uppercase flex items-center justify-center gap-1 ${financeFilter === f ? 'bg-white text-emerald-600 shadow-sm' : 'text-gray-400'}`}><i className={`fa-solid ${PERIODO_ICON[f]} text-[8px] opacity-70`}></i>{f}</button>))}</div>
            
            <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col text-center">
               <p className="text-[9px] font-black uppercase text-gray-400 mb-1">Comissões Geradas no Período</p>
@@ -2098,7 +2107,10 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       {activeTab === 'CREDIT' && (
         <div className="space-y-4">
           <header className="px-1 flex justify-between items-center">
-            <h2 className="text-xs font-black text-gray-400 uppercase tracking-wider">Contas a Receber</h2>
+            <div className="flex items-center gap-2.5">
+              <span className="w-9 h-9 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0"><i className="fa-solid fa-file-invoice-dollar text-sm"></i></span>
+              <h2 className="text-xs font-black text-gray-400 uppercase tracking-wider">Contas a Receber</h2>
+            </div>
             <button 
               onClick={() => setFilterOverdueOnly(!filterOverdueOnly)}
               className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all flex items-center gap-2 shadow-sm ${filterOverdueOnly ? 'bg-rose-600 text-white' : 'bg-white text-gray-400 border border-gray-100'}`}
@@ -2113,9 +2125,9 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
               <button 
                 key={t} 
                 onClick={() => setCreditTypeFilter(t)} 
-                className={`flex-1 min-w-[70px] py-2.5 rounded-xl text-[9px] font-black uppercase transition-all ${creditTypeFilter === t ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}
+                className={`flex-1 min-w-[70px] py-2.5 rounded-xl text-[9px] font-black uppercase transition-all flex items-center justify-center gap-1 ${creditTypeFilter === t ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}
               >
-                {t === 'COMUM' ? 'Comum' : t}
+                <i className={`fa-solid ${CREDIT_ICON[t]} text-[8px] opacity-70`}></i>{t === 'COMUM' ? 'Comum' : t}
               </button>
             ))}
           </div>

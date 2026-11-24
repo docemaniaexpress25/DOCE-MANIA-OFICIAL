@@ -676,7 +676,7 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
           <div className="border-t border-gray-50 pt-3 space-y-2">
             <button onClick={alternarLogRecebimentos} className="w-full flex items-center justify-between gap-2 text-left" aria-expanded={recLogAberto}>
               <div className="flex items-start gap-3">
-                <i className="fa-solid fa-sack-dollar text-teal-500 mt-1"></i>
+                <i className="fa-solid fa-piggy-bank text-teal-500 mt-1"></i>
                 <div>
                   <p className="text-[11px] font-bold text-gray-600 uppercase">Log de pagamentos e recebimentos</p>
                   <p className="text-[9px] text-gray-400 font-semibold leading-snug mt-0.5">De onde veio cada baixa: automática (webhook/sync do Inter), Pix do portal ou baixa manual (por quem). Últimos 40.</p>
@@ -777,7 +777,7 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
           {/* ===== BLOCO 205 — MENSAGEM DE COBRANÇA (Portal de Cobranças) ===== */}
           <div className="border-t border-gray-50 pt-3 space-y-2">
             <div className="flex items-start gap-3">
-              <i className="fa-solid fa-bell-dollar text-rose-500 mt-1"></i>
+              <i className="fa-solid fa-bell text-rose-500 mt-1"></i>
               <div className="flex-1">
                 <p className="text-[11px] font-bold text-gray-600 uppercase">Mensagem de cobrança (boletos atrasados)</p>
                 <p className="text-[9px] text-gray-400 font-semibold leading-snug mt-0.5">Texto enviado ao cliente pelo <strong className="text-gray-500">Portal de Cobranças</strong> (boletos atrasados do Inter). Os marcadores viram os dados de cada boleto: <span className="font-mono text-gray-500">{'{nome}'} {'{valor}'} {'{vencimento}'} {'{dias}'}</span>.</p>

@@ -251,7 +251,7 @@ export default function CobrancasPortal() {
       <PortalPinGate
         titulo="Portal de Cobranças"
         subtitulo="Boletos atrasados · Inter"
-        icone="fa-bell-dollar"
+        icone="fa-bell"
         accent="bg-rose-600"
         pin={pin}
         pinErro={pinErro}
@@ -270,7 +270,7 @@ export default function CobrancasPortal() {
       {/* header */}
       <div className="sticky top-0 z-40 bg-slate-950/90 backdrop-blur border-b border-slate-800 px-4 py-3 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
-          <div className="w-9 h-9 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0"><i className="fa-solid fa-bell-dollar text-sm"></i></div>
+          <div className="w-9 h-9 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0"><i className="fa-solid fa-bell text-sm"></i></div>
           <div className="min-w-0">
             <h1 className="text-[15px] font-black uppercase tracking-tight leading-none whitespace-nowrap">Portal de Cobranças <span className="text-rose-300">· Atrasados</span></h1>
             {nome && <p className="text-[9px] font-bold text-slate-500 uppercase truncate">{nome}</p>}
@@ -280,7 +280,7 @@ export default function CobrancasPortal() {
           <button onClick={() => void carregar(token, true)} disabled={carregando} className="text-slate-300 hover:text-white text-[10px] font-black uppercase px-3 py-2 rounded-xl border border-slate-700 disabled:opacity-50" title="Buscar de novo no Inter (sem cache)">
             <i className={`fa-solid ${carregando ? 'fa-spinner fa-spin' : 'fa-rotate'} mr-1`}></i>Atualizar
           </button>
-          <button onClick={() => { try { localStorage.removeItem(TOKEN_KEY); } catch { /* ignore */ } setToken(null); setDados(null); }} className="text-slate-400 hover:text-slate-200 text-xs font-black uppercase px-3 py-2 rounded-xl border border-slate-700">Sair</button>
+          <button onClick={() => { try { localStorage.removeItem(TOKEN_KEY); } catch { /* ignore */ } setToken(null); setDados(null); }} className="text-slate-400 hover:text-slate-200 text-xs font-black uppercase px-3 py-2 rounded-xl border border-slate-700 flex items-center gap-1.5"><i className="fa-solid fa-arrow-right-from-bracket"></i>Sair</button>
         </div>
       </div>
 
@@ -300,7 +300,7 @@ export default function CobrancasPortal() {
         {/* hero: total atrasado */}
         <section className={`rounded-3xl p-4 ${dark}`}>
           <div className="flex items-start justify-between gap-2">
-            <p className="text-[9px] font-black uppercase tracking-widest text-slate-400"><i className="fa-solid fa-bell-dollar mr-1.5 text-rose-400"></i>{dados?.fonte === 'LOCAL' ? 'Boletos atrasados (banco local)' : 'Boletos atrasados (API do Inter)'}</p>
+            <p className="text-[9px] font-black uppercase tracking-widest text-slate-400"><i className="fa-solid fa-bell mr-1.5 text-rose-400"></i>{dados?.fonte === 'LOCAL' ? 'Boletos atrasados (banco local)' : 'Boletos atrasados (API do Inter)'}</p>
             {dados?.consultadoEm && (
               <span className="text-[8px] font-bold text-slate-500 whitespace-nowrap">consulta {new Date(dados.consultadoEm).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
             )}

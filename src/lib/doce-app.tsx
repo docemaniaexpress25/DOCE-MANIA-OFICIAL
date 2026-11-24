@@ -9,7 +9,7 @@ import SecretarioEstoque from '@/components/doce/SecretarioEstoque';
 import Login from '@/components/doce/Login';
 import { haptics } from '@/utils/haptics';
 import { offlineSync } from '@/utils/offlineSync';
-import { userService, clearSessionToken } from '@/services/userService';
+import { userService, clearSessionToken, installSessionGuard, renovarSessaoSeNecessario, isSessionTokenExpired, SESSION_EXPIRED_EVENT } from '@/services/userService';
 import { productService, ProdutoSalvoResultado } from '@/services/productService';
 import { clientService } from '@/services/clientService';
 import type { InsercaoClienteResultado } from '@/services/clientService';
@@ -212,6 +212,53 @@ const App: React.FC = () => {
   }, [currentUser]);
 
   useEffect(() => { saveLocalState('currentUser', currentUser); }, [currentUser]);
+
+  /* ------------------------------------------------------------------
+   * BLOCO 217 — GUARDA DE SESSÃO (corrige o erro "Sessão expirada" na
+   * venda). Três camadas, todas aqui:
+   *
+   * 1. GUARD GLOBAL (uma vez, sempre montado): qualquer API /api/* que
+   *    devolva 401 "Sessão expirada" limpa o token e dispara o evento —
+   *    o logout acontece na hora, nunca mais o vendedor fica "logado
+   *    fantasma" tentando vender contra APIs que recusam tudo.
+   * 2. ARRANQUE: se o token salvo já nasceu morto (expirado) OU o
+   *    currentUser restaurado do localStorage não tem token nenhum,
+   *    desloga ANTES do primeiro atendimento (vai direto pro login).
+   * 3. SESSÃO DESLIZANTE: com usuário logado, renova o token quando
+   *    falta < 72h dos 7 dias (no arranque, a cada 30 min e ao voltar o
+   *    foco) — quem usa o app com regularidade NUNCA mais vê a sessão
+   *    expirar no meio da venda.
+   * ------------------------------------------------------------------ */
+  useEffect(() => {
+    installSessionGuard();
+    const onSessionExpired = () => {
+      clearSessionToken();
+      setCurrentUser(prev => (prev ? null : prev)); // idempotente: só desloga se estava logado
+    };
+    window.addEventListener(SESSION_EXPIRED_EVENT, onSessionExpired);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onSessionExpired);
+  }, []);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    // Arranque com token morto: vai pro login AGORA (antes o fantasma
+    // navegava até esbarrar num 401 no meio da venda).
+    if (isSessionTokenExpired()) {
+      clearSessionToken();
+      setCurrentUser(null);
+      return;
+    }
+    // Renovação proativa: arranque + foco + ciclo de 30 min.
+    renovarSessaoSeNecessario();
+    const iv = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      renovarSessaoSeNecessario();
+    }, 30 * 60_000);
+    const onFocus = () => { if (!document.hidden) renovarSessaoSeNecessario(); };
+    window.addEventListener('focus', onFocus);
+    return () => { clearInterval(iv); window.removeEventListener('focus', onFocus); };
+  }, [currentUser?.id]);
+
 
   // Papel do usuario em ref (usado para o ENTREGADOR pular as buscas pesadas
   // de estoque/vendas/comissoes — ele so usa a tela de rota)

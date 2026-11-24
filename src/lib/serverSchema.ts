@@ -177,3 +177,8 @@ export function hasBoletoCpfColumn(): Promise<boolean> {
 export function hasSalesBoletosTable(): Promise<boolean> {
   return probeColumn('sales_boletos', 'id', 'salesBoletos');
 }
+
+/** cargas_fiscal existe? (Bloco 215 — remessa 5949 da carga + devolução 1949 automática) */
+export function hasCargasFiscalTable(): Promise<boolean> {
+  return probeColumn('cargas_fiscal', 'id', 'cargasFiscal');
+}

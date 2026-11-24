@@ -156,6 +156,8 @@ export interface NotaEspecialInput {
   pagamentoValor?: number;
   /** Chave da NF-e original (devolução) — 44 dígitos, opcional. */
   refNfe?: string;
+  /** BLOCO 215: override do indPres (a remessa da carga usa 9 — não se aplica). */
+  presenca?: number;
   /** Informações complementares / motivo (texto do dono). */
   informacoes?: string;
 }
@@ -246,6 +248,8 @@ export const CFOP_BASES: { cfop: string; label: string }[] = [
   { cfop: '5910', label: 'Remessa em bonificação, doação ou brinde' },
   { cfop: '5911', label: 'Remessa p/ demonstração' },
   { cfop: '5949', label: 'Outra saída de mercadoria não especificada' },
+  // BLOCO 215: devolução da REMESSA do vendedor (entrada própria da carga não vendida)
+  { cfop: '1949', label: 'Outra entrada de mercadoria não especificada' },
 ];
 
 /** Rotulo completo: "5202 · Devolução de venda de mercadoria (fora do estado)". */
@@ -261,11 +265,14 @@ export function labelCfop(cfop: string): string {
 /**
  * Ajusta o 1º dígito do CFOP pela UF do destinatário — o "5102 -> 6202 fora
  * do estado" do dono, automático. Sem `auto`, devolve o CFOP como digitou.
+ * BLOCO 215: também cobre ENTRADAS (1949 -> 2949 fora do estado) para a
+ * devolução da remessa da van.
  */
 export function cfopAjustadoPorUf(cfop: string, ufDest: string, ufEmit: string, auto: boolean): string {
   const c = soDigitos(cfop);
-  if (!auto || c.length !== 4 || !/^[56]/.test(c)) return c;
+  if (!auto || c.length !== 4 || !/^[1256]/.test(c)) return c;
   const fora = (ufDest || '').toUpperCase().trim() !== (ufEmit || '').toUpperCase().trim();
+  if (c.startsWith('1') || c.startsWith('2')) return fora ? '2' + c.slice(1) : '1' + c.slice(1);
   const dígito = fora ? '6' : '5';
   return dígito + c.slice(1);
 }
@@ -278,6 +285,10 @@ export const TRIBUTACOES: TributacaoOp[] = [
   { codigo: '101', kind: 'CSOSN', label: 'CSOSN 101', desc: 'Simples — com permissão de crédito (padrão da venda)' },
   { codigo: '102', kind: 'CSOSN', label: 'CSOSN 102', desc: 'Simples — sem crédito (padrão da NFC-e)' },
   { codigo: '900', kind: 'CSOSN', label: 'CSOSN 900', desc: 'Simples — outros (devolução / bonificação)' },
+  // BLOCO 215 (remessa para venda ambulante): o dono precisa das duas opções
+  // que o contador pode pedir na remessa/devolução do estoque da van.
+  { codigo: '400', kind: 'CSOSN', label: 'CSOSN 400', desc: 'Simples — não tributada (remessa que será vendida depois)' },
+  { codigo: '500', kind: 'CSOSN', label: 'CSOSN 500', desc: 'Simples — ICMS ST já recolhido na compra (produto substituído)' },
   { codigo: '000', kind: 'CST', label: 'CST 000', desc: 'Regime normal — tributada integralmente (envia base + alíquota)' },
   { codigo: '040', kind: 'CST', label: 'CST 040', desc: 'Regime normal — isenta' },
   { codigo: '041', kind: 'CST', label: 'CST 041', desc: 'Regime normal — não tributada' },
@@ -501,8 +512,8 @@ export function validarNotaEspecial(input: NotaEspecialInput, ufEmitente: string
     if (!(it.quantidade > 0)) erros.push(`Item ${n}: quantidade deve ser maior que zero.`);
     if (numeroDe(it.valorUnitario) < 0) erros.push(`Item ${n}: valor unitário inválido.`);
     const cfop = soDigitos(it.cfop);
-    if (cfop.length !== 4 || !/^[56]/.test(cfop)) {
-      erros.push(`Item ${n}: CFOP "${it.cfop}" inválido — informe 4 dígitos começando com 5 (mesma UF) ou 6 (fora do estado).`);
+    if (cfop.length !== 4 || !/^[1256]/.test(cfop)) {
+      erros.push(`Item ${n}: CFOP "${it.cfop}" inválido — informe 4 dígitos: 5 (saída mesma UF), 6 (saída fora), 1 (entrada mesma UF) ou 2 (entrada fora).`);
     }
     const trib = tributacaoDe(it.tributacao);
     if (!trib) {
@@ -662,7 +673,7 @@ export function montarNotaEspecial(input: NotaEspecialInput, ctx: CtxNotaEspecia
     local_destino: foraEstado ? 2 : 1,
     finalidade_emissao: Number(input.finalidade ?? preset.finalidade),
     consumidor_final: docDest.length === 14 ? 0 : 1, // CNPJ (contribuinte) não é consumidor final; PF é
-    presenca_comprador: preset.presenca,
+    presenca_comprador: Number(input.presenca ?? preset.presenca),
     modalidade_frete: 9,
     ...(ctx.emitentePayload || {}),
     nome_destinatario: normalizaTexto(dest.nome, 60),

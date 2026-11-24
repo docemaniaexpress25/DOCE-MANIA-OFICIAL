@@ -14,7 +14,7 @@ import { numeroSemanaISO } from '@/lib/frequencia';
  * testar a fila de entrega do admin (setas de ordem + editor de pedido).
  */
 
-const CATCH_TABLES = ['app_users', 'clients', 'products', 'app_settings', 'product_categories', 'product_subcategories', 'cargas', 'cargas_pendentes', 'system_messages', 'commissions', 'commission_payment_logs', 'sales', 'sales_boletos', 'seller_expenses', 'push_tokens', 'daily_routes', 'entrega_rotas', 'entrega_eventos', 'sale_items', 'payment_comprovantes', 'caixa_fechamentos', 'caixa_fechamentos_geral', 'caixa_pagamentos', 'pre_vendas', 'pedidos', 'xml_importacoes', 'xml_itens', 'custos_empresa'];
+const CATCH_TABLES = ['app_users', 'clients', 'products', 'app_settings', 'product_categories', 'product_subcategories', 'cargas', 'cargas_pendentes', 'system_messages', 'commissions', 'commission_payment_logs', 'sales', 'sales_boletos', 'seller_expenses', 'push_tokens', 'daily_routes', 'entrega_rotas', 'entrega_eventos', 'sale_items', 'payment_comprovantes', 'caixa_fechamentos', 'caixa_fechamentos_geral', 'caixa_pagamentos', 'pre_vendas', 'pedidos', 'xml_importacoes', 'xml_itens', 'custos_empresa', 'cargas_fiscal'];
 
 const users = [{
   id: 'adminuser', nome: 'Admin Teste', email: '', perfil: 'ADMIN', ativo: true,
@@ -330,6 +330,8 @@ const tables: Record<string, any[]> = {
   product_subcategories: [],
   cargas: [{ id: 'carga-1', vendedor_id: 'rota2user', produto_id: 'prod-t1', quantidade: 30, modo_nota: 'COM_NF', data: new Date().toISOString() }, { id: 'carga-2', vendedor_id: 'rota2user', produto_id: 'prod-1', quantidade: 20, data: new Date().toISOString() }, { id: 'carga-3', vendedor_id: 'vend01', produto_id: 'prod-1', quantidade: 25, modo_nota: 'SEM_NF', data: new Date().toISOString() }, { id: 'carga-4', vendedor_id: 'vend04', produto_id: 'prod-1', quantidade: 25, data: new Date().toISOString() }, { id: 'carga-5', vendedor_id: 'vend04', produto_id: 'prod-2', quantidade: 15, data: new Date().toISOString() }],
   cargas_pendentes: [],
+  // BLOCO 215: carga fiscal do vendedor (remessa 5949 / devolução 1949)
+  cargas_fiscal: [],
   system_messages: [],
   commissions: [],
   commission_payment_logs: [],
@@ -440,16 +442,22 @@ function aplicarFiltros(rows: any[], params: URLSearchParams): any[] {
 function linhasQueBatem(rows: any[], params: URLSearchParams): number[] {
   const eqs: [string, string][] = [];
   const isNulls: string[] = [];
+  // BLOCO 215: `in.` também bate (update .in('id', ids) do fluxo fiscal) —
+  // antes só eq/is existiam e o update marcava TODAS as linhas.
+  const ins: [string, string[]][] = [];
   for (const [key, val] of params.entries()) {
     const m = val.match(/^eq\.([\s\S]*)$/);
     if (m) eqs.push([key, m[1]]);
     const mi = val.match(/^is\.([\s\S]*)$/);
     if (mi && mi[1] === 'null') isNulls.push(key);
+    const mi2 = val.match(/^in\.\(([\s\S]*)\)$/);
+    if (mi2) ins.push([key, mi2[1].split(',').map(s => s.replace(/^"|"$/g, '').trim())]);
   }
   const idx: number[] = [];
   rows.forEach((r, i) => {
     const isOk = isNulls.every(k => r[k] === null || r[k] === undefined);
-    if (isOk && eqs.every(([k, v]) => String(r[k]) === v)) idx.push(i);
+    const inOk = ins.every(([k, lista]) => lista.includes(String(r[k])));
+    if (isOk && inOk && eqs.every(([k, v]) => String(r[k]) === v)) idx.push(i);
   });
   return idx;
 }

@@ -1,6 +1,6 @@
 "use client";
 // @ts-nocheck
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Product, User, Carga, Sale, Commission, Client, ReceiveMethod, CommissionPaymentLog, Expense, Category, Subcategory, MelhoriasFlags } from '@/lib/types';
 import { ProdutoSalvoResultado } from '@/services/productService';
 import type { InsercaoClienteResultado } from '@/services/clientService';
@@ -408,6 +408,170 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [stagingCarga, setStagingCarga] = useState<{ [pId: string]: number }>({});
   // BLOCO 29 (ROTA 2): MODO da carga da van — COM_NF (estoque 1) | SEM_NF (estoque 2). 1 ou outro, nunca mistura.
   const [cargaModo, setCargaModo] = useState<'COM_NF' | 'SEM_NF'>('COM_NF');
+
+  // ======================================================================
+  // BLOCO 215 — CARGA FISCAL: remessa para venda ambulante (NF-e 5949)
+  // gerada na carga + devolução AUTOMÁTICA (NF-e de entrada 1949) no retorno.
+  // Pedido do dono: "carregamos 50cxs... lá em carga será gerado um documento,
+  // por fim quando eu clicar em devolver será feita a devolução tudo
+  // automaticamente... o vendedor fica 1 semana fora".
+  // ======================================================================
+  interface CargaFiscalEstado {
+    focus: { configurado: boolean; ambiente: string; ufEmitente: string; emitenteNome: string; emitenteCnpj: string };
+    emitenteIncompleto?: string[];
+    tabelaOk?: boolean;
+    aviso?: string;
+    vendedorNome?: string;
+    itensVan?: { produtoId: string; nome: string; quantidade: number; valorUnitario: number; unidade?: string }[];
+    unidadesVan?: number;
+    remessaAtiva?: { id: string; status: string; nota_numero: string; nota_serie: string; nota_chave: string; nota_protocolo: string; pdf_url: string; erro: string; focus_ref: string; valor_total: number; criado_em: string } | null;
+    remessasJornada?: { id: string; status: string; nota_numero: string; focus_ref: string; valor_total: number; criado_em: string }[];
+    propostaDevolucao?: { produtoId: string; nome: string; valorUnitario: number; carregado: number; vendido: number; devolve: number }[];
+    devolucoes?: { id: string; status: string; nota_numero: string; erro: string; criado_em: string }[];
+  }
+  const [fiscalCarga, setFiscalCarga] = useState<CargaFiscalEstado | null>(null);
+  const [fiscalLoading, setFiscalLoading] = useState(false);
+  const [busyFiscal, setBusyFiscal] = useState(false);
+  const [showDevolverCarga, setShowDevolverCarga] = useState(false);
+  const [devolveEdits, setDevolveEdits] = useState<{ [pid: string]: number }>({});
+  const [diasJornada, setDiasJornada] = useState(7);
+
+  const carregarFiscalCarga = useCallback(async (vId: string) => {
+    if (!vId) { setFiscalCarga(null); return; }
+    setFiscalLoading(true);
+    try {
+      const res = await fetch(`/api/cargas-fiscal?vendedorId=${encodeURIComponent(vId)}`, { headers: authHeaders() });
+      const j = await res.json();
+      if (res.ok && j.ok) setFiscalCarga(j as CargaFiscalEstado);
+      else setFiscalCarga(null);
+    } catch { setFiscalCarga(null); }
+    finally { setFiscalLoading(false); }
+  }, []);
+
+  useEffect(() => { void carregarFiscalCarga(selectedVendedorId); }, [selectedVendedorId, carregarFiscalCarga]);
+
+  const gerarRemessaCarga = async () => {
+    if (!selectedVendedorId) return;
+    setBusyFiscal(true);
+    try {
+      const res = await fetch('/api/cargas-fiscal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ acao: 'REMESSA', vendedorId: selectedVendedorId, dias: diasJornada }),
+      });
+      const j = await res.json();
+      if (res.ok && j.ok) {
+        if (j.jaEmitida) showToast('Remessa da carga de hoje já existe.', 'success');
+        else if (j.rascunho) showToast('Remessa RASCUNHO gravada — imprima o Documento de Porte (Focus não configurada).', 'success');
+        else showToast('REMESSA enviada à SEFAZ! Status: EMITINDO/AUTORIZADA.', 'success');
+      } else {
+        showToast(j.erro || 'Erro gerando a remessa.', 'error');
+      }
+      await carregarFiscalCarga(selectedVendedorId);
+    } catch (e) {
+      showToast('Falha de rede gerando a remessa.', 'error');
+    } finally { setBusyFiscal(false); }
+  };
+
+  const devolverCargaAutomatico = async () => {
+    if (!selectedVendedorId) return;
+    setBusyFiscal(true);
+    try {
+      const itensDevolucao = (fiscalCarga?.propostaDevolucao || []).map(p => ({
+        produtoId: p.produtoId,
+        devolve: devolveEdits[p.produtoId] ?? p.devolve,
+      }));
+      const res = await fetch('/api/cargas-fiscal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ acao: 'DEVOLUCAO', vendedorId: selectedVendedorId, itensDevolucao }),
+      });
+      const j = await res.json();
+      if (res.ok && j.ok) {
+        if (j.mecanica && j.semRemessa) showToast('Carga devolvida ao estoque (sem remessa — sem documento fiscal).', 'success');
+        else if (j.mecanica && j.semItens) showToast('Tudo vendido — estoque devolvido, sem NF-e de devolução.', 'success');
+        else if (j.rascunho) showToast(`Devolução RASCUNHO gravada + ${j.mecanicaResumo?.unidades ?? 0} un. devolvidas ao estoque.`, 'success');
+        else showToast(`Devolução AUTORIZADA/EMITINDO! ${j.mecanicaResumo?.unidades ?? 0} un. devolvidas ao estoque.`, 'success');
+        setShowDevolverCarga(false);
+        setDevolveEdits({});
+      } else {
+        showToast(j.erro || 'Erro na devolução.', 'error');
+      }
+      await carregarFiscalCarga(selectedVendedorId);
+      if (props.reloadSales) props.reloadSales();
+    } catch {
+      showToast('Falha de rede na devolução.', 'error');
+    } finally { setBusyFiscal(false); }
+  };
+
+  /** DOCUMENTO DE PORTE (A4): folha que o vendedor carrega com a carga —
+   *  lista dos itens com valores, CFOP/natureza da remessa e instruções
+   *  fiscais. Quando a NF-e está autorizada, leva número/chave/protocolo. */
+  const imprimirPorteCarga = () => {
+    const fc = fiscalCarga;
+    if (!fc) return;
+    const rem = fc.remessaAtiva;
+    const itens = fc.itensVan || [];
+    const fmt = (v: number) => (Number(v) || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+    const total = itens.reduce((a, i) => a + i.quantidade * i.valorUnitario, 0);
+    const linhas = itens.map(i =>
+      `<tr><td>${String(i.nome || '').replace(/</g, '&lt;')}</td><td style="text-align:center">${i.quantidade}</td><td style="text-align:center">${String(i.unidade || 'UN')}</td><td style="text-align:right">${fmt(i.valorUnitario)}</td><td style="text-align:right">${fmt(i.quantidade * i.valorUnitario)}</td></tr>`
+    ).join('');
+    const remessaBloco = rem
+      ? `<div class="box ok"><b>NF-e REMESSA ${rem.status === 'AUTORIZADA' ? 'AUTORIZADA' : rem.status}</b> — nº ${rem.nota_numero || '—'} série ${rem.nota_serie || '—'}<br>Chave de acesso: ${rem.nota_chave || '—'}<br>Protocolo: ${rem.nota_protocolo || '—'} · Ref: ${rem.focus_ref || '—'}</div>`
+      : `<div class="box warn"><b>REMESSA NÃO EMITIDA</b> — gere a NF-e de Remessa (CFOP 5949) ou emita pelo contador antes de a van circular com mercadoria não vendida.</div>`;
+    const html = `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>Documento de Porte — Carga ${fc.vendedorNome || ''}</title>
+<style>
+  * { font-family: Arial, Helvetica, sans-serif; box-sizing: border-box; }
+  body { margin: 0; padding: 28px; color: #111; font-size: 13px; }
+  h1 { font-size: 18px; margin: 0 0 2px; text-transform: uppercase; letter-spacing: .5px; }
+  h2 { font-size: 12px; margin: 0; color: #555; font-weight: bold; }
+  .top { display: flex; justify-content: space-between; border-bottom: 2px solid #111; padding-bottom: 10px; margin-bottom: 14px; gap: 20px; }
+  .box { border: 1.5px solid #111; border-radius: 8px; padding: 10px 12px; margin: 10px 0; font-size: 12px; line-height: 1.5; }
+  .box.ok { border-color: #166534; background: #f0fdf4; }
+  .box.warn { border-color: #b45309; background: #fffbeb; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { background: #f1f1f1; border: 1px solid #999; padding: 6px 8px; text-align: left; font-size: 10px; text-transform: uppercase; }
+  td { border: 1px solid #bbb; padding: 6px 8px; }
+  .fiscal { font-size: 11px; color: #333; line-height: 1.6; margin-top: 12px; border-top: 1px dashed #888; padding-top: 10px; }
+  .assin { display: flex; gap: 40px; margin-top: 36px; }
+  .assin div { flex: 1; border-top: 1px solid #111; padding-top: 6px; text-align: center; font-size: 11px; }
+  @media print { body { padding: 10mm; } }
+</style></head><body>
+<div class="top">
+  <div>
+    <h1>Documento de Porte da Carga</h1>
+    <h2>Remessa para venda ambulante — venda a pronta entrega</h2>
+    <p style="margin:8px 0 0;font-size:12px"><b>Emitente:</b> ${String(fc.focus.emitenteNome || '—').replace(/</g, '&lt;')} · CNPJ ${fc.focus.emitenteCnpj || '—'}<br>
+    <b>Vendedor:</b> ${String(fc.vendedorNome || '—').replace(/</g, '&lt;')} · <b>Jornada:</b> ${diasJornada} dia(s) · <b>Data:</b> ${new Date().toLocaleDateString('pt-BR')}</p>
+  </div>
+  <div style="text-align:right;font-size:11px;color:#555">
+    CFOP <b>5949</b> — Outra saída não especificada<br>Natureza: <b>REMESSA PARA VENDA AMBULANTE</b><br>Pagamento: <b>SEM PAGAMENTO (tPag 90)</b><br>Regime: <b>Simples Nacional</b> — CSOSN 900
+  </div>
+</div>
+${remessaBloco}
+<table>
+  <thead><tr><th>Produto</th><th style="text-align:center">Qtd</th><th style="text-align:center">Un</th><th style="text-align:right">Valor Unit.</th><th style="text-align:right">Total</th></tr></thead>
+  <tbody>${linhas || '<tr><td colspan="5" style="text-align:center">Carga vazia</td></tr>'}</tbody>
+  <tfoot><tr><td colspan="4" style="text-align:right"><b>TOTAL (${fc.unidadesVan ?? itens.reduce((a, i) => a + i.quantidade, 0)} un.)</b></td><td style="text-align:right"><b>${fmt(total)}</b></td></tr></tfoot>
+</table>
+<div class="fiscal">
+  <b>INSTRUÇÕES FISCAIS AO VENDEDOR:</b><br>
+  1. Carregue SEMPRE esta folha + o DANFE da NF-e de remessa (quando autorizada).<br>
+  2. Cada venda do dia = NF-e modelo 55 CFOP 5102 com o CNPJ do cliente (DANFE mini na hora) — a mercadoria vendida viaja com o DANFE DAQUELA venda.<br>
+  3. O estoque não vendido retorna com a NF-e de DEVOLUÇÃO (CFOP 1949) referenciando a remessa — gerada automaticamente pelo app no botão DEVOLVER CARGA.<br>
+  4. Não circule mercadoria sem documento: parada fiscal pode APREENDER a carga. As notas de compra do fornecedor ficam arquivadas na empresa.<br>
+  5. Simples Nacional: recolhimento pelo DAS mensal (PGDAS-D). Produtos com ST: ICMS já recolhido na compra (CSOSN 500).
+</div>
+<div class="assin"><div>O vendedor (${String(fc.vendedorNome || '').replace(/</g, '&lt;')})</div><div>O responsável pela empresa</div></div>
+<script>window.onload = () => { try { window.print(); } catch (e) {} };</script>
+</body></html>`;
+    const w = window.open('', '_blank');
+    if (!w) { showToast('Libere o pop-up para imprimir o documento de porte.', 'error'); return; }
+    w.document.write(html);
+    w.document.close();
+  };
+
 
   const logoInputRef = useRef<HTMLInputElement>(null);
   const comprovanteFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -2258,6 +2422,75 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
                   </div>
                 </div>
               )}
+              {/* ==================================================================
+                  BLOCO 215 — REMESSA FISCAL DA CARGA (pedido do dono: "carregamos
+                  50cxs... lá em carga será gerado um documento... quando eu clicar
+                  em devolver será feita a devolução tudo automaticamente").
+                  CARGA = NF-e 5949 REMESSA PARA VENDA AMBULANTE (sem pagamento).
+                  DEVOLVER = NF-e de ENTRADA 1949 referenciando a remessa +
+                  estoque voltando para a casa — tudo automático.
+                  ================================================================== */}
+              <div className={`rounded-3xl border p-4 space-y-3 ${fiscalCarga?.remessaAtiva?.status === 'AUTORIZADA' ? 'border-emerald-200 bg-emerald-50/40' : 'border-violet-200 bg-violet-50/40'}`}>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="w-9 h-9 rounded-xl bg-white text-violet-600 border border-violet-100 flex items-center justify-center shrink-0"><i className={`fa-solid ${fiscalLoading ? 'fa-spinner fa-spin' : 'fa-file-export'} text-sm`}></i></span>
+                    <div className="min-w-0">
+                      <h3 className="text-[11px] font-black text-gray-800 uppercase leading-tight">Remessa Fiscal da Carga</h3>
+                      <p className="text-[8.5px] font-bold text-gray-400 leading-snug">NF-e 5949 · Remessa p/ venda ambulante · sem pagamento</p>
+                    </div>
+                  </div>
+                  {fiscalCarga?.remessaAtiva && (
+                    <span className={`text-[8px] font-black uppercase px-2 py-1 rounded-lg shrink-0 ${fiscalCarga.remessaAtiva.status === 'AUTORIZADA' ? 'bg-emerald-600 text-white' : fiscalCarga.remessaAtiva.status === 'EMITINDO' ? 'bg-amber-400 text-amber-900' : 'bg-rose-600 text-white'}`}>
+                      {fiscalCarga.remessaAtiva.status}
+                      {fiscalCarga.remessaAtiva.nota_numero ? ` · NF ${fiscalCarga.remessaAtiva.nota_numero}` : ''}
+                    </span>
+                  )}
+                </div>
+
+                {fiscalCarga && fiscalCarga.tabelaOk === false && (
+                  <p className="text-[9px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded-xl p-2.5"><i className="fa-solid fa-database mr-1"></i>{fiscalCarga.aviso}</p>
+                )}
+                {fiscalCarga && fiscalCarga.emitenteIncompleto && fiscalCarga.emitenteIncompleto.length > 0 && (
+                  <p className="text-[9px] font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl p-2.5"><i className="fa-solid fa-id-card mr-1"></i>Emitente incompleto ({fiscalCarga.emitenteIncompleto.join(', ')}) — preencha em Configurações &gt; ERP Fiscal para emitir.</p>
+                )}
+                {fiscalCarga && !fiscalCarga.focus.configurado && fiscalCarga.tabelaOk !== false && (
+                  <p className="text-[9px] font-bold text-gray-600 bg-white border border-gray-200 rounded-xl p-2.5"><i className="fa-solid fa-plug mr-1"></i>Focus não configurada: o fluxo gera RASCUNHO + DOCUMENTO DE PORTE — o contador emite a NF-e. Ligue FOCUS_NFE_TOKEN para emissão automática.</p>
+                )}
+                {fiscalCarga?.remessaAtiva?.status === 'REJEITADA' && (
+                  <p className="text-[9px] font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl p-2.5 break-words"><i className="fa-solid fa-triangle-exclamation mr-1"></i>{fiscalCarga.remessaAtiva.erro || 'Rejeitada pela SEFAZ'}</p>
+                )}
+                {fiscalCarga?.remessaAtiva?.status === 'AUTORIZADA' && (
+                  <p className="text-[8.5px] font-bold text-emerald-800 leading-snug break-words">Chave: {fiscalCarga.remessaAtiva.nota_chave || '—'} · Ref: {fiscalCarga.remessaAtiva.focus_ref}</p>
+                )}
+
+                <div className="flex items-center gap-2">
+                  <label className="text-[8px] font-black text-gray-400 uppercase shrink-0">Jornada</label>
+                  <select value={diasJornada} onChange={e => setDiasJornada(Number(e.target.value))} className="text-[10px] font-black bg-white border border-gray-200 rounded-xl px-2 py-2 outline-none">
+                    {[1, 2, 3, 5, 7, 10, 14].map(d => <option key={d} value={d}>{d} dia{d > 1 ? 's' : ''}</option>)}
+                  </select>
+                  <span className="text-[8px] font-bold text-gray-400">{(fiscalCarga?.unidadesVan ?? 0)} un. na van</span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <button onClick={gerarRemessaCarga} disabled={busyFiscal || fiscalLoading || (fiscalCarga?.unidadesVan ?? 0) === 0 || !!(fiscalCarga?.remessaAtiva && fiscalCarga.remessaAtiva.status !== 'REJEITADA')}
+                    className={`py-3.5 rounded-2xl text-[9px] font-black uppercase border-2 transition-all flex items-center justify-center gap-1.5 ${busyFiscal ? 'bg-gray-100 text-gray-300 border-gray-100' : 'bg-violet-600 text-white border-violet-600 shadow-sm active:scale-95'}`}>
+                    <i className={`fa-solid ${busyFiscal ? 'fa-spinner fa-spin' : 'fa-file-export'}`}></i>
+                    {fiscalCarga?.remessaAtiva && fiscalCarga.remessaAtiva.status !== 'REJEITADA' ? 'Remessa já gerada' : 'Gerar Remessa NF-e'}
+                  </button>
+                  <button onClick={imprimirPorteCarga} disabled={!fiscalCarga || (fiscalCarga?.unidadesVan ?? 0) === 0}
+                    className="py-3.5 rounded-2xl text-[9px] font-black uppercase border-2 bg-white text-slate-700 border-gray-200 active:scale-95 flex items-center justify-center gap-1.5 disabled:text-gray-300">
+                    <i className="fa-solid fa-file-lines"></i>Documento de Porte
+                  </button>
+                  <button onClick={() => { setDevolveEdits({}); setShowDevolverCarga(true); }} disabled={busyFiscal || (fiscalCarga?.unidadesVan ?? 0) === 0}
+                    className="col-span-2 py-3.5 rounded-2xl text-[10px] font-black uppercase bg-rose-600 text-white shadow-sm active:scale-95 flex items-center justify-center gap-2 disabled:bg-gray-100 disabled:text-gray-300">
+                    <i className="fa-solid fa-rotate-left"></i>Devolver Carga (NF-e 1949 + estoque)
+                  </button>
+                </div>
+                <p className="text-[8px] font-bold text-gray-400 leading-snug px-0.5">
+                  Fluxo da jornada: carga → REMESSA 5949 → vendas com NF-e 5102 (DANFE mini) → devolução 1949 do que não vendeu. A devolução devolve o estoque à casa e marca a jornada como encerrada.
+                </p>
+              </div>
+
               <div className="grid gap-2 px-1">
                 {props.products.filter(p => p.ativo).filter(p => {
                   if (!cargaUsaModo) return true;
@@ -3326,6 +3559,57 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
 
       {showConfirmApply && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-w-xs rounded-3xl p-8 text-center shadow-2xl"><h3 className="font-black text-gray-800 text-lg mb-4">Aplicar Carga?</h3><p className="text-sm text-gray-500 mb-6 font-medium uppercase">Isso atualizará o estoque imediatamente.</p><div className="flex flex-col gap-2"><button onClick={handleApply} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest">Sim, Aplicar</button><button onClick={() => setShowConfirmApply(false)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button></div></div></div>
+      )}
+
+      {/* ================================================================
+          BLOCO 215 — MODAL DEVOLVER CARGA: remessa − vendas da jornada =
+          devolve (editável item a item). Confirmação emite a NF-e de
+          ENTRADA (CFOP 1949) referenciando a remessa, devolve o estoque
+          à casa e encerra a jornada. Rejeição da SEFAZ não move estoque.
+          ================================================================ */}
+      {showDevolverCarga && fiscalCarga && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[250] flex items-end sm:items-center justify-center p-4" onClick={() => busyFiscal || setShowDevolverCarga(false)}>
+          <div className="bg-white w-full max-w-md rounded-t-[2rem] sm:rounded-[2rem] max-h-[90dvh] overflow-y-auto flex flex-col shadow-2xl animate-in slide-in-from-bottom duration-300 pb-[calc(0.5rem+env(safe-area-inset-bottom))]" onClick={e => e.stopPropagation()}>
+            <div className="bg-gradient-to-br from-rose-600 to-rose-500 p-5">
+              <h3 className="font-black text-white text-sm uppercase">Devolver Carga</h3>
+              <p className="text-white/70 text-[9px] font-bold mt-1 uppercase">{fiscalCarga.vendedorNome || 'Vendedor'} · NF-e de entrada CFOP 1949 + estoque</p>
+            </div>
+            <div className="p-4 space-y-2">
+              {(fiscalCarga.propostaDevolucao || []).length === 0 ? (
+                <p className="text-[10px] font-bold text-gray-500 text-center py-6">Sem remessa ativa — a devolução será SÓ mecânica (estoque volta, sem documento fiscal).</p>
+              ) : (
+                <>
+                  <p className="text-[8px] font-bold text-gray-400 leading-snug px-1">Remessa − vendas da jornada = devolve. Ajuste a quantidade quando a rota vendeu algo fora do app.</p>
+                  <div className="space-y-1.5 max-h-72 overflow-y-auto">
+                    {(fiscalCarga.propostaDevolucao || []).map(p => {
+                      const dev = devolveEdits[p.produtoId] ?? p.devolve;
+                      return (
+                        <div key={p.produtoId} className="bg-gray-50 border border-gray-100 rounded-2xl p-2.5 flex items-center gap-2">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-[10px] font-black text-gray-800 uppercase truncate">{p.nome}</p>
+                            <p className="text-[8px] font-bold text-gray-400">carregado {p.carregado} · vendido {p.vendido} · {p.valorUnitario > 0 ? `R$ ${p.valorUnitario.toFixed(2)}` : 'sem preço'}</p>
+                          </div>
+                          <input type="number" min={0} max={p.carregado} value={dev}
+                            onChange={e => setDevolveEdits({ ...devolveEdits, [p.produtoId]: Math.max(0, Math.min(p.carregado, Math.floor(Number(e.target.value) || 0))) })}
+                            className="w-16 text-center py-2 bg-white border border-gray-200 rounded-xl text-xs font-black outline-none" />
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <p className="text-[9px] font-bold text-gray-500 px-1 pt-1">
+                    Devolve <b>{(fiscalCarga.propostaDevolucao || []).reduce((a, p) => a + (devolveEdits[p.produtoId] ?? p.devolve), 0)}</b> un. · NF-e de entrada 1949 referencia a remessa.
+                  </p>
+                </>
+              )}
+              <button onClick={devolverCargaAutomatico} disabled={busyFiscal}
+                className={`w-full font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest flex items-center justify-center gap-2 ${busyFiscal ? 'bg-gray-100 text-gray-300' : 'bg-rose-600 text-white'}`}>
+                <i className={`fa-solid ${busyFiscal ? 'fa-spinner fa-spin' : 'fa-rotate-left'}`}></i>
+                {busyFiscal ? 'Processando devolução...' : 'Confirmar Devolução'}
+              </button>
+              <button onClick={() => setShowDevolverCarga(false)} disabled={busyFiscal} className="w-full py-2.5 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {payoutVendedor && (

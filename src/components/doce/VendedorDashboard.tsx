@@ -705,6 +705,30 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
   // qualquer vendedor mostrava o card "ACEITAR CARGA" aqui — e o botao
   // aceitava cargasPendentes[0] (que podia ser de OUTRO vendedor).
   const minhasPendentes = useMemo(() => (cargasPendentes || []).filter(cp => cp.vendedorId === user.id), [cargasPendentes, user.id]);
+
+  // ======================================================================
+  // BLOCO 215 — CARGA FISCAL (leitura): status da REMESSA 5949 da carga.
+  // O admin gera a remessa e devolve; o vendedor SÓ VÊ o status e imprime
+  // o documento de porte (a API devolve 403 para vendedor tentar POST).
+  // ======================================================================
+  const [minhaRemessa, setMinhaRemessa] = useState<{ status: string; nota_numero: string; nota_chave: string; focus_ref: string } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const carregar = async () => {
+      try {
+        const res = await fetch(`/api/cargas-fiscal?vendedorId=${encodeURIComponent(user.id)}`, { headers: authHeaders() });
+        if (!res.ok) return;
+        const j = await res.json();
+        if (alive && j?.ok && (j.remessaAtiva || j.remessasJornada?.length)) {
+          const r = j.remessaAtiva || j.remessasJornada[0];
+          setMinhaRemessa({ status: String(r.status || ''), nota_numero: String(r.nota_numero || ''), nota_chave: String(r.nota_chave || ''), focus_ref: String(r.focus_ref || '') });
+        } else if (alive) setMinhaRemessa(null);
+      } catch { /* silencioso — chip é leitura */ }
+    };
+    void carregar();
+    return () => { alive = false; };
+  }, [user.id, minhaCarga.length]);
+
   
   const orderedCargaProducts = useMemo(() => {
     const cargaMap = new Map(minhaCarga.map(c => [c.produtoId, c]));
@@ -1889,6 +1913,19 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
                  <div className="min-w-0"><p className="text-[10px] font-black uppercase opacity-60">Valor Total Carga</p><h3 className="text-xl sm:text-2xl font-black tabular-nums break-words">R$ {valorTotalCarga.toFixed(2)}</h3></div>
                  <div className="text-right min-w-0"><p className="text-[10px] font-black uppercase opacity-60">Volume Total</p><h3 className="text-xl sm:text-2xl font-black tabular-nums">{totalUnidadesCarga}</h3></div>
               </div>
+
+              {/* BLOCO 215: chip fiscal da remessa (leitura) — o vendedor sabe
+                  que a carga dele está documentada (NF-e 5949) e anda com o
+                  DANFE dela + o DANFE de cada venda 5102 que emitir. */}
+              {minhaRemessa && (
+                <div className={`rounded-2xl border p-3 flex items-center gap-2.5 ${minhaRemessa.status === 'AUTORIZADA' ? 'border-emerald-200 bg-emerald-50' : minhaRemessa.status === 'REJEITADA' ? 'border-rose-200 bg-rose-50' : 'border-amber-200 bg-amber-50'}`}>
+                  <i className={`fa-solid ${minhaRemessa.status === 'AUTORIZADA' ? 'fa-file-circle-check text-emerald-600' : minhaRemessa.status === 'REJEITADA' ? 'fa-triangle-exclamation text-rose-600' : 'fa-hourglass-half text-amber-600'}`}></i>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[9px] font-black uppercase text-gray-700 leading-tight">Remessa da carga: {minhaRemessa.status}{minhaRemessa.nota_numero ? ` · NF ${minhaRemessa.nota_numero}` : ''}</p>
+                    <p className="text-[8px] font-bold text-gray-400 leading-snug">Guarde o DANFE da remessa na van junto com os DANFEs das vendas do dia (NF-e 5102).</p>
+                  </div>
+                </div>
+              )}
 
               <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
                 <div className="overflow-x-auto">

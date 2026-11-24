@@ -156,6 +156,9 @@ export interface NotaEspecialInput {
   pagamentoValor?: number;
   /** Chave da NF-e original (devolução) — 44 dígitos, opcional. */
   refNfe?: string;
+  /** BLOCO 216: chaves EXTRA referenciadas (devolução consolidada de várias
+   *  remessas — a NF-e de entrada referencia todas as remessas da jornada). */
+  refNfeExtras?: string[];
   /** BLOCO 215: override do indPres (a remessa da carga usa 9 — não se aplica). */
   presenca?: number;
   /** Informações complementares / motivo (texto do dono). */
@@ -703,10 +706,12 @@ export function montarNotaEspecial(input: NotaEspecialInput, ctx: CtxNotaEspecia
     (payload as unknown as Record<string, unknown>).icms_valor_total = icmsDestacado;
   }
 
-  // ---- nota referenciada (devolução com a chave da nota original) ----
-  const ref = soDigitos(input.refNfe);
-  if (ref.length === 44) {
-    (payload as unknown as Record<string, unknown>).notas_referenciadas = [ref];
+  // ---- nota(s) referenciada(s) (devolução; BLOCO 216 aceita VÁRIAS remessas) ----
+  const refs = [soDigitos(input.refNfe), ...(input.refNfeExtras || []).map(r => soDigitos(r))]
+    .filter(r => r.length === 44);
+  if (refs.length > 0) {
+    const unicas = Array.from(new Set(refs));
+    (payload as unknown as Record<string, unknown>).notas_referenciadas = unicas;
   }
 
   // ---- informações complementares (motivo + carimbo — nunca silencioso) ----

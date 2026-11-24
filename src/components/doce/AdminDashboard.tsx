@@ -422,11 +422,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     tabelaOk?: boolean;
     aviso?: string;
     vendedorNome?: string;
+    placaVan?: string;
     itensVan?: { produtoId: string; nome: string; quantidade: number; valorUnitario: number; unidade?: string }[];
     unidadesVan?: number;
-    remessaAtiva?: { id: string; status: string; nota_numero: string; nota_serie: string; nota_chave: string; nota_protocolo: string; pdf_url: string; erro: string; focus_ref: string; valor_total: number; criado_em: string } | null;
-    remessasJornada?: { id: string; status: string; nota_numero: string; focus_ref: string; valor_total: number; criado_em: string }[];
-    propostaDevolucao?: { produtoId: string; nome: string; valorUnitario: number; carregado: number; vendido: number; devolve: number }[];
+    remessaAtiva?: { id: string; status: string; nota_numero: string; nota_serie: string; nota_chave: string; nota_protocolo: string; pdf_url: string; erro: string; focus_ref: string; valor_total: number; criado_em: string; placa?: string; peso_kg?: number } | null;
+    remessasJornada?: { id: string; status: string; nota_numero: string; focus_ref: string; valor_total: number; criado_em: string; placa?: string; peso_kg?: number; diasDecorridos?: number }[];
+    propostaDevolucao?: { produtoId: string; nome: string; valorUnitario: number; carregado: number; vendido: number; devolve: number; porRemessa?: { id: string; ref: string; numero: string; qtd: number; chave: string }[] }[];
+    sobrouUnidades?: number;
     devolucoes?: { id: string; status: string; nota_numero: string; erro: string; criado_em: string }[];
   }
   const [fiscalCarga, setFiscalCarga] = useState<CargaFiscalEstado | null>(null);
@@ -435,6 +437,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [showDevolverCarga, setShowDevolverCarga] = useState(false);
   const [devolveEdits, setDevolveEdits] = useState<{ [pid: string]: number }>({});
   const [diasJornada, setDiasJornada] = useState(7);
+  // BLOCO 216: peso bruto opcional da carga (kg) — vai na DANFE/porte/manifesto
+  const [pesoKgCarga, setPesoKgCarga] = useState('');
 
   const carregarFiscalCarga = useCallback(async (vId: string) => {
     if (!vId) { setFiscalCarga(null); return; }
@@ -457,7 +461,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       const res = await fetch('/api/cargas-fiscal', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify({ acao: 'REMESSA', vendedorId: selectedVendedorId, dias: diasJornada }),
+        body: JSON.stringify({ acao: 'REMESSA', vendedorId: selectedVendedorId, dias: diasJornada, ...(Number(pesoKgCarga) > 0 ? { pesoKg: Number(pesoKgCarga) } : {}) }),
       });
       const j = await res.json();
       if (res.ok && j.ok) {
@@ -570,6 +574,73 @@ ${remessaBloco}
     if (!w) { showToast('Libere o pop-up para imprimir o documento de porte.', 'error'); return; }
     w.document.write(html);
     w.document.close();
+  };
+
+  /** BLOCO 216 — REQUERIMENTO DE REGIME ESPECIAL DE VENDA AMBULANTE + MANIFESTO
+   *  DE CARGA (A4, nova aba). SEM ACHISMO: o texto cita só o que é certo no
+   *  âmbito NACIONAL (tabela de CFOP — Ajuste SINIEF 17/00; CSOSN — Ajuste
+   *  SINIEF 22/08; modelo da NF-e — Ajuste SINIEF 16/13; grupo de pagamento
+   *  tPag 90 do schema nacional) e deixa [COMPLETAR] para o RICMS do estado e
+   *  nº do processo, que são da competência do contador/SEFAZ estadual. */
+  const imprimirRequerimentoAmbulante = () => {
+    const fc = fiscalCarga;
+    if (!fc) return;
+    const remessas = fc.remessasJornada || [];
+    const fmt = (v: number) => (Number(v) || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+    const esc = (s: unknown) => String(s ?? '').replace(/</g, '&lt;');
+    const linhasRem = remessas.map(r =>
+      `<tr><td>${esc(r.nota_numero || '—')}</td><td>${r.status}</td><td>${(r.criado_em || '').slice(0, 10).split('-').reverse().join('/')}</td><td>${r.diasDecorridos ?? 0}</td><td>${esc(r.placa || fc.placaVan || '—')}</td><td style="text-align:right">${fmt(r.valor_total || 0)}</td></tr>`
+    ).join('');
+    const html = `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>Requerimento — Regime Especial de Venda Ambulante</title>
+<style>
+  * { font-family: 'Times New Roman', Times, serif; box-sizing: border-box; }
+  body { margin: 0; padding: 32px; color: #111; font-size: 14px; line-height: 1.55; }
+  h1 { font-size: 16px; text-align: center; margin: 0 0 18px; text-transform: uppercase; letter-spacing: 1px; }
+  h2 { font-size: 13px; margin: 18px 0 6px; text-transform: uppercase; }
+  p { margin: 6px 0; text-align: justify; }
+  .qual { border: 1.5px solid #111; padding: 12px 14px; border-radius: 6px; font-size: 13px; }
+  .destaque { background: #fffbeb; border: 1.5px solid #b45309; border-radius: 6px; padding: 10px 12px; font-size: 12px; margin-top: 14px; }
+  table { width: 100%; border-collapse: collapse; font-size: 11.5px; margin-top: 6px; }
+  th { background: #f1f1f1; border: 1px solid #999; padding: 5px 7px; font-size: 10px; text-transform: uppercase; }
+  td { border: 1px solid #bbb; padding: 5px 7px; }
+  .assin { display: flex; gap: 60px; margin-top: 44px; }
+  .assin div { flex: 1; border-top: 1px solid #111; padding-top: 6px; text-align: center; font-size: 12px; }
+  .lugar { margin-top: 22px; font-size: 13px; }
+  @media print { body { padding: 12mm; } }
+</style></head><body>
+<h1>Requerimento — Regime Especial<br>Venda Ambulante / Distribuição com Venda a Pronta Entrega</h1>
+<div class="qual">
+  <b>Requerente (emitente):</b> ${esc(fc.focus.emitenteNome || '___')} &nbsp;·&nbsp; <b>CNPJ:</b> ${esc(fc.focus.emitenteCnpj || '___')}<br>
+  <b>Inscrição Estadual:</b> ___ &nbsp;·&nbsp; <b>Endereço:</b> ___<br>
+  <b>CNAE principal:</b> ___ &nbsp;·&nbsp; <b>Regime tributário:</b> Simples Nacional
+</div>
+<h2>1. Do objeto</h2>
+<p>${esc(fc.focus.emitenteNome || 'O requerente')}, empresa atacadista distribuidora de mercadorias, requer à ${'<b>[SEFAZ DO ESTADO — COMPLETAR UF]</b>'} a autorização para operar com <b>remessa de mercadoria para venda ambulante</b>, mediante carga levada por seus vendedores em veículo próprio, com emissão de <b>Nota Fiscal Eletrônica de remessa por carga</b> e <b>venda a pronta entrega no decorrer da jornada</b>, nos procedimentos abaixo.</p>
+<h2>2. Da fundamentação (a completar pelo contador)</h2>
+<p>O pedido fundamenta-se no <b>[RICMS/${'UF'} — art. ___ / regulamentação estadual da venda ambulante — COMPLETAR]</b> e, no âmbito técnico nacional, na tabela oficial de CFOP (Ajuste SINIEF 17/00 — CFOP 5.949 “outra saída não especificada” e 1.949 “outra entrada não especificada”), na tabela de CSOSN do Simples Nacional (Ajuste SINIEF 22/08) e no Modelo Nacional da NF-e (Ajuste SINIEF 16/13, com o código de pagamento “90 — sem pagamento” do schema nacional).</p>
+<h2>3. Dos procedimentos comprometidos</h2>
+<p>a) Por cada carga carregada na van, emissão de NF-e (modelo 55) de <b>remessa para venda ambulante — CFOP 5.949</b>, sem pagamento (tPag 90), com identificação do vendedor, veículo (placa) e, quando informado, peso bruto da carga;</p>
+<p>b) Cada venda da jornada será documentada por <b>NF-e de venda — CFOP 5.102</b> (DANFE entregue ao cliente na hora), com o estoque remanescente permanecendo sob a propriedade exclusiva do requerente;</p>
+<p>c) O remanescente não vendido retornará ao estabelecimento documentado por <b>NF-e de devolução — CFOP 1.949</b>, com <b>referência às NF-e de remessa</b> correspondentes, devolvendo o estoque fiscal;</p>
+<p>d) Manutenção de <b>manifesto de carga</b> por vendedor/jornada (abaixo), com as remessas ativas, e do controle de venda/devolução no sistema próprio;</p>
+<p>e) Compromisso de observar o <b>prazo de circulação</b> da mercadoria estabelecido na regulamentação estadual [<b>COMPLETAR prazo do RICMS/UF ou do ato concessório</b>], promovendo a devolução ou a venda dentro dele.</p>
+<h2>4. Do manifesto de carga da van — ${esc(fc.vendedorNome || 'vendedor')}</h2>
+<table>
+  <thead><tr><th>NF-e remessa</th><th>Status</th><th>Emissão</th><th>Dias corridos</th><th>Placa</th><th style="text-align:right">Valor</th></tr></thead>
+  <tbody>${linhasRem || '<tr><td colspan="6" style="text-align:center">Nenhuma remessa ativa</td></tr>'}</tbody>
+</table>
+<p style="font-size:12px;margin-top:8px"><b>Saldo consolidado a devolver:</b> ${fc.sobrouUnidades ?? 0} un. em aberto (${(fc.propostaDevolucao || []).length} produto(s)) · <b>Peso bruto informado:</b> ${esc((remessas.find(r => r.peso_kg) || {} as { peso_kg?: number }).peso_kg ? `${(remessas.find(r => r.peso_kg) as unknown as { peso_kg: number }).peso_kg} kg` : '—')}</p>
+<h2>5. Dos veículos utilizados</h2>
+<p>Placa(s): <b>${esc(fc.placaVan || '___')}${remessas.filter(r => r.placa && r.placa !== fc.placaVan).length ? ' · ' + esc(remessas.filter(r => r.placa && r.placa !== fc.placaVan).map(r => r.placa).join(', ')) : ''}</b> — veículo próprio, transporte por conta do remetente (sem frete contratado — não incide CT-e).</p>
+<div class="destaque"><b>NOTA AO CONTADOR (não vai protocolada):</b> este documento é um MODELO de requerimento — os campos entre colchetes [COMPLETAR] dependem da regulamentação de venda ambulante do RICMS do seu estado e do ato concessório da SEFAZ (nem todos os estados regulam; onde não há, aplica-se o prazo geral de circulação da NF-e). Confirme artigos, prazos e exigências com a fiscalização antes de protocolar.</div>
+<p class="lugar">${'___'/*cidade*/}, ____ de ______________ de ____.</p>
+<div class="assin"><div>O requerente (responsável legal)</div><div>[Reservado à SEFAZ — protocolo/deferimento]</div></div>
+<script>window.onload = () => { try { window.print(); } catch (e) {} };</script>
+</body></html>`;
+    const w2 = window.open('', '_blank');
+    if (!w2) { showToast('Libere o pop-up para o requerimento.', 'error'); return; }
+    w2.document.write(html);
+    w2.document.close();
   };
 
 
@@ -2463,13 +2534,34 @@ ${remessaBloco}
                   <p className="text-[8.5px] font-bold text-emerald-800 leading-snug break-words">Chave: {fiscalCarga.remessaAtiva.nota_chave || '—'} · Ref: {fiscalCarga.remessaAtiva.focus_ref}</p>
                 )}
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <label className="text-[8px] font-black text-gray-400 uppercase shrink-0">Jornada</label>
                   <select value={diasJornada} onChange={e => setDiasJornada(Number(e.target.value))} className="text-[10px] font-black bg-white border border-gray-200 rounded-xl px-2 py-2 outline-none">
                     {[1, 2, 3, 5, 7, 10, 14].map(d => <option key={d} value={d}>{d} dia{d > 1 ? 's' : ''}</option>)}
                   </select>
+                  <label className="text-[8px] font-black text-gray-400 uppercase ml-1">Peso (kg)</label>
+                  <input type="number" min={0} step="0.1" value={pesoKgCarga} onChange={e => setPesoKgCarga(e.target.value)} placeholder="opcional" className="w-20 py-2 px-2 bg-white border border-gray-200 rounded-xl text-[10px] font-black outline-none" />
                   <span className="text-[8px] font-bold text-gray-400">{(fiscalCarga?.unidadesVan ?? 0)} un. na van</span>
+                  {(fiscalCarga?.placaVan || fiscalCarga?.remessaAtiva?.placa) && (
+                    <span className="text-[8px] font-black text-gray-600 bg-gray-100 border border-gray-200 rounded-md px-1.5 py-0.5 uppercase"><i className="fa-solid fa-van-shuttle mr-1"></i>{fiscalCarga?.remessaAtiva?.placa || fiscalCarga?.placaVan}</span>
+                  )}
                 </div>
+
+                {(fiscalCarga?.remessasJornada || []).length > 0 && (
+                  <div className="rounded-xl bg-white border border-violet-100 p-2.5 space-y-1">
+                    {(fiscalCarga?.remessasJornada || []).map((r, i) => (
+                      <p key={r.id} className="text-[8px] font-bold text-gray-500 leading-snug flex items-center gap-1.5">
+                        <span className="w-4 h-4 rounded-md bg-violet-100 text-violet-700 flex items-center justify-center text-[7px] font-black shrink-0">{i + 1}</span>
+                        <span className="font-black text-gray-700">{r.nota_numero ? `NF ${r.nota_numero}` : r.focus_ref}</span>
+                        <span>· {r.status} · {r.diasDecorridos ?? 0} dia(s) atrás{r.peso_kg ? ` · ${r.peso_kg} kg` : ''}</span>
+                      </p>
+                    ))}
+                    {(fiscalCarga?.sobrouUnidades ?? 0) > 0 && (
+                      <p className="text-[9px] font-black text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-2 py-1.5 mt-1"><i className="fa-solid fa-boxes-stacked mr-1"></i>Sobrou {fiscalCarga?.sobrouUnidades} un. a devolver — o DEVOLVER consolida TODAS as remessas numa única NF-e 1949.</p>
+                    )}
+                    <p className="text-[7.5px] font-bold text-gray-400 leading-snug">Prazo de circulação da remessa: definido no RICMS do seu estado / regime especial (confirme com o contador) — a idade de cada NF-e aparece acima para você acompanhar.</p>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-2 gap-2">
                   <button onClick={gerarRemessaCarga} disabled={busyFiscal || fiscalLoading || (fiscalCarga?.unidadesVan ?? 0) === 0 || !!(fiscalCarga?.remessaAtiva && fiscalCarga.remessaAtiva.status !== 'REJEITADA')}
@@ -2481,9 +2573,13 @@ ${remessaBloco}
                     className="py-3.5 rounded-2xl text-[9px] font-black uppercase border-2 bg-white text-slate-700 border-gray-200 active:scale-95 flex items-center justify-center gap-1.5 disabled:text-gray-300">
                     <i className="fa-solid fa-file-lines"></i>Documento de Porte
                   </button>
+                  <button onClick={imprimirRequerimentoAmbulante} disabled={!fiscalCarga}
+                    className="py-3.5 rounded-2xl text-[9px] font-black uppercase border-2 bg-amber-50 text-amber-800 border-amber-200 active:scale-95 flex items-center justify-center gap-1.5 disabled:text-gray-300">
+                    <i className="fa-solid fa-scale-balanced"></i>Requerimento Regime Especial
+                  </button>
                   <button onClick={() => { setDevolveEdits({}); setShowDevolverCarga(true); }} disabled={busyFiscal || (fiscalCarga?.unidadesVan ?? 0) === 0}
-                    className="col-span-2 py-3.5 rounded-2xl text-[10px] font-black uppercase bg-rose-600 text-white shadow-sm active:scale-95 flex items-center justify-center gap-2 disabled:bg-gray-100 disabled:text-gray-300">
-                    <i className="fa-solid fa-rotate-left"></i>Devolver Carga (NF-e 1949 + estoque)
+                    className="py-3.5 rounded-2xl text-[9px] font-black uppercase bg-rose-600 text-white shadow-sm active:scale-95 flex items-center justify-center gap-2 disabled:bg-gray-100 disabled:text-gray-300">
+                    <i className="fa-solid fa-rotate-left"></i>Devolver Carga
                   </button>
                 </div>
                 <p className="text-[8px] font-bold text-gray-400 leading-snug px-0.5">
@@ -3584,14 +3680,26 @@ ${remessaBloco}
                     {(fiscalCarga.propostaDevolucao || []).map(p => {
                       const dev = devolveEdits[p.produtoId] ?? p.devolve;
                       return (
-                        <div key={p.produtoId} className="bg-gray-50 border border-gray-100 rounded-2xl p-2.5 flex items-center gap-2">
-                          <div className="flex-1 min-w-0">
-                            <p className="text-[10px] font-black text-gray-800 uppercase truncate">{p.nome}</p>
-                            <p className="text-[8px] font-bold text-gray-400">carregado {p.carregado} · vendido {p.vendido} · {p.valorUnitario > 0 ? `R$ ${p.valorUnitario.toFixed(2)}` : 'sem preço'}</p>
+                        <div key={p.produtoId} className="bg-gray-50 border border-gray-100 rounded-2xl p-2.5 space-y-1">
+                          <div className="flex items-center gap-2">
+                            <div className="flex-1 min-w-0">
+                              <p className="text-[10px] font-black text-gray-800 uppercase truncate">{p.nome}</p>
+                              <p className="text-[8px] font-bold text-gray-400">carregado {p.carregado} · vendido {p.vendido} · {p.valorUnitario > 0 ? `R$ ${p.valorUnitario.toFixed(2)}` : 'sem preço'}</p>
+                            </div>
+                            <input type="number" min={0} max={p.carregado} value={dev}
+                              onChange={e => setDevolveEdits({ ...devolveEdits, [p.produtoId]: Math.max(0, Math.min(p.carregado, Math.floor(Number(e.target.value) || 0))) })}
+                              className="w-16 text-center py-2 bg-white border border-gray-200 rounded-xl text-xs font-black outline-none" />
                           </div>
-                          <input type="number" min={0} max={p.carregado} value={dev}
-                            onChange={e => setDevolveEdits({ ...devolveEdits, [p.produtoId]: Math.max(0, Math.min(p.carregado, Math.floor(Number(e.target.value) || 0))) })}
-                            className="w-16 text-center py-2 bg-white border border-gray-200 rounded-xl text-xs font-black outline-none" />
+                          {/* BLOCO 216: de qual remessa saem as caixas devolvidas */}
+                          {(p.porRemessa || []).length > 1 && (
+                            <div className="flex flex-wrap gap-1 pt-0.5">
+                              {(p.porRemessa || []).map(pr => (
+                                <span key={pr.id} className="text-[7px] font-black uppercase bg-white border border-violet-200 text-violet-700 rounded-md px-1.5 py-0.5">
+                                  {pr.numero ? `NF ${pr.numero}` : pr.ref.slice(-8)}: {pr.qtd} un.
+                                </span>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       );
                     })}

@@ -43,6 +43,13 @@ create table if not exists cargas_fiscal (
 
 alter table cargas_fiscal enable row level security;
 
+-- BLOCO 216: placa do veículo da remessa (cadastro do vendedor) e peso bruto
+-- opcional da carga (kg) — sobem nas informações complementares da NF-e
+-- (DANFE) e no Documento de Porte / Manifesto. Idempotente (roda de novo sem
+-- erro depois que a tabela já existe).
+alter table cargas_fiscal add column if not exists placa text not null default '';
+alter table cargas_fiscal add column if not exists peso_kg numeric;
+
 create index if not exists cargas_fiscal_vendedor_idx
   on cargas_fiscal (vendedor_id, criado_em desc);
 

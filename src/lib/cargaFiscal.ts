@@ -69,11 +69,20 @@ export interface EmitenteCargaFiscal {
 }
 
 /** Texto que sobe na NF-e de remessa (informações complementares). */
-export function informacoesRemessaCarga(vendedor: string, dias: number): string {
+export function informacoesRemessaCarga(opts: {
+  vendedor: string;
+  dias: number;
+  placa?: string;
+  pesoKg?: number;
+}): string {
+  const veiculo = opts.placa
+    ? ` Veículo: placa ${opts.placa}${opts.pesoKg && opts.pesoKg > 0 ? `, peso bruto da carga ${opts.pesoKg.toFixed(2)} kg` : ''}.`
+    : '';
   return (
-    `Remessa para venda ambulante — carga do vendedor ${vendedor || '(vendedor)'} ` +
-    `para venda a pronta entrega no período de ${dias} dia(s). ` +
-    'As vendas serão emitidas por NF-e (CFOP 5102) pelo próprio emitente. ' +
+    `Remessa para venda ambulante — carga do vendedor ${opts.vendedor || '(vendedor)'} ` +
+    `para venda a pronta entrega no período de ${opts.dias} dia(s).` +
+    veiculo +
+    ' As vendas serão emitidas por NF-e (CFOP 5102) pelo próprio emitente. ' +
     'O remanescente não vendido retorna ao estabelecimento por NF-e de devolução (CFOP 1949) referenciando esta nota.'
   );
 }
@@ -123,6 +132,8 @@ export function montarInputRemessaCarga(opts: {
   emitente: EmitenteCargaFiscal;
   vendedor: string;
   dias: number;
+  placa?: string;
+  pesoKg?: number;
 }): NotaEspecialInput {
   return {
     tipo: 'LIVRE',
@@ -133,7 +144,7 @@ export function montarInputRemessaCarga(opts: {
     destinatario: destinatarioDaEmpresa(opts.emitente),
     itens: itensParaNota(opts.itens, CFOP_REMESSA, '900'),
     pagamentoForma: '90', // SEM PAGAMENTO (tPag 90) — remessa não é venda
-    informacoes: informacoesRemessaCarga(opts.vendedor, opts.dias),
+    informacoes: informacoesRemessaCarga({ vendedor: opts.vendedor, dias: opts.dias, placa: opts.placa, pesoKg: opts.pesoKg }),
   };
 }
 
@@ -168,31 +179,66 @@ export interface ResumoDevolucaoItem {
   produtoId: string;
   nome: string;
   valorUnitario: number;
-  /** Quantidade na remessa (o que saiu na NF-e 5949). */
+  /** Carregado CONSOLIDADO (soma de TODAS as remessas da jornada). */
   carregado: number;
-  /** Vendido na jornada (NF-e 5102 — vendas do vendedor desde a remessa). */
+  /** Vendido na jornada (NF-e 5102 — vendas do vendedor desde a 1a remessa). */
   vendido: number;
   /** Devolve = max(0, carregado - vendido) — default do modal (editável). */
   devolve: number;
+  /** BLOCO 216: de qual remessa sai cada caixa devolvida (ref/numero + qtd). */
+  porRemessa: { id: string; ref: string; numero: string; qtd: number; chave: string }[];
 }
 
-export function resumoDevolucao(opts: {
-  remessa: ItemCargaFiscal[];
-  /** mapa produtoId -> quantidade vendida desde a remessa (sale_items). */
+/**
+ * BLOCO 216 — RESUMO CONSOLIDADO DE VÁRIAS REMESSAS DA MESMA JORNADA:
+ * "gero 50 cx no dia 1, mais 50 no dia 10, mais 50 no dia 20; vendeu 50 —
+ * o sistema traz que sobrou 100 e QUIS são, pronto para devolver".
+ * Consome as remessas da jornada na ordem (mais antiga primeiro) — a devolução
+ * "sai" primeiro das remessas antigas e a NF-e de entrada referencia TODAS.
+ */
+export function resumoDevolucaoConsolidada(opts: {
+  remessas: { id: string; ref: string; numero: string; chave: string; itens: ItemCargaFiscal[] }[];
   vendidos: Map<string, number>;
 }): ResumoDevolucaoItem[] {
-  return opts.remessa.map(it => {
-    const vendido = Math.min(it.quantidade, Math.max(0, opts.vendidos.get(it.produtoId) || 0));
-    const devolve = Math.max(0, it.quantidade - vendido);
-    return {
-      produtoId: it.produtoId,
-      nome: it.nome,
-      valorUnitario: it.valorUnitario,
-      carregado: it.quantidade,
-      vendido,
-      devolve,
-    };
-  });
+  const porProduto = new Map<string, ResumoDevolucaoItem>();
+  // Consumo de vendido na ordem das remessas (antiga consome primeiro) —
+  // `consumido` guarda o TOTAL vendido do produto na jornada (soma das fatias),
+  // porque o vendido nunca pode "zerar" na última remessa.
+  const restanteVendido = new Map<string, number>();
+  for (const [pid, qtd] of opts.vendidos.entries()) restanteVendido.set(pid, qtd);
+  const consumido = new Map<string, number>();
+
+  for (const rem of opts.remessas) {
+    for (const it of rem.itens) {
+      const atual = porProduto.get(it.produtoId);
+      const qtd = Math.max(0, it.quantidade);
+      const carregado = (atual?.carregado || 0) + qtd;
+      const restante = Math.max(0, restanteVendido.get(it.produtoId) || 0);
+      const consome = Math.min(qtd, restante);
+      restanteVendido.set(it.produtoId, restante - consome);
+      consumido.set(it.produtoId, (consumido.get(it.produtoId) || 0) + consome);
+      const vendidoTotal = consumido.get(it.produtoId) || 0;
+      const porRemessa = atual?.porRemessa || [];
+      const slot = porRemessa.find(p => p.id === rem.id);
+      if (slot) slot.qtd += qtd;
+      else porRemessa.push({ id: rem.id, ref: rem.ref, numero: rem.numero, chave: rem.chave, qtd });
+      porProduto.set(it.produtoId, {
+        produtoId: it.produtoId,
+        nome: atual?.nome || it.nome,
+        valorUnitario: atual?.valorUnitario ?? it.valorUnitario,
+        carregado,
+        vendido: Math.min(vendidoTotal, carregado),
+        devolve: Math.max(0, carregado - vendidoTotal),
+        porRemessa,
+      });
+    }
+  }
+  return Array.from(porProduto.values());
+}
+
+/** Total consolidado que sobrou (unidades) — "sobrou 100 cx". */
+export function totalSobrouUnidades(resumo: ResumoDevolucaoItem[]): number {
+  return resumo.reduce((a, it) => a + it.devolve, 0);
 }
 
 /** Total da remessa/devolução (itens × valor). */

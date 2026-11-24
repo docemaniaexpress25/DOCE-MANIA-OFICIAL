@@ -18,7 +18,8 @@ import {
 import {
   montarInputRemessaCarga,
   montarInputDevolucaoCarga,
-  resumoDevolucao,
+  resumoDevolucaoConsolidada,
+  totalSobrouUnidades,
   totalItensCarga,
   EmitenteCargaFiscal,
   ItemCargaFiscal,
@@ -86,6 +87,8 @@ interface CargasFiscalRow {
   erro: string;
   ref_remessa: string;
   chave_remessa: string;
+  placa: string;
+  peso_kg: number;
   devolvida_em: string;
   data_autorizacao: string;
   criado_em: string;
@@ -149,7 +152,9 @@ async function remessasAtivas(db: any, vendedorId: string): Promise<CargasFiscal
 /** Vendidos por produto desde a remessa mais antiga (vendas do vendedor). */
 async function vendidosDaJornada(db: any, vendedorId: string, desde: string): Promise<Map<string, number>> {
   const vendidos = new Map<string, number>();
-  if (!desde) return vendidos;
+  // Guard: data inválida/ausente (row sem criado_em) NÃO pode virar filtro
+  // quebrado ('undefined' string) que engole as vendas da jornada silenciosamente.
+  if (!/^\d{4}-\d{2}-\d{2}/.test(String(desde || ''))) return vendidos;
   const { data: sales } = await db
     .from('sales')
     .select('id')
@@ -248,27 +253,41 @@ export async function GET(req: NextRequest) {
     cargaAtualDaVan(db, vendedorId),
     remessasAtivas(db, vendedorId),
     db.from('cargas_fiscal').select('*').eq('vendedor_id', vendedorId).eq('tipo', 'DEVOLUCAO').order('criado_em', { ascending: false }).limit(20),
-    db.from('app_users').select('nome').eq('id', vendedorId).limit(1).maybeSingle(),
+    db.from('app_users').select('nome, placa_veiculo').eq('id', vendedorId).limit(1).maybeSingle(),
   ]);
-  const vendedorNome = String((uRes.data as Record<string, unknown> | null)?.nome || '');
+  const uRow = (uRes.data as Record<string, unknown> | null) || {};
+  const vendedorNome = String(uRow.nome || '');
+  const placaVan = String(uRow.placa_veiculo || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10);
 
   const remessaBase = remessas[0]; // a mais antiga = início da jornada
   const vendidos = remessaBase ? await vendidosDaJornada(db, vendedorId, remessaBase.criado_em) : new Map<string, number>();
-  const proposta = remessaBase
-    ? resumoDevolucao({ remessa: remessaBase.itens as ItemCargaFiscal[], vendidos })
+  // BLOCO 216: proposta CONSOLIDADA de todas as remessas da jornada —
+  // "150 carregados em 3 remessas, 50 vendidos => sobrou 100 e quais são".
+  const proposta = remessas.length > 0
+    ? resumoDevolucaoConsolidada({
+        remessas: remessas.map(r => ({ id: r.id, ref: r.focus_ref || '', numero: r.nota_numero || '', chave: r.nota_chave || r.chave_remessa || '', itens: (r.itens || []) as ItemCargaFiscal[] })),
+        vendidos,
+      })
     : [];
+  const agoraTs = Date.now();
+  const remessasComIdade = remessas.map(r => ({
+    ...r,
+    diasDecorridos: Math.max(0, Math.floor((agoraTs - new Date(r.criado_em).getTime()) / 86_400_000)),
+  }));
 
   return NextResponse.json({
     ...base,
     tabelaOk: true,
     vendedorNome,
+    placaVan,
     itensVan: van.itens,
     unidadesVan: van.unidades,
-    remessasJornada: remessas,
+    remessasJornada: remessasComIdade,
     // BLOCO 215: "ativa" para o painel = AUTORIZADA/EMITINDO; sem elas, o
     // RASCUNHO também entra (o dono vê o rascunho que ficou pendente).
     remessaAtiva: remessas.find(r => r.status === 'AUTORIZADA' || r.status === 'EMITINDO') || remessas[0] || null,
     propostaDevolucao: proposta,
+    sobrouUnidades: totalSobrouUnidades(proposta),
     devolucoes: (devolucoes.data || []) as unknown as CargasFiscalRow[],
   });
 }
@@ -311,8 +330,14 @@ export async function POST(req: NextRequest) {
     uf: erp.emitente.uf,
     cep: erp.emitente.cep,
   };
-  const { data: uRes } = await db.from('app_users').select('nome').eq('id', vendedorId).limit(1).maybeSingle();
-  const vendedorNome = String((uRes as Record<string, unknown> | null)?.nome || 'Vendedor');
+  const { data: uRes } = await db.from('app_users').select('nome, placa_veiculo').eq('id', vendedorId).limit(1).maybeSingle();
+  const uRowPost = (uRes as Record<string, unknown> | null) || {};
+  const vendedorNome = String(uRowPost.nome || 'Vendedor');
+  // BLOCO 216: placa do veículo (cadastro do vendedor, sobrescrevível no body)
+  // + peso bruto opcional da carga (kg). Ambos sobem nas informações
+  // complementares da NF-e (imprimem na DANFE) e ficam gravados na tabela.
+  const placaVan = String(body.placa || uRowPost.placa_veiculo || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10);
+  const pesoKg = Math.max(0, Number(body.pesoKg) || 0);
 
   // ---------------------------------------------------------------------
   // REMESSA: carga atual da van -> NF-e 55 CFOP 5949 SEM PAGAMENTO
@@ -339,7 +364,7 @@ export async function POST(req: NextRequest) {
     const ref = refIdempotente('CARGA', vendedorId, rejeitados);
 
     const dias = Math.max(1, Math.min(31, Math.round(Number(body.dias) || 7)));
-    const input: NotaEspecialInput = montarInputRemessaCarga({ itens, emitente, vendedor: vendedorNome, dias });
+    const input: NotaEspecialInput = montarInputRemessaCarga({ itens, emitente, vendedor: vendedorNome, dias, placa: placaVan || undefined, pesoKg: pesoKg > 0 ? pesoKg : undefined });
     const ufEmit = String(erp.emitente.uf || 'RS').toUpperCase();
     const val = validarNotaEspecial(input, ufEmit);
     if (val.erros.length > 0) return BAD(422, val.erros[0], { erros: val.erros, avisos: val.avisos });
@@ -352,6 +377,8 @@ export async function POST(req: NextRequest) {
       itens: itens as unknown as Record<string, unknown>[],
       valor_total: totalItensCarga(itens),
       payload: montada.payload as unknown as Record<string, unknown>,
+      placa: placaVan,
+      ...(pesoKg > 0 ? { peso_kg: pesoKg } : {}),
     };
 
     if (!isFocusConfigured()) {
@@ -427,7 +454,13 @@ export async function POST(req: NextRequest) {
 
     const remessaBase = remessas[0];
     const vendidos = await vendidosDaJornada(db, vendedorId, remessaBase.criado_em);
-    let proposta = resumoDevolucao({ remessa: remessaBase.itens as ItemCargaFiscal[], vendidos });
+    // BLOCO 216: proposta CONSOLIDADA de TODAS as remessas da jornada
+    // (3 remessas de 50 cx - 50 vendidas => sobrou 100, com a origem de cada
+    // caixa) — a devolução referencia TODAS as remessas autorizadas.
+    let proposta = resumoDevolucaoConsolidada({
+      remessas: remessas.map(r => ({ id: r.id, ref: r.focus_ref || '', numero: r.nota_numero || '', chave: r.nota_chave || r.chave_remessa || '', itens: (r.itens || []) as ItemCargaFiscal[] })),
+      vendidos,
+    });
 
     // Override item a item (o dono ajusta quando a rota vendeu fora do app).
     const overrides = Array.isArray(body.itensDevolucao) ? body.itensDevolucao : [];
@@ -471,13 +504,18 @@ export async function POST(req: NextRequest) {
 
     const rejeitadasHoje = await db.from('cargas_fiscal').select('id').eq('vendedor_id', vendedorId).eq('tipo', 'DEVOLUCAO').eq('status', 'REJEITADA');
     const ref = refIdempotente('DEV', vendedorId, ((rejeitadasHoje.data || []) as unknown[]).length);
+    // BLOCO 216: a NF-e de entrada referencia TODAS as chaves das remessas
+    // AUTORIZADAS da jornada (notas_referenciadas aceita várias).
+    const chavesRemessas = remessas.map(r => r.nota_chave || r.chave_remessa || '').filter(c => c.length === 44);
+    const numerosRemessas = remessas.map(r => r.nota_numero || r.focus_ref).filter(Boolean);
     const input = montarInputDevolucaoCarga({
       itens: itensDevolucao,
       emitente,
       vendedor: vendedorNome,
-      remessaNumero: remessaBase.nota_numero || remessaBase.focus_ref,
-      remessaChave: remessaBase.nota_chave || remessaBase.chave_remessa || '',
+      remessaNumero: numerosRemessas.join(', ') || remessaBase.focus_ref,
+      remessaChave: chavesRemessas[0] || '',
     });
+    if (chavesRemessas.length > 1) input.refNfeExtras = chavesRemessas.slice(1);
     const ufEmit = String(erp.emitente.uf || 'RS').toUpperCase();
     const val = validarNotaEspecial(input, ufEmit);
     if (val.erros.length > 0) return BAD(422, val.erros[0], { erros: val.erros, avisos: val.avisos });

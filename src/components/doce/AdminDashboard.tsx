@@ -1846,10 +1846,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
           <div className="px-2 flex items-center justify-between"><div><h2 className="text-2xl font-black text-gray-800 tracking-tight">Painel Administrativo</h2><p className="text-xs text-gray-400 font-semibold uppercase tracking-wider">Gestão e Controle Total</p></div><div className="flex items-center gap-2"><button onClick={() => setShowNotifPrefs(true)} className="w-10 h-10 bg-white text-gray-400 rounded-xl flex items-center justify-center shadow-sm border border-gray-100 active:scale-90"><i className="fa-solid fa-sliders text-xs"></i></button><button onClick={() => { setShowNotifPanel(!showNotifPanel); if (showNotifPanel) markAllRead(); }} className="w-10 h-10 bg-white text-blue-600 rounded-xl flex items-center justify-center shadow-sm border border-gray-100 active:scale-90 relative"><i className="fa-solid fa-bell text-sm"></i>{unreadCount > 0 && (<span className="absolute -top-1 -right-1 w-5 h-5 bg-rose-500 text-white text-[8px] font-black rounded-full flex items-center justify-center animate-pulse">{unreadCount > 9 ? '9+' : unreadCount}</span>)}</button></div></div>
           {/* ================================================================
               BLOCO 211 (pedido do dono): NADA DE VENDA PASSA SEM COBRAR —
-              card vermelho no topo da HOME: venda A PRAZO sem boleto gerado
+              card no topo da HOME: venda A PRAZO sem boleto gerado
               (esqueceram de gerar) e venda À VISTA sem recebimento. “Abrir
               venda” abre o cupom — no card do boleto ficam GERAR BOLETO e o
               CANCELAR BOLETO (Bloco 210, trocar data que o cliente pediu).
+              BLOCO 214 (pedido do dono): “Retire o card de vendas sem
+              cobrança e deixe apenas para o admin” — EXCLUSIVO DO ADMIN:
+              saiu da HOME do vendedor e a API só responde para ADMIN.
               ================================================================ */}
           <AlertaCobranca
             onAbrirVenda={(saleId) => {

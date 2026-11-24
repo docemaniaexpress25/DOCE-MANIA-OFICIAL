@@ -33,9 +33,9 @@ import { isIOSDevice, TEXTO_IMPRESSAO_IOS, TITULO_IMPRESSAO_IOS } from '@/lib/io
 // BLOCO 111: impressão térmica USB do PC — canal BT x USB persistente por dispositivo
 import { imprimirViaUsb, lerCanalImpressao } from '@/lib/usbPrint';
 import FilaEntregas from '@/components/doce/FilaEntregas';
-// BLOCO 211: ALERTA de vendas sem cobrança — a prazo sem boleto gerado e à vista
-// sem recebimento, das vendas do PRÓPRIO vendedor (a API filtra por sessão)
-import AlertaCobranca from '@/components/doce/AlertaCobranca';
+// BLOCO 214 (regra do dono): o ALERTA de vendas sem cobrança SAIU da HOME do
+// vendedor — agora é EXCLUSIVO do admin (card removido daqui e a API
+// /api/pendencias-cobranca só responde para ADMIN).
 
 // BLOCO 188 (regra do dono): kanban de ORDENAÇÃO mora SOMENTE no ROTEIRO
 // SEMANAL — arrastar-e-soltar (dnd-kit, mesmo padrão do BLOCO 63/61) grava no
@@ -1470,18 +1470,10 @@ const VendedorDashboard: React.FC<VendedorDashboardProps> = ({
       {activeTab === 'HOME' && (
         <div className="py-4 space-y-4">
           {/* ================================================================
-              BLOCO 211 (pedido do dono): NADA DE VENDA PASSA SEM COBRAR —
-              card no topo da HOME do vendedor com as vendas DELE em aberto:
-              a prazo sem boleto gerado (esqueceu de gerar na van) e à vista
-              sem recebimento. “Abrir venda” abre o cupom — no card do boleto
-              ficam GERAR BOLETO e o CANCELAR BOLETO (trocar data do cliente).
+              BLOCO 214 (pedido do dono): “Retire o card de vendas sem cobrança
+              e deixe apenas para o admin” — o card NÃO existe mais na HOME do
+              vendedor. O alerta segue vivo só no Painel Administrativo.
               ================================================================ */}
-          <AlertaCobranca
-            onAbrirVenda={(saleId) => {
-              const s = sales.find(x => x.id === saleId);
-              if (s) setViewingSale(s);
-            }}
-          />
           <div className="grid grid-cols-2 gap-4">
           <MenuCard icon="fa-route" title="Rota do Dia" tab="ROTEIRO" color="bg-blue-50 text-blue-600" />
           {/* BLOCO 13: TODO vendedor acompanha a fila de entregas dos seus pedidos (leitura) */}

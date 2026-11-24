@@ -9,7 +9,9 @@ import { authHeaders } from '@/services/userService';
  * tanto a vista como prazo... esquecemos de gerar esse boleto entao precisa
  * nos avisa."
  *
- * Card que fica no TOPO da HOME (admin e vendedor) e AVISA quando existe:
+ * Card que fica no TOPO da HOME do ADMIN (BLOCO 214: exclusivo do admin —
+ * o card saiu da HOME do vendedor e a API devolve 403 para não-admin) e
+ * AVISA quando existe:
  *  - VENDA A PRAZO sem boleto gerado (o caso do exemplo: vendeu a prazo,
  *    ninguem gerou o boleto) — badge VERMELHO "BOLETO NAO GERADO";
  *  - VENDA A VISTA sem recebimento registrado — badge AMBAR "SEM RECEBIMENTO".
@@ -41,7 +43,7 @@ export interface PendenciaCobranca {
 }
 
 interface AlertaCobrancaProps {
-  /** Abre o cupom da venda (admin: selectedSale / vendedor: viewingSale) */
+  /** Abre o cupom da venda (admin: selectedSale — o card é só do admin) */
   onAbrirVenda?: (saleId: string) => void;
 }
 

@@ -31,8 +31,11 @@ import { hasSalesBoletosTable } from '@/lib/serverSchema';
  *        recebedor confirma em Contas a Receber).
  * - A prazo COM boleto ativo NAO entra aqui: boleto existe (o vencido/atraso
  *   e papel do Portal de Cobrancas /cobrancas).
- * - ADMIN e SECRETARIO veem TODAS as vendas; VENDEDOR ve somente as PROPRIAS
- *   (ele esqueceu de gerar o boleto na van — o aviso aparece pra ele tambem).
+ * - BLOCO 214 (pedido do dono): “Retire o card de vendas sem cobrança e
+ *   deixe apenas para o admin” — o alerta é EXCLUSIVO do ADMIN: a HOME do
+ *   vendedor não renderiza mais o card e esta API devolve 403 para qualquer
+ *   perfil que não seja ADMIN (antes: ADMIN/SECRETARIO viam tudo e VENDEDOR
+ *   via as proprias).
  * - Retorna a mensagem de cobranca do ERP (mesma do portal /cobrancas) para
  *   o WhatsApp do alerta usar os placeholders {nome} {valor} {dias}.
  */
@@ -80,6 +83,9 @@ export async function GET(req: NextRequest) {
   if (bridged) return bridged;
   const session = sessionFromRequest(req);
   if (!session) return BAD(401, 'Sessao expirada. Faca login novamente.');
+
+  // BLOCO 214 (regra do dono): alerta EXCLUSIVO do administrador.
+  if (session.perfil !== 'ADMIN') return BAD(403, 'Alerta de cobranca exclusivo do administrador.');
 
   const db = getServiceClient();
   const desde = dataMenosDiasSp(JANELA_DIAS);
@@ -139,13 +145,11 @@ export async function GET(req: NextRequest) {
   const vendedorPorId = new Map<string, string>();
   for (const u of (uRes.data as Record<string, unknown>[]) || []) vendedorPorId.set(String(u.id || ''), String(u.nome || ''));
 
-  const soMinhas = session.perfil === 'ADMIN' || session.perfil === 'SECRETARIO'
-    ? null
-    : String(session.sub || '');
+  // BLOCO 214: sem filtro por vendedor — so o ADMIN chega aqui e ve TODAS as
+  // pendencias da empresa.
 
   const pendencias: PendenciaCobrancaApi[] = [];
   for (const s of candidatas) {
-    if (soMinhas && String(s.vendedor_id || '') !== soMinhas) continue;
     const metodo = String(s.metodo_pagamento || 'A_PRAZO').toUpperCase();
     const total = Math.round((Number(s.valor_total) || 0) * 100) / 100;
     const pago = Math.round((Number(s.valor_pago) || 0) * 100) / 100;

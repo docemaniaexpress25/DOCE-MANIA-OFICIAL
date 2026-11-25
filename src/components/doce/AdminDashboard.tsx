@@ -65,6 +65,8 @@ import MovimentacoesEstoque from '@/components/doce/MovimentacoesEstoque';
 import AReceberPanel from '@/components/doce/AReceberPanel';
 // BLOCO 118: Fechamento de Caixa (dinheiro/pix recebidos com comprovantes, fechado pelo admin)
 import CaixaFechamento from '@/components/doce/CaixaFechamento';
+// BLOCO 219: tela da baixa automática (contas a receber / boletos / Pix — telemetria + sync na mão)
+import ConciliacaoView from '@/components/doce/ConciliacaoView';
 // BLOCO 118: David (R5) não tem comissão — helper da casa
 import { isDavidVendedor } from '@/lib/equipe';
 // BLOCO 211: ALERTA de vendas sem cobrança — a prazo sem boleto gerado e à vista
@@ -156,7 +158,7 @@ interface AdminDashboardProps {
 
 // BLOCO 118: 'CAIXA' agora é o FECHAMENTO DE CAIXA — as comissões viram aba 'COMISSOES'
 // BLOCO 156: 'FISCAL_PRODUTOS' = portal /fiscal-produtos — lista editável NCM/CEST/CFOP
-type TabType = 'HOME' | 'PORTAIS' | 'CATALOGO' | 'CATALOGO_PORTAL' | 'FISCAL_XML' | 'ENTRADAS' | 'CATEGORIAS' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'COMISSOES' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'COMPROVANTES' | 'ENTREGAS' | 'LUCRO' | 'BACKUP' | 'SETTINGS' | 'CONFIG_ERP' | 'ESTOQUE_MOV' | 'NOTAS_PENDENTES' | 'FISCAL_PRODUTOS' | 'FISCAL_CLIENTES' | 'NOTAS_ESPECIAIS';
+type TabType = 'HOME' | 'PORTAIS' | 'CATALOGO' | 'CATALOGO_PORTAL' | 'FISCAL_XML' | 'ENTRADAS' | 'CATEGORIAS' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'COMISSOES' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'COMPROVANTES' | 'ENTREGAS' | 'LUCRO' | 'BACKUP' | 'SETTINGS' | 'CONFIG_ERP' | 'ESTOQUE_MOV' | 'NOTAS_PENDENTES' | 'FISCAL_PRODUTOS' | 'FISCAL_CLIENTES' | 'NOTAS_ESPECIAIS' | 'CONCILIACAO';
 
 type ReportType = 'RESUMO' | 'TOP_CLIENTES' | 'TOP_PRODUTOS' | 'CLIENTES_RISCO' | 'VENDAS_CATEGORIAS' | 'PRODUTOS_RENTAVEIS' | null;
 type ReportFilterType = 'RESUMO' | 'TOP_PRODUTOS' | 'TOP_CLIENTES' | 'CATEGORIAS' | 'VENDEDORES' | 'DIVIDAS' | 'PRODUTOS_RENTAVEIS';
@@ -2080,6 +2082,8 @@ ${remessaBloco}
             {/* BLOCO 79: Lucro por Rota — a conta do dono ao vivo */}
             <MenuCard icon="fa-piggy-bank" title="Lucro por Rota" tab="LUCRO" color="bg-amber-50 text-amber-600" />
             <MenuCard icon="fa-file-invoice-dollar" title="Contas a Receber" tab="CONTAS_RECEBER" color="bg-rose-50 text-rose-600" />
+            {/* BLOCO 219: telemetria da baixa automática (boletos/pix/caixa) + sync na mão */}
+            <MenuCard icon="fa-arrows-rotate" title="Baixa Automática" tab="CONCILIACAO" color="bg-cyan-50 text-cyan-600" />
             <MenuCard icon="fa-clipboard-check" title="Comprovantes Pix" tab="COMPROVANTES" color="bg-teal-50 text-teal-600" badge={comprovantesBadge} />
             <MenuCard icon="fa-truck" title="Entregas" tab="ENTREGAS" color="bg-emerald-50 text-emerald-600" />
             <MenuCard icon="fa-database" title="Backup" tab="BACKUP" color="bg-gray-100 text-gray-600" />
@@ -3240,6 +3244,9 @@ ${remessaBloco}
           </div>
         </div>
       )}
+
+      {/* BLOCO 219: baixa automática — como funciona, frequência do sync, filas, log e botões de sync */}
+      {activeTab === 'CONCILIACAO' && <ConciliacaoView showToast={showToast} />}
 
       {activeTab === 'COMPROVANTES' && (
         <div className="space-y-4">

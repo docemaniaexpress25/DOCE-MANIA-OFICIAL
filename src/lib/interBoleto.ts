@@ -118,7 +118,7 @@ function mtlsAgent(): https.Agent {
 
 /** Requisicao HTTPS com certificado da aplicacao (mTLS). */
 function mtlsRequest(
-  method: 'GET' | 'POST' | 'PATCH' | 'PUT',
+  method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE',
   url: string,
   opts: { headers?: Record<string, string>; body?: string } = {}
 ): Promise<{ status: number; body: string }> {
@@ -191,7 +191,7 @@ function authHeaders(token: string): Record<string, string> {
 }
 
 async function requestJson(
-  method: 'GET' | 'POST' | 'PATCH' | 'PUT',
+  method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE',
   path: string,
   body?: unknown
 ): Promise<InterCobrancaResultado> {
@@ -247,6 +247,79 @@ export function cancelarCobranca(codigoSolicitacao: string, motivo: string): Pro
   return requestJson('POST', `/cobranca/v3/cobrancas/${encodeURIComponent(codigoSolicitacao)}/cancelar`, {
     motivoCancelamento: motivo.slice(0, 50),
   });
+}
+
+// ---------------------------------------------------------------------------
+// BLOCO 220 — WEBHOOK DA COBRANCA V3: cadastrar/consultar/excluir VIA API.
+//
+// A resposta ao dono: o Internet Banking do Inter NAO tem tela para cadastrar
+// webhook (por isso ele nao achava a funcao). A doc oficial "Como configurar
+// um webhook?" (developers.inter.co/docs/webhooks/como-config-webhooks) manda
+// CRIAR O WEBHOOK PELA API, na referencia da funcionalidade desejada. Para a
+// Cobranca V3 (boleto com Pix), a referencia oficial (cobranca-bolepix,
+// secao "Webhook") define:
+//
+//   PUT    /cobranca/v3/cobrancas/webhook   body {"webhookUrl": "https://..."}
+//          -> 204 Sucesso | escopo boleto-cobranca.write | 5 req/min
+//   GET    /cobranca/v3/cobrancas/webhook   -> {webhookUrl, criacao, atualizacao}
+//          -> 404 quando nao ha webhook | escopo boleto-cobranca.read
+//   DELETE /cobranca/v3/cobrancas/webhook   -> 204 | escopo boleto-cobranca.write
+//
+// Os escopos sao os MESMOS que o app ja usa para emitir/reconsultar boletos
+// (obterToken) — nenhuma credencial nova e necessaria.
+// ---------------------------------------------------------------------------
+
+/** Estado do webhook no Inter (consulta REAL na API, mTLS). */
+export interface WebhookInterEstado {
+  ok: boolean;
+  cadastrado: boolean;
+  url: string;
+  criacao: string;
+  atualizacao: string;
+  erro: string;
+  /** true quando a falha e so de credenciais no ambiente (nada a concluir). */
+  semCredenciais: boolean;
+}
+
+export async function consultarWebhookInter(): Promise<WebhookInterEstado> {
+  const vazio: WebhookInterEstado = { ok: false, cadastrado: false, url: '', criacao: '', atualizacao: '', erro: '', semCredenciais: false };
+  if (!isInterConfigured()) return { ...vazio, erro: 'INTER_NAO_CONFIGURADO — defina INTER_CLIENT_ID/SECRET e o certificado no ambiente', semCredenciais: true };
+  const r = await requestJson('GET', '/cobranca/v3/cobrancas/webhook');
+  if (r.status === 404) return { ...vazio, ok: true, cadastrado: false, erro: '' };
+  if (!r.ok) return { ...vazio, erro: r.erro || `HTTP ${r.status}` };
+  const d = (r.data || {}) as Record<string, unknown>;
+  return {
+    ok: true,
+    cadastrado: !!d.webhookUrl,
+    url: String(d.webhookUrl || ''),
+    criacao: String(d.criacao || ''),
+    atualizacao: String(d.atualizacao || ''),
+    erro: '',
+    semCredenciais: false,
+  };
+}
+
+/** Cadastra/reponta o webhook da Cobranca V3 (PUT — o Inter aceita re-PUT). */
+export async function cadastrarWebhookInter(webhookUrl: string): Promise<WebhookInterEstado> {
+  const vazio: WebhookInterEstado = { ok: false, cadastrado: false, url: '', criacao: '', atualizacao: '', erro: '', semCredenciais: false };
+  const url = (webhookUrl || '').trim();
+  if (!/^https:\/\/[^\s]+$/.test(url)) return { ...vazio, erro: 'URL invalida — deve iniciar com https:// (sem espacos)' };
+  if (!isInterConfigured()) return { ...vazio, erro: 'INTER_NAO_CONFIGURADO — defina INTER_CLIENT_ID/SECRET e o certificado no ambiente', semCredenciais: true };
+  const r = await requestJson('PUT', '/cobranca/v3/cobrancas/webhook', { webhookUrl: url });
+  if (!r.ok) return { ...vazio, erro: r.erro || `HTTP ${r.status}` };
+  // Re-consulta o estado final (fonte da verdade — o PUT responde 204 vazio)
+  const estado = await consultarWebhookInter();
+  if (!estado.ok) return { ...vazio, ok: true, cadastrado: true, url, erro: '' };
+  return estado;
+}
+
+/** Exclui o webhook cadastrado (DELETE). */
+export async function excluirWebhookInter(): Promise<{ ok: boolean; erro: string }> {
+  if (!isInterConfigured()) return { ok: false, erro: 'INTER_NAO_CONFIGURADO — defina INTER_CLIENT_ID/SECRET e o certificado no ambiente' };
+  const r = await requestJson('DELETE', '/cobranca/v3/cobrancas/webhook');
+  if (r.status === 404) return { ok: true, erro: '' }; // ja nao existia — objetivo alcancado
+  if (!r.ok) return { ok: false, erro: r.erro || `HTTP ${r.status}` };
+  return { ok: true, erro: '' };
 }
 
 // ---------------------------------------------------------------------------

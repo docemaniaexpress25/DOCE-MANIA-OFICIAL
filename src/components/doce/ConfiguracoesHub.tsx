@@ -61,6 +61,25 @@ interface RecebimentoLog {
   detalhe: string;
 }
 
+// BLOCO 220 — painel da baixa automática: estado REAL do webhook no Inter
+// (GET /cobranca/v3/cobrancas/webhook) + fila em aberto + último sync (cron)
+interface InterPainel {
+  ok: boolean;
+  configurado: boolean;
+  webhook: {
+    ok: boolean;
+    cadastrado: boolean;
+    url: string;
+    criacao: string;
+    atualizacao: string;
+    erro: string;
+    semCredenciais: boolean;
+  } | null;
+  filaAberta: number | null;
+  ultimoSync: { em: string; resultado: string; processado: boolean } | null;
+  frequencia: { webhook: string; sync: string };
+}
+
 // BLOCO 116/117 — webhook da Focus (status em tempo real via API /v2/hooks)
 // eventos: nfe (NF-e autorizada), nfce (NFC-e autorizada), nfce_contingencia
 // (desfecho da NFC-e offline) — doc docs/webhooks, cada gatilho monitora UM evento.
@@ -168,6 +187,14 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
   const [recLog, setRecLog] = useState<RecebimentoLog[] | null>(null);
   const [recLogErro, setRecLogErro] = useState('');
   const [recLogCarregando, setRecLogCarregando] = useState(false);
+
+  // BLOCO 220 — painel da baixa automática (situação REAL do webhook no Inter)
+  const [painelAberto, setPainelAberto] = useState(false);
+  const [painelInter, setPainelInter] = useState<InterPainel | null>(null);
+  const [painelCarregando, setPainelCarregando] = useState(false);
+  const [acaoInter, setAcaoInter] = useState<'CADASTRAR' | 'EXCLUIR' | null>(null);
+  const [syncRodando, setSyncRodando] = useState(false);
+  const [syncResultado, setSyncResultado] = useState('');
 
   const [toast, setToast] = useState<{ msg: string; tipo: 'success' | 'error' } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -366,6 +393,85 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
     const novo = !recLogAberto;
     setRecLogAberto(novo);
     if (novo && recLog === null) void carregarLogRecebimentos();
+  };
+
+  /* ===== BLOCO 220 — painel da baixa automática (GET /api/webhooks/inter-painel) =====
+   * O Internet Banking do Inter NÃO tem tela para cadastrar webhook — o cadastro
+   * é feito pela API oficial da Cobrança V3. Este painel verifica o estado REAL
+   * no Inter e cadastra/remove em um clique (o app fala direto com o banco via
+   * mTLS usando as credenciais da Vercel). */
+  const carregarPainelInter = useCallback(async () => {
+    setPainelCarregando(true);
+    try {
+      const res = await fetch('/api/webhooks/inter-painel', { headers: { ...authHeaders() } });
+      const d = await res.json().catch(() => null);
+      if (!res.ok || !d?.ok) throw new Error(String(d?.error || 'Falha ao consultar o Inter.'));
+      setPainelInter({
+        ok: true,
+        configurado: !!d.configurado,
+        webhook: d.webhook || null,
+        filaAberta: typeof d.filaAberta === 'number' ? d.filaAberta : null,
+        ultimoSync: d.ultimoSync || null,
+        frequencia: d.frequencia || { webhook: '', sync: '' },
+      });
+    } catch {
+      setPainelInter(null);
+    } finally {
+      setPainelCarregando(false);
+    }
+  }, []);
+
+  const alternarPainelInter = () => {
+    const novo = !painelAberto;
+    setPainelAberto(novo);
+    if (novo) void carregarPainelInter();
+  };
+
+  /* ===== BLOCO 220 — cadastra/remove o webhook DIRETO na API do Inter ===== */
+  const acaoWebhookInter = async (acao: 'CADASTRAR' | 'EXCLUIR') => {
+    setAcaoInter(acao);
+    try {
+      const res = await fetch('/api/webhooks/inter-cadastrar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify(acao === 'CADASTRAR' ? { acao, url: webhookUrl } : { acao }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok || !d.ok) throw new Error(d.error || 'O Inter recusou a operação.');
+      mostrarToast(acao === 'CADASTRAR'
+        ? 'Baixa automática ATIVADA — o Inter já avisará o app quando um boleto pagar!'
+        : 'Webhook removido do Inter.', 'success');
+    } catch (e) {
+      mostrarToast(e instanceof Error ? e.message : 'Falha na operação.', 'error');
+    } finally {
+      setAcaoInter(null);
+      void carregarPainelInter();
+      setLogHook(null); // força o log a recarregar (a ação foi auditada)
+      if (logAberto) void carregarLogWebhook();
+    }
+  };
+
+  /* ===== BLOCO 220 — "Sincronizar agora" (GET /api/boletos-sync, admin) ===== */
+  const sincronizarBoletosAgora = async () => {
+    setSyncRodando(true);
+    setSyncResultado('');
+    try {
+      const res = await fetch('/api/boletos-sync', { headers: { ...authHeaders() } });
+      const d = await res.json().catch(() => ({}));
+      if (res.status === 401 || res.status === 403) throw new Error('Somente admin pode sincronizar.');
+      if (!res.ok || !d.ok) throw new Error(d.erro || 'Falha na sincronização.');
+      if (d.motivo === 'INTER_NAO_CONFIGURADO') setSyncResultado('Credenciais do Inter ausentes neste ambiente — na produção (Vercel) funciona.');
+      else if (d.motivo === 'NADA_ABERTO') setSyncResultado('Nenhum boleto em aberto — tudo conciliado.');
+      else if (d.motivo === 'SCHEMA_ANTIGO') setSyncResultado('Banco desatualizado — rode o SQL do bloco 25.');
+      else setSyncResultado(`${d.processadas || 0} cobrança(s) reconsultada(s) no Inter · ${d.baixadas || 0} baixa(s) automática(s) agora.`);
+      void carregarPainelInter();
+      setLogHook(null);
+      if (logAberto) void carregarLogWebhook();
+    } catch (e) {
+      setSyncResultado(e instanceof Error ? e.message : 'Falha na sincronização.');
+    } finally {
+      setSyncRodando(false);
+    }
   };
 
   // BLOCO 172 — rótulo/cor da origem da baixa
@@ -614,16 +720,101 @@ const ConfiguracoesHub: React.FC<Props> = ({ onBack, onAbrirMovimentos }) => {
                 <i className="fa-solid fa-copy"></i>Copiar
               </button>
             </div>
-            {/* BLOCO 167: passo a passo do cadastro no Internet Banking do Inter */}
-            <div className="bg-white border border-slate-200 rounded-xl p-3 mt-1">
-              <p className="text-[9px] font-black text-slate-600 uppercase mb-1.5">Como ativar (uma vez só)</p>
-              <ol className="text-[9px] font-semibold text-gray-500 leading-relaxed space-y-1 list-decimal list-inside">
-                <li>Internet Banking PJ do Inter <strong className="text-gray-600">&gt; API Inter &gt; Webhooks</strong> (ou peça ao gerente da conta).</li>
-                <li>Tipo do webhook: <strong className="text-gray-600">Cobrança (boletos)</strong> — evento de pagamento/baixa.</li>
-                <li>Cole a URL acima (copiar) e salve.</li>
-                <li>Pronto: quando um boleto cair, o Inter avisa o app, que re-consulta o Inter e dá a baixa automática (contas a receber + caixa) com log.</li>
-              </ol>
-              <p className="text-[8px] font-bold text-slate-400 leading-snug mt-1.5">Segurança: o payload do Inter não move nada sozinho — o app SEMPRE re-consulta a cobrança direto no banco (mTLS) antes de baixar. Se o webhook não chegar, o <strong className="text-gray-500">boletos-sync</strong> (cron diário) faz a mesma baixa como rede de segurança.</p>
+            {/* BLOCO 220 — PAINEL DA BAIXA AUTOMÁTICA: o Internet Banking do
+                Inter NÃO tem tela para cadastrar webhook (a doc oficial manda
+                cadastrar PELA API da Cobrança V3). Este painel verifica o estado
+                REAL no Inter e ativa/remover em um clique. */}
+            <div className="bg-white border border-slate-200 rounded-xl p-3 mt-1 space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[9px] font-black text-slate-600 uppercase">Situação no Inter (consultada na hora, na fonte oficial)</p>
+                <button onClick={alternarPainelInter} disabled={painelCarregando} aria-expanded={painelAberto} className="text-[9px] font-black uppercase text-teal-600 underline disabled:opacity-50 px-1 py-1 flex-shrink-0">
+                  <i className={`fa-solid ${painelCarregando ? 'fa-spinner fa-spin' : 'fa-rotate-right'} mr-1`}></i>Verificar
+                </button>
+              </div>
+
+              {!painelAberto && (
+                <p className="text-[9px] font-semibold text-gray-400 leading-snug">
+                  O Internet Banking do Inter <strong className="text-gray-500">não tem tela para cadastrar webhook</strong> (por isso você não encontrava a função) — o cadastro é feito pela <strong className="text-gray-500">API oficial do Inter</strong>. Clique em <strong className="text-teal-600">Verificar</strong> para consultar a situação real e ativar a baixa automática em um clique, sem sair daqui.
+                </p>
+              )}
+
+              {painelAberto && painelCarregando && !painelInter && (
+                <p className="text-[9px] font-black text-gray-300 uppercase py-2 text-center"><i className="fa-solid fa-spinner fa-spin mr-1"></i>Consultando o Inter...</p>
+              )}
+              {painelAberto && !painelCarregando && !painelInter && (
+                <p className="text-[9px] font-bold text-rose-500 uppercase leading-snug">Não foi possível consultar o Inter agora — tente novamente em instantes.</p>
+              )}
+
+              {painelAberto && painelInter && (
+                <div className="space-y-2.5">
+                  {/* Estado REAL do webhook no Inter */}
+                  {painelInter.webhook?.cadastrado ? (
+                    <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-3">
+                      <p className="text-[10px] font-black text-emerald-700 uppercase flex items-center gap-1.5"><i className="fa-solid fa-circle-check"></i>Webhook ATIVO no Inter — baixa automática ligada</p>
+                      <p className="text-[8px] font-bold text-emerald-600/80 mt-1 break-all">{painelInter.webhook.url || webhookUrl}</p>
+                      {painelInter.webhook.atualizacao && (
+                        <p className="text-[8px] font-semibold text-emerald-600/70 mt-0.5">Cadastrado/atualizado em {new Date(painelInter.webhook.atualizacao).toLocaleString('pt-BR')}</p>
+                      )}
+                      {painelInter.webhook.url && painelInter.webhook.url !== webhookUrl && (
+                        <p className="text-[8px] font-bold text-amber-600 mt-1">Atenção: o Inter está apontando para outra URL. Use &quot;Reapontar&quot; abaixo para corrigir para a URL deste app.</p>
+                      )}
+                    </div>
+                  ) : painelInter.webhook?.ok ? (
+                    <div className="bg-amber-50 border border-amber-100 rounded-xl p-3">
+                      <p className="text-[10px] font-black text-amber-700 uppercase flex items-center gap-1.5"><i className="fa-solid fa-triangle-exclamation"></i>Webhook ainda NÃO cadastrado no Inter</p>
+                      <p className="text-[9px] font-semibold text-amber-600 leading-snug mt-1">Ative agora: o app cadastra sozinho na API do Inter (usa o certificado já configurado). Sem Internet Banking, sem Postman, sem suporte do banco.</p>
+                    </div>
+                  ) : (
+                    <div className="bg-gray-50 border border-gray-100 rounded-xl p-3">
+                      <p className="text-[10px] font-black text-gray-600 uppercase"><i className="fa-solid fa-circle-question mr-1.5"></i>Não foi possível verificar o cadastro</p>
+                      <p className="text-[9px] font-semibold text-gray-400 leading-snug mt-1 break-words">
+                        {painelInter.webhook?.erro || 'Sem resposta do Inter.'}
+                        {painelInter.webhook?.semCredenciais ? ' — neste ambiente (dev/preview) não há credenciais do Inter; na produção (Vercel) a verificação funciona.' : ''}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Ações de cadastro/remoção (PUT/DELETE direto na API do Inter) */}
+                  {!painelInter.webhook?.cadastrado && painelInter.webhook?.ok && (
+                    <button onClick={() => void acaoWebhookInter('CADASTRAR')} disabled={acaoInter !== null} className="w-full bg-emerald-600 text-white h-11 rounded-xl text-[10px] font-black uppercase tracking-wide active:scale-95 disabled:opacity-60 flex items-center justify-center gap-2">
+                      <i className={`fa-solid ${acaoInter ? 'fa-spinner fa-spin' : 'fa-bolt'}`}></i>{acaoInter ? 'Ativando no Inter...' : 'Ativar baixa automática agora'}
+                    </button>
+                  )}
+                  {painelInter.webhook?.cadastrado && (
+                    <div className="flex gap-2">
+                      <button onClick={() => void acaoWebhookInter('CADASTRAR')} disabled={acaoInter !== null} className="flex-1 bg-teal-50 text-teal-700 border border-teal-100 h-9 rounded-xl text-[9px] font-black uppercase active:scale-95 disabled:opacity-60">
+                        <i className={`fa-solid ${acaoInter === 'CADASTRAR' ? 'fa-spinner fa-spin' : 'fa-arrows-rotate'} mr-1`}></i>Reapontar p/ esta URL
+                      </button>
+                      <button
+                        onClick={() => { if (window.confirm('Remover o webhook do Inter? A baixa automática para (o sync diário continua).')) void acaoWebhookInter('EXCLUIR'); }}
+                        disabled={acaoInter !== null}
+                        className="flex-1 bg-rose-50 text-rose-600 border border-rose-100 h-9 rounded-xl text-[9px] font-black uppercase active:scale-95 disabled:opacity-60"
+                      >
+                        <i className={`fa-solid ${acaoInter === 'EXCLUIR' ? 'fa-spinner fa-spin' : 'fa-trash-can'} mr-1`}></i>Remover
+                      </button>
+                    </div>
+                  )}
+
+                  {/* SINCRONIZAÇÃO — frequência real + botão manual */}
+                  <div className="bg-slate-50 border border-slate-100 rounded-xl p-3 space-y-1.5">
+                    <p className="text-[9px] font-black text-slate-500 uppercase flex items-center gap-1.5"><i className="fa-solid fa-arrows-rotate text-teal-600"></i>Sincronização (com que frequência atualiza)</p>
+                    <ul className="text-[8px] font-semibold text-gray-500 leading-relaxed space-y-0.5">
+                      <li>• Tempo real: webhook do Inter avisa o app na hora do pagamento (se falhar, o Inter reenvia em 20/30/60/120 min).</li>
+                      <li>• Rede de segurança: sync automático 1x/dia às 07h (Brasília) + botão abaixo quando você quiser.</li>
+                      {painelInter.filaAberta !== null && <li>• Boletos em aberto monitorados agora: <strong className="text-gray-600">{painelInter.filaAberta}</strong>.</li>}
+                      {painelInter.ultimoSync && (
+                        <li>• Último sync: {new Date(painelInter.ultimoSync.em).toLocaleString('pt-BR')} — {painelInter.ultimoSync.resultado}</li>
+                      )}
+                    </ul>
+                    <button onClick={() => void sincronizarBoletosAgora()} disabled={syncRodando} className="w-full bg-slate-700 text-white h-9 rounded-xl text-[9px] font-black uppercase active:scale-95 disabled:opacity-60 flex items-center justify-center gap-2">
+                      <i className={`fa-solid ${syncRodando ? 'fa-spinner fa-spin' : 'fa-rocket'} mr-1`}></i>{syncRodando ? 'Sincronizando...' : 'Sincronizar agora'}
+                    </button>
+                    {syncResultado && <p className="text-[8px] font-bold text-gray-500 leading-snug">{syncResultado}</p>}
+                  </div>
+
+                  <p className="text-[8px] font-bold text-slate-400 leading-snug">Segurança: o aviso do Inter não move nada sozinho — o app SEMPRE re-consulta a cobrança direto no banco (mTLS) antes de baixar. Cada ação de ativação/remoção fica no log de eventos abaixo (origem CONFIG).</p>
+                </div>
+              )}
             </div>
           </div>
 

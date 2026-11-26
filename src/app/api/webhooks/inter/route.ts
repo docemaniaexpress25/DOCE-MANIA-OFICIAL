@@ -81,7 +81,7 @@ export async function GET() {
     ok: true,
     webhook: 'inter-boleto',
     configurado: isInterConfigured(),
-    instrucao: 'Cadastre esta URL no Internet Banking do Inter (Cobranca V3 -> Webhooks). A baixa so acontece apos re-consulta na API do Inter.',
+    instrucao: 'BLOCO 220: o cadastro e feito PELA API do Inter (PUT /cobranca/v3/cobrancas/webhook) — o app cadastra sozinho em Configuracoes > Boletos > "Ativar baixa automatica". O Internet Banking nao tem tela para webhooks.',
     log: 'Eventos em /api/webhooks/inter-log (admin) e no app: Configuracoes > ERP Fiscal > Boletos.',
   });
 }
@@ -139,8 +139,39 @@ async function processarNotificacaoParcela(
 }
 
 export async function POST(req: NextRequest) {
-  const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+  // BLOCO 220 — O CALLBACK DO INTER E UM ARRAY. A spec oficial (referencia
+  // cobranca-bolepix, "Callback payload samples") envia
+  //   [ { codigoSolicitacao, seuNumero, situacao, valorTotalRecebido, ... } ]
+  // Antes o body era tratado como OBJETO: body.codigoSolicitacao dava undefined
+  // quando o Inter mandava o array real e o evento caia em SEM_CODIGO (a baixa
+  // automatica nao rodava na primeira notificacao). Agora normaliza e processa
+  // evento a evento (o validador do portal do desenvolvedor tambem manda array).
+  const payload = (await req.json().catch(() => null)) as unknown;
+  const eventos: Record<string, unknown>[] = Array.isArray(payload)
+    ? payload.filter((e): e is Record<string, unknown> => !!e && typeof e === 'object')
+    : payload && typeof payload === 'object'
+      ? [payload as Record<string, unknown>]
+      : [];
 
+  const db = getServiceClient();
+
+  if (eventos.length === 0) {
+    await logEvento(db, { evento: (payload ?? {}) as unknown, resultado: 'PAYLOAD_VAZIO — callback sem conteudo JSON valido', processado: false });
+    return NextResponse.json({ ok: true, processado: false, motivo: 'PAYLOAD_VAZIO' });
+  }
+  if (eventos.length === 1) return processarEvento(db, eventos[0]);
+  // Varios eventos: processa em sequencia e devolve a lista (o Inter so le o
+  // HTTP 200 — a resposta detalhada serve para o log/admin e para o validador).
+  const detalhes: Record<string, unknown>[] = [];
+  for (const ev of eventos.slice(0, 20)) {
+    const r = await processarEvento(db, ev);
+    detalhes.push(await r.json().catch(() => ({})));
+  }
+  return NextResponse.json({ ok: true, eventos: eventos.length, detalhes });
+}
+
+/** BLOCO 220: processa UM evento do callback (antes era o corpo do POST). */
+async function processarEvento(db: ReturnType<typeof getServiceClient>, body: Record<string, unknown>) {
   // O Inter pode mandar codigos em varias chaves — acacha todas
   const codigo =
     String(body.codigoSolicitacao || body.codigo || body.codigoSolicitacaoBoleto || '').trim() ||
@@ -149,8 +180,6 @@ export async function POST(req: NextRequest) {
   // seuNumero = DM<saleId> — fallback quando o codigo nao veio no payload
   const seuNumero = String(body.seuNumero || (body.cobranca as Record<string, unknown>)?.seuNumero || '').trim();
   const saleIdPeloSeuNumero = seuNumero.startsWith('DM') ? seuNumero.slice(2) : '';
-
-  const db = getServiceClient();
 
   // 1. Sem credenciais Inter nao ha o que fazer (mas responde 200 p/ o Inter parar de reenviar)
   if (!isInterConfigured()) {

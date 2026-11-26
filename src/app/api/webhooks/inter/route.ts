@@ -4,6 +4,8 @@ import { hasBoletoColumns, hasSalesBoletosTable } from '@/lib/serverSchema';
 import { isInterConfigured, recuperarCobranca, interpretarCobranca } from '@/lib/interBoleto';
 // BLOCO 199: baixa da PARCELA do boleto duplo (rota 5) compartilhada com o cron
 import { acharParcelaPorCobranca, espelharParcelaInter, baixarParcelaPaga, type ParcelaRow } from '@/lib/baixaBoleto';
+// BLOCO 221: aviso aos admins a cada baixa ("toda baixa a gente seja comunicado")
+import { avisarBaixaBoleto, nomeClienteDaVenda } from '@/lib/notificacoes';
 
 /**
  * BLOCO 108 — WEBHOOK DO INTER: baixa AUTOMATICA do boleto pago.
@@ -208,11 +210,13 @@ async function processarEvento(db: ReturnType<typeof getServiceClient>, body: Re
   }
 
   // 2. Acha a venda (pelo codigo da cobranca gravado na emissao, senao pelo seuNumero)
+  // BLOCO 221: client_id entra no select para o aviso de baixa levar o nome do cliente.
+  const SALES_COLS = 'id, valor_total, valor_pago, status_pagamento, metodo_pagamento, detalhe_pagamento, inter_boleto_codigo, inter_boleto_seu_numero, inter_boleto_status, client_id';
   let sale: Record<string, unknown> | null = null;
   if (codigo) {
     const { data } = await db
       .from('sales')
-      .select('id, valor_total, valor_pago, status_pagamento, metodo_pagamento, detalhe_pagamento, inter_boleto_codigo, inter_boleto_seu_numero, inter_boleto_status')
+      .select(SALES_COLS)
       .eq('inter_boleto_codigo', codigo)
       .limit(1)
       .maybeSingle();
@@ -225,7 +229,7 @@ async function processarEvento(db: ReturnType<typeof getServiceClient>, body: Re
     // (cobre o seuNumero normal e as reemissoes DM...-r2/r3).
     const { data: porSeuNumero } = await db
       .from('sales')
-      .select('id, valor_total, valor_pago, status_pagamento, metodo_pagamento, detalhe_pagamento, inter_boleto_codigo, inter_boleto_seu_numero, inter_boleto_status')
+      .select(SALES_COLS)
       .eq('inter_boleto_seu_numero', seuNumero)
       .limit(1)
       .maybeSingle();
@@ -236,7 +240,7 @@ async function processarEvento(db: ReturnType<typeof getServiceClient>, body: Re
     // protege contra mudanca de formato) — so aceita UUID real.
     const { data } = await db
       .from('sales')
-      .select('id, valor_total, valor_pago, status_pagamento, metodo_pagamento, detalhe_pagamento, inter_boleto_codigo, inter_boleto_seu_numero, inter_boleto_status')
+      .select(SALES_COLS)
       .eq('id', saleIdPeloSeuNumero)
       .limit(1)
       .maybeSingle();
@@ -307,6 +311,12 @@ async function processarEvento(db: ReturnType<typeof getServiceClient>, body: Re
 
   // BLOCO 172: origem da baixa (best-effort — não trava se SQL 172 faltar).
   await marcarBaixaOrigem(db, String(sale.id), 'WEBHOOK_INTER');
+
+  // BLOCO 221: AVISO aos admins — "toda baixa a gente seja comunicado". O aviso
+  // fica na tabela notificacoes e aparece no sino do app (persistente) + o
+  // realtime de sales ja toca o alerta sonoro na hora. Best-effort.
+  const clienteWebhook = await nomeClienteDaVenda(db, sale.client_id);
+  await avisarBaixaBoleto(db, { saleId: String(sale.id), valor: valorTotal, origem: 'WEBHOOK_INTER', cliente: clienteWebhook });
 
   // BLOCO 167: a trigger trg_baixa_boleto_caixa (SQL 167) já deu a baixa no
   // CAIXA (pago_em) como reação ao UPDATE acima — nada extra a fazer aqui.

@@ -133,3 +133,24 @@
   background: #cbd5e1;
   border-radius: 9999px;
 }
+
+/* BLOCO 221: barra de rolagem discreta das listas do LOG DE BAIXAS (mesmo
+   padrao do .cupom-scroll — o `*` global esconde scrollbars; esta classe
+   restaura uma barra fina onde a lista precisa rolar). */
+.dm-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+  -ms-overflow-style: auto;
+}
+.dm-scroll::-webkit-scrollbar {
+  display: block;
+  width: 6px;
+  height: 6px;
+}
+.dm-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.dm-scroll::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}

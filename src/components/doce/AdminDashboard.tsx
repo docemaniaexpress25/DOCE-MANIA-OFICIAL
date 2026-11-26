@@ -67,6 +67,8 @@ import AReceberPanel from '@/components/doce/AReceberPanel';
 import CaixaFechamento from '@/components/doce/CaixaFechamento';
 // BLOCO 219: tela da baixa automática (contas a receber / boletos / Pix — telemetria + sync na mão)
 import ConciliacaoView from '@/components/doce/ConciliacaoView';
+// BLOCO 221: LOG DE BAIXAS em tela limpa (cada baixa automática na hora que aconteceu)
+import LogBaixasView from '@/components/doce/LogBaixasView';
 // BLOCO 118: David (R5) não tem comissão — helper da casa
 import { isDavidVendedor } from '@/lib/equipe';
 // BLOCO 211: ALERTA de vendas sem cobrança — a prazo sem boleto gerado e à vista
@@ -158,7 +160,7 @@ interface AdminDashboardProps {
 
 // BLOCO 118: 'CAIXA' agora é o FECHAMENTO DE CAIXA — as comissões viram aba 'COMISSOES'
 // BLOCO 156: 'FISCAL_PRODUTOS' = portal /fiscal-produtos — lista editável NCM/CEST/CFOP
-type TabType = 'HOME' | 'PORTAIS' | 'CATALOGO' | 'CATALOGO_PORTAL' | 'FISCAL_XML' | 'ENTRADAS' | 'CATEGORIAS' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'COMISSOES' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'COMPROVANTES' | 'ENTREGAS' | 'LUCRO' | 'BACKUP' | 'SETTINGS' | 'CONFIG_ERP' | 'ESTOQUE_MOV' | 'NOTAS_PENDENTES' | 'FISCAL_PRODUTOS' | 'FISCAL_CLIENTES' | 'NOTAS_ESPECIAIS' | 'CONCILIACAO';
+type TabType = 'HOME' | 'PORTAIS' | 'CATALOGO' | 'CATALOGO_PORTAL' | 'FISCAL_XML' | 'ENTRADAS' | 'CATEGORIAS' | 'VENDEDORES' | 'CARGAS' | 'CLIENTES' | 'HISTORY' | 'COMISSOES' | 'CAIXA' | 'ROTEIRO' | 'REPORTS' | 'CONTAS_RECEBER' | 'COMPROVANTES' | 'ENTREGAS' | 'LUCRO' | 'BACKUP' | 'SETTINGS' | 'CONFIG_ERP' | 'ESTOQUE_MOV' | 'NOTAS_PENDENTES' | 'FISCAL_PRODUTOS' | 'FISCAL_CLIENTES' | 'NOTAS_ESPECIAIS' | 'CONCILIACAO' | 'LOG_BAIXAS';
 
 type ReportType = 'RESUMO' | 'TOP_CLIENTES' | 'TOP_PRODUTOS' | 'CLIENTES_RISCO' | 'VENDAS_CATEGORIAS' | 'PRODUTOS_RENTAVEIS' | null;
 type ReportFilterType = 'RESUMO' | 'TOP_PRODUTOS' | 'TOP_CLIENTES' | 'CATEGORIAS' | 'VENDEDORES' | 'DIVIDAS' | 'PRODUTOS_RENTAVEIS';
@@ -772,12 +774,69 @@ ${remessaBloco}
       setNotifications(prev => [notif, ...prev].slice(0, 50));
       // Vibração se disponível
       if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+      // BLOCO 221: a baixa que acabou de virar UPDATE no sales também gerou um
+      // aviso persistido no servidor — busca em 5 s para o sino atualizar.
+      setTimeout(() => carregarNotifServidorRef.current(), 5000);
     }, notifPrefs);
     return () => {
       console.log('[NOTIF] Cleanup da inscrição realtime');
       cleanup();
     };
   }, [notifPrefs]);
+
+  // ============================================================
+  // BLOCO 221 — AVISOS PERSISTIDOS DE BAIXA (servidor)
+  // A tabela `notificacoes` guarda o aviso de TODA baixa automatica
+  // (webhook Inter em tempo real, cron 07h, auto-sync de 60 min). O polling
+  // de 60 s alimenta o sino; o realtime acima continua com o SOM na hora.
+  // ============================================================
+  const [notifServ, setNotifServ] = useState<AppNotification[]>([]);
+  const carregarNotifServidorRef = useRef<() => void>(() => {});
+  const carregarNotifServidor = useCallback(async () => {
+    try {
+      const res = await fetch('/api/notificacoes', { headers: { ...authHeaders() }, cache: 'no-store' });
+      if (!res.ok) return; // 503 = SQL 221 pendente; 403 = perfil sem avisos
+      const d = await res.json().catch(() => null);
+      if (!d?.ok) return;
+      setNotifServ(((d.itens || []) as Array<Record<string, unknown>>).map(n => ({
+        id: String(n.id),
+        type: 'BAIXA_BOLETO' as NotificationType,
+        title: String(n.titulo || 'Baixa automática'),
+        body: String(n.mensagem || ''),
+        data: { saleId: n.saleId, origem: n.origem, valor: n.valor },
+        createdAt: String(n.criadoEm || new Date().toISOString()),
+        read: !!n.lida,
+      })));
+    } catch { /* silencioso — o realtime cobre o resto */ }
+  }, []);
+  carregarNotifServidorRef.current = () => { void carregarNotifServidor(); };
+  useEffect(() => {
+    void carregarNotifServidor();
+    const iv = setInterval(() => { void carregarNotifServidor(); }, 60000);
+    return () => clearInterval(iv);
+  }, [carregarNotifServidor]);
+
+  /** Não lidas do servidor (persistidas — sobrevivem ao fechar o app). */
+  const naoLidasServidor = useMemo(() => notifServ.filter(n => !n.read).length, [notifServ]);
+  /** BLOCO 221: badge UNIFICADO — servidor + efêmeras do realtime sem duplicar
+   *  (a efêmera de uma baixa que já chegou do servidor não conta duas vezes). */
+  const saleIdsServNaoLidas = useMemo(
+    () => new Set(notifServ.filter(n => !n.read).map(n => n.data?.saleId).filter(Boolean)),
+    [notifServ]
+  );
+  const naoLidasEfimeras = useMemo(
+    () => notifications.filter(n => !n.read && !(n.data?.saleId && saleIdsServNaoLidas.has(n.data.saleId))).length,
+    [notifications, saleIdsServNaoLidas]
+  );
+  const badgeAvisos = naoLidasServidor + naoLidasEfimeras;
+  /** Painel: efêmeras do realtime + histórico persistido, mais recente 1º. */
+  const notifMerged = useMemo(() => {
+    const idsServ = new Set(notifServ.map(n => n.id));
+    const efimeras = notifications.filter(n => !idsServ.has(n.id));
+    return [...efimeras, ...notifServ]
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .slice(0, 60);
+  }, [notifications, notifServ]);
 
   const toggleNotifPref = (type: NotificationType) => {
     setNotifPrefs(prev => {
@@ -789,6 +848,14 @@ ${remessaBloco}
 
   const markAllRead = () => {
     setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+    // BLOCO 221: marca também no BANCO (POST /api/notificacoes) — o badge das
+    // baixas persistentes zera de verdade e sobrevive ao fechar o app.
+    fetch('/api/notificacoes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ acao: 'ler_todas' }),
+    }).then(() => setNotifServ(prev => prev.map(n => ({ ...n, read: true }))))
+      .catch(() => { /* best-effort — SQL 221 pendente nao trava o painel */ });
   };
 
   // ============================================================
@@ -2039,11 +2106,19 @@ ${remessaBloco}
         </div>
       )}
 
-      {activeTab !== 'HOME' && <button onClick={() => { setActiveTab('HOME'); setSearch(''); setActiveReport(null); }} className="w-10 h-10 bg-white text-blue-600 rounded-xl flex items-center justify-center shadow-sm border border-gray-100 mb-2 active:scale-90 transition-transform"><i className="fa-solid fa-arrow-left"></i></button>}
+      {activeTab !== 'HOME' && (
+        <div className="flex items-center gap-2 mb-2">
+          <button onClick={() => { setActiveTab('HOME'); setSearch(''); setActiveReport(null); }} className="w-10 h-10 bg-white text-blue-600 rounded-xl flex items-center justify-center shadow-sm border border-gray-100 active:scale-90 transition-transform"><i className="fa-solid fa-arrow-left"></i></button>
+          {/* BLOCO 221: SINO GLOBAL — o aviso de baixa aparece em TODAS as abas,
+              não só na HOME (o dono: "toda baixa a gente seja comunicado"). */}
+          <div className="flex-1" />
+          <button onClick={() => { setShowNotifPanel(!showNotifPanel); if (showNotifPanel) markAllRead(); }} className="relative w-10 h-10 bg-white text-blue-600 rounded-xl flex items-center justify-center shadow-sm border border-gray-100 active:scale-90"><i className="fa-solid fa-bell text-sm"></i>{badgeAvisos > 0 && (<span className="absolute -top-1 -right-1 w-5 h-5 bg-rose-500 text-white text-[8px] font-black rounded-full flex items-center justify-center animate-pulse">{badgeAvisos > 9 ? '9+' : badgeAvisos}</span>)}</button>
+        </div>
+      )}
 
       {activeTab === 'HOME' && (
         <div className="space-y-6 py-4">
-          <div className="px-2 flex items-center justify-between"><div><h2 className="text-2xl font-black text-gray-800 tracking-tight">Painel Administrativo</h2><p className="text-xs text-gray-400 font-semibold uppercase tracking-wider">Gestão e Controle Total</p></div><div className="flex items-center gap-2"><button onClick={() => setShowNotifPrefs(true)} className="w-10 h-10 bg-white text-gray-400 rounded-xl flex items-center justify-center shadow-sm border border-gray-100 active:scale-90"><i className="fa-solid fa-sliders text-xs"></i></button><button onClick={() => { setShowNotifPanel(!showNotifPanel); if (showNotifPanel) markAllRead(); }} className="w-10 h-10 bg-white text-blue-600 rounded-xl flex items-center justify-center shadow-sm border border-gray-100 active:scale-90 relative"><i className="fa-solid fa-bell text-sm"></i>{unreadCount > 0 && (<span className="absolute -top-1 -right-1 w-5 h-5 bg-rose-500 text-white text-[8px] font-black rounded-full flex items-center justify-center animate-pulse">{unreadCount > 9 ? '9+' : unreadCount}</span>)}</button></div></div>
+          <div className="px-2 flex items-center justify-between"><div><h2 className="text-2xl font-black text-gray-800 tracking-tight">Painel Administrativo</h2><p className="text-xs text-gray-400 font-semibold uppercase tracking-wider">Gestão e Controle Total</p></div><div className="flex items-center gap-2"><button onClick={() => setShowNotifPrefs(true)} className="w-10 h-10 bg-white text-gray-400 rounded-xl flex items-center justify-center shadow-sm border border-gray-100 active:scale-90"><i className="fa-solid fa-sliders text-xs"></i></button><button onClick={() => { setShowNotifPanel(!showNotifPanel); if (showNotifPanel) markAllRead(); }} className="w-10 h-10 bg-white text-blue-600 rounded-xl flex items-center justify-center shadow-sm border border-gray-100 active:scale-90 relative"><i className="fa-solid fa-bell text-sm"></i>{badgeAvisos > 0 && (<span className="absolute -top-1 -right-1 w-5 h-5 bg-rose-500 text-white text-[8px] font-black rounded-full flex items-center justify-center animate-pulse">{badgeAvisos > 9 ? '9+' : badgeAvisos}</span>)}</button></div></div>
           {/* ================================================================
               BLOCO 211 (pedido do dono): NADA DE VENDA PASSA SEM COBRAR —
               card no topo da HOME: venda A PRAZO sem boleto gerado
@@ -2084,6 +2159,8 @@ ${remessaBloco}
             <MenuCard icon="fa-file-invoice-dollar" title="Contas a Receber" tab="CONTAS_RECEBER" color="bg-rose-50 text-rose-600" />
             {/* BLOCO 219: telemetria da baixa automática (boletos/pix/caixa) + sync na mão */}
             <MenuCard icon="fa-arrows-rotate" title="Baixa Automática" tab="CONCILIACAO" color="bg-cyan-50 text-cyan-600" />
+            {/* BLOCO 221: LOG DE BAIXAS em tela limpa + badge com avisos não lidos */}
+            <MenuCard icon="fa-clipboard-list" title="Log de Baixas" tab="LOG_BAIXAS" color="bg-teal-50 text-teal-600" badge={badgeAvisos} />
             <MenuCard icon="fa-clipboard-check" title="Comprovantes Pix" tab="COMPROVANTES" color="bg-teal-50 text-teal-600" badge={comprovantesBadge} />
             <MenuCard icon="fa-truck" title="Entregas" tab="ENTREGAS" color="bg-emerald-50 text-emerald-600" />
             <MenuCard icon="fa-database" title="Backup" tab="BACKUP" color="bg-gray-100 text-gray-600" />
@@ -3246,7 +3323,10 @@ ${remessaBloco}
       )}
 
       {/* BLOCO 219: baixa automática — como funciona, frequência do sync, filas, log e botões de sync */}
-      {activeTab === 'CONCILIACAO' && <ConciliacaoView showToast={showToast} />}
+      {/* BLOCO 221: botão "Log" leva para a tela limpa LOG_BAIXAS */}
+      {activeTab === 'CONCILIACAO' && <ConciliacaoView showToast={showToast} onAbrirLogBaixas={() => setActiveTab('LOG_BAIXAS')} />}
+      {/* BLOCO 221: LOG DE BAIXAS — tela limpa com cada baixa na ordem em que aconteceu */}
+      {activeTab === 'LOG_BAIXAS' && <LogBaixasView showToast={showToast} />}
 
       {activeTab === 'COMPROVANTES' && (
         <div className="space-y-4">
@@ -3947,19 +4027,27 @@ ${remessaBloco}
             <div className="bg-gradient-to-br from-blue-600 to-indigo-700 p-4 flex items-center justify-between">
               <h3 className="font-black text-white text-sm uppercase">Notificacoes</h3>
               <div className="flex gap-2">
-                {unreadCount > 0 && <button onClick={markAllRead} className="text-white/70 text-[9px] font-bold uppercase active:scale-95">Marcar lidas</button>}
+                {/* BLOCO 221: "Marcar lidas" zera o badge UNIFICADO e grava no banco */}
+                {badgeAvisos > 0 && <button onClick={markAllRead} className="text-white/70 text-[9px] font-bold uppercase active:scale-95">Marcar lidas</button>}
                 <button onClick={() => setShowNotifPanel(false)} className="text-white/70 active:scale-95"><i className="fa-solid fa-xmark"></i></button>
               </div>
             </div>
+            {/* BLOCO 221: baixas automáticas ganham atalho direto para o Log */}
+            {badgeAvisos > 0 && (
+              <button onClick={() => { setShowNotifPanel(false); setActiveTab('LOG_BAIXAS'); }} className="w-full bg-teal-50 border-b border-teal-100 px-4 py-2.5 text-[9px] font-black uppercase text-teal-700 flex items-center justify-center gap-2 active:scale-[0.98]">
+                <i className="fa-solid fa-clipboard-list"></i>Abrir Log de Baixas
+              </button>
+            )}
             <div className="overflow-y-auto max-h-[60vh]">
-              {notifications.length === 0 && (
+              {/* BLOCO 221: lista UNIFICADA — avisos persistidos (servidor) + efêmeros do realtime */}
+              {notifMerged.length === 0 && (
                 <div className="p-8 text-center"><i className="fa-solid fa-bell-slash text-3xl text-gray-200 mb-3"></i><p className="text-[10px] text-gray-400 font-bold uppercase">Nenhuma notificacao</p></div>
               )}
-              {notifications.map((n, i) => {
+              {notifMerged.map((n, i) => {
                 const typeInfo = NOTIFICATION_TYPES.find(t => t.type === n.type);
                 return (
-                  <div key={n.id + i} className={`px-4 py-3 flex items-start gap-3 border-b border-gray-50 transition-all ${!n.read ? 'bg-blue-50/50' : ''}`}>
-                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${n.type === 'NOVA_VENDA' ? 'bg-emerald-100' : n.type === 'RECEBIMENTO' ? 'bg-blue-100' : 'bg-gray-100'}`}>
+                  <div key={n.id + i} className={`px-4 py-3 flex items-start gap-3 border-b border-gray-50 transition-all ${!n.read ? (n.type === 'BAIXA_BOLETO' ? 'bg-teal-50/50' : 'bg-blue-50/50') : ''}`}>
+                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${n.type === 'NOVA_VENDA' ? 'bg-emerald-100' : n.type === 'RECEBIMENTO' ? 'bg-blue-100' : n.type === 'BAIXA_BOLETO' ? 'bg-teal-100' : 'bg-gray-100'}`}>
                       <i className={`${typeInfo?.icon || 'fa-solid fa-bell'} ${typeInfo?.color || 'text-gray-400'} text-sm`}></i>
                     </div>
                     <div className="flex-1 min-w-0">
@@ -3967,7 +4055,7 @@ ${remessaBloco}
                       <p className="text-[9px] text-gray-500 font-semibold mt-0.5">{n.body}</p>
                       <p className="text-[8px] text-gray-300 mt-1">{new Date(n.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
                     </div>
-                    {!n.read && <div className="w-2 h-2 bg-blue-500 rounded-full flex-shrink-0 mt-1.5"></div>}
+                    {!n.read && <div className={`w-2 h-2 rounded-full flex-shrink-0 mt-1.5 ${n.type === 'BAIXA_BOLETO' ? 'bg-teal-500' : 'bg-blue-500'}`}></div>}
                   </div>
                 );
               })}

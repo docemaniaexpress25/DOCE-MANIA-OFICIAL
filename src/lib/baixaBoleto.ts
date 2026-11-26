@@ -1,4 +1,6 @@
 import { getServiceClient } from '@/lib/serverSupabase';
+// BLOCO 221: aviso aos admins a cada baixa ("toda baixa a gente seja comunicado")
+import { avisarBaixaBoleto, nomeClienteDaVenda } from '@/lib/notificacoes';
 
 /**
  * BLOCO 199 — BOLETO DUPLICO (regra do dono, EXCLUSIVO rota 5 / Deivid):
@@ -150,6 +152,24 @@ export async function baixarParcelaPaga(
   try {
     await db.from('sales').update({ baixa_origem: origem, baixa_em: new Date().toISOString() }).eq('id', parcela.sale_id);
   } catch { /* degrada ok */ }
+
+  // BLOCO 221: AVISO aos admins — parcela paga (baixa parcial ou fechamento
+  // da venda). Best-effort: SQL 221 ausente nao desfaz a baixa.
+  try {
+    const { data: cliId } = await db.from('sales').select('client_id').eq('id', parcela.sale_id).maybeSingle();
+    const cliente = await nomeClienteDaVenda(db, (cliId as Record<string, unknown> | null)?.client_id);
+    await avisarBaixaBoleto(db, {
+      saleId: parcela.sale_id,
+      valor: Number(parcela.valor) || 0,
+      origem,
+      cliente,
+      parcelaSeq: parcela.seq,
+      parcelaTotal: (todas || []).length || 2,
+      parcial: !fechar,
+    });
+  } catch (e: unknown) {
+    console.warn('[baixa-boleto] aviso da parcela nao gravado:', (e as Error)?.message);
+  }
 
   // Comissão libera só quando a venda FECHA (todas as parcelas pagas)
   if (fechar) {

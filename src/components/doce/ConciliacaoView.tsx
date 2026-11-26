@@ -47,6 +47,8 @@ interface Snapshot {
 
 interface ConciliacaoViewProps {
   showToast?: (message: string, type?: 'success' | 'error') => void;
+  /** BLOCO 221: atalho para a nova aba LOG_BAIXAS (tela limpa de baixas). */
+  onAbrirLogBaixas?: () => void;
 }
 
 const brl = (v: number) => 'R$ ' + (Number(v) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -93,7 +95,7 @@ const rotuloStatusBoleto = (s: string): string => {
   }
 };
 
-const ConciliacaoView: React.FC<ConciliacaoViewProps> = ({ showToast }) => {
+const ConciliacaoView: React.FC<ConciliacaoViewProps> = ({ showToast, onAbrirLogBaixas }) => {
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
@@ -184,13 +186,25 @@ const ConciliacaoView: React.FC<ConciliacaoViewProps> = ({ showToast }) => {
             <p className="text-[10px] text-gray-400 font-bold uppercase mt-1">Contas a receber · Boletos · Pix</p>
           </div>
         </div>
-        <button
-          onClick={() => void carregar()}
-          className="bg-white p-2.5 rounded-xl shadow-sm border border-gray-100 text-gray-500 active:scale-95 transition-all"
-          title="Atualizar agora"
-        >
-          <i className={`fa-solid fa-rotate ${carregando ? 'fa-spin' : ''}`}></i>
-        </button>
+        <div className="flex items-center gap-2">
+          {/* BLOCO 221: atalho para o LOG DE BAIXAS (tela limpa, por dia) */}
+          {onAbrirLogBaixas && (
+            <button
+              onClick={onAbrirLogBaixas}
+              className="bg-teal-600 text-white px-3 py-2.5 rounded-xl text-[9px] font-black uppercase flex items-center gap-1.5 shadow-sm active:scale-95 transition-all"
+              title="Abrir o Log de Baixas"
+            >
+              <i className="fa-solid fa-clipboard-list"></i>Log
+            </button>
+          )}
+          <button
+            onClick={() => void carregar()}
+            className="bg-white p-2.5 rounded-xl shadow-sm border border-gray-100 text-gray-500 active:scale-95 transition-all"
+            title="Atualizar agora"
+          >
+            <i className={`fa-solid fa-rotate ${carregando ? 'fa-spin' : ''}`}></i>
+          </button>
+        </div>
       </header>
 
       {carregando && !snap && (
@@ -212,7 +226,7 @@ const ConciliacaoView: React.FC<ConciliacaoViewProps> = ({ showToast }) => {
             <h3 className="text-[11px] font-black text-gray-800 uppercase flex items-center gap-2"><i className="fa-solid fa-circle-info text-cyan-500"></i>Como a baixa acontece (5 vias)</h3>
             {[
               { ic: 'fa-bolt', nome: 'Webhook do Inter', via: 'TEMPO REAL — instantâneo', desc: 'O Inter avisa que o boleto/pix caiu, o app re-consulta o Inter e baixa sozinho na hora. Vai para Contas a Receber, Caixa e histórico da venda.', cor: 'bg-emerald-50 text-emerald-600' },
-              { ic: 'fa-clock', nome: `Cron do sync — ${snap.crons.boletosSync.rotulo}`, via: `1x POR DIA · ${snap.crons.boletosSync.limite}`, desc: 'Rede de segurança: se o aviso do Inter se perder, todo dia às 07:00 o app reconsulta os boletos abertos e baixa o que já pagou.', cor: 'bg-cyan-50 text-cyan-600' },
+              { ic: 'fa-clock', nome: `Cron + auto-sync — ${snap.crons.boletosSync.rotulo}`, via: 'VÁRIAS VEZES POR DIA · 07:00 + de hora em hora', desc: 'Rede de segurança: se o aviso do Inter se perder, todo dia às 07:00 o app reconsulta os boletos abertos e baixa o que já pagou. E o AUTO-SYNC repete a rodada a cada 60 min enquanto o sistema é usado.', cor: 'bg-cyan-50 text-cyan-600' },
               { ic: 'fa-database', nome: 'Trigger do caixa (SQL)', via: 'TEMPO REAL — dentro do banco', desc: 'Venda à vista PAGO (dinheiro/pix) entra no caixa na hora. Venda vira PAGO por qualquer via: a linha do boleto no caixa "zera" sozinha.', cor: 'bg-teal-50 text-teal-600' },
               { ic: 'fa-mobile-alt', nome: 'Comprovante Pix do portal', via: 'MANUAL — revisão do admin', desc: 'Cliente manda o comprovante pelo portal; entra na fila "Comprovantes Pix" e a baixa acontece quando você confirma.', cor: 'bg-violet-50 text-violet-600' },
               { ic: 'fa-hand', nome: 'Baixa manual', via: 'MANUAL — admin/PDV', desc: 'Boleto pago fora do app (emitido direto no Internet Banking) não tem venda vinculada: baixa manual no Contas a Receber.', cor: 'bg-amber-50 text-amber-600' },
@@ -228,7 +242,7 @@ const ConciliacaoView: React.FC<ConciliacaoViewProps> = ({ showToast }) => {
             ))}
             <div className="rounded-2xl bg-slate-50 border border-slate-100 p-3 text-[9px] font-bold text-slate-500 leading-snug">
               <i className="fa-solid fa-calendar-days mr-1 text-slate-400"></i>
-              Frequência dos crons (agendados na Vercel): boletos <b>{snap.crons.boletosSync.schedule}</b> = {snap.crons.boletosSync.rotulo} · notas fiscais <b>{snap.crons.notasSync.schedule}</b> = {snap.crons.notasSync.rotulo}.
+              Frequência: boletos <b>{snap.crons.boletosSync.schedule}</b> = {snap.crons.boletosSync.rotulo} + <b>AUTO-SYNC a cada 60 min</b> enquanto o sistema é usado · notas fiscais <b>{snap.crons.notasSync.schedule}</b> = {snap.crons.notasSync.rotulo}.
             </div>
           </section>
 

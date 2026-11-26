@@ -3,6 +3,8 @@ import { getServiceClient } from '@/lib/serverSupabase';
 import { sessionFromRequest } from '@/lib/session';
 import { isInterConfigured } from '@/lib/interBoleto';
 import { hasBoletoColumns, hasSalesBoletosTable } from '@/lib/serverSchema';
+// BLOCO 221: auto-sync horario — abrir a tela da Baixa Automatica conta como uso
+import { agendarAutoSyncBoletos } from '@/lib/autoSync';
 
 /**
  * BLOCO 219 — TELEMETRIA DA BAIXA AUTOMATICA (contas a receber / boletos / Pix)
@@ -41,6 +43,9 @@ export async function GET(req: NextRequest) {
   if (!session || session.perfil !== 'ADMIN') {
     return NextResponse.json({ ok: false, erro: 'Somente admin.' }, { status: 401 });
   }
+
+  // BLOCO 221: AUTO-SYNC horario (via after() — roda depois da resposta).
+  agendarAutoSyncBoletos();
 
   const db = getServiceClient();
   const agora = new Date();
@@ -192,7 +197,7 @@ export async function GET(req: NextRequest) {
     agora: agora.toISOString(),
     // frequencias reais agendadas na Vercel (vercel.json) — espelhadas na UI
     crons: {
-      boletosSync: { schedule: '0 10 * * *', rotulo: 'Todo dia 07:00 (Brasília)', limite: '15 boletos + 15 parcelas por rodada' },
+      boletosSync: { schedule: '0 10 * * *', rotulo: 'Todo dia 07:00 (Brasília)', limite: '15 boletos + 15 parcelas por rodada + AUTO-SYNC a cada 60 min' },
       notasSync: { schedule: '0 12 * * *', rotulo: 'Todo dia 09:00 (Brasília)', limite: 'status fiscal das notas' },
     },
     config,

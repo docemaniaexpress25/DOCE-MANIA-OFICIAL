@@ -3,6 +3,8 @@ import { getServiceClient, isServerSupabaseConfigured, devBridge } from '@/lib/s
 import { sessionFromRequest } from '@/lib/session';
 import { hasBoletoColumns } from '@/lib/serverSchema';
 import { isInterConfigured, consultarWebhookInter } from '@/lib/interBoleto';
+// BLOCO 221: auto-sync horario — abrir o painel da automacao conta como uso
+import { agendarAutoSyncBoletos } from '@/lib/autoSync';
 
 /**
  * BLOCO 220 — PAINEL DA BAIXA AUTOMATICA (admin/secretario).
@@ -39,6 +41,9 @@ export async function GET(req: NextRequest) {
   if (session.perfil !== 'ADMIN' && session.perfil !== 'SECRETARIO') {
     return NextResponse.json({ ok: false, error: 'Somente admin/secretario veem o painel da automacao.' }, { status: 403 });
   }
+
+  // BLOCO 221: AUTO-SYNC horario (via after() — roda depois da resposta).
+  agendarAutoSyncBoletos();
 
   const db = getServiceClient();
 
@@ -82,11 +87,12 @@ export async function GET(req: NextRequest) {
     webhook,
     filaAberta,
     ultimoSync,
-    // BLOCO 220: frequencias reais — webhook = tempo real; sync = cron Vercel
-    // (vercel.json: "0 10 * * *" = 10h UTC = 07h Brasilia) + botao manual.
+    // BLOCO 220/221: frequencias reais — webhook = tempo real; sync = cron
+    // diario da Vercel (07h Brasilia) + AUTO-SYNC a cada 60 min sempre que o
+    // sistema e usado (Log de Baixas, conciliacao, painel, sino) + botao manual.
     frequencia: {
       webhook: 'Tempo real — o Inter avisa o app na hora do pagamento (retries em 20/30/60/120 min se falhar)',
-      sync: 'Rede de seguranca: 1x por dia as 07h (Brasilia) via cron da Vercel + botao "Sincronizar agora"',
+      sync: 'Varias vezes por dia: cron da Vercel 07h (Brasilia) + AUTO-SYNC a cada 60 min quando o sistema e usado + botao "Sincronizar agora"',
     },
   });
 }

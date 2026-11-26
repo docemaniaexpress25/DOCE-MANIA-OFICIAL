@@ -82,7 +82,8 @@ export const locationService = {
 };
 
 // Tipos de notificacao disponiveis
-export type NotificationType = 'NOVA_VENDA' | 'RECEBIMENTO' | 'NOVO_CLIENTE' | 'ESTOQUE_BAIXO';
+// BLOCO 221: BAIXA_BOLETO = aviso persistido do webhook/cron (tabela notificacoes)
+export type NotificationType = 'NOVA_VENDA' | 'RECEBIMENTO' | 'NOVO_CLIENTE' | 'ESTOQUE_BAIXO' | 'BAIXA_BOLETO';
 
 export interface NotificationPref {
   type: NotificationType;
@@ -95,6 +96,7 @@ export interface NotificationPref {
 export const NOTIFICATION_TYPES: NotificationPref[] = [
   { type: 'NOVA_VENDA', label: 'Venda Realizada', icon: 'fa-solid fa-cart-shopping', color: 'text-emerald-500', enabled: true },
   { type: 'RECEBIMENTO', label: 'Recebimento de Conta', icon: 'fa-solid fa-money-bill-wave', color: 'text-blue-500', enabled: true },
+  { type: 'BAIXA_BOLETO', label: 'Baixa de Boleto (automática)', icon: 'fa-solid fa-bolt', color: 'text-teal-500', enabled: true },
   { type: 'NOVO_CLIENTE', label: 'Novo Cliente Cadastro', icon: 'fa-solid fa-user-plus', color: 'text-purple-500', enabled: false },
   { type: 'ESTOQUE_BAIXO', label: 'Estoque Baixo', icon: 'fa-solid fa-box-open', color: 'text-orange-500', enabled: false },
 ];

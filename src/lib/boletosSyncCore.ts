@@ -1,9 +1,10 @@
 import { getServiceClient } from '@/lib/serverSupabase';
 import { hasBoletoColumns, hasSalesBoletosTable } from '@/lib/serverSchema';
-import { isInterConfigured, recuperarCobranca, interpretarCobranca } from '@/lib/interBoleto';
+import { isInterConfigured, recuperarCobranca, interpretarCobranca, cancelarCobranca } from '@/lib/interBoleto';
 import { espelharParcelaInter, baixarParcelaPaga, type ParcelaRow } from '@/lib/baixaBoleto';
 // BLOCO 221: aviso aos admins a cada baixa ("toda baixa a gente seja comunicado")
-import { avisarBaixaBoleto, nomeClienteDaVenda } from '@/lib/notificacoes';
+// BLOCO 226: avisos do AUTO-DESTRAVAMENTO e da cobranca ORFA do Inter
+import { avisarBaixaBoleto, nomeClienteDaVenda, avisarBoletoAutoDestravado, avisarBoletoOrfao } from '@/lib/notificacoes';
 
 /**
  * BLOCO 221 — CORE DA SINCRONIZACAO DE BOLETOS (extraido da rota
@@ -34,8 +35,52 @@ export interface ResumoSync {
   ok: boolean;
   processadas: number;
   baixadas: number;
+  /** BLOCO 226: boletos/parcelas presas em EM_PROCESSAMENTO liberadas sozinhas. */
+  destravadas?: number;
+  /** BLOCO 226: cobrancas orfas do Inter resolvidas nesta rodada. */
+  orfaos?: number;
   falhas?: Array<{ id: string; erro: string }>;
   motivo?: string;
+}
+
+const carimboCurto = () =>
+  new Intl.DateTimeFormat('pt-BR', {
+    timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).format(new Date());
+
+/** BLOCO 226: minutos desde o ISO local (null quando ausente/invalido). */
+function minutosDesde(iso: unknown): number | null {
+  if (!iso) return null;
+  const t = new Date(String(iso)).getTime();
+  if (!Number.isFinite(t)) return null;
+  return Math.max(0, Math.round((Date.now() - t) / 60000));
+}
+
+/**
+ * BLOCO 226 — registra a COBRANCA ORFA em webhook_logs (best-effort).
+ * Órfã = cobrança viva no Inter que o sistema local já liberou (destravou).
+ * O sync vigia cada órfã: se ela sair de EM_PROCESSAMENTO ele CANCELA sozinho
+ * (nada de cliente pagar boleto que o sistema nao conhece); se alguém PAGAR,
+ * avisa os admins com urgência. Sem SQL novo: usa a webhook_logs (SQL 167).
+ */
+async function registrarOrfao(
+  db: ReturnType<typeof getServiceClient>,
+  o: { codigo: string; seuNumero: string; saleId?: string; fonte: string; detalhe: string }
+): Promise<void> {
+  try {
+    const { error } = await db.from('webhook_logs').insert({
+      origem: 'ORFAO_INTER',
+      evento: { fonte: o.fonte } as any,
+      codigo: (o.codigo || '').slice(0, 120) || null,
+      seu_numero: (o.seuNumero || '').slice(0, 60) || null,
+      sale_id: o.saleId ? String(o.saleId).slice(0, 64) : null,
+      resultado: o.detalhe.slice(0, 300),
+      processado: false,
+    });
+    if (error) console.warn('[boletos-sync] orfao nao registrado:', error.message);
+  } catch (err: any) {
+    console.warn('[boletos-sync] orfao nao registrado:', err?.message);
+  }
 }
 
 /** Persiste o evento do SYNC em webhook_logs (origem 'CRON'). Best-effort. */
@@ -92,7 +137,7 @@ export async function executarSyncBoletos(): Promise<ResumoSync> {
   const db = getServiceClient();
   const { data: abertos, error } = await db
     .from('sales')
-    .select('id, valor_total, valor_pago, status_pagamento, detalhe_pagamento, inter_boleto_status, inter_boleto_codigo, inter_boleto_seu_numero, inter_boleto_vencimento, client_id')
+    .select('id, valor_total, valor_pago, status_pagamento, detalhe_pagamento, inter_boleto_status, inter_boleto_codigo, inter_boleto_seu_numero, inter_boleto_vencimento, inter_boleto_em, client_id')
     .in('inter_boleto_status', ['EM_PROCESSAMENTO', 'A_RECEBER', 'ATRASADO'])
     .limit(LIMITE);
 
@@ -106,6 +151,7 @@ export async function executarSyncBoletos(): Promise<ResumoSync> {
 
   let processadas = 0;
   let baixadas = 0;
+  let destravadas = 0; // BLOCO 226
   const falhas: Array<{ id: string; erro: string }> = [];
   const hojeSp = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 
@@ -135,6 +181,49 @@ export async function executarSyncBoletos(): Promise<ResumoSync> {
       }
       const cob = interpretarCobranca(r.data as Record<string, unknown>);
       processadas++;
+
+      // ===================================================================
+      // BLOCO 226 — AUTO-DESTRAVAR (boleto ÚNICO): cobrança ainda presa em
+      // EM_PROCESSAMENTO no Inter APÓS 60 MINUTOS da emissão local. Caso
+      // Paradouro do Campo: o Inter aceita o POST e NUNCA processa, e o
+      // cancelamento é recusado nesse estado — o boleto travava o card para
+      // sempre e o dono não conseguia gerar novo. Agora o sync libera SOZINHO:
+      //   1. tenta cancelar no Inter (se saiu do processamento, cancela de
+      //      verdade e elimina o risco de pagamento em duplicidade);
+      //   2. marca FALHA_EMISSAO local com mensagem clara (o card volta a
+      //      oferecer GERAR — mesmo efeito do botão DESTRAVAR, sem depender
+      //      de admin);
+      //   3. registra a cobrança ÓRFÃ para vigilância (processarOrfaos);
+      //   4. notifica os admins.
+      // ===================================================================
+      if (cob.status === 'EM_PROCESSAMENTO') {
+        const min = minutosDesde(sale.inter_boleto_em);
+        if (min !== null && min >= 60) {
+          const cliente = await nomeClienteDaVenda(db, sale.client_id);
+          let cancelou = false;
+          try {
+            const c = await cancelarCobranca(codigo, 'Emissao presa - liberada pelo sistema');
+            cancelou = c.ok || c.status === 202;
+          } catch { /* Inter recusou (esperado) — segue como órfã vigiada */ }
+          await db.from('sales').update({
+            inter_boleto_status: 'FALHA_EMISSAO',
+            inter_boleto_erro: cancelou
+              ? `Emissão ficou ${min} min presa em EM_PROCESSAMENTO no Inter e foi CANCELADA lá pelo sistema em ${carimboCurto()}. Gere um boleto novo.`
+              : `Emissão ficou ${min} min presa em EM_PROCESSAMENTO no Inter (cancelamento recusado lá) — boleto liberado pelo sistema em ${carimboCurto()}. Gere um boleto novo.`,
+          }).eq('id', saleId);
+          await registrarOrfao(db, {
+            codigo,
+            seuNumero,
+            saleId,
+            fonte: 'auto-destrava-boleto-unico',
+            detalhe: `boleto único destravado automaticamente após ${min} min em EM_PROCESSAMENTO (cancelou no Inter: ${cancelou ? 'sim' : 'nao — Inter recusou'})`,
+          });
+          destravadas++;
+          await logCronEvento(db, { codigo, seuNumero, saleId, resultado: `AUTO-DESTRAVA: emissão presa ${min} min — FALHA_EMISSAO local${cancelou ? ' + cancelada no Inter' : ''}`, processado: true });
+          await avisarBoletoAutoDestravado(db, { saleId, codigo, cliente, cancelouNoInter: cancelou, minutosPreso: min });
+          continue;
+        }
+      }
 
       const vencido = !!String(cob.vencimento || '') && String(cob.vencimento) < hojeSp;
       const statusFinal = cob.status === 'A_RECEBER' && vencido && sale.status_pagamento !== 'PAGO'
@@ -187,10 +276,27 @@ export async function executarSyncBoletos(): Promise<ResumoSync> {
     const sinc = await sincronizarParcelas(db);
     processadas += sinc.processadas;
     baixadas += sinc.baixadas;
+    destravadas += sinc.destravadas;
     if (sinc.falhas > 0) falhas.push({ id: 'parcelas', erro: `${sinc.falhas} falha(s) no sync das parcelas` });
   }
 
-  return { ok: true, processadas, baixadas, falhas: falhas.length ? falhas : undefined };
+  // BLOCO 226: vigia as COBRANÇAS ÓRFÃS (liberadas localmente enquanto vivas
+  // no Inter) — cancela sozinho quando processarem, avisa URGENTE se pagarem.
+  let orfaos = 0;
+  try {
+    orfaos = await processarOrfaos(db);
+  } catch (e: unknown) {
+    console.warn('[boletos-sync] vigilância de órfãos falhou:', (e as Error).message);
+  }
+
+  return {
+    ok: true,
+    processadas,
+    baixadas,
+    destravadas,
+    orfaos,
+    falhas: falhas.length ? falhas : undefined,
+  };
 }
 
 /**
@@ -199,22 +305,23 @@ export async function executarSyncBoletos(): Promise<ResumoSync> {
  * sales_boletos: reconsulta o Inter, espelha status, marca ATRASADO por
  * vencimento e baixa a parcela paga (a venda fecha quando TODAS pagarem).
  */
-async function sincronizarParcelas(db: ReturnType<typeof getServiceClient>): Promise<{ processadas: number; baixadas: number; falhas: number }> {
+async function sincronizarParcelas(db: ReturnType<typeof getServiceClient>): Promise<{ processadas: number; baixadas: number; destravadas: number; falhas: number }> {
   const LIMITE_PARCELAS = 15;
   const hojeSp = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
   let processadas = 0;
   let baixadas = 0;
+  let destravadas = 0; // BLOCO 226
   let falhas = 0;
 
   const { data: abertas, error } = await db
     .from('sales_boletos')
-    .select('id, sale_id, seq, valor, vencimento, status, codigo, seu_numero, linha, barras, pix, erro')
+    .select('id, sale_id, seq, valor, vencimento, status, codigo, seu_numero, linha, barras, pix, erro, emitido_em')
     .in('status', ['EM_PROCESSAMENTO', 'A_RECEBER', 'ATRASADO'])
     .order('vencimento', { ascending: true })
     .limit(LIMITE_PARCELAS);
   if (error) {
     console.warn('[boletos-sync] leitura das parcelas falhou:', error.message);
-    return { processadas: 0, baixadas: 0, falhas: 1 };
+    return { processadas: 0, baixadas: 0, destravadas: 0, falhas: 1 };
   }
   for (const p of (abertas || []) as unknown as ParcelaRow[]) {
     if (!p.codigo) continue;
@@ -238,6 +345,46 @@ async function sincronizarParcelas(db: ReturnType<typeof getServiceClient>): Pro
       }
       const cob = interpretarCobranca(r.data as Record<string, unknown>);
       processadas++;
+
+      // ===================================================================
+      // BLOCO 226 — AUTO-DESTRAVAR (PARCELA): mesma regra do boleto único —
+      // parcela presa em EM_PROCESSAMENTO no Inter há 60+ min é liberada
+      // sozinha (cancela no Inter quando possível, FALHA_EMISSAO local,
+      // órfã registrada, admins avisados). O GERAR volta a aparecer no card
+      // sem precisar de admin.
+      // ===================================================================
+      if (cob.status === 'EM_PROCESSAMENTO') {
+        const min = minutosDesde((p as unknown as Record<string, unknown>).emitido_em);
+        if (min !== null && min >= 60) {
+          let cancelou = false;
+          try {
+            const c = await cancelarCobranca(p.codigo, 'Emissao presa - liberada pelo sistema');
+            cancelou = c.ok || c.status === 202;
+          } catch { /* Inter recusou (esperado) — segue como órfã vigiada */ }
+          await db.from('sales_boletos').update({
+            status: 'FALHA_EMISSAO',
+            erro: cancelou
+              ? `Emissão ficou ${min} min presa em EM_PROCESSAMENTO no Inter e foi CANCELADA lá pelo sistema em ${carimboCurto()}. Gere o boleto novamente.`
+              : `Emissão ficou ${min} min presa em EM_PROCESSAMENTO no Inter (cancelamento recusado lá) — boleto liberado pelo sistema em ${carimboCurto()}. Gere o boleto novamente.`,
+          }).eq('id', String(p.id));
+          await registrarOrfao(db, {
+            codigo: String(p.codigo),
+            seuNumero: String(p.seu_numero || ''),
+            saleId: String(p.sale_id),
+            fonte: 'auto-destrava-parcela',
+            detalhe: `parcela ${p.seq} destravada automaticamente após ${min} min em EM_PROCESSAMENTO (cancelou no Inter: ${cancelou ? 'sim' : 'nao — Inter recusou'})`,
+          });
+          destravadas++;
+          await logCronEvento(db, { codigo: p.codigo, seuNumero: p.seu_numero || '', saleId: p.sale_id, resultado: `AUTO-DESTRAVA parcela ${p.seq}: presa ${min} min — FALHA_EMISSAO local${cancelou ? ' + cancelada no Inter' : ''}`, processado: true });
+          try {
+            const { data: s2 } = await db.from('sales').select('client_id').eq('id', String(p.sale_id)).maybeSingle();
+            const cliente = await nomeClienteDaVenda(db, (s2 as Record<string, unknown> | null)?.client_id);
+            await avisarBoletoAutoDestravado(db, { saleId: String(p.sale_id), parcelaSeq: p.seq, parcelaTotal: null, codigo: String(p.codigo), cliente, cancelouNoInter: cancelou, minutosPreso: min });
+          } catch { /* aviso é best-effort */ }
+          continue;
+        }
+      }
+
       await espelharParcelaInter(db, p, cob, hojeSp);
       const pagoInter = cob.status === 'RECEBIDO' || cob.status === 'MARCADO_RECEBIDO' || (cob.valorRecebido !== null && cob.valorRecebido > 0);
       if (pagoInter) {
@@ -252,5 +399,105 @@ async function sincronizarParcelas(db: ReturnType<typeof getServiceClient>): Pro
       console.warn('[boletos-sync] parcela', p.seq, 'falhou:', (e as Error).message);
     }
   }
-  return { processadas, baixadas, falhas };
+  return { processadas, baixadas, destravadas, falhas };
+}
+
+// ---------------------------------------------------------------------------
+// BLOCO 226 — VIGILÂNCIA DAS COBRANÇAS ÓRFÃS DO INTER.
+// Órfã = cobrança viva lá dentro cujo boleto o sistema já liberou (DESTRAVAR
+// manual ou auto-destrava). Enquanto EM_PROCESSAMENTO ninguém consegue pagá-la
+// (sem linha digitável) — mas SE ela processar um dia, o cliente receberia um
+// boleto que o sistema não conhece mais: aqui o sync CANCELA sozinho quando
+// ela vira A_RECEBER (o Inter aceita cancelar nesse estado) e avisa URGENTE
+// caso alguém já tenha PAGADO. Pendências ficam com processado=false e são
+// reavaliadas na próxima rodada. Sem SQL novo (usa a webhook_logs do SQL 167).
+// ---------------------------------------------------------------------------
+const LIMITE_ORFAOS = 10;
+
+async function processarOrfaos(db: ReturnType<typeof getServiceClient>): Promise<number> {
+  let tratados = 0;
+  let pendentes: Record<string, unknown>[] = [];
+  try {
+    const { data, error } = await db
+      .from('webhook_logs')
+      .select('id, codigo, seu_numero, sale_id, resultado')
+      .eq('origem', 'ORFAO_INTER')
+      .eq('processado', false)
+      .order('criado_em', { ascending: true })
+      .limit(LIMITE_ORFAOS);
+    if (error) {
+      console.warn('[boletos-sync] leitura de órfãos falhou:', error.message);
+      return 0;
+    }
+    pendentes = (data || []) as Record<string, unknown>[];
+  } catch {
+    return 0; // tabela ausente (SQL 167 pendente) — vigilância degrada ok
+  }
+
+  const clienteDaSale = async (saleId: string): Promise<string | null> => {
+    if (!saleId) return null;
+    try {
+      const { data: s } = await db.from('sales').select('client_id').eq('id', saleId).maybeSingle();
+      return await nomeClienteDaVenda(db, (s as Record<string, unknown> | null)?.client_id);
+    } catch {
+      return null;
+    }
+  };
+
+  for (const o of pendentes) {
+    const logId = String(o.id || '');
+    const codigo = String(o.codigo || '');
+    const saleId = String(o.sale_id || '');
+    const baseTxt = String(o.resultado || '').slice(0, 140);
+    if (!codigo || !logId) {
+      // registro sem codigo não tem o que vigiar — fecha (update é no-op se logId vazio)
+      if (logId) {
+        await db.from('webhook_logs').update({ processado: true, resultado: `${baseTxt} | sem codigo — fechado` }).eq('id', logId);
+      }
+      continue;
+    }
+    const r = await recuperarCobranca(codigo);
+    // Órfã deixou de existir no Inter — objetivo alcançado, fecha o registro.
+    if (!r.ok && r.status === 404) {
+      await db.from('webhook_logs').update({ processado: true, resultado: `${baseTxt} | órfã não existe mais no Inter (404) — fechado` }).eq('id', logId);
+      tratados++;
+      continue;
+    }
+    if (!r.ok || !r.data || 'erro' in r.data) continue; // falha de consulta — reavalia na próxima rodada
+    const cob = interpretarCobranca(r.data as Record<string, unknown>);
+    const situacao = cob.status;
+
+    // PAGA: o caso grave — cliente pagou cobrança que o sistema não conhece.
+    const pagaInter = situacao === 'RECEBIDO' || situacao === 'MARCADO_RECEBIDO' || (cob.valorRecebido !== null && cob.valorRecebido > 0);
+    if (pagaInter) {
+      const cliente = await clienteDaSale(saleId);
+      await avisarBoletoOrfao(db, { codigo, situacao, saleId: saleId || null, cliente, valor: cob.valorRecebido, paga: true });
+      await logCronEvento(db, { codigo, seuNumero: String(o.seu_numero || ''), saleId: saleId || undefined, resultado: `ORFÃ PAGA pelo cliente R$ ${Number(cob.valorRecebido || 0).toFixed(2)} — aviso urgente aos admins`, processado: true });
+      await db.from('webhook_logs').update({ processado: true, resultado: `${baseTxt} | órfã PAGA — admin avisado` }).eq('id', logId);
+      tratados++;
+      continue;
+    }
+
+    // Já morta lá dentro (cancelada pelo humano do Inter, expirada...) — fecha.
+    if (['CANCELADO', 'EXPIRADO', 'REJEITADO', 'FALHA_EMISSAO'].includes(situacao)) {
+      await db.from('webhook_logs').update({ processado: true, resultado: `${baseTxt} | órfã morreu no Inter (${situacao}) — fechado` }).eq('id', logId);
+      tratados++;
+      continue;
+    }
+
+    // EM_PROCESSAMENTO / A_RECEBER / ATRASADO: cancelar no Inter (A_RECEBER
+    // é o estado em que o Inter ACEITA o cancelamento — risco eliminado).
+    const c = await cancelarCobranca(codigo, 'Cobranca sobrando - cancelada pelo sistema');
+    const cancelou = c.ok || c.status === 202;
+    if (cancelou) {
+      const cliente = await clienteDaSale(saleId);
+      await avisarBoletoOrfao(db, { codigo, situacao, saleId: saleId || null, cliente, valor: cob.valor, cancelada: true });
+      await logCronEvento(db, { codigo, seuNumero: String(o.seu_numero || ''), saleId: saleId || undefined, resultado: `ORFÃ cancelada no Inter (estava ${situacao}) — risco de pagamento duplicado eliminado`, processado: true });
+      await db.from('webhook_logs').update({ processado: true, resultado: `${baseTxt} | órfã CANCELADA no Inter (estava ${situacao})` }).eq('id', logId);
+      tratados++;
+    }
+    // Recusado de novo (EM_PROCESSAMENTO): segue pendente — próxima rodada
+    // tenta de novo até o Inter processar ou matar a cobrança.
+  }
+  return tratados;
 }

@@ -761,10 +761,40 @@ export async function POST(req: NextRequest) {
         return BAD(422, `Só boleto em EM_PROCESSAMENTO pode ser destravado (esta parcela está ${String(parcela.status || 'NAO_GERADO')}).`);
       }
       const codAntigo = String(parcela.codigo || '');
+      // =================================================================
+      // BLOCO 226 — o DESTRAVAR agora tenta CANCELAR a cobrança no Inter
+      // ANTES de liberar local: se ela saiu de EM_PROCESSAMENTO (virou
+      // A_RECEBER), o cancelamento CONSEGUE e o risco de o cliente pagar a
+      // cobrança antiga acaba NA HORA. Se o Inter ainda recusa (estado
+      // EM_PROCESSAMENTO), a cobrança fica registrada como ÓRFÃ e o sync
+      // passa a vigiá-la: cancela sozinho quando ela processar e avisa
+      // URGENTE se alguém pagou.
+      // =================================================================
+      let destinoOrfao = 'recusado';
+      if (codAntigo && isInterConfigured()) {
+        try {
+          const c = await cancelarCobranca(codAntigo, 'Cobranca presa - liberada pelo sistema');
+          if (c.ok || c.status === 202) destinoOrfao = 'cancelado';
+          else if (c.status === 404) destinoOrfao = 'inexistente';
+        } catch { /* degrada: órfã fica sob vigilância do sync */ }
+      }
+      if (codAntigo && destinoOrfao === 'recusado') {
+        try {
+          await db.from('webhook_logs').insert({
+            origem: 'ORFAO_INTER',
+            evento: { fonte: 'destravar-parcela' },
+            codigo: codAntigo.slice(0, 120),
+            seu_numero: String(parcela.seu_numero || '').slice(0, 60) || null,
+            sale_id: saleId.slice(0, 64),
+            resultado: `parcela ${Number(parcela.seq) || 1} destravada pelo admin — cobrança segue VIVA no Inter (cancelamento recusado); sync vigia e cancela sozinho quando sair do EM_PROCESSAMENTO`,
+            processado: false,
+          });
+        } catch { /* tabela ausente (SQL 167 pendente) não trava o destravamento */ }
+      }
       await db.from('sales_boletos').update({
         status: 'FALHA_EMISSAO',
         codigo: null,
-        erro: `Destravado pelo admin em ${carimbo}: cobrança ${codAntigo.slice(0, 36)} estava presa em EM_PROCESSAMENTO no Inter (cancelamento recusado lá). Gere um novo boleto.`,
+        erro: `Destravado pelo admin em ${carimbo}: cobrança ${codAntigo.slice(0, 36)} estava presa em EM_PROCESSAMENTO no Inter${destinoOrfao === 'cancelado' ? ' e foi CANCELADA lá agora' : destinoOrfao === 'inexistente' ? ' e nem existe mais lá' : ' (cancelamento recusado lá — o sync vigia e cancela sozinho quando sair do processamento)'}. Gere um novo boleto.`,
       }).eq('id', String(parcela.id));
       await recomputeVencimentoVenda(saleId);
       const { data: atual } = await db.from('sales_boletos').select(PARC_COLS).eq('id', String(parcela.id)).maybeSingle();
@@ -774,10 +804,34 @@ export async function POST(req: NextRequest) {
       return BAD(422, `Só boleto em EM_PROCESSAMENTO pode ser destravado (esta venda está ${String(sale.inter_boleto_status || 'NAO_GERADO')}).`);
     }
     const codUnico = String(sale.inter_boleto_codigo || '');
+    // BLOCO 226: mesmo tratamento do DESTRAVAR de parcela (acima) — tenta
+    // cancelar no Inter primeiro; recusado, registra a ÓRFÃ para o sync
+    // vigiar/cancelar sozinho.
+    let destinoOrfaoUnico = 'recusado';
+    if (codUnico && isInterConfigured()) {
+      try {
+        const c = await cancelarCobranca(codUnico, 'Cobranca presa - liberada pelo sistema');
+        if (c.ok || c.status === 202) destinoOrfaoUnico = 'cancelado';
+        else if (c.status === 404) destinoOrfaoUnico = 'inexistente';
+      } catch { /* degrada: órfã fica sob vigilância do sync */ }
+    }
+    if (codUnico && destinoOrfaoUnico === 'recusado') {
+      try {
+        await db.from('webhook_logs').insert({
+          origem: 'ORFAO_INTER',
+          evento: { fonte: 'destravar-boleto-unico' },
+          codigo: codUnico.slice(0, 120),
+          seu_numero: String(sale.inter_boleto_seu_numero || '').slice(0, 60) || null,
+          sale_id: saleId.slice(0, 64),
+          resultado: 'boleto único destravado pelo admin — cobrança segue VIVA no Inter (cancelamento recusado); sync vigia e cancela sozinho quando sair do EM_PROCESSAMENTO',
+          processado: false,
+        });
+      } catch { /* tabela ausente (SQL 167 pendente) não trava o destravamento */ }
+    }
     await atualizar(saleId, {
       inter_boleto_status: 'FALHA_EMISSAO',
       inter_boleto_codigo: null,
-      inter_boleto_erro: `Destravado pelo admin em ${carimbo}: cobrança ${codUnico.slice(0, 36)} estava presa em EM_PROCESSAMENTO no Inter (cancelamento recusado lá). Gere um novo boleto.`,
+      inter_boleto_erro: `Destravado pelo admin em ${carimbo}: cobrança ${codUnico.slice(0, 36)} estava presa em EM_PROCESSAMENTO no Inter${destinoOrfaoUnico === 'cancelado' ? ' e foi CANCELADA lá agora' : destinoOrfaoUnico === 'inexistente' ? ' e nem existe mais lá' : ' (cancelamento recusado lá — o sync vigia e cancela sozinho quando sair do processamento)'}. Gere um novo boleto.`,
     });
     return NextResponse.json({ ok: true, boleto: { ...cobrancaPublica(sale as Record<string, unknown>), status: 'FALHA_EMISSAO' } });
   }
@@ -801,7 +855,21 @@ export async function POST(req: NextRequest) {
         // processamento ("A cobrança não pode ser cancelada, pois se
         // encontra na situação EM_PROCESSAMENTO") — orienta o DESTRAVAR.
         if (String(r.erro || '').toUpperCase().includes('EM_PROCESSAMENTO')) {
-          return BAD(409, 'O Inter não permite cancelar um boleto que ainda está processando lá dentro. Use DESTRAVAR (botão do admin) para liberar e gerar um boleto novo.');
+          // BLOCO 226: a recusa deixa a cobrança REGISTRADA como ÓRFÃ — o
+          // sync vigia: cancela sozinho se ela sair do processamento e avisa
+          // URGENTE se alguém pagar (protege contra boleto pago duplicado).
+          try {
+            await db.from('webhook_logs').insert({
+              origem: 'ORFAO_INTER',
+              evento: { fonte: 'cancelar-parcela-recusado' },
+              codigo: String(parcela.codigo).slice(0, 120),
+              seu_numero: String(parcela.seu_numero || '').slice(0, 60) || null,
+              sale_id: saleId.slice(0, 64),
+              resultado: `cancelamento da parcela ${Number(parcela.seq) || 1} recusado pelo Inter (EM_PROCESSAMENTO) — sync vigia e cancela sozinho quando sair do processamento`,
+              processado: false,
+            });
+          } catch { /* tabela ausente não trava a resposta */ }
+          return BAD(409, 'O Inter não permite cancelar um boleto que ainda está processando lá dentro. Use DESTRAVAR (botão do admin) para liberar e gerar um boleto novo — a cobrança antiga fica vigiada e será cancelada automaticamente se sair do processamento.');
         }
         return BAD(502, r.erro || 'Falha ao cancelar na API do Inter.');
       }
@@ -819,7 +887,19 @@ export async function POST(req: NextRequest) {
     if (!r.ok && r.status !== 202 && r.status !== 404) {
       // BLOCO 224: mesma recusa do Inter para cobrança em processamento.
       if (String(r.erro || '').toUpperCase().includes('EM_PROCESSAMENTO')) {
-        return BAD(409, 'O Inter não permite cancelar um boleto que ainda está processando lá dentro. Use DESTRAVAR (botão do admin) para liberar e gerar um boleto novo.');
+        // BLOCO 226: registra a ÓRFÃ — o sync vigia e cancela sozinho.
+        try {
+          await db.from('webhook_logs').insert({
+            origem: 'ORFAO_INTER',
+            evento: { fonte: 'cancelar-unico-recusado' },
+            codigo: String(sale.inter_boleto_codigo).slice(0, 120),
+            seu_numero: String(sale.inter_boleto_seu_numero || '').slice(0, 60) || null,
+            sale_id: saleId.slice(0, 64),
+            resultado: 'cancelamento do boleto único recusado pelo Inter (EM_PROCESSAMENTO) — sync vigia e cancela sozinho quando sair do processamento',
+            processado: false,
+          });
+        } catch { /* tabela ausente não trava a resposta */ }
+        return BAD(409, 'O Inter não permite cancelar um boleto que ainda está processando lá dentro. Use DESTRAVAR (botão do admin) para liberar e gerar um boleto novo — a cobrança antiga fica vigiada e será cancelada automaticamente se sair do processamento.');
       }
       return BAD(502, r.erro || 'Falha ao cancelar na API do Inter.', { boleto: cobrancaPublica(sale as Record<string, unknown>) });
     }

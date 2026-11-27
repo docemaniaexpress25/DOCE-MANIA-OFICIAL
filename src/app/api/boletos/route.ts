@@ -8,7 +8,9 @@ import { validaCpfCnpj, mascaraCpfCnpj } from '@/lib/validaDoc';
 import {
   isInterConfigured,
   getInterConfig,
-  emitirCobrancaComRetry,
+  // BLOCO 231: a emissão do dono AGORA MARCA o sinal de emissão em voo — o
+  // sync cede a vez (para de chamar o Inter) enquanto o GERAR está no ar.
+  emitirCobrancaComRetryMarcada,
   ehErroTransienteInter,
   recuperarCobranca,
   recuperarPdf,
@@ -432,7 +434,8 @@ async function emitirCobrancaUnificada(args: {
   // ("Tente novamente mais tarde...", 5xx, timeout) tenta até 3x sozinho.
   // BLOCO 230: cada tentativa 15s + DEADLINE (50s padrão; 28s por parcela
   // no EMITIR_TODAS) — o GERAR responde em <= ~1 min, nunca mais minutos.
-  let r = await emitirCobrancaComRetry(payload as never, args.deadlineEmissaoMs ? { deadlineMs: args.deadlineEmissaoMs } : undefined);
+  // BLOCO 231: versão MARCADA — durante a emissão o sync cede a vez ao dono.
+  let r = await emitirCobrancaComRetryMarcada(payload as never, args.deadlineEmissaoMs ? { deadlineMs: args.deadlineEmissaoMs } : undefined);
   // -----------------------------------------------------------------
   // BLOCO 150: o POST da cobranca v3 pode recusar o objeto notaFiscal e aí
   // o boleto morria INTEIRO. Retenta SEM o vínculo formal e leva a NF para
@@ -450,7 +453,8 @@ async function emitirCobrancaUnificada(args: {
         linha5: `${tipoNota === 'NFE' ? 'NF-e' : 'NFC-e'} ${String(sale.nota_numero || '')} atrelada a esta cobranca`,
       },
     };
-    r = await emitirCobrancaComRetry(semNota as never, { maxTentativas: 1, deadlineMs: 15_000 });
+    // BLOCO 231: fallback também marcado (a emissão continua em voo).
+    r = await emitirCobrancaComRetryMarcada(semNota as never, { maxTentativas: 1, deadlineMs: 15_000 });
     fallbackSemNota = r.ok;
   }
   if (!r.ok || !r.data || !(r.data as Record<string, unknown>).codigoSolicitacao) {

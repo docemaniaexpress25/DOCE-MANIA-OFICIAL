@@ -156,31 +156,88 @@ function mtlsRequest(
 
 // ---------------------------------------------------------------------------
 // Token OAuth (cache 55 min)
+// BLOCO 231 — SINGLE-FLIGHT: quando o token expira com varias chamadas em
+// voo (sync + webhook + GERAR do dono), TODAS pediam um token novo ao mesmo
+// tempo — e o endpoint de token aceita só 5 req/min: a rajada tomava 429 e
+// a emissao do dono caia em retry lento. Agora a PRIMEIRA chamada busca o
+// token e as outras ESPERAM a mesma Promise (um unico pedido por instância).
 // ---------------------------------------------------------------------------
 let tokenCache: { token: string; exp: number } | null = null;
+let tokenEmVoo: Promise<string> | null = null;
 
 export async function obterToken(): Promise<string> {
   const now = Date.now();
   if (tokenCache && now < tokenCache.exp) return tokenCache.token;
+  if (tokenEmVoo) return tokenEmVoo; // outra chamada já está buscando — espera a mesma
 
-  const cfg = getInterConfig();
-  const form = new URLSearchParams({
-    client_id: cfg.clientId,
-    client_secret: cfg.clientSecret,
-    grant_type: 'client_credentials',
-    scope: 'boleto-cobranca.read boleto-cobranca.write',
-  });
-  const res = await mtlsRequest('POST', `${cfg.baseUrl}/oauth/v2/token`, {
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: form.toString(),
-  }, 15_000); // BLOCO 230: token rápido — sem ele nada mais começa
-  let data: Record<string, unknown> = {};
-  try { data = JSON.parse(res.body); } catch { /* segue */ }
-  if (res.status !== 200 || !data.access_token) {
-    throw new Error(`Falha ao autenticar no Inter (HTTP ${res.status}): ${String(data.error_description || data.error || res.body).slice(0, 200)}`);
+  tokenEmVoo = (async () => {
+    const cfg = getInterConfig();
+    const form = new URLSearchParams({
+      client_id: cfg.clientId,
+      client_secret: cfg.clientSecret,
+      grant_type: 'client_credentials',
+      scope: 'boleto-cobranca.read boleto-cobranca.write',
+    });
+    const res = await mtlsRequest('POST', `${cfg.baseUrl}/oauth/v2/token`, {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: form.toString(),
+    }, 15_000); // BLOCO 230: token rápido — sem ele nada mais começa
+    let data: Record<string, unknown> = {};
+    try { data = JSON.parse(res.body); } catch { /* segue */ }
+    if (res.status !== 200 || !data.access_token) {
+      throw new Error(`Falha ao autenticar no Inter (HTTP ${res.status}): ${String(data.error_description || data.error || res.body).slice(0, 200)}`);
+    }
+    tokenCache = { token: String(data.access_token), exp: Date.now() + TOKEN_TTL_MS };
+    return tokenCache.token;
+  })();
+  try {
+    return await tokenEmVoo;
+  } finally {
+    tokenEmVoo = null; // falhou ou passou — próxima chamada tenta de novo
   }
-  tokenCache = { token: String(data.access_token), exp: now + TOKEN_TTL_MS };
-  return tokenCache.token;
+}
+
+// ---------------------------------------------------------------------------
+// BLOCO 231 — SINAL DE EMISSÃO EM VOO (prioridade do GERAR do dono).
+// A causa real da demora de 27/11 13:07: o dono apertou GERAR 7 minutos
+// depois do cron das 13:00, no meio de uma rodada de sync que virou PESADA
+// com os blocos 226/228 (até ~42 chamadas ao Inter + listagem de cobranças
+// de 2x500 itens) — emissão e sync disputaram a API e o POST do dono caiu
+// em retry lento enquanto o card girava 3 minutos.
+//
+// O contador abaixo marca (POR INSTÂNCIA serverless) que uma EMISSÃO está
+// acontecendo agora. O sync consulta esse sinal ENTRE chamadas e CENDE a
+// vez (para de chamar o Inter por alguns segundos) enquanto o dono está
+// esperando o boleto na tela. Com isso o GERAR volta a ser rápido como
+// antes dos blocos 226/228: o sync nunca mais disputa a emissão.
+// ---------------------------------------------------------------------------
+type SinalEmissao = { __dmEmissoesEmVoo?: number };
+const sinal = () => globalThis as unknown as SinalEmissao;
+
+/** Entra/sai de região de emissão (sempre em try/finally pelo chamador). */
+export function emissaoEntrar(): void {
+  const s = sinal();
+  s.__dmEmissoesEmVoo = (s.__dmEmissoesEmVoo || 0) + 1;
+}
+export function emissaoSair(): void {
+  const s = sinal();
+  s.__dmEmissoesEmVoo = Math.max(0, (s.__dmEmissoesEmVoo || 0) - 1);
+}
+/** true quando alguma emissão (GERAR do dono) está em voo nesta instância. */
+export function temEmissaoEmVoo(): boolean {
+  return (sinal().__dmEmissoesEmVoo || 0) > 0;
+}
+/**
+ * Cede a vez à emissão: enquanto houver GERAR em voo, o sync dorme em ciclos
+ * de 2s (máx. ~24s) sem chamar o Inter — a emissão do dono disputa a API
+ * sozinha e sai em segundos. Devolve quanto tempo esperou (ms, diagnóstico).
+ */
+export async function cederAEmissao(maxEsperaMs = 24_000): Promise<number> {
+  const inicio = Date.now();
+  while (temEmissaoEmVoo() && Date.now() - inicio < maxEsperaMs) {
+    await esperarMs(2_000);
+  }
+  return Date.now() - inicio;
 }
 
 // ---------------------------------------------------------------------------
@@ -266,6 +323,21 @@ export function ehErroTransienteInter(status: number, erro?: string): boolean {
 }
 
 const esperarMs = (ms: number) => new Promise(res => setTimeout(res, ms));
+
+/** BLOCO 231: emissão com retry + deadline (230) MARCANDO o sinal de
+ *  emissão em voo — durante o GERAR do dono o sync cede a vez e para de
+ *  disputar a API do Inter (ver cederAEmissao / boletosSyncCore). */
+export async function emitirCobrancaComRetryMarcada(
+  payload: Parameters<typeof emitirCobranca>[0],
+  opts?: { maxTentativas?: number; esperaBaseMs?: number; deadlineMs?: number }
+): Promise<InterCobrancaResultado & { tentativas: number }> {
+  emissaoEntrar();
+  try {
+    return await emitirCobrancaComRetry(payload, opts);
+  } finally {
+    emissaoSair();
+  }
+}
 
 /** BLOCO 230: emissão com retry automático E DEADLINE TOTAL.
  *  - prazo por tentativa: 15s (emitirCobranca);

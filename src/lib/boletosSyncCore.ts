@@ -3,7 +3,9 @@ import { hasBoletoColumns, hasSalesBoletosTable } from '@/lib/serverSchema';
 // BLOCO 228 (regra do dono): listarCobrancas alimenta a VARREDURA de boletos
 // órfãos de vendas EXCLUÍDAS (cobrança viva no Inter cuja venda já foi apagada
 // daqui — cancela sozinho para o cliente nunca pagar venda que não existe).
-import { isInterConfigured, recuperarCobranca, interpretarCobranca, cancelarCobranca, listarCobrancas, type CobrancaColecaoItem } from '@/lib/interBoleto';
+// BLOCO 231: cederAEmissao/temEmissaoEmVoo — o sync CENDE a vez ao GERAR do
+// dono entre chamadas (a emissão na tela nunca mais disputa a API do sync).
+import { isInterConfigured, recuperarCobranca, interpretarCobranca, cancelarCobranca, listarCobrancas, cederAEmissao, type CobrancaColecaoItem } from '@/lib/interBoleto';
 import { espelharParcelaInter, baixarParcelaPaga, type ParcelaRow } from '@/lib/baixaBoleto';
 // BLOCO 221: aviso aos admins a cada baixa ("toda baixa a gente seja comunicado")
 // BLOCO 226: avisos do AUTO-DESTRAVAMENTO e da cobranca ORFA do Inter
@@ -32,7 +34,18 @@ import { avisarBaixaBoleto, nomeClienteDaVenda, avisarBoletoAutoDestravado, avis
  * no-op ok. Idempotente (venda PAGO nunca rebaixa).
  */
 
-const LIMITE = 15;
+// BLOCO 231 — TAMANHO DA FATIA por tipo de rodada.
+// Antes era UM limite fixo de 15 boletos + 15 parcelas em TODA rodada (com os
+// 50 boletos em aberto, a mesma fatia era reconsultada sempre e a rodada toda
+// ficava presa no Inter). Agora:
+//   - rodada LEVE (auto-sync horário): 8 boletos + 8 parcelas — termina em
+//     segundos e nunca estoura a paciência do Inter;
+//   - rodada PESADA (cron 3x/dia e botão do admin): 15 + 15 — rede de
+//     segurança completa do dia;
+// e a FILA ROTA (offset por rodada) — os 50 abertos são cobertos ao longo
+// de algumas rodadas em vez de sempre os mesmos 15 primeiros.
+const LIMITE_LEVE = 8;
+const LIMITE_PESADO = 15;
 
 export interface ResumoSync {
   ok: boolean;
@@ -44,8 +57,14 @@ export interface ResumoSync {
   orfaos?: number;
   /** BLOCO 228: cobrancas de vendas EXCLUIDAS canceladas nesta varredura. */
   orfaosExcluidas?: number;
-  falhas?: Array<{ id: string; erro: string }>;
+  /** BLOCO 231: true quando a rodada incluiu órfãos + varredura de excluídas
+   *  (cron 3x/dia e botão do admin); false/nulo = rodada LEVE do auto-sync. */
+  pesada?: boolean;
+  /** BLOCO 231: por que a rodada não rodou (JA_EM_ANDAMENTO, NADA_ABERTO...). */
   motivo?: string;
+  /** BLOCO 231: duração da rodada em ms (transparência da demora). */
+  duracaoMs?: number;
+  falhas?: Array<{ id: string; erro: string }>;
 }
 
 const carimboCurto = () =>
@@ -128,10 +147,46 @@ async function marcarBaixaOrigem(
 
 /**
  * BLOCO 221 — EXECUTA uma rodada completa do sync (boletos unicos + parcelas).
- * Usada por: cron da Vercel (/api/boletos-sync), botao "Sincronizar agora"
- * do admin e AUTO-SYNC horario (lib/autoSync).
+ * Usada por: cron da Vercel (/api/boletos-sync), botão "Sincronizar agora"
+ * do admin e AUTO-SYNC horário (lib/autoSync).
+ *
+ * BLOCO 231 — FIM DA DEMORA DO GERAR (a causa real do bug que começou com os
+ * blocos 226/228):
+ *   1. LOCK anti-sobreposição — cron + auto-sync + botão manual NUNCA mais
+ *      rodam juntos: rodada em andamento devolve JA_EM_ANDAMENTO na hora
+ *      (antes duas rodadas podiam disputar a API e dobrar a fila de chamadas);
+ *   2. RODADA LEVE x PESADA — o auto-sync horário (sino de 60s) faz só a fila
+ *      de boletos/parcelas (leve, segundos); a vigilância de órfãos e a
+ *      varredura de vendas excluídas (a chamada MAIS PESADA da API do Inter:
+ *      coleção de cobranças) ficam para o CRON 3x/dia e o botão do admin;
+ *   3. CEDIMENTO À EMISSÃO — antes de cada consulta o sync checa o sinal de
+ *      emissão em voo (GERAR do dono na tela) e ESPERA em ciclos de 2s; o
+ *      GERAR volta a ser rápido como antes dos blocos 226/228;
+ *   4. FILA ROTATIVA — cada rodada consulta uma fatia DIFERENTE dos abertos
+ *      (EM_PROCESSAMENTO sempre entra: é o estado que trava/destrava); os 50
+ *      em aberto são cobertos em poucas rodadas em vez de sempre os mesmos 15.
+ *
+ * @param opts.pesada true = inclui órfãos + varredura de excluídas (cron/manual)
  */
-export async function executarSyncBoletos(): Promise<ResumoSync> {
+export async function executarSyncBoletos(opts?: { pesada?: boolean }): Promise<ResumoSync> {
+  const inicioRodada = Date.now();
+  const pesada = opts?.pesada === true;
+
+  // ---- BLOCO 231: LOCK POR INSTÂNCIA — uma rodada de cada vez. ----------
+  type LockSync = { __dmSyncEmVoo?: boolean; __dmSyncRodada?: number };
+  const g = globalThis as unknown as LockSync;
+  if (g.__dmSyncEmVoo) {
+    return { ok: true, processadas: 0, baixadas: 0, motivo: 'JA_EM_ANDAMENTO', duracaoMs: 0 };
+  }
+  g.__dmSyncEmVoo = true;
+  try {
+    return await rodadaSyncBoletos(pesada, inicioRodada);
+  } finally {
+    g.__dmSyncEmVoo = false;
+  }
+}
+
+async function rodadaSyncBoletos(pesada: boolean, inicioRodada: number): Promise<ResumoSync> {
   if (!(await hasBoletoColumns())) {
     return { ok: true, processadas: 0, baixadas: 0, motivo: 'SCHEMA_ANTIGO' };
   }
@@ -139,20 +194,39 @@ export async function executarSyncBoletos(): Promise<ResumoSync> {
     return { ok: true, processadas: 0, baixadas: 0, motivo: 'INTER_NAO_CONFIGURADO' };
   }
 
+  // BLOCO 231: número da rodada (rotatividade da fila) por instância.
+  type ContadorRodada = { __dmSyncRodada?: number };
+  const gc = globalThis as unknown as ContadorRodada;
+  gc.__dmSyncRodada = (gc.__dmSyncRodada || 0) + 1;
+  const rodadaN = gc.__dmSyncRodada || 1;
+
   const db = getServiceClient();
+  const limiteFatia = pesada ? LIMITE_PESADO : LIMITE_LEVE;
   const { data: abertos, error } = await db
     .from('sales')
     .select('id, valor_total, valor_pago, status_pagamento, detalhe_pagamento, inter_boleto_status, inter_boleto_codigo, inter_boleto_seu_numero, inter_boleto_vencimento, inter_boleto_em, client_id')
     .in('inter_boleto_status', ['EM_PROCESSAMENTO', 'A_RECEBER', 'ATRASADO'])
-    .limit(LIMITE);
+    .order('inter_boleto_vencimento', { ascending: true, nullsFirst: false })
+    .limit(300); // BLOCO 231: lê a fila inteira (barato) e fatia AQUI com rotação
 
   if (error) {
     return { ok: false, processadas: 0, baixadas: 0, motivo: error.message };
   }
-  const fila = (abertos || []) as Record<string, unknown>[];
-  if (fila.length === 0) {
+  const filaCheia = (abertos || []) as Record<string, unknown>[];
+  if (filaCheia.length === 0) {
     return { ok: true, processadas: 0, baixadas: 0, motivo: 'NADA_ABERTO' };
   }
+
+  // ---- BLOCO 231: FATIA ROTATIVA -------------------------------
+  // EM_PROCESSAMENTO entra SEMPRE (é o estado que trava o card e precisa da
+  // auto-destrava). O resto (A_RECEBER/ATRASADO) entra em fatias girando por
+  // rodada, ordenado pelo vencimento mais próximo primeiro.
+  const presos = filaCheia.filter(s => String(s.inter_boleto_status) === 'EM_PROCESSAMENTO');
+  const resto = filaCheia.filter(s => String(s.inter_boleto_status) !== 'EM_PROCESSAMENTO');
+  const gruposRodada = Math.max(1, Math.ceil(resto.length / limiteFatia));
+  const offset = ((rodadaN - 1) % gruposRodada) * limiteFatia;
+  const fatia = resto.slice(offset, offset + limiteFatia);
+  const fila = [...presos, ...fatia];
 
   let processadas = 0;
   let baixadas = 0;
@@ -166,6 +240,9 @@ export async function executarSyncBoletos(): Promise<ResumoSync> {
     const seuNumero = String((sale as any).inter_boleto_seu_numero || '');
     if (!codigo) continue;
     try {
+      // BLOCO 231: o GERAR do dono passa na frente — sync espera (sem chamar
+      // o Inter) enquanto houver emissão em voo nesta instância.
+      await cederAEmissao();
       const r = await recuperarCobranca(codigo);
       // BLOCO 222 (auto-reparo): 404 = o Inter NAO conhece essa cobranca — a
       // emissao nunca completou lá (rede caiu depois do POST, etc). Antes a
@@ -276,34 +353,38 @@ export async function executarSyncBoletos(): Promise<ResumoSync> {
 
   // Segunda varredura — PARCELAS do boleto duplo (rota 5).
   // Degradacao graciosa: tabela ausente (SQL 199 pendente) não afeta o sync
-  // das vendas acima.
+  // das vendas acima. BLOCO 231: mesma fatia LEVE/PESADA da rodada.
   if (await hasSalesBoletosTable()) {
-    const sinc = await sincronizarParcelas(db);
+    const sinc = await sincronizarParcelas(db, limiteFatia);
     processadas += sinc.processadas;
     baixadas += sinc.baixadas;
     destravadas += sinc.destravadas;
     if (sinc.falhas > 0) falhas.push({ id: 'parcelas', erro: `${sinc.falhas} falha(s) no sync das parcelas` });
   }
 
-  // BLOCO 226: vigia as COBRANÇAS ÓRFÃS (liberadas localmente enquanto vivas
-  // no Inter) — cancela sozinho quando processarem, avisa URGENTE se pagarem.
+  // BLOCO 226/228 + BLOCO 231: vigilância de órfãos e varredura de vendas
+  // excluídas SÓ na rodada PESADA (cron 3x/dia e botão do admin). O auto-sync
+  // horário do sino volta a ser LEVE (era isso que deixava o GERAR lento:
+  // rodada de hora em hora com a coleção mais pesada da API do Inter).
   let orfaos = 0;
-  try {
-    orfaos = await processarOrfaos(db);
-  } catch (e: unknown) {
-    console.warn('[boletos-sync] vigilância de órfãos falhou:', (e as Error).message);
-  }
-
-  // BLOCO 228: VARREDURA das cobrancas de VENDAS EXCLUIDAS — o caso real do
-  // dono ("acabei de excluir uma venda com boleto gerado! o boleto ficou vivo
-  // lá"): exclusões antigas e falhas deixaram cobrança VIVA no Inter sem
-  // ninguém vigiando. Aqui o Inter é perguntado DIRETO (coleção de cobranças)
-  // e toda cobrança viva cuja venda não existe mais é cancelada sozinha.
   let orfaosExcluidas = 0;
-  try {
-    orfaosExcluidas = await varrerVendasExcluidas(db);
-  } catch (e: unknown) {
-    console.warn('[boletos-sync] varredura de vendas excluidas falhou:', (e as Error).message);
+  if (pesada) {
+    // BLOCO 226: vigia as COBRANÇAS ÓRFÃS (liberadas localmente enquanto
+    // vivas no Inter) — cancela sozinho quando processarem, avisa se pagarem.
+    try {
+      orfaos = await processarOrfaos(db);
+    } catch (e: unknown) {
+      console.warn('[boletos-sync] vigilância de órfãos falhou:', (e as Error).message);
+    }
+
+    // BLOCO 228: VARREDURA das cobrancas de VENDAS EXCLUIDAS — o caso real
+    // do dono ("acabei de excluir uma venda com boleto gerado! o boleto ficou
+    // vivo lá"). A exclusão já cancela na hora; a varredura é a rede extra.
+    try {
+      orfaosExcluidas = await varrerVendasExcluidas(db);
+    } catch (e: unknown) {
+      console.warn('[boletos-sync] varredura de vendas excluidas falhou:', (e as Error).message);
+    }
   }
 
   return {
@@ -313,6 +394,8 @@ export async function executarSyncBoletos(): Promise<ResumoSync> {
     destravadas,
     orfaos,
     orfaosExcluidas,
+    pesada,
+    duracaoMs: Date.now() - inicioRodada,
     falhas: falhas.length ? falhas : undefined,
   };
 }
@@ -322,9 +405,10 @@ export async function executarSyncBoletos(): Promise<ResumoSync> {
  * Mesma rede de segurança do boleto único, aplicada às cobranças da tabela
  * sales_boletos: reconsulta o Inter, espelha status, marca ATRASADO por
  * vencimento e baixa a parcela paga (a venda fecha quando TODAS pagarem).
+ * BLOCO 231: cede à emissão do dono entre chamadas e usa FATIA ROTATIVA
+ * (mesma disciplina da fila dos boletos únicos).
  */
-async function sincronizarParcelas(db: ReturnType<typeof getServiceClient>): Promise<{ processadas: number; baixadas: number; destravadas: number; falhas: number }> {
-  const LIMITE_PARCELAS = 15;
+async function sincronizarParcelas(db: ReturnType<typeof getServiceClient>, limiteFatia: number): Promise<{ processadas: number; baixadas: number; destravadas: number; falhas: number }> {
   const hojeSp = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
   let processadas = 0;
   let baixadas = 0;
@@ -336,14 +420,27 @@ async function sincronizarParcelas(db: ReturnType<typeof getServiceClient>): Pro
     .select('id, sale_id, seq, valor, vencimento, status, codigo, seu_numero, linha, barras, pix, erro, emitido_em')
     .in('status', ['EM_PROCESSAMENTO', 'A_RECEBER', 'ATRASADO'])
     .order('vencimento', { ascending: true })
-    .limit(LIMITE_PARCELAS);
+    .limit(120); // BLOCO 231: lê a fila inteira (barato) e fatia AQUI
   if (error) {
     console.warn('[boletos-sync] leitura das parcelas falhou:', error.message);
     return { processadas: 0, baixadas: 0, destravadas: 0, falhas: 1 };
   }
-  for (const p of (abertas || []) as unknown as ParcelaRow[]) {
+  const cheia = (abertas || []) as unknown as ParcelaRow[];
+  // BLOCO 231: fatia rotativa — EM_PROCESSAMENTO sempre entra (auto-destrava),
+  // o resto gira por rodada (mesmo esquema da fila dos boletos únicos).
+  type ContadorRodada2 = { __dmSyncRodada?: number };
+  const rodadaN = (globalThis as unknown as ContadorRodada2).__dmSyncRodada || 1;
+  const presas = cheia.filter(p => String(p.status) === 'EM_PROCESSAMENTO');
+  const restantes = cheia.filter(p => String(p.status) !== 'EM_PROCESSAMENTO');
+  const grupos = Math.max(1, Math.ceil(restantes.length / limiteFatia));
+  const offsetP = ((rodadaN - 1) % grupos) * limiteFatia;
+  const abertasRot = [...presas, ...restantes.slice(offsetP, offsetP + limiteFatia)];
+
+  for (const p of abertasRot) {
     if (!p.codigo) continue;
     try {
+      // BLOCO 231: cede a vez ao GERAR do dono antes de falar com o Inter.
+      await cederAEmissao();
       const r = await recuperarCobranca(p.codigo);
       // BLOCO 222 (auto-reparo da PARCELA): mesmo 404 do boleto unico — sem
       // isso a parcela ficava "Gerando no Inter..." para sempre e travava a
@@ -467,6 +564,8 @@ async function processarOrfaos(db: ReturnType<typeof getServiceClient>): Promise
     const codigo = String(o.codigo || '');
     const saleId = String(o.sale_id || '');
     const baseTxt = String(o.resultado || '').slice(0, 140);
+    // BLOCO 231: consulta/cancelamento do vigilante também cedem ao GERAR.
+    await cederAEmissao();
     if (!codigo || !logId) {
       // registro sem codigo não tem o que vigiar — fecha (update é no-op se logId vazio)
       if (logId) {
@@ -539,7 +638,7 @@ async function processarOrfaos(db: ReturnType<typeof getServiceClient>): Promise
 // so cancela cobrancas com o selo DM — cobranca emitida fora do app (outro
 // canal, portal do Inter) fica FORA do alcance: nunca cancela coisa alheia.
 // ---------------------------------------------------------------------------
-const JANELA_VARREDURA_DIAS = 120;
+const JANELA_VARREDURA_DIAS = 30; // BLOCO 231: era 120 (240 dias de janela = coleção gigante). A exclusão cancela na hora (228) — órfã nova é recente; 30 dias cobre com folga.
 const LIMITE_VARREDURA_RODADA = 8;
 
 async function varrerVendasExcluidas(db: ReturnType<typeof getServiceClient>): Promise<number> {
@@ -547,7 +646,11 @@ async function varrerVendasExcluidas(db: ReturnType<typeof getServiceClient>): P
   const tHoje = new Date(`${hoje}T12:00:00Z`).getTime();
   const ini = new Date(tHoje - JANELA_VARREDURA_DIAS * 86400000).toISOString().slice(0, 10);
   const fim = new Date(tHoje + JANELA_VARREDURA_DIAS * 86400000).toISOString().slice(0, 10);
-  const r = await listarCobrancas({ dataInicial: ini, dataFinal: fim, size: 500, maxPaginas: 2 });
+  // BLOCO 231: cede a vez ao GERAR do dono antes da coleção (a chamada mais
+  // pesada da API do Inter) e pergunta LEVE: 1 página x 200 itens (antes eram
+  // 2 x 500 = até 1 MB de JSON por rodada — a causa da demora do sync).
+  await cederAEmissao();
+  const r = await listarCobrancas({ dataInicial: ini, dataFinal: fim, size: 200, maxPaginas: 1 });
   if (!r.ok || r.itens.length === 0) {
     // BLOCO 228: transparente — se a pergunta ao Inter falhar (token/rate
     // limit), o sync REGISTRA a falha em vez de passar silencioso por "0".
@@ -573,6 +676,9 @@ async function varrerVendasExcluidas(db: ReturnType<typeof getServiceClient>): P
   let tratadas = 0;
   for (const item of r.itens as CobrancaColecaoItem[]) {
     if (tratadas >= LIMITE_VARREDURA_RODADA) break;
+    // BLOCO 231: cancelamento é chamada ao Inter — o GERAR do dono na tela
+    // passa na frente também aqui.
+    await cederAEmissao();
     const m = String(item.seuNumero || '').toUpperCase().match(/^DM([0-9A-Z]{8,9})/);
     if (!m) continue; // sem selo DM — emitida fora do app, nao mexe
     if (vivos.has(`DM${m[1]}`)) continue; // venda existe — nao e orfa

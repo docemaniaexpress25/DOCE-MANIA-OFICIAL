@@ -47,7 +47,11 @@ export async function GET(req: NextRequest) {
   }
 
   // BLOCO 221: o corpo do sync vive em lib/boletosSyncCore (executarSyncBoletos).
+  // BLOCO 231: cron e botão do admin rodam a rodada PESADA (fila maior +
+  // vigilância de órfãos + varredura de vendas excluídas). O auto-sync horário
+  // do sino (lib/autoSync) segue LEVE — é ele que nunca mais pode disputar o
+  // GERAR do dono com a coleção pesada da API do Inter.
   const { executarSyncBoletos } = await import('@/lib/boletosSyncCore');
-  const r = await executarSyncBoletos();
+  const r = await executarSyncBoletos({ pesada: true });
   return NextResponse.json(r, { status: r.ok ? 200 : 500 });
 }

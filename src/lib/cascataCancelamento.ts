@@ -1,6 +1,10 @@
 import { getServiceClient } from '@/lib/serverSupabase';
+import { hasBoletoColumns, hasSalesBoletosTable } from '@/lib/serverSchema';
 import { arquivarNotaCancelada } from '@/lib/focusArquivos';
 import { cancelarNota, interpretarResultado, isFocusConfigured, FocusDoc } from '@/lib/focusNfe';
+// BLOCO 228 (regra do dono): excluir venda com boleto gerado CANCELA o boleto
+// do Inter NA HORA — boleto único + parcelas da divisão (Bloco 199).
+import { isInterConfigured, cancelarCobranca } from '@/lib/interBoleto';
 
 /**
  * BLOCO 192 — CASCATA FISCAL (regras do dono, atualizadas):
@@ -145,4 +149,140 @@ export async function cancelarNotaAntesExclusao(
     arquivada: rA.ok,
     avisoArquivamento: rA.ok ? undefined : `Falha ao arquivar no Portal (${rA.motivo || 'erro'}) — use Portal Fiscal > Buscar TODAS na Focus.`,
   };
+}
+
+// ---------------------------------------------------------------------------
+// BLOCO 228 (regra do dono) — "acabei de excluir uma venda com boleto gerado!
+// o sistema deve cancelar esse boleto!": a EXCLUSAO da venda agora cancela
+// TAMBEM as cobrancas do Inter (boleto unico + parcelas do boleto duplo).
+//
+//  REGRA 3 — exclusao de venda cancela os boletos do Inter NA HORA:
+//   - cobranca viva -> cancelarCobranca() no Inter (202 = aceito assincrono);
+//   - recusada (ex.: EM_PROCESSAMENTO) -> registrada como ORFA no webhook_logs
+//     (ORFAO_INTER) e o sync vigia: cancela sozinho quando sair do
+//     processamento e avisa URGENTE se alguem pagar (rede do BLOCO 226);
+//   - inexistente no Inter (404) -> nada a cancelar lá;
+//   - RECEBIDO/MARCADO_RECEBIDO = DINHEIRO REAL: NUNCA cancelado, o aviso
+//     informa o admin (a venda foi paga de verdade).
+// O estado local (colunas inter_boleto_* + parcelas) é zerado logo antes da
+// venda ser apagada — assim a exclusao nunca quebra por FK de parcelas e, se
+// a exclusao falhar depois, a venda fica limpa para gerar boleto novo.
+// ---------------------------------------------------------------------------
+export interface ResumoBoletosExclusao {
+  canceladasNoInter: number;
+  orfasVigiadas: number;
+  jaMortas: number;
+  /** BLOCO 228: cobrancas RECEBIDAS (dinheiro real) — jamais canceladas. */
+  dinheiroReal: number;
+  /** Aviso combinado para o admin (vazio quando nada a informar). */
+  aviso: string;
+}
+
+/** Registra a ORFA de venda excluida em webhook_logs (best-effort, sem SQL novo). */
+async function registrarOrfaExclusao(
+  db: ReturnType<typeof getServiceClient>,
+  c: { codigo: string; seuNumero: string; rotulo: string },
+  detalhe: string,
+): Promise<void> {
+  try {
+    await db.from('webhook_logs').insert({
+      origem: 'ORFAO_INTER',
+      evento: { fonte: 'exclusao-venda' },
+      codigo: c.codigo.slice(0, 120),
+      seu_numero: (c.seuNumero || '').slice(0, 60) || null,
+      resultado: `boleto da venda EXCLUIDA (${c.rotulo}) segue vivo no Inter — ${detalhe}; sync vigia: cancela sozinho quando sair do processamento e avisa se alguem pagar`,
+      processado: false,
+    });
+  } catch { /* webhook_logs ausente (SQL 167 pendente) — best-effort */ }
+}
+
+export async function cancelarBoletosAntesExclusao(saleId: string): Promise<ResumoBoletosExclusao> {
+  const res: ResumoBoletosExclusao = { canceladasNoInter: 0, orfasVigiadas: 0, jaMortas: 0, dinheiroReal: 0, aviso: '' };
+  try {
+    if (!(await hasBoletoColumns())) return res; // schema antigo — sem boletos
+    const db = getServiceClient();
+    const { data: sB } = await db.from('sales')
+      .select('inter_boleto_status, inter_boleto_codigo, inter_boleto_seu_numero')
+      .eq('id', saleId).maybeSingle();
+    const cobrancas: Array<{ codigo: string; seuNumero: string; status: string; rotulo: string }> = [];
+    const codUnico = String((sB as Record<string, unknown> | null)?.inter_boleto_codigo || '');
+    if (codUnico) {
+      cobrancas.push({
+        codigo: codUnico,
+        seuNumero: String((sB as Record<string, unknown>)?.inter_boleto_seu_numero || ''),
+        status: String((sB as Record<string, unknown>)?.inter_boleto_status || '').toUpperCase(),
+        rotulo: 'boleto único',
+      });
+    }
+    if (await hasSalesBoletosTable()) {
+      const { data: pl } = await db.from('sales_boletos')
+        .select('seq, status, codigo, seu_numero').eq('sale_id', saleId);
+      for (const p of (pl || []) as Record<string, unknown>[]) {
+        const cd = String(p.codigo || '');
+        if (!cd) continue;
+        cobrancas.push({
+          codigo: cd,
+          seuNumero: String(p.seu_numero || ''),
+          status: String(p.status || '').toUpperCase(),
+          rotulo: `parcela ${Number(p.seq) || '?'}`,
+        });
+      }
+    }
+    if (cobrancas.length === 0) return res; // venda sem boleto vivo — nada a fazer
+
+    const mortos = ['CANCELADO', 'EXPIRADO', 'FALHA_EMISSAO', 'NAO_GERADO', 'REJEITADO'];
+    const avisos: string[] = [];
+    for (const c of cobrancas) {
+      // DINHEIRO REAL: boleto já pago NUNCA é cancelado — o admin precisa saber.
+      if (['RECEBIDO', 'MARCADO_RECEBIDO'].includes(c.status)) {
+        res.dinheiroReal++;
+        avisos.push(`${c.rotulo} já RECEBIDO (dinheiro real) — NÃO cancelado no Inter.`);
+        continue;
+      }
+      if (mortos.includes(c.status)) { res.jaMortas++; continue; }
+      if (!isInterConfigured()) {
+        res.orfasVigiadas++;
+        await registrarOrfaExclusao(db, c, 'Inter não configurado no servidor');
+        continue;
+      }
+      try {
+        const r = await cancelarCobranca(c.codigo, 'Venda excluida - cancelamento automatico');
+        // 202 = cancelamento assíncrono aceito; 404 = a cobrança nem existe mais lá
+        if (r.ok || r.status === 202 || r.status === 404) { res.canceladasNoInter++; continue; }
+        res.orfasVigiadas++;
+        await registrarOrfaExclusao(db, c, `cancelamento recusado pelo Inter (${String(r.erro || 'erro').slice(0, 120)})`);
+      } catch (eC) {
+        res.orfasVigiadas++;
+        await registrarOrfaExclusao(db, c, `falha de conexão com o Inter (${String((eC as Error).message).slice(0, 100)})`);
+      }
+    }
+    // Limpa o estado local do boleto (a venda é apagada na sequência; se a
+    // exclusão falhar depois, a venda fica limpa para gerar boleto de novo).
+    await db.from('sales').update({
+      inter_boleto_status: 'NAO_GERADO',
+      inter_boleto_codigo: null,
+      inter_boleto_seu_numero: null,
+      inter_boleto_linha: null,
+      inter_boleto_barras: null,
+      inter_boleto_pix: null,
+      inter_boleto_erro: null,
+      inter_boleto_valor: null,
+      inter_boleto_vencimento: null,
+      inter_boleto_em: null,
+    }).eq('id', saleId);
+    if (await hasSalesBoletosTable()) {
+      await db.from('sales_boletos').delete().eq('sale_id', saleId);
+    }
+    if (res.canceladasNoInter > 0) {
+      avisos.push(`${res.canceladasNoInter} boleto(s) CANCELADO(S) no Inter na hora da exclusão.`);
+    }
+    if (res.orfasVigiadas > 0) {
+      avisos.push(`${res.orfasVigiadas} cobrança(s) ficaram vivas no Inter (cancelamento recusado lá) — o sistema vigia e cancela sozinho quando sair do processamento.`);
+    }
+    res.aviso = avisos.join(' ');
+    return res;
+  } catch (e) {
+    res.aviso = `Atenção: falhou o cancelamento automático dos boletos do Inter (${String((e as Error).message).slice(0, 100)}) — confira no Portal Fiscal > Ações > Boleto.`;
+    return res;
+  }
 }

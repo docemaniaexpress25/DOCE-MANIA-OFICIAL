@@ -1,6 +1,9 @@
 import { getServiceClient } from '@/lib/serverSupabase';
 import { hasBoletoColumns, hasSalesBoletosTable } from '@/lib/serverSchema';
-import { isInterConfigured, recuperarCobranca, interpretarCobranca, cancelarCobranca } from '@/lib/interBoleto';
+// BLOCO 228 (regra do dono): listarCobrancas alimenta a VARREDURA de boletos
+// órfãos de vendas EXCLUÍDAS (cobrança viva no Inter cuja venda já foi apagada
+// daqui — cancela sozinho para o cliente nunca pagar venda que não existe).
+import { isInterConfigured, recuperarCobranca, interpretarCobranca, cancelarCobranca, listarCobrancas, type CobrancaColecaoItem } from '@/lib/interBoleto';
 import { espelharParcelaInter, baixarParcelaPaga, type ParcelaRow } from '@/lib/baixaBoleto';
 // BLOCO 221: aviso aos admins a cada baixa ("toda baixa a gente seja comunicado")
 // BLOCO 226: avisos do AUTO-DESTRAVAMENTO e da cobranca ORFA do Inter
@@ -39,6 +42,8 @@ export interface ResumoSync {
   destravadas?: number;
   /** BLOCO 226: cobrancas orfas do Inter resolvidas nesta rodada. */
   orfaos?: number;
+  /** BLOCO 228: cobrancas de vendas EXCLUIDAS canceladas nesta varredura. */
+  orfaosExcluidas?: number;
   falhas?: Array<{ id: string; erro: string }>;
   motivo?: string;
 }
@@ -289,12 +294,25 @@ export async function executarSyncBoletos(): Promise<ResumoSync> {
     console.warn('[boletos-sync] vigilância de órfãos falhou:', (e as Error).message);
   }
 
+  // BLOCO 228: VARREDURA das cobrancas de VENDAS EXCLUIDAS — o caso real do
+  // dono ("acabei de excluir uma venda com boleto gerado! o boleto ficou vivo
+  // lá"): exclusões antigas e falhas deixaram cobrança VIVA no Inter sem
+  // ninguém vigiando. Aqui o Inter é perguntado DIRETO (coleção de cobranças)
+  // e toda cobrança viva cuja venda não existe mais é cancelada sozinha.
+  let orfaosExcluidas = 0;
+  try {
+    orfaosExcluidas = await varrerVendasExcluidas(db);
+  } catch (e: unknown) {
+    console.warn('[boletos-sync] varredura de vendas excluidas falhou:', (e as Error).message);
+  }
+
   return {
     ok: true,
     processadas,
     baixadas,
     destravadas,
     orfaos,
+    orfaosExcluidas,
     falhas: falhas.length ? falhas : undefined,
   };
 }
@@ -500,4 +518,93 @@ async function processarOrfaos(db: ReturnType<typeof getServiceClient>): Promise
     // tenta de novo até o Inter processar ou matar a cobrança.
   }
   return tratados;
+}
+
+// ---------------------------------------------------------------------------
+// BLOCO 228 — VARREDURA DE COBRANCAS DE VENDAS EXCLUIDAS (regra do dono:
+// "acabei de excluir uma venda com boleto gerado! o sistema deve cancelar
+// esse boleto!"). O cancelamento NA HORA da exclusao agora existe (lib/
+// cascataCancelamento -> cancelarBoletosAntesExclusao), mas exclusoes antigas
+// e falhas deixaram cobrancas VIVAS no Inter sem venda de origem. Aqui o sync
+// pergunta ao Inter (colecao de cobrancas, janela de vencimento larga) e
+// cancela sozinho toda cobranca viva cuja venda nao existe mais no sistema:
+//   - viva e cancelavel -> cancelada (202/ok) — risco eliminado;
+//   - recusada (EM_PROCESSAMENTO) -> ORFA registrada — o vigilante cancela
+//     quando sair do processamento (Bloco 226);
+//   - PAGA pelo cliente -> aviso URGENTE aos admins (dinheiro de venda que
+//     nao existe — ajuste manual/reembolso);
+//   - 404/ja morta -> nada a fazer.
+// Casamento por seuNumero: boleto unico = "DM" + 9 chars do sale_id sem
+// hifens; parcela = "DM" + 8 chars + "-P<seq>" (seuNumeroParcela). O sistema
+// so cancela cobrancas com o selo DM — cobranca emitida fora do app (outro
+// canal, portal do Inter) fica FORA do alcance: nunca cancela coisa alheia.
+// ---------------------------------------------------------------------------
+const JANELA_VARREDURA_DIAS = 120;
+const LIMITE_VARREDURA_RODADA = 8;
+
+async function varrerVendasExcluidas(db: ReturnType<typeof getServiceClient>): Promise<number> {
+  const hoje = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const tHoje = new Date(`${hoje}T12:00:00Z`).getTime();
+  const ini = new Date(tHoje - JANELA_VARREDURA_DIAS * 86400000).toISOString().slice(0, 10);
+  const fim = new Date(tHoje + JANELA_VARREDURA_DIAS * 86400000).toISOString().slice(0, 10);
+  const r = await listarCobrancas({ dataInicial: ini, dataFinal: fim, size: 500, maxPaginas: 2 });
+  if (!r.ok || r.itens.length === 0) return 0;
+
+  // selos DM de TODAS as vendas vivas (os 2 formatos: boleto unico 9 chars,
+  // parcela 8 chars) — cobranca cujo selo esta aqui tem venda de origem.
+  const vivos = new Set<string>();
+  const { data: ids, error: errIds } = await db.from('sales').select('id').limit(200000);
+  if (errIds) return 0;
+  for (const row of (ids || []) as Array<{ id: string }>) {
+    const hex = String(row.id || '').replace(/-/g, '').toUpperCase();
+    vivos.add(`DM${hex.slice(0, 9)}`);
+    vivos.add(`DM${hex.slice(0, 8)}`);
+  }
+
+  const vivas = ['EM_PROCESSAMENTO', 'A_RECEBER', 'ATRASADO'];
+  let canceladas = 0;
+  let tratadas = 0;
+  for (const item of r.itens as CobrancaColecaoItem[]) {
+    if (tratadas >= LIMITE_VARREDURA_RODADA) break;
+    const m = String(item.seuNumero || '').toUpperCase().match(/^DM([0-9A-Z]{8,9})/);
+    if (!m) continue; // sem selo DM — emitida fora do app, nao mexe
+    if (vivos.has(`DM${m[1]}`)) continue; // venda existe — nao e orfa
+    const situacao = String(item.situacao || '').toUpperCase();
+    // DINHEIRO REAL: cliente pagou cobranca de venda que foi excluida
+    if (['RECEBIDO', 'MARCADO_RECEBIDO'].includes(situacao)) {
+      tratadas++;
+      try {
+        await avisarBoletoOrfao(db, { codigo: item.codigo, situacao, saleId: null, cliente: item.pagadorNome || null, valor: item.valor, paga: true });
+        await logCronEvento(db, { codigo: item.codigo, seuNumero: item.seuNumero, resultado: `ORFA de venda EXCLUIDA foi PAGA pelo cliente R$ ${Number(item.valor || 0).toFixed(2)} (${item.pagadorNome || 'pagador'}) — AJUSTE MANUAL/reembolso necessario`, processado: true });
+      } catch { /* best-effort */ }
+      continue;
+    }
+    if (!vivas.includes(situacao)) continue; // ja morta (CANCELADO/EXPIRADO/...) — nada a fazer
+    // ja registrada como orfa pendente? o vigilante (Bloco 226) cuida — nao duplica
+    const { data: dup } = await db.from('webhook_logs')
+      .select('id').eq('origem', 'ORFAO_INTER').eq('processado', false).eq('codigo', item.codigo.slice(0, 120)).limit(1);
+    if (dup && dup.length > 0) continue;
+    try {
+      const c = await cancelarCobranca(item.codigo, 'Venda excluida - cancelamento automatico');
+      if (c.ok || c.status === 202 || c.status === 404) {
+        canceladas++;
+        tratadas++;
+        try {
+          await avisarBoletoOrfao(db, { codigo: item.codigo, situacao, saleId: null, cliente: item.pagadorNome || null, valor: item.valor, cancelada: true });
+        } catch { /* aviso best-effort */ }
+        await logCronEvento(db, { codigo: item.codigo, seuNumero: item.seuNumero, resultado: `ORFA de venda EXCLUIDA cancelada no Inter (estava ${situacao}) — cliente nunca paga venda que nao existe mais`, processado: true });
+        continue;
+      }
+      // recusada agora (EM_PROCESSAMENTO) — registra ORFA: o vigilante cancela
+      // sozinho assim que sair do processamento
+      await registrarOrfao(db, {
+        codigo: item.codigo,
+        seuNumero: String(item.seuNumero || ''),
+        fonte: 'varredura-venda-excluida',
+        detalhe: `cobranca de venda EXCLUIDA segue viva no Inter (${situacao}; cancelamento recusado nesta rodada) — cancela sozinho quando sair do processamento`,
+      });
+      tratadas++;
+    } catch { /* falha de rede/token — proxima rodada tenta de novo */ }
+  }
+  return canceladas;
 }

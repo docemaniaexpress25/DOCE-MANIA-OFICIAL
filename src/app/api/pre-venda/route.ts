@@ -20,7 +20,10 @@ import { FISCAL_OBRIGATORIO, cargaBloqueadaPorNota } from '@/lib/regras-fiscais'
 // BLOCO 192 (regra do dono): EXCLUIR venda com nota batida CANCELA a nota na
 // SEFAZ NA HORA (cancelarNotaAntesExclusao) e depois arquiva no Portal —
 // todas as notas continuam salvas no portal mesmo excluindo a venda.
-import { cancelarNotaAntesExclusao } from '@/lib/cascataCancelamento';
+// BLOCO 228 (regra do dono): excluir venda com BOLETO gerado CANCELA o boleto
+// do Inter NA HORA também (cancelarBoletosAntesExclusao) — boleto único +
+// parcelas do boleto duplo; recusa vira ORFÃ vigiada pelo sync (Bloco 226).
+import { cancelarNotaAntesExclusao, cancelarBoletosAntesExclusao } from '@/lib/cascataCancelamento';
 
 /**
  * PRÉ-VENDA / ROTAS DE ENTREGA (estilo Shopee)
@@ -1889,13 +1892,26 @@ export async function POST(req: NextRequest) {
     // Portal Fiscal. A SEFAZ recusou (prazo 30min/24h vencido) → arquivada com
     // o status REAL e o aviso manda o admin resolver no Portal/SEFAZ. Depois
     // disso a venda pode ser apagada sem a nota sumir nem ficar viva.
+    // BLOCO 228 (regra do dono, "acabei de excluir uma venda com boleto gerado!
+    // o sistema deve cancelar esse boleto!"): os BOLETOS DO INTER também são
+    // cancelados aqui — SEMPRE, mesmo quando a venda não tem nota (boleto
+    // existe sem nota!). Recusa do Inter vira ÓRFÃ vigiada pelo sync (226).
     // Idempotente: rodar de novo só regrava o mesmo JSON (mesma ref).
     if (acao === 'ARQUIVAR_NOTA_EXCLUSAO') {
       if (!admin) {
         return NextResponse.json({ ok: false, error: 'Somente o admin gerencia exclusao de vendas e notas fiscais.' }, { status: 403 });
       }
+      // BLOCO 228: cancela os BOLETOS do Inter na hora (antes de qualquer coisa
+      // — a exclusão que vem depois não pode deixar cobrança viva lá dentro).
+      let avisoBoletos = '';
+      try {
+        const rB = await cancelarBoletosAntesExclusao(saleId);
+        avisoBoletos = String(rB.aviso || '');
+      } catch (eB) {
+        avisoBoletos = `Atenção: falhou o cancelamento automático dos boletos do Inter (${String((eB as Error).message).slice(0, 100)}) — confira no Portal Fiscal > Ações > Boleto.`;
+      }
       if (!(await hasNotaColumns())) {
-        return NextResponse.json({ ok: true, arquivada: false, canceladaSefaz: false, msg: 'Schema fiscal ausente — nada a arquivar.' });
+        return NextResponse.json({ ok: true, arquivada: false, canceladaSefaz: false, msg: 'Schema fiscal ausente — nada a arquivar.', aviso: avisoBoletos });
       }
       const [temChaveN, temEmitN] = await Promise.all([hasBoletoColumns(), hasNotaEmitidaEm()]);
       const selNota = [
@@ -1906,7 +1922,8 @@ export async function POST(req: NextRequest) {
       const { data: sArq } = await supabase.from('sales').select(selNota).eq('id', saleId).maybeSingle();
       const sA = ((sArq || {}) as unknown) as Record<string, unknown>;
       if (!String(sA.nota_ref || '')) {
-        return NextResponse.json({ ok: true, arquivada: false, canceladaSefaz: false, msg: 'Venda sem nota fiscal — nada a cancelar/arquivar.', aviso: '' });
+        // BLOCO 228: venda SEM nota — mas o aviso dos BOLETOS segue (cancelados acima)
+        return NextResponse.json({ ok: true, arquivada: false, canceladaSefaz: false, msg: 'Venda sem nota fiscal — nada a cancelar/arquivar.', aviso: avisoBoletos });
       }
       const rCanc = await cancelarNotaAntesExclusao(sA);
       const docLabel = String(sA.nota_tipo || '').toUpperCase() === 'NFCE' ? 'NFC-e' : 'NF-e';
@@ -1919,11 +1936,14 @@ export async function POST(req: NextRequest) {
       } else {
         aviso = rCanc.avisoArquivamento || `Nota ${docLabel} arquivada no Portal Fiscal (status ${String(sA.nota_status || '') || 'atual'}).`;
       }
+      // BLOCO 228: o aviso final leva nota + boletos juntos (o dono vê os dois
+      // resultados na mesma notificação — nada escondido).
+      const avisoFinal = [aviso, avisoBoletos].filter(Boolean).join(' ');
       if (!rCanc.arquivada && String(sA.nota_status || '').toUpperCase() !== 'AUTORIZADA' && !rCanc.canceladaSefaz) {
         // falha de arquivamento em nota sem cancelamento — segue o aviso geral
-        return NextResponse.json({ ok: false, error: aviso, canceladaSefaz: rCanc.canceladaSefaz }, { status: 500 });
+        return NextResponse.json({ ok: false, error: avisoFinal, canceladaSefaz: rCanc.canceladaSefaz }, { status: 500 });
       }
-      return NextResponse.json({ ok: true, arquivada: rCanc.arquivada, canceladaSefaz: rCanc.canceladaSefaz, aviso, msg: aviso });
+      return NextResponse.json({ ok: true, arquivada: rCanc.arquivada, canceladaSefaz: rCanc.canceladaSefaz, aviso: avisoFinal, msg: avisoFinal });
     }
 
     // ---------- EXCLUIR_VENDA ----------
@@ -1965,6 +1985,17 @@ export async function POST(req: NextRequest) {
             avisoNota = `A ${docLabel} Nº ${String(sN.nota_numero || '')} NÃO foi cancelada na SEFAZ (${rCanc.motivo}) — resolva no Portal Fiscal.${rCanc.avisoArquivamento ? ' ' + rCanc.avisoArquivamento : ''}`;
           }
         }
+      }
+      // BLOCO 228 (defesa em profundidade): mesmo que o ARQUIVAR_NOTA_EXCLUSAO
+      // não tenha rodado antes (ex.: pré-venda excluída direto da fila), os
+      // BOLETOS do Inter são cancelados AQUI na hora — nenhuma exclusão de
+      // venda deixa cobrança viva lá dentro.
+      let avisoBoletosEx = '';
+      try {
+        const rBEx = await cancelarBoletosAntesExclusao(saleId);
+        avisoBoletosEx = String(rBEx.aviso || '');
+      } catch (eBEx) {
+        avisoBoletosEx = `Atenção: falhou o cancelamento automático dos boletos do Inter (${String((eBEx as Error).message).slice(0, 100)}) — confira no Portal Fiscal > Ações > Boleto.`;
       }
       // BLOCO 88: pedido RESERVADO (estoque baixa no registro agora) — devolve
       // a quantidade ao Estoque Total antes de apagar. Desmarca o guard ANTES
@@ -2013,7 +2044,10 @@ export async function POST(req: NextRequest) {
       }
       // BLOCO 154: aviso quando a nota NAO conseguiu ser congelada (a venda foi
       // excluida, mas o portal precisa reimportar pelo backup/ref).
-      return NextResponse.json({ ok: true, ...(avisoNota ? { aviso: avisoNota } : {}) });
+      // BLOCO 228: o aviso final traz nota + boletos (o dono vê o resultado de
+      // TODOS os cancelamentos automáticos da exclusão na mesma notificação).
+      const avisoFinalEx = [avisoNota, avisoBoletosEx].filter(Boolean).join(' ');
+      return NextResponse.json({ ok: true, ...(avisoFinalEx ? { aviso: avisoFinalEx } : {}) });
     }
 
     // ============================================================================

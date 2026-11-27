@@ -14,7 +14,7 @@ import { numeroSemanaISO } from '@/lib/frequencia';
  * testar a fila de entrega do admin (setas de ordem + editor de pedido).
  */
 
-const CATCH_TABLES = ['app_users', 'clients', 'products', 'app_settings', 'product_categories', 'product_subcategories', 'cargas', 'cargas_pendentes', 'system_messages', 'commissions', 'commission_payment_logs', 'sales', 'sales_boletos', 'seller_expenses', 'push_tokens', 'daily_routes', 'entrega_rotas', 'entrega_eventos', 'sale_items', 'payment_comprovantes', 'caixa_fechamentos', 'caixa_fechamentos_geral', 'caixa_pagamentos', 'pre_vendas', 'pedidos', 'xml_importacoes', 'xml_itens', 'custos_empresa', 'cargas_fiscal'];
+const CATCH_TABLES = ['app_users', 'clients', 'products', 'app_settings', 'product_categories', 'product_subcategories', 'cargas', 'cargas_pendentes', 'system_messages', 'commissions', 'commission_payment_logs', 'sales', 'sales_boletos', 'seller_expenses', 'push_tokens', 'daily_routes', 'entrega_rotas', 'entrega_eventos', 'sale_items', 'payment_comprovantes', 'caixa_fechamentos', 'caixa_fechamentos_geral', 'caixa_pagamentos', 'caixa_repasses_david', 'pre_vendas', 'pedidos', 'xml_importacoes', 'xml_itens', 'custos_empresa', 'cargas_fiscal'];
 
 const users = [{
   id: 'adminuser', nome: 'Admin Teste', email: '', perfil: 'ADMIN', ativo: true,
@@ -366,6 +366,8 @@ const tables: Record<string, any[]> = {
   // caixa_fechamentos do BLOCO 96, que é caixa por entregador/data)
   caixa_fechamentos_geral: [],
   caixa_pagamentos: [],
+  // BLOCO 232: pagamentos ao David (recibos) — 1 recibo de exemplo
+  caixa_repasses_david: [],
   pre_vendas: [],
   pedidos: [],
   // BLOCO 95: fila fiscal de produtos vindos da XML (aba XML → Produtos)
@@ -386,6 +388,42 @@ const tables: Record<string, any[]> = {
     { id: 'sb-4', sale_id: 'sale-divida-001', seq: 2, valor: 10, vencimento: diaPassado(-10), doc: null, cep: null, status: 'NAO_GERADO', codigo: null, seu_numero: null, linha: null, barras: null, pix: null, erro: null, emitido_em: null, pago_em: null, criado_em: new Date().toISOString() },
   ],
 };
+
+// BLOCO 232 (E2E): CAIXA DO DAVID — fechamento anterior (-15d) para fixar o
+// "desde" e 4 pagamentos (à vista dinheiro/pix + boleto pendente + boleto
+// PAGO de venda gerada ANTES do fechamento = prova de que entra no recebido
+// do período atual). Números esperados no resumo:
+//   vista 5897.86 · gerado a prazo 2898.37 · recebido por boleto 1102 · pendente 2898.37 · totalGerado 8796.23
+tables.caixa_fechamentos_geral.push({
+  id: 'cfg-1',
+  janela_inicio: new Date(Date.now() - 20 * 864e5).toISOString(),
+  fechado_em: new Date(Date.now() - 15 * 864e5).toISOString(),
+  fechado_por_id: 'adminuser',
+  fechado_por_nome: 'Admin Teste',
+  total_dinheiro: 100,
+  total_pix: 50,
+  total_deposito: 0,
+  total_geral: 150,
+  qtde_pagamentos: 2,
+  observacao: 'Fechamento anterior (E2E)',
+  pagamentos: [],
+});
+tables.caixa_pagamentos.push(
+  { id: 'cp-1', criado_em: new Date(Date.now() - 5 * 864e5).toISOString(), origem: 'VENDA', sale_id: 'cpv-1', cliente: 'Mercado Gambino', vendedor: 'Deivid', metodo: 'DINHEIRO', valor: 3207.4, comprovante: null, detalhe: 'Venda à vista dinheiro — automático (trigger)', usuario_id: null, usuario_nome: 'AUTOMATICO (trigger)', fechamento_id: null, pago_em: null },
+  { id: 'cp-2', criado_em: new Date(Date.now() - 4 * 864e5).toISOString(), origem: 'VENDA', sale_id: 'cpv-2', cliente: 'Posto Trevo da Rota', vendedor: 'Deivid', metodo: 'PIX', valor: 2690.46, comprovante: null, detalhe: 'Venda à vista pix — automático (trigger)', usuario_id: null, usuario_nome: 'AUTOMATICO (trigger)', fechamento_id: null, pago_em: null },
+  { id: 'cp-3', criado_em: new Date(Date.now() - 3 * 864e5).toISOString(), origem: 'VENDA', sale_id: 'cpv-3', cliente: 'Sacolao Zimermann', vendedor: 'Deivid', metodo: 'BOLETO', valor: 2898.37, comprovante: null, detalhe: 'Boleto gerado na venda (a prazo) — venc. 03/12/2026', usuario_id: null, usuario_nome: 'AUTOMATICO (trigger)', fechamento_id: null, pago_em: null },
+  { id: 'cp-4', criado_em: new Date(Date.now() - 40 * 864e5).toISOString(), origem: 'VENDA', sale_id: 'cpv-4', cliente: 'Missioneiro Atacado', vendedor: 'Deivid', metodo: 'BOLETO', valor: 1102, comprovante: null, detalhe: 'Boleto gerado na venda (a prazo) | Boleto PAGO — baixa automatica', usuario_id: null, usuario_nome: 'AUTOMATICO (trigger)', fechamento_id: null, pago_em: new Date(Date.now() - 2 * 864e5).toISOString() },
+);
+tables.caixa_repasses_david.push({
+  id: 'rep-1',
+  recibo_numero: 1,
+  criado_em: new Date(Date.now() - 1 * 864e5).toISOString(),
+  valor: 500,
+  forma: 'DINHEIRO',
+  observacao: 'Repasse de exemplo (E2E)',
+  registrado_por_id: 'adminuser',
+  registrado_por_nome: 'Admin Teste',
+});
 
 // BLOCO 210: headers CORS — o supabase-js roda NO BROWSER e quando a env do
 // mock aponta para 127.0.0.1 enquanto o app abre em localhost, cada request
@@ -632,6 +670,13 @@ async function handle(req: NextRequest, segments: string[]) {
         }
         if (table === 'caixa_fechamentos_geral') {
           clone.fechado_em = clone.fechado_em ?? new Date().toISOString();
+        }
+        // BLOCO 232: repasses ao David (recibo_numero é identity no SQL real)
+        if (table === 'caixa_repasses_david') {
+          clone.criado_em = clone.criado_em ?? new Date().toISOString();
+          const ultRec = (tables['caixa_repasses_david'] || []).reduce((m: number, r: any) => Math.max(m, Number(r.recibo_numero || 0)), 0);
+          clone.recibo_numero = clone.recibo_numero ?? ultRec + 1;
+          clone.forma = clone.forma ?? 'DINHEIRO';
         }
         // BLOCO 95: defaults da fila fiscal (criado_em vem do DEFAULT now() do SQL)
         if (table === 'xml_importacoes') {

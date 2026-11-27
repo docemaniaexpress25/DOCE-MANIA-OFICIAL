@@ -116,6 +116,18 @@ export async function executarSyncBoletos(): Promise<ResumoSync> {
     if (!codigo) continue;
     try {
       const r = await recuperarCobranca(codigo);
+      // BLOCO 222 (auto-reparo): 404 = o Inter NAO conhece essa cobranca — a
+      // emissao nunca completou lá (rede caiu depois do POST, etc). Antes a
+      // venda ficava EM_PROCESSAMENTO PARA SEMPRE ("boleto nao gera"); agora
+      // marca FALHA_EMISSAO e o card volta a oferecer GERAR/REEMITIR.
+      if (!r.ok && r.status === 404) {
+        await db.from('sales').update({
+          inter_boleto_status: 'FALHA_EMISSAO',
+          inter_boleto_erro: 'Cobranca nao encontrada no Inter (404) — emita o boleto novamente.',
+        }).eq('id', saleId);
+        await logCronEvento(db, { codigo, seuNumero, saleId, resultado: 'CRON — cobranca nao existe no Inter (404): marcada FALHA_EMISSAO para reemitir', processado: true });
+        continue;
+      }
       if (!r.ok || !r.data || 'erro' in r.data) {
         falhas.push({ id: saleId, erro: 'consulta falhou' });
         await logCronEvento(db, { codigo, seuNumero, saleId, resultado: `CRON — falha re-consultando cobranca ${codigo.slice(0, 18)}`, processado: false });
@@ -208,6 +220,17 @@ async function sincronizarParcelas(db: ReturnType<typeof getServiceClient>): Pro
     if (!p.codigo) continue;
     try {
       const r = await recuperarCobranca(p.codigo);
+      // BLOCO 222 (auto-reparo da PARCELA): mesmo 404 do boleto unico — sem
+      // isso a parcela ficava "Gerando no Inter..." para sempre e travava a
+      // venda do boleto duplo (rota 5).
+      if (!r.ok && r.status === 404) {
+        await db.from('sales_boletos').update({
+          status: 'FALHA_EMISSAO',
+          erro: 'Cobranca nao encontrada no Inter (404) — gere o boleto novamente.',
+        }).eq('id', String(p.id));
+        await logCronEvento(db, { codigo: p.codigo, seuNumero: p.seu_numero || '', saleId: p.sale_id, resultado: `CRON parcela ${p.seq} — nao existe no Inter (404): FALHA_EMISSAO para reemitir`, processado: true });
+        continue;
+      }
       if (!r.ok || !r.data || 'erro' in r.data) {
         falhas++;
         await logCronEvento(db, { codigo: p.codigo, seuNumero: p.seu_numero || '', saleId: p.sale_id, resultado: `CRON parcela ${p.seq} — falha re-consultando ${p.codigo.slice(0, 18)}`, processado: false });

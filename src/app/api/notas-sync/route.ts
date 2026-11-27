@@ -36,10 +36,14 @@ export async function GET(req: NextRequest) {
     if (bridged) return bridged;
   }
 
-  // --- autorizacao: cron (Bearer CRON_SECRET) OU admin logado ---
+  // --- autorizacao: cron (Bearer CRON_SECRET OU x-vercel-cron) OU admin ---
+  // BLOCO 222: a Vercel SEMPRE marca as invocacoes do proprio cron com o
+  // header x-vercel-cron: 1, mesmo sem CRON_SECRET configurada. Sem isso o
+  // cron tomava 401 e o sync de notas nunca rodava (mesma causa raiz
+  // diagnosticada no sync de boletos em producao).
   const auth = req.headers.get('authorization') || '';
   const secret = process.env.CRON_SECRET || '';
-  const viaCron = secret && auth === `Bearer ${secret}`;
+  const viaCron = (secret && auth === `Bearer ${secret}`) || req.headers.get('x-vercel-cron') === '1';
   const session = sessionFromRequest(req);
   const viaAdmin = session?.perfil === 'ADMIN';
   if (!viaCron && !viaAdmin) {

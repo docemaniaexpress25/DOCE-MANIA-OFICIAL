@@ -640,6 +640,16 @@ export async function POST(req: NextRequest) {
       if (!parcela) return BAD(404, 'Parcela nao encontrada.');
       if (!parcela.codigo) return BAD(422, `Boleto ${Number(parcela.seq)} ainda não foi gerado.`);
       const r = await recuperarCobranca(String(parcela.codigo));
+      // BLOCO 222: 404 = o Inter NAO conhece a cobranca (emissao morreu lá
+      // apos o POST). Antes devolvia 502 PARA SEMPRE e o card ficava
+      // "Gerando..."; agora marca FALHA_EMISSAO e devolve o estado — o card
+      // mostra o erro e volta a oferecer o botao GERAR/REEMITIR.
+      if (!r.ok && r.status === 404) {
+        const msgErro = 'Cobranca nao encontrada no Inter (404) — gere o boleto novamente.';
+        await db.from('sales_boletos').update({ status: 'FALHA_EMISSAO', erro: msgErro }).eq('id', String(parcela.id));
+        const { data: falhou } = await db.from('sales_boletos').select(PARC_COLS).eq('id', String(parcela.id)).maybeSingle();
+        return NextResponse.json({ ok: true, parcela: parcelaPublica(falhou as Record<string, unknown>) });
+      }
       if (!r.ok) return BAD(502, r.erro || 'Falha ao consultar a API do Inter.');
       const cob = interpretarCobranca(r.data as Record<string, unknown>);
       const hoje = hojeSp();
@@ -652,6 +662,13 @@ export async function POST(req: NextRequest) {
     }
     if (!sale.inter_boleto_codigo) return BAD(422, 'Esta venda ainda nao tem boleto gerado.');
     const r = await recuperarCobranca(String(sale.inter_boleto_codigo));
+    // BLOCO 222: mesmo destrave do 404 na parcela — boleto unico que o Inter
+    // nao conhece sai do EM_PROCESSAMENTO eterno e volta a ser reemitivel.
+    if (!r.ok && r.status === 404) {
+      const msgErro = 'Cobranca nao encontrada no Inter (404) — emita o boleto novamente.';
+      await atualizar(saleId, { inter_boleto_status: 'FALHA_EMISSAO', inter_boleto_erro: msgErro });
+      return NextResponse.json({ ok: true, boleto: { ...cobrancaPublica(sale as Record<string, unknown>), status: 'FALHA_EMISSAO', erro: msgErro } });
+    }
     if (!r.ok) return BAD(502, r.erro || 'Falha ao consultar a API do Inter.', { boleto: cobrancaPublica(sale as Record<string, unknown>) });
     const cob = interpretarCobranca(r.data as Record<string, unknown>);
     await atualizar(saleId, {

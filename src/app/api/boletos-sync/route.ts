@@ -9,9 +9,18 @@ import { sessionFromRequest } from '@/lib/session';
  * BLOCO 221 — agora tambem acionado pelo auto-sync horario do app.
  *
  * GET /api/boletos-sync  (sem sessao!)
- *   Autorizacao: header `Authorization: Bearer ${CRON_SECRET}` — a Vercel
- *   Cron envia esse header automaticamente quando a env CRON_SECRET existe.
- *   ADMIN logado tambem pode chamar ("sincronizar agora").
+ *   Autorizacao (BLOCO 222):
+ *   a) header `Authorization: Bearer ${CRON_SECRET}` — a Vercel Cron envia
+ *      esse header automaticamente QUANDO a env CRON_SECRET existe;
+ *   b) header `x-vercel-cron: 1` — a Vercel SEMPRE marca as invocacoes do
+ *      proprio cron com esse header, mesmo sem CRON_SECRET configurada.
+ *      Sem isso, se o dono nao criou a CRON_SECRET, o cron tomava 401 e o
+ *      sync NUNCA rodava (boletos travados em EM_PROCESSAMENTO para sempre,
+ *      com webhook_logs vazia — diagnosticado em producao).
+ *      Seguranca: o endpoint e idempotente e so reconsulta cobrancas do
+ *      PROPRIO Inter, portanto um header forjado no maximo causa uma
+ *      sincronizacao extra — sem risco de baixa duplicada.
+ *   c) ADMIN logado tambem pode chamar ("sincronizar agora").
  *
  * VARRE: sales com inter_boleto_status IN (EM_PROCESSAMENTO, A_RECEBER,
  * ATRASADO) — max 15 por rodada (rate limit do Inter respeitado; endpoint
@@ -27,10 +36,13 @@ import { sessionFromRequest } from '@/lib/session';
 export async function GET(req: NextRequest) {
   const auth = req.headers.get('authorization') || '';
   const secret = process.env.CRON_SECRET || '';
-  const viaCron = !!secret && auth === `Bearer ${secret}`;
+  const viaCronSecret = !!secret && auth === `Bearer ${secret}`;
+  // BLOCO 222: o cron da Vercel SEMPRE envia x-vercel-cron — autoriza mesmo
+  // sem CRON_SECRET (causa raiz do sync que nunca rodou em producao).
+  const viaCronHeader = req.headers.get('x-vercel-cron') === '1';
   const session = sessionFromRequest(req);
   const viaAdmin = session?.perfil === 'ADMIN';
-  if (!viaCron && !viaAdmin) {
+  if (!viaCronSecret && !viaCronHeader && !viaAdmin) {
     return NextResponse.json({ ok: false, erro: 'Nao autorizado (cron ou admin).' }, { status: 401 });
   }
 

@@ -75,6 +75,19 @@ import { isDavidNome } from '@/lib/equipe';
  *
  * SQL: sql/bloco118_caixa_fechamento.sql + sql/bloco167 (pago_em) +
  *      sql/bloco232_caixa_repasses_david.sql (repasses/recibos).
+ *
+ * BLOCO 233 (regra do dono — A LINHA DO CAIXA, números fáceis sem poluição):
+ *   "total de vendas geradas isso em azul, em Verde tudo o que foi recebido
+ *   a vista Dinheiro + Pix e tbm prazo já pago na mesma linha tudo que ainda
+ *   está a prazo... meus cálculos serão encima do que já entrou no caixa...
+ *   quando o caixa for fechado vc deve perguntar se realmente deseja fechar,
+ *   então ali zeramos os contadores do que foi recebido e continuamos tendo
+ *   visão do que vai entrar, conforme vai entrando vai caindo em recebidos."
+ *   GET devolve resumo.recebidoNoCaixa = VERDE (à vista dinheiro+pix+depósito
+ *   do caixa aberto + boletos com baixa no período) — calculado AQUI no
+ *   servidor (fonte única da verdade). No FECHAR os recebidos zeram (à vista
+ *   prende no fechamento; desde avança) e o A PRAZO pendente segue visível
+ *   até o pagamento cair — quando cai, entra no VERDE do novo período.
  */
 
 const round2 = (v: number) => Math.round(v * 100) / 100;
@@ -229,7 +242,7 @@ export async function GET(req: NextRequest) {
         qtdeGerados: gerados.length,
         recebidoNoPeriodo: soma(pagosB),
         qtdeRecebidos: pagosB.length,
-        recebidosLista: pagosB.slice(0, 12).map((b) => ({
+        recebidosLista: pagosB.slice(0, 100).map((b) => ({
           id: String(b.id),
           pagoEm: b.pago_em,
           valor: Number(b.valor || 0),
@@ -240,6 +253,14 @@ export async function GET(req: NextRequest) {
         qtdePendentes: pendentesB.length,
       },
       totalGerado: round2(vistaTotal + soma(gerados)),
+      // ----------------------------------------------------------------
+      // BLOCO 233 — VERDE: o que JÁ ENTROU no caixa do David no período.
+      // = à vista (dinheiro + pix + depósito do caixa aberto) + prazo já
+      // pago (baixas com pago_em dentro do período — boleto gerado antes
+      // e pago agora TAMBÉM entra, "conforme vai entrando vai caindo em
+      // recebidos"). É em cima desse número que o dono faz os cálculos.
+      // ----------------------------------------------------------------
+      recebidoNoCaixa: round2(vistaTotal + soma(pagosB)),
     };
 
     // ------------------------------------------------------------------

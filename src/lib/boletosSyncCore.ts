@@ -548,7 +548,14 @@ async function varrerVendasExcluidas(db: ReturnType<typeof getServiceClient>): P
   const ini = new Date(tHoje - JANELA_VARREDURA_DIAS * 86400000).toISOString().slice(0, 10);
   const fim = new Date(tHoje + JANELA_VARREDURA_DIAS * 86400000).toISOString().slice(0, 10);
   const r = await listarCobrancas({ dataInicial: ini, dataFinal: fim, size: 500, maxPaginas: 2 });
-  if (!r.ok || r.itens.length === 0) return 0;
+  if (!r.ok || r.itens.length === 0) {
+    // BLOCO 228: transparente — se a pergunta ao Inter falhar (token/rate
+    // limit), o sync REGISTRA a falha em vez de passar silencioso por "0".
+    if (!r.ok) {
+      await logCronEvento(db, { resultado: `varredura de vendas excluidas NAO completou: ${String(r.erro || 'falha').slice(0, 160)} — proxima rodada tenta de novo`, processado: false });
+    }
+    return 0;
+  }
 
   // selos DM de TODAS as vendas vivas (os 2 formatos: boleto unico 9 chars,
   // parcela 8 chars) — cobranca cujo selo esta aqui tem venda de origem.

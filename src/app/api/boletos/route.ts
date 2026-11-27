@@ -709,7 +709,10 @@ export async function POST(req: NextRequest) {
       const parcela = await carregarParcela(saleId, String(body.parcelaId));
       if (!parcela || !parcela.codigo) return BAD(422, 'Esta parcela nao tem boleto para cancelar.');
       const r = await cancelarCobranca(String(parcela.codigo), motivo);
-      if (!r.ok && r.status !== 202) {
+      // BLOCO 223: 404 = a cobranca NAO existe no Inter (emissao morreu lá
+      // depois do POST) — nao ha nada a cancelar lá e o cancelamento LOCAL
+      // segue para destravar o card. 202 = cancelamento assincrono aceito.
+      if (!r.ok && r.status !== 202 && r.status !== 404) {
         return BAD(502, r.erro || 'Falha ao cancelar na API do Inter.');
       }
       // BLOCO 210: CANCELADO volta a oferecer Gerar/Refazer no card — a
@@ -721,7 +724,9 @@ export async function POST(req: NextRequest) {
     }
     if (!sale.inter_boleto_codigo) return BAD(422, 'Esta venda nao tem boleto para cancelar.');
     const r = await cancelarCobranca(String(sale.inter_boleto_codigo), motivo);
-    if (!r.ok && r.status !== 202) {
+    // BLOCO 223: mesmo 404 da parcela — cobranca inexistente no Inter nao
+    // impede o cancelamento local (destrava GERAR/REEMITIR no card).
+    if (!r.ok && r.status !== 202 && r.status !== 404) {
       return BAD(502, r.erro || 'Falha ao cancelar na API do Inter.', { boleto: cobrancaPublica(sale as Record<string, unknown>) });
     }
     await atualizar(saleId, { inter_boleto_status: 'CANCELADO', inter_boleto_erro: null });
@@ -787,9 +792,32 @@ export async function POST(req: NextRequest) {
     if (!(await hasSalesBoletosTable())) return BAD(503, 'Rode o SQL do Bloco 199 (sales_boletos).');
     const parcela = await carregarParcela(saleId, String(body.parcelaId));
     if (!parcela) return BAD(404, 'Parcela nao encontrada.');
-    // Idempotencia: parcela já tem cobrança ATIVA no Inter? Devolve o estado.
+    // ------------------------------------------------------------------
+    // BLOCO 223 (destravamento do "EM PROCESSAMENTO que nao vai"): parcela
+    // com codigo e status ainda nao final — reconsulta o Inter NO CLIQUE:
+    //   - existe e processou -> espelha o estado REAL (A_RECEBER + linha/
+    //     pix/PDF) e devolve jaGerado atualizado (card mostra o boleto);
+    //   - 404 (o Inter NAO conhece a cobranca) -> marca FALHA_EMISSAO e
+    //     SEGUE para a emissao nova logo abaixo (GERAR finalmente gera);
+    //   - falhou por outro motivo (rede/token) -> mantem jaGerado antigo.
+    // ------------------------------------------------------------------
     if (parcela.codigo && !['CANCELADO', 'EXPIRADO', 'FALHA_EMISSAO'].includes(String(parcela.status))) {
-      return NextResponse.json({ ok: true, jaGerado: true, parcela: parcelaPublica(parcela) });
+      const rec = await recuperarCobranca(String(parcela.codigo));
+      if (!rec.ok && rec.status === 404) {
+        await db.from('sales_boletos').update({
+          status: 'FALHA_EMISSAO',
+          erro: 'Cobranca anterior nao existe no Inter (404) — pode gerar de novo.',
+        }).eq('id', String(parcela.id));
+      } else if (rec.ok && rec.data) {
+        const cobOk = interpretarCobranca(rec.data as Record<string, unknown>);
+        await espelharParcelaInter(db, parcela as unknown as ParcelaRow, cobOk, hojeSp());
+        const pagoAgora = cobOk.status === 'RECEBIDO' || cobOk.status === 'MARCADO_RECEBIDO' || (cobOk.valorRecebido !== null && cobOk.valorRecebido > 0);
+        if (pagoAgora) await baixarParcelaPaga(db, parcela as unknown as ParcelaRow, 'CONSULTA_MANUAL');
+        const { data: atual } = await db.from('sales_boletos').select(PARC_COLS).eq('id', String(parcela.id)).maybeSingle();
+        return NextResponse.json({ ok: true, jaGerado: true, parcela: parcelaPublica(atual as Record<string, unknown>) });
+      } else {
+        return NextResponse.json({ ok: true, jaGerado: true, parcela: parcelaPublica(parcela) });
+      }
     }
     return emitirCobrancaUnificada({
       sale: sale as Record<string, unknown>,
@@ -802,9 +830,32 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // Ja tem boleto ATIVO? Devolve os dados (idempotencia na tela).
+  // ------------------------------------------------------------------
+  // BLOCO 223 (mesmo destravamento do EMITIR de parcela): boleto UNICO com
+  // codigo e status ainda nao final — reconsulta o Inter NO CLIQUE:
+  //   - existe -> espelha e devolve jaGerado com o estado REAL;
+  //   - 404 -> FALHA_EMISSAO e SEGUE para gerar o boleto novo;
+  //   - outro erro -> comportamento antigo (jaGerado).
+  // ------------------------------------------------------------------
   if (sale.inter_boleto_codigo && !['CANCELADO', 'EXPIRADO', 'FALHA_EMISSAO'].includes(String(sale.inter_boleto_status))) {
-    return NextResponse.json({ ok: true, jaGerado: true, boleto: cobrancaPublica(sale as Record<string, unknown>) });
+    const rec = await recuperarCobranca(String(sale.inter_boleto_codigo));
+    if (!rec.ok && rec.status === 404) {
+      const msgErro = 'Cobranca anterior nao existe no Inter (404) — pode gerar de novo.';
+      await atualizar(saleId, { inter_boleto_status: 'FALHA_EMISSAO', inter_boleto_erro: msgErro });
+      sale.inter_boleto_status = 'FALHA_EMISSAO';
+    } else if (rec.ok && rec.data) {
+      const cobOk = interpretarCobranca(rec.data as Record<string, unknown>);
+      await atualizar(saleId, {
+        inter_boleto_status: cobOk.status,
+        inter_boleto_linha: cobOk.linhaDigitavel || (sale.inter_boleto_linha as string) || null,
+        inter_boleto_barras: cobOk.codigoBarras || (sale.inter_boleto_barras as string) || null,
+        inter_boleto_pix: cobOk.pixCopiaECola || (sale.inter_boleto_pix as string) || null,
+        inter_boleto_erro: cobOk.status === 'FALHA_EMISSAO' ? 'Falha na emissao no Inter' : null,
+      });
+      return NextResponse.json({ ok: true, jaGerado: true, boleto: { ...cobrancaPublica(sale as Record<string, unknown>), ...cobOk } });
+    } else {
+      return NextResponse.json({ ok: true, jaGerado: true, boleto: cobrancaPublica(sale as Record<string, unknown>) });
+    }
   }
   // BLOCO 212 (race do boleto unico): EM_PROCESSAMENTO SEM codigo = emissao
   // em voo (o update roda antes do POST ao Inter). Re-emitir aqui criaria a

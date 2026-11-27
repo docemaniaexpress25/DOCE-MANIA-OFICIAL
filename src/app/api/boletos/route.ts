@@ -698,6 +698,51 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, pdfBase64: r.pdf.toString('base64') });
   }
 
+  // ------------------------------------------------------------------
+  // BLOCO 224 — DESTRAVAR (ADMIN): boleto preso em EM_PROCESSAMENTO
+  // dentro do Inter (caso Paradouro do Campo / Zotti Tijuca). O Inter
+  // RECUSA o cancelamento de cobrança em processamento ("A cobrança
+  // não pode ser cancelada, pois se encontra na situação
+  // EM_PROCESSAMENTO") e a reconsulta não sai do lugar; o GERAR
+  // devolvia "já gerado" para sempre. O destravamento é LOCAL: marca
+  // FALHA_EMISSAO, registra o código antigo no campo erro e LIMPA o
+  // inter_boleto_codigo (senão o sync/webhook reescreveriam o
+  // EM_PROCESSAMENTO por cima). A cobrança antiga segue no Inter sem
+  // linha digitável — ninguém consegue pagá-la; na sequência o card
+  // oferece GERAR para um boleto NOVO (novo seuNumero).
+  // ------------------------------------------------------------------
+  if (acao === 'DESTRAVAR') {
+    if (session.perfil !== 'ADMIN') return BAD(403, 'Somente o admin pode destravar boletos.');
+    const carimbo = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date());
+    if (body.parcelaId) {
+      if (!(await hasSalesBoletosTable())) return BAD(503, 'Rode o SQL do Bloco 199 (sales_boletos).');
+      const parcela = await carregarParcela(saleId, String(body.parcelaId));
+      if (!parcela) return BAD(404, 'Parcela não encontrada.');
+      if (String(parcela.status) !== 'EM_PROCESSAMENTO') {
+        return BAD(422, `Só boleto em EM_PROCESSAMENTO pode ser destravado (esta parcela está ${String(parcela.status || 'NAO_GERADO')}).`);
+      }
+      const codAntigo = String(parcela.codigo || '');
+      await db.from('sales_boletos').update({
+        status: 'FALHA_EMISSAO',
+        codigo: null,
+        erro: `Destravado pelo admin em ${carimbo}: cobrança ${codAntigo.slice(0, 36)} estava presa em EM_PROCESSAMENTO no Inter (cancelamento recusado lá). Gere um novo boleto.`,
+      }).eq('id', String(parcela.id));
+      await recomputeVencimentoVenda(saleId);
+      const { data: atual } = await db.from('sales_boletos').select(PARC_COLS).eq('id', String(parcela.id)).maybeSingle();
+      return NextResponse.json({ ok: true, parcela: parcelaPublica(atual as Record<string, unknown>) });
+    }
+    if (String(sale.inter_boleto_status) !== 'EM_PROCESSAMENTO') {
+      return BAD(422, `Só boleto em EM_PROCESSAMENTO pode ser destravado (esta venda está ${String(sale.inter_boleto_status || 'NAO_GERADO')}).`);
+    }
+    const codUnico = String(sale.inter_boleto_codigo || '');
+    await atualizar(saleId, {
+      inter_boleto_status: 'FALHA_EMISSAO',
+      inter_boleto_codigo: null,
+      inter_boleto_erro: `Destravado pelo admin em ${carimbo}: cobrança ${codUnico.slice(0, 36)} estava presa em EM_PROCESSAMENTO no Inter (cancelamento recusado lá). Gere um novo boleto.`,
+    });
+    return NextResponse.json({ ok: true, boleto: { ...cobrancaPublica(sale as Record<string, unknown>), status: 'FALHA_EMISSAO' } });
+  }
+
   // ---------- CANCELAR (ADMIN, venda ou parcela) ----------
   if (acao === 'CANCELAR') {
     if (session.perfil !== 'ADMIN') return BAD(403, 'Somente o admin pode cancelar boletos.');
@@ -713,6 +758,12 @@ export async function POST(req: NextRequest) {
       // depois do POST) — nao ha nada a cancelar lá e o cancelamento LOCAL
       // segue para destravar o card. 202 = cancelamento assincrono aceito.
       if (!r.ok && r.status !== 202 && r.status !== 404) {
+        // BLOCO 224: recusa CLÁSSICA do Inter para cobrança ainda em
+        // processamento ("A cobrança não pode ser cancelada, pois se
+        // encontra na situação EM_PROCESSAMENTO") — orienta o DESTRAVAR.
+        if (String(r.erro || '').toUpperCase().includes('EM_PROCESSAMENTO')) {
+          return BAD(409, 'O Inter não permite cancelar um boleto que ainda está processando lá dentro. Use DESTRAVAR (botão do admin) para liberar e gerar um boleto novo.');
+        }
         return BAD(502, r.erro || 'Falha ao cancelar na API do Inter.');
       }
       // BLOCO 210: CANCELADO volta a oferecer Gerar/Refazer no card — a
@@ -727,6 +778,10 @@ export async function POST(req: NextRequest) {
     // BLOCO 223: mesmo 404 da parcela — cobranca inexistente no Inter nao
     // impede o cancelamento local (destrava GERAR/REEMITIR no card).
     if (!r.ok && r.status !== 202 && r.status !== 404) {
+      // BLOCO 224: mesma recusa do Inter para cobrança em processamento.
+      if (String(r.erro || '').toUpperCase().includes('EM_PROCESSAMENTO')) {
+        return BAD(409, 'O Inter não permite cancelar um boleto que ainda está processando lá dentro. Use DESTRAVAR (botão do admin) para liberar e gerar um boleto novo.');
+      }
       return BAD(502, r.erro || 'Falha ao cancelar na API do Inter.', { boleto: cobrancaPublica(sale as Record<string, unknown>) });
     }
     await atualizar(saleId, { inter_boleto_status: 'CANCELADO', inter_boleto_erro: null });

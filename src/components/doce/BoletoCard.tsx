@@ -700,6 +700,39 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
     if (r.boleto) setBoleto(r.boleto);
   };
 
+  // ============================================================
+  // BLOCO 224 — DESTRAVAR boleto preso em "EM PROCESSAMENTO"
+  // (caso Paradouro do Campo / Zotti Tijuca): o Inter RECUSA o
+  // cancelamento de cobrança em processamento lá dentro e a
+  // reconsulta não sai do lugar; o GERAR devolvia "já gerado"
+  // para sempre. O DESTRAVAR (ADMIN) marca FALHA DE EMISSÃO local
+  // e libera o GERAR para um boleto NOVO. A cobrança antiga fica
+  // no Inter sem linha digitável — ninguém consegue pagá-la.
+  // ============================================================
+  const handleDestravar = async (parcelaId?: string) => {
+    if (busy || busyParcela || !saleId) return;
+    const ehParcela = !!parcelaId;
+    if (!window.confirm(ehParcela
+      ? 'Destavar este boleto travado em "EM PROCESSAMENTO"?\n\nMarca FALHA DE EMISSÃO no sistema e libera o GERAR para um boleto novo. A cobrança antiga fica no Inter sem linha digitável — ninguém consegue pagá-la.'
+      : 'Destavar o boleto travado em "EM PROCESSAMENTO"?\n\nMarca FALHA DE EMISSÃO no sistema e libera o GERAR para um boleto novo. A cobrança antiga fica no Inter sem linha digitável — ninguém consegue pagá-la.')) return;
+    setErroLocal('');
+    if (ehParcela) {
+      setBusyParcela(parcelaId);
+      const r = await boletoService.destravar(saleId, parcelaId);
+      setBusyParcela('');
+      if (!r.ok && !r.parcela) { showToast?.(r.erro || 'Falha ao destravar.', 'error'); return; }
+      showToast?.('Boleto destravado — clique GERAR para gerar o novo.', 'success');
+      await refrescarParcelas();
+      return;
+    }
+    setBusy(true);
+    const r = await boletoService.destravar(saleId);
+    setBusy(false);
+    if (!r.ok && !r.boleto) { showToast?.(r.erro || 'Falha ao destravar.', 'error'); return; }
+    if (r.boleto) setBoleto(r.boleto);
+    showToast?.('Boleto destravado — clique GERAR para gerar o novo.', 'success');
+  };
+
   // BLOCO 217: o handlePdf do boleto único agora vive junto do visualizador
   // (topo do componente — usa boletoService.obterPdf e abre o modal PDF).
   // BLOCO 170: COMPROVANTE 80mm removido deste card (pedido do dono) — o mini
@@ -1040,6 +1073,15 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
                         <i className="fa-solid fa-ban mr-1"></i>Cancelar
                       </button>
                     )}
+                    {/* BLOCO 224: DESTRAVAR a parcela travada em EM_PROCESSAMENTO
+                        (o Inter recusa cancelar cobrança em processamento) —
+                        marca FALHA DE EMISSÃO e libera o GERAR. */}
+                    {podeCancel && p.status === 'EM_PROCESSAMENTO' && (
+                      <button onClick={() => void handleDestravar(p.id)} disabled={ocupado}
+                        className="bg-white border-2 border-amber-300 text-amber-700 font-black py-2.5 rounded-xl text-[8px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
+                        <i className={`fa-solid ${ocupado ? 'fa-spinner fa-spin' : 'fa-unlock'} mr-1`}></i>Destravar
+                      </button>
+                    )}
                   </div>
                   {alvoCancel === p.id && formCancel(p.id, `Boleto ${p.seq}`)}
                 </div>
@@ -1098,7 +1140,9 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
               Boleto temporariamente indisponível: credenciais do Inter ausentes no servidor. O admin precisa definir INTER_CLIENT_ID, INTER_CLIENT_SECRET e o certificado (mTLS) nas variáveis da Vercel.
             </p>
           )}
-          {['A_RECEBER', 'ATRASADO'].includes(boleto.status) && (
+          {/* BLOCO 224: ATUALIZAR também quando está EM_PROCESSAMENTO — o
+              dono precisava ver se a cobrança já saiu lá no Inter. */}
+          {['A_RECEBER', 'ATRASADO', 'EM_PROCESSAMENTO'].includes(boleto.status) && (
             <button onClick={handleConsultar} disabled={busy} className="text-[10px] font-black underline py-1 inline-block disabled:opacity-50">
               Atualizar situação no Inter
             </button>
@@ -1115,6 +1159,16 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
               className="block w-full bg-slate-800 text-white font-black py-3 rounded-xl text-[10px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
               <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-arrows-rotate'} mr-1`}></i>
               Gerar Novamente
+            </button>
+          )}
+          {/* BLOCO 224: DESTRAVAR (admin) — o Inter recusa cancelar cobrança
+              que está EM_PROCESSAMENTO lá dentro; este botão marca FALHA
+              DE EMISSÃO local e libera o GERAR para um boleto novo. */}
+          {podeCancel && boleto.status === 'EM_PROCESSAMENTO' && (
+            <button onClick={() => void handleDestravar()} disabled={busy}
+              className="block w-full bg-white border-2 border-amber-300 text-amber-700 font-black py-2.5 rounded-xl text-[9px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
+              <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-unlock'} mr-1`}></i>
+              Destavar boleto travado (admin)
             </button>
           )}
           {['CANCELADO', 'EXPIRADO', 'FALHA_EMISSAO', 'NAO_GERADO'].includes(boleto.status) && !form && (

@@ -164,6 +164,29 @@ export const boletoService = {
     }
   },
 
+  // =====================================================================
+  // BLOCO 224 — DESTRAVAR boleto preso em EM_PROCESSAMENTO no Inter
+  // (caso Paradouro do Campo / Zotti Tijuca): o Inter RECUSA o
+  // cancelamento de cobrança em processamento ("A cobrança não pode ser
+  // cancelada, pois se encontra na situação EM_PROCESSAMENTO"). O admin
+  // destrava LOCALMENTE: vira FALHA_EMISSAO e o card volta a oferecer
+  // GERAR para um boleto novo (novo seuNumero).
+  // =====================================================================
+  async destravar(saleId: string, parcelaId?: string): Promise<{ ok: boolean; boleto?: BoletoInfo; parcela?: BoletoParcelaInfo; erro?: string }> {
+    try {
+      const res = await fetch('/api/boletos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ acao: 'DESTRAVAR', saleId, ...(parcelaId ? { parcelaId } : {}) }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}`, boleto: data.boleto, parcela: data.parcela };
+      return { ok: true, boleto: data.boleto, parcela: data.parcela };
+    } catch (e: unknown) {
+      return { ok: false, erro: e instanceof Error ? e.message : 'Falha de conexao' };
+    }
+  },
+
   /** BLOCO 210: [ADMIN] cancela o boleto de UMA parcela da divisão (só o
    *  boleto escolhido — a venda e as outras parcelas seguem normais). */
   async cancelarParcela(saleId: string, parcelaId: string, motivo: string): Promise<{ ok: boolean; parcela?: BoletoParcelaInfo; erro?: string }> {

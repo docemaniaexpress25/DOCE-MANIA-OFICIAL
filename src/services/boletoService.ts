@@ -8,6 +8,40 @@ import { authHeaders } from '@/services/userService';
  * do Inter (acao PDF) enviado ao cliente/WhatsApp.
  */
 
+// ============================================================================
+// BLOCO 230 — PRAZO (timeout) em TODAS as chamadas do boleto.
+// Caso real (27/11 13:07 SP): o dono apertou GERAR e o card ficou girando
+// "Gerando no Inter..." por 3 MINUTOS sem nenhuma resposta — o fetch do
+// app não tinha prazo e o servidor podia ficar até ~5,5 min preso na cadeia
+// token + tentativas + fallback no Inter. Agora TODA chamada tem AbortController:
+// estourou o prazo, o card mostra mensagem clara na hora (e orienta conferir
+// o ATUALIZAR antes de gerar de novo, porque o Inter pode ter aceitado).
+// ============================================================================
+class PrazoExcedidoError extends Error {
+  constructor(public prazoSegundos: number) {
+    super(`PRAZO_EXCEDIDO_${prazoSegundos}s`);
+  }
+}
+
+async function fetchComPrazo(url: string, init: RequestInit, prazoMs: number): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), prazoMs);
+  try {
+    return await fetch(url, { ...init, signal: ctrl.signal });
+  } catch (e: unknown) {
+    if (e instanceof DOMException && e.name === 'AbortError') throw new PrazoExcedidoError(Math.round(prazoMs / 1000));
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Mensagem amigável quando o prazo estoura — sempre orienta a conferir antes
+ *  de reemitir (evita boleto em dobro: a emissão pode ter sido aceita lá). */
+function msgPrazo(prazoSegundos: number, contexto: string): string {
+  return `${contexto}: passou de ${prazoSegundos}s sem resposta (Inter lento/instável agora). O boleto PODE ter sido aceito — toque ATUALIZAR no card para conferir a situação antes de GERAR de novo.`;
+}
+
 export interface BoletoInfo {
   status: string;            // NAO_GERADO | EM_PROCESSAMENTO | A_RECEBER | RECEBIDO | ATRASADO | CANCELADO | EXPIRADO | FALHA_EMISSAO | PROTESTO | MARCADO_RECEBIDO
   codigo?: string;           // codigoSolicitacao no Inter
@@ -97,51 +131,58 @@ export const boletoService = {
   /** Estado atual do boleto da venda (leitura barata).
    *  BLOCO 200: o SERVIDOR também diz se a venda pode dividir em 2 boletos
    *  (rota 5) — reforço à prova de falha do casamento feito no client.
-   *  BLOCO 210: podeCancelar diz se o botão CANCELAR BOLETO aparece (ADMIN). */
+   *  BLOCO 210: podeCancelar diz se o botão CANCELAR BOLETO aparece (ADMIN).
+   *  BLOCO 230: prazo 30s. */
   async status(saleId: string): Promise<{ ok: boolean; boleto?: BoletoInfo; parcelas?: BoletoParcelaInfo[]; inter?: InterStatusInfo; nota?: NotaDaVendaInfo; config?: BoletoConfigInfo; podeDividir?: boolean; podeCancelar?: boolean; erro?: string }> {
     try {
-      const res = await fetch(`/api/boletos?saleId=${encodeURIComponent(saleId)}`, {
+      const res = await fetchComPrazo(`/api/boletos?saleId=${encodeURIComponent(saleId)}`, {
         method: 'GET',
         headers: { ...authHeaders() },
-      });
+      }, 30_000);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}` };
       return { ok: true, boleto: data.boleto, parcelas: data.parcelas, inter: data.inter, nota: data.nota, config: data.config, podeDividir: data.podeDividir === true, podeCancelar: data.podeCancelar === true };
     } catch (e: unknown) {
+      if (e instanceof PrazoExcedidoError) return { ok: false, erro: msgPrazo(e.prazoSegundos, 'Consultar boleto') };
       return { ok: false, erro: e instanceof Error ? e.message : 'Falha de conexao' };
     }
   },
 
   /** Gera a cobranca (boleto+pix) no Inter para o saldo da venda.
    *  BLOCO 227: devolve avisoVencimento quando o prazo vencido foi corrigido
-   *  para hoje pelo servidor. */
+   *  para hoje pelo servidor.
+   *  BLOCO 230: prazo 75s — o GERAR responde rápido ou avisa na hora; o
+   *  servidor por dentro agora tem deadline de 50s na emissão. */
   async gerar(saleId: string, p: GerarBoletoParams): Promise<GerarBoletoResposta> {
     try {
-      const res = await fetch('/api/boletos', {
+      const res = await fetchComPrazo('/api/boletos', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ acao: 'EMITIR', saleId, ...p }),
-      });
+      }, 75_000);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}`, boleto: data.boleto };
       return { ok: true, jaGerado: data.jaGerado, boleto: data.boleto, avisoAtrelamento: data.avisoAtrelamento, notaAtrelada: data.notaAtrelada, avisoVencimento: data.avisoVencimento };
     } catch (e: unknown) {
+      if (e instanceof PrazoExcedidoError) return { ok: false, erro: msgPrazo(e.prazoSegundos, 'GERAR boleto') };
       return { ok: false, erro: e instanceof Error ? e.message : 'Falha de conexao' };
     }
   },
 
-  /** Reconsulta a situacao no Inter (emissao assincrona / pagamento). */
+  /** Reconsulta a situacao no Inter (emissao assincrona / pagamento).
+   *  BLOCO 230: prazo 30s. */
   async consultar(saleId: string): Promise<{ ok: boolean; boleto?: BoletoInfo; erro?: string }> {
     try {
-      const res = await fetch('/api/boletos', {
+      const res = await fetchComPrazo('/api/boletos', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ acao: 'CONSULTAR', saleId }),
-      });
+      }, 30_000);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}`, boleto: data.boleto };
       return { ok: true, boleto: data.boleto };
     } catch (e: unknown) {
+      if (e instanceof PrazoExcedidoError) return { ok: false, erro: msgPrazo(e.prazoSegundos, 'Consultar boleto') };
       return { ok: false, erro: e instanceof Error ? e.message : 'Falha de conexao' };
     }
   },
@@ -154,36 +195,40 @@ export const boletoService = {
    * salvar". Agora o card recebe o base64 e mostra o VISUALIZADOR próprio
    * (iframe) com COMPARTILHAR (Web Share API com arquivo real), SALVAR
    * (download) e ABRIR EM NOVA ABA — tudo com gesto direto do usuário.
+   * BLOCO 230: prazo 45s (o PDF vem do Inter e é maior).
    */
   async obterPdf(saleId: string): Promise<{ ok: boolean; pdfBase64?: string; erro?: string }> {
     try {
-      const res = await fetch('/api/boletos', {
+      const res = await fetchComPrazo('/api/boletos', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ acao: 'PDF', saleId }),
-      });
+      }, 45_000);
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.pdfBase64) return { ok: false, erro: data.erro || `Erro ${res.status}` };
       return { ok: true, pdfBase64: String(data.pdfBase64) };
     } catch (e: unknown) {
+      if (e instanceof PrazoExcedidoError) return { ok: false, erro: msgPrazo(e.prazoSegundos, 'Buscar PDF do boleto') };
       return { ok: false, erro: e instanceof Error ? e.message : 'Falha ao buscar o PDF' };
     }
   },
 
   /** [ADMIN] Cancela a cobranca no Inter (motivo obrigatorio).
    *  BLOCO 210: cancela APENAS o boleto — a venda permanece e o status
-   *  CANCELADO volta a oferecer "Gerar Novamente" no card. */
+   *  CANCELADO volta a oferecer "Gerar Novamente" no card.
+   *  BLOCO 230: prazo 40s. */
   async cancelar(saleId: string, motivo: string): Promise<{ ok: boolean; boleto?: BoletoInfo; erro?: string }> {
     try {
-      const res = await fetch('/api/boletos', {
+      const res = await fetchComPrazo('/api/boletos', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ acao: 'CANCELAR', saleId, motivo }),
-      });
+      }, 40_000);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}`, boleto: data.boleto };
       return { ok: true, boleto: data.boleto };
     } catch (e: unknown) {
+      if (e instanceof PrazoExcedidoError) return { ok: false, erro: msgPrazo(e.prazoSegundos, 'Cancelar boleto') };
       return { ok: false, erro: e instanceof Error ? e.message : 'Falha de conexao' };
     }
   },
@@ -195,18 +240,20 @@ export const boletoService = {
   // cancelada, pois se encontra na situação EM_PROCESSAMENTO"). O admin
   // destrava LOCALMENTE: vira FALHA_EMISSAO e o card volta a oferecer
   // GERAR para um boleto novo (novo seuNumero).
+  // BLOCO 230: prazo 45s.
   // =====================================================================
   async destravar(saleId: string, parcelaId?: string): Promise<{ ok: boolean; boleto?: BoletoInfo; parcela?: BoletoParcelaInfo; erro?: string }> {
     try {
-      const res = await fetch('/api/boletos', {
+      const res = await fetchComPrazo('/api/boletos', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ acao: 'DESTRAVAR', saleId, ...(parcelaId ? { parcelaId } : {}) }),
-      });
+      }, 45_000);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}`, boleto: data.boleto, parcela: data.parcela };
       return { ok: true, boleto: data.boleto, parcela: data.parcela };
     } catch (e: unknown) {
+      if (e instanceof PrazoExcedidoError) return { ok: false, erro: msgPrazo(e.prazoSegundos, 'Destravar boleto') };
       return { ok: false, erro: e instanceof Error ? e.message : 'Falha de conexao' };
     }
   },
@@ -217,35 +264,39 @@ export const boletoService = {
   // vigilancia do sync, BLOCO 226), apaga a divisao de parcelas e devolve
   // a venda ao estado NAO_GERADO puro — o card volta a oferecer GERAR do
   // zero. Protecao no servidor: boleto/parcela ja RECEBIDO bloqueia.
+  // BLOCO 230: prazo 60s (cancela várias cobranças no Inter).
   // =====================================================================
   async resetar(saleId: string): Promise<{ ok: boolean; boleto?: BoletoInfo; parcelas?: BoletoParcelaInfo[]; aviso?: string; erro?: string }> {
     try {
-      const res = await fetch('/api/boletos', {
+      const res = await fetchComPrazo('/api/boletos', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ acao: 'RESET', saleId }),
-      });
+      }, 60_000);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}`, boleto: data.boleto };
       return { ok: true, boleto: data.boleto, parcelas: data.parcelas || [], aviso: data.aviso };
     } catch (e: unknown) {
+      if (e instanceof PrazoExcedidoError) return { ok: false, erro: msgPrazo(e.prazoSegundos, 'Resetar boleto') };
       return { ok: false, erro: e instanceof Error ? e.message : 'Falha de conexao' };
     }
   },
 
   /** BLOCO 210: [ADMIN] cancela o boleto de UMA parcela da divisão (só o
-   *  boleto escolhido — a venda e as outras parcelas seguem normais). */
+   *  boleto escolhido — a venda e as outras parcelas seguem normais).
+   *  BLOCO 230: prazo 40s. */
   async cancelarParcela(saleId: string, parcelaId: string, motivo: string): Promise<{ ok: boolean; parcela?: BoletoParcelaInfo; erro?: string }> {
     try {
-      const res = await fetch('/api/boletos', {
+      const res = await fetchComPrazo('/api/boletos', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ acao: 'CANCELAR', saleId, parcelaId, motivo }),
-      });
+      }, 40_000);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}` };
       return { ok: true, parcela: data.parcela };
     } catch (e: unknown) {
+      if (e instanceof PrazoExcedidoError) return { ok: false, erro: msgPrazo(e.prazoSegundos, 'Cancelar boleto') };
       return { ok: false, erro: e instanceof Error ? e.message : 'Falha de conexao' };
     }
   },
@@ -255,46 +306,52 @@ export const boletoService = {
   // dois boletos que JUNTOS fecham o valor da venda.
   // =====================================================================
 
-  /** Grava a divisão (2 boletos com SEU valor e SEU vencimento). */
+  /** Grava a divisão (2 boletos com SEU valor e SEU vencimento).
+   *  BLOCO 230: prazo 30s (só grava no banco). */
   async criarParcelas(saleId: string, boletos: Array<{ valor: number; vencimento: string; doc?: string; cep?: string }>): Promise<{ ok: boolean; parcelas?: BoletoParcelaInfo[]; erro?: string }> {
     try {
-      const res = await fetch('/api/boletos', {
+      const res = await fetchComPrazo('/api/boletos', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ acao: 'CRIAR_PARCELAS', saleId, boletos }),
-      });
+      }, 30_000);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}` };
       return { ok: true, parcelas: data.parcelas };
     } catch (e: unknown) {
+      if (e instanceof PrazoExcedidoError) return { ok: false, erro: msgPrazo(e.prazoSegundos, 'Gravar divisão') };
       return { ok: false, erro: e instanceof Error ? e.message : 'Falha de conexao' };
     }
   },
 
-  /** Gera UMA parcela no Inter (boleto do seq escolhido). */
+  /** Gera UMA parcela no Inter (boleto do seq escolhido).
+   *  BLOCO 230: prazo 40s (deadline do servidor por parcela: 28s). */
   async gerarParcela(saleId: string, parcelaId: string, p: { docManual?: string; cepManual?: string; atrelarNFe?: boolean }): Promise<{ ok: boolean; jaGerado?: boolean; parcela?: BoletoParcelaInfo; erro?: string }> {
     try {
-      const res = await fetch('/api/boletos', {
+      const res = await fetchComPrazo('/api/boletos', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ acao: 'EMITIR', saleId, parcelaId, ...p }),
-      });
+      }, 40_000);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}`, parcela: data.parcela };
       return { ok: true, jaGerado: data.jaGerado, parcela: data.parcela };
     } catch (e: unknown) {
+      if (e instanceof PrazoExcedidoError) return { ok: false, erro: msgPrazo(e.prazoSegundos, 'GERAR boleto') };
       return { ok: false, erro: e instanceof Error ? e.message : 'Falha de conexao' };
     }
   },
 
-  /** Gera TODAS as parcelas abertas de uma vez (os dois boletos juntos). */
+  /** Gera TODAS as parcelas abertas de uma vez (os dois boletos juntos).
+   *  BLOCO 230: prazo 110s — são 2 emissões SEQUENCIAIS no Inter, cada uma
+   *  com deadline próprio de 28s no servidor. */
   async emitirTodasParcelas(saleId: string, p: { docManual?: string; cepManual?: string; atrelarNFe?: boolean } = {}): Promise<{ ok: boolean; resultados?: Array<{ seq: number; ok: boolean; erro?: string; parcela?: BoletoParcelaInfo }>; erro?: string }> {
     try {
-      const res = await fetch('/api/boletos', {
+      const res = await fetchComPrazo('/api/boletos', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ acao: 'EMITIR_TODAS', saleId, ...p }),
-      });
+      }, 110_000);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}` };
       // BLOCO 212: o servidor devolve ok:false (200) quando alguma parcela
@@ -302,39 +359,44 @@ export const boletoService = {
       // ok:true e falha parcial/total ficava silenciosa).
       return { ok: data.ok !== false, resultados: data.resultados || [], erro: data.erro || (data.ok === false ? 'Falha ao gerar os boletos.' : undefined) };
     } catch (e: unknown) {
+      if (e instanceof PrazoExcedidoError) return { ok: false, erro: msgPrazo(e.prazoSegundos, 'GERAR os 2 boletos') };
       return { ok: false, erro: e instanceof Error ? e.message : 'Falha de conexao' };
     }
   },
 
-  /** Reconsulta UMA parcela no Inter (emissao assincrona / pagamento). */
+  /** Reconsulta UMA parcela no Inter (emissao assincrona / pagamento).
+   *  BLOCO 230: prazo 30s. */
   async consultarParcela(saleId: string, parcelaId: string): Promise<{ ok: boolean; parcela?: BoletoParcelaInfo; erro?: string }> {
     try {
-      const res = await fetch('/api/boletos', {
+      const res = await fetchComPrazo('/api/boletos', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ acao: 'CONSULTAR', saleId, parcelaId }),
-      });
+      }, 30_000);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}`, parcela: data.parcela };
       return { ok: true, parcela: data.parcela };
     } catch (e: unknown) {
+      if (e instanceof PrazoExcedidoError) return { ok: false, erro: msgPrazo(e.prazoSegundos, 'Consultar boleto') };
       return { ok: false, erro: e instanceof Error ? e.message : 'Falha de conexao' };
     }
   },
 
   /** BLOCO 217: baixa o PDF do Inter de UMA parcela (base64, sem abrir janela
-   *  — mesmo fluxo do visualizador do boleto único). */
+   *  — mesmo fluxo do visualizador do boleto único).
+   *  BLOCO 230: prazo 45s. */
   async obterPdfParcela(saleId: string, parcelaId: string): Promise<{ ok: boolean; pdfBase64?: string; erro?: string }> {
     try {
-      const res = await fetch('/api/boletos', {
+      const res = await fetchComPrazo('/api/boletos', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ acao: 'PDF', saleId, parcelaId }),
-      });
+      }, 45_000);
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.pdfBase64) return { ok: false, erro: data.erro || `Erro ${res.status}` };
       return { ok: true, pdfBase64: String(data.pdfBase64) };
     } catch (e: unknown) {
+      if (e instanceof PrazoExcedidoError) return { ok: false, erro: msgPrazo(e.prazoSegundos, 'Buscar PDF do boleto') };
       return { ok: false, erro: e instanceof Error ? e.message : 'Falha ao buscar o PDF' };
     }
   },

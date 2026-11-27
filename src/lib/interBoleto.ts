@@ -116,11 +116,17 @@ function mtlsAgent(): https.Agent {
   return agentCache;
 }
 
-/** Requisicao HTTPS com certificado da aplicacao (mTLS). */
+/** Requisicao HTTPS com certificado da aplicacao (mTLS).
+ *  BLOCO 230: timeout PARAMETRIZADO (antes 45s fixos) — a emissao de boleto
+ *  é uma ação que o DONO espera na tela; cada chamada agora tem prazo curto
+ *  (15-30s) e o retry tem DEADLINE total, para o GERAR nunca ficar minutos
+ *  sem resposta (caso real 27/11 13:07: card girando 3 min porque a cadeia
+ *  token+3 tentativas+fallback sem nota+consulta podia somar ~5,5 min). */
 function mtlsRequest(
   method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE',
   url: string,
-  opts: { headers?: Record<string, string>; body?: string } = {}
+  opts: { headers?: Record<string, string>; body?: string } = {},
+  timeoutMs = 20_000
 ): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
@@ -142,7 +148,7 @@ function mtlsRequest(
       }
     );
     req.on('error', reject);
-    req.setTimeout(45_000, () => req.destroy(new Error('Timeout na API do Inter')));
+    req.setTimeout(timeoutMs, () => req.destroy(new Error(`Timeout na API do Inter (${Math.round(timeoutMs / 1000)}s)`)));
     if (opts.body) req.write(opts.body);
     req.end();
   });
@@ -167,7 +173,7 @@ export async function obterToken(): Promise<string> {
   const res = await mtlsRequest('POST', `${cfg.baseUrl}/oauth/v2/token`, {
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: form.toString(),
-  });
+  }, 15_000); // BLOCO 230: token rápido — sem ele nada mais começa
   let data: Record<string, unknown> = {};
   try { data = JSON.parse(res.body); } catch { /* segue */ }
   if (res.status !== 200 || !data.access_token) {
@@ -193,7 +199,8 @@ function authHeaders(token: string): Record<string, string> {
 async function requestJson(
   method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE',
   path: string,
-  body?: unknown
+  body?: unknown,
+  timeoutMs = 20_000
 ): Promise<InterCobrancaResultado> {
   const cfg = getInterConfig();
   try {
@@ -201,7 +208,7 @@ async function requestJson(
     const res = await mtlsRequest(method, `${cfg.baseUrl}${path}`, {
       headers: authHeaders(token),
       body: body === undefined ? undefined : JSON.stringify(body),
-    });
+    }, timeoutMs);
     let data: Record<string, unknown> = {};
     try { data = JSON.parse(res.body); } catch { /* resposta nao-JSON */ }
     if (res.status >= 200 && res.status < 300) return { ok: true, status: res.status, data };
@@ -225,7 +232,10 @@ export function emitirCobranca(payload: {
   formasRecebimento?: ('BOLETO' | 'PIX' | 'SEM_FORMA_PAGAMENTO')[];
   notaFiscal?: InterNotaFiscal;
 }): Promise<InterCobrancaResultado> {
-  return requestJson('POST', '/cobranca/v3/cobrancas', payload);
+  // BLOCO 230: 15s por tentativa — o Inter saudável responde em ~2-12s
+  // (medido 27/11: POST aceito em 12s de ponta a ponta); se travar, o
+  // retry com deadline resolve mais rápido do que esperar 45s preso.
+  return requestJson('POST', '/cobranca/v3/cobrancas', payload, 15_000);
 }
 
 // ---------------------------------------------------------------------------
@@ -257,41 +267,59 @@ export function ehErroTransienteInter(status: number, erro?: string): boolean {
 
 const esperarMs = (ms: number) => new Promise(res => setTimeout(res, ms));
 
-/** BLOCO 225: emissao com retry automatico quando o Inter responde instabilidade. */
+/** BLOCO 230: emissão com retry automático E DEADLINE TOTAL.
+ *  - prazo por tentativa: 15s (emitirCobranca);
+ *  - espera entre tentativas: 2s/4s (antes 3s/6s);
+ *  - DEADLINE (deadlineMs, default 50s): quando o orçamento estoura, PARA
+ *    de tentar e responde na hora — o dono nunca mais fica 3 minutos
+ *    olhando o card girar (o pior caso antigo somava ~5,5 min: 6 tentativas
+ *    x 45s + esperas + consulta).
+ *  EMITIR_TODAS (2 parcelas) usa deadlineMs menor por chamada (~28s) para
+ *  as duas emissões somarem menos que o prazo da função na Vercel. */
 export async function emitirCobrancaComRetry(
   payload: Parameters<typeof emitirCobranca>[0],
-  maxTentativas = 3
+  opts?: { maxTentativas?: number; esperaBaseMs?: number; deadlineMs?: number }
 ): Promise<InterCobrancaResultado & { tentativas: number }> {
+  const maxTentativas = Math.min(Math.max(opts?.maxTentativas ?? 3, 1), 5);
+  const esperaBaseMs = Math.max(opts?.esperaBaseMs ?? 2_000, 1_000);
+  const deadlineMs = Math.max(opts?.deadlineMs ?? 50_000, 10_000);
+  const inicio = Date.now();
   let ultimo: InterCobrancaResultado = { ok: false, status: 0, erro: 'emissao nao iniciada' };
   for (let i = 1; i <= maxTentativas; i++) {
     ultimo = await emitirCobranca(payload);
     if (ultimo.ok || !ehErroTransienteInter(ultimo.status, ultimo.erro)) {
       return { ...ultimo, tentativas: i };
     }
-    if (i < maxTentativas) await esperarMs(i * 3000); // espera 3s, depois 6s
+    if (i < maxTentativas) {
+      // BLOCO 230: deadline — não inicia nova tentativa se o orçamento acabou
+      if (Date.now() - inicio >= deadlineMs) break;
+      await esperarMs((i - 1) * esperaBaseMs + esperaBaseMs); // 2s, depois 4s...
+    }
   }
   return { ...ultimo, tentativas: maxTentativas };
 }
 
-/** Recupera a cobranca completa (situacao, linha digitavel, pix...). */
+/** Recupera a cobranca completa (situacao, linha digitavel, pix...).
+ *  BLOCO 230: 15s — a consulta é leve; se o Inter travar, o card avisará
+ *  em vez de girar 45s. */
 export function recuperarCobranca(codigoSolicitacao: string): Promise<InterCobrancaResultado> {
-  return requestJson('GET', `/cobranca/v3/cobrancas/${encodeURIComponent(codigoSolicitacao)}`);
+  return requestJson('GET', `/cobranca/v3/cobrancas/${encodeURIComponent(codigoSolicitacao)}`, undefined, 15_000);
 }
 
-/** Recupera o PDF do boleto (JSON {pdf: base64}). */
+/** Recupera o PDF do boleto (JSON {pdf: base64}). BLOCO 230: 30s (PDF é maior). */
 export async function recuperarPdf(codigoSolicitacao: string): Promise<{ ok: boolean; pdf?: Buffer; erro?: string }> {
-  const r = await requestJson('GET', `/cobranca/v3/cobrancas/${encodeURIComponent(codigoSolicitacao)}/pdf`);
+  const r = await requestJson('GET', `/cobranca/v3/cobrancas/${encodeURIComponent(codigoSolicitacao)}/pdf`, undefined, 30_000);
   if (!r.ok) return { ok: false, erro: r.erro };
   const b64 = String((r.data as Record<string, unknown>)?.pdf || '');
   if (!b64) return { ok: false, erro: 'Inter nao devolveu o PDF (cobranca ainda processando?)' };
   return { ok: true, pdf: Buffer.from(b64, 'base64') };
 }
 
-/** Cancela a cobranca (motivo <= 50 caracteres). */
+/** Cancela a cobranca (motivo <= 50 caracteres). BLOCO 230: 20s. */
 export function cancelarCobranca(codigoSolicitacao: string, motivo: string): Promise<InterCobrancaResultado> {
   return requestJson('POST', `/cobranca/v3/cobrancas/${encodeURIComponent(codigoSolicitacao)}/cancelar`, {
     motivoCancelamento: motivo.slice(0, 50),
-  });
+  }, 20_000);
 }
 
 // ---------------------------------------------------------------------------
@@ -329,7 +357,7 @@ export interface WebhookInterEstado {
 export async function consultarWebhookInter(): Promise<WebhookInterEstado> {
   const vazio: WebhookInterEstado = { ok: false, cadastrado: false, url: '', criacao: '', atualizacao: '', erro: '', semCredenciais: false };
   if (!isInterConfigured()) return { ...vazio, erro: 'INTER_NAO_CONFIGURADO — defina INTER_CLIENT_ID/SECRET e o certificado no ambiente', semCredenciais: true };
-  const r = await requestJson('GET', '/cobranca/v3/cobrancas/webhook');
+  const r = await requestJson('GET', '/cobranca/v3/cobrancas/webhook', undefined, 20_000);
   if (r.status === 404) return { ...vazio, ok: true, cadastrado: false, erro: '' };
   if (!r.ok) return { ...vazio, erro: r.erro || `HTTP ${r.status}` };
   const d = (r.data || {}) as Record<string, unknown>;
@@ -350,7 +378,7 @@ export async function cadastrarWebhookInter(webhookUrl: string): Promise<Webhook
   const url = (webhookUrl || '').trim();
   if (!/^https:\/\/[^\s]+$/.test(url)) return { ...vazio, erro: 'URL invalida — deve iniciar com https:// (sem espacos)' };
   if (!isInterConfigured()) return { ...vazio, erro: 'INTER_NAO_CONFIGURADO — defina INTER_CLIENT_ID/SECRET e o certificado no ambiente', semCredenciais: true };
-  const r = await requestJson('PUT', '/cobranca/v3/cobrancas/webhook', { webhookUrl: url });
+  const r = await requestJson('PUT', '/cobranca/v3/cobrancas/webhook', { webhookUrl: url }, 20_000);
   if (!r.ok) return { ...vazio, erro: r.erro || `HTTP ${r.status}` };
   // Re-consulta o estado final (fonte da verdade — o PUT responde 204 vazio)
   const estado = await consultarWebhookInter();
@@ -361,7 +389,7 @@ export async function cadastrarWebhookInter(webhookUrl: string): Promise<Webhook
 /** Exclui o webhook cadastrado (DELETE). */
 export async function excluirWebhookInter(): Promise<{ ok: boolean; erro: string }> {
   if (!isInterConfigured()) return { ok: false, erro: 'INTER_NAO_CONFIGURADO — defina INTER_CLIENT_ID/SECRET e o certificado no ambiente' };
-  const r = await requestJson('DELETE', '/cobranca/v3/cobrancas/webhook');
+  const r = await requestJson('DELETE', '/cobranca/v3/cobrancas/webhook', undefined, 20_000);
   if (r.status === 404) return { ok: true, erro: '' }; // ja nao existia — objetivo alcancado
   if (!r.ok) return { ok: false, erro: r.erro || `HTTP ${r.status}` };
   return { ok: true, erro: '' };
@@ -405,6 +433,10 @@ export async function listarCobrancas(opts: {
   const size = Math.min(Math.max(opts.size || 500, 1), 1000);
   const maxPaginas = Math.min(Math.max(opts.maxPaginas || 5, 1), 10);
   const todas: CobrancaColecaoItem[] = [];
+  // BLOCO 230: deadline TOTAL da listagem (30s por página) — a varredura do
+  // sync/portal não pode ficar 150s+ preso se o Inter começar a travar.
+  const inicioListagem = Date.now();
+  const DEADLINE_LISTAGEM_MS = 110_000;
 
   const parseItem = (raw: Record<string, unknown>): CobrancaColecaoItem | null => {
     const cob = ((raw.cobranca as Record<string, unknown>) || raw) as Record<string, unknown>;
@@ -434,7 +466,7 @@ export async function listarCobrancas(opts: {
       ordenarPor: 'DATA_VENCIMENTO',
       tipoOrdenacao: 'ASC',
     });
-    const r = await requestJson('GET', `/cobranca/v3/cobrancas?${qs.toString()}`);
+    const r = await requestJson('GET', `/cobranca/v3/cobrancas?${qs.toString()}`, undefined, 30_000);
     if (!r.ok) return { ok: false, itens: todas, erro: r.erro };
     const data = r.data as Record<string, unknown>;
     const arr: Record<string, unknown>[] = Array.isArray((data as { cobrancas?: unknown }).cobrancas)
@@ -447,6 +479,8 @@ export async function listarCobrancas(opts: {
       if (it) todas.push(it);
     }
     const qtdPaginas = Number((data as Record<string, unknown>).totalPaginas || (data as Record<string, unknown>).qtdPaginas || 1);
+    // BLOCO 230: para por deadline total ou fim real da paginação
+    if (Date.now() - inicioListagem >= DEADLINE_LISTAGEM_MS) break;
     if (!Number.isFinite(qtdPaginas) || pagina + 1 >= qtdPaginas || arr.length < size) break;
   }
   return { ok: true, itens: todas, paginas: maxPaginas };

@@ -27,6 +27,14 @@ import { espelharParcelaInter, baixarParcelaPaga, type ParcelaRow } from '@/lib/
 // mesma lib de equipe do caixa/comissão (sem dependências).
 import { isDavidVendedor } from '@/lib/equipe';
 
+// BLOCO 230 — PRAZO MÁXIMO da função na Vercel. Antes (sem maxDuration) a
+// função podia ficar presa na cadeia token + 6 tentativas de 45s + consulta
+// (~5,5 min no pior caso) enquanto o card do dono girava "Gerando no Inter..."
+// por 3+ minutos sem resposta. Agora a função responde SEMPRE em <= ~2 min
+// (e na prática <= ~1 min: cada chamada ao Inter tem 15-30s e o retry tem
+// deadline de 50s — ver interBoleto.ts BLOCO 230).
+export const maxDuration = 120;
+
 /**
  * BOLETO BANCARIO INTER (Bloco 25) — cobranca boleto+pix na venda.
  *
@@ -236,6 +244,9 @@ async function emitirCobrancaUnificada(args: {
   // valores no caso de boleto único
   valorUnico?: number;
   vencUnico?: string;
+  // BLOCO 230: deadline da emissão (ms) — EMITIR_TODAS usa 28s por parcela
+  // para as duas emissões somarem menos que o prazo da função/frontend.
+  deadlineEmissaoMs?: number;
 }): Promise<NextResponse> {
   const db = getServiceClient();
   const { sale, saleId, parcela } = args;
@@ -419,11 +430,15 @@ async function emitirCobrancaUnificada(args: {
 
   // BLOCO 225: emissão com RETRY automático — instabilidade do Inter
   // ("Tente novamente mais tarde...", 5xx, timeout) tenta até 3x sozinho.
-  let r = await emitirCobrancaComRetry(payload as never);
+  // BLOCO 230: cada tentativa 15s + DEADLINE (50s padrão; 28s por parcela
+  // no EMITIR_TODAS) — o GERAR responde em <= ~1 min, nunca mais minutos.
+  let r = await emitirCobrancaComRetry(payload as never, args.deadlineEmissaoMs ? { deadlineMs: args.deadlineEmissaoMs } : undefined);
   // -----------------------------------------------------------------
   // BLOCO 150: o POST da cobranca v3 pode recusar o objeto notaFiscal e aí
   // o boleto morria INTEIRO. Retenta SEM o vínculo formal e leva a NF para
   // a MENSAGEM (aparece no PDF). O boleto NUNCA falha por causa da nota.
+  // BLOCO 230: o fallback SEM NOTA faz UMA tentativa só (o orçamento de
+  // tempo já foi quase todo gasto — antes ele podia somar +2,5 min preso).
   // -----------------------------------------------------------------
   let fallbackSemNota = false;
   if (!r.ok && notaFiscal) {
@@ -435,7 +450,7 @@ async function emitirCobrancaUnificada(args: {
         linha5: `${tipoNota === 'NFE' ? 'NF-e' : 'NFC-e'} ${String(sale.nota_numero || '')} atrelada a esta cobranca`,
       },
     };
-    r = await emitirCobrancaComRetry(semNota as never);
+    r = await emitirCobrancaComRetry(semNota as never, { maxTentativas: 1, deadlineMs: 15_000 });
     fallbackSemNota = r.ok;
   }
   if (!r.ok || !r.data || !(r.data as Record<string, unknown>).codigoSolicitacao) {
@@ -1088,6 +1103,9 @@ export async function POST(req: NextRequest) {
         atrelarNFe: body.atrelarNFe !== false,
         mensagemAvulsa: '',
         parcela: p,
+        // BLOCO 230: deadline curto POR PARCELA — 2 emissões sequenciais não
+        // podem somar minutos (antes o pior caso passava de 4 min juntos).
+        deadlineEmissaoMs: 28_000,
       });
       if (res.status === 200) {
         const j = await res.json();

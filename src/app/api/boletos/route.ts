@@ -8,7 +8,8 @@ import { validaCpfCnpj, mascaraCpfCnpj } from '@/lib/validaDoc';
 import {
   isInterConfigured,
   getInterConfig,
-  emitirCobranca,
+  emitirCobrancaComRetry,
+  ehErroTransienteInter,
   recuperarCobranca,
   recuperarPdf,
   cancelarCobranca,
@@ -67,14 +68,32 @@ import { isDavidVendedor } from '@/lib/equipe';
 const BAD = (status: number, erro: string, extra: Record<string, unknown> = {}) =>
   NextResponse.json({ ok: false, erro, ...extra }, { status });
 
-const COLS = 'id, vendedor_id, client_id, valor_total, valor_pago, metodo_pagamento, status_pagamento, data_venda, nota_status, nota_tipo, nota_chave, nota_numero, nota_ref, inter_boleto_status, inter_boleto_codigo, inter_boleto_seu_numero, inter_boleto_linha, inter_boleto_barras, inter_boleto_pix, inter_boleto_vencimento, inter_boleto_valor, inter_boleto_erro';
+// BLOCO 225: inter_boleto_em entra no COLS — o card precisa saber HÁ QUANTO
+// tempo a cobrança está EM_PROCESSAMENTO no Inter (processamento normal x
+// emissão travada que merece o DESTRAVAR).
+const COLS = 'id, vendedor_id, client_id, valor_total, valor_pago, metodo_pagamento, status_pagamento, data_venda, nota_status, nota_tipo, nota_chave, nota_numero, nota_ref, inter_boleto_status, inter_boleto_codigo, inter_boleto_seu_numero, inter_boleto_linha, inter_boleto_barras, inter_boleto_pix, inter_boleto_vencimento, inter_boleto_valor, inter_boleto_erro, inter_boleto_em';
 
 // Bloco 199: colunas da parcela (sales_boletos)
 const PARC_COLS = 'id, sale_id, seq, valor, vencimento, doc, cep, status, codigo, seu_numero, linha, barras, pix, erro, emitido_em, pago_em';
 
-function cobrancaPublica(s: Record<string, unknown>): CobrancaPublica {
+/**
+ * BLOCO 225: minutos desde que a cobrança entrou EM_PROCESSAMENTO no Inter
+ * (inter_boleto_em / parcela.emitido_em). Avisar o DESTRAVAR quando passa de
+ * 30 minutos sem processar — o dono precisa distinguir "o Inter está
+ * processando normal" de "essa emissão travou lá dentro".
+ */
+function tempoProcessando(emIso: unknown, status: string): { processandoMin: number | null; avisarDestravar: boolean } {
+  if (status !== 'EM_PROCESSAMENTO' || !emIso) return { processandoMin: null, avisarDestravar: false };
+  const t = new Date(String(emIso)).getTime();
+  if (!Number.isFinite(t)) return { processandoMin: null, avisarDestravar: false };
+  const min = Math.max(0, Math.round((Date.now() - t) / 60000));
+  return { processandoMin: min, avisarDestravar: min >= 30 };
+}
+
+function cobrancaPublica(s: Record<string, unknown>): CobrancaPublica & { processandoMin: number | null; avisarDestravar: boolean } {
+  const st = (s.inter_boleto_status as string) || 'NAO_GERADO';
   return {
-    status: (s.inter_boleto_status as string) || 'NAO_GERADO',
+    status: st,
     codigo: (s.inter_boleto_codigo as string) || '',
     seuNumero: (s.inter_boleto_seu_numero as string) || '',
     vencimento: (s.inter_boleto_vencimento as string) || '',
@@ -85,23 +104,28 @@ function cobrancaPublica(s: Record<string, unknown>): CobrancaPublica {
     valorRecebido: null,
     erro: (s.inter_boleto_erro as string) || '',
     notaFiscalChave: '',
+    // BLOCO 225: tempo preso em EM_PROCESSAMENTO + aviso do DESTRAVAR.
+    ...tempoProcessando(s.inter_boleto_em, st),
   };
 }
 
 /** Bloco 199: parcela no formato publico do app (camelCase, valores tipados). */
 function parcelaPublica(p: Record<string, unknown>) {
+  const st = String(p.status || 'NAO_GERADO');
   return {
     id: String(p.id || ''),
     seq: Number(p.seq) || 1,
     valor: Number(p.valor) || 0,
     vencimento: String(p.vencimento || '').slice(0, 10),
-    status: String(p.status || 'NAO_GERADO'),
+    status: st,
     codigo: String(p.codigo || ''),
     seuNumero: String(p.seu_numero || ''),
     linhaDigitavel: String(p.linha || ''),
     codigoBarras: String(p.barras || ''),
     pixCopiaECola: String(p.pix || ''),
     erro: String(p.erro || ''),
+    // BLOCO 225: minutos em EM_PROCESSAMENTO + aviso do DESTRAVAR (>= 30 min).
+    ...tempoProcessando(p.emitido_em, st),
   };
 }
 
@@ -372,7 +396,9 @@ async function emitirCobrancaUnificada(args: {
     });
   }
 
-  let r = await emitirCobranca(payload as never);
+  // BLOCO 225: emissão com RETRY automático — instabilidade do Inter
+  // ("Tente novamente mais tarde...", 5xx, timeout) tenta até 3x sozinho.
+  let r = await emitirCobrancaComRetry(payload as never);
   // -----------------------------------------------------------------
   // BLOCO 150: o POST da cobranca v3 pode recusar o objeto notaFiscal e aí
   // o boleto morria INTEIRO. Retenta SEM o vínculo formal e leva a NF para
@@ -388,18 +414,25 @@ async function emitirCobrancaUnificada(args: {
         linha5: `${tipoNota === 'NFE' ? 'NF-e' : 'NFC-e'} ${String(sale.nota_numero || '')} atrelada a esta cobranca`,
       },
     };
-    r = await emitirCobranca(semNota as never);
+    r = await emitirCobrancaComRetry(semNota as never);
     fallbackSemNota = r.ok;
   }
   if (!r.ok || !r.data || !(r.data as Record<string, unknown>).codigoSolicitacao) {
     const erro = r.erro || `HTTP ${r.status}`;
+    // BLOCO 225: falhou MESMO com o retry — quando é instabilidade do Inter,
+    // a mensagem orienta o dono a esperar e tocar GERAR de novo (a falha
+    // transiente costuma passar em minutos: caso Paradouro 07:48 recusou,
+    // 08:28 o mesmo Inter aceitou).
+    const dicaInstabilidade = ehErroTransienteInter(r.status, r.erro)
+      ? ' O Inter está instável agora (já tentamos 3x). Aguarde 2 minutos e toque GERAR de novo.'
+      : '';
     if (parcela) {
       await db.from('sales_boletos').update({ status: 'FALHA_EMISSAO', erro }).eq('id', String(parcela.id))
         .then(({ error }) => { if (error) console.error('[api/boletos] rollback FALHA_EMISSAO parcela:', error.message); });
-      return BAD(502, `Inter recusou o boleto ${Number(parcela.seq) || 1}: ${erro}`, { parcela: parcelaPublica({ ...parcela, status: 'FALHA_EMISSAO', erro }) });
+      return BAD(502, `Inter recusou o boleto ${Number(parcela.seq) || 1}: ${erro}${dicaInstabilidade}`, { parcela: parcelaPublica({ ...parcela, status: 'FALHA_EMISSAO', erro }) });
     }
     await atualizar(saleId, { inter_boleto_status: 'FALHA_EMISSAO', inter_boleto_erro: erro });
-    return BAD(502, `Inter recusou o boleto: ${erro}`, { boleto: { status: 'FALHA_EMISSAO', erro } });
+    return BAD(502, `Inter recusou o boleto: ${erro}${dicaInstabilidade}`, { boleto: { status: 'FALHA_EMISSAO', erro } });
   }
 
   const codigo = String((r.data as Record<string, unknown>).codigoSolicitacao);
@@ -678,7 +711,13 @@ export async function POST(req: NextRequest) {
       inter_boleto_pix: cob.pixCopiaECola || sale.inter_boleto_pix || null,
       inter_boleto_erro: cob.status === 'FALHA_EMISSAO' ? 'Falha na emissao no Inter' : null,
     });
-    return NextResponse.json({ ok: true, boleto: cob });
+    // BLOCO 225: quando a cobrança segue EM_PROCESSAMENTO, a resposta leva
+    // HÁ QUANTO tempo (inter_boleto_em) + aviso do DESTRAVAR após 30 min —
+    // o dono finalmente vê se é processamento normal ou emissão travada.
+    return NextResponse.json({
+      ok: true,
+      boleto: { ...cob, ...tempoProcessando(sale.inter_boleto_em, cob.status) },
+    });
   }
 
   // ---------- PDF (venda ou parcela) ----------

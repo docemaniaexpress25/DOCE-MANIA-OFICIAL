@@ -228,6 +228,51 @@ export function emitirCobranca(payload: {
   return requestJson('POST', '/cobranca/v3/cobrancas', payload);
 }
 
+// ---------------------------------------------------------------------------
+// BLOCO 225 — RETRY AUTOMATICO PARA INSTABILIDADE DO INTER.
+// Caso real (Paradouro do Campo, 27/11 07:48): o POST de emissao voltou com
+// o erro TRANSIENTE "Tente novamente mais tarde, caso o erro persista favor
+// entrar em contato com o suporte inter." e a parcela morreu em FALHA_EMISSAO
+// sem nova tentativa — o dono ficou sem boleto ("nao consigo gerar nenhum
+// boleto novo!"). 40 minutos depois o MESMO servidor Inter aceitou a outra
+// parcela (08:28): era instabilidade passageira. Agora erros transientes
+// (HTTP 429/500/502/503/504, timeout de rede ou mensagens de instabilidade)
+// ganham RETRY: ate 3 tentativas com espera de 3s/6s. Falha de DADOS (400/
+// 422 de validacao, 401 token, 403 escopo) NAO re-tenta — volta na hora.
+// ---------------------------------------------------------------------------
+export function ehErroTransienteInter(status: number, erro?: string): boolean {
+  if (status === 0) return true; // falha de rede/timeout do nosso lado
+  if (status === 429 || (status >= 500 && status <= 504)) return true;
+  const t = String(erro || '').toLowerCase();
+  return (
+    t.includes('tente novamente') ||
+    t.includes('suporte inter') ||
+    t.includes('timeout') ||
+    t.includes('tempo esgotado') ||
+    t.includes('unavailable') ||
+    t.includes('overloaded') ||
+    t.includes('temporarily')
+  );
+}
+
+const esperarMs = (ms: number) => new Promise(res => setTimeout(res, ms));
+
+/** BLOCO 225: emissao com retry automatico quando o Inter responde instabilidade. */
+export async function emitirCobrancaComRetry(
+  payload: Parameters<typeof emitirCobranca>[0],
+  maxTentativas = 3
+): Promise<InterCobrancaResultado & { tentativas: number }> {
+  let ultimo: InterCobrancaResultado = { ok: false, status: 0, erro: 'emissao nao iniciada' };
+  for (let i = 1; i <= maxTentativas; i++) {
+    ultimo = await emitirCobranca(payload);
+    if (ultimo.ok || !ehErroTransienteInter(ultimo.status, ultimo.erro)) {
+      return { ...ultimo, tentativas: i };
+    }
+    if (i < maxTentativas) await esperarMs(i * 3000); // espera 3s, depois 6s
+  }
+  return { ...ultimo, tentativas: maxTentativas };
+}
+
 /** Recupera a cobranca completa (situacao, linha digitavel, pix...). */
 export function recuperarCobranca(codigoSolicitacao: string): Promise<InterCobrancaResultado> {
   return requestJson('GET', `/cobranca/v3/cobrancas/${encodeURIComponent(codigoSolicitacao)}`);

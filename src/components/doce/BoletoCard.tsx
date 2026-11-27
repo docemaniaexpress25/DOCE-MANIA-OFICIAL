@@ -120,7 +120,9 @@ const badgeParcelaTxt = (p: BoletoParcelaInfo): string => {
   switch (p.status) {
     case 'A_RECEBER': return `A RECEBER — venc. ${dataBR(p.vencimento)}`;
     case 'RECEBIDO': case 'MARCADO_RECEBIDO': return 'PAGO';
-    case 'EM_PROCESSAMENTO': return 'Gerando no Inter...';
+    // BLOCO 225: o dono vê HÁ QUANTO tempo o Inter está processando —
+    // “Gerando no Inter... (~12 min)” deixa claro se é normal ou travou.
+    case 'EM_PROCESSAMENTO': return p.processandoMin != null ? `Gerando no Inter... (~${p.processandoMin} min)` : 'Gerando no Inter...';
     case 'ATRASADO': return `ATRASADO — venc. ${dataBR(p.vencimento)}`;
     case 'PROTESTO': return 'Em protesto';
     case 'CANCELADO': case 'EXPIRADO': return 'Cancelado';
@@ -825,7 +827,8 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
     switch (s) {
       case 'A_RECEBER': return { cls: 'bg-emerald-50 text-emerald-700 border-emerald-200', icon: 'fa-barcode', txt: `BOLETO A RECEBER — venc. ${dataBR(boleto?.vencimento)}` };
       case 'RECEBIDO': case 'MARCADO_RECEBIDO': return { cls: 'bg-emerald-50 text-emerald-700 border-emerald-200', icon: 'fa-circle-check', txt: `BOLETO PAGO${boleto?.valorRecebido ? ` — R$ ${Number(boleto.valorRecebido).toFixed(2)}` : ''}` };
-      case 'EM_PROCESSAMENTO': return { cls: 'bg-amber-50 text-amber-700 border-amber-200', icon: 'fa-hourglass-half', txt: 'Gerando boleto no Inter...' };
+      // BLOCO 225: badge mostra HÁ QUANTO tempo o Inter está processando.
+      case 'EM_PROCESSAMENTO': return { cls: 'bg-amber-50 text-amber-700 border-amber-200', icon: 'fa-hourglass-half', txt: boleto?.processandoMin != null ? `Gerando boleto no Inter... (~${boleto.processandoMin} min)` : 'Gerando boleto no Inter...' };
       case 'ATRASADO': return { cls: 'bg-rose-50 text-rose-700 border-rose-200', icon: 'fa-triangle-exclamation', txt: `BOLETO ATRASADO — venc. ${dataBR(boleto?.vencimento)}` };
       case 'PROTESTO': return { cls: 'bg-rose-50 text-rose-700 border-rose-200', icon: 'fa-gavel', txt: 'Boleto em protesto' };
       case 'CANCELADO': case 'EXPIRADO': return { cls: 'bg-gray-100 text-gray-500 border-gray-200', icon: 'fa-ban', txt: 'Boleto cancelado' };
@@ -844,7 +847,11 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
     const soma = parcelas.reduce((acc, p) => acc + (Number(p.valor) || 0), 0);
     if (pagas === todas) return { cls: 'bg-emerald-50 text-emerald-700 border-emerald-200', icon: 'fa-circle-check', txt: `BOLETO DUPLICO — PAGO (${pagas}/${todas}) — R$ ${soma.toFixed(2)}` };
     if (pagas > 0) return { cls: 'bg-emerald-50 text-emerald-700 border-emerald-200', icon: 'fa-circle-half-stroke', txt: `BOLETO DUPLICO — ${pagas}/${todas} pago(s)` };
-    if (parcelas.some(p => p.status === 'EM_PROCESSAMENTO')) return { cls: 'bg-amber-50 text-amber-700 border-amber-200', icon: 'fa-hourglass-half', txt: 'Gerando os boletos no Inter...' };
+    if (parcelas.some(p => p.status === 'EM_PROCESSAMENTO')) {
+      // BLOCO 225: o badge agregado mostra o maior tempo em processamento.
+      const maxMin = Math.max(0, ...parcelas.map(p => (p.status === 'EM_PROCESSAMENTO' && p.processandoMin != null) ? p.processandoMin : 0));
+      return { cls: 'bg-amber-50 text-amber-700 border-amber-200', icon: 'fa-hourglass-half', txt: maxMin > 0 ? `Gerando os boletos no Inter... (~${maxMin} min)` : 'Gerando os boletos no Inter...' };
+    }
     if (parcelas.some(p => ['A_RECEBER', 'ATRASADO'].includes(p.status))) {
       const atrasada = parcelas.some(p => p.status === 'ATRASADO');
       return atrasada
@@ -1020,6 +1027,17 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
                   {p.erro && p.status === 'FALHA_EMISSAO' && (
                     <p className="text-[8px] font-bold text-rose-600 leading-snug break-words">{p.erro}</p>
                   )}
+                  {/* BLOCO 225: emissão presa há 30+ min em EM_PROCESSAMENTO —
+                      o Inter pode ter travado essa cobrança lá dentro. O
+                      dono fica orientado: ATUALIZAR primeiro; se não sair,
+                      DESTRavar (admin) libera e libera o GERAR de um boleto
+                      novo (a cobrança antiga não tem linha digitável). */}
+                  {p.status === 'EM_PROCESSAMENTO' && p.avisarDestravar && (
+                    <p className="text-[8px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5 leading-snug">
+                      <i className="fa-solid fa-hourglass-half mr-1"></i>
+                      Preso no Inter há ~{p.processandoMin} min sem sair do processamento. Toque ATUALIZAR; se não sair, use DESTRavar para liberar e GERAR um boleto novo.
+                    </p>
+                  )}
                   {/* BLOCO 217 (regra do dono): linha digitável e PIX copia-e-cola
                       SAÍRAM do card — “não vamos usar isso, apenas informe se o
                       boleto foi gerado com sucesso”. O status segue no badge e
@@ -1142,6 +1160,14 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
           )}
           {/* BLOCO 224: ATUALIZAR também quando está EM_PROCESSAMENTO — o
               dono precisava ver se a cobrança já saiu lá no Inter. */}
+          {/* BLOCO 225: aviso do boleto ÚNICO preso há 30+ min — orienta o
+              DESTRAVAR (admin) em vez do “atualizar que não sai do lugar”. */}
+          {boleto.status === 'EM_PROCESSAMENTO' && boleto.avisarDestravar && (
+            <p className="text-[9px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5 leading-snug">
+              <i className="fa-solid fa-hourglass-half mr-1"></i>
+              Preso no Inter há ~{boleto.processandoMin} min sem sair do processamento. Toque ATUALIZAR; se não sair, use DESTRavar (admin) para liberar e GERAR um boleto novo.
+            </p>
+          )}
           {['A_RECEBER', 'ATRASADO', 'EM_PROCESSAMENTO'].includes(boleto.status) && (
             <button onClick={handleConsultar} disabled={busy} className="text-[10px] font-black underline py-1 inline-block disabled:opacity-50">
               Atualizar situação no Inter

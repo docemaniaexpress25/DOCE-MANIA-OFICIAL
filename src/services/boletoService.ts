@@ -21,6 +21,13 @@ export interface BoletoInfo {
   erro?: string;
   /** FIX atrelamento: chave 44 dig da NF-e/NFC-e atrelada à cobrança no Inter. */
   notaFiscalChave?: string;
+  /** BLOCO 225: minutos desde que a cobrança entrou EM_PROCESSAMENTO no
+   *  Inter (null quando não é o caso) — o dono vê se é processamento normal
+   *  ou emissão travada. */
+  processandoMin?: number | null;
+  /** BLOCO 225: true = processando há 30+ min sem sair — orientar o botão
+   *  DESTRavar (admin) para liberar e gerar um boleto novo. */
+  avisarDestravar?: boolean;
 }
 
 export interface NotaDaVendaInfo {
@@ -55,6 +62,9 @@ export interface BoletoParcelaInfo {
   codigoBarras?: string;
   pixCopiaECola?: string;
   erro?: string;
+  /** BLOCO 225: minutos em EM_PROCESSAMENTO + aviso do DESTRavar (30+ min). */
+  processandoMin?: number | null;
+  avisarDestravar?: boolean;
 }
 
 export interface GerarBoletoParams {

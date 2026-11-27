@@ -3,6 +3,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { authHeaders } from '@/services/userService';
 import ConfirmModal from '@/components/doce/ConfirmModal';
+// BLOCO 232: recibo do pagamento ao David — valor por extenso
+import { valorPorExtenso } from '@/lib/extenso';
 
 /**
  * BLOCO 118 — FECHAMENTO DE CAIXA (pedido do dono):
@@ -12,10 +14,10 @@ import ConfirmModal from '@/components/doce/ConfirmModal';
  *  fechamento assim como gerara log de pagamentos etc para ter rastreio!"
  * BLOCO 118.3 (regra do dono): o CAIXA é EXCLUSIVO do DAVID (Rota 5) e só
  * registra À VISTA: "vendas realizados a prazo deverao entrar no caixa de
- * forma separada de venda a vista... o que me interessa sao as vendas com
- * dinheiro e pix que ele recebe a vista! as vendas a prazo que ele recebe no
- * contas a receber nao precisam constar nessa tela!" — boleto/contas a
- * receber/portal não entram.
+ *  forma separada de venda a vista... o que me interessa sao as vendas com
+ *  dinheiro e pix que ele recebe a vista! as vendas a prazo que ele recebe no
+ *  contas a receber nao precisam constar nessa tela!" — boleto/contas a
+ *  receber/portal não entram.
  *
  * - Mostra o CAIXA ABERTO: dinheiro e pix recebidos À VISTA (com comprovante
  *   foto) com o log completo de cada pagamento (origem, cliente, vendedor, hora).
@@ -60,6 +62,35 @@ interface FechamentoResumo {
 interface FechamentoDetalhe extends FechamentoResumo {
   janelaInicio?: string | null;
   pagamentos: PagamentoCaixa[];
+}
+
+// ---------------------------------------------------------------------------
+// BLOCO 232 — CONTAS DO DAVID no período + PAGAMENTOS AO DAVID (recibos):
+// "o caixa do David serve para eu admin saber quanto ele gerou de vendas a
+// prazo e venda a vista em um período... e quando ele trouxe a vista em
+// dinheiro e Pix e quando dos boletos dele a prazo foram pagos e dados baixa.
+// Encima disso eu faço pagamento para ele... de um valor que eu vou digitar
+// na tela e isso precisa gerar um recibo."
+// ---------------------------------------------------------------------------
+interface ResumoCaixa {
+  vista: { dinheiro: number; pix: number; deposito: number; total: number; qtde: number };
+  prazo: {
+    geradoNoPeriodo: number; qtdeGerados: number;
+    recebidoNoPeriodo: number; qtdeRecebidos: number;
+    recebidosLista: { id: string; pagoEm: string; valor: number; cliente?: string | null; saleId?: string | null }[];
+    pendentes: number; qtdePendentes: number;
+  };
+  totalGerado: number;
+}
+
+interface RepasseDavid {
+  id: string;
+  reciboNumero: number;
+  criadoEm: string;
+  valor: number;
+  forma: string;
+  observacao?: string | null;
+  registradoPorNome?: string | null;
 }
 
 interface CaixaFechamentoProps {
@@ -122,6 +153,16 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
   const [excluirAlvo, setExcluirAlvo] = useState<PagamentoCaixa | null>(null);
   const [excluindo, setExcluindo] = useState(false);
 
+  // BLOCO 232: contas do David no período + pagamentos ao David (recibos)
+  const [resumo, setResumo] = useState<ResumoCaixa | null>(null);
+  const [repasses, setRepasses] = useState<RepasseDavid[]>([]);
+  const [repassesSqlOk, setRepassesSqlOk] = useState(true);
+  const [modalRepasse, setModalRepasse] = useState(false);
+  const [repValor, setRepValor] = useState('');
+  const [repForma, setRepForma] = useState<'DINHEIRO' | 'PIX'>('DINHEIRO');
+  const [repObs, setRepObs] = useState('');
+  const [registrandoRep, setRegistrandoRep] = useState(false);
+
   const carregar = useCallback(async (silencioso = false) => {
     if (!silencioso) setLoading(true);
     setErro(null);
@@ -140,6 +181,10 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
       setTotais(d.aberto?.totais || { dinheiro: 0, pix: 0, deposito: 0, boleto: 0, total: 0 });
       setDesde(d.aberto?.desde || null);
       setHistorico(d.historico || []);
+      // BLOCO 232: resumo das contas + pagamentos (recibos) já registrados
+      setResumo((d.resumo as ResumoCaixa) || null);
+      setRepasses((d.repasses as RepasseDavid[]) || []);
+      setRepassesSqlOk(d.repassesSqlOk !== false);
       setAtualizadoEm(new Date());
     } catch {
       if (!silencioso) setErro('Sem conexao para carregar o caixa.');
@@ -252,6 +297,91 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
       showToast?.('Sem conexao para abrir o fechamento.', 'error');
     } finally {
       setCarregandoDetalhe(null);
+    }
+  };
+
+  // ---------------------------------------------------------------------------
+  // BLOCO 232 — RECIBO do pagamento ao David (imprimível, nova aba — mesmo
+  // padrão dos portes/DANFE do app). Persistido no banco (SQL 232), o número
+  // do recibo é identity — reimpressão é sempre a MESMA via.
+  // ---------------------------------------------------------------------------
+  const abrirRecibo = (r: RepasseDavid) => {
+    const esc = (s: unknown) => String(s ?? '').replace(/</g, '&lt;');
+    const v = Number(r.valor) || 0;
+    const ext = valorPorExtenso(v);
+    const d = new Date(r.criadoEm);
+    const dataBR = `${d.toLocaleDateString('pt-BR')} ${d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`;
+    const num = String(r.reciboNumero || 0).padStart(6, '0');
+    const formaTxt = String(r.forma || 'DINHEIRO') === 'PIX' ? 'Pix' : 'Dinheiro';
+    const pagouPor = esc(r.registradoPorNome || user?.nome || 'Admin');
+    const html = `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>Recibo nº ${num} — Pagamento ao vendedor</title>
+<style>
+  * { font-family: Arial, Helvetica, sans-serif; box-sizing: border-box; }
+  body { margin: 0; padding: 32px; color: #111; font-size: 14px; line-height: 1.6; }
+  .box { border: 2px solid #111; border-radius: 10px; padding: 18px 22px; max-width: 720px; margin: 0 auto; }
+  .topo { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 1px solid #999; padding-bottom: 10px; }
+  h1 { font-size: 18px; margin: 0; text-transform: uppercase; letter-spacing: 2px; }
+  .num { font-size: 16px; font-weight: bold; text-align: right; }
+  .valor { font-size: 22px; font-weight: bold; margin: 16px 0 4px; }
+  .ext { font-style: italic; font-size: 13px; color: #333; }
+  p { margin: 10px 0; text-align: justify; }
+  .ref { background: #f6f6f6; border-radius: 8px; padding: 10px 12px; font-size: 13px; }
+  .linha { display: flex; gap: 40px; margin-top: 10px; font-size: 13px; }
+  .linha div { flex: 1; }
+  .assin { display: flex; gap: 60px; margin-top: 60px; max-width: 720px; margin-left: auto; margin-right: auto; }
+  .assin div { flex: 1; border-top: 1px solid #111; padding-top: 6px; text-align: center; font-size: 12px; }
+  .rodape { max-width: 720px; margin: 26px auto 0; font-size: 10px; color: #777; text-align: center; }
+  @media print { body { padding: 12mm; } }
+</style></head><body>
+<div class="box">
+  <div class="topo">
+    <div><h1>RECIBO</h1><p style="margin:2px 0 0;font-size:12px">Pagamento ao vendedor — Rota 5</p></div>
+    <div class="num">Nº ${num}<br><span style="font-size:11px;color:#555">${esc(dataBR)}</span></div>
+  </div>
+  <p class="valor">R$ ${v.toFixed(2).replace('.', ',')}</p>
+  <p class="ext">(${esc(ext)})</p>
+  <p>Recebemos de <b>DOCE MANIA EXPRESS</b> a quantia acima, referente ao pagamento do repasse das vendas do caixa do vendedor <b>Deivid (Rota 5)</b>.</p>
+  <div class="ref"><b>Forma do pagamento:</b> ${formaTxt}${r.observacao ? `<br><b>Referência:</b> ${esc(r.observacao)}` : ''}</div>
+</div>
+<div class="assin"><div>Quem recebeu<br><b>Deivid (Rota 5)</b></div><div>Quem pagou<br><b>${pagouPor}</b></div></div>
+<p class="rodape">Recibo registrado no sistema (caixa — pagamentos ao David). Reimpressão desta via é sempre a mesma do recibo nº ${num}.</p>
+<script>window.onload = () => { try { window.print(); } catch (e) {} };</script>
+</body></html>`;
+    const w = window.open('', '_blank');
+    if (!w) { showToast?.('Libere o pop-up para imprimir o recibo.', 'error'); return; }
+    w.document.write(html);
+    w.document.close();
+  };
+
+  // BLOCO 232 — registra o pagamento digitado pelo dono e abre o recibo.
+  const registrarRepasse = async () => {
+    const valorNum = Math.round(parseFloat(String(repValor).replace(/[^0-9,\.]/g, '').replace(',', '.')) * 100) / 100;
+    if (!(valorNum > 0)) {
+      showToast?.('Digite o valor do pagamento antes de registrar.', 'error');
+      return;
+    }
+    setRegistrandoRep(true);
+    try {
+      const res = await fetch('/api/caixa', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ acao: 'REPASSE', valor: valorNum, forma: repForma, observacao: repObs }),
+      });
+      const d = await res.json().catch(() => null);
+      if (!res.ok || !d?.ok) {
+        showToast?.(String(d?.error || 'Não foi possível registrar o pagamento.'), 'error');
+        return;
+      }
+      showToast?.(`Pagamento registrado — recibo nº ${String(d.repasse?.reciboNumero || 0).padStart(6, '0')}`, 'success');
+      setModalRepasse(false);
+      setRepValor('');
+      setRepObs('');
+      if (d.repasse) abrirRecibo(d.repasse as RepasseDavid);
+      carregar();
+    } catch {
+      showToast?.('Sem conexão para registrar o pagamento.', 'error');
+    } finally {
+      setRegistrandoRep(false);
     }
   };
 
@@ -436,6 +566,149 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
             )}
           </div>
 
+          {/* ==================================================================
+              BLOCO 232 (regra do dono): CONTAS DO DAVID — o que realmente importa.
+              "quanto ele gerou de vendas a prazo e venda a vista em um período,
+              e quando ele trouxe a vista em dinheiro e Pix e quando dos boletos
+              dele a prazo foram pagos e dados baixa. Encima disso eu faço
+              pagamento para ele."
+              ================================================================== */}
+          {resumo && (
+            <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-md mx-1">
+              <p className="text-[8px] font-black text-gray-400 uppercase mb-3">
+                Contas do David — período do caixa{desde ? ` (desde ${new Date(desde).toLocaleDateString('pt-BR')})` : ' (primeiro período)'}
+              </p>
+
+              {/* TOTAL GERADO = à vista + a prazo gerado no período */}
+              <div className="bg-gray-900 rounded-2xl p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-[8px] font-black text-white opacity-60 uppercase">Total gerado no período</p>
+                    <p className="text-3xl font-black text-emerald-400 leading-tight">{fmt(resumo.totalGerado)}</p>
+                    <p className="text-[8px] font-bold text-white opacity-40 uppercase mt-1">vendas à vista + vendas a prazo (boletos)</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-[8px] font-black text-white opacity-60 uppercase">A receber de boletos</p>
+                    <p className="text-xl font-black text-amber-400">{fmt(resumo.prazo.pendentes)}</p>
+                    <p className="text-[8px] font-bold text-white opacity-40 uppercase">{resumo.prazo.qtdePendentes} em aberto</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 mt-3">
+                {/* TROUXE À VISTA — o dinheiro que trava no fechamento */}
+                <div className="bg-emerald-50 p-3 rounded-2xl">
+                  <p className="text-[9px] font-black text-emerald-500 uppercase">Trouxe à vista</p>
+                  <p className="text-[15px] font-black text-emerald-700 mt-1">{fmt(resumo.vista.total)}</p>
+                  <p className="text-[8px] font-bold text-emerald-600/80 uppercase mt-0.5">
+                    Dinheiro {fmt(resumo.vista.dinheiro)} · Pix {fmt(resumo.vista.pix)}
+                    {resumo.vista.deposito > 0 ? ` · Dep ${fmt(resumo.vista.deposito)}` : ''}
+                    {' '}· {resumo.vista.qtde} pagamento(s)
+                  </p>
+                </div>
+                {/* A PRAZO GERADO no período */}
+                <div className="bg-amber-50 p-3 rounded-2xl">
+                  <p className="text-[9px] font-black text-amber-500 uppercase">A prazo gerado</p>
+                  <p className="text-[15px] font-black text-amber-700 mt-1">{fmt(resumo.prazo.geradoNoPeriodo)}</p>
+                  <p className="text-[8px] font-bold text-amber-600/80 uppercase mt-0.5">{resumo.prazo.qtdeGerados} boleto(s) gerado(s) no período</p>
+                </div>
+              </div>
+
+              {/* BOLETOS PAGOS / BAIXA no período — QUANDO cada um caiu */}
+              <div className="bg-teal-50 border border-teal-100 rounded-2xl p-3 mt-2">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-[9px] font-black text-teal-600 uppercase"><i className="fa-solid fa-circle-check mr-1"></i>Boletos pagos (baixa) no período</p>
+                    <p className="text-[8px] font-bold text-teal-600/80 uppercase mt-0.5">{resumo.prazo.qtdeRecebidos} baixa(s) — boleto gerado antes e pago agora entra aqui</p>
+                  </div>
+                  <p className="text-[15px] font-black text-teal-700">{fmt(resumo.prazo.recebidoNoPeriodo)}</p>
+                </div>
+                {resumo.prazo.recebidosLista.length > 0 && (
+                  <div className="mt-2 max-h-48 overflow-y-auto divide-y divide-teal-100/60">
+                    {resumo.prazo.recebidosLista.map((b) => (
+                      <div key={b.id} className="flex items-center justify-between gap-2 py-1.5">
+                        <div className="min-w-0">
+                          <p className="text-[9px] font-black text-gray-700 uppercase truncate">{b.cliente || 'Boleto'}</p>
+                          <p className="text-[8px] font-bold text-gray-400 uppercase">
+                            pago em {new Date(b.pagoEm).toLocaleDateString('pt-BR')} {new Date(b.pagoEm).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                          </p>
+                        </div>
+                        <p className="text-[11px] font-black text-teal-700 flex-shrink-0">{fmt(b.valor)}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <p className="text-[8px] font-bold text-gray-400 uppercase mt-2 leading-relaxed">
+                <i className="fa-solid fa-lock mr-1"></i>Ao FECHAR o caixa, o dinheiro à vista SAI DA MÃO DO DAVID e entra no caixa da empresa. Boletos pendentes continuam no caixa dele até o pagamento cair.
+              </p>
+            </div>
+          )}
+
+          {/* ==================================================================
+              BLOCO 232: PAGAMENTOS AO DAVID (recibos) — o dono digita o valor
+              que vai pagar a ele, registra e o recibo numerado é gerado.
+              ================================================================== */}
+          <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden mx-1">
+            <div className="px-4 py-3 flex items-center justify-between bg-gray-50/70">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-[8px] font-black uppercase px-2 py-1 rounded-md bg-gray-900 text-white"><i className="fa-solid fa-hand-holding-dollar mr-1"></i>Pagamentos ao David</span>
+                <span className="text-[8px] font-black text-gray-400 uppercase">{repasses.length} registro(s)</span>
+              </div>
+              {isAdmin && (
+                <button
+                  onClick={() => setModalRepasse(true)}
+                  className="bg-gray-900 text-white text-[9px] font-black uppercase px-3 py-2 rounded-xl active:scale-95 transition-all flex items-center gap-1.5 flex-shrink-0"
+                >
+                  <i className="fa-solid fa-plus text-[9px]"></i>Pagar
+                </button>
+              )}
+            </div>
+            {!repassesSqlOk && (
+              <div className="bg-amber-50 border-t border-amber-100 p-3">
+                <p className="text-[8px] font-bold text-amber-600 uppercase leading-relaxed">
+                  <i className="fa-solid fa-database mr-1"></i>SQL do Bloco 232 pendente — rode o SQL do bloco 232 no Supabase para registrar pagamentos com recibo.
+                </p>
+              </div>
+            )}
+            {repasses.length > 0 ? (
+              <div className="divide-y divide-gray-50 max-h-96 overflow-y-auto">
+                {repasses.map((r) => (
+                  <div key={r.id} className="p-3 flex items-center justify-between gap-2">
+                    <div className="flex-1 min-w-0 pr-1">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded-md bg-gray-900 text-white">Recibo #{String(r.reciboNumero || 0).padStart(6, '0')}</span>
+                        <span className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded-md ${r.forma === 'PIX' ? 'bg-violet-600 text-white' : 'bg-emerald-600 text-white'}`}>{r.forma === 'PIX' ? 'Pix' : 'Dinheiro'}</span>
+                      </div>
+                      <p className="text-[8px] text-gray-400 font-bold uppercase mt-1">
+                        {hora(r.criadoEm)}{r.registradoPorNome ? ` · pagou ${r.registradoPorNome}` : ''}
+                      </p>
+                      {r.observacao && <p className="text-[8px] text-gray-400 font-semibold mt-0.5 break-words">{r.observacao}</p>}
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <button
+                        onClick={() => abrirRecibo(r)}
+                        className="w-9 h-9 bg-gray-900 text-white rounded-xl flex items-center justify-center active:scale-90 transition-all"
+                        title="Abrir / imprimir recibo"
+                      >
+                        <i className="fa-solid fa-receipt text-xs"></i>
+                      </button>
+                      <p className="text-[11px] font-black text-gray-800 text-right">{fmt(r.valor)}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="p-6 text-center">
+                <p className="text-[9px] font-black uppercase text-gray-400 tracking-widest">Nenhum pagamento registrado ainda</p>
+                <p className="text-[8px] font-bold text-gray-300 uppercase mt-1">
+                  {isAdmin ? 'Use o botão PAGAR para registrar o valor que você paga ao David — o recibo sai na hora.' : 'Somente o admin registra pagamentos.'}
+                </p>
+              </div>
+            )}
+          </div>
+
           {/* BLOCO 119: CONFERÊNCIA POR FORMA — grupo por grupo, subtotal por grupo.
               Dinheiro = conta na gaveta. Pix = conta nos comprovantes. Depósito = extrato. */}
           {gruposMetodo.length > 0 ? (
@@ -519,6 +792,9 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
                 <p className="text-[8px] font-bold text-emerald-600/80 mt-0.5">
                   {pagamentos.filter(p => p.metodo === 'DINHEIRO').length} recebimento(s) em dinheiro · esperado: <span className="font-black">{fmt(totais.dinheiro)}</span>
                 </p>
+                <p className="text-[8px] font-black text-emerald-700 uppercase mt-1.5">
+                  <i className="fa-solid fa-lock mr-1"></i>Ao confirmar, o dinheiro SAI DA MÃO DO DAVID e entra no caixa da empresa.
+                </p>
               </div>
             </div>
 
@@ -584,6 +860,76 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
               <button onClick={() => setModalFoto(null)} className="w-10 h-10 bg-gray-100 rounded-xl flex items-center justify-center active:scale-90"><i className="fa-solid fa-xmark text-gray-500"></i></button>
             </div>
             <img src={modalFoto.foto} alt="Comprovante do pagamento recebido no caixa" className="w-full rounded-2xl max-h-[70dvh] object-contain bg-gray-50" />
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: novo pagamento ao David (admin) — BLOCO 232. O dono DIGITA o
+          valor, escolhe a forma e o recibo numerado é gerado ao registrar. */}
+      {modalRepasse && (
+        <div className="fixed inset-0 z-[400] bg-black/60 flex items-end justify-center sm:items-center p-4" onClick={() => !registrandoRep && setModalRepasse(false)}>
+          <div className="bg-white w-full max-w-md rounded-3xl p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] shadow-2xl max-h-[92dvh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-black text-gray-800 uppercase tracking-widest flex items-center gap-2">
+              <i className="fa-solid fa-hand-holding-dollar text-gray-900"></i>Pagar o David
+            </h3>
+            <p className="text-[9px] font-bold text-gray-400 uppercase mt-1">Digite o valor que você vai pagar a ele — o recibo numerado sai ao registrar. Não interfere no fechamento do caixa.</p>
+
+            {/* Atalhos: preencher com os números das contas do período */}
+            {resumo && (
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                <button onClick={() => setRepValor(String(resumo.vista.total.toFixed(2)))} className="bg-emerald-50 text-emerald-700 border border-emerald-100 text-[8px] font-black uppercase px-2.5 py-1.5 rounded-lg active:scale-95">
+                  À vista do período: {fmt(resumo.vista.total)}
+                </button>
+                <button onClick={() => setRepValor(String(resumo.prazo.recebidoNoPeriodo.toFixed(2)))} className="bg-teal-50 text-teal-700 border border-teal-100 text-[8px] font-black uppercase px-2.5 py-1.5 rounded-lg active:scale-95">
+                  Boletos pagos: {fmt(resumo.prazo.recebidoNoPeriodo)}
+                </button>
+                <button onClick={() => setRepValor(String(resumo.totalGerado.toFixed(2)))} className="bg-gray-900 text-white text-[8px] font-black uppercase px-2.5 py-1.5 rounded-lg active:scale-95">
+                  Total gerado: {fmt(resumo.totalGerado)}
+                </button>
+              </div>
+            )}
+
+            <div className="mt-3">
+              <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Valor do pagamento (R$)</label>
+              <input
+                type="text"
+                inputMode="decimal"
+                value={repValor}
+                onChange={(e) => setRepValor(e.target.value.replace(/[^0-9,.]/g, ''))}
+                placeholder="0,00"
+                className="w-full mt-1 p-4 bg-gray-50 border border-gray-100 rounded-2xl text-2xl font-black text-gray-800 outline-none focus:border-gray-400"
+              />
+            </div>
+
+            <div className="mt-3">
+              <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Forma</label>
+              <div className="grid grid-cols-2 gap-2 mt-1">
+                <button onClick={() => setRepForma('DINHEIRO')} className={`py-3 rounded-2xl font-black text-[10px] uppercase tracking-wide border transition-all ${repForma === 'DINHEIRO' ? 'bg-emerald-600 border-emerald-600 text-white shadow-md' : 'bg-white border-gray-200 text-gray-400'}`}>
+                  <i className="fa-solid fa-money-bill-wave mr-1.5"></i>Dinheiro
+                </button>
+                <button onClick={() => setRepForma('PIX')} className={`py-3 rounded-2xl font-black text-[10px] uppercase tracking-wide border transition-all ${repForma === 'PIX' ? 'bg-violet-600 border-violet-600 text-white shadow-md' : 'bg-white border-gray-200 text-gray-400'}`}>
+                  <i className="fa-brands fa-pix mr-1.5"></i>Pix
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-3">
+              <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Referência / observação (opcional)</label>
+              <textarea
+                value={repObs}
+                onChange={(e) => setRepObs(e.target.value)}
+                rows={2}
+                maxLength={300}
+                placeholder="Ex: repasse das vendas de hoje — à vista + boletos pagos"
+                className="w-full mt-1 p-3 bg-gray-50 border border-gray-100 rounded-2xl text-xs font-semibold outline-none resize-none"
+              />
+            </div>
+            <div className="flex gap-2 mt-4">
+              <button onClick={() => setModalRepasse(false)} disabled={registrandoRep} className="flex-1 bg-gray-100 text-gray-500 font-black py-3.5 rounded-2xl uppercase text-[10px] tracking-widest active:scale-95">Cancelar</button>
+              <button onClick={registrarRepasse} disabled={registrandoRep} className="flex-1 bg-gray-900 text-white font-black py-3.5 rounded-2xl uppercase text-[10px] tracking-widest shadow-lg active:scale-95">
+                {registrandoRep ? <i className="fa-solid fa-spinner fa-spin"></i> : 'Registrar + recibo'}
+              </button>
+            </div>
           </div>
         </div>
       )}

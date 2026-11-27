@@ -55,7 +55,26 @@ import { isDavidNome } from '@/lib/equipe';
  *     pagamentos) e prende os pagamentos abertos (fechamento_id = id). O caixa
  *     volta a zerar (novo período).
  *
- * SQL: sql/bloco118_caixa_fechamento.sql (tabelas + RLS fechada, service_role only).
+ * BLOCO 232 (regra do dono — contas do David + pagamento com recibo):
+ *   GET devolve também:
+ *     resumo: {
+ *       vista { dinheiro, pix, deposito, total, qtde } — o que ele TROUXE à vista
+ *         no período (dinheiro que trava no fechamento);
+ *       prazo { geradoNoPeriodo, qtdeGerados, recebidoNoPeriodo, qtdeRecebidos,
+ *         recebidosLista[{pagoEm,valor,cliente}], pendentes, qtdePendentes } —
+ *         a prazo gerado no período e QUANDO cada boleto foi PAGO/BAIXADO
+ *         (pago_em — trigger SQL 167);
+ *       totalGerado — à vista + a prazo gerado no período.
+ *     }
+ *     repasses[] — pagamentos que o admin JÁ fez ao David (caixa_repasses_david,
+ *       SQL 232) com recibo_numero para reimprimir.
+ *   POST { acao: 'REPASSE', valor, forma?, observacao? }  [ADMIN]
+ *     Registra o pagamento que o dono faz ao David (valor DIGITADO na tela) e
+ *     devolve o recibo numerado. NÃO entra em caixa_pagamentos e NÃO interfere
+ *     no fechamento — é o registro do dinheiro que o dono PAGA a ele.
+ *
+ * SQL: sql/bloco118_caixa_fechamento.sql + sql/bloco167 (pago_em) +
+ *      sql/bloco232_caixa_repasses_david.sql (repasses/recibos).
  */
 
 const round2 = (v: number) => Math.round(v * 100) / 100;
@@ -154,6 +173,105 @@ export async function GET(req: NextRequest) {
       .select('fechado_em')
       .order('fechado_em', { ascending: false })
       .limit(1);
+    const desdeISO: string | null = ultimo?.[0]?.fechado_em || null;
+
+    // ------------------------------------------------------------------
+    // BLOCO 232 — CONTAS DO DAVID no período (o que realmente importa):
+    //   1) todas as linhas BOLETO ainda ABERTAS no ledger (fechamento_id
+    //      null — sobrevivem ao fechamento): pendentes E as já PAGAS
+    //      (pago_em preenchido pela trigger SQL 167 na baixa).
+    //   2) janela: gerado no período = criado_em >= desde;
+    //      recebido (baixa) no período = pago_em >= desde (boleto gerado
+    //      antes e pago agora conta como recebido NO período atual).
+    // ------------------------------------------------------------------
+    let boletosTodas: any[] = [];
+    const bqBase = supabase
+      .from('caixa_pagamentos')
+      .select('id, criado_em, pago_em, valor, cliente, sale_id, detalhe')
+      .is('fechamento_id', null)
+      .eq('metodo', 'BOLETO')
+      .order('criado_em', { ascending: false })
+      .limit(2000);
+    const { data: bqData, error: bqErr } = await bqBase;
+    if (bqErr && erroColunaFaltando(bqErr) && pagoEmOkCache !== false) {
+      pagoEmOkCache = false;
+      const alt = await supabase
+        .from('caixa_pagamentos')
+        .select('id, criado_em, valor, cliente, sale_id, detalhe')
+        .is('fechamento_id', null)
+        .eq('metodo', 'BOLETO')
+        .order('criado_em', { ascending: false })
+        .limit(2000);
+      boletosTodas = (alt.data || []).map((r: any) => ({ ...r, pago_em: null }));
+    } else if (!bqErr) {
+      boletosTodas = bqData || [];
+    }
+
+    const vistaPags = pags.filter((p) => String(p.metodo || '').toUpperCase() !== 'BOLETO');
+    const vistaTotal = round2(totais.dinheiro + totais.pix + totais.deposito);
+
+    const gerados = boletosTodas.filter((b) => !desdeISO || String(b.criado_em) >= desdeISO);
+    const pagosB = boletosTodas.filter((b) => !!b.pago_em && (!desdeISO || String(b.pago_em) >= desdeISO));
+    const pendentesB = boletosTodas.filter((b) => !b.pago_em);
+    const soma = (l: any[]) => round2(l.reduce((a, b) => a + Number(b.valor || 0), 0));
+
+    const resumo = {
+      desde: desdeISO,
+      vista: {
+        dinheiro: totais.dinheiro,
+        pix: totais.pix,
+        deposito: totais.deposito,
+        total: vistaTotal,
+        qtde: vistaPags.length,
+      },
+      prazo: {
+        geradoNoPeriodo: soma(gerados),
+        qtdeGerados: gerados.length,
+        recebidoNoPeriodo: soma(pagosB),
+        qtdeRecebidos: pagosB.length,
+        recebidosLista: pagosB.slice(0, 12).map((b) => ({
+          id: String(b.id),
+          pagoEm: b.pago_em,
+          valor: Number(b.valor || 0),
+          cliente: b.cliente || null,
+          saleId: b.sale_id || null,
+        })),
+        pendentes: soma(pendentesB),
+        qtdePendentes: pendentesB.length,
+      },
+      totalGerado: round2(vistaTotal + soma(gerados)),
+    };
+
+    // ------------------------------------------------------------------
+    // BLOCO 232 — REPASSES ao David já registrados (recibos). Tabela nova
+    // (SQL 232): se ainda não rodou, devolve lista vazia + flag — a tela
+    // continua funcionando e avisa para rodar o SQL.
+    // ------------------------------------------------------------------
+    let repasses: any[] = [];
+    let repassesSqlOk = true;
+    try {
+      const { data: rp, error: rpErr } = await supabase
+        .from('caixa_repasses_david')
+        .select('id, recibo_numero, criado_em, valor, forma, observacao, registrado_por_nome')
+        .order('criado_em', { ascending: false })
+        .limit(30);
+      if (rpErr) {
+        if (sqlFaltando(rpErr)) repassesSqlOk = false;
+        else throw rpErr;
+      } else {
+        repasses = (rp || []).map((r: any) => ({
+          id: String(r.id),
+          reciboNumero: Number(r.recibo_numero || 0),
+          criadoEm: r.criado_em,
+          valor: Number(r.valor || 0),
+          forma: String(r.forma || 'DINHEIRO'),
+          observacao: r.observacao || null,
+          registradoPorNome: r.registrado_por_nome || null,
+        }));
+      }
+    } catch {
+      repassesSqlOk = false;
+    }
 
     // Histórico (sem o jsonb pesado)
     const { data: hist, error: histErr } = await supabase
@@ -168,7 +286,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       ok: true,
       aberto: {
-        desde: ultimo?.[0]?.fechado_em || null,
+        desde: desdeISO,
         pagamentos: pags.map((p) => ({
           id: p.id,
           criadoEm: p.criado_em,
@@ -184,6 +302,10 @@ export async function GET(req: NextRequest) {
         })),
         totais,
       },
+      // BLOCO 232: contas do David no período + pagamentos (recibos) já feitos
+      resumo,
+      repasses,
+      repassesSqlOk,
       historico: (hist || []).map((f: any) => ({
         id: f.id,
         fechadoEm: f.fechado_em,
@@ -325,6 +447,61 @@ export async function POST(req: NextRequest) {
           valor: Number(rowEx.valor || 0),
           cliente: rowEx.cliente,
           saleId: rowEx.sale_id,
+        },
+      });
+    }
+
+    // ---------------- REPASSE (pagamento do dono ao David) — BLOCO 232 -------
+    // ADMIN digita o VALOR que vai pagar ao David e a tela gera o RECIBO
+    // numerado (caixa_repasses_david, SQL 232). NÃO é caixa: não entra em
+    // caixa_pagamentos e não interfere no fechamento — é o dinheiro que o
+    // dono PAGA ao vendedor por cima das contas do caixa dele.
+    if (acao === 'REPASSE') {
+      if (!isAdminSession(req)) {
+        return NextResponse.json({ ok: false, error: 'Somente o admin registra pagamento ao David.' }, { status: 403 });
+      }
+      const valorRep = round2(Number(body.valor || 0));
+      if (!(valorRep > 0)) {
+        return NextResponse.json({ ok: false, error: 'Valor do pagamento invalido.' }, { status: 400 });
+      }
+      const formaRep = String(body.forma || 'DINHEIRO').toUpperCase();
+      if (!['DINHEIRO', 'PIX'].includes(formaRep)) {
+        return NextResponse.json({ ok: false, error: 'Forma invalida (DINHEIRO/PIX).' }, { status: 400 });
+      }
+
+      // Nome do admin que registra (mesma lógica do FECHAR)
+      let nomeAdminRep: string | null = null;
+      if (session.sub && !/^ADMIN$/.test(session.sub)) {
+        const { data: u } = await supabase.from('app_users').select('nome').eq('id', session.sub).limit(1).maybeSingle();
+        nomeAdminRep = (u as any)?.nome || null;
+      }
+
+      const { data: rep, error: repErr } = await supabase
+        .from('caixa_repasses_david')
+        .insert({
+          valor: valorRep,
+          forma: formaRep,
+          observacao: String(body.observacao || '').slice(0, 300) || null,
+          registrado_por_id: session.sub,
+          registrado_por_nome: nomeAdminRep,
+        })
+        .select('id, recibo_numero, criado_em, valor, forma, observacao, registrado_por_nome')
+        .single();
+      if (repErr && sqlFaltando(repErr)) {
+        return NextResponse.json({ ok: false, error: 'Banco desatualizado: rode o SQL do Bloco 232 (pagamentos ao David).' }, { status: 503 });
+      }
+      if (repErr) throw repErr;
+
+      return NextResponse.json({
+        ok: true,
+        repasse: {
+          id: String(rep.id),
+          reciboNumero: Number(rep.recibo_numero || 0),
+          criadoEm: rep.criado_em,
+          valor: Number(rep.valor || 0),
+          forma: String(rep.forma || 'DINHEIRO'),
+          observacao: rep.observacao || null,
+          registradoPorNome: rep.registrado_por_nome || null,
         },
       });
     }

@@ -81,6 +81,18 @@ export interface InterStatusInfo {
   ambiente: string;          // 'producao' | 'sandbox'
 }
 
+/** BLOCO 227: resposta de gerar ganha o aviso do vencimento corrigido
+ *  (boleto com prazo vencido sai vencendo hoje — o servidor avisa aqui). */
+export interface GerarBoletoResposta {
+  ok: boolean;
+  jaGerado?: boolean;
+  boleto?: BoletoInfo;
+  erro?: string;
+  avisoAtrelamento?: string;
+  notaAtrelada?: boolean;
+  avisoVencimento?: string;
+}
+
 export const boletoService = {
   /** Estado atual do boleto da venda (leitura barata).
    *  BLOCO 200: o SERVIDOR também diz se a venda pode dividir em 2 boletos
@@ -100,8 +112,10 @@ export const boletoService = {
     }
   },
 
-  /** Gera a cobranca (boleto+pix) no Inter para o saldo da venda. */
-  async gerar(saleId: string, p: GerarBoletoParams): Promise<{ ok: boolean; jaGerado?: boolean; boleto?: BoletoInfo; erro?: string; avisoAtrelamento?: string; notaAtrelada?: boolean }> {
+  /** Gera a cobranca (boleto+pix) no Inter para o saldo da venda.
+   *  BLOCO 227: devolve avisoVencimento quando o prazo vencido foi corrigido
+   *  para hoje pelo servidor. */
+  async gerar(saleId: string, p: GerarBoletoParams): Promise<GerarBoletoResposta> {
     try {
       const res = await fetch('/api/boletos', {
         method: 'POST',
@@ -110,7 +124,7 @@ export const boletoService = {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}`, boleto: data.boleto };
-      return { ok: true, jaGerado: data.jaGerado, boleto: data.boleto, avisoAtrelamento: data.avisoAtrelamento, notaAtrelada: data.notaAtrelada };
+      return { ok: true, jaGerado: data.jaGerado, boleto: data.boleto, avisoAtrelamento: data.avisoAtrelamento, notaAtrelada: data.notaAtrelada, avisoVencimento: data.avisoVencimento };
     } catch (e: unknown) {
       return { ok: false, erro: e instanceof Error ? e.message : 'Falha de conexao' };
     }
@@ -192,6 +206,28 @@ export const boletoService = {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}`, boleto: data.boleto, parcela: data.parcela };
       return { ok: true, boleto: data.boleto, parcela: data.parcela };
+    } catch (e: unknown) {
+      return { ok: false, erro: e instanceof Error ? e.message : 'Falha de conexao' };
+    }
+  },
+
+  // =====================================================================
+  // BLOCO 227 — RESET TOTAL do boleto da venda (ADMIN, ultimo recurso):
+  // cancela as cobrancas vivas no Inter (o que o Inter recusar fica sob
+  // vigilancia do sync, BLOCO 226), apaga a divisao de parcelas e devolve
+  // a venda ao estado NAO_GERADO puro — o card volta a oferecer GERAR do
+  // zero. Protecao no servidor: boleto/parcela ja RECEBIDO bloqueia.
+  // =====================================================================
+  async resetar(saleId: string): Promise<{ ok: boolean; boleto?: BoletoInfo; parcelas?: BoletoParcelaInfo[]; aviso?: string; erro?: string }> {
+    try {
+      const res = await fetch('/api/boletos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ acao: 'RESET', saleId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}`, boleto: data.boleto };
+      return { ok: true, boleto: data.boleto, parcelas: data.parcelas || [], aviso: data.aviso };
     } catch (e: unknown) {
       return { ok: false, erro: e instanceof Error ? e.message : 'Falha de conexao' };
     }

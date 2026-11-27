@@ -302,8 +302,29 @@ async function emitirCobrancaUnificada(args: {
     return BAD(422, 'Valor invalido: o boleto do Inter precisa ser de no minimo R$ 2,50.');
   }
   if (valor > 99999999) return BAD(422, 'Valor acima do limite da API do Inter.');
-  const venc = parcela ? String(parcela.vencimento || '').slice(0, 10) : String(args.vencUnico || '');
+  let venc = parcela ? String(parcela.vencimento || '').slice(0, 10) : String(args.vencUnico || '');
   if (!validaVencimento(venc)) return BAD(422, 'Data de vencimento invalida (formato AAAA-MM-DD).');
+
+  // ------------------------------------------------------------------
+  // BLOCO 227 — AUTO-CORRECAO DO VENCIMENTO VENCIDO (o conflito real que
+  // travava "nenhum boleto novo"): quando a venda tem prazo combinado ja
+  // PASSADO (pre-venda antiga, venda reaberta depois do vencimento), o
+  // card preenchia a data vencida e o Inter RECUSAVA o POST com a
+  // mensagem generica "Verifique se os dados informados estao de acordo
+  // com a documentacao disponibilizada e tente novamente." (caso real
+  // gravado na venda Missioneiro 24668267: venc. 08/10 emitido em 27/11 —
+  // 50 dias no passado; e o boleto do paradouro da nota cancelada nem
+  // chegou a nascer pelo mesmo motivo). Em vez de recusar e deixar o
+  // dono sem resposta, o servidor AGORA corrige sozinho: vencimento no
+  // passado sai como HOJE (valido no Inter) + aviso claro na resposta —
+  // o boleto SEMPRE sai e o dono sabe exatamente o que aconteceu.
+  // ------------------------------------------------------------------
+  let avisoVencimento = '';
+  const hojeIso227 = hojeSp();
+  if (venc < hojeIso227) {
+    avisoVencimento = `O prazo combinado (${venc.slice(8, 10)}/${venc.slice(5, 7)}/${venc.slice(0, 4)}) ja tinha passado — o boleto saiu vencendo HOJE (${hojeIso227.slice(8, 10)}/${hojeIso227.slice(5, 7)}/${hojeIso227.slice(0, 4)}). Ajuste o vencimento no card se precisar de outra data.`;
+    venc = hojeIso227;
+  }
 
   // Nota fiscal atrelada (opcional): chave de 44 digitos.
   // BLOCO 177: só NF-e (modelo 55) atrela — NFC-e nunca. Nas PARCELAS a
@@ -463,6 +484,8 @@ async function emitirCobrancaUnificada(args: {
         ok: true,
         parcela: { ...parcelaPublica({ ...parcela, status: cob.status, codigo, seu_numero: seuNumero }), linhaDigitavel: cob.linhaDigitavel || '', codigoBarras: cob.codigoBarras || '', pixCopiaECola: cob.pixCopiaECola || '', status: cob.status },
         ...(notaFiscal && !fallbackSemNota ? { notaAtrelada: true } : {}),
+        // BLOCO 227: vencimento vencido foi corrigido para hoje — o dono precisa saber.
+        ...(avisoVencimento ? { avisoVencimento } : {}),
         ...(fallbackSemNota ? { avisoAtrelamento: `Boleto GERADO com o valor da parcela. O Inter não aceitou o vínculo formal da nota agora — ela ficou escrita na mensagem do boleto.` } : avisoAtrelamento ? { avisoAtrelamento } : {}),
       });
     }
@@ -490,6 +513,8 @@ async function emitirCobrancaUnificada(args: {
         }
       : {}),
     ...(notaFiscal && !fallbackSemNota ? { notaAtrelada: true } : {}),
+    // BLOCO 227: vencimento vencido foi corrigido para hoje — o dono precisa saber.
+    ...(avisoVencimento ? { avisoVencimento } : {}),
     ...(fallbackSemNota
       ? { avisoAtrelamento: `Boleto GERADO com o valor da venda. O Inter não aceitou o vínculo formal da nota agora — a ${tipoNota === 'NFE' ? 'NF-e' : 'NFC-e'} ${String(sale.nota_numero || '')} ficou escrita na mensagem do boleto (aparece no PDF e no comprovante).` }
       : avisoAtrelamento ? { avisoAtrelamento } : {}),
@@ -834,6 +859,123 @@ export async function POST(req: NextRequest) {
       inter_boleto_erro: `Destravado pelo admin em ${carimbo}: cobrança ${codUnico.slice(0, 36)} estava presa em EM_PROCESSAMENTO no Inter${destinoOrfaoUnico === 'cancelado' ? ' e foi CANCELADA lá agora' : destinoOrfaoUnico === 'inexistente' ? ' e nem existe mais lá' : ' (cancelamento recusado lá — o sync vigia e cancela sozinho quando sair do processamento)'}. Gere um novo boleto.`,
     });
     return NextResponse.json({ ok: true, boleto: { ...cobrancaPublica(sale as Record<string, unknown>), status: 'FALHA_EMISSAO' } });
+  }
+
+  // ------------------------------------------------------------------
+  // BLOCO 227 — RESET TOTAL DO BOLETO (ADMIN, venda inteira de uma vez).
+  // Pedido literal do dono ("reseta todo o sistema de boletos e deixa
+  // tudo funcional novamente"): um botao de ULTIMO RECURSO que devolve
+  // a venda ao estado NAO_GERADO puro em qualquer situacao travada —
+  // boleto unico + divisao apagados, cobrancas vivas canceladas no Inter
+  // (best-effort; recusa vira ORFA vigiada pelo sync, BLOCO 226) e um
+  // log RESET_BOLETO no webhook_logs. PROTECAO: nada de apagar dinheiro
+  // real — boleto unico ou parcela RECEBIDO/MARCADO_RECEBIDO bloqueia
+  // o reset (e nem faz sentido: a venda ja foi paga).
+  // ------------------------------------------------------------------
+  if (acao === 'RESET') {
+    if (session.perfil !== 'ADMIN') return BAD(403, 'Somente o admin pode resetar boletos.');
+    const carimboReset = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date());
+    // Protecao 1: boleto unico recebido = dinheiro real registrado
+    if (['RECEBIDO', 'MARCADO_RECEBIDO'].includes(String(sale.inter_boleto_status))) {
+      return BAD(422, 'O boleto unico desta venda ja foi RECEBIDO (dinheiro real) — o reset nao pode apaga-lo. A venda ja esta paga.');
+    }
+    // Protecao 2: parcela da divisao recebida
+    if (await hasSalesBoletosTable()) {
+      const { data: pl } = await db.from('sales_boletos').select('id, seq, status, codigo, seu_numero').eq('sale_id', saleId);
+      const pagaP = (pl || []).some((p: Record<string, unknown>) => ['RECEBIDO', 'MARCADO_RECEBIDO'].includes(String(p.status)));
+      if (pagaP) return BAD(422, 'Ha boleto da divisao ja RECEBIDO (dinheiro real) — o reset nao pode apagar. A venda ja esta paga.');
+      // --- Cancela no Inter as cobrancas VIVAS (unico + parcelas) ---
+      let canceladasInter = 0;
+      let orfasVigiadas = 0;
+      const cancelarOuOrfa = async (codigo: string, seuNumero: string, fonte: string) => {
+        if (!codigo) return;
+        if (!isInterConfigured()) return;
+        try {
+          const c = await cancelarCobranca(codigo, 'Reset do boleto pelo admin');
+          if (c.ok || c.status === 202 || c.status === 404) { canceladasInter++; return; }
+        } catch { /* segue para orfa */ }
+        orfasVigiadas++;
+        try {
+          await db.from('webhook_logs').insert({
+            origem: 'ORFAO_INTER',
+            evento: { fonte },
+            codigo: codigo.slice(0, 120),
+            seu_numero: String(seuNumero || '').slice(0, 60) || null,
+            sale_id: saleId.slice(0, 64),
+            resultado: `cobranca ficou viva no Inter apos RESET do admin (cancelamento recusado) — sync vigia e cancela sozinho quando sair do EM_PROCESSAMENTO; avisa se alguem pagar`,
+            processado: false,
+          });
+        } catch { /* tabela ausente nao trava o reset */ }
+      };
+      const codUnicoR = String(sale.inter_boleto_codigo || '');
+      const stUnicoR = String(sale.inter_boleto_status || '');
+      if (codUnicoR && !['CANCELADO', 'EXPIRADO', 'FALHA_EMISSAO', 'NAO_GERADO'].includes(stUnicoR)) {
+        await cancelarOuOrfa(codUnicoR, String(sale.inter_boleto_seu_numero || ''), 'reset-boleto-unico');
+      }
+      const { data: plR } = await db.from('sales_boletos').select('id, seq, status, codigo, seu_numero').eq('sale_id', saleId);
+      for (const p of (plR || []) as Record<string, unknown>[]) {
+        const cd = String(p.codigo || '');
+        const st = String(p.status || '');
+        if (!cd || ['CANCELADO', 'EXPIRADO', 'FALHA_EMISSAO', 'NAO_GERADO'].includes(st)) continue;
+        await cancelarOuOrfa(cd, String(p.seu_numero || ''), 'reset-parcela');
+      }
+      // --- Apaga a divisao inteira e zera o boleto unico da venda ---
+      await db.from('sales_boletos').delete().eq('sale_id', saleId);
+      await atualizar(saleId, {
+        inter_boleto_status: 'NAO_GERADO',
+        inter_boleto_codigo: null,
+        inter_boleto_seu_numero: null,
+        inter_boleto_linha: null,
+        inter_boleto_barras: null,
+        inter_boleto_pix: null,
+        inter_boleto_erro: null,
+        inter_boleto_valor: null,
+        inter_boleto_vencimento: null,
+        inter_boleto_em: null,
+      });
+      try {
+        await db.from('webhook_logs').insert({
+          origem: 'RESET_BOLETO',
+          evento: { fonte: 'reset-admin' },
+          sale_id: saleId.slice(0, 64),
+          resultado: `RESET total do boleto pelo admin em ${carimboReset}: cobrancas canceladas no Inter ${canceladasInter}, orfas sob vigilancia ${orfasVigiadas} — venda voltou a NAO_GERADO (boleto unico e divisao apagados)`,
+          processado: true,
+        });
+      } catch { /* tabela ausente nao trava o reset */ }
+      return NextResponse.json({
+        ok: true,
+        boleto: { status: 'NAO_GERADO', codigo: '', seuNumero: '', vencimento: '', valor: null, linhaDigitavel: '', codigoBarras: '', pixCopiaECola: '', valorRecebido: null, erro: '', notaFiscalChave: '' },
+        parcelas: [],
+        ...(orfasVigiadas > 0 ? { aviso: `${orfasVigiadas} cobranca(s) antiga(s) seguiram vivas no Inter (cancelamento recusado lá) — o sistema vigia e cancela sozinho quando sair do processamento.` } : {}),
+      });
+    }
+    // Sem tabela de parcelas (SQL 199 pendente): reset so do boleto unico
+    const codUnicoR2 = String(sale.inter_boleto_codigo || '');
+    if (codUnicoR2 && isInterConfigured()) {
+      try { await cancelarCobranca(codUnicoR2, 'Reset do boleto pelo admin'); } catch { /* degrada */ }
+    }
+    await atualizar(saleId, {
+      inter_boleto_status: 'NAO_GERADO',
+      inter_boleto_codigo: null,
+      inter_boleto_seu_numero: null,
+      inter_boleto_linha: null,
+      inter_boleto_barras: null,
+      inter_boleto_pix: null,
+      inter_boleto_erro: null,
+      inter_boleto_valor: null,
+      inter_boleto_vencimento: null,
+      inter_boleto_em: null,
+    });
+    try {
+      await db.from('webhook_logs').insert({
+        origem: 'RESET_BOLETO',
+        evento: { fonte: 'reset-admin' },
+        sale_id: saleId.slice(0, 64),
+        resultado: `RESET do boleto unico pelo admin em ${carimboReset} — venda voltou a NAO_GERADO`,
+        processado: true,
+      });
+    } catch { /* tabela ausente nao trava o reset */ }
+    return NextResponse.json({ ok: true, boleto: { status: 'NAO_GERADO', codigo: '', seuNumero: '', vencimento: '', valor: null, linhaDigitavel: '', codigoBarras: '', pixCopiaECola: '', valorRecebido: null, erro: '', notaFiscalChave: '' } });
   }
 
   // ---------- CANCELAR (ADMIN, venda ou parcela) ----------

@@ -145,6 +145,8 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
   const [expandido, setExpandido] = useState<boolean>(!!abertoInicial);
   const [valor, setValor] = useState('');
   const [venc, setVenc] = useState('');
+  // BLOCO 227: aviso do prazo da venda ja VENCIDO (sugestao de nova data)
+  const [avisoPrazo, setAvisoPrazo] = useState('');
   const [atrelar, setAtrelar] = useState(true);
   const [doc, setDoc] = useState('');
   const [cep, setCep] = useState('');
@@ -298,13 +300,27 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
         // BLOCO 212: data_vencimento é fim-do-dia em SP (30/11T23:59:59-03:00
         // = 01/12 02:59 UTC) — slice(0,10) direto mostrava/gravava D+1. A data
         // é convertida para o fuso America/Sao_Paulo antes de cortar.
+        // ----------------------------------------------------------------
+        // BLOCO 227 — CONFLITO QUE TRAVAVA "NENHUM BOLETO NOVO": prazo da
+        // venda ja VENCIDO preenchia o campo com data do passado e o Inter
+        // RECUSAVA o POST com a mensagem generica "Verifique se os dados
+        // informados..." (caso real: venda Missioneiro com venc. 08/10
+        // emitida em 27/11 — 50 dias no passado; e o boleto do paradouro
+        // da nota cancelada nem chegou a nascer pelo mesmo motivo). Agora
+        // prazo valido preenche o campo; prazo VENCIDO sugere +7 dias e
+        // avisa o dono no card. O servidor tambem se protege (corrige
+        // vencimento vencido para hoje e devolve avisoVencimento).
+        // ----------------------------------------------------------------
+        const fmtSp227 = (d: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+        const hoje227 = fmtSp227(new Date());
         const isoRaw = vencimentoVenda && /^\d{4}-\d{2}-\d{2}/.test(vencimentoVenda) ? vencimentoVenda : null;
-        const iso = isoRaw ? new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(isoRaw)) : null;
-        if (iso) {
+        const iso = isoRaw ? fmtSp227(new Date(isoRaw)) : null;
+        if (iso && iso >= hoje227) {
           setVenc(iso);
+          setAvisoPrazo('');
         } else {
-          const d = new Date(Date.now() + 7 * 24 * 3600 * 1000);
-          setVenc(new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d));
+          setVenc(fmtSp227(new Date(Date.now() + 7 * 24 * 3600 * 1000)));
+          setAvisoPrazo(iso ? `O prazo da venda (${iso.split('-').reverse().join('/')}) ja tinha passado — o campo veio com um novo prazo (+7 dias). Ajuste a data se quiser outro dia.` : '');
         }
         const saldo = Math.max(0, (valorTotal || 0) - (valorPago || 0));
         setValor(saldo > 0 ? saldo.toFixed(2) : (valorTotal || 0).toFixed(2));
@@ -416,12 +432,12 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
       <div className="grid grid-cols-2 gap-2">
         <label className="block">
           <span className="text-[8px] font-black uppercase text-gray-500">Boleto 1 — vencimento</span>
-          <input type="date" value={venc1Doc} onChange={e => setVenc1Doc(e.target.value)} aria-label="Vencimento do primeiro boleto"
+          <input type="date" min={plusDias(0)} value={venc1Doc} onChange={e => setVenc1Doc(e.target.value)} aria-label="Vencimento do primeiro boleto" // BLOCO 227: min = hoje — data passada o Inter recusa na hora
             className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-[11px] font-black text-center text-gray-800 focus:outline-none focus:border-violet-300" />
         </label>
         <label className="block">
           <span className="text-[8px] font-black uppercase text-gray-500">Boleto 2 — vencimento</span>
-          <input type="date" value={venc2Doc} onChange={e => setVenc2Doc(e.target.value)} aria-label="Vencimento do segundo boleto"
+          <input type="date" min={plusDias(0)} value={venc2Doc} onChange={e => setVenc2Doc(e.target.value)} aria-label="Vencimento do segundo boleto" // BLOCO 227: min = hoje
             className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-[11px] font-black text-center text-gray-800 focus:outline-none focus:border-violet-300" />
         </label>
       </div>
@@ -657,9 +673,18 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
       showToast?.('Informe o CEP do pagador (8 dígitos).', 'error');
       return;
     }
+    // BLOCO 227: data vencida NAO segue para o Inter (a recusa dele é a
+    // mensagem generica "Verifique os dados..." que confundia o dono) —
+    // corrige para HOJE na hora e avisa.
+    let vencEnvio = venc;
+    if (vencEnvio && vencEnvio < plusDias(0)) {
+      vencEnvio = plusDias(0);
+      setVenc(vencEnvio);
+      showToast?.(`Vencimento corrigido para HOJE (a data ${venc.split('-').reverse().join('/')} ja tinha passado).`, 'success');
+    }
     setBusy(true);
     const r = await boletoService.gerar(saleId, {
-      vencimento: venc,
+      vencimento: vencEnvio,
       valor: valor || undefined,
       atrelarNFe: atrelar,
       docManual: doc || undefined,
@@ -676,6 +701,9 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
     if (r.ok && r.boleto) {
       // FIX atrelamento: o vendedor fica sabendo NA HORA se o boleto nasceu
       // sem a nota (chave ainda nao sincronizada ou checkbox desligado).
+      // BLOCO 227: o servidor pode ter corrigido o vencimento vencido —
+      // avisa o dono na hora.
+      if (r.avisoVencimento) showToast?.(r.avisoVencimento, 'success');
       if (r.avisoAtrelamento) {
         showToast?.(r.avisoAtrelamento, 'error');
       } else if (r.notaAtrelada) {
@@ -733,6 +761,30 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
     if (!r.ok && !r.boleto) { showToast?.(r.erro || 'Falha ao destravar.', 'error'); return; }
     if (r.boleto) setBoleto(r.boleto);
     showToast?.('Boleto destravado — clique GERAR para gerar o novo.', 'success');
+  };
+
+  // ============================================================
+  // BLOCO 227 — RESET TOTAL (admin, ultimo recurso; pedido do dono:
+  // "reseta todo o sistema de boletos e deixa tudo funcional").
+  // Cancela as cobrancas vivas no Inter (o que o Inter recusar fica
+  // vigiado e o sistema cancela sozinho depois), apaga o boleto unico
+  // e a divisao de parcelas e devolve a venda ao estado SEM BOLETO —
+  // o GERAR volta a funcionar do zero em qualquer situacao travada.
+  // Protecao no servidor: boleto ja RECEBIDO nao pode ser apagado.
+  // ============================================================
+  const handleResetar = async () => {
+    if (busy || !saleId) return;
+    if (!window.confirm('RESETAR TODO O BOLETO desta venda?\n\nApaga o boleto unico e a divisao de parcelas do sistema e tenta cancelar as cobrancas no Inter (o que o Inter recusar fica vigiado e sera cancelado sozinho pelo sistema). A venda volta ao estado SEM BOLETO para gerar tudo de novo.\n\nNao afeta boletos ja RECEBIDOS (dinheiro real fica intocado).')) return;
+    setErroLocal('');
+    setBusy(true);
+    const r = await boletoService.resetar(saleId);
+    setBusy(false);
+    if (!r.ok) { showToast?.(r.erro || 'Falha ao resetar o boleto.', 'error'); return; }
+    setBoleto(r.boleto || null);
+    setParcelas([]);
+    setAvisoPrazo('');
+    if (r.aviso) showToast?.(r.aviso, 'success');
+    showToast?.('Boleto resetado — a venda voltou para SEM BOLETO. Clique GERAR para comecar de novo.', 'success');
   };
 
   // BLOCO 217: o handlePdf do boleto único agora vive junto do visualizador
@@ -1105,6 +1157,18 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
                 </div>
               );
             })}
+            {/* BLOCO 227: RESET TOTAL da divisao (admin, ultimo recurso) —
+                apaga TODAS as parcelas e as cobrancas do sistema desta venda
+                (cancela no Inter o que estiver vivo) e volta ao zero. Aparece
+                so quando ha parcela travada/morta/falhada — nada recebido
+                pode ser apagado (o servidor bloqueia). */}
+            {podeCancel && parcelas.some(p => ['EM_PROCESSAMENTO', 'FALHA_EMISSAO', 'CANCELADO', 'EXPIRADO'].includes(p.status)) && (
+              <button onClick={handleResetar} disabled={busy}
+                className="block w-full bg-white border-2 border-slate-200 text-slate-500 font-black py-2 rounded-xl text-[8px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
+                <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-rotate-left'} mr-1`}></i>
+                Resetar todos os boletos desta venda (admin)
+              </button>
+            )}
             {/* Doc/CEP do pagador — 1 form só para os DOIS boletos (aparece
                 quando o cadastro não tem documento/CEP — Bloco 187/196) */}
             {(!clienteTemDoc || !clienteTemCep) && (
@@ -1197,6 +1261,17 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
               Destavar boleto travado (admin)
             </button>
           )}
+          {/* BLOCO 227: RESET TOTAL (admin, último recurso) — quando NADA
+              resolve (travado em processamento, falha estranha, cancelado,
+              expirado), o reset devolve a venda a NAO_GERADO e o GERAR
+              funciona de novo do zero ("resetar todo o sistema de boletos"). */}
+          {podeCancel && ['EM_PROCESSAMENTO', 'FALHA_EMISSAO', 'CANCELADO', 'EXPIRADO'].includes(boleto.status) && (
+            <button onClick={handleResetar} disabled={busy}
+              className="block w-full bg-white border-2 border-slate-200 text-slate-500 font-black py-2 rounded-xl text-[8.5px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
+              <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-rotate-left'} mr-1`}></i>
+              Resetar boleto desta venda (admin)
+            </button>
+          )}
           {['CANCELADO', 'EXPIRADO', 'FALHA_EMISSAO', 'NAO_GERADO'].includes(boleto.status) && !form && (
             <button onClick={() => { setErroLocal(''); setForm(true); }} disabled={busy}
               className="block w-full bg-slate-800 text-white font-black py-3 rounded-xl text-[10px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
@@ -1282,10 +1357,17 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
                 </label>
                 <label className="block">
                   <span className="text-[8px] font-black uppercase text-gray-500">Vencimento</span>
-                  <input type="date" value={venc} onChange={e => setVenc(e.target.value)}
+                  {/* BLOCO 227: min = hoje — o Inter recusa boleto com data passada
+                      (era a recusa genérica "Verifique os dados informados..." */}
+                  <input type="date" min={plusDias(0)} value={venc} onChange={e => setVenc(e.target.value)}
                     className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-[11px] font-bold text-gray-800 focus:outline-none focus:border-gray-400" />
                 </label>
               </div>
+              {avisoPrazo && (
+                <p className="text-[9px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5 leading-snug">
+                  <i className="fa-solid fa-calendar-xmark mr-1"></i>{avisoPrazo}
+                </p>
+              )}
               {!clienteTemDoc && (
                 <label className="block">
                   <span className="text-[8px] font-black uppercase text-gray-500">CPF/CNPJ do pagador (cliente sem documento no cadastro)</span>

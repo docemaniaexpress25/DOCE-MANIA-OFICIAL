@@ -20,6 +20,11 @@ import {
   // BLOCO 239: recuperação da emissão "sombra" (POST que morreu DEPOIS que o
   // Inter aceitou) — fim do "o boleto não gera nunca" (caso mercado Bagé).
   recuperarEmissaoPorSeuNumero,
+  // BLOCO 242: extrator ÚNICO do código — a API do Inter responde em DOIS
+  // formatos (POST raiz {codigoSolicitacao} x CONSULTA {cobranca:{codigoSolicitacao}})
+  // e a rota antiga só entendia o POST: toda ADOÇÃO de sombra era morta com
+  // "Falha ao gerar HTTP 200" mesmo com a cobranca adotada (bug do Bagé).
+  extrairCodigoEmissao,
   recuperarPdf,
   cancelarCobranca,
   interpretarCobranca,
@@ -465,7 +470,9 @@ async function emitirCobrancaUnificada(args: {
     // não existe (emissão nova é segura); viva e não morta = a emissão
     // original venceu, adota o estado REAL (linha/pix/situação já vem).
     try {
-      const rec = await recuperarCobranca(codigoAnterior);
+      // BLOCO 242: prazo 8s (a adoção é pergunta rápida — 15s queimavam o
+      // orçamento do GERAR quando o Inter estava lento).
+      const rec = await recuperarCobranca(codigoAnterior, 8_000);
       if (rec.ok && rec.data) {
         const cob = interpretarCobranca(rec.data as Record<string, unknown>);
         if (!['CANCELADO', 'EXPIRADO', 'REJEITADO', 'NEGADO'].includes(cob.status)) {
@@ -479,7 +486,11 @@ async function emitirCobrancaUnificada(args: {
   } else if (adocaoAtiva) {
     try {
       const sombra = await recuperarEmissaoPorSeuNumero(anteriorSeuAdocao);
-      if (sombra.ok && sombra.resultado && String((sombra.resultado.data as Record<string, unknown>)?.codigoSolicitacao || '')) {
+      // BLOCO 242: o código pode vir no raiz (POST) OU dentro de cobranca
+      // (formato da consulta/sombra) — o extrator único cobre os dois; antes
+      // a condição exigia o raiz e NUNCA era satisfeita (adoção morta + risco
+      // de re-post e boleto em dobro).
+      if (sombra.ok && sombra.resultado && extrairCodigoEmissao(sombra.resultado.data as Record<string, unknown> | undefined)) {
         r = { ...sombra.resultado, tentativas: 0 };
         adotouSombra = true;
       }
@@ -522,7 +533,7 @@ async function emitirCobrancaUnificada(args: {
       await db.from('webhook_logs').insert({
         origem: 'EMISSAO',
         evento: { fonte: 'api/boletos', parcela: parcela ? Number(parcela.seq) || 1 : null } as any,
-        codigo: String((r?.data as Record<string, unknown> | undefined)?.codigoSolicitacao || '').slice(0, 120) || null,
+        codigo: extrairCodigoEmissao(r?.data as Record<string, unknown> | undefined).slice(0, 120) || null,
         seu_numero: String(seuNumero || '').slice(0, 60) || null,
         sale_id: String(saleId).slice(0, 64),
         resultado: parts.slice(0, 300),
@@ -654,8 +665,20 @@ async function emitirCobrancaUnificada(args: {
       fallbackSemNota = r.ok;
     }
   }
-  if (!r.ok || !r.data || !(r.data as Record<string, unknown>).codigoSolicitacao) {
-    const erro = r.erro || `HTTP ${r.status}`;
+  // BLOCO 242 — A CHECAGEM DE SUCESSO PASSA A ACEITAR OS DOIS FORMATOS DO
+  // INTER (raiz do POST x cobranca da CONSULTA/adoção). Antes: `!r.data
+  // .codigoSolicitacao` era TRUE para toda adoção (formato consulta) e a
+  // emissão bem-sucedida era convertida em FALHA com o erro inútil "HTTP
+  // 200" — era a mensagem "Falha ao gerar http 200" que o dono reportou.
+  const codigoEmissao = extrairCodigoEmissao(r.data as Record<string, unknown> | undefined);
+  if (!r.ok || !codigoEmissao) {
+    // Mensagem ÚTIL: quando o Inter responde OK mas sem código (formato
+    // desconhecido/HTML/WAF), o dono precisa ver O QUE veio — não um "HTTP
+    // 200" cego. O corpo real vai para a tela (recortado), o banco e o log.
+    const corpoResposta = JSON.stringify(r.data || {}).slice(0, 200);
+    const erro = r.erro || (r.ok
+      ? `Resposta inesperada do Inter (HTTP ${r.status} sem codigoSolicitacao)${corpoResposta && corpoResposta !== '{}' ? `: ${corpoResposta}` : ''}`
+      : `HTTP ${r.status}`);
     // BLOCO 225: falhou MESMO com o retry — quando é instabilidade do Inter,
     // a mensagem orienta o dono a esperar e tocar GERAR de novo (a falha
     // transiente costuma passar em minutos: caso Paradouro 07:48 recusou,
@@ -674,7 +697,7 @@ async function emitirCobrancaUnificada(args: {
     return BAD(502, `Inter recusou o boleto: ${erro}${dicaInstabilidade}`, { boleto: { status: 'FALHA_EMISSAO', erro } });
   }
 
-  const codigo = String((r.data as Record<string, unknown>).codigoSolicitacao);
+  const codigo = codigoEmissao;
   if (parcela) {
     const { error: codErr } = await db.from('sales_boletos').update({ codigo, emitido_em: new Date().toISOString() }).eq('id', String(parcela.id));
     // BLOCO 212: se a gravação do código falhar o boleto fica órfão — log.

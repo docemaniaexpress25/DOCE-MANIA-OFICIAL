@@ -1,6 +1,27 @@
 # Worklog - DOCE MANIA App
 
 ---
+Task ID: 167
+Agent: Z.ai Code (sessão principal)
+Task: BLOCO 242 (dono reportou: "Falha ao gerar http 200" ao gerar boleto) — CAUSA RAIZ DO "FALHA AO GERAR HTTP 200" ENCONTRADA E CORRIGIDA: CONFLITO DE FORMATO DE RESPOSTA DA API DO INTER QUE MATAVA A ADOÇÃO DE COBRANÇA "SOMBRA" (o mecanismo criado no 239/241 para resolver o caso mercado Bagé) — o dono tinha razão: era 100% dentro do nosso código.
+
+DIAGNÓSTICO EXATO (linha a linha da rota /api/boletos + lib/interBoleto):
+(1) A API do Inter responde em DOIS formatos: o POST de emissão nova devolve {codigoSolicitacao} na RAIZ; a CONSULTA (GET /cobrancas/{codigo}) devolve {cobranca:{codigoSolicitacao, situacao...}, boleto:{...}, pix:{...}} — código DENTRO de cobranca, raiz SEM nada.
+(2) O BLOCO 239/241 criou a ADOÇÃO DE SOMBRA: quando a venda está FALHA_EMISSAO/EM_PROCESSAMENTO com código anterior gravado, a reemissão CONSULTA direta (leve) a cobranca anterior e a ADOTA como sucesso (r = {ok:true, status:200, data: corpo DA CONSULTA}) — o anti-dobro do retry (emitirCobrancaComRetry → recuperarEmissaoPorSeuNumero) devolve o MESMO formato consulta/sintético.
+(3) MAS a checagem de sucesso da rota exigia `r.data.codigoSolicitacao` NA RAIZ (formato POST): em toda adoção isso é UNDEFINED → a rota entrava no ramo de FALHA com `erro = r.erro || \`HTTP ${r.status}\`` → como r.ok era TRUE e status 200, o texto final era "HTTP 200" → venda virava FALHA_EMISSAO com "Inter recusou o boleto: HTTP 200" — A MENSAGEM EXATA que o dono reportou ("Falha ao gerar http 200").
+(4) Consequência prática: TODA reemissão de venda com emissão anterior mal-sucedida E código gravado (exatamente o perfil do mercado Bagé e de toda venda que "não gera nunca") adotava a cobranca VIVA no Inter e em seguida era MORTA pela checagem errada — loop infinito: cada clique GERAR "falha HTTP 200", a sombra ficava viva lá para sempre, e o boleto nunca saía. Complemento: a condição de adoção pela LISTAGEM (sem código gravado, linha 482) exigia codigoSolicitacao no raiz TAMBÉM — nunca satisfeita, a sombra era descartada e o fluxo re-postava (risco de boleto em dobro).
+
+FIX (src/lib/interBoleto.ts + src/app/api/boletos/route.ts):
+(1) novo extrairCodigoEmissao(data): extrator ÚNICO que aceita os DOIS formatos (raiz do POST {codigoSolicitacao}, cobranca da CONSULTA {cobranca.codigoSolicitacao} e fallback `codigo`) — fim da divergência POST x consulta.
+(2) rota: checagem de sucesso (antiga linha 657) agora usa o extrator — adoção de sombra com cobranca VIVA passa a ser aceita e o boleto SAI (código gravado, consulta pós-emissão espelha linha/pix/situacao real);
+(3) extração do código para gravar (antiga 677) usa o mesmo extrator;
+(4) condição da adoção pela LISTAGEM (antiga 482) usa o extrator — sombra sem código volta a ser ADOTADA em vez de re-postada (anti-dobro realmente funcionando);
+(5) telemetria (webhook_logs EMISSAO) grava o código do formato certo;
+(6) MENSAGEM ÚTIL quando o Inter responder OK sem código reconhecível (formato novo/WAF/HTML): o dono agora vê "Resposta inesperada do Inter (HTTP 200 sem codigoSolicitacao): {corpo}" em vez de um "HTTP 200" cego — qualquer formato novo do Inter se revela na tela e no log na primeira ocorrência;
+(7) adoção leve: consulta da adoção com prazo 8s (antes 15s — queimavam o orçamento do GERAR com o Inter lento; se a consulta não responde em 8s segue para emissão nova e o anti-dobro do retry cobre).
+INTACTO: fluxo normal de emissão (POST raiz continua entendido), retry/deadline 238, sync/webhook/cron, EMITIR_TODAS, fallback sem nota, DESTRAVAR, RESET. lint 0 erros/8 warnings pre-existentes; tsc 129 erros PRE-EXISTENTES em outros módulos (notas/financeiro/spedy etc.) — 0 nos arquivos tocados.
+
+---
 Task ID: 166
 Agent: Z.ai Code (sessão principal)
 Task: BLOCO 241 (dono: "eu acho MT difícil de o inter estar fora do ar, nunca tinha acontecido isso. Deve ser algo dentro do nosso código, a comunicação do app e API, Vercel, supabase, algum erro... revise todo o fluxo e código que tem haver com boleto") — REVISÃO LINHA A LINHA DE TODO O FLUXO DO BOLETO + 4 CORREÇÕES DE GARGALOS REAIS QUE AINDA EXISTIAM NO NOSSO CÓDIGO (encontrados lendo emissão, cliente Inter, sync core, webhook, auto-sync, BoletoCard, boletoService, focusNfe e serverSchema; o dono está CERTO: nem tudo era o Inter).

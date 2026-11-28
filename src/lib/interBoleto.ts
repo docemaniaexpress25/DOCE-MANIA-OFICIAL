@@ -777,6 +777,44 @@ export function interpretarCobranca(data: Record<string, unknown>): CobrancaPubl
 }
 
 // ---------------------------------------------------------------------------
+// BLOCO 242 — FIX "Falha ao gerar HTTP 200" (caso real: reemissão morria com
+// "Inter recusou o boleto: HTTP 200" MESMO quando a cobranca tinha sido
+// aceita/adotada).
+//
+// CAUSA RAIZ: a API do Inter responde em DOIS formatos diferentes e o
+// emissao do app so entendia um deles:
+//   1. POST /cobranca/v3/cobrancas (emissao NOVA)
+//      -> { codigoSolicitacao: "..." } (raiz)
+//   2. GET  /cobranca/v3/cobrancas/{codigo} (CONSULTA — e o corpo que a
+//      ADOCAO de sombra (239/241) e o anti-dobro do retry devolvem)
+//      -> { cobranca: { codigoSolicitacao: "..." }, boleto: {...}, pix: {...} }
+//      (codigo DENTRO de cobranca — raiz NAO tem nada)
+//
+// A rota checava `data.codigoSolicitacao` (raiz): no formato 2 isso é
+// UNDEFINED — a rota entendia "sucesso sem codigo" e devolvia a falha
+// generica `HTTP 200` (era o único texto disponível: status 200 sem erro).
+// Consequência: TODA reemissão que entrava na ADOCAO (venda com emissão
+// anterior falhada/com código gravado — ex. mercado Bagé) adotava a cobranca
+// VIVA e em seguida era morta pela checagem errada — "Falha ao gerar HTTP
+// 200" a cada clique, boleto nunca sai, sombra viva no Inter para sempre.
+//
+// FIX: extrator ÚNICO que aceita os DOIS formatos (raiz do POST, cobranca
+// da consulta, e `codigo` como último fallback). Usado na checagem de
+// sucesso, na extração do código, na condição de adoção pela listagem e na
+// telemetria — um só caminho, fim da divergência.
+// ---------------------------------------------------------------------------
+export function extrairCodigoEmissao(data: Record<string, unknown> | null | undefined): string {
+  if (!data) return '';
+  const cob = (data.cobranca || {}) as Record<string, unknown>;
+  return String(
+    (data.codigoSolicitacao as string)
+      || (cob.codigoSolicitacao as string)
+      || (data.codigo as string)
+      || ''
+  ).trim();
+}
+
+// ---------------------------------------------------------------------------
 // Helpers de pagador (dados do cadastro do cliente)
 // ---------------------------------------------------------------------------
 /** Monta o pagador a partir das colunas do cadastro.

@@ -12,6 +12,13 @@ import ConfirmModal from '@/components/doce/ConfirmModal';
  * Despesas gravam na MESMA tabela do Financeiro (seller_expenses) — o acerto
  * de comissões do admin já desconta. Cada vendedor só enxerga a própria rota
  * (a API corta pela sessão).
+ *
+ * BLOCO 236 (regra do dono): "essa informação tbm deve estar no lucro da rota
+ * logado como david" — a fatia Recebido × A receber agora mostra EXATAMENTE a
+ * mesma informação do cartão da Rota 5 no painel do admin (Lucro por Rota):
+ * Recebido (N vendas) total · lucro  /  A receber (N vendas) total · lucro.
+ * A fatia PAGO reúne à vista + prazo já pago (baixa de boleto) — por isso o
+ * rótulo antigo "Dinheiro recebido" era enganoso e virou "Recebido (N)".
  */
 
 interface AccFechada { nVendas: number; faturamento: number; custo: number; lucro: number; margem: number }
@@ -267,18 +274,24 @@ const LucroRotaVendedor: React.FC<LucroRotaVendedorProps> = ({ user, showToast }
                 </div>
               </div>
 
-              {/* ===== Recebido × A receber ===== */}
-              <div className="grid grid-cols-2 gap-3">
-                <div className="bg-emerald-50 p-4 rounded-3xl shadow-sm border border-emerald-100 min-w-0">
-                  <p className="text-[9px] font-black text-emerald-600 uppercase mb-1">Dinheiro recebido</p>
-                  <p className="text-base sm:text-lg font-black text-emerald-700 tabular-nums break-words">{fmtBRL(data!.pago.faturamento)}</p>
-                  <p className="text-[8px] font-bold text-emerald-500 uppercase mt-1">lucro nele: {fmtBRL(data!.pago.lucro)}</p>
+              {/* ===== BLOCO 236 — Recebido × A receber: a MESMA informação do
+                  cartão da rota que o admin vê no "Lucro por Rota" (contagem
+                  de vendas + total + lucro de cada fatia), agora na mão do
+                  vendedor. "Dinheiro recebido" virou "Recebido (N)" — porque a
+                  fatia PAGO reúne à vista E prazo já pago (baixa de boleto). ===== */}
+              <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-4 space-y-2.5 min-w-0">
+                <p className="text-[9px] font-black text-gray-400 uppercase tracking-wider"><i className="fa-solid fa-wallet mr-1 text-emerald-500"></i>Recebido × A receber</p>
+                <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-[11px] font-bold">
+                  <span className="text-emerald-700"><i className="fa-solid fa-circle-check mr-1.5 text-[8px]"></i>Recebido ({data!.pago.nVendas})</span>
+                  <span className="text-gray-700 tabular-nums">{fmtBRL(data!.pago.faturamento)} <span className="text-emerald-600">· lucro {fmtBRL(data!.pago.lucro)}</span></span>
                 </div>
-                <div className="bg-amber-50 p-4 rounded-3xl shadow-sm border border-amber-100 min-w-0">
-                  <p className="text-[9px] font-black text-amber-600 uppercase mb-1">A receber (prazo)</p>
-                  <p className="text-base sm:text-lg font-black text-amber-700 tabular-nums break-words">{fmtBRL(data!.aReceber.faturamento)}</p>
-                  <p className="text-[8px] font-bold text-amber-500 uppercase mt-1">lucro nele: {fmtBRL(data!.aReceber.lucro)}</p>
+                <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-[11px] font-bold">
+                  <span className="text-amber-700"><i className="fa-solid fa-clock mr-1.5 text-[8px]"></i>A receber ({data!.aReceber.nVendas})</span>
+                  <span className="text-gray-700 tabular-nums">{fmtBRL(data!.aReceber.faturamento)} <span className="text-amber-600">· lucro {fmtBRL(data!.aReceber.lucro)}</span></span>
                 </div>
+                <p className="text-[8px] font-bold text-gray-300 uppercase leading-relaxed">
+                  Mesmos números do cartão da Rota 5 no painel do admin — vendas do mês separadas entre pagamento já recebido (à vista + prazo pago) e o que ainda está a prazo
+                </p>
               </div>
 
               {/* ===== Despesas ===== */}

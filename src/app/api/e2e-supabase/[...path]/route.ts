@@ -304,6 +304,47 @@ const salesSeed = [
     prioridade: 0, separado: false, separado_em: null, entregador_id: null,
     comprovante_foto: null, modo_nota: null, route_id: null, entrega_seq: null, ordem_entrega: null,
   },
+  // BLOCO 236 (E2E): vendas do DAVID no mês corrente para o LUCRO DA ROTA —
+  // 2 PAGO (à vista Dinheiro + Pix) e 2 PENDENTE (a prazo), todas com
+  // sale_items de custo CONGELADO. Números fáceis de conferir na tela:
+  //   Recebido (2)  R$ 450,00 · lucro R$ 305,00   (custo 90 + 55 = 145)
+  //   A receber (3) R$ 615,50 · lucro R$ 556,50   (com a sale-fila-004 15,50/custo 5)
+  {
+    id: 'sale-dav-p1', vendedor_id: 'david-r5', client_id: 'cli-6',
+    valor_total: 300.0, valor_pago: 300.0, metodo_pagamento: 'DINHEIRO',
+    detalhe_pagamento: 'À VISTA — dinheiro',
+    status_pagamento: 'PAGO', data_venda: iso(800), data_vencimento: null,
+    tipo_venda: 'PRONTA', entrega_status: null, trocas: null,
+    prioridade: 0, separado: false, separado_em: null, entregador_id: null,
+    comprovante_foto: null, modo_nota: null, route_id: null, entrega_seq: null, ordem_entrega: null,
+  },
+  {
+    id: 'sale-dav-p2', vendedor_id: 'david-r5', client_id: 'cli-7',
+    valor_total: 150.0, valor_pago: 150.0, metodo_pagamento: 'PIX',
+    detalhe_pagamento: 'À VISTA — pix',
+    status_pagamento: 'PAGO', data_venda: iso(700), data_vencimento: null,
+    tipo_venda: 'PRONTA', entrega_status: null, trocas: null,
+    prioridade: 0, separado: false, separado_em: null, entregador_id: null,
+    comprovante_foto: null, modo_nota: null, route_id: null, entrega_seq: null, ordem_entrega: null,
+  },
+  {
+    id: 'sale-dav-r1', vendedor_id: 'david-r5', client_id: 'cli-1',
+    valor_total: 400.0, valor_pago: 0, metodo_pagamento: 'A_PRAZO',
+    detalhe_pagamento: 'PRONTA — cobrar BOLETO na entrega (A PRAZO)',
+    status_pagamento: 'PENDENTE', data_venda: iso(600), data_vencimento: `${diaPassado(-7)}T23:59:59-03:00`,
+    tipo_venda: 'PRONTA', entrega_status: null, trocas: null,
+    prioridade: 0, separado: false, separado_em: null, entregador_id: null,
+    comprovante_foto: null, modo_nota: null, route_id: null, entrega_seq: null, ordem_entrega: null,
+  },
+  {
+    id: 'sale-dav-r2', vendedor_id: 'david-r5', client_id: 'cli-2',
+    valor_total: 200.0, valor_pago: 0, metodo_pagamento: 'A_PRAZO',
+    detalhe_pagamento: 'PRONTA — cobrar BOLETO na entrega (A PRAZO)',
+    status_pagamento: 'PENDENTE', data_venda: iso(500), data_vencimento: `${diaPassado(-14)}T23:59:59-03:00`,
+    tipo_venda: 'PRONTA', entrega_status: null, trocas: null,
+    prioridade: 0, separado: false, separado_em: null, entregador_id: null,
+    comprovante_foto: null, modo_nota: null, route_id: null, entrega_seq: null, ordem_entrega: null,
+  },
 ];
 
 const saleItemsSeed = [
@@ -320,6 +361,13 @@ const saleItemsSeed = [
   { id: 'si-10', sale_id: 'sale-boleto-antigo', produto_id: 'prod-1', product_id: 'prod-1', quantidade: 30, preco_venda: 15.226 },
   // BLOCO 211 (E2E): item da venda à vista sem pagamento (cupom reaberto com itens)
   { id: 'si-9', sale_id: 'sale-avista-sem-pag', produto_id: 'prod-2', product_id: 'prod-2', quantidade: 10, preco_venda: 4.55 },
+  // BLOCO 236 (E2E): itens das vendas do DAVID com custo CONGELADO na venda
+  // (custo_unitario) — Recebido: 10×9,00=90 + 10×5,50=55 = 145 · lucro 305
+  // A receber: 10×3,60=36 + 10×1,80=18 = 54 · lucro 546 (sem a fila-004)
+  { id: 'si-dav-1', sale_id: 'sale-dav-p1', produto_id: 'prod-r1', product_id: 'prod-r1', quantidade: 10, preco_venda: 30.0, custo_unitario: 9.0 },
+  { id: 'si-dav-2', sale_id: 'sale-dav-p2', produto_id: 'prod-r2', product_id: 'prod-r2', quantidade: 10, preco_venda: 15.0, custo_unitario: 5.5 },
+  { id: 'si-dav-3', sale_id: 'sale-dav-r1', produto_id: 'prod-r3', product_id: 'prod-r3', quantidade: 10, preco_venda: 40.0, custo_unitario: 3.6 },
+  { id: 'si-dav-4', sale_id: 'sale-dav-r2', produto_id: 'prod-r4', product_id: 'prod-r4', quantidade: 10, preco_venda: 20.0, custo_unitario: 1.8 },
 ];
 
 // BLOCO 191: custos lançados pelo admin (Portal Financeiro) — 1 exemplo

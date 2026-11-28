@@ -1,6 +1,21 @@
 # Worklog - DOCE MANIA App
 
 ---
+Task ID: 161
+Agent: Z.ai Code (sessão principal)
+Task: BLOCO 236 (pedido do dono: "Essa informação tbm deve estar no lucro da rota logado como david" — com screenshot do cartão da Rota 5 no painel admin: FATURAMENTO / CUSTO PRODUTOS / "Recebido (44) R$ X · lucro R$ Y" / "A receber (52) R$ X · lucro R$ Y") — LUCRO DA ROTA DO DAVID agora mostra a MESMA informação do cartão da rota no admin.
+
+Work Log:
+- LucroRotaVendedor.tsx: a seção "Recebido × A receber" (antes: 2 cards "Dinheiro recebido" / "A receber (prazo)", SEM contagem de vendas) virou o MESMO bloco do cartão da rota que o admin vê no Lucro por Rota — linhas "✓ Recebido (N) R$ total · lucro R$ X" e "🕐 A receber (N) R$ total · lucro R$ Y", com nota "Mesmos números do cartão da Rota 5 no painel do admin — vendas do mês separadas entre pagamento já recebido (à vista + prazo pago) e o que ainda está a prazo". Rótulo antigo "Dinheiro recebido" era enganoso: a fatia PAGO reúne à vista E prazo já pago (baixa de boleto) — virou "Recebido (N)".
+- NENHUMA mudança de API/banco: a API /api/vendedor/lucro-rota já devolvia nVendas de cada fatia (fechaAcc) — alteração 100% no componente.
+- Mock E2E ganha seed do David no mês corrente (BLOCO 236): 4 vendas david-r5 — 2 PAGO (sale-dav-p1 Dinheiro 300,00 custo congelado 90 + sale-dav-p2 Pix 150,00 custo 55) e 2 PENDENTE a prazo (sale-dav-r1 400,00 custo 36 / sale-dav-r2 200,00 custo 18) + sale_items com custo_unitario — números de prova: Recebido (2) R$ 450,00 · lucro R$ 305,00 / A receber (3) R$ 615,50 · lucro R$ 556,50 (com a sale-fila-004 15,50/custo 5 do seed antigo).
+- E2E REAL (mock + agent-browser, padrão do projeto; lições aplicadas: localStorage.clear antes do login, innerText do snapshot vem MAIÚSCULO mas com espaço não-quebrável U+00A0 no formato BRL — validar com .replace(/\u00A0/g,' '), innerText de eval devolve texto ORIGINAL): (A) LOGIN DAVID (David - R5 / PIN 123456) → aba LUCRO DA ROTA: FATURAMENTO R$ 1.065,50 · 5 VENDAS · TICKET R$ 213,10, CUSTO R$ 204,00, LUCRO BRUTO R$ 861,50 (80,9%), e a seção nova "RECEBIDO × A RECEBER" com EXATAMENTE "Recebido (2) — R$ 450,00 · lucro R$ 305,00" e "A receber (3) — R$ 615,50 · lucro R$ 556,50"; screenshot docs/e2e_bloco236_david_secao.png. (B) LOGIN ADMIN (5 toques no logo espaçados 400ms + PIN) → LUCRO POR ROTA → cartão ROTA 05 expandido: FATURAMENTO R$ 1.065,50 / CUSTO PRODUTOS R$ 204,00 / "Recebido (2) R$ 450,00 · lucro R$ 305,00" / "A receber (3) R$ 615,50 · lucro R$ 556,50" — PROVA DE EQUIVALÊNCIA: David e admin veem OS MESMOS números; screenshot docs/e2e_bloco236_admin_rota5.png. Zero erros de console e de página. .env.local E2E removido no fim e dev server reiniciado limpo em modo produção (GET / 200).
+- VALIDAÇÕES LOCAIS: lint 0 erros / 8 warnings (baseline exata). Sem SQL novo.
+
+Stage Summary:
+- O David, logado como vendedor, agora vê na aba Lucro da Rota exatamente a mesma informação do cartão da Rota 5 que o dono vê no painel: Recebido (N vendas) com o total e o lucro embutido, e A receber (N vendas) com o total e o lucro ainda pendente — a conta do dono e a do vendedor nunca mais divergem.
+
+---
 Task ID: 160
 Agent: Z.ai Code (sessão principal)
 Task: BLOCO 235 (pedido do dono: "Ok olhando o caixa do David logado como admin tbm tem que aparecer uma tela simples e fácil entendimento, o que deve aparecer e de período até período de fechamento de caixa, ou seja tudo que o vendedor David recebeu a vista em dinheiro para acertar conosco e Pix para conferir na conta. Em outra tela ou botão um log de recebimento de tudo ou seja dinheiro Pix e o prazo pago e mostrando o quanto tem prazo pendente. Assim fica bem organizado, o admin fechou caixa quer dizer que recebeu o dinheiro daquele período e começa denovo.") — TELA DO ADMIN agora tem 2 ABAS: CAIXA (simples) + LOG (tudo).

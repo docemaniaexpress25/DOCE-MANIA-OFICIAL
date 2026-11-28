@@ -47,13 +47,15 @@ import { hojeSp } from '@/lib/interBoleto';
  *
  * GET  ?vendedorId=...  -> estado fiscal da carga: remessa(s) ativa(s), itens
  *                          na van, vendidos da jornada, proposta de devolução
- *                          (carregado×vendido×devolve) + status da Focus/emitente.
+ *                          (carregado×vendido×devolve) + status da Focus/emitente
+ *                          + COBERTURA FISCAL (BLOCO 237): total carregado em
+ *                          notas, o que já tem nota e o que é NOVO SEM NOTA.
  *                          ADMIN vê qualquer vendedor; VENDEDOR só o próprio.
  * POST { acao: 'REMESSA', vendedorId, dias? }
- *       -> monta a remessa da carga ATUAL da van (snapshot de itens/valores),
- *          valida (motor 182), EMITE pela Focus quando configurada e guarda o
- *          snapshot em cargas_fiscal. Sem Focus: RASCUNHO + payload auditável
- *          (o dono emite pelo contador/Notas Especiais).
+ *       -> BLOCO 237: remessa por DELTA — emite uma NF-e 5949 nova SOMENTE com
+ *          o que foi ADICIONADO desde a última remessa viva (van atual − somatório
+ *          das remessas ativas). PODE haver várias remessas na mesma jornada/dia:
+ *          carga nova = nota nova = porte novo. Sem delta positivo: 422 explicativo.
  * POST { acao: 'DEVOLUCAO', vendedorId, itensDevolucao?: [{produtoId, devolve}] }
  *       -> devolução AUTOMÁTICA: calcula remessa − vendas da jornada (editável
  *          item a item), emite a NF-e de entrada 1949 referenciando a(s)
@@ -67,6 +69,48 @@ const BAD = (status: number, erro: string, extra: Record<string, unknown> = {}) 
   NextResponse.json({ ok: false, erro, ...extra }, { status });
 
 const soDigitos = (v: unknown): string => String(v ?? '').replace(/\D/g, '');
+
+/**
+ * BLOCO 237 — COBERTURA FISCAL da van: quanto da carga atual já tem nota.
+ * Somatório dos itens de TODAS as remessas vivas da jornada (por produto).
+ * Novo sem nota = itensVan − cobertura (nunca negativo — vendido não é "novo").
+ */
+function coberturaDasRemessas(
+  remessas: CargasFiscalRow[],
+  van: { itens: ItemCargaFiscal[] },
+): {
+  coberturaRemessas: { produtoId: string; nome: string; unidades: number }[];
+  unidadesCobertas: number;
+  novoSemNota: { produtoId: string; nome: string; unidades: number }[];
+  unidadesNovoSemNota: number;
+} {
+  const cob = new Map<string, number>();
+  const nomes = new Map<string, string>();
+  for (const r of remessas) {
+    for (const it of (r.itens || []) as ItemCargaFiscal[]) {
+      const q = Math.max(0, Number(it.quantidade) || 0);
+      if (q <= 0) continue;
+      cob.set(it.produtoId, (cob.get(it.produtoId) || 0) + q);
+      if (!nomes.has(it.produtoId)) nomes.set(it.produtoId, it.nome);
+    }
+  }
+  for (const it of van.itens) nomes.set(it.produtoId, it.nome);
+  const todos = new Set<string>([...cob.keys(), ...van.itens.map(i => i.produtoId)]);
+  const coberturaRemessas = Array.from(todos).map(pid => ({
+    produtoId: pid,
+    nome: nomes.get(pid) || 'Produto',
+    unidades: cob.get(pid) || 0,
+  }));
+  const novoSemNota = van.itens
+    .map(i => ({ produtoId: i.produtoId, nome: i.nome, unidades: Math.max(0, i.quantidade - (cob.get(i.produtoId) || 0)) }))
+    .filter(n => n.unidades > 0);
+  return {
+    coberturaRemessas,
+    unidadesCobertas: coberturaRemessas.reduce((a, c) => a + c.unidades, 0),
+    novoSemNota,
+    unidadesNovoSemNota: novoSemNota.reduce((a, n) => a + n.unidades, 0),
+  };
+}
 
 interface CargasFiscalRow {
   id: string;
@@ -275,6 +319,9 @@ export async function GET(req: NextRequest) {
     diasDecorridos: Math.max(0, Math.floor((agoraTs - new Date(r.criado_em).getTime()) / 86_400_000)),
   }));
 
+  // BLOCO 237: cobertura fiscal — o quanto da van já tem nota e o que é novo.
+  const cobertura = coberturaDasRemessas(remessas, van);
+
   return NextResponse.json({
     ...base,
     tabelaOk: true,
@@ -289,6 +336,11 @@ export async function GET(req: NextRequest) {
     propostaDevolucao: proposta,
     sobrouUnidades: totalSobrouUnidades(proposta),
     devolucoes: (devolucoes.data || []) as unknown as CargasFiscalRow[],
+    // BLOCO 237 — TOTAL CARREGADO: notas (cobertura) × van × novo sem nota.
+    coberturaRemessas: cobertura.coberturaRemessas,
+    unidadesCobertas: cobertura.unidadesCobertas,
+    novoSemNota: cobertura.novoSemNota,
+    unidadesNovoSemNota: cobertura.unidadesNovoSemNota,
   });
 }
 
@@ -343,25 +395,47 @@ export async function POST(req: NextRequest) {
   // REMESSA: carga atual da van -> NF-e 55 CFOP 5949 SEM PAGAMENTO
   // ---------------------------------------------------------------------
   if (acao === 'REMESSA') {
-    const { itens, unidades } = await cargaAtualDaVan(db, vendedorId);
-    if (itens.length === 0) return BAD(422, 'Carga vazia — carregue a van antes de gerar a remessa.');
+    const { itens: itensVan } = await cargaAtualDaVan(db, vendedorId);
+    if (itensVan.length === 0) return BAD(422, 'Carga vazia — carregue a van antes de gerar a remessa.');
 
     const incompleto = emitenteIncompleto(emitente);
     if (incompleto.length > 0) {
       return BAD(422, `Dados do emitente incompletos para a NF-e: falta ${incompleto.join(', ')}. Preencha em Configurações > ERP Fiscal (dados do emitente).`, { faltando: incompleto });
     }
 
-    // Idempotência: 1 remessa por vendedor/dia (reemissão -r2, -r3... só
-    // quando a anterior foi REJEITADA).
+    // =====================================================================
+    // BLOCO 237 — REMESSA POR DELTA (pedido do dono: "se em algum momento
+    // adicionarmos mais carga devera ser criada outra nota e outro documento
+    // de porte com as quantidades carregadas... se nao devolver ela ira
+    // apenas gerar a quantidade que foi adicionada"):
+    //   DELTA = itensVan − somatório das remessas VIVAS (por produto).
+    //   A nota nova sai SOMENTE com o delta (o que foi adicionado e ainda
+    //   não tem nota). Múltiplas remessas por dia/jornada são permitidas —
+    //   carga nova = nota nova = porte novo. A devolução 1949 continua
+    //   referenciando TODAS as chaves (já consolidada no Bloco 216).
+    // =====================================================================
+    const remessasVivas = await remessasAtivas(db, vendedorId);
+    const cobMap = new Map<string, number>();
+    for (const r of remessasVivas) {
+      for (const it of (r.itens || []) as ItemCargaFiscal[]) {
+        const q = Math.max(0, Number(it.quantidade) || 0);
+        if (q > 0) cobMap.set(it.produtoId, (cobMap.get(it.produtoId) || 0) + q);
+      }
+    }
+    const itens = itensVan
+      .map(i => ({ ...i, quantidade: Math.max(0, i.quantidade - (cobMap.get(i.produtoId) || 0)) }))
+      .filter(i => i.quantidade > 0);
+    if (itens.length === 0) {
+      return BAD(422, 'Nada novo para remessar — toda a carga da van já tem nota. Adicione mais produtos (Aplicar Agora) para gerar outra remessa, ou devolva a carga para encerrar a jornada.', { unidadesNovoSemNota: 0 });
+    }
+
+    // Ref ÚNICA por emissão: sequência do dia (base, base-r1, base-r2...) —
+    // rejeitadas também contam, então cada tentativa nova sempre tem ref livre.
     const data = hojeSp().replace(/-/g, '');
     const refBase = `CARGA-${vendedorId.slice(0, 8)}-${data}`;
-    const { data: existentes } = await db.from('cargas_fiscal').select('*').eq('vendedor_id', vendedorId).eq('tipo', 'REMESSA').like('focus_ref', `${refBase}%`);
-    const vivas = ((existentes || []) as unknown as CargasFiscalRow[]).filter(r => ['AUTORIZADA', 'EMITINDO', 'RASCUNHO'].includes(r.status));
-    if (vivas.length > 0) {
-      return NextResponse.json({ ok: true, jaEmitida: true, remessa: vivas[0], aviso: 'Remessa da carga de hoje já existe — nada foi emitido de novo.' });
-    }
-    const rejeitados = ((existentes || []) as unknown as CargasFiscalRow[]).filter(r => r.status === 'REJEITADA').length;
-    const ref = refIdempotente('CARGA', vendedorId, rejeitados);
+    const { data: existentes } = await db.from('cargas_fiscal').select('id, focus_ref').eq('vendedor_id', vendedorId).eq('tipo', 'REMESSA').like('focus_ref', `${refBase}%`);
+    const totalDoDia = ((existentes || []) as unknown[]).length;
+    const ref = totalDoDia > 0 ? `${refBase}-r${totalDoDia}` : refBase;
 
     const dias = Math.max(1, Math.min(31, Math.round(Number(body.dias) || 7)));
     const input: NotaEspecialInput = montarInputRemessaCarga({ itens, emitente, vendedor: vendedorNome, dias, placa: placaVan || undefined, pesoKg: pesoKg > 0 ? pesoKg : undefined });

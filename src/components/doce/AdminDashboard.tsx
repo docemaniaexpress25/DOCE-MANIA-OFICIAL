@@ -433,6 +433,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
     propostaDevolucao?: { produtoId: string; nome: string; valorUnitario: number; carregado: number; vendido: number; devolve: number; porRemessa?: { id: string; ref: string; numero: string; qtd: number; chave: string }[] }[];
     sobrouUnidades?: number;
     devolucoes?: { id: string; status: string; nota_numero: string; erro: string; criado_em: string }[];
+    // BLOCO 237 — TOTAL CARREGADO: quanto da van já tem nota e o que é novo.
+    coberturaRemessas?: { produtoId: string; nome: string; unidades: number }[];
+    unidadesCobertas?: number;
+    novoSemNota?: { produtoId: string; nome: string; unidades: number }[];
+    unidadesNovoSemNota?: number;
   }
   const [fiscalCarga, setFiscalCarga] = useState<CargaFiscalEstado | null>(null);
   const [fiscalLoading, setFiscalLoading] = useState(false);
@@ -442,6 +447,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const [diasJornada, setDiasJornada] = useState(7);
   // BLOCO 216: peso bruto opcional da carga (kg) — vai na DANFE/porte/manifesto
   const [pesoKgCarga, setPesoKgCarga] = useState('');
+  // BLOCO 237: modal que sugere gerar a NF-e de remessa LOGO APÓS aplicar a
+  // carga com acréscimo ("clicar em carregar tem que gerar a nf")
+  const [showRemessaAposCarga, setShowRemessaAposCarga] = useState<{ unidades: number } | null>(null);
 
   const carregarFiscalCarga = useCallback(async (vId: string) => {
     if (!vId) { setFiscalCarga(null); return; }
@@ -468,8 +476,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       });
       const j = await res.json();
       if (res.ok && j.ok) {
-        if (j.jaEmitida) showToast('Remessa da carga de hoje já existe.', 'success');
-        else if (j.rascunho) showToast('Remessa RASCUNHO gravada — imprima o Documento de Porte (Focus não configurada).', 'success');
+        if (j.rascunho) showToast('Remessa RASCUNHO gravada — imprima o Documento de Porte (Focus não configurada).', 'success');
         else showToast('REMESSA enviada à SEFAZ! Status: EMITINDO/AUTORIZADA.', 'success');
       } else {
         showToast(j.erro || 'Erro gerando a remessa.', 'error');
@@ -1184,9 +1191,18 @@ ${remessaBloco}
     if (!selectedVendedorId) return;
     if (!props.cargasLoaded) { showToast('A carga atual ainda está carregando — aguarde 2 segundos e tente de novo.', 'error'); return; }
     const itens = montarItensCarga();
+    // BLOCO 237: quantas unidades NOVAS estão entrando na van (delta positivo)
+    // — "clicar em carregar tem que gerar a nf com as quantidades anotadas".
+    const cargaAtualMap = props.cargas
+      .filter(c => c.vendedorId === selectedVendedorId)
+      .reduce((acc, curr) => ({ ...acc, [curr.produtoId]: curr.quantidade ?? 0 }), {} as { [id: string]: number });
+    const unidadesNovas = itens.reduce((a, i) => a + Math.max(0, i.quantidade - (cargaAtualMap[i.produtoId] ?? 0)), 0);
     const r = await props.applyCargaDirectly(selectedVendedorId, itens);
     setShowConfirmApply(false);
-    if (r?.ok) showToast('Carga aplicada com sucesso!');
+    if (r?.ok) {
+      showToast('Carga aplicada com sucesso!');
+      if (unidadesNovas > 0) setShowRemessaAposCarga({ unidades: unidadesNovas });
+    }
     else showToast(r?.erro || 'Erro ao aplicar a carga.', 'error');
   };
 
@@ -2559,6 +2575,27 @@ ${remessaBloco}
                   <p className="text-[8.5px] font-bold text-emerald-800 leading-snug break-words">Chave: {fiscalCarga.remessaAtiva.nota_chave || '—'} · Ref: {fiscalCarga.remessaAtiva.focus_ref}</p>
                 )}
 
+                {/* BLOCO 237 — TOTAL CARREGADO (sempre visível): o que já foi
+                    carregado EM NOTAS × o que está NA VAN × o que é NOVO SEM NOTA
+                    (cada acréscimo vira OUTRA remessa só com o adicionado). */}
+                <div className="grid grid-cols-3 gap-1.5">
+                  <div className="bg-white rounded-xl border border-violet-100 p-2 text-center">
+                    <p className="text-[7px] font-black text-gray-400 uppercase leading-tight">Carregado<br />(em notas)</p>
+                    <p className="text-[14px] font-black text-violet-700 leading-tight">{fiscalCarga?.unidadesCobertas ?? 0}<span className="text-[8px] font-bold text-gray-400"> un.</span></p>
+                  </div>
+                  <div className="bg-white rounded-xl border border-orange-100 p-2 text-center">
+                    <p className="text-[7px] font-black text-gray-400 uppercase leading-tight">Na van<br />agora</p>
+                    <p className="text-[14px] font-black text-orange-600 leading-tight">{fiscalCarga?.unidadesVan ?? 0}<span className="text-[8px] font-bold text-gray-400"> un.</span></p>
+                  </div>
+                  <div className={`rounded-xl border p-2 text-center ${((fiscalCarga?.unidadesNovoSemNota ?? 0) > 0) ? 'bg-rose-50 border-rose-200' : 'bg-white border-gray-100'}`}>
+                    <p className={`text-[7px] font-black uppercase leading-tight ${((fiscalCarga?.unidadesNovoSemNota ?? 0) > 0) ? 'text-rose-500' : 'text-gray-400'}`}>Novo<br />sem nota</p>
+                    <p className={`text-[14px] font-black leading-tight ${((fiscalCarga?.unidadesNovoSemNota ?? 0) > 0) ? 'text-rose-600' : 'text-gray-500'}`}>{fiscalCarga?.unidadesNovoSemNota ?? 0}<span className="text-[8px] font-bold text-gray-400"> un.</span></p>
+                  </div>
+                </div>
+                {((fiscalCarga?.unidadesNovoSemNota ?? 0) > 0) && (
+                  <p className="text-[8.5px] font-black text-rose-700 bg-rose-50 border border-rose-200 rounded-xl p-2 leading-snug"><i className="fa-solid fa-file-circle-plus mr-1"></i>Existem {fiscalCarga?.unidadesNovoSemNota} un. NOVAS sem nota — o GERAR REMESSA emite OUTRA NF-e só com elas (carga nova = nota nova = porte novo).</p>
+                )}
+
                 <div className="flex items-center gap-2 flex-wrap">
                   <label className="text-[8px] font-black text-gray-400 uppercase shrink-0">Jornada</label>
                   <select value={diasJornada} onChange={e => setDiasJornada(Number(e.target.value))} className="text-[10px] font-black bg-white border border-gray-200 rounded-xl px-2 py-2 outline-none">
@@ -2566,11 +2603,17 @@ ${remessaBloco}
                   </select>
                   <label className="text-[8px] font-black text-gray-400 uppercase ml-1">Peso (kg)</label>
                   <input type="number" min={0} step="0.1" value={pesoKgCarga} onChange={e => setPesoKgCarga(e.target.value)} placeholder="opcional" className="w-20 py-2 px-2 bg-white border border-gray-200 rounded-xl text-[10px] font-black outline-none" />
-                  <span className="text-[8px] font-bold text-gray-400">{(fiscalCarga?.unidadesVan ?? 0)} un. na van</span>
+                  <span className="text-[8px] font-bold text-gray-400">{fiscalCarga?.unidadesVan ?? 0} un. na van</span>
                   {(fiscalCarga?.placaVan || fiscalCarga?.remessaAtiva?.placa) && (
                     <span className="text-[8px] font-black text-gray-600 bg-gray-100 border border-gray-200 rounded-md px-1.5 py-0.5 uppercase"><i className="fa-solid fa-van-shuttle mr-1"></i>{fiscalCarga?.remessaAtiva?.placa || fiscalCarga?.placaVan}</span>
                   )}
                 </div>
+
+                {/* BLOCO 237: a placa entra na NF-e/porte automaticamente do
+                    cadastro do vendedor — sem placa cadastrada, avisa. */}
+                {fiscalCarga && !fiscalCarga.placaVan && !fiscalCarga.remessaAtiva?.placa && (
+                  <p className="text-[8.5px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded-xl p-2.5 leading-snug"><i className="fa-solid fa-van-shuttle mr-1"></i>Vendedor SEM placa no cadastro — a nota sai sem placa. Cadastre em Vendedores para ela entrar na NF-e, no Porte e no Requerimento.</p>
+                )}
 
                 {(fiscalCarga?.remessasJornada || []).length > 0 && (
                   <div className="rounded-xl bg-white border border-violet-100 p-2.5 space-y-1">
@@ -2589,11 +2632,22 @@ ${remessaBloco}
                 )}
 
                 <div className="grid grid-cols-2 gap-2">
-                  <button onClick={gerarRemessaCarga} disabled={busyFiscal || fiscalLoading || (fiscalCarga?.unidadesVan ?? 0) === 0 || !!(fiscalCarga?.remessaAtiva && fiscalCarga.remessaAtiva.status !== 'REJEITADA')}
-                    className={`py-3.5 rounded-2xl text-[9px] font-black uppercase border-2 transition-all flex items-center justify-center gap-1.5 ${busyFiscal ? 'bg-gray-100 text-gray-300 border-gray-100' : 'bg-violet-600 text-white border-violet-600 shadow-sm active:scale-95'}`}>
-                    <i className={`fa-solid ${busyFiscal ? 'fa-spinner fa-spin' : 'fa-file-export'}`}></i>
-                    {fiscalCarga?.remessaAtiva && fiscalCarga.remessaAtiva.status !== 'REJEITADA' ? 'Remessa já gerada' : 'Gerar Remessa NF-e'}
-                  </button>
+                  {(() => {
+                    // BLOCO 237: a remessa agora é por DELTA — habilita quando
+                    // existe carga NOVA sem nota (ou reemissão após rejeição,
+                    // pois a rejeitada não conta como cobertura).
+                    const novoSemNota = fiscalCarga?.unidadesNovoSemNota ?? 0;
+                    const temEmitindo = (fiscalCarga?.remessasJornada || []).some(r => r.status === 'EMITINDO');
+                    const podeGerar = novoSemNota > 0 && !temEmitindo;
+                    const label = temEmitindo ? 'Aguarde a nota processar' : podeGerar ? `Gerar Remessa NF-e (+${novoSemNota} un.)` : 'Toda a carga tem nota';
+                    return (
+                      <button onClick={gerarRemessaCarga} disabled={busyFiscal || fiscalLoading || !podeGerar}
+                        className={`py-3.5 rounded-2xl text-[9px] font-black uppercase border-2 transition-all flex items-center justify-center gap-1.5 ${busyFiscal || !podeGerar ? 'bg-gray-100 text-gray-300 border-gray-100' : 'bg-violet-600 text-white border-violet-600 shadow-sm active:scale-95'}`}>
+                        <i className={`fa-solid ${busyFiscal ? 'fa-spinner fa-spin' : 'fa-file-export'}`}></i>
+                        {label}
+                      </button>
+                    );
+                  })()}
                   <button onClick={imprimirPorteCarga} disabled={!fiscalCarga || (fiscalCarga?.unidadesVan ?? 0) === 0}
                     className="py-3.5 rounded-2xl text-[9px] font-black uppercase border-2 bg-white text-slate-700 border-gray-200 active:scale-95 flex items-center justify-center gap-1.5 disabled:text-gray-300">
                     <i className="fa-solid fa-file-lines"></i>Documento de Porte
@@ -2608,7 +2662,7 @@ ${remessaBloco}
                   </button>
                 </div>
                 <p className="text-[8px] font-bold text-gray-400 leading-snug px-0.5">
-                  Fluxo da jornada: carga → REMESSA 5949 → vendas com NF-e 5102 (DANFE mini) → devolução 1949 do que não vendeu. A devolução devolve o estoque à casa e marca a jornada como encerrada.
+                  Fluxo da jornada: carregar (Aplicar) → REMESSA 5949 das unidades novas → carregou mais? OUTRA remessa só com o acréscimo → vendas com NF-e 5102 (DANFE mini) → DEVOLVER emite a 1949 do que não vendeu (referencia TODAS as remessas), devolve o estoque à casa e encerra a jornada.
                 </p>
               </div>
 
@@ -2622,11 +2676,18 @@ ${remessaBloco}
                 }).map(p => {
                   const atual = props.cargas.find(c => c.vendedorId === selectedVendedorId && c.produtoId === p.id)?.quantidade ?? 0;
                   const staged = stagingCarga[p.id] ?? atual;
+                  // BLOCO 237: fila com a situação fiscal por produto — quanto
+                  // da carga ATUAL já tem nota e quanto é novo sem nota.
+                  const coberto = fiscalCarga?.coberturaRemessas?.find(c => c.produtoId === p.id)?.unidades ?? 0;
+                  const novo = Math.max(0, atual - coberto);
                   return (
                     <div key={p.id} className="bg-white p-3 rounded-2xl border border-gray-100 shadow-sm flex items-center gap-3">
                       <div className="flex-1 min-w-0">
                         <h4 className="font-bold text-gray-800 text-[11px] uppercase break-words">{p.nome}</h4>
-                        <p className="text-[9px] text-gray-400 font-bold mt-0.5">Estoque Central: {p.estoquePrincipal ?? 0} | Na van: {atual}</p>
+                        <p className="text-[9px] text-gray-400 font-bold mt-0.5">Estoque Central: {p.estoquePrincipal ?? 0} | Na van: {atual} | Na nota: {coberto}</p>
+                        {novo > 0 && (
+                          <span className="inline-block mt-1 text-[7.5px] font-black uppercase text-rose-700 bg-rose-50 border border-rose-200 rounded-md px-1.5 py-0.5"><i className="fa-solid fa-circle-exclamation mr-1"></i>+{novo} novo sem nota</span>
+                        )}
                       </div>
                       <div className="flex items-center gap-1">
                         <button onClick={() => updateStaging(p.id, -1)} className="w-10 h-10 bg-orange-50 text-orange-600 rounded-lg flex items-center justify-center active:scale-90 border border-orange-100"><i className="fa-solid fa-minus text-[9px]"></i></button>
@@ -3682,6 +3743,27 @@ ${remessaBloco}
 
       {showConfirmApply && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[200] flex items-center justify-center p-6"><div className="bg-white w-full max-w-xs rounded-3xl p-8 text-center shadow-2xl"><h3 className="font-black text-gray-800 text-lg mb-4">Aplicar Carga?</h3><p className="text-sm text-gray-500 mb-6 font-medium uppercase">Isso atualizará o estoque imediatamente.</p><div className="flex flex-col gap-2"><button onClick={handleApply} className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest">Sim, Aplicar</button><button onClick={() => setShowConfirmApply(false)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Cancelar</button></div></div></div>
+      )}
+
+      {/* ================================================================
+          BLOCO 237 — APÓS APLICAR COM ACRÉSCIMO: "clicar em carregar tem
+          que gerar a nf com as quantidades anotadas". A carga entra na van
+          e o sistema PERGUNTA se emite já a NF-e de remessa — que sai
+          SOMENTE com as unidades novas, com placa + porte + requerimento.
+          ================================================================ */}
+      {showRemessaAposCarga && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[210] flex items-center justify-center p-6">
+          <div className="bg-white w-full max-w-xs rounded-3xl p-8 text-center shadow-2xl">
+            <span className="w-14 h-14 rounded-2xl bg-violet-50 text-violet-600 flex items-center justify-center mx-auto mb-3"><i className="fa-solid fa-file-export text-xl"></i></span>
+            <h3 className="font-black text-gray-800 text-base mb-1 uppercase">Carga aplicada</h3>
+            <p className="text-xs text-gray-500 font-bold mb-2">+{showRemessaAposCarga.unidades} un. novas na van</p>
+            <p className="text-[10px] text-gray-400 font-bold mb-5 leading-snug">Gerar a NF-e de remessa agora? A nota sai SOMENTE com as unidades novas (CFOP 5949, sem pagamento), já com placa, Documento de Porte e Requerimento.</p>
+            <div className="flex flex-col gap-2">
+              <button onClick={() => { setShowRemessaAposCarga(null); void gerarRemessaCarga(); }} className="w-full bg-violet-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 uppercase text-xs tracking-widest">Gerar NF-e agora</button>
+              <button onClick={() => setShowRemessaAposCarga(null)} className="w-full py-3 text-gray-400 font-bold uppercase text-[10px] tracking-widest">Depois</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* ================================================================

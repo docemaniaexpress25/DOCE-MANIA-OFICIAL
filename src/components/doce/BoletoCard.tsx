@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { boletoService, BoletoInfo, BoletoParcelaInfo, BoletoConfigInfo, NotaDaVendaInfo } from '@/services/boletoService';
 import { validaCpfCnpj } from '@/lib/validaDoc';
 // BLOCO 177: MINI BOLETO imprime DIRETO (sem preview) nos DOIS canais:
@@ -338,6 +338,51 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
     if (r.ok) setPodeCancelApi(r.podeCancelar === true);
   };
 
+  // ======================================================================
+  // BLOCO 239 — AUTO-POLL (fim da demora percebida): a emissão é ASSÍNCRONA
+  // no Inter — o POST aceita em segundos e a LINHA DIGITÁVEL chega depois.
+  // Antes o card perguntava UMA vez após 4s e parava: se o Inter ainda não
+  // tinha processado, o dono precisava ficar tocando ATUALIZAR ("boletos
+  // demoram a ser gerados"). Agora o card PERGUNTA SOZINHO — até 6 rodadas
+  // de 4s, parando no primeiro status final — tanto no boleto único quanto
+  // nas parcelas. O sync/webhook continuam a rede de segurança por trás.
+  // ======================================================================
+  const pollVivoRef = useRef(false);
+  useEffect(() => () => { pollVivoRef.current = false; }, []);
+
+  const autoPollUnico = () => {
+    let rodadas = 0;
+    const passo = async () => {
+      while (rodadas < 6) {
+        rodadas++;
+        await new Promise(res => setTimeout(res, 4000));
+        if (!pollVivoRef.current) return;
+        try {
+          const c = await boletoService.consultar(saleId);
+          if (!pollVivoRef.current) return;
+          if (c.ok && c.boleto) {
+            setBoleto(c.boleto);
+            if (c.boleto.status !== 'EM_PROCESSAMENTO') return; // linha chegou — para
+          }
+        } catch { /* próxima rodada */ }
+      }
+    };
+    void passo();
+  };
+
+  const autoRefreshParcelas = () => {
+    let rodadas = 0;
+    const passo = async () => {
+      while (rodadas < 5) {
+        rodadas++;
+        await new Promise(res => setTimeout(res, 4000));
+        if (!pollVivoRef.current) return;
+        try { await refrescarParcelas(); } catch { /* próxima rodada */ }
+      }
+    };
+    void passo();
+  };
+
   /** Doc/CEP finais: digitado no card > cadastro (mesma regra do boleto único). */
   const docFinal = doc.replace(/\D/g, '') || (clienteDoc || '').replace(/\D/g, '');
   const cepFinal = cep.replace(/\D/g, '') || (clienteCep || '').replace(/\D/g, '');
@@ -509,8 +554,9 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
       setErroLocal(`Boleto ${falhas[0].seq}: ${falhas[0].erro || 'falha na emissão'}`);
     } else if ((r.resultados || []).length > 0) {
       showToast?.(`${(r.resultados || []).length} boleto(s) gerado(s)! O Inter pode demorar alguns segundos para liberar a linha digitável.`, 'success');
-      // Emissão é assíncrona — reconsulta para pegar linha digitável
-      setTimeout(() => { void refrescarParcelas(); }, 4000);
+      // BLOCO 239: emissão é assíncrona — o card PERGUNTA sozinho até a linha
+      // chegar (antes era UMA consulta de 4s e parava).
+      autoRefreshParcelas();
     }
   };
 
@@ -529,10 +575,14 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
       return;
     }
     await refrescarParcelas();
+    // BLOCO 239: cobranca sombra da tentativa anterior foi RECUPERADA —
+    // o boleto nasceu lá e NÃO foi emitido em dobro.
+    if (r.avisoRecuperacao) showToast?.(r.avisoRecuperacao, 'success');
     if (r.jaGerado) { showToast?.(`Boleto ${p.seq} já está gerado.`, 'success'); return; }
     if (r.parcela?.status === 'EM_PROCESSAMENTO') {
       showToast?.(`Boleto ${p.seq} gerado! O Inter está processando...`, 'success');
-      setTimeout(() => { void refrescarParcelas(); }, 4000);
+      // BLOCO 239: auto-poll das parcelas (antes era UMA consulta de 4s).
+      autoRefreshParcelas();
     } else {
       showToast?.(`Boleto ${p.seq} gerado!`, 'success');
     }
@@ -703,6 +753,9 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
       // sem a nota (chave ainda nao sincronizada ou checkbox desligado).
       // BLOCO 227: o servidor pode ter corrigido o vencimento vencido —
       // avisa o dono na hora.
+      // BLOCO 239: a cobranca sombra da tentativa anterior foi RECUPERADA —
+      // o boleto nasceu (a emissão anterior foi aceita lá) e NÃO foi dobrado.
+      if (r.avisoRecuperacao) showToast?.(r.avisoRecuperacao, 'success');
       if (r.avisoVencimento) showToast?.(r.avisoVencimento, 'success');
       if (r.avisoAtrelamento) {
         showToast?.(r.avisoAtrelamento, 'error');
@@ -711,10 +764,9 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
       }
       if (r.boleto.status === 'EM_PROCESSAMENTO') {
         showToast?.('Boleto gerado! O Inter esta processando...', 'success');
-        setTimeout(async () => {
-          const c = await boletoService.consultar(saleId);
-          if (c.ok && c.boleto) setBoleto(c.boleto);
-        }, 4000);
+        // BLOCO 239: auto-poll — o card PERGUNTA sozinho (6x4s) até a linha
+        // digitável chegar; sem clique extra no ATUALIZAR.
+        autoPollUnico();
       } else {
         showToast?.('Boleto gerado!', 'success');
       }

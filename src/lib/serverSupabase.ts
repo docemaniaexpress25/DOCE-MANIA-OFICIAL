@@ -52,6 +52,24 @@ export function isServerSupabaseConfigured(): boolean {
 
 export const DEV_BRIDGE_URL = process.env.DM_PROD_URL || 'https://sistema-doce-mania1.vercel.app';
 
+/**
+ * BLOCO 239 — PRAZO DA PONTE ALINHADO COM O GERAR DO BOLETO.
+ * A ponte tinha AbortSignal.timeout(45_000): qualquer chamada que o backend de
+ * producao demorasse MAIS que 45s morria AQUI (a ponte abortava, devolvia null
+ * e a rota local seguia sem service key — o dono via erro de sessao/servidor
+ * depois de 45s de "Gerando no Inter...") ENQUANTO a Vercel continuava a
+ * emissao no Inter em segundo plano. Com o orcamento de emissao do BLOCO 238
+ * (tentativa 30s + deadline 64s + fallback 15s + consulta), emissões lentas que
+ * o Inter ACEITA entre 45 e 95s viravam exatamente o caso "boleto nao gera
+ * nunca" — o boleto nascia lá e o app nunca soube. Agora a ponte espera os
+ * MESMOS 115s que o prazo do app (boletoService fetchComPrazo no GERAR):
+ * quem corta primeiro passa a ser sempre o prazo do frontend, nunca a ponte.
+ */
+const BRIDGE_TIMEOUT_MS = Math.max(
+  Number(process.env.DM_BRIDGE_TIMEOUT_MS || '') || 115_000,
+  30_000,
+);
+
 export async function devBridge(req: Request): Promise<NextResponse | null> {
   if (isServerSupabaseConfigured()) return null;
   if (process.env.NODE_ENV === 'production') return null;
@@ -68,7 +86,7 @@ export async function devBridge(req: Request): Promise<NextResponse | null> {
       method,
       headers,
       body,
-      signal: AbortSignal.timeout(45_000),
+      signal: AbortSignal.timeout(BRIDGE_TIMEOUT_MS),
       cache: 'no-store',
     });
     const text = await r.text();

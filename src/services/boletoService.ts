@@ -116,7 +116,10 @@ export interface InterStatusInfo {
 }
 
 /** BLOCO 227: resposta de gerar ganha o aviso do vencimento corrigido
- *  (boleto com prazo vencido sai vencendo hoje — o servidor avisa aqui). */
+ *  (boleto com prazo vencido sai vencendo hoje — o servidor avisa aqui).
+ *  BLOCO 239: avisoRecuperacao = a tentativa anterior tinha sido ACEITA pelo
+ *  Inter (cobranca sombra) e foi reencontrada/adotada pelo código — o boleto
+ *  nasceu e NÃO foi emitido em dobro. */
 export interface GerarBoletoResposta {
   ok: boolean;
   jaGerado?: boolean;
@@ -125,6 +128,7 @@ export interface GerarBoletoResposta {
   avisoAtrelamento?: string;
   notaAtrelada?: boolean;
   avisoVencimento?: string;
+  avisoRecuperacao?: string;
 }
 
 export const boletoService = {
@@ -165,7 +169,7 @@ export const boletoService = {
       }, 115_000);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}`, boleto: data.boleto };
-      return { ok: true, jaGerado: data.jaGerado, boleto: data.boleto, avisoAtrelamento: data.avisoAtrelamento, notaAtrelada: data.notaAtrelada, avisoVencimento: data.avisoVencimento };
+      return { ok: true, jaGerado: data.jaGerado, boleto: data.boleto, avisoAtrelamento: data.avisoAtrelamento, notaAtrelada: data.notaAtrelada, avisoVencimento: data.avisoVencimento, avisoRecuperacao: data.avisoRecuperacao };
     } catch (e: unknown) {
       if (e instanceof PrazoExcedidoError) return { ok: false, erro: msgPrazo(e.prazoSegundos, 'GERAR boleto') };
       return { ok: false, erro: e instanceof Error ? e.message : 'Falha de conexao' };
@@ -332,7 +336,7 @@ export const boletoService = {
    *  (deadline de emissão 64s + fallback + consulta condicionada); os 40s
    *  antigos abortavam cedo demais e o card morria com a emissão ainda
    *  andando lá (parecia "timeout" com o boleto gerado). */
-  async gerarParcela(saleId: string, parcelaId: string, p: { docManual?: string; cepManual?: string; atrelarNFe?: boolean }): Promise<{ ok: boolean; jaGerado?: boolean; parcela?: BoletoParcelaInfo; erro?: string }> {
+  async gerarParcela(saleId: string, parcelaId: string, p: { docManual?: string; cepManual?: string; atrelarNFe?: boolean }): Promise<{ ok: boolean; jaGerado?: boolean; parcela?: BoletoParcelaInfo; erro?: string; avisoRecuperacao?: string }> {
     try {
       const res = await fetchComPrazo('/api/boletos', {
         method: 'POST',
@@ -341,7 +345,7 @@ export const boletoService = {
       }, 115_000);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}`, parcela: data.parcela };
-      return { ok: true, jaGerado: data.jaGerado, parcela: data.parcela };
+      return { ok: true, jaGerado: data.jaGerado, parcela: data.parcela, avisoRecuperacao: data.avisoRecuperacao };
     } catch (e: unknown) {
       if (e instanceof PrazoExcedidoError) return { ok: false, erro: msgPrazo(e.prazoSegundos, 'GERAR boleto') };
       return { ok: false, erro: e instanceof Error ? e.message : 'Falha de conexao' };

@@ -47,6 +47,19 @@ import { avisarBaixaBoleto, nomeClienteDaVenda, avisarBoletoAutoDestravado, avis
 const LIMITE_LEVE = 8;
 const LIMITE_PESADO = 15;
 
+// BLOCO 239 — SYNC EDUCADO: a rodada não pode mais VIVER da API do Inter em
+// rajada. Cada consulta agora respeita (1) uma PAUSA entre chamadas e (2) um
+// PRAZO TOTAL da rodada. Antes a rodada pesada (15+15+10 órfãos + coleção)
+// disparava até 41 chamadas seguidas sem respiro — junto com o GERAR do dono,
+// isso esbarrava nos limites da API (429 -> retry lento -> "boleto demora /
+// time out"). Com a pausa, o sync ocupa no máximo ~1/3 da janela por minuto e
+// o GERAR sempre tem espaço; o que não couber na rodada é coberto pela fila
+// rotativa na rodada seguinte (nada fica sem sync).
+const PAUSA_ENTRE_CHAMADAS_MS = 350;
+const PRAZO_RODADA_LEVE_MS = 40_000;
+const PRAZO_RODADA_PESADA_MS = 110_000;
+const pausaMs = (ms: number) => new Promise(res => setTimeout(res, ms));
+
 export interface ResumoSync {
   ok: boolean;
   processadas: number;
@@ -233,8 +246,16 @@ async function rodadaSyncBoletos(pesada: boolean, inicioRodada: number): Promise
   let destravadas = 0; // BLOCO 226
   const falhas: Array<{ id: string; erro: string }> = [];
   const hojeSp = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  // BLOCO 239: prazo total da rodada + pausa entre chamadas (sync educado).
+  const prazoFim = inicioRodada + (pesada ? PRAZO_RODADA_PESADA_MS : PRAZO_RODADA_LEVE_MS);
 
+  let primeiroBoleto = true;
   for (const sale of fila) {
+    // BLOCO 239: o que não couber no prazo da rodada fica para a próxima
+    // (fila rotativa — nada fica sem sync, o Inter não toma rajada).
+    if (!primeiroBoleto && Date.now() >= prazoFim) break;
+    if (!primeiroBoleto) await pausaMs(PAUSA_ENTRE_CHAMADAS_MS);
+    primeiroBoleto = false;
     const saleId = String(sale.id);
     const codigo = String(sale.inter_boleto_codigo || '');
     const seuNumero = String((sale as any).inter_boleto_seu_numero || '');
@@ -354,8 +375,9 @@ async function rodadaSyncBoletos(pesada: boolean, inicioRodada: number): Promise
   // Segunda varredura — PARCELAS do boleto duplo (rota 5).
   // Degradacao graciosa: tabela ausente (SQL 199 pendente) não afeta o sync
   // das vendas acima. BLOCO 231: mesma fatia LEVE/PESADA da rodada.
+  // BLOCO 239: mesmo prazo total e pausa entre chamadas da rodada.
   if (await hasSalesBoletosTable()) {
-    const sinc = await sincronizarParcelas(db, limiteFatia);
+    const sinc = await sincronizarParcelas(db, limiteFatia, prazoFim);
     processadas += sinc.processadas;
     baixadas += sinc.baixadas;
     destravadas += sinc.destravadas;
@@ -371,19 +393,25 @@ async function rodadaSyncBoletos(pesada: boolean, inicioRodada: number): Promise
   if (pesada) {
     // BLOCO 226: vigia as COBRANÇAS ÓRFÃS (liberadas localmente enquanto
     // vivas no Inter) — cancela sozinho quando processarem, avisa se pagarem.
-    try {
-      orfaos = await processarOrfaos(db);
-    } catch (e: unknown) {
-      console.warn('[boletos-sync] vigilância de órfãos falhou:', (e as Error).message);
+    // BLOCO 239: só quando a rodada ainda tem tempo (as consultas do dono
+    // passam na frente).
+    if (Date.now() < prazoFim) {
+      try {
+        orfaos = await processarOrfaos(db, prazoFim);
+      } catch (e: unknown) {
+        console.warn('[boletos-sync] vigilância de órfãos falhou:', (e as Error).message);
+      }
     }
 
     // BLOCO 228: VARREDURA das cobrancas de VENDAS EXCLUIDAS — o caso real
     // do dono ("acabei de excluir uma venda com boleto gerado! o boleto ficou
     // vivo lá"). A exclusão já cancela na hora; a varredura é a rede extra.
-    try {
-      orfaosExcluidas = await varrerVendasExcluidas(db);
-    } catch (e: unknown) {
-      console.warn('[boletos-sync] varredura de vendas excluidas falhou:', (e as Error).message);
+    if (Date.now() < prazoFim) {
+      try {
+        orfaosExcluidas = await varrerVendasExcluidas(db, prazoFim);
+      } catch (e: unknown) {
+        console.warn('[boletos-sync] varredura de vendas excluidas falhou:', (e as Error).message);
+      }
     }
   }
 
@@ -408,7 +436,7 @@ async function rodadaSyncBoletos(pesada: boolean, inicioRodada: number): Promise
  * BLOCO 231: cede à emissão do dono entre chamadas e usa FATIA ROTATIVA
  * (mesma disciplina da fila dos boletos únicos).
  */
-async function sincronizarParcelas(db: ReturnType<typeof getServiceClient>, limiteFatia: number): Promise<{ processadas: number; baixadas: number; destravadas: number; falhas: number }> {
+async function sincronizarParcelas(db: ReturnType<typeof getServiceClient>, limiteFatia: number, prazoFim: number): Promise<{ processadas: number; baixadas: number; destravadas: number; falhas: number }> {
   const hojeSp = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
   let processadas = 0;
   let baixadas = 0;
@@ -436,7 +464,12 @@ async function sincronizarParcelas(db: ReturnType<typeof getServiceClient>, limi
   const offsetP = ((rodadaN - 1) % grupos) * limiteFatia;
   const abertasRot = [...presas, ...restantes.slice(offsetP, offsetP + limiteFatia)];
 
+  let primeiroaParcela = true;
   for (const p of abertasRot) {
+    // BLOCO 239: pausa entre chamadas + prazo total da rodada (sync educado).
+    if (!primeiroaParcela && Date.now() >= prazoFim) break;
+    if (!primeiroaParcela) await pausaMs(PAUSA_ENTRE_CHAMADAS_MS);
+    primeiroaParcela = false;
     if (!p.codigo) continue;
     try {
       // BLOCO 231: cede a vez ao GERAR do dono antes de falar com o Inter.
@@ -529,7 +562,7 @@ async function sincronizarParcelas(db: ReturnType<typeof getServiceClient>, limi
 // ---------------------------------------------------------------------------
 const LIMITE_ORFAOS = 10;
 
-async function processarOrfaos(db: ReturnType<typeof getServiceClient>): Promise<number> {
+async function processarOrfaos(db: ReturnType<typeof getServiceClient>, prazoFim: number): Promise<number> {
   let tratados = 0;
   let pendentes: Record<string, unknown>[] = [];
   try {
@@ -559,11 +592,16 @@ async function processarOrfaos(db: ReturnType<typeof getServiceClient>): Promise
     }
   };
 
+  let primeiroOrfao = true;
   for (const o of pendentes) {
     const logId = String(o.id || '');
     const codigo = String(o.codigo || '');
     const saleId = String(o.sale_id || '');
     const baseTxt = String(o.resultado || '').slice(0, 140);
+    // BLOCO 239: pausa entre chamadas + prazo da rodada (sync educado).
+    if (!primeiroOrfao && Date.now() >= prazoFim) break;
+    if (!primeiroOrfao) await pausaMs(PAUSA_ENTRE_CHAMADAS_MS);
+    primeiroOrfao = false;
     // BLOCO 231: consulta/cancelamento do vigilante também cedem ao GERAR.
     await cederAEmissao();
     if (!codigo || !logId) {
@@ -641,7 +679,7 @@ async function processarOrfaos(db: ReturnType<typeof getServiceClient>): Promise
 const JANELA_VARREDURA_DIAS = 30; // BLOCO 231: era 120 (240 dias de janela = coleção gigante). A exclusão cancela na hora (228) — órfã nova é recente; 30 dias cobre com folga.
 const LIMITE_VARREDURA_RODADA = 8;
 
-async function varrerVendasExcluidas(db: ReturnType<typeof getServiceClient>): Promise<number> {
+async function varrerVendasExcluidas(db: ReturnType<typeof getServiceClient>, prazoFim: number): Promise<number> {
   const hoje = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
   const tHoje = new Date(`${hoje}T12:00:00Z`).getTime();
   const ini = new Date(tHoje - JANELA_VARREDURA_DIAS * 86400000).toISOString().slice(0, 10);
@@ -674,8 +712,13 @@ async function varrerVendasExcluidas(db: ReturnType<typeof getServiceClient>): P
   const vivas = ['EM_PROCESSAMENTO', 'A_RECEBER', 'ATRASADO'];
   let canceladas = 0;
   let tratadas = 0;
+  let primeiroItemVarredura = true;
   for (const item of r.itens as CobrancaColecaoItem[]) {
     if (tratadas >= LIMITE_VARREDURA_RODADA) break;
+    // BLOCO 239: pausa entre chamadas + prazo da rodada (sync educado).
+    if (!primeiroItemVarredura && Date.now() >= prazoFim) break;
+    if (!primeiroItemVarredura) await pausaMs(PAUSA_ENTRE_CHAMADAS_MS);
+    primeiroItemVarredura = false;
     // BLOCO 231: cancelamento é chamada ao Inter — o GERAR do dono na tela
     // passa na frente também aqui.
     await cederAEmissao();

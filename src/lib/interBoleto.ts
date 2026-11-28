@@ -371,7 +371,12 @@ export async function emitirCobrancaComRetryMarcada(
  *  - DEADLINE (deadlineMs, default 64s): estourou o orçamento, PARA de tentar
  *    e responde na hora — o dono nunca fica minutos olhando o card girar.
  *  EMITIR_TODAS (2 parcelas) usa deadlineMs de 26s + tentativaMs de 24s por
- *  chamada para as duas emissões somarem menos que o prazo do app. */
+ *  chamada para as duas emissões somarem menos que o prazo do app.
+ *  BLOCO 239 — ANTI-DOBRO/ANTI-SOMBRA: quando a tentativa morre em timeout de
+ *  rede (status 0) ou 5xx, a cobranca PODE TER SIDO ACEITA lá dentro mesmo
+ *  sem resposta. Antes de re-postar o MESMO seuNumero (boleto em dobro!),
+ *  perguntamos à coleção se ela já existe — achou, a emissão original vence
+ *  e devolvemos o código dela como sucesso. */
 export async function emitirCobrancaComRetry(
   payload: Parameters<typeof emitirCobranca>[0],
   opts?: { maxTentativas?: number; esperaBaseMs?: number; deadlineMs?: number; tentativaMs?: number }
@@ -387,6 +392,23 @@ export async function emitirCobrancaComRetry(
     if (ultimo.ok || !ehErroTransienteInter(ultimo.status, ultimo.erro)) {
       return { ...ultimo, tentativas: i };
     }
+    // BLOCO 239: falha transiente que PODE ter criado a cobranca lá dentro
+    // (rede/timeout status 0, 5xx — 429 foi recusado antes de criar). Confere
+    // a coleção pelo seuNumero ANTES de re-postar: achou = emissão original
+    // venceu (sem boleto em dobro). Só quando ainda há ORÇAMENTO para a
+    // pergunta (a coleção custa ~3-30s): o EMITIR_TODAS usa deadline de 26s
+    // POR PARCELA — lá a recuperação fica para a ADOÇÃO do próximo clique
+    // (emitirCobrancaUnificada), mantendo o prazo do app fechando.
+    if (ultimo.status === 0 || (ultimo.status >= 500 && ultimo.status <= 504)) {
+      if (Date.now() - inicio < deadlineMs * 0.75) {
+        try {
+          const sombra = await recuperarEmissaoPorSeuNumero(payload.seuNumero);
+          if (sombra.ok && sombra.resultado) {
+            return { ...sombra.resultado, tentativas: i };
+          }
+        } catch { /* listagem falhou — segue o fluxo de retry normal */ }
+      }
+    }
     if (i < maxTentativas) {
       // BLOCO 230: deadline — não inicia nova tentativa se o orçamento acabou
       if (Date.now() - inicio >= deadlineMs) break;
@@ -396,11 +418,78 @@ export async function emitirCobrancaComRetry(
   return { ...ultimo, tentativas: maxTentativas };
 }
 
+// ---------------------------------------------------------------------------
+// BLOCO 239 — RECUPERACAO DE EMISSAO "SOMBRA" (fim do "o boleto não gera
+// nunca" + proteção contra boleto EM DOBRO).
+//
+// O POST de emissao é ASSINCRONO e sob carga o Inter demora 20-30s para
+// responder. Quando a resposta morre no caminho (timeout de rede, HTTP 5xx,
+// função cortada), a cobranca PODE TER SIDO ACEITA lá dentro mesmo assim —
+// ela nasce como "sombra": existe no Inter, mas o app ficou sem o
+// codigoSolicitacao. O que acontecia depois era o PIOR dos mundos:
+//   - o retry re-postava o MESMO seuNumero (risco de boleto EM DOBRO);
+//   - ou a venda morria em FALHA_EMISSAO sem codigo — o sync/webhook NUNCA
+//     acham a cobranca sombra e o card nunca sai de "não gera" (caso real:
+//     venda do mercado Bagé). O DESTRAVAR liberava a venda, mas a sombra
+//     ficava viva no Inter para sempre.
+//
+// FIX: antes de re-postar (e antes de aceitar a falha final), PERGUNTAMOS à
+// coleção de cobrancas (janela curta de vencimento, 1 página) se o seuNumero
+// desta emissao ja existe lá. Achou => a emissao original VENCEU: adotamos o
+// codigo dela e devolvemos como SUCESSO — sem segunda cobranca.
+// Situacoes mortas (CANCELADO/EXPIRADO/REJEITADO) nao contam: nesse caso é
+// seguro emitir de novo.
+// ---------------------------------------------------------------------------
+const SITUACOES_MORTAS_INTER = ['CANCELADO', 'EXPIRADO', 'REJEITADO', 'NEGADO'];
+
+export async function recuperarEmissaoPorSeuNumero(
+  seuNumero: string
+): Promise<{ ok: boolean; resultado?: InterCobrancaResultado; erro?: string }> {
+  const alvo = String(seuNumero || '').trim().toUpperCase();
+  if (!alvo) return { ok: false, erro: 'sem seuNumero' };
+  // Janela de vencimento: a cobranca sombra nasceu há segundos/minutos com o
+  // vencimento da venda (hoje corrigido ou futuro) — -2d a +120d cobre tudo.
+  const hoje = hojeSp();
+  const t = new Date(`${hoje}T12:00:00Z`).getTime();
+  const ini = new Date(t - 2 * 86400000).toISOString().slice(0, 10);
+  const fim = new Date(t + 120 * 86400000).toISOString().slice(0, 10);
+  const r = await listarCobrancas({ dataInicial: ini, dataFinal: fim, size: 200, maxPaginas: 1 });
+  if (!r.ok) return { ok: false, erro: r.erro || 'listagem do Inter falhou' };
+  const achou = r.itens.find(it => String(it.seuNumero || '').trim().toUpperCase() === alvo);
+  if (!achou) return { ok: false, erro: 'cobranca sombra nao encontrada' };
+  if (SITUACOES_MORTAS_INTER.includes(String(achou.situacao || '').toUpperCase())) {
+    return { ok: false, erro: `cobranca sombra ja morta no Inter (${achou.situacao})` };
+  }
+  // Achou viva: busca a cobranca COMPLETA (linha digitavel/pix/situacao real).
+  const c = await recuperarCobranca(achou.codigo);
+  if (c.ok && c.data) return { ok: true, resultado: c };
+  // A colecao CONFIRMOU que existe; se a consulta completa falhou agora
+  // (Inter instável), devolve mesmo assim o essencial vindo da colecao —
+  // o codigo é o que importa para a venda deixar de ser órfã.
+  return {
+    ok: true,
+    resultado: {
+      ok: true,
+      status: 200,
+      data: {
+        cobranca: {
+          codigoSolicitacao: achou.codigo,
+          seuNumero: achou.seuNumero,
+          situacao: achou.situacao,
+          dataVencimento: achou.vencimento,
+          valorNominal: achou.valor,
+        },
+      },
+    },
+  };
+}
+
 /** Recupera a cobranca completa (situacao, linha digitavel, pix...).
  *  BLOCO 230: 15s — a consulta é leve; se o Inter travar, o card avisará
- *  em vez de girar 45s. */
-export function recuperarCobranca(codigoSolicitacao: string): Promise<InterCobrancaResultado> {
-  return requestJson('GET', `/cobranca/v3/cobrancas/${encodeURIComponent(codigoSolicitacao)}`, undefined, 15_000);
+ *  em vez de girar 45s. BLOCO 239: prazo parametrizável (a consulta
+ *  POS-EMISSAO usa 8s para o GERAR voltar mais rápido; o resto segue 15s). */
+export function recuperarCobranca(codigoSolicitacao: string, timeoutMs = 15_000): Promise<InterCobrancaResultado> {
+  return requestJson('GET', `/cobranca/v3/cobrancas/${encodeURIComponent(codigoSolicitacao)}`, undefined, timeoutMs);
 }
 
 /** Recupera o PDF do boleto (JSON {pdf: base64}). BLOCO 230: 30s (PDF é maior). */

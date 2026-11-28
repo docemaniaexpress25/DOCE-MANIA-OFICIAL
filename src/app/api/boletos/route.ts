@@ -13,6 +13,9 @@ import {
   emitirCobrancaComRetryMarcada,
   ehErroTransienteInter,
   recuperarCobranca,
+  // BLOCO 239: recuperação da emissão "sombra" (POST que morreu DEPOIS que o
+  // Inter aceitou) — fim do "o boleto não gera nunca" (caso mercado Bagé).
+  recuperarEmissaoPorSeuNumero,
   recuperarPdf,
   cancelarCobranca,
   interpretarCobranca,
@@ -22,6 +25,7 @@ import {
   validaVencimento,
   hojeSp,
   CobrancaPublica,
+  InterCobrancaResultado,
 } from '@/lib/interBoleto';
 import { espelharParcelaInter, baixarParcelaPaga, type ParcelaRow } from '@/lib/baixaBoleto';
 // BLOCO 200 (regra do dono): a divisão em 2 boletos é EXCLUSIVA da rota 5
@@ -410,76 +414,125 @@ async function emitirCobrancaUnificada(args: {
     notaFiscal,
   };
 
-  // Marca processando antes de chamar o Inter (rastreabilidade se cair a conexao)
-  if (parcela) {
-    // BLOCO 212 (race de emissão): dois cliques/telas podem chegar aqui juntos
-    // e gravar EM_PROCESSAMENTO DUAS VEZES antes de qualquer código existir —
-    // o CAS por status NAO_GERADO/FALHA/CANCELADO garante que só UM request
-    // conquista a emissão (o outro perde e sai com 409).
-    const { data: ganhou } = await db.from('sales_boletos').update({
-      status: 'EM_PROCESSAMENTO',
-      seu_numero: seuNumero,
-      erro: null,
-    })
-      .eq('id', String(parcela.id))
-      .in('status', ['NAO_GERADO', 'FALHA_EMISSAO', 'CANCELADO', 'EXPIRADO'])
-      .select('id');
-    if (!ganhou || ganhou.length === 0) {
-      return NextResponse.json({ ok: false, erro: 'Boleto ' + (Number(parcela.seq) || 1) + ' já está sendo gerado agora (aguarde alguns segundos).' }, { status: 409 });
-    }
-  } else {
-    await atualizar(saleId, {
-      inter_boleto_status: 'EM_PROCESSAMENTO',
-      inter_boleto_seu_numero: seuNumero,
-      inter_boleto_valor: payload.valorNominal,
-      inter_boleto_vencimento: venc,
-      inter_boleto_erro: null,
-    });
+  // ------------------------------------------------------------------
+  // BLOCO 239 — ADOÇÃO DA COBRANCA "SOMBRA" (fim do "o boleto não gera
+  // nunca", caso real: venda do mercado Bagé). Quando a emissão anterior
+  // morreu por rede/timeout/5xx DEPOIS que o Inter ACEITOU a cobranca, a
+  // venda fica FALHA_EMISSAO (ou EM_PROCESSAMENTO) SEM codigo: o sync e o
+  // webhook nunca acham essa cobranca e TODO "Gerar Novamente" re-postava
+  // (risco de boleto em dobro ou nova falha) — a venda nunca saía do lugar.
+  // AGORA, antes de emitir de novo, checamos a coleção do Inter pelo
+  // seuNumero ANTERIOR: sombra viva = a emissão original VENCEU — adotamos
+  // o codigo dela e seguimos como SUCESSO (sem segunda cobranca).
+  // Não readota o que foi liberado DE PROPÓSITO (DESTRAVAR admin / auto-
+  // destrava do sync — mensagens contêm "Destravado pelo admin" ou
+  // "liberado/CANCELADA ... pelo sistema"): nesse caso emitir um boleto
+  // NOVO é o correto.
+  // ------------------------------------------------------------------
+  const anteriorSeuAdocao = parcela ? String((parcela.seu_numero as string) || '') : String(sale.inter_boleto_seu_numero || '');
+  const statusAdocao = parcela ? String(parcela.status || '') : String(sale.inter_boleto_status || '');
+  const erroAdocao = String((parcela?.erro as string) || sale.inter_boleto_erro || '');
+  const vemDeDestrava = /Destravado pelo admin|liberad[oa] (pelo sistema|lá)|CANCELADA lá pelo sistema/i.test(erroAdocao);
+  let r: InterCobrancaResultado & { tentativas: number } | null = null;
+  let adotouSombra = false;
+  let fallbackSemNota = false;
+  if (anteriorSeuAdocao && ['FALHA_EMISSAO', 'EM_PROCESSAMENTO'].includes(statusAdocao) && !vemDeDestrava) {
+    try {
+      const sombra = await recuperarEmissaoPorSeuNumero(anteriorSeuAdocao);
+      if (sombra.ok && sombra.resultado && String((sombra.resultado.data as Record<string, unknown>)?.codigoSolicitacao || '')) {
+        r = { ...sombra.resultado, tentativas: 0 };
+        adotouSombra = true;
+      }
+    } catch { /* listagem falhou — segue o fluxo de emissão normal */ }
   }
 
-  // BLOCO 225: emissão com RETRY automático — instabilidade do Inter
-  // ("Tente novamente mais tarde...", 5xx, timeout) tenta até 3x sozinho.
-  // BLOCO 238: cada tentativa 30s (24s no EMITIR_TODAS) + DEADLINE (64s na
-  // emissão única; 26s por parcela no EMITIR_TODAS) — o GERAR responde em
-  // <= ~1,5 min no pior caso e, no caso saudável, sai em 12-20s como antes.
-  // BLOCO 231: versão MARCADA — durante a emissão o sync cede a vez ao dono.
   const inicioEmissaoMs = Date.now();
-  // BLOCO 238: a tentativa acompanha o orçamento — EMITIR_TODAS usa chamadas
-  // menores (24s) para as duas emissões caberem no prazo do app; a emissão
-  // única usa o default de 30s da lib.
-  const tentativaEmissaoMs = args.deadlineEmissaoMs
-    ? Math.min(30_000, Math.max(args.deadlineEmissaoMs - 2_000, 5_000))
-    : undefined;
-  let r = await emitirCobrancaComRetryMarcada(payload as never, {
-    ...(args.deadlineEmissaoMs ? { deadlineMs: args.deadlineEmissaoMs } : {}),
-    ...(tentativaEmissaoMs ? { tentativaMs: tentativaEmissaoMs } : {}),
-  });
-  // -----------------------------------------------------------------
-  // BLOCO 150: o POST da cobranca v3 pode recusar o objeto notaFiscal e aí
-  // o boleto morria INTEIRO. Retenta SEM o vínculo formal e leva a NF para
-  // a MENSAGEM (aparece no PDF). O boleto NUNCA falha por causa da nota.
-  // BLOCO 230: o fallback SEM NOTA faz UMA tentativa só (o orçamento de
-  // tempo já foi quase todo gasto — antes ele podia somar +2,5 min preso).
-  // -----------------------------------------------------------------
-  let fallbackSemNota = false;
-  if (!r.ok && notaFiscal) {
-    const semNota = {
-      ...payload,
-      notaFiscal: undefined,
-      mensagem: {
-        ...payload.mensagem,
-        linha5: `${tipoNota === 'NFE' ? 'NF-e' : 'NFC-e'} ${String(sale.nota_numero || '')} atrelada a esta cobranca`,
-      },
-    };
-    // BLOCO 231: fallback também marcado (a emissão continua em voo).
-    // BLOCO 238: tentativa do fallback também acompanha o orçamento (20s no
-    // EMITIR_TODAS; 30s na emissão única).
-    r = await emitirCobrancaComRetryMarcada(semNota as never, {
-      maxTentativas: 1,
-      deadlineMs: 15_000,
-      ...(tentativaEmissaoMs ? { tentativaMs: Math.min(tentativaEmissaoMs, 20_000) } : {}),
+  if (!r) {
+    // Marca processando antes de chamar o Inter (rastreabilidade se cair a conexao)
+    if (parcela) {
+      // BLOCO 212 (race de emissão): dois cliques/telas podem chegar aqui juntos
+      // e gravar EM_PROCESSAMENTO DUAS VEZES antes de qualquer código existir —
+      // o CAS por status NAO_GERADO/FALHA/CANCELADO garante que só UM request
+      // conquista a emissão (o outro perde e sai com 409).
+      // BLOCO 239: exceção AUTOREPARÁVEL — parcela presa em EM_PROCESSAMENTO há
+      // 2+ minutos sem cobrança no Inter (nenhuma emissão vive mais que isso):
+      // a resposta foi perdida; re-marcamos sem CAS e emitimos de novo.
+      const emitidoIso = String(parcela.emitido_em || '');
+      const presoMin = emitidoIso ? Math.floor((Date.now() - new Date(emitidoIso).getTime()) / 60000) : null;
+      const emissaoMorta = String(parcela.status) === 'EM_PROCESSAMENTO' && !adotouSombra && presoMin !== null && presoMin >= 2;
+      if (emissaoMorta) {
+        await db.from('sales_boletos').update({
+          status: 'EM_PROCESSAMENTO',
+          seu_numero: seuNumero,
+          erro: null,
+        }).eq('id', String(parcela.id));
+      } else {
+        const { data: ganhou } = await db.from('sales_boletos').update({
+          status: 'EM_PROCESSAMENTO',
+          seu_numero: seuNumero,
+          erro: null,
+        })
+          .eq('id', String(parcela.id))
+          .in('status', ['NAO_GERADO', 'FALHA_EMISSAO', 'CANCELADO', 'EXPIRADO'])
+          .select('id');
+        if (!ganhou || ganhou.length === 0) {
+          return NextResponse.json({ ok: false, erro: 'Boleto ' + (Number(parcela.seq) || 1) + ' já está sendo gerado agora (aguarde alguns segundos).' }, { status: 409 });
+        }
+      }
+    } else {
+      await atualizar(saleId, {
+        inter_boleto_status: 'EM_PROCESSAMENTO',
+        inter_boleto_seu_numero: seuNumero,
+        inter_boleto_valor: payload.valorNominal,
+        inter_boleto_vencimento: venc,
+        inter_boleto_erro: null,
+      });
+    }
+
+    // BLOCO 225: emissão com RETRY automático — instabilidade do Inter
+    // ("Tente novamente mais tarde...", 5xx, timeout) tenta até 3x sozinho.
+    // BLOCO 238: cada tentativa 30s (24s no EMITIR_TODAS) + DEADLINE (64s na
+    // emissão única; 26s por parcela) — o GERAR responde em <= ~1,5 min no
+    // pior caso e, no caso saudável, sai em 12-20s como antes.
+    // BLOCO 231: versão MARCADA — durante a emissão o sync cede a vez ao dono.
+    // BLOCO 239: dentro do retry, falha em timeout/5xx confere a COLEÇÃO pelo
+    // seuNumero antes de re-postar (anti-boleto-em-dobro; ver interBoleto).
+    // BLOCO 238: a tentativa acompanha o orçamento — EMITIR_TODAS usa chamadas
+    // menores (24s) para as duas emissões caberem no prazo do app; a emissão
+    // única usa o default de 30s da lib.
+    const tentativaEmissaoMs = args.deadlineEmissaoMs
+      ? Math.min(30_000, Math.max(args.deadlineEmissaoMs - 2_000, 5_000))
+      : undefined;
+    r = await emitirCobrancaComRetryMarcada(payload as never, {
+      ...(args.deadlineEmissaoMs ? { deadlineMs: args.deadlineEmissaoMs } : {}),
+      ...(tentativaEmissaoMs ? { tentativaMs: tentativaEmissaoMs } : {}),
     });
-    fallbackSemNota = r.ok;
+    // -----------------------------------------------------------------
+    // BLOCO 150: o POST da cobranca v3 pode recusar o objeto notaFiscal e aí
+    // o boleto morria INTEIRO. Retenta SEM o vínculo formal e leva a NF para
+    // a MENSAGEM (aparece no PDF). O boleto NUNCA falha por causa da nota.
+    // BLOCO 230: o fallback SEM NOTA faz UMA tentativa só (o orçamento de
+    // tempo já foi quase todo gasto — antes ele podia somar +2,5 min preso).
+    // -----------------------------------------------------------------
+    if (!r.ok && notaFiscal) {
+      const semNota = {
+        ...payload,
+        notaFiscal: undefined,
+        mensagem: {
+          ...payload.mensagem,
+          linha5: `${tipoNota === 'NFE' ? 'NF-e' : 'NFC-e'} ${String(sale.nota_numero || '')} atrelada a esta cobranca`,
+        },
+      };
+      // BLOCO 231: fallback também marcado (a emissão continua em voo).
+      // BLOCO 238: tentativa do fallback também acompanha o orçamento (20s no
+      // EMITIR_TODAS; 30s na emissão única).
+      r = await emitirCobrancaComRetryMarcada(semNota as never, {
+        maxTentativas: 1,
+        deadlineMs: 15_000,
+        ...(tentativaEmissaoMs ? { tentativaMs: Math.min(tentativaEmissaoMs, 20_000) } : {}),
+      });
+      fallbackSemNota = r.ok;
+    }
   }
   if (!r.ok || !r.data || !(r.data as Record<string, unknown>).codigoSolicitacao) {
     const erro = r.erro || `HTTP ${r.status}`;
@@ -520,8 +573,12 @@ async function emitirCobrancaUnificada(args: {
   // digitável/pix chegam pelo ATUALIZAR do card (ou sync/webhook) — não se
   // perde nada.
   const boleto: CobrancaPublica = { status: 'EM_PROCESSAMENTO', codigo, seuNumero, vencimento: venc, valor: payload.valorNominal, linhaDigitavel: '', codigoBarras: '', pixCopiaECola: '', valorRecebido: null, erro: '', notaFiscalChave: '' };
+  // BLOCO 239: consulta com prazo CURTO (8s) — o POST costuma processar em
+  // segundos; se o Inter ainda não liberou a linha, a resposta volta NA HORA
+  // em EM_PROCESSAMENTO e o card PERGUNTA sozinho (auto-poll) + sync/webhook
+  // completam. A consulta lenta de 15s somava demora percebida ao GERAR.
   const c = Date.now() - inicioEmissaoMs < 40_000
-    ? await recuperarCobranca(codigo)
+    ? await recuperarCobranca(codigo, 8_000)
     : { ok: false, status: 0, erro: 'consulta adiada: a emissao consumiu o orcamento de tempo' };
   if (c.ok && c.data) {
     const cob = interpretarCobranca(c.data as Record<string, unknown>);
@@ -538,6 +595,9 @@ async function emitirCobrancaUnificada(args: {
         ...(notaFiscal && !fallbackSemNota ? { notaAtrelada: true } : {}),
         // BLOCO 227: vencimento vencido foi corrigido para hoje — o dono precisa saber.
         ...(avisoVencimento ? { avisoVencimento } : {}),
+        // BLOCO 239: a cobranca sombra da tentativa anterior foi RECUPERADA —
+        // o dono fica sabendo que o boleto nasceu (não foi emitido em dobro).
+        ...(adotouSombra ? { avisoRecuperacao: 'Boleto RECUPERADO: a tentativa anterior tinha sido aceita pelo Inter mesmo com o erro na tela — o sistema reencontrou a cobrança pelo código e adotou aqui (sem boleto em dobro).' } : {}),
         ...(fallbackSemNota ? { avisoAtrelamento: `Boleto GERADO com o valor da parcela. O Inter não aceitou o vínculo formal da nota agora — ela ficou escrita na mensagem do boleto.` } : avisoAtrelamento ? { avisoAtrelamento } : {}),
       });
     }
@@ -567,6 +627,8 @@ async function emitirCobrancaUnificada(args: {
     ...(notaFiscal && !fallbackSemNota ? { notaAtrelada: true } : {}),
     // BLOCO 227: vencimento vencido foi corrigido para hoje — o dono precisa saber.
     ...(avisoVencimento ? { avisoVencimento } : {}),
+    // BLOCO 239: a cobranca sombra da tentativa anterior foi RECUPERADA.
+    ...(adotouSombra ? { avisoRecuperacao: 'Boleto RECUPERADO: a tentativa anterior tinha sido aceita pelo Inter mesmo com o erro na tela — o sistema reencontrou a cobrança pelo código e adotou aqui (sem boleto em dobro).' } : {}),
     ...(fallbackSemNota
       ? { avisoAtrelamento: `Boleto GERADO com o valor da venda. O Inter não aceitou o vínculo formal da nota agora — a ${tipoNota === 'NFE' ? 'NF-e' : 'NFC-e'} ${String(sale.nota_numero || '')} ficou escrita na mensagem do boleto (aparece no PDF e no comprovante).` }
       : avisoAtrelamento ? { avisoAtrelamento } : {}),
@@ -1232,8 +1294,20 @@ export async function POST(req: NextRequest) {
   // BLOCO 212 (race do boleto unico): EM_PROCESSAMENTO SEM codigo = emissao
   // em voo (o update roda antes do POST ao Inter). Re-emitir aqui criaria a
   // segunda cobranca — o vendedor aguarda ou recarrega o card.
+  // BLOCO 239 (fim do "não gera nunca"): a marca fica presa quando a RESPOSTA
+  // da emissão se perde (função cortada, rede caiu, ponte abortou) — o 429
+  // eterno travava a venda para sempre. Nenhuma emissão vive mais que ~2 min
+  // (deadline 64s + fallback): marca com 3+ minutos = emissão morta. Aí o
+  // fluxo SEGUE para a unificada, que ADOTA a cobranca sombra (se ela tiver
+  // nascido no Inter) ou re-emite com segurança (se não). Menos de 3 min =
+  // emissão realmente em voo: mantém o 429.
   if (!sale.inter_boleto_codigo && String(sale.inter_boleto_status) === 'EM_PROCESSAMENTO') {
-    return BAD(429, 'O boleto desta venda já está sendo gerado agora — aguarde alguns segundos e recarregue o card.');
+    const emIso = String(sale.inter_boleto_em || '');
+    const emMin = emIso ? Math.floor((Date.now() - new Date(emIso).getTime()) / 60000) : null;
+    if (emMin === null || emMin < 3) {
+      return BAD(429, 'O boleto desta venda já está sendo gerado agora — aguarde alguns segundos e recarregue o card.');
+    }
+    // emissão morta (>3 min): segue para a unificada (adoção de sombra/re-emissão)
   }
 
   // Valor: saldo em aberto (ou informado), minimo R$ 2,50 (regra da API)

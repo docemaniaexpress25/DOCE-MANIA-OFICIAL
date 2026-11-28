@@ -127,7 +127,8 @@ function authHeader(): string {
 async function focusRequest<T = FocusNotaResultado>(
   method: 'GET' | 'POST' | 'DELETE',
   path: string,
-  body?: unknown
+  body?: unknown,
+  timeoutMs = 45_000
 ): Promise<{ ok: boolean; status: number; data: T | { erro: string } }> {
   const { baseUrl } = getFocusConfig();
   try {
@@ -138,7 +139,7 @@ async function focusRequest<T = FocusNotaResultado>(
         'Content-Type': 'application/json',
       },
       body: body ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(45_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     const text = await res.text();
     let data: unknown;
@@ -659,9 +660,14 @@ export async function emitirNfe(doc: FocusDoc, ref: string, payload: FocusNfePay
 /** Consulta situacao atual da nota pela ref (ou pela CHAVE de acesso 44 dig —
  *  BLOCO 141: a Focus aceita os dois; `completa=1` traz destinatario/valor/
  *  pagamento que a avulsa importada precisa para virar linha do portal). */
-export async function consultarNota(doc: FocusDoc, ref: string, completa = false) {
+export async function consultarNota(doc: FocusDoc, ref: string, completa = false, timeoutMs = 45_000) {
   const sufixo = completa ? '?completa=1' : '';
-  return focusRequest<FocusNotaResultado>('GET', `/v2/${doc}/${encodeURIComponent(ref)}${sufixo}`);
+  // BLOCO 241: timeout PARAMETRIZÁVEL. Fluxos que usam a consulta como
+  // ENFEITE (ex.: chave da NF-e para atrelar ao boleto do Inter) chamam com
+  // prazo curto (3s) — a Focus nunca segura a emissão do boleto (o boleto
+  // sai sem nota atrelada + aviso, e a chave é preenchida depois pelo
+  // notas-sync/webhook da Focus). Default continua 45s (fluxos da nota).
+  return focusRequest<FocusNotaResultado>('GET', `/v2/${doc}/${encodeURIComponent(ref)}${sufixo}`, undefined, timeoutMs);
 }
 
 // ---------------------------------------------------------------------------

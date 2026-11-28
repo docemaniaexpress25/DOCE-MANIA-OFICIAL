@@ -12,6 +12,10 @@ import {
   // sync cede a vez (para de chamar o Inter) enquanto o GERAR está no ar.
   emitirCobrancaComRetryMarcada,
   ehErroTransienteInter,
+  // BLOCO 241: telemetria — o token é AQUECIDO e MEDIDO antes do POST (a
+  // instância fria revela em quanto tempo autentica; sem isso nunca se sabe
+  // se a demora é token, POST ou consulta).
+  obterToken,
   recuperarCobranca,
   // BLOCO 239: recuperação da emissão "sombra" (POST que morreu DEPOIS que o
   // Inter aceitou) — fim do "o boleto não gera nunca" (caso mercado Bagé).
@@ -216,7 +220,14 @@ async function chaveDaNota(sale: Record<string, unknown>): Promise<string> {
   if (!ref) return '';
   const doc: FocusDoc = String(sale.nota_tipo || '').toUpperCase() === 'NFCE' ? 'nfce' : 'nfe';
   try {
-    const r = await consultarNota(doc, ref);
+    // BLOCO 241: prazo CURTO (3s). Antes a consulta usava o prazo padrão da
+    // Focus (45s) DENTRO do caminho do GERAR: venda com NF-e autorizada sem
+    // chave gravada fazia o boleto esperar até 45s NA FOCUS antes de chegar
+    // ao Inter — o dono via "boleto não gera / demora muito" enquanto o
+    // gargalo era outro banco (Focus), não o Inter. Agora: chave não checou
+    // em 3s? O boleto SAI SEM nota atrelada (avisoAtrelamento explica) e a
+    // chave é preenchida depois pelo webhook/notas-sync — nada travado.
+    const r = await consultarNota(doc, ref, false, 3_000);
     if (!r.ok || !r.data || 'erro' in r.data) return '';
     const data = r.data as Record<string, unknown>;
     const c = String(data.chave || '').replace(/\D/g, '');
@@ -428,15 +439,44 @@ async function emitirCobrancaUnificada(args: {
   // destrava do sync — mensagens contêm "Destravado pelo admin" ou
   // "liberado/CANCELADA ... pelo sistema"): nesse caso emitir um boleto
   // NOVO é o correto.
+  //
+  // BLOCO 241 — ADOÇÃO LEVE (fim da listagem pesada na reemissão): quando
+  // o CÓDIGO da tentativa anterior está gravado (FALHA_EMISSAO por 404 do
+  // sync, EM_PROCESSAMENTO antigo etc), a pergunta é feita pela CONSULTA
+  // DIRETA (leve, ~1-2s) em vez da LISTAGEM da coleção (pesada, 2-8s — a
+  // chamada mais cara da API do Inter). A listagem fica SOMENTE para o caso
+  // da sombra SEM código (emissão cuja resposta se perdeu antes de gravar
+  // o codigo). E quando a consulta direta confirma 404, a reemissão segue
+  // IMEDIATAMENTE — sem pagar listagem nenhuma. Reemissão volta a ser rápida
+  // como antes da baixa automática.
   // ------------------------------------------------------------------
   const anteriorSeuAdocao = parcela ? String((parcela.seu_numero as string) || '') : String(sale.inter_boleto_seu_numero || '');
+  const codigoAnterior = parcela ? String((parcela.codigo as string) || '') : String(sale.inter_boleto_codigo || '');
   const statusAdocao = parcela ? String(parcela.status || '') : String(sale.inter_boleto_status || '');
   const erroAdocao = String((parcela?.erro as string) || sale.inter_boleto_erro || '');
   const vemDeDestrava = /Destravado pelo admin|liberad[oa] (pelo sistema|lá)|CANCELADA lá pelo sistema/i.test(erroAdocao);
   let r: InterCobrancaResultado & { tentativas: number } | null = null;
   let adotouSombra = false;
   let fallbackSemNota = false;
-  if (anteriorSeuAdocao && ['FALHA_EMISSAO', 'EM_PROCESSAMENTO'].includes(statusAdocao) && !vemDeDestrava) {
+  const inicioAdocaoMs = Date.now();
+  const adocaoAtiva = anteriorSeuAdocao && ['FALHA_EMISSAO', 'EM_PROCESSAMENTO'].includes(statusAdocao) && !vemDeDestrava;
+  if (adocaoAtiva && codigoAnterior) {
+    // Caminho LEVE: consulta pelo codigo gravado — 404 = cobranca anterior
+    // não existe (emissão nova é segura); viva e não morta = a emissão
+    // original venceu, adota o estado REAL (linha/pix/situação já vem).
+    try {
+      const rec = await recuperarCobranca(codigoAnterior);
+      if (rec.ok && rec.data) {
+        const cob = interpretarCobranca(rec.data as Record<string, unknown>);
+        if (!['CANCELADO', 'EXPIRADO', 'REJEITADO', 'NEGADO'].includes(cob.status)) {
+          r = { ok: true, status: 200, data: rec.data, tentativas: 0 };
+          adotouSombra = true;
+        }
+      }
+      // 404 / falha de rede: segue para emissão nova (a listagem não ajudaria —
+      // rede caiu para consulta direta cai para listagem também).
+    } catch { /* segue fluxo normal */ }
+  } else if (adocaoAtiva) {
     try {
       const sombra = await recuperarEmissaoPorSeuNumero(anteriorSeuAdocao);
       if (sombra.ok && sombra.resultado && String((sombra.resultado.data as Record<string, unknown>)?.codigoSolicitacao || '')) {
@@ -447,7 +487,79 @@ async function emitirCobrancaUnificada(args: {
   }
 
   const inicioEmissaoMs = Date.now();
+  // ------------------------------------------------------------------
+  // BLOCO 241 — TELEMETRIA POR ETAPA (fim do "onde está a demora?" no escuro).
+  // Cada emissão grava em webhook_logs (origem 'EMISSAO') o tempo REAL de:
+  //   token (OAuth mTLS) | consulta/adocao | POST (retry completo, tentativas)
+  //   | consulta pós-emissão | total. O painel do webhook e o log de eventos
+  // mostram esses números — a próxima emissão do dono REVELA o gargalo com
+  // número em vez de chute (token 429? POST lento? Focus? fica gravado).
+  // ------------------------------------------------------------------
+  let telemetria = {
+    tokenMs: null as number | null,
+    adocaoMs: Date.now() - inicioAdocaoMs,
+    postMs: null as number | null,
+    postTentativas: null as number | null,
+    postOk: null as boolean | null,
+    consultaMs: null as number | null,
+    fallbackSemNotaMs: null as number | null,
+  };
+  const logEmissaoTelemetria = async (resultado: string, extra?: Record<string, unknown>) => {
+    try {
+      const totalMs = Date.now() - inicioEmissaoMs;
+      const parts = [
+        `EMISSAO ${resultado}`,
+        `token=${telemetria.tokenMs === null ? '-' : telemetria.tokenMs + 'ms'}`,
+        `adocao=${telemetria.adocaoMs === null ? '-' : telemetria.adocaoMs + 'ms'}`,
+        `post=${telemetria.postMs === null ? '-' : telemetria.postMs + 'ms'}`,
+        `tentativas=${telemetria.postTentativas ?? '-'}`,
+        ...(telemetria.fallbackSemNotaMs !== null ? [`fallbackSemNota=${telemetria.fallbackSemNotaMs}ms`] : []),
+        `consulta=${telemetria.consultaMs === null ? '-' : telemetria.consultaMs + 'ms'}`,
+        `total=${totalMs}ms`,
+        extra && Object.keys(extra).length ? ` ${JSON.stringify(extra).slice(0, 120)}` : '',
+      ].join(' ');
+      console.log('[api/boletos]', parts);
+      await db.from('webhook_logs').insert({
+        origem: 'EMISSAO',
+        evento: { fonte: 'api/boletos', parcela: parcela ? Number(parcela.seq) || 1 : null } as any,
+        codigo: String((r?.data as Record<string, unknown> | undefined)?.codigoSolicitacao || '').slice(0, 120) || null,
+        seu_numero: String(seuNumero || '').slice(0, 60) || null,
+        sale_id: String(saleId).slice(0, 64),
+        resultado: parts.slice(0, 300),
+        processado: telemetria.postOk === true,
+      });
+    } catch { /* telemetria é best-effort — nunca trava a emissão */ }
+  };
+
   if (!r) {
+    // BLOCO 241: aquece e mede o token ANTES do POST (fora do loop de retry —
+    // o retry usa o token cacheado; a medição mostra quanto custa autenticar).
+    // 2 tentativas rápidas (1,5s de intervalo): falha TRANSIENTE de rede no
+    // token não mata o GERAR na primeira — antes o retry interno do POST
+    // cobria isso; agora o aquecimento cobre com a mesma tolerância.
+    const tToken = Date.now();
+    let tokErro: unknown = null;
+    let tokOk = false;
+    for (let i = 1; i <= 2 && !tokOk; i++) {
+      try {
+        await obterToken();
+        tokOk = true;
+      } catch (e: unknown) {
+        tokErro = e;
+        if (i < 2) await new Promise(res2 => setTimeout(res2, 1_500));
+      }
+    }
+    telemetria.tokenMs = Date.now() - tToken;
+    if (!tokOk) {
+      const msgToken = tokErro instanceof Error ? tokErro.message : 'falha de autenticacao';
+      if (parcela) {
+        await db.from('sales_boletos').update({ status: 'FALHA_EMISSAO', erro: msgToken.slice(0, 240) }).eq('id', String(parcela.id));
+        return BAD(502, `Falha ao autenticar no Inter: ${msgToken}`, { parcela: parcelaPublica({ ...parcela, status: 'FALHA_EMISSAO' }) });
+      }
+      await atualizar(saleId, { inter_boleto_status: 'FALHA_EMISSAO', inter_boleto_erro: msgToken.slice(0, 240) });
+      void logEmissaoTelemetria('FALHA_TOKEN');
+      return BAD(502, `Falha ao autenticar no Inter: ${msgToken}`);
+    }
     // Marca processando antes de chamar o Inter (rastreabilidade se cair a conexao)
     if (parcela) {
       // BLOCO 212 (race de emissão): dois cliques/telas podem chegar aqui juntos
@@ -503,10 +615,15 @@ async function emitirCobrancaUnificada(args: {
     const tentativaEmissaoMs = args.deadlineEmissaoMs
       ? Math.min(30_000, Math.max(args.deadlineEmissaoMs - 2_000, 5_000))
       : undefined;
+    // BLOCO 241: POST MEDIDO (retry completo) — gravado na telemetria.
+    const tPost = Date.now();
     r = await emitirCobrancaComRetryMarcada(payload as never, {
       ...(args.deadlineEmissaoMs ? { deadlineMs: args.deadlineEmissaoMs } : {}),
       ...(tentativaEmissaoMs ? { tentativaMs: tentativaEmissaoMs } : {}),
     });
+    telemetria.postMs = Date.now() - tPost;
+    telemetria.postTentativas = r.tentativas;
+    telemetria.postOk = r.ok;
     // -----------------------------------------------------------------
     // BLOCO 150: o POST da cobranca v3 pode recusar o objeto notaFiscal e aí
     // o boleto morria INTEIRO. Retenta SEM o vínculo formal e leva a NF para
@@ -526,11 +643,14 @@ async function emitirCobrancaUnificada(args: {
       // BLOCO 231: fallback também marcado (a emissão continua em voo).
       // BLOCO 238: tentativa do fallback também acompanha o orçamento (20s no
       // EMITIR_TODAS; 30s na emissão única).
+      // BLOCO 241: telemetria do fallback — soma ao POST e marca que houve fallback.
+      const tFb = Date.now();
       r = await emitirCobrancaComRetryMarcada(semNota as never, {
         maxTentativas: 1,
         deadlineMs: 15_000,
         ...(tentativaEmissaoMs ? { tentativaMs: Math.min(tentativaEmissaoMs, 20_000) } : {}),
       });
+      telemetria.fallbackSemNotaMs = Date.now() - tFb;
       fallbackSemNota = r.ok;
     }
   }
@@ -543,6 +663,8 @@ async function emitirCobrancaUnificada(args: {
     const dicaInstabilidade = ehErroTransienteInter(r.status, r.erro)
       ? ' O Inter está instável agora (já tentamos 3x). Aguarde 2 minutos e toque GERAR de novo.'
       : '';
+    // BLOCO 241: telemetria da FALHA gravada (o dono vê no log o tempo real).
+    void logEmissaoTelemetria('FALHA', { erro: String(erro).slice(0, 100), status: r.status });
     if (parcela) {
       await db.from('sales_boletos').update({ status: 'FALHA_EMISSAO', erro }).eq('id', String(parcela.id))
         .then(({ error }) => { if (error) console.error('[api/boletos] rollback FALHA_EMISSAO parcela:', error.message); });
@@ -577,9 +699,14 @@ async function emitirCobrancaUnificada(args: {
   // segundos; se o Inter ainda não liberou a linha, a resposta volta NA HORA
   // em EM_PROCESSAMENTO e o card PERGUNTA sozinho (auto-poll) + sync/webhook
   // completam. A consulta lenta de 15s somava demora percebida ao GERAR.
+  const tConsulta = Date.now();
   const c = Date.now() - inicioEmissaoMs < 40_000
     ? await recuperarCobranca(codigo, 8_000)
     : { ok: false, status: 0, erro: 'consulta adiada: a emissao consumiu o orcamento de tempo' };
+  telemetria.consultaMs = Date.now() - tConsulta;
+  // BLOCO 241: telemetria de SUCESSO — o dono vê no log de eventos o tempo
+  // real de cada etapa desta emissão (token/post/consulta/total).
+  void logEmissaoTelemetria(adotouSombra ? 'OK-ADOTADA' : 'OK', { codigo: codigo.slice(0, 24), statusPos: c.ok ? String((interpretarCobranca((c.data || {}) as Record<string, unknown>)).status) : 'sem-consulta' });
   if (c.ok && c.data) {
     const cob = interpretarCobranca(c.data as Record<string, unknown>);
     if (parcela) {

@@ -178,7 +178,62 @@ function mtlsRequest(
 // tempo — e o endpoint de token aceita só 5 req/min: a rajada tomava 429 e
 // a emissao do dono caia em retry lento. Agora a PRIMEIRA chamada busca o
 // token e as outras ESPERAM a mesma Promise (um unico pedido por instância).
+//
+// BLOCO 241 — CACHE DE NÍVEL 2: TOKEN COMPARTILHADO ENTRE INSTÂNCIAS.
+// A memória (nível 1) só cobre a PRÓPRIA instância serverless. O webhook, o
+// cron e a emissão do dono rodam em INSTÂNCIAS DIFERENTES da Vercel — cada
+// instância fria pedia um token NOVO ao Inter. O endpoint de token aceita
+// 5 req/min POR APLICAÇÃO: nas horas movimentadas (cron 10/16/22h + auto-sync
+// + webhooks + emissões do dia) a rajada de tokens tomava 429 e TODO fluxo
+// que dependia do token entrava em retry lento — inclusive o GERAR do dono
+// ("boleto não gera / demora muito"). Agora o token válido é compartilhado
+// via Supabase (app_settings, linha 'inter_token'): a instância fria LÊ o
+// token (~80ms) em vez de pedir um novo, e o pedido real ao Inter acontece
+// no máximo 1x por hora para o sistema INTEIRO (não por instância).
+// Leitura/escrita do Supabase são BEST-EFFORT (falha = segue o fluxo antigo).
 // ---------------------------------------------------------------------------
+const TOKEN_COMPARTILHADO_ID = 'inter_token';
+const TOKEN_COMPARTILHADO_MARGEM_MS = 3 * 60 * 1000; // aceita até 3 min antes de expirar
+
+type SharedTokenRow = { access_token?: string; exp?: number };
+
+async function lerTokenCompartilhado(): Promise<{ token: string; exp: number } | null> {
+  try {
+    const { getServiceClient, isServerSupabaseConfigured } = await import('@/lib/serverSupabase');
+    if (!isServerSupabaseConfigured()) return null;
+    const db = getServiceClient();
+    const { data, error } = await db
+      .from('app_settings')
+      .select('erp_config')
+      .eq('id', TOKEN_COMPARTILHADO_ID)
+      .maybeSingle();
+    if (error) return null;
+    const raw = ((data as Record<string, unknown> | null)?.erp_config || null) as SharedTokenRow | null;
+    if (!raw?.access_token || !raw?.exp) return null;
+    const exp = Number(raw.exp);
+    if (!Number.isFinite(exp) || Date.now() >= exp - TOKEN_COMPARTILHADO_MARGEM_MS) return null;
+    return { token: String(raw.access_token), exp };
+  } catch {
+    return null; // Supabase indisponível — segue o fluxo de pedir token
+  }
+}
+
+async function gravarTokenCompartilhado(token: string, exp: number): Promise<void> {
+  try {
+    const { getServiceClient, isServerSupabaseConfigured } = await import('@/lib/serverSupabase');
+    if (!isServerSupabaseConfigured()) return;
+    const db = getServiceClient();
+    await db
+      .from('app_settings')
+      .upsert(
+        { id: TOKEN_COMPARTILHADO_ID, erp_config: { access_token: token, exp, origem: 'boletos' } as unknown as Record<string, unknown> },
+        { onConflict: 'id' }
+      );
+  } catch {
+    // best-effort — cache compartilhado é otimização, nunca bloqueia emissão
+  }
+}
+
 let tokenCache: { token: string; exp: number } | null = null;
 let tokenEmVoo: Promise<string> | null = null;
 
@@ -188,6 +243,12 @@ export async function obterToken(): Promise<string> {
   if (tokenEmVoo) return tokenEmVoo; // outra chamada já está buscando — espera a mesma
 
   tokenEmVoo = (async () => {
+    // BLOCO 241: nível 2 — reusa o token que outra instância gravou.
+    const compartilhado = await lerTokenCompartilhado();
+    if (compartilhado) {
+      tokenCache = { token: compartilhado.token, exp: compartilhado.exp };
+      return compartilhado.token;
+    }
     const cfg = getInterConfig();
     const form = new URLSearchParams({
       client_id: cfg.clientId,
@@ -205,6 +266,9 @@ export async function obterToken(): Promise<string> {
       throw new Error(`Falha ao autenticar no Inter (HTTP ${res.status}): ${String(data.error_description || data.error || res.body).slice(0, 200)}`);
     }
     tokenCache = { token: String(data.access_token), exp: Date.now() + TOKEN_TTL_MS };
+    // BLOCO 241: publica para TODAS as instâncias (exp 5 min antes — margem
+    // para o caminho de leitura que já corta 3 min). Fire-and-forget.
+    void gravarTokenCompartilhado(tokenCache.token, tokenCache.exp - 5 * 60_000);
     return tokenCache.token;
   })();
   try {

@@ -5,7 +5,23 @@ import { hasBoletoColumns, hasSalesBoletosTable } from '@/lib/serverSchema';
 // daqui — cancela sozinho para o cliente nunca pagar venda que não existe).
 // BLOCO 231: cederAEmissao/temEmissaoEmVoo — o sync CENDE a vez ao GERAR do
 // dono entre chamadas (a emissão na tela nunca mais disputa a API do sync).
-import { isInterConfigured, recuperarCobranca, interpretarCobranca, cancelarCobranca, listarCobrancas, cederAEmissao, type CobrancaColecaoItem } from '@/lib/interBoleto';
+// BLOCO 243: recuperarEmissaoPorSeuNumero/extrairCodigoEmissao — o sync agora
+// ADOITA sozinho a cobrança sombra da venda presa em EM_PROCESSAMENTO SEM
+// código (fim do "Gerando no Inter..." eterno) e cancelarSombrasDuplicadas
+// limpa as cobranças sobrando do mesmo boleto (anti pagamento em dobro).
+import {
+  isInterConfigured,
+  recuperarCobranca,
+  interpretarCobranca,
+  cancelarCobranca,
+  listarCobrancas,
+  cederAEmissao,
+  recuperarEmissaoPorSeuNumero,
+  extrairCodigoEmissao,
+  seloBaseDoSeuNumero,
+  type CobrancaColecaoItem,
+  type InterCobrancaResultado,
+} from '@/lib/interBoleto';
 import { espelharParcelaInter, baixarParcelaPaga, type ParcelaRow } from '@/lib/baixaBoleto';
 // BLOCO 221: aviso aos admins a cada baixa ("toda baixa a gente seja comunicado")
 // BLOCO 226: avisos do AUTO-DESTRAVAMENTO e da cobranca ORFA do Inter
@@ -257,14 +273,68 @@ async function rodadaSyncBoletos(pesada: boolean, inicioRodada: number): Promise
     if (!primeiroBoleto) await pausaMs(PAUSA_ENTRE_CHAMADAS_MS);
     primeiroBoleto = false;
     const saleId = String(sale.id);
-    const codigo = String(sale.inter_boleto_codigo || '');
+    let codigo = String(sale.inter_boleto_codigo || '');
     const seuNumero = String((sale as any).inter_boleto_seu_numero || '');
+    // ===================================================================
+    // BLOCO 243 — AUTO-ADOÇÃO DA COBRANCA SOMBRA (fim do "Gerando no
+    // Inter..." PARA SEMPRE na venda SEM código). Caso real (28/11): a
+    // venda SÓ CUPOM "estava gerando e não deu certo" — o POST morreu
+    // antes de gravar o codigoSolicitacao (rede/timeout/5xx) e o sync
+    // PULAVA a venda no `if (!codigo) continue`: ninguém nunca olhava o
+    // Inter por ela. O boleto com NF (Bagé) foi salvo pelo GERAR do dono
+    // (adoção 239/242) — mas quem não clica GERAR de novo fica preso.
+    // Agora o sync cuida sozinho de TODA venda EM_PROCESSAMENTO sem código
+    // há 5+ minutos (nenhuma emissão viva passa de ~2 min):
+    //   1. cobrança VIVA no Inter (busca alvo pelo seuNumero + vencimento
+    //      exato) -> ADOITA: grava o código e segue o espelhamento normal
+    //      (linha/pix/ATRASADO/BAIXA automática tudo funciona);
+    //   2. listagem respondeu e NÃO há cobrança -> FALHA_EMISSAO clara,
+    //      o card volta a oferecer GERAR na hora (emissão nunca aceita lá);
+    //   3. listagem falhou (rede/token) -> reavalia na próxima rodada.
+    // ===================================================================
+    let preAdotada: InterCobrancaResultado | null = null;
+    if (!codigo && String(sale.inter_boleto_status) === 'EM_PROCESSAMENTO' && seuNumero) {
+      const minEm = minutosDesde(sale.inter_boleto_em);
+      const podeMexer = minEm === null || minEm >= 5; // sem carimbo = linha legada presa (nunca em voo)
+      if (podeMexer) {
+        try {
+          await cederAEmissao();
+          const sombra = await recuperarEmissaoPorSeuNumero(seuNumero, String(sale.inter_boleto_vencimento || ''));
+          const codSom = sombra.ok && sombra.resultado ? extrairCodigoEmissao(sombra.resultado.data as Record<string, unknown> | undefined) : '';
+          if (codSom) {
+            codigo = codSom;
+            preAdotada = sombra.resultado || null;
+            await db.from('sales').update({
+              inter_boleto_codigo: codSom,
+              ...(sale.inter_boleto_em ? {} : { inter_boleto_em: new Date().toISOString() }),
+            }).eq('id', saleId);
+            await logCronEvento(db, { codigo: codSom, seuNumero, saleId, resultado: 'AUTO-ADOÇÃO: cobrança sombra reencontrada pelo seuNumero (a emissão antiga tinha sido ACEITA pelo Inter) — sistema assumiu o boleto sem clique extra', processado: true });
+          } else if (sombra.procurou) {
+            await db.from('sales').update({
+              inter_boleto_status: 'FALHA_EMISSAO',
+              inter_boleto_erro: 'Emissão conferida pelo sistema: não existe cobrança no Inter — toque GERAR para emitir o boleto.',
+            }).eq('id', saleId);
+            destravadas++;
+            await logCronEvento(db, { codigo: '', seuNumero, saleId, resultado: 'AUTO-DESTRava (sem código): o Inter NÃO tem essa cobrança — FALHA_EMISSAO e o card volta a oferecer GERAR', processado: true });
+            continue;
+          } else {
+            await logCronEvento(db, { codigo: '', seuNumero, saleId, resultado: 'adoção da sombra não pôde ser conferida (listagem falhou) — reavalia na próxima rodada', processado: false });
+            continue;
+          }
+        } catch (e: unknown) {
+          console.warn('[boletos-sync] adoção da sombra falhou:', (e as Error).message);
+          continue;
+        }
+      } else {
+        continue; // emissão possivelmente EM VOO agora (menos de 5 min) — o sync não interfere
+      }
+    }
     if (!codigo) continue;
     try {
       // BLOCO 231: o GERAR do dono passa na frente — sync espera (sem chamar
       // o Inter) enquanto houver emissão em voo nesta instância.
       await cederAEmissao();
-      const r = await recuperarCobranca(codigo);
+      const r = preAdotada ?? await recuperarCobranca(codigo);
       // BLOCO 222 (auto-reparo): 404 = o Inter NAO conhece essa cobranca — a
       // emissao nunca completou lá (rede caiu depois do POST, etc). Antes a
       // venda ficava EM_PROCESSAMENTO PARA SEMPRE ("boleto nao gera"); agora
@@ -361,6 +431,23 @@ async function rodadaSyncBoletos(pesada: boolean, inicioRodada: number): Promise
         await avisarBaixaBoleto(db, { saleId, valor: valorTotal, origem: 'CRON_INTER', cliente });
       }
       await db.from('sales').update(patch).eq('id', saleId);
+      // BLOCO 243: adoção de sombra = já houve cliques anteriores que falharam
+      // na tela. Na época pré-242 cada clique deixava UMA cobrança VIVA no
+      // Inter (o anti-dobro adotava o resultado da CONSULTA e a checagem
+      // antiga matava a emissão). Agora que UMA foi adotada, as OUTRAS
+      // cobranças do MESMO boleto (mesmo selo DM... com -rN) são DUPLICADAS:
+      // cancela na hora — o que o Inter recusar fica de vigia como órfã.
+      if (preAdotada) {
+        try {
+          const limpas = await cancelarSombrasDuplicadas(db, {
+            seloBase: seloBaseDoSeuNumero(seuNumero),
+            codigoAdotado: codigo,
+            saleId,
+            contexto: 'boleto único (sombra adotada pelo sync)',
+          });
+          if (limpas > 0) await logCronEvento(db, { codigo, seuNumero, saleId, resultado: `LIMPEZA: ${limpas} cobrança(s) DUPLICADA(s) do mesmo boleto cancelada(s) no Inter — risco de pagamento em dobro eliminado`, processado: true });
+        } catch { /* limpeza é best-effort — nunca trava o sync */ }
+      }
       if (pagoInter) {
         if (sale.status_pagamento !== 'PAGO') await marcarBaixaOrigem(db, saleId, 'CRON_INTER');
         try {
@@ -470,11 +557,55 @@ async function sincronizarParcelas(db: ReturnType<typeof getServiceClient>, limi
     if (!primeiroaParcela && Date.now() >= prazoFim) break;
     if (!primeiroaParcela) await pausaMs(PAUSA_ENTRE_CHAMADAS_MS);
     primeiroaParcela = false;
+    // ===================================================================
+    // BLOCO 243 — AUTO-ADOÇÃO DA SOMBRA na PARCELA presa em EM_PROCESSAMENTO
+    // sem código (mesma recuperação do boleto único, rota 5 inclusa):
+    // sombra viva -> adota e espelha; nenhuma cobrança -> FALHA_EMISSAO;
+    // listagem falhou -> reavalia na próxima rodada. Guarda de 5 min =
+    // nunca interfere numa emissão que pode estar em voo agora.
+    // ===================================================================
+    let preAdotadaP: InterCobrancaResultado | null = null;
+    if (!p.codigo && String(p.status) === 'EM_PROCESSAMENTO' && String(p.seu_numero || '')) {
+      const minEm = minutosDesde(p.emitido_em);
+      const podeMexerP = minEm === null || minEm >= 5;
+      if (podeMexerP) {
+        try {
+          await cederAEmissao();
+          const sombraP = await recuperarEmissaoPorSeuNumero(String(p.seu_numero), String(p.vencimento || ''));
+          const codSomP = sombraP.ok && sombraP.resultado ? extrairCodigoEmissao(sombraP.resultado.data as Record<string, unknown> | undefined) : '';
+          if (codSomP) {
+            p.codigo = codSomP;
+            preAdotadaP = sombraP.resultado || null;
+            await db.from('sales_boletos').update({
+              codigo: codSomP,
+              ...(p.emitido_em ? {} : { emitido_em: new Date().toISOString() }),
+            }).eq('id', String(p.id));
+            await logCronEvento(db, { codigo: codSomP, seuNumero: p.seu_numero || '', saleId: p.sale_id, resultado: `AUTO-ADOÇÃO parcela ${p.seq}: sombra reencontrada pelo seuNumero — boleto da divisão assumido pelo sistema sem clique extra`, processado: true });
+          } else if (sombraP.procurou) {
+            await db.from('sales_boletos').update({
+              status: 'FALHA_EMISSAO',
+              erro: 'Emissão conferida pelo sistema: não existe cobrança no Inter — toque GERAR para emitir o boleto.',
+            }).eq('id', String(p.id));
+            destravadas++;
+            await logCronEvento(db, { codigo: '', seuNumero: p.seu_numero || '', saleId: p.sale_id, resultado: `AUTO-DESTRava parcela ${p.seq} (sem código): o Inter NÃO tem essa cobrança — FALHA_EMISSAO, card volta a oferecer GERAR`, processado: true });
+            continue;
+          } else {
+            await logCronEvento(db, { codigo: '', seuNumero: p.seu_numero || '', saleId: p.sale_id, resultado: `parcela ${p.seq}: adoção da sombra não pôde ser conferida (listagem falhou) — reavalia na próxima rodada`, processado: false });
+            continue;
+          }
+        } catch (e: unknown) {
+          console.warn('[boletos-sync] adoção da sombra (parcela) falhou:', (e as Error).message);
+          continue;
+        }
+      } else {
+        continue; // emissão possivelmente em voo — não interfere
+      }
+    }
     if (!p.codigo) continue;
     try {
       // BLOCO 231: cede a vez ao GERAR do dono antes de falar com o Inter.
       await cederAEmissao();
-      const r = await recuperarCobranca(p.codigo);
+      const r = preAdotadaP ?? await recuperarCobranca(p.codigo);
       // BLOCO 222 (auto-reparo da PARCELA): mesmo 404 do boleto unico — sem
       // isso a parcela ficava "Gerando no Inter..." para sempre e travava a
       // venda do boleto duplo (rota 5).
@@ -534,6 +665,21 @@ async function sincronizarParcelas(db: ReturnType<typeof getServiceClient>, limi
       }
 
       await espelharParcelaInter(db, p, cob, hojeSp);
+      // BLOCO 243: sombra adotada = cliques anteriores deixaram cobranças
+      // vivas no Inter para o MESMO boleto da divisão (selo DM...-P<seq>).
+      // Cancela as DUPLICADAS (a adotada fica; o que recusar vira órfã
+      // vigiada) — anti pagamento em dobro na rota 5.
+      if (preAdotadaP) {
+        try {
+          const limpasP = await cancelarSombrasDuplicadas(db, {
+            seloBase: seloBaseDoSeuNumero(String(p.seu_numero || '')),
+            codigoAdotado: String(p.codigo),
+            saleId: String(p.sale_id),
+            contexto: `parcela ${p.seq} (sombra adotada pelo sync)`,
+          });
+          if (limpasP > 0) await logCronEvento(db, { codigo: String(p.codigo), seuNumero: p.seu_numero || '', saleId: p.sale_id, resultado: `LIMPEZA parcela ${p.seq}: ${limpasP} cobrança(s) DUPLICADA(s) do mesmo boleto cancelada(s) no Inter`, processado: true });
+        } catch { /* best-effort */ }
+      }
       const pagoInter = cob.status === 'RECEBIDO' || cob.status === 'MARCADO_RECEBIDO' || (cob.valorRecebido !== null && cob.valorRecebido > 0);
       if (pagoInter) {
         const baixou = await baixarParcelaPaga(db, p, 'CRON_INTER');
@@ -548,6 +694,60 @@ async function sincronizarParcelas(db: ReturnType<typeof getServiceClient>, limi
     }
   }
   return { processadas, baixadas, destravadas, falhas };
+}
+
+// ---------------------------------------------------------------------------
+// BLOCO 243 — CANCELAMENTO DAS COBRANCAS DUPLICADAS do MESMO boleto.
+// Na época pré-242 cada clique GERAR sobre uma emissão que morria deixava
+// UMA cobrança viva no Inter (o anti-dobro adotava o resultado da consulta
+// e a checagem antiga convertia o sucesso em FALHA "HTTP 200"). Vendas
+// clicadas várias vezes podem ter 2-3+ cobranças do MESMO débito lá dentro:
+// o cliente recebe/recebeu várias linhas digitáveis e pode PAGAR EM DOBRO.
+// Depois de uma ADOÇÃO (sistema assumiu UMA cobrança), esta rotina lista a
+// coleção e cancela toda cobrança VIVA com o MESMO selo (DM<9hex> para
+// boleto único, DM<8hex>-P<seq> para parcela — originais e reemissões -rN),
+// EXCETO a adotada. Cancelamento recusado (EM_PROCESSAMENTO) -> registra
+// ÓRFÃ com saleId: o vigilante (226) cancela quando sair do processamento.
+// Na venda ainda existente a varredura de excluídas (228) NÃO atinge — é
+// esta limpeza que elimina o risco. Só roda quando houve adoção (raro):
+// um listagem a mais por adoção, dentro da disciplina de prazo do sync.
+// ---------------------------------------------------------------------------
+export async function cancelarSombrasDuplicadas(
+  db: ReturnType<typeof getServiceClient>,
+  o: { seloBase: string; codigoAdotado: string; saleId: string; contexto: string }
+): Promise<number> {
+  const selo = String(o.seloBase || '').trim().toUpperCase();
+  if (!selo || !o.codigoAdotado) return 0;
+  const padrao = new RegExp(`^${selo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(R\\d+)?$`, 'i');
+  const hoje = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const t = new Date(`${hoje}T12:00:00Z`).getTime();
+  const ini = new Date(t - 2 * 86400000).toISOString().slice(0, 10);
+  const fim = new Date(t + 120 * 86400000).toISOString().slice(0, 10);
+  const r = await listarCobrancas({ dataInicial: ini, dataFinal: fim, size: 200, maxPaginas: 1 });
+  if (!r.ok) return 0;
+  let canceladas = 0;
+  for (const item of r.itens as CobrancaColecaoItem[]) {
+    if (!padrao.test(String(item.seuNumero || '').toUpperCase())) continue;
+    if (String(item.codigo) === String(o.codigoAdotado)) continue; // a adotada fica
+    const situacao = String(item.situacao || '').toUpperCase();
+    if (!['EM_PROCESSAMENTO', 'A_RECEBER', 'ATRASADO'].includes(situacao)) continue; // morta — nada a fazer
+    try {
+      const c = await cancelarCobranca(item.codigo, 'Cobranca duplicada - cancelada pelo sistema');
+      if (c.ok || c.status === 202 || c.status === 404) {
+        canceladas++;
+        await logCronEvento(db, { codigo: item.codigo, seuNumero: item.seuNumero, saleId: o.saleId, resultado: `cobrança DUPLICADA cancelada no Inter (estava ${situacao}; ${o.contexto}) — cliente nunca paga o mesmo boleto 2x`, processado: true });
+        continue;
+      }
+    } catch { /* segue para órfã */ }
+    await registrarOrfao(db, {
+      codigo: item.codigo,
+      seuNumero: String(item.seuNumero || ''),
+      saleId: o.saleId,
+      fonte: 'sombra-duplicada',
+      detalhe: `cobrança DUPLICADA do mesmo boleto (${o.contexto}) segue viva no Inter (${situacao}; cancelamento recusado nesta rodada) — o vigilante cancela sozinho quando sair do processamento`,
+    });
+  }
+  return canceladas;
 }
 
 // ---------------------------------------------------------------------------

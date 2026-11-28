@@ -1,6 +1,28 @@
 # Worklog - DOCE MANIA App
 
 ---
+Task ID: 168
+Agent: Z.ai Code (sessão principal)
+Task: BLOCO 243 (dono: "o boleto do mercado Bagé foi gerado, esse era com nota fiscal, agora o outro que estava gerando não deu certo. Lembrando um foi com NF e outro foi só cupom. Então verifique o que aconteceu?") — REVISA O PORQUÊ DO BOLETO COM NF TER SAÍDO E O SÓ CUPOM NÃO + 4 CORREÇÕES NA RECUPERAÇÃO AUTOMÁTICA (o caminho de emissão é IDÊNTICO para NF e cupom; o que difere é o ESTADO que cada venda ficou).
+
+ANÁLISE (rota /api/boletos linha a linha + interBoleto + boletosSyncCore + webhook + BoletoCard + Cupom):
+(1) NF x CUPOM NÃO muda o caminho do boleto: na emitirCobrancaUnificada a venda com NF-e AUTORIZADA só ganha o objeto notaFiscal (chave) e uma consulta Focus de 3s; a venda só cupom pula os dois — o fluxo de emissão, retry, adoção e fallback é o MESMO (BoletoCard aparece para qualquer A_PRAZO, Cupom.tsx linha 614). Logo "com NF gera / sem NF não gera" não é causa de código de emissão.
+(2) O Bagé (com NF) saiu porque o GERAR do dono, com o 242 no ar, ADOITOU a cobrança sombra pelo clique dele. O só cupom ficou num ESTADO que NENHUM mecanismo alcançava: EM_PROCESSAMENTO SEM código (a resposta do POST se perdeu antes de gravar o codigoSolicitacao) — o sync PULAVA a venda no `if (!codigo) continue` (boletosSyncCore, fila de vendas e de parcelas) e NINGUÉM nunca olhava o Inter por ela: card eterno "Gerando no Inter..." sem clique novo = "estava gerando e não deu certo".
+(3) OUTRO furo real na adoção: recuperarEmissaoPorSeuNumero listava 1 página x 200 ordenada por DATA_VENCIMENTO ASC na janela [-2d,+120d] — com muitos boletos ATRASADOS de vencimentos anteriores, a sombra fica FORA da página 1 e a adoção responde "nao encontrada" (o clique re-postava e a venda seguia travada/duplicada).
+(4) DÍVIDA DA ERA PRÉ-242: cada clique que morria deixava UMA cobrança VIVA no Inter (anti-dobro devolvia formato CONSULTA, checagem antiga convertia em falha) — vendas clicadas várias vezes podem ter 2-3+ cobranças do MESMO débito lá dentro = cliente pode PAGAR EM DOBRO; a varredura de excluídas (228) não as alcança (a venda existe).
+(5) inter_boleto_em/emitido_em só eram gravados NO SUCESSO: venda presa em EM_PROCESSAMENTO ficava SEM carimbo — o card não mostrava "(~X min)", o auto-destrava do sync não tinha idade e nenhuma guarda por idade era possível.
+(6) ENV/VERCEL verificado AO VIVO: GET https://sistema-doce-mania1.vercel.app/api/webhooks/inter → {"configurado":true} — INTER_CLIENT_ID/SECRET + certificado OK na Vercel (não é env).
+
+FIX (BLOCO 243) — 4 frentes:
+(A) src/lib/interBoleto.ts — recuperarEmissaoPorSeuNumero ganhou vencimentoExato: BUSCA ALVO pelo DIA EXATO do vencimento da sombra (coleção mínima = acha com certeza), janela larga fica de fallback; retorno agora traz `procurou` (true = listagem respondeu, dá para CONCLUIR que não existe; false = listagem falhou, nada pode ser marcado). novo seloBaseDoSeuNumero (remove sufixo -rN). retry anti-dobro (emitirCobrancaComRetry) passa payload.dataVencimento.
+(B) src/lib/boletosSyncCore.ts — AUTO-ADOÇÃO DA SOMBRA no SYNC (boleto único E parcelas): venda/parcela EM_PROCESSAMENTO SEM código há 5+ min (sem carimbo = linha legada presa, nunca em voo) → sombra viva = ADOITA (grava código + segue espelhamento/baixa normal, tudo funciona sem clique); listagem respondeu sem cobrança = FALHA_EMISSAO clara ("toque GERAR"); listagem falhou = reavalia na próxima rodada. Guarda de 5 min: nunca interfere em emissão em voo (nenhuma vive mais que ~2 min) → sem corrida com o GERAR.
+(C) src/lib/boletosSyncCore.ts + rota — cancelarSombrasDuplicadas(db, {seloBase, codigoAdotado, saleId, contexto}): após toda ADOÇÃO (sync inline; GERAR fire-and-forget sem queimar orçamento) lista a coleção e cancela toda cobrança VIVA com o MESMO selo ^SELO(rN)?$ que não seja a adotada; recusada (EM_PROCESSAMENTO) vira ORFAO_INTER com saleId — o vigilante 226 cancela quando sair do processamento. FIM do risco de pagamento em dobro das vendas clicadas várias vezes.
+(D) src/app/api/boletos/route.ts + baixaBoleto.ts — relógio do EM_PROCESSAMENTO desde o CLIQUE: marking da emissão grava inter_boleto_em (único) / emitido_em (parcela, CAS e re-mark) e ParcelaRow ganha emitido_em?; adoção na rota passa `venc` na busca alvo.
+INTACTO: emissão normal POST/retry/deadline 238, adoção leve 242, sync/webhook/cron/baixas, EMITIR_TODAS, fallback sem nota, DESTRAVAR, RESET. lint 0 erros (8 warnings pre-existentes); tsc 0 erros nos arquivos tocados.
+
+O QUE O DONO VÊ AGORA: a venda só cupom SEM clicar nada — na próxima rodada do sync (sino 1h / cron 3x/dia) o sistema PERGUNTA ao Inter pelo seuNumero: achou a cobrança (foi aceita lá) = boleto aparece de uma vez; não achou = card mostra "toque GERAR" e o clique sai; e as cobranças sobrando dos cliques antigos são canceladas sozinho (nunca mais boleto em dobro). Se o dono preferir, o clique GERAR imediato também recupera (adoção 242 + busca pelo vencimento exato).
+
+---
 Task ID: 167
 Agent: Z.ai Code (sessão principal)
 Task: BLOCO 242 (dono reportou: "Falha ao gerar http 200" ao gerar boleto) — CAUSA RAIZ DO "FALHA AO GERAR HTTP 200" ENCONTRADA E CORRIGIDA: CONFLITO DE FORMATO DE RESPOSTA DA API DO INTER QUE MATAVA A ADOÇÃO DE COBRANÇA "SOMBRA" (o mecanismo criado no 239/241 para resolver o caso mercado Bagé) — o dono tinha razão: era 100% dentro do nosso código.

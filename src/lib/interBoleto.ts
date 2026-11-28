@@ -466,7 +466,10 @@ export async function emitirCobrancaComRetry(
     if (ultimo.status === 0 || (ultimo.status >= 500 && ultimo.status <= 504)) {
       if (Date.now() - inicio < deadlineMs * 0.75) {
         try {
-          const sombra = await recuperarEmissaoPorSeuNumero(payload.seuNumero);
+          // BLOCO 243: busca alvo pelo vencimento EXATO desta tentativa (a
+          // sombra nasceu com ele) — a janela larga de 200 itens podia
+          // perder a sombra quando há muitos boletos atrasados na coleção.
+          const sombra = await recuperarEmissaoPorSeuNumero(payload.seuNumero, payload.dataVencimento);
           if (sombra.ok && sombra.resultado) {
             return { ...sombra.resultado, tentativas: i };
           }
@@ -506,32 +509,63 @@ export async function emitirCobrancaComRetry(
 // ---------------------------------------------------------------------------
 const SITUACOES_MORTAS_INTER = ['CANCELADO', 'EXPIRADO', 'REJEITADO', 'NEGADO'];
 
+// ---------------------------------------------------------------------------
 export async function recuperarEmissaoPorSeuNumero(
-  seuNumero: string
-): Promise<{ ok: boolean; resultado?: InterCobrancaResultado; erro?: string }> {
+  seuNumero: string,
+  vencimentoExato?: string
+): Promise<{ ok: boolean; resultado?: InterCobrancaResultado; erro?: string; procurou?: boolean }> {
   const alvo = String(seuNumero || '').trim().toUpperCase();
   if (!alvo) return { ok: false, erro: 'sem seuNumero' };
-  // Janela de vencimento: a cobranca sombra nasceu há segundos/minutos com o
-  // vencimento da venda (hoje corrigido ou futuro) — -2d a +120d cobre tudo.
   const hoje = hojeSp();
   const t = new Date(`${hoje}T12:00:00Z`).getTime();
-  const ini = new Date(t - 2 * 86400000).toISOString().slice(0, 10);
-  const fim = new Date(t + 120 * 86400000).toISOString().slice(0, 10);
-  const r = await listarCobrancas({ dataInicial: ini, dataFinal: fim, size: 200, maxPaginas: 1 });
-  if (!r.ok) return { ok: false, erro: r.erro || 'listagem do Inter falhou' };
-  const achou = r.itens.find(it => String(it.seuNumero || '').trim().toUpperCase() === alvo);
-  if (!achou) return { ok: false, erro: 'cobranca sombra nao encontrada' };
+
+  // ------------------------------------------------------------------
+  // BLOCO 243 — BUSCA ALVO PELO VENCIMENTO EXATO (a sombra NUNCA mais se
+  // perde na coleção). A busca antiga listava UMA página x 200 ordenada por
+  // DATA_VENCIMENTO ASC dentro da janela [-2d, +120d]: com muitos boletos
+  // ATRASADOS de vencimentos anteriores, a sombra ficava FORA da página 1 —
+  // a adoção respondia "nao encontrada", o clique re-postava e a venda
+  // seguida travada ("estava gerando e não deu certo" — venda só cupom,
+  // 28/11). A sombra nasceu com O VENCIMENTO DA TENTATIVA: listando SOMENTE
+  // aquele dia a coleção é mínima e a sombra é encontrada com certeza.
+  // Não achou no dia exato (ou sem vencimento informado)? Cai na janela
+  // larga de sempre (tentativa antiga com data diferente / corrigida p/ hoje).
+  // `procurou` = a listagem RESPONDEU (achou ou não) — o chamador pode
+  // concluir "não existe" com segurança; false = a listagem falhou (rede/
+  // token) e NADA pode ser concluído (o sync não marca FALHA_EMISSAO).
+  // ------------------------------------------------------------------
+  const procurar = async (dataInicial: string, dataFinal: string): Promise<CobrancaColecaoItem | null | 'FALHA'> => {
+    const r = await listarCobrancas({ dataInicial, dataFinal, size: 200, maxPaginas: 1 });
+    if (!r.ok) return 'FALHA';
+    return r.itens.find(it => String(it.seuNumero || '').trim().toUpperCase() === alvo) || null;
+  };
+
+  let achou: CobrancaColecaoItem | null | 'FALHA' = 'FALHA';
+  const vencOk = !!vencimentoExato && /^\d{4}-\d{2}-\d{2}$/.test(vencimentoExato);
+  if (vencOk) {
+    achou = await procurar(vencimentoExato as string, vencimentoExato as string);
+  }
+  if (achou === 'FALHA' || achou === null) {
+    const ini = new Date(t - 2 * 86400000).toISOString().slice(0, 10);
+    const fim = new Date(t + 120 * 86400000).toISOString().slice(0, 10);
+    const achouLargo = await procurar(ini, fim);
+    if (achou === 'FALHA') achou = achouLargo; // sem busca alvo (falhou ou não rodou): o largo decide
+    else if (achou === null && achouLargo !== 'FALHA') achou = achouLargo; // alvo respondeu vazio, largo confirma
+  }
+  if (achou === 'FALHA') return { ok: false, erro: 'listagem do Inter falhou', procurou: false };
+  if (!achou) return { ok: false, erro: 'cobranca sombra nao encontrada', procurou: true };
   if (SITUACOES_MORTAS_INTER.includes(String(achou.situacao || '').toUpperCase())) {
-    return { ok: false, erro: `cobranca sombra ja morta no Inter (${achou.situacao})` };
+    return { ok: false, erro: `cobranca sombra ja morta no Inter (${achou.situacao})`, procurou: true };
   }
   // Achou viva: busca a cobranca COMPLETA (linha digitavel/pix/situacao real).
   const c = await recuperarCobranca(achou.codigo);
-  if (c.ok && c.data) return { ok: true, resultado: c };
+  if (c.ok && c.data) return { ok: true, resultado: c, procurou: true };
   // A colecao CONFIRMOU que existe; se a consulta completa falhou agora
   // (Inter instável), devolve mesmo assim o essencial vindo da colecao —
   // o codigo é o que importa para a venda deixar de ser órfã.
   return {
     ok: true,
+    procurou: true,
     resultado: {
       ok: true,
       status: 200,
@@ -546,6 +580,15 @@ export async function recuperarEmissaoPorSeuNumero(
       },
     },
   };
+}
+
+/** BLOCO 243 — SELO BASE do seuNumero: remove o sufixo de reemissão (-r2, -r3...)
+ *  e devolve a identidade do BOLETO no Inter — boleto único = "DM"+9 hex,
+ *  parcela = "DM"+8hex+"-P<seq>". Toda cobrança do MESMO boleto (original e
+ *  reemissões) casa com ^SELO(rN)?$ — usado para achar/cancelar sombras
+ *  DUPLICADAS deixadas pelos cliques de reemissão (anti pagamento em dobro). */
+export function seloBaseDoSeuNumero(seuNumero: string): string {
+  return String(seuNumero || '').trim().toUpperCase().replace(/-R\d+$/, '');
 }
 
 /** Recupera a cobranca completa (situacao, linha digitavel, pix...).

@@ -40,6 +40,9 @@ export interface ParcelaRow {
   barras: string | null;
   pix: string | null;
   erro: string | null;
+  /** BLOCO 243: carimbo do início da emissão (relógio do EM_PROCESSAMENTO e
+   *  guarda de 5 min da auto-adoção da sombra no sync). */
+  emitido_em?: string | null;
 }
 
 export const PARCELA_COLS = 'id, sale_id, seq, valor, vencimento, doc, cep, status, codigo, seu_numero, linha, barras, pix, erro';

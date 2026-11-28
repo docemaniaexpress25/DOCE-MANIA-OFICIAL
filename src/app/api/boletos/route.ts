@@ -25,6 +25,9 @@ import {
   // e a rota antiga só entendia o POST: toda ADOÇÃO de sombra era morta com
   // "Falha ao gerar HTTP 200" mesmo com a cobranca adotada (bug do Bagé).
   extrairCodigoEmissao,
+  // BLOCO 243: selo do boleto — identifica TODAS as cobranças do mesmo boleto
+  // (original + reemissões) para cancelar as DUPLICADAS após a adoção.
+  seloBaseDoSeuNumero,
   recuperarPdf,
   cancelarCobranca,
   interpretarCobranca,
@@ -36,6 +39,9 @@ import {
   CobrancaPublica,
   InterCobrancaResultado,
 } from '@/lib/interBoleto';
+// BLOCO 243: limpeza das cobranças DUPLICADAS deixadas por cliques anteriores
+// (era pré-242) — roda fire-and-forget após cada ADOÇÃO de sombra.
+import { cancelarSombrasDuplicadas } from '@/lib/boletosSyncCore';
 import { espelharParcelaInter, baixarParcelaPaga, type ParcelaRow } from '@/lib/baixaBoleto';
 // BLOCO 200 (regra do dono): a divisão em 2 boletos é EXCLUSIVA da rota 5
 // (Deivid/David) — o SERVIDOR confere de novo (fonte da verdade), com a
@@ -485,7 +491,10 @@ async function emitirCobrancaUnificada(args: {
     } catch { /* segue fluxo normal */ }
   } else if (adocaoAtiva) {
     try {
-      const sombra = await recuperarEmissaoPorSeuNumero(anteriorSeuAdocao);
+      // BLOCO 243: venc entra na busca — a sombra nasceu com o vencimento
+      // desta venda; procurar o DIA EXATO primeiro garante achar mesmo com
+      // 200+ boletos atrasados na coleção (a busca larga fica de fallback).
+      const sombra = await recuperarEmissaoPorSeuNumero(anteriorSeuAdocao, venc);
       // BLOCO 242: o código pode vir no raiz (POST) OU dentro de cobranca
       // (formato da consulta/sombra) — o extrator único cobre os dois; antes
       // a condição exigia o raiz e NUNCA era satisfeita (adoção morta + risco
@@ -588,12 +597,18 @@ async function emitirCobrancaUnificada(args: {
           status: 'EM_PROCESSAMENTO',
           seu_numero: seuNumero,
           erro: null,
+          // BLOCO 243: o relógio de EM_PROCESSAMENTO começa NO CLIQUE — sem
+          // carimbo, o sync (minutosDesde) não sabia há quanto tempo a emissão
+          // estava no ar e nem o card mostrava "(~X min)". Com o carimbo a
+          // auto-adoção/auto-destrava do sync têm a idade real da emissão.
+          emitido_em: new Date().toISOString(),
         }).eq('id', String(parcela.id));
       } else {
         const { data: ganhou } = await db.from('sales_boletos').update({
           status: 'EM_PROCESSAMENTO',
           seu_numero: seuNumero,
           erro: null,
+          emitido_em: new Date().toISOString(), // BLOCO 243: relógio desde o clique
         })
           .eq('id', String(parcela.id))
           .in('status', ['NAO_GERADO', 'FALHA_EMISSAO', 'CANCELADO', 'EXPIRADO'])
@@ -609,6 +624,10 @@ async function emitirCobrancaUnificada(args: {
         inter_boleto_valor: payload.valorNominal,
         inter_boleto_vencimento: venc,
         inter_boleto_erro: null,
+        // BLOCO 243: relógio do EM_PROCESSAMENTO desde o clique (antes ficava
+        // NULL até o sucesso — o sync não via a idade e a adoção automática
+        // não tinha guarda segura; o card também não mostrava "(~X min)").
+        inter_boleto_em: new Date().toISOString(),
       });
     }
 
@@ -707,6 +726,29 @@ async function emitirCobrancaUnificada(args: {
     await recomputeVencimentoVenda(saleId);
   } else {
     await atualizar(saleId, { inter_boleto_codigo: codigo, inter_boleto_em: new Date().toISOString() });
+  }
+
+  // ------------------------------------------------------------------
+  // BLOCO 243 — LIMPEZA DAS COBRANCAS DUPLICADAS após ADOÇÃO (fire-and-
+  // forget, não queima o orçamento do GERAR). A adoção só acontece quando
+  // a tentativa anterior foi ACEITA pelo Inter e o app perdeu a resposta:
+  // cliques anteriores (era pré-242) podem ter deixado OUTRAS cobranças
+  // vivas do MESMO boleto lá dentro — o cliente poderia pagar em dobro.
+  // O sync também faz a limpeza quando é ele quem adota; aqui cobre a
+  // adoção feita no clique do dono (caso Bagé).
+  // ------------------------------------------------------------------
+  if (adotouSombra) {
+    const seloAdocao = parcela
+      ? seloBaseDoSeuNumero(String((parcela.seu_numero as string) || ''))
+      : seloBaseDoSeuNumero(String(sale.inter_boleto_seu_numero || ''));
+    if (seloAdocao) {
+      void cancelarSombrasDuplicadas(getServiceClient(), {
+        seloBase: seloAdocao,
+        codigoAdotado: codigo,
+        saleId,
+        contexto: parcela ? `parcela ${Number(parcela.seq) || 1} (adoção no GERAR)` : 'boleto único (adoção no GERAR)',
+      }).catch(() => { /* best-effort — o sync cobre na próxima rodada */ });
+    }
   }
 
   // A emissao e assincrona: consulta em seguida pra pegar linha digitavel se ja processou.

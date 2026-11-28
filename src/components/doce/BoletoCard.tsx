@@ -339,23 +339,34 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
   };
 
   // ======================================================================
-  // BLOCO 239 — AUTO-POLL (fim da demora percebida): a emissão é ASSÍNCRONA
-  // no Inter — o POST aceita em segundos e a LINHA DIGITÁVEL chega depois.
-  // Antes o card perguntava UMA vez após 4s e parava: se o Inter ainda não
-  // tinha processado, o dono precisava ficar tocando ATUALIZAR ("boletos
-  // demoram a ser gerados"). Agora o card PERGUNTA SOZINHO — até 6 rodadas
-  // de 4s, parando no primeiro status final — tanto no boleto único quanto
-  // nas parcelas. O sync/webhook continuam a rede de segurança por trás.
+  // BLOCO 239 — AUTO-POLL: a emissão é ASSÍNCRONA no Inter — o POST aceita
+  // em segundos e a LINHA DIGITÁVEL chega depois. O card pergunta sozinho.
+  // ======================================================================
+  // BLOCO 240 — AUTO-POLL PACIENTE (fim do “boleto não gera / demora”):
+  // o caso REAL de 28/11 (Mercado Bagé) provou nos dados: o POST é ACEITO
+  // pelo Inter em segundos, mas o PROCESSAMENTO (linha digitável/pix) é
+  // assíncrono LÁ DENTRO e nos últimos dias o Inter está aceitando rápido e
+  // processando em MINUTOS (cobrança do Bagé aceita 16:06, processando
+  // 20+ min depois — o próprio sync/webhook confirmou EM_PROCESSAMENTO na
+  // API deles). O auto-poll antigo parava em 24s (6x4s) e o card congelava
+  // em “Gerando...” para o dono tocar ATUALIZAR na mão — ele via “não gera”.
+  // Agora o poll ESCALONA: 6x4s (24s) + 8x10s (80s) + 5x20s (100s) =
+  // ~3,4 min de paciência automática, parando no primeiro status final.
+  // O sync (cron 3x/dia + auto-sync 1h) e o webhook continuam a rede por
+  // trás: quando o Inter processar, o card atualiza SOZINHO.
   // ======================================================================
   const pollVivoRef = useRef(false);
   useEffect(() => () => { pollVivoRef.current = false; }, []);
 
+  /** BLOCO 240: agenda de esperas do auto-poll (backoff paciente). */
+  const PLANOPOLL_MS = [4000, 4000, 4000, 4000, 4000, 4000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 20000, 20000, 20000, 20000, 20000];
+
   const autoPollUnico = () => {
     let rodadas = 0;
     const passo = async () => {
-      while (rodadas < 6) {
+      while (rodadas < PLANOPOLL_MS.length) {
+        await new Promise(res => setTimeout(res, PLANOPOLL_MS[rodadas]));
         rodadas++;
-        await new Promise(res => setTimeout(res, 4000));
         if (!pollVivoRef.current) return;
         try {
           const c = await boletoService.consultar(saleId);
@@ -373,9 +384,9 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
   const autoRefreshParcelas = () => {
     let rodadas = 0;
     const passo = async () => {
-      while (rodadas < 5) {
+      while (rodadas < PLANOPOLL_MS.length) {
+        await new Promise(res => setTimeout(res, PLANOPOLL_MS[rodadas]));
         rodadas++;
-        await new Promise(res => setTimeout(res, 4000));
         if (!pollVivoRef.current) return;
         try { await refrescarParcelas(); } catch { /* próxima rodada */ }
       }
@@ -1136,6 +1147,15 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
                       dono fica orientado: ATUALIZAR primeiro; se não sair,
                       DESTRavar (admin) libera e libera o GERAR de um boleto
                       novo (a cobrança antiga não tem linha digitável). */}
+                  {/* BLOCO 240: parcela aceita pelo Inter e processando devagar
+                      (mesma verdade do boleto único) — com codigo gravado, a
+                      linha/pix chegam sozinhas; sem segunda emissão. */}
+                  {p.status === 'EM_PROCESSAMENTO' && !p.avisarDestravar && (p.processandoMin ?? 0) >= 3 && p.codigo && (
+                    <p className="text-[9px] font-bold text-amber-800 bg-amber-50 border border-amber-300 rounded-lg px-2 py-1.5 leading-snug">
+                      <i className="fa-solid fa-circle-info mr-1"></i>
+                      O Inter ACEITOU o boleto {p.seq} e está processando lá dentro (hoje eles estão processando devagar). A linha digitável aparece SOZINHA em alguns minutos — não gere outro.
+                    </p>
+                  )}
                   {p.status === 'EM_PROCESSAMENTO' && p.avisarDestravar && (
                     <p className="text-[8px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5 leading-snug">
                       <i className="fa-solid fa-hourglass-half mr-1"></i>
@@ -1284,6 +1304,18 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
               Preso no Inter há ~{boleto.processandoMin} min sem sair do processamento. Toque ATUALIZAR; se não sair, use DESTRavar (admin) para liberar e GERAR um boleto novo.
             </p>
           )}
+          {/* BLOCO 240 (caso real Mercado Bagé 28/11): o Inter ACEITOU o boleto
+              (código gravado) e está PROCESSANDO devagar lá dentro — hoje o
+              Inter anda aceitando rápido e processando em minutos. O dono via
+              “Gerando...” e achava que não gerou. Este banner diz a verdade:
+              o boleto EXISTE, a linha/pix chegam SOZINHOS, e o botão de gerar
+              de novo fica escondido (não há segunda cobrança a fazer). */}
+          {boleto.status === 'EM_PROCESSAMENTO' && !boleto.avisarDestravar && (boleto.processandoMin ?? 0) >= 3 && boleto.codigo && (
+            <p className="text-[9px] font-bold text-amber-800 bg-amber-50 border border-amber-300 rounded-lg px-2 py-1.5 leading-snug">
+              <i className="fa-solid fa-circle-info mr-1"></i>
+              O Inter ACEITOU este boleto (código {boleto.codigo.slice(0, 8)}) e está processando lá dentro. Hoje o Inter está aceitando rápido mas processando devagar (instabilidade deles — não é erro do app). A linha digitável e o Pix aparecem SOZINHOS em alguns minutos (o sistema consulta por conta própria). NÃO gere outro boleto: este já existe — risco de cobrar o cliente em dobro.
+            </p>
+          )}
           {['A_RECEBER', 'ATRASADO', 'EM_PROCESSAMENTO'].includes(boleto.status) && (
             <button onClick={handleConsultar} disabled={busy} className="text-[10px] font-black underline py-1 inline-block disabled:opacity-50">
               Atualizar situação no Inter
@@ -1296,7 +1328,11 @@ const BoletoCard: React.FC<BoletoCardProps> = ({ saleId, valorTotal, valorPago, 
               REMOVIDOS do card — “não vamos usar isso, apenas informe se o
               boleto foi gerado com sucesso”. O badge do card informa o status
               e o PDF do Inter abre pelo botão PDF (visualizar/compartilhar/salvar). */}
-          {boleto.status === 'EM_PROCESSAMENTO' && (
+          {/* BLOCO 240: “Gerar Novamente” só existe quando a cobranca NÃO
+              existe lá (sem codigo = emissão morta/em voo). Com codigo, o
+              boleto JÁ FOI ACEITO: re-gerar só devolve “já gerado” — o botão
+              induzia à cobrança em dobro imaginada e virou o ATUALIZAR. */}
+          {boleto.status === 'EM_PROCESSAMENTO' && !boleto.codigo && (
             <button onClick={handleGerar} disabled={busy}
               className="block w-full bg-slate-800 text-white font-black py-3 rounded-xl text-[10px] uppercase tracking-widest active:scale-95 disabled:opacity-60">
               <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-arrows-rotate'} mr-1`}></i>

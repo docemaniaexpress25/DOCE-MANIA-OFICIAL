@@ -57,6 +57,25 @@ import { isDavidVendedor } from '@/lib/equipe';
  *     Reimpressão: botão RECIBO em cada caixa fechado do histórico (mesma via,
  *     número sequencial da coluna recibo_numero — SQL 234; sem a coluna, o
  *     número é derivado do id, fallback determinístico).
+ *
+ * BLOCO 235 (regra do dono — o ADMIN TAMBÉM ganha tela simples + LOG):
+ *   "olhando o caixa do David logado como admin tbm tem que aparecer uma tela
+ *   simples e fácil entendimento, o que deve aparecer é de período até período
+ *   de fechamento de caixa, ou seja tudo que o vendedor David recebeu a vista
+ *   em dinheiro para acertar conosco e Pix para conferir na conta. Em outra
+ *   tela ou botão um log de recebimento de tudo ou seja dinheiro Pix e o prazo
+ *   pago e mostrando o quanto tem prazo pendente. Assim fica bem organizado, o
+ *   admin fechou caixa quer dizer que recebeu o dinheiro daquele período e
+ *   começa denovo."
+ *   A tela do ADMIN agora tem 2 ABAS:
+ *     - CAIXA (padrão) = a mesma tela SIMPLES do David: tudo que entrou à
+ *       vista no período (Dinheiro "para acertar conosco" + Pix "para conferir
+ *       na conta") + lista das entradas + FECHAR (entrega o dinheiro, zera e
+ *       gera o recibo de entrega).
+ *     - LOG = log de recebimentos de TUDO (dinheiro + Pix + prazo pago, com
+ *       filtros) + A PRAZO PENDENTE (boletos em aberto, sobrevivem ao
+ *       fechamento) + pagamentos ao David (recibos) + caixas fechados
+ *       (reimpressão do recibo de entrega). Nada se perde — só fica organizado.
  */
 
 interface PagamentoCaixa {
@@ -212,6 +231,10 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
   // BLOCO 233: filtro da lista de recebidos (conferência direta por forma)
   const [filtroRecebidos, setFiltroRecebidos] = useState<'TUDO' | 'DINHEIRO' | 'PIX' | 'PRAZO'>('TUDO');
 
+  // BLOCO 235: as duas abas do admin — CAIXA (tela simples do período) e LOG
+  // (log de recebimentos de tudo + a prazo pendente + pagamentos + fechados)
+  const [aba, setAba] = useState<'CAIXA' | 'LOG'>('CAIXA');
+
   const carregar = useCallback(async (silencioso = false) => {
     if (!silencioso) setLoading(true);
     setErro(null);
@@ -254,15 +277,17 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
   }, [carregar]);
 
   // ---------------------------------------------------------------------------
-  // BLOCO 233 — OS 3 NÚMEROS DA LINHA DO CAIXA.
-  // VERDE vem do SERVIDOR (recebidoNoCaixa = à vista + prazo já pago no
-  // período). AZUL = total gerado no período. A PRAZO = pendente de TODOS os
-  // períodos (boletos sobrevivem ao fechamento até o pagamento cair).
+  // BLOCO 235 — NÚMEROS DO ADMIN:
+  // À VISTA do período (Dinheiro + Pix + Depósito) = o que o admin RECEBE no
+  // fechamento (aba CAIXA, botão FECHAR). VERDE = tudo que JÁ ENTROU no caixa
+  // (à vista + prazo pago) — é o total do LOG de recebimentos. A PRAZO =
+  // pendente de TODOS os períodos (boletos sobrevivem ao fechamento até o
+  // pagamento cair — quando cai, entra no log como prazo pago).
   // ---------------------------------------------------------------------------
+  const avistaTotal = Math.round((totais.dinheiro + totais.pix + totais.deposito) * 100) / 100;
   const verde = resumo
     ? Math.round((resumo.recebidoNoCaixa ?? (resumo.vista.total + resumo.prazo.recebidoNoPeriodo)) * 100) / 100
-    : Math.round((totais.dinheiro + totais.pix + totais.deposito) * 100) / 100;
-  const azul = resumo ? resumo.totalGerado : verde;
+    : avistaTotal;
   const aprazo = resumo ? resumo.prazo.pendentes : totais.boleto;
   const qtdeBoletosPendentes = resumo ? resumo.prazo.qtdePendentes : pagamentos.filter((p) => p.metodo === 'BOLETO').length;
 
@@ -281,8 +306,8 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
       }
       const bp = d.boletosPendentes as { qtde: number; valor: number } | undefined;
       showToast?.(
-        `Caixa fechado — ${fmt(d.fechamento?.totalGeral || 0)} recebidos zerados e vão para o caixa da empresa`
-        + (bp && bp.qtde > 0 ? ` · A prazo ${fmt(bp.valor)} (${bp.qtde}) continua na tela até o pagamento cair` : ''),
+        `Caixa fechado — ${fmt(d.fechamento?.totalGeral || 0)} à vista entregues ao caixa da empresa`
+        + (bp && bp.qtde > 0 ? ` · A prazo ${fmt(bp.valor)} (${bp.qtde}) continua no LOG até o pagamento cair` : ''),
         'success'
       );
       // BLOCO 234: "quando zerado o caixa o recibo gera para comprovar que
@@ -629,6 +654,17 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
   const davidQtdeDinheiro = entradasDavid.filter((p) => p.metodo === 'DINHEIRO').length;
   const davidQtdePix = entradasDavid.filter((p) => p.metodo === 'PIX').length;
 
+  // BLOCO 235: entradas à vista do ADMIN = tudo MENOS boleto (Dinheiro + Pix +
+  // Depósito) — a lista da tela simples e o que trava no fechamento.
+  const entradasAvistaAdmin = React.useMemo(() => {
+    return pagamentos
+      .filter((p) => p.metodo !== 'BOLETO')
+      .slice()
+      .sort((a, b) => String(b.criadoEm || '').localeCompare(String(a.criadoEm || '')));
+  }, [pagamentos]);
+  const adminQtdeDinheiro = entradasAvistaAdmin.filter((p) => p.metodo === 'DINHEIRO').length;
+  const adminQtdePix = entradasAvistaAdmin.filter((p) => p.metodo === 'PIX').length;
+
   if (davidView) {
     return (
       <div className="space-y-4">
@@ -811,7 +847,7 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
       <div className="px-2">
         <h2 className="text-2xl font-black text-gray-800 tracking-tight">Caixa do David</h2>
         <p className="text-[10px] text-gray-400 font-bold uppercase mt-1">
-          Rota 5 · {desde ? `caixa aberto desde ${new Date(desde).toLocaleDateString('pt-BR')} ${new Date(desde).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}` : 'caixa aberto — primeiro período'}
+          Rota 5 · {desde ? `do último fechamento (${hora(desde)}) até agora` : 'caixa aberto — primeiro período'}
           {!isAdmin && ' · fechamento pelo admin'}
         </p>
         {/* BLOCO 167: "o caixa deve sempre atualizar" — refresh a cada 20s automático */}
@@ -820,12 +856,26 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
         </p>
       </div>
 
-      {/* BLOCO 233: a regra em 1 linha — números fáceis, sem poluição */}
-      <div className="bg-gray-50 border border-gray-100 rounded-2xl p-3 mx-1">
-        <p className="text-[8px] font-black text-gray-500 uppercase leading-relaxed">
-          <i className="fa-solid fa-circle-info text-gray-400 mr-1"></i>
-          <span className="text-blue-600">Azul</span> = tudo que ele gerou (à vista + a prazo) · <span className="text-emerald-600">Verde</span> = o que JÁ ENTROU no caixa (dinheiro + Pix + prazo pago) · <span className="text-amber-600">A prazo</span> = o que ainda vai entrar. Ao fechar, os recebidos zeram — o a prazo continua até o pagamento cair.
-        </p>
+      {/* ================================================================
+          BLOCO 235 — AS DUAS ABAS DO ADMIN (regra do dono):
+          - CAIXA = tela SIMPLES: tudo que entrou à vista no período
+            (Dinheiro para acertar conosco + Pix para conferir na conta).
+          - LOG = log de recebimentos de TUDO (dinheiro, Pix e prazo pago)
+            + o quanto tem A PRAZO PENDENTE + pagamentos + caixas fechados.
+          ================================================================ */}
+      <div className="flex gap-2 px-1">
+        <button
+          onClick={() => setAba('CAIXA')}
+          className={`flex-1 py-3 rounded-2xl font-black uppercase text-[10px] tracking-widest border transition-all ${aba === 'CAIXA' ? 'bg-gray-900 text-white border-gray-900 shadow-md' : 'bg-white text-gray-400 border-gray-200'}`}
+        >
+          <i className="fa-solid fa-cash-register mr-1.5"></i>Caixa do período
+        </button>
+        <button
+          onClick={() => setAba('LOG')}
+          className={`flex-1 py-3 rounded-2xl font-black uppercase text-[10px] tracking-widest border transition-all ${aba === 'LOG' ? 'bg-gray-900 text-white border-gray-900 shadow-md' : 'bg-white text-gray-400 border-gray-200'}`}
+        >
+          <i className="fa-solid fa-list-check mr-1.5"></i>Log de recebimentos
+        </button>
       </div>
 
       {loading && (
@@ -844,76 +894,117 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
         </div>
       )}
 
-      {!loading && !erro && (
+      {/* ================================================================
+          ABA CAIXA (padrão) — BLOCO 235: tela SIMPLES do admin, a mesma do
+          David: tudo que entrou à vista no período (Dinheiro "para acertar
+          conosco" + Pix "para conferir na conta") + lista das entradas +
+          FECHAR (entrega o dinheiro, zera e gera o recibo de entrega).
+          ================================================================ */}
+      {!loading && !erro && aba === 'CAIXA' && (
         <>
-          {/* ================================================================
-              BLOCO 233 — A LINHA DO CAIXA (uma linha, os 3 números):
-              AZUL total gerado | VERDE recebido (à vista + prazo pago) |
-              A PRAZO ainda vai entrar. Seus cálculos ficam no VERDE.
-              ================================================================ */}
+          {/* O NÚMERO ÚNICO DA TELA: tudo que entrou à vista neste caixa */}
           <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-md mx-1">
-            <div className="flex items-center justify-between mb-3">
-              <p className="text-[8px] font-black text-gray-400 uppercase">A linha do caixa</p>
-              {resumo && (
-                <span className="text-[8px] font-black text-gray-400 uppercase">{resumo.prazo.qtdeRecebidos} baixa(s) · {resumo.vista.qtde} à vista</span>
+            <p className="text-[8px] font-black text-gray-400 uppercase">Tudo que entrou à vista neste caixa</p>
+            <p className="text-4xl font-black text-gray-800 mt-1 tabular-nums leading-tight">{fmt(avistaTotal)}</p>
+            <p className="text-[8px] font-bold text-gray-400 uppercase mt-1.5">Dinheiro + Pix{totais.deposito > 0 ? ' + Depósito' : ''} · do último fechamento até agora</p>
+            <div className={`grid gap-2 mt-4 ${totais.deposito > 0 ? 'grid-cols-3' : 'grid-cols-2'}`}>
+              <div className="bg-emerald-50 rounded-2xl p-3 text-center">
+                <p className="text-[8px] font-black text-emerald-500 uppercase">Dinheiro</p>
+                <p className="text-base font-black text-emerald-600 mt-0.5 tabular-nums">{fmt(totais.dinheiro)}</p>
+                <p className="text-[7px] font-bold text-emerald-500/80 uppercase mt-0.5 leading-tight">para acertar conosco · {adminQtdeDinheiro} recebimento(s)</p>
+              </div>
+              <div className="bg-violet-50 rounded-2xl p-3 text-center">
+                <p className="text-[8px] font-black text-violet-500 uppercase">Pix</p>
+                <p className="text-base font-black text-violet-600 mt-0.5 tabular-nums">{fmt(totais.pix)}</p>
+                <p className="text-[7px] font-bold text-violet-500/80 uppercase mt-0.5 leading-tight">para conferir na conta · {adminQtdePix} recebimento(s)</p>
+              </div>
+              {totais.deposito > 0 && (
+                <div className="bg-slate-50 rounded-2xl p-3 text-center">
+                  <p className="text-[8px] font-black text-slate-500 uppercase">Depósito</p>
+                  <p className="text-base font-black text-slate-600 mt-0.5 tabular-nums">{fmt(totais.deposito)}</p>
+                  <p className="text-[7px] font-bold text-slate-500/80 uppercase mt-0.5 leading-tight">já direto no banco</p>
+                </div>
               )}
             </div>
-            <div className="grid grid-cols-3 gap-2">
-              {/* AZUL — total de vendas geradas (à vista + a prazo) */}
-              <div className="bg-blue-50 rounded-2xl p-3 text-center">
-                <p className="text-[8px] font-black text-blue-500 uppercase">Total gerado</p>
-                <p className="text-[13px] sm:text-lg font-black text-blue-600 mt-1 tabular-nums leading-tight">{fmt(azul)}</p>
-                <p className="text-[7px] font-bold text-blue-400 uppercase mt-1 leading-tight">vendas à vista + a prazo</p>
-              </div>
-              {/* VERDE — o que JÁ ENTROU no caixa (dinheiro + pix + prazo pago) */}
-              <div className="bg-emerald-50 rounded-2xl p-3 text-center ring-1 ring-emerald-200">
-                <p className="text-[8px] font-black text-emerald-500 uppercase">Recebido</p>
-                <p className="text-[13px] sm:text-lg font-black text-emerald-600 mt-1 tabular-nums leading-tight">{fmt(verde)}</p>
-                <p className="text-[7px] font-bold text-emerald-500/80 uppercase mt-1 leading-tight">entrou no caixa</p>
-              </div>
-              {/* A PRAZO — o que ainda vai entrar */}
-              <div className="bg-amber-50 rounded-2xl p-3 text-center">
-                <p className="text-[8px] font-black text-amber-500 uppercase">A prazo</p>
-                <p className="text-[13px] sm:text-lg font-black text-amber-600 mt-1 tabular-nums leading-tight">{fmt(aprazo)}</p>
-                <p className="text-[7px] font-bold text-amber-500/80 uppercase mt-1 leading-tight">ainda vai entrar</p>
-              </div>
-            </div>
+          </div>
 
-            {/* Decomposição — 3 linhas pequenas, a conta na mesa */}
-            <div className="mt-3 space-y-1">
-              <p className="text-[8px] font-bold text-gray-400 uppercase leading-relaxed">
-                <span className="font-black text-emerald-600">Verde</span> = Dinheiro {fmt(totais.dinheiro)} + Pix {fmt(totais.pix)}{totais.deposito > 0 ? ` + Depósito ${fmt(totais.deposito)}` : ''} + prazo pago {fmt(resumo ? resumo.prazo.recebidoNoPeriodo : 0)} ({resumo ? resumo.prazo.qtdeRecebidos : 0} baixa(s))
-              </p>
-              <p className="text-[8px] font-bold text-gray-400 uppercase leading-relaxed">
-                <span className="font-black text-blue-600">Azul</span> = à vista {fmt(resumo ? resumo.vista.total : 0)} + a prazo gerado {fmt(resumo ? resumo.prazo.geradoNoPeriodo : 0)} — seus cálculos ficam em cima do VERDE
-              </p>
-              <p className="text-[8px] font-bold text-gray-400 uppercase leading-relaxed">
-                <span className="font-black text-amber-600">A prazo</span> = {qtdeBoletosPendentes} boleto(s) em aberto — não zera no fechamento; quando o pagamento cai, cai no VERDE
-              </p>
+          {/* LISTA: tudo que entrou à vista (Dinheiro e Pix) no período */}
+          <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden mx-1">
+            <div className="px-4 py-3 bg-gray-50/70">
+              <p className="text-[9px] font-black text-gray-700 uppercase"><i className="fa-solid fa-list mr-1.5 text-gray-400"></i>Entradas à vista — Dinheiro e Pix</p>
             </div>
-
-            {isAdmin ? (
-              <button
-                onClick={() => setModalFechar(true)}
-                className="w-full mt-3 bg-gray-900 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 transition-all uppercase text-xs tracking-widest"
-              >
-                <i className="fa-solid fa-lock mr-2"></i>Fechar caixa agora — recebido {fmt(verde)}
-              </button>
+            {entradasAvistaAdmin.length > 0 ? (
+              <div className="divide-y divide-gray-50 max-h-96 overflow-y-auto">
+                {entradasAvistaAdmin.map((p) => (
+                  <div key={p.id} className="p-3 flex items-center justify-between gap-2">
+                    <div className="flex-1 min-w-0 pr-1">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded-md ${p.metodo === 'DINHEIRO' ? 'bg-emerald-600 text-white' : p.metodo === 'PIX' ? 'bg-violet-600 text-white' : 'bg-slate-600 text-white'}`}>{p.metodo === 'DINHEIRO' ? 'Dinheiro' : p.metodo === 'PIX' ? 'Pix' : 'Depósito'}</span>
+                        {p.cliente && <span className="text-[9px] font-black text-gray-700 uppercase break-words">{p.cliente}</span>}
+                      </div>
+                      <p className="text-[8px] text-gray-400 font-bold uppercase mt-1">{hora(p.criadoEm)}</p>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      {p.temComprovante && (
+                        <button
+                          onClick={() => verFoto(p.id)}
+                          className="w-9 h-9 bg-violet-50 text-violet-600 rounded-xl flex items-center justify-center border border-violet-100 active:scale-90 transition-all"
+                          title="Ver comprovante"
+                        >
+                          <i className="fa-solid fa-image text-xs"></i>
+                        </button>
+                      )}
+                      <p className={`text-[11px] font-black text-right ${p.metodo === 'DINHEIRO' ? 'text-emerald-600' : p.metodo === 'PIX' ? 'text-violet-600' : 'text-slate-600'}`}>{fmt(p.valor)}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
             ) : (
-              <div className="w-full mt-3 bg-gray-100 text-gray-500 font-bold py-3 rounded-2xl uppercase text-[9px] tracking-widest text-center">
-                <i className="fa-solid fa-lock mr-2"></i>Leitura — o ADMIN fecha o caixa
+              <div className="p-6 text-center">
+                <p className="text-[9px] font-black uppercase text-gray-400 tracking-widest">Nada entrou à vista ainda neste caixa</p>
+                <p className="text-[8px] font-bold text-gray-300 uppercase mt-1">Conforme o David receber em Dinheiro ou Pix, aparece aqui</p>
               </div>
             )}
           </div>
 
+          {isAdmin ? (
+            <button
+              onClick={() => setModalFechar(true)}
+              className="w-full mx-1 bg-gray-900 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 transition-all uppercase text-xs tracking-widest"
+            >
+              <i className="fa-solid fa-lock mr-2"></i>Fechar caixa agora — entregar {fmt(avistaTotal)}
+            </button>
+          ) : (
+            <div className="w-full mx-1 bg-gray-100 text-gray-500 font-bold py-3 rounded-2xl uppercase text-[9px] tracking-widest text-center">
+              <i className="fa-solid fa-lock mr-2"></i>Leitura — o ADMIN fecha o caixa
+            </div>
+          )}
+
+          <div className="bg-gray-50 border border-gray-100 rounded-2xl p-3 mx-1">
+            <p className="text-[8px] font-black text-gray-500 uppercase leading-relaxed">
+              <i className="fa-solid fa-lock mr-1 text-gray-400"></i>Fechar o caixa = você RECEBEU o dinheiro deste período (Dinheiro + Pix). Os contadores ZERAM, começa de novo e o RECIBO DE ENTREGA é gerado. O log de tudo e o a prazo pendente ficam no botão LOG DE RECEBIMENTOS.
+            </p>
+          </div>
+        </>
+      )}
+
+      {/* ================================================================
+          ABA LOG — BLOCO 235: "um log de recebimento de tudo ou seja
+          dinheiro Pix e o prazo pago e mostrando o quanto tem prazo
+          pendente" — mais os pagamentos ao David e os caixas fechados
+          (recibo de entrega reimprimível).
+          ================================================================ */}
+      {!loading && !erro && aba === 'LOG' && (
+        <>
+
           {/* ================================================================
-              BLOCO 233 — RECEBIDOS NO CAIXA (o que já entrou = VERDE):
+              BLOCO 235 — LOG DE RECEBIMENTOS (o que já entrou = VERDE):
               à vista (com comprovante/exclusão) + boletos pagos com a DATA
               DA BAIXA. Filtro por forma para a conferência direta.
               ================================================================ */}
           <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden mx-1">
             <div className="px-4 py-3 flex items-center justify-between bg-gray-50/70">
-              <p className="text-[9px] font-black text-gray-700 uppercase"><i className="fa-solid fa-circle-check text-emerald-500 mr-1.5"></i>Recebidos no caixa — o que já entrou</p>
+              <p className="text-[9px] font-black text-gray-700 uppercase"><i className="fa-solid fa-circle-check text-emerald-500 mr-1.5"></i>Log de recebimentos — tudo que já entrou</p>
               <p className="text-sm font-black text-emerald-600">{fmt(verde)}</p>
             </div>
             <div className="px-4 py-2 flex gap-1.5 flex-wrap border-b border-gray-50">
@@ -944,13 +1035,14 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
           </div>
 
           {/* ================================================================
-              BLOCO 233 — AINDA A PRAZO (o que vai entrar): boletos em aberto
-              de qualquer período. Não zera no fechamento — só sai daqui
-              quando o pagamento cair (e cai no VERDE, com a data da baixa).
+              BLOCO 235 — A PRAZO PENDENTE (o quanto tem a prazo pendente):
+              boletos em aberto de qualquer período. Não zera no fechamento —
+              só sai daqui quando o pagamento cair (cai no LOG como prazo
+              pago, com a data da baixa).
               ================================================================ */}
           <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden mx-1">
             <div className="px-4 py-3 flex items-center justify-between bg-gray-50/70">
-              <p className="text-[9px] font-black text-gray-700 uppercase"><i className="fa-solid fa-barcode text-amber-500 mr-1.5"></i>Ainda a prazo — o que vai entrar</p>
+              <p className="text-[9px] font-black text-gray-700 uppercase"><i className="fa-solid fa-barcode text-amber-500 mr-1.5"></i>A prazo pendente — o que ainda vai entrar</p>
               <p className="text-sm font-black text-amber-600">{fmt(aprazo)}</p>
             </div>
             {pendentesLista.length > 0 ? (
@@ -1112,7 +1204,7 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
               <div className="flex justify-between text-[10px] font-black uppercase"><span className="text-emerald-600">Dinheiro</span><span className="text-gray-700">{fmt(totais.dinheiro)}</span></div>
               <div className="flex justify-between text-[10px] font-black uppercase"><span className="text-violet-600">Pix</span><span className="text-gray-700">{fmt(totais.pix)}</span></div>
               {totais.deposito > 0 && <div className="flex justify-between text-[10px] font-black uppercase"><span className="text-slate-600">Depósito</span><span className="text-gray-700">{fmt(totais.deposito)}</span></div>}
-              <div className="flex justify-between text-sm font-black uppercase pt-1 border-t border-gray-200"><span className="text-gray-800">Recebido (verde)</span><span className="text-emerald-600">{fmt(verde)}</span></div>
+              <div className="flex justify-between text-sm font-black uppercase pt-1 border-t border-gray-200"><span className="text-gray-800">Total à vista a entregar</span><span className="text-emerald-600">{fmt(avistaTotal)}</span></div>
               <p className="text-[8px] font-bold text-gray-400 uppercase">{pagamentos.filter((p) => p.metodo !== 'BOLETO').length} recebimento(s) à vista no log</p>
             </div>
 
@@ -1126,7 +1218,7 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
 
             <div className="bg-blue-50 border border-blue-100 rounded-2xl p-3.5 mt-3">
               <p className="text-[9px] font-black text-blue-700 uppercase leading-relaxed">
-                <i className="fa-solid fa-lock mr-1"></i>Ao confirmar: o dinheiro recebido SAI DA MÃO DO DAVID e entra no caixa da empresa. Os contadores de RECEBIDOS ZERAM e um novo período começa. O A PRAZO continua aparecendo até o pagamento cair.
+                <i className="fa-solid fa-lock mr-1"></i>Ao confirmar: o dinheiro à vista SAI DA MÃO DO DAVID e entra no caixa da empresa. Os contadores ZERAM e um novo período começa. O A PRAZO continua no LOG até o pagamento cair.
               </p>
             </div>
 
@@ -1177,7 +1269,7 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
             {/* Atalhos: preencher com os números da linha do caixa (BLOCO 233) */}
             <div className="mt-3 flex flex-wrap gap-1.5">
               <button onClick={() => setRepValor(verde.toFixed(2))} className="bg-emerald-50 text-emerald-700 border border-emerald-100 text-[8px] font-black uppercase px-2.5 py-1.5 rounded-lg active:scale-95">
-                Recebido (verde): {fmt(verde)}
+                Recebido no caixa: {fmt(verde)}
               </button>
               <button onClick={() => setRepValor(totais.dinheiro.toFixed(2))} className="bg-gray-50 text-gray-600 border border-gray-200 text-[8px] font-black uppercase px-2.5 py-1.5 rounded-lg active:scale-95">
                 Dinheiro: {fmt(totais.dinheiro)}

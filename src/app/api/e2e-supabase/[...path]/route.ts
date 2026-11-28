@@ -406,6 +406,8 @@ tables.caixa_fechamentos_geral.push({
   total_geral: 150,
   qtde_pagamentos: 2,
   observacao: 'Fechamento anterior (E2E)',
+  // BLOCO 234: número do recibo de entrega (sequence no SQL real)
+  recibo_numero: 1,
   pagamentos: [],
 });
 tables.caixa_pagamentos.push(
@@ -505,6 +507,11 @@ function linhasQueBatem(rows: any[], params: URLSearchParams): number[] {
   // BLOCO 215: `in.` também bate (update .in('id', ids) do fluxo fiscal) —
   // antes só eq/is existiam e o update marcava TODAS as linhas.
   const ins: [string, string[]][] = [];
+  // BLOCO 234: `neq.` também bate — o FECHAR do caixa prende os pagamentos
+  // com .is('fechamento_id', null).neq('metodo', 'BOLETO'); sem neq, o mock
+  // travava TAMBÉM os boletos pendentes (em produção eles sobrevivem ao
+  // fechamento) e o "A prazo" zerava errado no teste.
+  const neqs: [string, string][] = [];
   for (const [key, val] of params.entries()) {
     const m = val.match(/^eq\.([\s\S]*)$/);
     if (m) eqs.push([key, m[1]]);
@@ -512,12 +519,15 @@ function linhasQueBatem(rows: any[], params: URLSearchParams): number[] {
     if (mi && mi[1] === 'null') isNulls.push(key);
     const mi2 = val.match(/^in\.\(([\s\S]*)\)$/);
     if (mi2) ins.push([key, mi2[1].split(',').map(s => s.replace(/^"|"$/g, '').trim())]);
+    const mn = val.match(/^neq\.([\s\S]*)$/);
+    if (mn) neqs.push([key, mn[1]]);
   }
   const idx: number[] = [];
   rows.forEach((r, i) => {
     const isOk = isNulls.every(k => r[k] === null || r[k] === undefined);
     const inOk = ins.every(([k, lista]) => lista.includes(String(r[k])));
-    if (isOk && inOk && eqs.every(([k, v]) => String(r[k]) === v)) idx.push(i);
+    const neqOk = neqs.every(([k, v]) => String(r[k]) !== v);
+    if (isOk && inOk && neqOk && eqs.every(([k, v]) => String(r[k]) === v)) idx.push(i);
   });
   return idx;
 }
@@ -670,6 +680,9 @@ async function handle(req: NextRequest, segments: string[]) {
         }
         if (table === 'caixa_fechamentos_geral') {
           clone.fechado_em = clone.fechado_em ?? new Date().toISOString();
+          // BLOCO 234: recibo de entrega — número sequencial (sequence no SQL real)
+          const ultRecFe = (tables['caixa_fechamentos_geral'] || []).reduce((m: number, r: any) => Math.max(m, Number(r.recibo_numero || 0)), 0);
+          clone.recibo_numero = clone.recibo_numero ?? ultRecFe + 1;
         }
         // BLOCO 232: repasses ao David (recibo_numero é identity no SQL real)
         if (table === 'caixa_repasses_david') {

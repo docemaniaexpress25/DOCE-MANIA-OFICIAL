@@ -88,6 +88,23 @@ import { isDavidNome } from '@/lib/equipe';
  *   servidor (fonte única da verdade). No FECHAR os recebidos zeram (à vista
  *   prende no fechamento; desde avança) e o A PRAZO pendente segue visível
  *   até o pagamento cair — quando cai, entra no VERDE do novo período.
+ *
+ * BLOCO 234 (regra do dono — TELA DO DAVID + RECIBO DE ENTREGA):
+ *   "tela caixa que aparece para o David deve mostrar tudo que entrou a vista
+ *   dinheiro e Pix, no período de um fechamento de caixa até outro. Quem
+ *   fecha o caixa é login admin. Conforme o caixa é fechado vai zerando.
+ *   Somente isso e nada mais. Quando zerado o caixa o recibo gera para
+ *   comprovar que foi entregue o dinheiro."
+ *   - A visão VENDEDOR (David) já é servida por este GET (aberto.pagamentos
+ *     filtrado a DINHEIRO+PIX no front — tela simplificada, nada mais).
+ *   - No FECHAR, a resposta passa a carregar os dados do RECIBO DE ENTREGA
+ *     (recibo_numero da coluna nova SQL 234, janela_inicio, dinheiro, pix,
+ *     depósito, total, qtde, quem fechou) — o front gera o recibo imprimível
+ *     que comprova que o David ENTREGOU o dinheiro ao caixa da empresa.
+ *   - GET histórico devolve janela_inicio + recibo_numero para REIMPRIMIR o
+ *     recibo do fechamento — a via é sempre a mesma (número sequencial).
+ *   - Coluna recibo_numero ausente (SQL 234 pendente): fechamento funciona
+ *     igual e o recibo sai com número derivado do id (fallback determinístico).
  */
 
 const round2 = (v: number) => Math.round(v * 100) / 100;
@@ -98,6 +115,12 @@ const round2 = (v: number) => Math.round(v * 100) / 100;
 // com fallback automático no primeiro erro 42703).
 // ---------------------------------------------------------------------------
 let pagoEmOkCache: boolean | null = null;
+
+// BLOCO 234: coluna recibo_numero (SQL 234) pode ainda não existir — mesmo
+// padrão do pago_em: cache por instância + fallback automático no 42703.
+// O recibo de entrega é gerado PELO FRONT a partir dos dados do fechamento;
+// a coluna só dá o número sequencial estável do recibo.
+let reciboNumOkCache: boolean | null = null;
 
 function erroColunaFaltando(e: any): boolean {
   const code = String(e?.code || e?.details?.code || '');
@@ -294,12 +317,23 @@ export async function GET(req: NextRequest) {
       repassesSqlOk = false;
     }
 
-    // Histórico (sem o jsonb pesado)
-    const { data: hist, error: histErr } = await supabase
+    // Histórico (sem o jsonb pesado). BLOCO 234: janela_inicio + recibo_numero
+    // para o RECIBO DE ENTREGA reimprimível do fechamento — se a coluna nova
+    // (SQL 234) ainda não existe, retry sem ela (fallback determinístico no id).
+    let histRes = await supabase
       .from('caixa_fechamentos_geral')
-      .select('id, fechado_em, fechado_por_nome, total_dinheiro, total_pix, total_deposito, total_geral, qtde_pagamentos, observacao')
+      .select('id, fechado_em, fechado_por_nome, total_dinheiro, total_pix, total_deposito, total_geral, qtde_pagamentos, observacao, janela_inicio, recibo_numero')
       .order('fechado_em', { ascending: false })
       .limit(60);
+    if (histRes.error && erroColunaFaltando(histRes.error)) {
+      if (reciboNumOkCache !== false) reciboNumOkCache = false;
+      histRes = await supabase
+        .from('caixa_fechamentos_geral')
+        .select('id, fechado_em, fechado_por_nome, total_dinheiro, total_pix, total_deposito, total_geral, qtde_pagamentos, observacao, janela_inicio')
+        .order('fechado_em', { ascending: false })
+        .limit(60);
+    }
+    const { data: hist, error: histErr } = histRes;
     if (histErr && sqlFaltando(histErr)) {
       return NextResponse.json({ ok: false, error: 'Banco desatualizado: rode o SQL do Bloco 118 (fechamento de caixa).' }, { status: 503 });
     }
@@ -331,6 +365,9 @@ export async function GET(req: NextRequest) {
         id: f.id,
         fechadoEm: f.fechado_em,
         fechadoPorNome: f.fechado_por_nome,
+        // BLOCO 234: período do caixa + número do recibo de entrega
+        janelaInicio: f.janela_inicio || null,
+        reciboNumero: f.recibo_numero ? Number(f.recibo_numero) : null,
         totais: {
           dinheiro: Number(f.total_dinheiro || 0),
           pix: Number(f.total_pix || 0),
@@ -593,6 +630,18 @@ export async function POST(req: NextRequest) {
       const observacao = String(body.observacao || '').slice(0, 300) || null;
       const janelaInicio = trava.length > 0 ? trava[0].criado_em : null;
 
+      // BLOCO 234: o RECIBO DE ENTREGA é gerado pelo front com os dados do
+      // fechamento — precisa do recibo_numero (SQL 234). Probe uma única vez
+      // por instância; sem a coluna, o fechamento funciona igual (recibo com
+      // número derivado do id). O probe é ANTES do insert (insert é uma vez só).
+      if (reciboNumOkCache === null) {
+        const probe = await supabase.from('caixa_fechamentos_geral').select('recibo_numero').limit(1);
+        reciboNumOkCache = !probe.error;
+      }
+      const fSel = reciboNumOkCache
+        ? 'id, fechado_em, total_geral, recibo_numero, janela_inicio, total_dinheiro, total_pix, total_deposito, qtde_pagamentos'
+        : 'id, fechado_em, total_geral';
+
       const { data: fech, error: fErr } = await supabase
         .from('caixa_fechamentos_geral')
         .insert({
@@ -619,7 +668,7 @@ export async function POST(req: NextRequest) {
             usuario_nome: p.usuario_nome,
           })),
         })
-        .select('id, fechado_em, total_geral')
+        .select(fSel)
         .single();
       if (fErr && sqlFaltando(fErr)) {
         return NextResponse.json({ ok: false, error: 'Banco desatualizado: rode o SQL do Bloco 118 (fechamento de caixa).' }, { status: 503 });
@@ -669,6 +718,17 @@ export async function POST(req: NextRequest) {
           fechadoEm: fech.fechado_em,
           totalGeral: Number(fech.total_geral || 0),
           qtde: trava.length,
+          // --------------------------------------------------------------
+          // BLOCO 234 — dados do RECIBO DE ENTREGA do caixa: comprova que
+          // o David ENTREGOU o dinheiro à vista e os contadores zeraram.
+          // --------------------------------------------------------------
+          reciboNumero: (fech as any).recibo_numero ? Number((fech as any).recibo_numero) : null,
+          janelaInicio: (fech as any).janela_inicio || janelaInicio || null,
+          dinheiro: totais.dinheiro,
+          pix: totais.pix,
+          deposito: totais.deposito,
+          total: totais.total,
+          fechadoPorNome: nomeAdmin,
         },
         boletosPendentes,
       });

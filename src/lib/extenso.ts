@@ -42,14 +42,20 @@ function inteiroPorExtenso(n: number): string {
   if (bil) grupos.push(bil === 1 ? 'um bilhão' : `${tresDigitos(bil)} bilhões`);
   if (mih) grupos.push(mih === 1 ? 'um milhão' : `${tresDigitos(mih)} milhões`);
   if (mil) grupos.push(mil === 1 ? 'mil' : `${tresDigitos(mil)} mil`);
+  if (un) grupos.push(tresDigitos(un));
 
-  // Último grupo: "e" quando é centena exata ou menor que 100 ("mil e cem",
-  // "duzentos mil e trinta"); vírgula nos demais casos (norma de escrita).
-  if (un) {
-    const conector = grupos.length === 0 ? '' : un < 100 || un % 100 === 0 ? ' e ' : ', ';
-    grupos.push(`${conector}${tresDigitos(un)}`);
+  // Conector do ÚLTIMO grupo: "e" quando o resto é centena exata ou menor
+  // que 100 ("mil e cem", "duzentos mil e trinta"); vírgula nos demais casos
+  // (norma de escrita). BLOCO 234: join manual — o join(', ') genérico com
+  // conector dentro do grupo gerava vírgula DUPLA ("cinco mil, , oitocentos").
+  let texto = grupos[0] || '';
+  for (let i = 1; i < grupos.length; i++) {
+    const ehUltimo = i === grupos.length - 1;
+    const ultimoComE = ehUltimo && un > 0 && (un < 100 || un % 100 === 0);
+    texto += ultimoComE ? ' e ' : ', ';
+    texto += grupos[i];
   }
-  return grupos.join(', ');
+  return texto;
 }
 
 /** Valor monetário por extenso em reais: valorPorExtenso(1234.56). */
@@ -61,7 +67,13 @@ export function valorPorExtenso(v: number): string {
   const centavos = Math.round((abs - reais) * 100);
 
   let texto = '';
-  if (reais > 0) texto += `${inteiroPorExtenso(reais)} ${reais === 1 ? 'real' : 'reais'}`;
+  if (reais > 0) {
+    const intTxt = inteiroPorExtenso(reais);
+    // "um milhão DE reais" / "dois milhões DE reais" — termina em milhão/bilhão
+    // pede a preposição "de"; os demais ("...mil reais") não pedem.
+    const terminaGrupoDe = /(milh|bilh)(ão|ões)$/.test(intTxt);
+    texto += `${intTxt} ${reais === 1 ? 'real' : terminaGrupoDe ? 'de reais' : 'reais'}`;
+  }
   if (centavos > 0) {
     const cx = tresDigitos(centavos);
     texto += texto

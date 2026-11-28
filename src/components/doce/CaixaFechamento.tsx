@@ -5,6 +5,8 @@ import { authHeaders } from '@/services/userService';
 import ConfirmModal from '@/components/doce/ConfirmModal';
 // BLOCO 232: recibo do pagamento ao David — valor por extenso
 import { valorPorExtenso } from '@/lib/extenso';
+// BLOCO 234: a tela do David (vendedor) é simplificada — só à vista Dinheiro+Pix
+import { isDavidVendedor } from '@/lib/equipe';
 
 /**
  * BLOCO 118 — FECHAMENTO DE CAIXA (pedido do dono): caixa persistido do
@@ -36,6 +38,25 @@ import { valorPorExtenso } from '@/lib/extenso';
  *   confirmando, o dinheiro recebido SAI DA MÃO DO DAVID e entra no caixa da
  *   empresa, os contadores de RECEBIDOS ZERAM (novo período) e o A PRAZO
  *   continua visível até o pagamento cair.
+ *
+ * BLOCO 234 (regra do dono — A TELA DO DAVID + RECIBO DE ENTREGA):
+ *   "tela caixa que aparece para o David deve mostrar tudo que entrou a vista
+ *   dinheiro e Pix, no período de um fechamento de caixa até outro. Quem
+ *   fecha o caixa é login admin. Conforme o caixa é fechado vai zerando.
+ *   Somente isso e nada mais. Quando zerado o caixa o recibo gera para
+ *   comprovar que foi entregue o dinheiro."
+ *
+ *   - LOGIN VENDEDOR (David) = TELA SIMPLIFICADA, só isso e nada mais:
+ *       1. TOTAL À VISTA (Dinheiro + Pix) do período (último fechamento → agora)
+ *       2. Decomposição Dinheiro / Pix
+ *       3. Lista do que entrou à vista (com comprovante do Pix)
+ *     Sem azul/verde, sem boletos, sem repasses, sem histórico, sem lixeira.
+ *   - LOGIN ADMIN = tela gerencial completa (233) + no FECHAR o RECIBO DE
+ *     ENTREGA abre sozinho: "Recebemos de Deivid (Rota 5) a quantia ...",
+ *     assinado por quem entregou × quem recebeu — a prova do dinheiro entregue.
+ *     Reimpressão: botão RECIBO em cada caixa fechado do histórico (mesma via,
+ *     número sequencial da coluna recibo_numero — SQL 234; sem a coluna, o
+ *     número é derivado do id, fallback determinístico).
  */
 
 interface PagamentoCaixa {
@@ -56,6 +77,10 @@ interface FechamentoResumo {
   id: string;
   fechadoEm: string;
   fechadoPorNome?: string | null;
+  // BLOCO 234: período do caixa + número do recibo de entrega (SQL 234;
+  // null quando a coluna ainda não existe — recibo usa fallback pelo id)
+  janelaInicio?: string | null;
+  reciboNumero?: number | null;
   totais: { dinheiro: number; pix: number; deposito: number; total: number };
   qtdePagamentos: number;
   observacao?: string | null;
@@ -138,6 +163,16 @@ const METODO_LABEL: Record<string, { txt: string; cls: string }> = {
 
 const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) => {
   const isAdmin = String(user?.role || '').toUpperCase() === 'ADMIN';
+
+  // ------------------------------------------------------------------
+  // BLOCO 234 — DOIS JEITOS DE VER O MESMO CAIXA:
+  //   - LOGIN VENDEDOR (David) = TELA DO DAVID: só o que entrou À VISTA
+  //     (Dinheiro + Pix) do último fechamento até agora. Nada mais.
+  //   - LOGIN ADMIN = tela gerencial (233) + fechar com recibo de entrega.
+  //   O fechamento é EXCLUSIVO do admin — o David só acompanha o que
+  //   entrou e vê os contadores zerarem quando o admin fecha.
+  // ------------------------------------------------------------------
+  const davidView = !isAdmin && (String(user?.role || '').toUpperCase() === 'VENDEDOR' || isDavidVendedor(user));
 
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
@@ -250,6 +285,9 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
         + (bp && bp.qtde > 0 ? ` · A prazo ${fmt(bp.valor)} (${bp.qtde}) continua na tela até o pagamento cair` : ''),
         'success'
       );
+      // BLOCO 234: "quando zerado o caixa o recibo gera para comprovar que
+      // foi entregue o dinheiro" — o RECIBO DE ENTREGA abre sozinho no fechamento.
+      if (d.fechamento) abrirReciboEntrega(d.fechamento);
       setModalFechar(false);
       setObs('');
       setDetalhe({});
@@ -363,13 +401,84 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
     <div><h1>RECIBO</h1><p style="margin:2px 0 0;font-size:12px">Pagamento ao vendedor — Rota 5</p></div>
     <div class="num">Nº ${num}<br><span style="font-size:11px;color:#555">${esc(dataBR)}</span></div>
   </div>
-  <p class="valor">R$ ${v.toFixed(2).replace('.', ',')}</p>
+  <p class="valor">R$ ${v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
   <p class="ext">(${esc(ext)})</p>
   <p>Recebemos de <b>DOCE MANIA EXPRESS</b> a quantia acima, referente ao pagamento do repasse das vendas do caixa do vendedor <b>Deivid (Rota 5)</b>.</p>
   <div class="ref"><b>Forma do pagamento:</b> ${formaTxt}${r.observacao ? `<br><b>Referência:</b> ${esc(r.observacao)}` : ''}</div>
 </div>
 <div class="assin"><div>Quem recebeu<br><b>Deivid (Rota 5)</b></div><div>Quem pagou<br><b>${pagouPor}</b></div></div>
 <p class="rodape">Recibo registrado no sistema (caixa — pagamentos ao David). Reimpressão desta via é sempre a mesma do recibo nº ${num}.</p>
+<script>window.onload = () => { try { window.print(); } catch (e) {} };</script>
+</body></html>`;
+    const w = window.open('', '_blank');
+    if (!w) { showToast?.('Libere o pop-up para imprimir o recibo.', 'error'); return; }
+    w.document.write(html);
+    w.document.close();
+  };
+
+  // ---------------------------------------------------------------------------
+  // BLOCO 234 — RECIBO DE ENTREGA DO CAIXA: "quando zerado o caixa o recibo
+  // gera para comprovar que foi entregue o dinheiro". É a via que prova que o
+  // dinheiro À VISTA (Dinheiro + Pix) do período saiu da mão do David e entrou
+  // no caixa da empresa. Gerado AUTOMATICAMENTE no FECHAR e reimpressível pelo
+  // histórico — o número vem da coluna recibo_numero (SQL 234); sem a coluna,
+  // fallback determinístico pelo id (mesma via em toda reimpressão).
+  // ---------------------------------------------------------------------------
+  const numReciboEntrega = (reciboNumero?: number | null, id?: string | null): string => {
+    if (reciboNumero) return String(reciboNumero).padStart(6, '0');
+    const seed = String(id || '').replace(/\D/g, '');
+    return (seed || '0').slice(0, 6).padStart(6, '0');
+  };
+
+  const abrirReciboEntrega = (f: {
+    id?: string; reciboNumero?: number | null; fechadoEm: string; janelaInicio?: string | null;
+    dinheiro: number; pix: number; deposito?: number; total: number; qtde?: number;
+    fechadoPorNome?: string | null;
+  }) => {
+    const esc = (s: unknown) => String(s ?? '').replace(/</g, '&lt;');
+    const num = numReciboEntrega(f.reciboNumero, f.id);
+    const v = Number(f.total || 0);
+    const ext = valorPorExtenso(v);
+    const fim = new Date(f.fechadoEm);
+    const fimBR = `${fim.toLocaleDateString('pt-BR')} ${fim.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`;
+    const ini = f.janelaInicio ? new Date(f.janelaInicio) : null;
+    const iniBR = ini ? `${ini.toLocaleDateString('pt-BR')} ${ini.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}` : null;
+    const periodoTxt = iniBR ? `no período de ${iniBR} até ${fimBR}` : `até ${fimBR}`;
+    const recebidoPor = esc(f.fechadoPorNome || user?.nome || 'Admin');
+    const formasTxt = [
+      `Dinheiro ${fmt(Number(f.dinheiro || 0))}`,
+      `Pix ${fmt(Number(f.pix || 0))}`,
+      ...(Number(f.deposito || 0) > 0 ? [`Depósito ${fmt(Number(f.deposito || 0))}`] : []),
+    ].join(' · ');
+    const html = `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>Recibo de entrega do caixa nº ${num}</title>
+<style>
+  * { font-family: Arial, Helvetica, sans-serif; box-sizing: border-box; }
+  body { margin: 0; padding: 32px; color: #111; font-size: 14px; line-height: 1.6; }
+  .box { border: 2px solid #111; border-radius: 10px; padding: 18px 22px; max-width: 720px; margin: 0 auto; }
+  .topo { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 1px solid #999; padding-bottom: 10px; }
+  h1 { font-size: 18px; margin: 0; text-transform: uppercase; letter-spacing: 2px; }
+  .num { font-size: 16px; font-weight: bold; text-align: right; }
+  .valor { font-size: 22px; font-weight: bold; margin: 16px 0 4px; }
+  .ext { font-style: italic; font-size: 13px; color: #333; }
+  p { margin: 10px 0; text-align: justify; }
+  .ref { background: #f6f6f6; border-radius: 8px; padding: 10px 12px; font-size: 13px; }
+  .assin { display: flex; gap: 60px; margin-top: 60px; max-width: 720px; margin-left: auto; margin-right: auto; }
+  .assin div { flex: 1; border-top: 1px solid #111; padding-top: 6px; text-align: center; font-size: 12px; }
+  .rodape { max-width: 720px; margin: 26px auto 0; font-size: 10px; color: #777; text-align: center; }
+  @media print { body { padding: 12mm; } }
+</style></head><body>
+<div class="box">
+  <div class="topo">
+    <div><h1>Recibo de Entrega</h1><p style="margin:2px 0 0;font-size:12px">Fechamento do caixa — Rota 5</p></div>
+    <div class="num">Nº ${num}<br><span style="font-size:11px;color:#555">${esc(fimBR)}</span></div>
+  </div>
+  <p class="valor">R$ ${v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+  <p class="ext">(${esc(ext)})</p>
+  <p>Recebemos de <b>Deivid (Rota 5)</b> a quantia total acima, referente à <b>ENTREGA DO DINHEIRO DO CAIXA</b> — vendas à vista em Dinheiro e Pix ${esc(periodoTxt)}. Com este fechamento, os contadores do caixa do David ZERAM e o valor passa para o caixa da empresa.</p>
+  <div class="ref"><b>Formas recebidas:</b> ${esc(formasTxt)}<br><b>Recebimentos à vista:</b> ${Number(f.qtde || 0)}</div>
+</div>
+<div class="assin"><div>Quem entregou<br><b>Deivid (Rota 5)</b></div><div>Quem recebeu<br><b>${recebidoPor}</b></div></div>
+<p class="rodape">Recibo gerado pelo fechamento do caixa no sistema. Reimpressão desta via é sempre a mesma do recibo nº ${num}.</p>
 <script>window.onload = () => { try { window.print(); } catch (e) {} };</script>
 </body></html>`;
     const w = window.open('', '_blank');
@@ -501,6 +610,137 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
       .slice()
       .sort((a, b) => String(b.criadoEm || '').localeCompare(String(a.criadoEm || '')));
   }, [pagamentos]);
+
+  // ---------------------------------------------------------------------------
+  // BLOCO 234 — A TELA DO DAVID (login VENDEDOR): "tudo que entrou a vista
+  // dinheiro e Pix, no período de um fechamento de caixa até outro. Quem fecha
+  // o caixa é login admin. Conforme o caixa é fechado vai zerando. Somente
+  // isso e nada mais." — nada de azul/verde, boletos, repasses ou histórico.
+  // ---------------------------------------------------------------------------
+  const entradasDavid = React.useMemo(() => {
+    return pagamentos
+      .filter((p) => p.metodo === 'DINHEIRO' || p.metodo === 'PIX')
+      .slice()
+      .sort((a, b) => String(b.criadoEm || '').localeCompare(String(a.criadoEm || '')));
+  }, [pagamentos]);
+  const davidDinheiro = Math.round(entradasDavid.filter((p) => p.metodo === 'DINHEIRO').reduce((a, b) => a + Number(b.valor || 0), 0) * 100) / 100;
+  const davidPix = Math.round(entradasDavid.filter((p) => p.metodo === 'PIX').reduce((a, b) => a + Number(b.valor || 0), 0) * 100) / 100;
+  const davidTotal = Math.round((davidDinheiro + davidPix) * 100) / 100;
+  const davidQtdeDinheiro = entradasDavid.filter((p) => p.metodo === 'DINHEIRO').length;
+  const davidQtdePix = entradasDavid.filter((p) => p.metodo === 'PIX').length;
+
+  if (davidView) {
+    return (
+      <div className="space-y-4">
+        <div className="px-2">
+          <h2 className="text-2xl font-black text-gray-800 tracking-tight">Caixa do David</h2>
+          <p className="text-[10px] text-gray-400 font-bold uppercase mt-1">
+            Rota 5 · {desde ? `do último fechamento (${hora(desde)}) até agora` : 'caixa aberto — primeiro período'}
+          </p>
+          <p className="text-[8px] text-gray-300 font-bold uppercase mt-0.5">
+            <i className="fa-solid fa-rotate mr-1"></i>Atualiza sozinho a cada 20s{atualizadoEm ? ` · última atualização ${atualizadoEm.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : ''}
+          </p>
+        </div>
+
+        {loading && (
+          <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-8 text-center">
+            <i className="fa-solid fa-spinner fa-spin text-2xl text-gray-300"></i>
+            <p className="text-[9px] font-black uppercase text-gray-400 mt-3 tracking-widest">Carregando caixa...</p>
+          </div>
+        )}
+
+        {!loading && erro && (
+          <div className="bg-rose-50 border border-rose-100 rounded-2xl p-4 mx-1">
+            <p className="text-[9px] font-bold text-rose-600 leading-relaxed uppercase">
+              <i className="fa-solid fa-triangle-exclamation mr-1"></i>{erro}
+            </p>
+            <button onClick={() => void carregar()} className="mt-2 bg-rose-600 text-white px-4 py-2 rounded-xl text-[9px] font-black uppercase active:scale-95">Tentar de novo</button>
+          </div>
+        )}
+
+        {!loading && !erro && (
+          <>
+            {/* NÚMERO ÚNICO DA TELA: tudo que entrou à vista neste caixa */}
+            <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-md mx-1">
+              <p className="text-[8px] font-black text-gray-400 uppercase">Tudo que entrou à vista neste caixa</p>
+              <p className="text-4xl font-black text-gray-800 mt-1 tabular-nums leading-tight">{fmt(davidTotal)}</p>
+              <p className="text-[8px] font-bold text-gray-400 uppercase mt-1.5">Dinheiro + Pix · {entradasDavid.length} recebimento(s) · do último fechamento até agora</p>
+              <div className="grid grid-cols-2 gap-2 mt-4">
+                <div className="bg-emerald-50 rounded-2xl p-3 text-center">
+                  <p className="text-[8px] font-black text-emerald-500 uppercase">Dinheiro</p>
+                  <p className="text-base font-black text-emerald-600 mt-0.5 tabular-nums">{fmt(davidDinheiro)}</p>
+                  <p className="text-[7px] font-bold text-emerald-500/80 uppercase mt-0.5">{davidQtdeDinheiro} recebimento(s)</p>
+                </div>
+                <div className="bg-violet-50 rounded-2xl p-3 text-center">
+                  <p className="text-[8px] font-black text-violet-500 uppercase">Pix</p>
+                  <p className="text-base font-black text-violet-600 mt-0.5 tabular-nums">{fmt(davidPix)}</p>
+                  <p className="text-[7px] font-bold text-violet-500/80 uppercase mt-0.5">{davidQtdePix} recebimento(s)</p>
+                </div>
+              </div>
+            </div>
+
+            {/* LISTA: tudo que entrou à vista (Dinheiro e Pix) no período */}
+            <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden mx-1">
+              <div className="px-4 py-3 bg-gray-50/70">
+                <p className="text-[9px] font-black text-gray-700 uppercase"><i className="fa-solid fa-list mr-1.5 text-gray-400"></i>Entradas à vista — Dinheiro e Pix</p>
+              </div>
+              {entradasDavid.length > 0 ? (
+                <div className="divide-y divide-gray-50 max-h-96 overflow-y-auto">
+                  {entradasDavid.map((p) => (
+                    <div key={p.id} className="p-3 flex items-center justify-between gap-2">
+                      <div className="flex-1 min-w-0 pr-1">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded-md ${p.metodo === 'DINHEIRO' ? 'bg-emerald-600 text-white' : 'bg-violet-600 text-white'}`}>{p.metodo === 'DINHEIRO' ? 'Dinheiro' : 'Pix'}</span>
+                          {p.cliente && <span className="text-[9px] font-black text-gray-700 uppercase break-words">{p.cliente}</span>}
+                        </div>
+                        <p className="text-[8px] text-gray-400 font-bold uppercase mt-1">{hora(p.criadoEm)}</p>
+                      </div>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        {p.temComprovante && (
+                          <button
+                            onClick={() => verFoto(p.id)}
+                            className="w-9 h-9 bg-violet-50 text-violet-600 rounded-xl flex items-center justify-center border border-violet-100 active:scale-90 transition-all"
+                            title="Ver comprovante"
+                          >
+                            <i className="fa-solid fa-image text-xs"></i>
+                          </button>
+                        )}
+                        <p className={`text-[11px] font-black text-right ${p.metodo === 'DINHEIRO' ? 'text-emerald-600' : 'text-violet-600'}`}>{fmt(p.valor)}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="p-6 text-center">
+                  <p className="text-[9px] font-black uppercase text-gray-400 tracking-widest">Nada entrou à vista ainda neste caixa</p>
+                  <p className="text-[8px] font-bold text-gray-300 uppercase mt-1">Conforme entrar em Dinheiro ou Pix, aparece aqui</p>
+                </div>
+              )}
+            </div>
+
+            <div className="bg-gray-50 border border-gray-100 rounded-2xl p-3 mx-1">
+              <p className="text-[8px] font-black text-gray-500 uppercase leading-relaxed">
+                <i className="fa-solid fa-lock mr-1 text-gray-400"></i>Quem fecha o caixa é o ADMIN. Ao fechar, esses contadores ZERAM (novo período) e o recibo de entrega do dinheiro é gerado.
+              </p>
+            </div>
+          </>
+        )}
+
+        {/* Comprovante do Pix (foto) — única janela extra da tela do David */}
+        {modalFoto && (
+          <div className="fixed inset-0 z-[400] bg-black/70 flex items-center justify-center p-4" onClick={() => setModalFoto(null)}>
+            <div className="bg-white rounded-3xl p-3 max-w-lg w-full shadow-2xl" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between px-2 pb-2">
+                <p className="text-[9px] font-black uppercase text-gray-500 tracking-widest">Comprovante do pagamento</p>
+                <button onClick={() => setModalFoto(null)} className="w-10 h-10 bg-gray-100 rounded-xl flex items-center justify-center active:scale-90"><i className="fa-solid fa-xmark text-gray-500"></i></button>
+              </div>
+              <img src={modalFoto.foto} alt="Comprovante do pagamento recebido no caixa" className="w-full rounded-2xl max-h-[70dvh] object-contain bg-gray-50" />
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   const renderRecebido = (r: ItemRecebido) => {
     if (r.tipo === 'PRAZOPAGO') {
@@ -807,22 +1047,38 @@ const CaixaFechamento: React.FC<CaixaFechamentoProps> = ({ user, showToast }) =>
             <div className="grid gap-3">
               {historico.map((f) => (
                 <div key={f.id} className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
-                  <button onClick={() => abrirFechamento(f)} className="w-full p-4 flex items-center justify-between gap-2 active:bg-gray-50 transition-colors text-left">
+                  {/* BLOCO 234: div clicável (não button) — o botão RECIBO fica
+                      dentro do card e <button> não pode aninhar <button> */}
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => abrirFechamento(f)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); abrirFechamento(f); } }}
+                    className="w-full p-4 flex items-center justify-between gap-2 active:bg-gray-50 transition-colors text-left cursor-pointer"
+                  >
                     <div className="min-w-0">
                       <p className="text-[11px] font-black text-gray-800 uppercase">
                         {new Date(f.fechadoEm).toLocaleDateString('pt-BR')} {new Date(f.fechadoEm).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
                         <span className="text-gray-400 font-bold normal-case"> · {f.fechadoPorNome || 'admin'}</span>
                       </p>
                       <p className="text-[8px] font-bold text-gray-400 uppercase mt-0.5">
-                        {f.qtdePagamentos} pagamento(s) · Din {fmt(f.totais.dinheiro)} · Pix {fmt(f.totais.pix)}{f.totais.deposito > 0 ? ` · Dep ${fmt(f.totais.deposito)}` : ''}
+                        {f.qtdePagamentos} pagamento(s) · Din {fmt(f.totais.dinheiro)} · Pix {fmt(f.totais.pix)}{f.totais.deposito > 0 ? ` · Dep ${fmt(f.totais.deposito)}` : ''}{f.reciboNumero ? ` · recibo nº ${String(f.reciboNumero).padStart(6, '0')}` : ''}
                       </p>
                       {f.observacao && <p className="text-[8px] text-gray-400 font-semibold mt-0.5 break-words">{f.observacao}</p>}
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0">
+                      {/* BLOCO 234: RECIBO DE ENTREGA — reimpressão da mesma via */}
+                      <button
+                        onClick={(e) => { e.stopPropagation(); abrirReciboEntrega({ id: f.id, reciboNumero: f.reciboNumero, fechadoEm: f.fechadoEm, janelaInicio: f.janelaInicio, dinheiro: f.totais.dinheiro, pix: f.totais.pix, deposito: f.totais.deposito, total: f.totais.total, qtde: f.qtdePagamentos, fechadoPorNome: f.fechadoPorNome }); }}
+                        className="w-9 h-9 bg-gray-900 text-white rounded-xl flex items-center justify-center active:scale-90 transition-all"
+                        title="Recibo de entrega do caixa (reimprimir)"
+                      >
+                        <i className="fa-solid fa-receipt text-xs"></i>
+                      </button>
                       <p className="text-sm font-black text-gray-700">{fmt(f.totais.total)}</p>
                       {carregandoDetalhe === f.id ? <i className="fa-solid fa-spinner fa-spin text-gray-300 text-sm"></i> : <i className={`fa-solid fa-chevron-${detalhe[f.id] ? 'up' : 'down'} text-gray-300 text-xs`}></i>}
                     </div>
-                  </button>
+                  </div>
                   {detalhe[f.id] && (
                     <div className="border-t border-gray-50 divide-y divide-gray-50 max-h-72 overflow-y-auto bg-gray-50/50">
                       {detalhe[f.id].pagamentos.length === 0 && <p className="text-center py-4 text-[8px] font-black uppercase text-gray-300">Sem registros no snapshot.</p>}

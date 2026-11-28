@@ -151,15 +151,18 @@ export const boletoService = {
   /** Gera a cobranca (boleto+pix) no Inter para o saldo da venda.
    *  BLOCO 227: devolve avisoVencimento quando o prazo vencido foi corrigido
    *  para hoje pelo servidor.
-   *  BLOCO 230: prazo 75s — o GERAR responde rápido ou avisa na hora; o
-   *  servidor por dentro agora tem deadline de 50s na emissão. */
+   *  BLOCO 238: prazo 115s — alinhado ao orçamento REAL do servidor (deadline
+   *  de emissão 64s + fallback sem nota 30s + consulta quando couber). Os 75s
+   *  antigos abortavam AQUI antes do servidor terminar: o card morria em
+   *  "passou de 75s" MESMO com o boleto gerado no Inter (o dono apertava
+   *  GERAR de novo e criava cobrança duplicada). */
   async gerar(saleId: string, p: GerarBoletoParams): Promise<GerarBoletoResposta> {
     try {
       const res = await fetchComPrazo('/api/boletos', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ acao: 'EMITIR', saleId, ...p }),
-      }, 75_000);
+      }, 115_000);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}`, boleto: data.boleto };
       return { ok: true, jaGerado: data.jaGerado, boleto: data.boleto, avisoAtrelamento: data.avisoAtrelamento, notaAtrelada: data.notaAtrelada, avisoVencimento: data.avisoVencimento };
@@ -325,14 +328,17 @@ export const boletoService = {
   },
 
   /** Gera UMA parcela no Inter (boleto do seq escolhido).
-   *  BLOCO 230: prazo 40s (deadline do servidor por parcela: 28s). */
+   *  BLOCO 238: prazo 115s — MESMA cadeia do EMITIR único no servidor
+   *  (deadline de emissão 64s + fallback + consulta condicionada); os 40s
+   *  antigos abortavam cedo demais e o card morria com a emissão ainda
+   *  andando lá (parecia "timeout" com o boleto gerado). */
   async gerarParcela(saleId: string, parcelaId: string, p: { docManual?: string; cepManual?: string; atrelarNFe?: boolean }): Promise<{ ok: boolean; jaGerado?: boolean; parcela?: BoletoParcelaInfo; erro?: string }> {
     try {
       const res = await fetchComPrazo('/api/boletos', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ acao: 'EMITIR', saleId, parcelaId, ...p }),
-      }, 40_000);
+      }, 115_000);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return { ok: false, erro: data.erro || `Erro ${res.status}`, parcela: data.parcela };
       return { ok: true, jaGerado: data.jaGerado, parcela: data.parcela };
@@ -343,8 +349,9 @@ export const boletoService = {
   },
 
   /** Gera TODAS as parcelas abertas de uma vez (os dois boletos juntos).
-   *  BLOCO 230: prazo 110s — são 2 emissões SEQUENCIAIS no Inter, cada uma
-   *  com deadline próprio de 28s no servidor. */
+   *  BLOCO 230: prazo 110s — são 2 emissões SEQUENCIAIS no Inter.
+   *  BLOCO 238: cada parcela tem deadline próprio de 26s no servidor
+   *  (tentativa 24s) — pior caso ~96s para as duas, dentro deste prazo. */
   async emitirTodasParcelas(saleId: string, p: { docManual?: string; cepManual?: string; atrelarNFe?: boolean } = {}): Promise<{ ok: boolean; resultados?: Array<{ seq: number; ok: boolean; erro?: string; parcela?: BoletoParcelaInfo }>; erro?: string }> {
     try {
       const res = await fetchComPrazo('/api/boletos', {

@@ -32,9 +32,16 @@ import { isDavidVendedor } from '@/lib/equipe';
 // BLOCO 230 — PRAZO MÁXIMO da função na Vercel. Antes (sem maxDuration) a
 // função podia ficar presa na cadeia token + 6 tentativas de 45s + consulta
 // (~5,5 min no pior caso) enquanto o card do dono girava "Gerando no Inter..."
-// por 3+ minutos sem resposta. Agora a função responde SEMPRE em <= ~2 min
-// (e na prática <= ~1 min: cada chamada ao Inter tem 15-30s e o retry tem
-// deadline de 50s — ver interBoleto.ts BLOCO 230).
+// por 3+ minutos sem resposta.
+// BLOCO 238 — FIM DO "BOLETO NÃO GERA, DANDO TIMEOUT": o BLOCO 230 cortou a
+// tentativa de emissão para 15s, mas a resposta saudável do Inter já media
+// ~12s — no Inter sob carga o POST demora 20-30s e ACEITA, e com 15s TODA
+// tentativa morria ("Timeout na API do Inter (15s)" x3 = falha sempre) mesmo
+// com o banco de pé. Agora: tentativa 30s (24s no EMITIR_TODAS), deadline de
+// emissão 64s (26s por parcela), consulta pós-emissão só quando a emissão foi
+// rápida (< 40s) e os prazos do app alinhados (115s no GERAR) — a função
+// responde SEMPRE antes de 120s e o caso saudável volta a sair em 12-20s.
+// (ver interBoleto.ts BLOCO 238).
 export const maxDuration = 120;
 
 /**
@@ -432,10 +439,21 @@ async function emitirCobrancaUnificada(args: {
 
   // BLOCO 225: emissão com RETRY automático — instabilidade do Inter
   // ("Tente novamente mais tarde...", 5xx, timeout) tenta até 3x sozinho.
-  // BLOCO 230: cada tentativa 15s + DEADLINE (50s padrão; 28s por parcela
-  // no EMITIR_TODAS) — o GERAR responde em <= ~1 min, nunca mais minutos.
+  // BLOCO 238: cada tentativa 30s (24s no EMITIR_TODAS) + DEADLINE (64s na
+  // emissão única; 26s por parcela no EMITIR_TODAS) — o GERAR responde em
+  // <= ~1,5 min no pior caso e, no caso saudável, sai em 12-20s como antes.
   // BLOCO 231: versão MARCADA — durante a emissão o sync cede a vez ao dono.
-  let r = await emitirCobrancaComRetryMarcada(payload as never, args.deadlineEmissaoMs ? { deadlineMs: args.deadlineEmissaoMs } : undefined);
+  const inicioEmissaoMs = Date.now();
+  // BLOCO 238: a tentativa acompanha o orçamento — EMITIR_TODAS usa chamadas
+  // menores (24s) para as duas emissões caberem no prazo do app; a emissão
+  // única usa o default de 30s da lib.
+  const tentativaEmissaoMs = args.deadlineEmissaoMs
+    ? Math.min(30_000, Math.max(args.deadlineEmissaoMs - 2_000, 5_000))
+    : undefined;
+  let r = await emitirCobrancaComRetryMarcada(payload as never, {
+    ...(args.deadlineEmissaoMs ? { deadlineMs: args.deadlineEmissaoMs } : {}),
+    ...(tentativaEmissaoMs ? { tentativaMs: tentativaEmissaoMs } : {}),
+  });
   // -----------------------------------------------------------------
   // BLOCO 150: o POST da cobranca v3 pode recusar o objeto notaFiscal e aí
   // o boleto morria INTEIRO. Retenta SEM o vínculo formal e leva a NF para
@@ -454,7 +472,13 @@ async function emitirCobrancaUnificada(args: {
       },
     };
     // BLOCO 231: fallback também marcado (a emissão continua em voo).
-    r = await emitirCobrancaComRetryMarcada(semNota as never, { maxTentativas: 1, deadlineMs: 15_000 });
+    // BLOCO 238: tentativa do fallback também acompanha o orçamento (20s no
+    // EMITIR_TODAS; 30s na emissão única).
+    r = await emitirCobrancaComRetryMarcada(semNota as never, {
+      maxTentativas: 1,
+      deadlineMs: 15_000,
+      ...(tentativaEmissaoMs ? { tentativaMs: Math.min(tentativaEmissaoMs, 20_000) } : {}),
+    });
     fallbackSemNota = r.ok;
   }
   if (!r.ok || !r.data || !(r.data as Record<string, unknown>).codigoSolicitacao) {
@@ -487,9 +511,18 @@ async function emitirCobrancaUnificada(args: {
     await atualizar(saleId, { inter_boleto_codigo: codigo, inter_boleto_em: new Date().toISOString() });
   }
 
-  // A emissao e assincrona: consulta em seguida pra pegar linha digitavel se ja processou
+  // A emissao e assincrona: consulta em seguida pra pegar linha digitavel se ja processou.
+  // BLOCO 238: a consulta só roda quando a EMISSÃO foi rápida (< 40s) —
+  // quando o Inter demorou e o boleto saiu no fim do orçamento de tempo,
+  // gastar mais 15s de consulta estourava o prazo do app (o card morria em
+  // "passou de Xs" MESMO com o boleto GERADO lá — o dono achava que não saiu).
+  // Nesse caso a resposta volta na hora em EM_PROCESSAMENTO e a linha
+  // digitável/pix chegam pelo ATUALIZAR do card (ou sync/webhook) — não se
+  // perde nada.
   const boleto: CobrancaPublica = { status: 'EM_PROCESSAMENTO', codigo, seuNumero, vencimento: venc, valor: payload.valorNominal, linhaDigitavel: '', codigoBarras: '', pixCopiaECola: '', valorRecebido: null, erro: '', notaFiscalChave: '' };
-  const c = await recuperarCobranca(codigo);
+  const c = Date.now() - inicioEmissaoMs < 40_000
+    ? await recuperarCobranca(codigo)
+    : { ok: false, status: 0, erro: 'consulta adiada: a emissao consumiu o orcamento de tempo' };
   if (c.ok && c.data) {
     const cob = interpretarCobranca(c.data as Record<string, unknown>);
     if (parcela) {
@@ -1107,9 +1140,10 @@ export async function POST(req: NextRequest) {
         atrelarNFe: body.atrelarNFe !== false,
         mensagemAvulsa: '',
         parcela: p,
-        // BLOCO 230: deadline curto POR PARCELA — 2 emissões sequenciais não
-        // podem somar minutos (antes o pior caso passava de 4 min juntos).
-        deadlineEmissaoMs: 28_000,
+        // BLOCO 230/238: orçamento curto POR PARCELA (26s, tentativa 24s) —
+        // 2 emissões sequenciais não podem somar minutos (pior caso ~96s,
+        // dentro do prazo de 110s do app).
+        deadlineEmissaoMs: 26_000,
       });
       if (res.status === 200) {
         const j = await res.json();

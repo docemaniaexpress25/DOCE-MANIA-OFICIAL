@@ -118,10 +118,14 @@ function mtlsAgent(): https.Agent {
 
 /** Requisicao HTTPS com certificado da aplicacao (mTLS).
  *  BLOCO 230: timeout PARAMETRIZADO (antes 45s fixos) — a emissao de boleto
- *  é uma ação que o DONO espera na tela; cada chamada agora tem prazo curto
- *  (15-30s) e o retry tem DEADLINE total, para o GERAR nunca ficar minutos
- *  sem resposta (caso real 27/11 13:07: card girando 3 min porque a cadeia
- *  token+3 tentativas+fallback sem nota+consulta podia somar ~5,5 min). */
+ *  é uma ação que o DONO espera na tela.
+ *  BLOCO 238: o prazo virou ABSOLUTO (timer externo que destrói o request).
+ *  O req.setTimeout antigo media OCIOSIDADE do socket: resposta do Inter que
+ *  pingava byte a byte (servidor sob carga) nunca estourava e a chamada ficava
+ *  presa além do combinado. Agora DNS + TLS + envio + resposta têm UM relógio:
+ *  estourou, o request morre EXATAMENTE no prazo com "Timeout na API do Inter
+ *  (Ns)" e o retry (230/238) cuida do resto — a matemática da cadeia volta a
+ *  fechar com os prazos do servidor e do app. */
 function mtlsRequest(
   method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE',
   url: string,
@@ -144,11 +148,24 @@ function mtlsRequest(
       (res) => {
         const chunks: Buffer[] = [];
         res.on('data', (c: Buffer) => chunks.push(c));
-        res.on('end', () => resolve({ status: res.statusCode || 0, body: Buffer.concat(chunks).toString('utf8') }));
+        res.on('end', () => {
+          clearTimeout(timer);
+          resolve({ status: res.statusCode || 0, body: Buffer.concat(chunks).toString('utf8') });
+        });
+        res.on('error', (e: Error) => {
+          clearTimeout(timer);
+          reject(e);
+        });
       }
     );
-    req.on('error', reject);
-    req.setTimeout(timeoutMs, () => req.destroy(new Error(`Timeout na API do Inter (${Math.round(timeoutMs / 1000)}s)`)));
+    const timer = setTimeout(
+      () => req.destroy(new Error(`Timeout na API do Inter (${Math.round(timeoutMs / 1000)}s)`)),
+      timeoutMs
+    );
+    req.on('error', (e: Error) => {
+      clearTimeout(timer);
+      reject(e);
+    });
     if (opts.body) req.write(opts.body);
     req.end();
   });
@@ -278,7 +295,13 @@ async function requestJson(
   }
 }
 
-/** Emite a cobranca (boleto + pix). Retorna codigoSolicitacao. */
+/** Emite a cobranca (boleto + pix). Retorna codigoSolicitacao.
+ *  BLOCO 238: tentativa com FÔLEGO de novo (30s; o BLOCO 230 havia cortado
+ *  para 15s) — a resposta saudável já era medida em ~12s ponta a ponta e, com
+ *  o Inter sob carga, o POST demora 20-30s mas ACEITA: com 15s TODA tentativa
+ *  morria em timeout ("boleto não está sendo gerado, banco inter tá dando
+ *  time out") mesmo com o Inter de pé — era exatamente o caso que funcionava
+ *  antes do corte. Parametrizável para o EMITIR_TODAS usar chamadas menores. */
 export function emitirCobranca(payload: {
   seuNumero: string;
   valorNominal: number;
@@ -288,11 +311,8 @@ export function emitirCobranca(payload: {
   mensagem?: { linha1?: string; linha2?: string; linha3?: string; linha4?: string; linha5?: string };
   formasRecebimento?: ('BOLETO' | 'PIX' | 'SEM_FORMA_PAGAMENTO')[];
   notaFiscal?: InterNotaFiscal;
-}): Promise<InterCobrancaResultado> {
-  // BLOCO 230: 15s por tentativa — o Inter saudável responde em ~2-12s
-  // (medido 27/11: POST aceito em 12s de ponta a ponta); se travar, o
-  // retry com deadline resolve mais rápido do que esperar 45s preso.
-  return requestJson('POST', '/cobranca/v3/cobrancas', payload, 15_000);
+}, timeoutMs = 30_000): Promise<InterCobrancaResultado> {
+  return requestJson('POST', '/cobranca/v3/cobrancas', payload, timeoutMs);
 }
 
 // ---------------------------------------------------------------------------
@@ -340,25 +360,30 @@ export async function emitirCobrancaComRetryMarcada(
 }
 
 /** BLOCO 230: emissão com retry automático E DEADLINE TOTAL.
- *  - prazo por tentativa: 15s (emitirCobranca);
- *  - espera entre tentativas: 2s/4s (antes 3s/6s);
- *  - DEADLINE (deadlineMs, default 50s): quando o orçamento estoura, PARA
- *    de tentar e responde na hora — o dono nunca mais fica 3 minutos
- *    olhando o card girar (o pior caso antigo somava ~5,5 min: 6 tentativas
- *    x 45s + esperas + consulta).
- *  EMITIR_TODAS (2 parcelas) usa deadlineMs menor por chamada (~28s) para
- *  as duas emissões somarem menos que o prazo da função na Vercel. */
+ *  BLOCO 238: tentativa 30s (era 15s — matava a emissão que o Inter aceitava
+ *  entre 16 e 30s; caso real 30/11: "boleto não está sendo gerado, banco inter
+ *  tá dando time out") e DEADLINE default 64s = 2 tentativas completas de 30s
+ *  + esperas 2s/4s. Erros transientes RÁPIDOS (o Inter recusa em segundos)
+ *  continuam ganhando as 3 tentativas — o deadline só corta quando cada
+ *  tentativa queima o prazo inteiro.
+ *  - prazo por tentativa: 30s (parametrizável via tentativaMs);
+ *  - espera entre tentativas: 2s/4s;
+ *  - DEADLINE (deadlineMs, default 64s): estourou o orçamento, PARA de tentar
+ *    e responde na hora — o dono nunca fica minutos olhando o card girar.
+ *  EMITIR_TODAS (2 parcelas) usa deadlineMs de 26s + tentativaMs de 24s por
+ *  chamada para as duas emissões somarem menos que o prazo do app. */
 export async function emitirCobrancaComRetry(
   payload: Parameters<typeof emitirCobranca>[0],
-  opts?: { maxTentativas?: number; esperaBaseMs?: number; deadlineMs?: number }
+  opts?: { maxTentativas?: number; esperaBaseMs?: number; deadlineMs?: number; tentativaMs?: number }
 ): Promise<InterCobrancaResultado & { tentativas: number }> {
   const maxTentativas = Math.min(Math.max(opts?.maxTentativas ?? 3, 1), 5);
   const esperaBaseMs = Math.max(opts?.esperaBaseMs ?? 2_000, 1_000);
-  const deadlineMs = Math.max(opts?.deadlineMs ?? 50_000, 10_000);
+  const deadlineMs = Math.max(opts?.deadlineMs ?? 64_000, 10_000);
+  const tentativaMs = Math.max(opts?.tentativaMs ?? 30_000, 5_000);
   const inicio = Date.now();
   let ultimo: InterCobrancaResultado = { ok: false, status: 0, erro: 'emissao nao iniciada' };
   for (let i = 1; i <= maxTentativas; i++) {
-    ultimo = await emitirCobranca(payload);
+    ultimo = await emitirCobranca(payload, tentativaMs);
     if (ultimo.ok || !ehErroTransienteInter(ultimo.status, ultimo.erro)) {
       return { ...ultimo, tentativas: i };
     }
